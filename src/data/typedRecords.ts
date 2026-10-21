@@ -49,10 +49,10 @@ export interface TypedChildSpec {
    *  NOT the way to write a deterministic-id record, despite the shape:
    *  this path mints an ordinary `updated_at`, and a second call with the
    *  same id throws `DuplicateIdError` rather than adopting. That is exactly
-   *  the creator shape `syncObserver/reconcile.ts` names as the remaining I1
-   *  gap — two devices minting one id in the same millisecond produce equal
-   *  nonzero stamps from different writes, and the loser strands. Use
-   *  `getOrCreateTypedChild`, which stamps 0 and adopts. */
+   *  the creator shape `blocksAlreadyReflects` names (#744) — two devices
+   *  minting one id in the same millisecond produce equal nonzero stamps from
+   *  different writes, which a reader that cannot decode the row takes for one
+   *  write. Use `getOrCreateTypedChild`, which stamps 0 and adopts. */
   id?: string
   references?: readonly BlockReference[]
   /** Reuse one registry snapshot across a batch of records. Optional — the
@@ -359,13 +359,12 @@ export const getOrCreateTypedChild = async (
   )
   // `createOrGet`, not `createChild`: this is the insert the platform means
   // by a deterministic-id mint. It carries `systemMint` — which `createChild`
-  // has no way to pass — and stamping 0 is not optional here. Per
-  // `syncObserver/reconcile.ts`, two devices that mint the SAME derived id in
-  // the same millisecond produce equal nonzero stamps from DIFFERENT writes,
-  // which invariant I1 misreads as the same write and skips; the insert-or-
-  // skip loser then strands, permanently divergent from the server. A
-  // 0-stamped row always yields instead. It also gives us the cross-workspace
-  // guard and insert-or-fetch atomicity for free.
+  // has no way to pass — and stamping 0 is not optional here: two devices that
+  // mint the SAME derived id in the same millisecond produce equal nonzero
+  // stamps from DIFFERENT writes, which a reader that cannot decode the row
+  // takes for one write (`blocksAlreadyReflects`, #744). Stamp 0 never vouches.
+  // It also gives us the cross-workspace guard and insert-or-fetch atomicity
+  // for free.
   let inserted: boolean
   try {
     ;({inserted} = await tx.createOrGet({
@@ -377,22 +376,11 @@ export const getOrCreateTypedChild = async (
       ...(childSpec.references !== undefined ? {references: [...childSpec.references]} : {}),
     }, {systemMint: true}))
   } catch (error) {
-    // DEFENCE IN DEPTH — unreachable against the current engine, and left in
-    // deliberately rather than because a live path needs it.
-    //
-    // These are the two occupants `createOrGet` rejects outright: a tombstone
-    // and a row of the same id in another workspace. Against `TxEngine` the
-    // read above has already seen both — `SELECT_BY_ID_SQL` filters on neither
-    // `deleted` nor `workspace_id` — so `usable()` fails and the call returns
-    // `taken` long before it gets here. (An earlier version of this comment
-    // claimed `tx.get` hides them, which is why the branch read as
-    // load-bearing; it does not.)
-    //
-    // It stays because the alternative, if some other `Tx` ever filters its
-    // reads, is the caller's whole transaction aborting on a record this
-    // primitive had already promised to report rather than throw over. There
-    // is no way to reach it through the public path, so it has no test; do not
-    // read the absence of one as an oversight.
+    // DEFENCE IN DEPTH, untested because unreachable: the read above already
+    // sees a tombstone or a foreign row (`SELECT_BY_ID_SQL` filters on
+    // neither), so `createOrGet` never throws these here. Kept so a `Tx`
+    // that DOES filter its reads answers `taken` instead of aborting the
+    // caller's whole transaction.
     if (error instanceof DeletedConflictError || error instanceof DeterministicIdCrossWorkspaceError) {
       return {status: 'taken', id, block: await tx.get(id)}
     }
@@ -400,13 +388,11 @@ export const getOrCreateTypedChild = async (
   }
 
   if (!inserted) {
-    // DEFENCE IN DEPTH, like the catch above, and unreachable for the same
-    // kind of reason: `tx.get` and `createOrGet`'s own lookup are the same
-    // statement on the same connection inside one write transaction, so
-    // nothing can claim the id between them and a miss above means a miss
-    // here. Untestable through the public path, therefore untested — read that
-    // as deliberate, not as a gap. It stays because if that ever stops holding,
-    // falling through would write this caller's types and properties onto
+    // DEFENCE IN DEPTH, like the catch above: `tx.get` and `createOrGet`'s
+    // own lookup are the same statement on the same connection inside one
+    // write transaction, so nothing can claim the id between them and a
+    // miss above means a miss here. Kept because if that ever stops
+    // holding, falling through would write this caller's types onto
     // someone else's row and report it `created`.
     const claimed = classifyOccupant(await tx.get(id), policy)
     if (claimed.verdict === 'ours') {

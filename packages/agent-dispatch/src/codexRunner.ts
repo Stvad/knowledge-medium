@@ -1,45 +1,39 @@
 /**
- * Spawn one `codex exec` run for a task and parse its JSON result. The
- * engine is executor-agnostic (see engine.ts's runOptionsFor + `executor`
- * dispatch in daemon.ts) — this mirrors runner.ts's runClaude shape
- * (AgentRunOptions/AgentRunResult/RunEvent) so it drops into the same
- * lifecycle.
+ * Spawn one `codex exec` run for a task and parse its JSON result. Mirrors
+ * runner.ts's runClaude shape (AgentRunOptions/AgentRunResult/RunEvent) so it
+ * drops into the executor-agnostic engine lifecycle.
  *
- * Billing invariant: runs must hit the user's ChatGPT plan login, not
- * the OpenAI API. `codex` prefers an API key over the ChatGPT-plan OAuth
- * session when one is present in the env, so every API-key/token var it
- * reads (CODEX_BILLING_ENV_DENYLIST) is scrubbed from the child env —
- * the machine's `codex login` state (auth.json) then wins. NB: a key
- * stored via `codex login --with-api-key` lives in auth.json and env
- * scrubbing can't touch it; that's a login-state caveat, documented in
- * the README, not something this can fix.
+ * Billing invariant: runs must hit the user's ChatGPT plan login, not the
+ * OpenAI API. `codex` prefers an API key in the env over the ChatGPT-plan
+ * OAuth session, so every credential var it reads
+ * (CODEX_BILLING_ENV_DENYLIST) is scrubbed from the child env and the
+ * machine's `codex login` state (auth.json) wins. A key stored via `codex
+ * login --with-api-key` lives in auth.json, which env scrubbing cannot
+ * touch — a login-state caveat documented in the README, not fixable here.
  *
- * Permissions: Codex defaults to `-s read-only` for daemon runs. A
- * watcher can opt into `workspace-write` plus declared extra roots and
- * network access through its `runner` config. `read-only` is NOT "no
- * shell" — codex still EXECUTES model-generated shell commands, but the
- * sandbox restricts what those commands can do. km MCP is the graph
- * write path in every mode. This is a materially weaker posture than
- * the claude executor's fail-closed allowlist — see the README
- * "Executors" section.
- * `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own
- * MCP servers / settings there); it does NOT guarantee plugins, skills,
- * or a global AGENTS.md outside config.toml stay out, so it's a weaker
- * analogue of claude's --strict-mcp-config than "equivalent".
+ * Permissions: Codex defaults to `-s read-only` for daemon runs; a watcher
+ * can opt into `workspace-write` plus declared extra roots and network
+ * access through its `runner` config. `read-only` is NOT "no shell" — codex
+ * still EXECUTES model-generated shell commands, and the sandbox only
+ * restricts what those commands can do, so this is a materially weaker
+ * posture than the claude executor's fail-closed allowlist (README,
+ * "Executors"). km MCP is the graph write path in every mode.
+ * `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own MCP
+ * servers / settings there); it does NOT keep out plugins, skills or a
+ * global AGENTS.md declared outside config.toml, so it is a weaker analogue
+ * of claude's --strict-mcp-config rather than an equivalent.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import { envForBilling, humanizeToolName } from './runner.js'
-import type { AgentRunResult, RunEvent } from './runner.js'
+import type { AgentRunResult, CommonRunOptions, RunEvent } from './runner.js'
 import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 export type { SpawnImpl }
 
-/** Env vars that would redirect billing away from the ChatGPT plan login.
+/** Env vars that would redirect billing away from the ChatGPT plan login:
  *  codex's credential order reads any of these before falling back to the
- *  OAuth session in auth.json (verified against the codex-cli 0.142.5
- *  binary's auth manager: OPENAI_API_KEY / CODEX_API_KEY / CODEX_ACCESS_TOKEN
- *  are all live env credential sources; OPENAI_BASE_URL reroutes the API
- *  target). Mirrors runner.ts's BILLING_ENV_DENYLIST intent. */
+ *  OAuth session in auth.json, and a base URL reroutes the API target
+ *  outright. Mirrors runner.ts's BILLING_ENV_DENYLIST intent. */
 export const CODEX_BILLING_ENV_DENYLIST = [
   'OPENAI_API_KEY',
   'OPENAI_BASE_URL',
@@ -60,38 +54,20 @@ export interface CodexMcpServer {
   env: Record<string, string>
 }
 
-export interface CodexRunOptions {
+export interface CodexRunOptions extends CommonRunOptions {
   codexBin: string
-  prompt: string
-  cwd?: string
-  model?: string
   sandbox?: CodexSandbox
   addDirs?: string[]
   networkAccess?: boolean
   approvalPolicy?: CodexApprovalPolicy
   approvalsReviewer?: CodexApprovalsReviewer
-  /** Resume an existing thread (thread follow-up). */
-  resumeSessionId?: string
-  timeoutMs: number
-  env?: NodeJS.ProcessEnv
-  /** Billing mode (config.ts). 'api' skips the env scrub (usage-based
-   *  billing opted in); anything else (incl. undefined) scrubs — the
-   *  safe default. */
-  billing?: 'subscription' | 'api'
-  /** Called for each parsed progress event as the run streams. Errors
-   *  thrown by the handler are caught and logged — a broken consumer
-   *  must never kill the run. */
-  onEvent?: (event: RunEvent) => void
   /** Injected via `-c mcp_servers.<name>.*` overrides (config.toml has
    *  no --mcp-config-file equivalent this build exposes over CLI). */
   mcpServer?: CodexMcpServer
-  /** Abort the in-flight run (UI Stop) — kills the child like the timeout. */
-  signal?: AbortSignal
 }
 
 /** The prompt is deliberately NOT an argv element — same rationale as
- *  buildClaudeArgs: argv is `ps`-visible and ARG_MAX-capped, and note
- *  content belongs in neither failure mode. `-` (stdin) is always LAST. */
+ *  buildClaudeArgs. `-` (stdin) is always LAST. */
 export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   const args = ['exec']
   args.push('--json', '-s', options.sandbox ?? 'read-only', '--skip-git-repo-check', '--ignore-user-config')
@@ -104,17 +80,17 @@ export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   if (options.model) args.push('-m', options.model)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer
-    // -c values parse as TOML, not JSON (live-verified): a JSON array of
-    // strings is coincidentally valid TOML, but a JSON object is NOT a
-    // TOML map ("expected a map"), so env goes as dotted per-key
-    // overrides. JSON.stringify doubles as TOML basic-string escaping
-    // for the quote/backslash cases these values can contain.
+    // -c values parse as TOML, not JSON: a JSON array of strings is
+    // coincidentally valid TOML, but a JSON object is NOT a TOML map
+    // ("expected a map"), so env goes as dotted per-key overrides.
+    // JSON.stringify doubles as TOML basic-string escaping for the
+    // quote/backslash cases these values can contain.
     args.push('-c', `mcp_servers.${name}.command=${JSON.stringify(command)}`)
     args.push('-c', `mcp_servers.${name}.args=${JSON.stringify(serverArgs)}`)
-    // Headless exec has no user to approve MCP tool calls — without
-    // this, every km call dies as "user cancelled MCP tool call"
-    // (live-verified). Auto-approving km mirrors the claude executor's
-    // --allowedTools grant of the same tools.
+    // Headless exec has no user to approve MCP tool calls — without this,
+    // every km call dies as "user cancelled MCP tool call". Auto-approving
+    // km mirrors the claude executor's --allowedTools grant of the same
+    // tools.
     args.push('-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`)
     for (const [key, value] of Object.entries(env)) {
       args.push('-c', `mcp_servers.${name}.env.${key}=${JSON.stringify(value)}`)
@@ -143,10 +119,9 @@ export interface ParsedCodexResult {
  *  createStreamJsonParser's shape ({feed, finish}) so runCodex composes
  *  with runJsonlProcess exactly like runClaude does.
  *
- *  Never throws: unparseable/unknown lines, events, and item types are
- *  silently skipped — the real transcript has item types (reasoning,
- *  command_execution, web_search, mcp_tool_call) we haven't observed
- *  live, and future codex versions may add more.
+ *  Never throws: unparseable or unknown lines, events and item types are
+ *  silently skipped, since the transcript carries item types this parser has
+ *  no branch for and codex can add more.
  *
  *  Terminal state comes from turn.completed / turn.failed, NOT from
  *  reaching end-of-stream — a `result` sentinel line doesn't exist in

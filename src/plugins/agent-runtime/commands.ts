@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
-import type { Repo } from '@/data/repo'
+import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
@@ -21,13 +21,21 @@ import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
-import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { getLocalWorkspace } from '@/data/workspaces.js'
+import { dataModelGuide } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
+import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
+import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
+import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
+import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import type { ParsedBlock } from '@/utils/markdownParser.js'
+import { createChild, deleteBlock, move, restoreBlock } from '@/data/mutators.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -40,20 +48,44 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
-import { applyToggle, isEnabled } from '@/facets/togglable.js'
+import { combineFacetContributions, type FacetContribution } from '@/facets/facet.js'
+import { applyToggle, isEnabled, type Overrides } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
   createCompileCache,
+  ExtensionTranspileError,
   hashExtensionSource,
+  lookupApproval,
   readApproval,
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
+import {
+  definitionSeedsFacet,
+  sameTxProcessorsFacet,
+  projectedTypeDefinitionsFacet,
+  typeSeedsFacet,
+  valuePresetCoresFacet,
+} from '@/data/facets.js'
+import { resolveSeedsByName } from '@/data/propertyDefinitionRegistry.js'
+import {
+  buildTypeDefinitionRegistry,
+  harvestNestedPropertySeeds,
+} from '@/data/typeDefinitionRegistry.js'
+import type { AnyValuePresetCore } from '@/data/api'
+import { v4 as uuidv4 } from 'uuid'
 import { lintExtensionSource } from './extensionLint.ts'
+import {
+  findPresetIdentityConflicts,
+  presetIdentityRefusal,
+  type PresetIdentityConflict,
+  type PresetIdentityScan,
+  type PresetRegistryAfter,
+} from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -65,6 +97,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {isReadOnlyAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {assertContributor, createContributor, listContributors} from '@/plugins/contributors/profiles'
+import {contributorAttributionProcessor} from '@/plugins/contributors/processor'
+import {viewWorkspace} from './agentViews/shared'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   takeLastPropertyCellBackfillRun,
@@ -87,6 +123,7 @@ import type {
   MoveBlockPosition,
   RestoreBlockInput,
   RunBackfillResult,
+  RematerializeWorkspaceInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -144,6 +181,14 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   return value
 }
 
+/** The verb's target block id as it acts on it (see `blockIdField`). */
+const commandBlockId = (
+  repo: Repo,
+  command: {blockId?: unknown; id?: unknown; exactIds?: unknown},
+  verb: string,
+): Promise<string> =>
+  blockIdField(repo, requireString(command.blockId ?? command.id, 'blockId'), verb, command.exactIds === true)
+
 const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
   if (!isRecord(value)) {
     throw new Error('position must be an object with kind first|last|before|after')
@@ -196,12 +241,13 @@ const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): 
       'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
       'server or other clients) and skips the kernel derivations (block_types, ' +
       'reference normalization, property projection), desyncing derived state. Use ' +
-      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'create-block / update-block (which go through repo.tx) for a normal ' +
       'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
       '(or {allowSyncedWrite: true} on the command body) to override this check.',
   )
 }
 
+// Deliberate raw maintenance bypasses Repo processors, including contributor selection and attribution.
 const runSql = async (
   repo: Repo,
   sql: string,
@@ -232,17 +278,47 @@ const isExtensionContribution = (source: unknown, blockId: string): boolean => {
   return source === prefix || source.startsWith(`${prefix}/`)
 }
 
-const verifyExtensionBlock = async (
+/** One extension's contributions, resolved on their own.
+ *
+ *  This EXECUTES the candidate's top-level module code and its extension
+ *  factory, which is the only way to see what it registers — so it runs behind
+ *  the two conditions install already licenses, and no others: the caller
+ *  asked (`--verify`), or this install makes the source live here, meaning the
+ *  block passes BOTH loader gates (approved on this device and enabled by
+ *  intent) and the install is about to re-pin it to this very source. A block
+ *  that fails either gate stores source that nothing executes (#67), and
+ *  evaluating it to inspect it would be the one thing those gates exist to
+ *  prevent. `installRuntimeExtension` owns that decision; everything here
+ *  assumes it has been made.
+ *
+ *  `liveOverrides` is the device's real enable-intent map, not an empty one:
+ *  the block itself is forced on (it is what we came to resolve), but a
+ *  boundary NESTED inside its tree — a `userToggle` the extension declares for
+ *  part of itself — must be evaluated exactly as the app will evaluate it.
+ *  Resolving those against an empty map prunes any that is off by default and
+ *  on by override, so the preset check would see none of the cores beneath it
+ *  and the app-wide rebuild would then register them unrefused.
+ *
+ *  `block` is the row the source WOULD produce: on an update the stored row
+ *  with its new content, on a first install a row that does not exist yet.
+ *  Only `id`, `content` and `workspaceId` are read here. */
+const resolveExtensionInIsolation = async (
   repo: Repo,
-  context: AgentRuntimeContext,
-  blockId: string,
-): Promise<ExtensionVerificationResult> => {
-  const block = await repo.load(blockId)
-  if (!block) {
-    throw new Error(`Extension block ${blockId} not found after install`)
-  }
-
+  block: BlockData,
+  liveOverrides: Overrides,
+): Promise<{
+  runtime: Awaited<ReturnType<typeof resolveAppRuntime>>
+  errors: ExtensionVerificationResult['errors']
+  /** Can this source be PINNED? False only when it did not transpile, in which
+   *  case `approveExtension` leaves the previous pin — and the code it already
+   *  runs — in place, so the install changes nothing about what is registered.
+   *  Anything that transpiled still pins and still takes effect at the next
+   *  reload, however it then failed. */
+  pinnable: boolean
+}> => {
   const errors: ExtensionVerificationResult['errors'] = []
+  let pinnable = true
+  const overrides = new Map([...liveOverrides, [block.id, true]])
   const singleBlockRepo = {
     query: {
       findExtensionBlocks: () => ({
@@ -262,7 +338,7 @@ const verifyExtensionBlock = async (
       repo: singleBlockRepo,
       workspaceId: block.workspaceId,
       safeMode: false,
-      overrides: new Map([[block.id, true]]),
+      overrides,
       // Verification compiles the brand-new LIVE source in isolation to
       // inspect its contributions before any device-local approval exists,
       // so it bypasses the approval gate (#67). This does NOT run the
@@ -272,20 +348,163 @@ const verifyExtensionBlock = async (
       // never shares the process-wide cache with the user-facing loader.
       cache: createCompileCache(),
       errorReporter: (reportedBlockId, error) => {
+        if (error instanceof ExtensionTranspileError) pinnable = false
         errors.push(serializeVerificationError(reportedBlockId, error))
       },
     }),
     {
-      overrides: new Map([[block.id, true]]),
+      overrides,
       context: {
         repo,
         workspaceId: repo.activeWorkspaceId,
-        safeMode: context.safeMode,
+        // NORMAL mode, even when the app is in safe mode. The dynamic loader
+        // above is already told `safeMode: false` so it compiles at all, and a
+        // function-valued extension reads `ctx.safeMode` itself: handing it the
+        // app's value lets it omit the very contribution this resolution exists
+        // to see, while leaving safe mode later registers it unrefused.
+        safeMode: false,
         generation: 'agent-runtime-install-verify',
       },
     },
   )
 
+  return {runtime: verificationRuntime, errors, pinnable}
+}
+
+/** The app's own contribution list for `facetId`, with this block's entries
+ *  REPLACED IN PLACE by the candidate's.
+ *
+ *  Both halves matter and neither is re-derived by the caller: the folds this
+ *  feeds sort by `precedence` and break ties by POSITION, so a candidate read
+ *  in isolation — or appended at the end — can name itself the winner over a
+ *  live contribution that would actually outrank it. Splicing at the first of
+ *  this block's entries is where a reload puts them back.
+ *
+ *  With no anchor — a first install, or a block contributing nothing to this
+ *  facet today — the candidate goes wherever this facet's resolution makes it
+ *  WIN a same-precedence tie: last for a last-wins fold, first for a
+ *  first-wins one. That is an APPROXIMATION of its place in
+ *  `findExtensionBlocks` order and a deliberate one, but the direction is not
+ *  arbitrary: winning means the scan reads the CANDIDATE's value as the
+ *  after-state, so the error it can make is a spurious refusal (with
+ *  `--allow-preset-change` to hand) and never a missed one. Placing it where
+ *  it loses would make the scan compare the incumbent against itself and let a
+ *  real re-typing through. Reconstructing the true position would mean
+ *  asserting that block order and resolver order agree, which nothing here can
+ *  pin — so `unanchored` must be set from how the CALLER resolves this facet,
+ *  not from what reads naturally. */
+const mergeCandidateInto = (
+  facetId: string,
+  context: AgentRuntimeContext,
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  blockId: string,
+  unanchored: 'wins-last' | 'wins-first',
+  onReplaced?: (contribution: FacetContribution<unknown>) => void,
+): FacetContribution<unknown>[] => {
+  const candidate = resolution.runtime.contributionsById(facetId)
+  const merged: FacetContribution<unknown>[] = []
+  let spliced = false
+  for (const contribution of context.runtime.contributionsById(facetId)) {
+    if (!isExtensionContribution(contribution.source, blockId)) {
+      merged.push(contribution)
+      continue
+    }
+    onReplaced?.(contribution)
+    if (!spliced) {
+      merged.push(...candidate)
+      spliced = true
+    }
+  }
+  if (!spliced) {
+    if (unanchored === 'wins-first') merged.unshift(...candidate)
+    else merged.push(...candidate)
+  }
+  return merged
+}
+
+/** The effective value-preset registry this install would produce, for the
+ *  preset ids it touches.
+ *
+ *  Every id is resolved from the MERGED contribution list (see
+ *  {@link mergeCandidateInto}) and folded by the facet, so the core recorded is
+ *  the one that would actually end up registered: an extension contributing two
+ *  cores under one id has a loser that never reaches `repo.valuePresetCores`
+ *  and must not raise a conflict that cannot happen.
+ *
+ *  The second half is the direction a scan of the candidate cannot see: ids
+ *  this block contributes TODAY that the new source drops. Nothing is declared
+ *  for them, and the id still changes codec — to the last contribution from any
+ *  other source, or to nothing at all. That is the same re-typing from
+ *  underneath, so it is put into the map explicitly. */
+const presetRegistryAfter = (
+  context: AgentRuntimeContext,
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  blockId: string,
+  workspaceId: string,
+): PresetRegistryAfter => {
+  // An unpinnable source changes nothing: the previous pin keeps running, so
+  // there is no after to diff. Every OTHER failure still pins and still takes
+  // effect, and the resolution ran the same code the reload will — so what it
+  // produced is what will be registered, absences included.
+  if (!resolution.pinnable) return new Map()
+
+  const claimedToday = new Set<string>()
+  const merged = mergeCandidateInto(
+    valuePresetCoresFacet.id, context, resolution, blockId, 'wins-last',
+    // An id this block claims TODAY that the fold no longer holds at all stops
+    // resolving. An absent key cannot say that — it reads the same as an id
+    // nobody ever claimed — so it is collected on the pass that already visits
+    // exactly those contributions, and recorded explicitly below.
+    replaced => claimedToday.add((replaced.value as AnyValuePresetCore).id))
+  const folded = combineFacetContributions(valuePresetCoresFacet, merged, {})
+
+  // The seeds the workspace would resolve after this install, assembled the
+  // way `facetBridge` assembles them and resolved by the registry's own
+  // owner-of-a-name rule. Re-deriving any part of this is what made three
+  // rounds of this check wrong: the harvest step is how a property seed
+  // declared INLINE in a type seed reaches the registry at all, and the
+  // first-wins collision rule is the opposite of the `Map.set` last-wins a
+  // local assembly gets for free.
+  const explicitSeeds = combineFacetContributions(definitionSeedsFacet,
+    mergeCandidateInto(definitionSeedsFacet.id, context, resolution, blockId, 'wins-first'), {})
+  const typeSeeds = combineFacetContributions(typeSeedsFacet,
+    mergeCandidateInto(typeSeedsFacet.id, context, resolution, blockId, 'wins-first'), {})
+  const harvested = harvestNestedPropertySeeds(
+    buildTypeDefinitionRegistry({
+      workspaceId,
+      projectedDefinitions: context.runtime.read(projectedTypeDefinitionsFacet),
+      seeds: typeSeeds,
+    }),
+    explicitSeeds,
+  )
+  // Keyed by the property NAME, which is what cells are stored under — see
+  // `SeedConfigPair`. A seed's `seedKey` is independent of its name and can be
+  // re-keyed without moving any data.
+  const seedConfigsByPreset = new Map<string, Map<string, unknown>>()
+  for (const seed of resolveSeedsByName([...explicitSeeds, ...harvested]).values()) {
+    const configs = seedConfigsByPreset.get(seed.presetId) ?? new Map<string, unknown>()
+    configs.set(seed.name, seed.encodedConfig)
+    seedConfigsByPreset.set(seed.presetId, configs)
+  }
+
+  // Seed-declared ids are deliberately NOT unioned in here. For one to matter
+  // it must already resolve to a core, and every such id is either in `folded`
+  // or added below; the ids a union would add are exactly the ones the fold
+  // cannot see, where "no core registers this id" would be a false refusal
+  // against a core that is still there (#1054).
+  const presetIds = new Set([...folded.keys(), ...claimedToday])
+  return new Map([...presetIds].map(presetId => [presetId, {
+    core: folded.get(presetId),
+    seedConfigs: seedConfigsByPreset.get(presetId) ?? new Map<string, unknown>(),
+  }]))
+}
+
+const describeVerification = (
+  resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>>,
+  block: BlockData,
+): ExtensionVerificationResult => {
+  const {runtime: verificationRuntime, errors} = resolution
+  const blockId = block.id
   const renderersContribs = verificationRuntime.contributionsById(blockRenderersFacet.id)
   const appMountsContribs = verificationRuntime.contributionsById(appMountsFacet.id)
   const appEffectsContribs = verificationRuntime.contributionsById(appEffectsFacet.id)
@@ -325,6 +544,116 @@ const verifyExtensionBlock = async (
   }
 }
 
+/** The device's synced enable-intent map — what the app resolves every
+ *  extension toggle through. `null` when prefs could not be read at all.
+ *
+ *  Null rather than an empty map because the two callers must answer it
+ *  differently: "which toggles are on" has a sane default for a status REPORT
+ *  (absent intent reads as disabled, which is what a user-installed extension
+ *  is), and none for a data-safety CHECK — an empty map there prunes every
+ *  boundary that is off by default and on by override, hiding exactly the
+ *  contributions the check exists to see. */
+const readExtensionOverrides = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<Overrides | null> => {
+  try {
+    // A copy: with nothing stored this is the schema's shared default.
+    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
+  } catch {
+    return null
+  }
+}
+
+/** What an install does to the code running on THIS device.
+ *
+ *  - `live` — both loader gates pass here and the install re-pins, so the
+ *    candidate's preset cores replace the ones registered right now. The case
+ *    the preset check exists for.
+ *  - `dormant` — the install stores source nothing will run: a block this
+ *    device never approved, one disabled by intent, a first install, or safe
+ *    mode. No preset of its can re-type a value.
+ *  - `unreadable` — a gate's own store could not be read, so which of the two
+ *    this is cannot be known.
+ *
+ *  Three-valued because every gate is a store that can FAIL TO READ, and a
+ *  failed read is not a "no". Collapsing one into `dormant` skips the check
+ *  and keeps the re-pin, which is how a lost refusal becomes a re-typing at
+ *  the next boot — the two must move together, so they read one answer.
+ *
+ *  `repin` is that pairing made literal: the install pins this device's
+ *  approval to the new source ONLY on the `live` arm, the one arm where the
+ *  candidate was executed and its presets compared. Every `dormant` arm
+ *  declines, which is what makes "nothing this install does takes effect
+ *  here" true rather than a claim the re-pin quietly contradicts. It costs
+ *  the update flow nothing: `enable-extension` re-approves unconditionally,
+ *  so install-then-enable still ships an update, while the settings-UI enable
+ *  — which keeps an existing pin — now reports `update-available` instead of
+ *  silently adopting source nothing compared (narrowing #1046). */
+type InstallLiveness =
+  | {kind: 'live'; overrides: Overrides}
+  | {kind: 'dormant'; overrides: Overrides}
+  | {kind: 'unreadable'; why: string}
+
+const resolveInstallLiveness = async (
+  repo: Repo,
+  workspaceId: string,
+  existing: BlockData | null,
+  safeMode: boolean,
+  verify: boolean,
+): Promise<InstallLiveness> => {
+  // A block this device has never seen is not running here, and no value is
+  // stored under a core it has never registered — so neither gate can make it
+  // `live`, and an unreadable one must not refuse: a fresh graph with a
+  // malformed prefs row still installs. The map is still READ, because
+  // `--verify` resolves the candidate behind these toggles and an empty stand-in
+  // prunes every contribution behind one that is off by default and on by
+  // override.
+  if (existing === null) {
+    // Read only for `--verify`, whose isolated resolution needs the real
+    // toggles; a plain install has no use for the answer.
+    return {
+      kind: 'dormant',
+      overrides: verify ? await readExtensionOverrides(repo, workspaceId) ?? new Map() : new Map(),
+    }
+  }
+
+  // `lookupApproval`, not `readApproval`: the latter reports a transient store
+  // failure as "no approval", which here would skip the check on an extension
+  // that IS approved and running. Its own docblock sends callers whose
+  // fallback re-pins live source to this one.
+  const approval = await lookupApproval(existing.id)
+  if (approval.status === 'unreadable') {
+    return {kind: 'unreadable', why: 'this device\'s extension approval record could not be read'}
+  }
+  // Each gate is read only where its answer can change what happens. Without
+  // approval this install can neither run the source nor pin it, so the
+  // override map decides nothing and an unreadable one must not refuse —
+  // `--verify` is the exception, since the report it asks for resolves the
+  // candidate behind these very toggles.
+  if (approval.status !== 'approved' && !verify) {
+    return {kind: 'dormant', overrides: new Map()}
+  }
+
+  const overrides = await readExtensionOverrides(repo, workspaceId)
+  // An empty map is not a safe stand-in for an unread one: it prunes every
+  // boundary that is off by default and on by override, hiding exactly the
+  // contributions the check exists to see.
+  if (overrides === null) {
+    return {kind: 'unreadable', why: 'this device\'s extension overrides could not be read'}
+  }
+
+  // Safe mode registers NO dynamic-extension contribution at all, whatever the
+  // override state, so the live registry holds none of the cores this install
+  // would replace and every id would read as unregistered — an all-clear that
+  // means only that nothing is loaded.
+  if (safeMode) return {kind: 'dormant', overrides}
+
+  return approval.status === 'approved' && isEnabled(userExtensionToggle(existing), overrides)
+    ? {kind: 'live', overrides}
+    : {kind: 'dormant', overrides}
+}
+
 /** Will this extension actually run on this device, and if not, why not?
  *
  *  Two independent gates gate every extension: a SYNCED enabled intent, and
@@ -340,15 +669,13 @@ const readRunState = async (
 ): Promise<{approved: boolean; enabled: boolean; running: boolean}> => {
   const approval = await readApproval(block.id).catch(() => null)
   const approved = Boolean(approval) && (await hashExtensionSource(block.content ?? '')) === approval?.sourceHash
-  let enabled = false
-  try {
-    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
-    const overrides = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
-    enabled = isEnabled(userExtensionToggle(block), overrides)
-  } catch {
-    // Prefs unavailable (fresh profile / read failure) — intent reads as
-    // absent, which for a user-installed extension means disabled.
-  }
+  const enabled = isEnabled(
+    userExtensionToggle(block),
+    // Prefs unavailable → intent reads as absent, which for a user-installed
+    // extension means disabled. A status report may default; see the note on
+    // `readExtensionOverrides` for why the preset check may not.
+    await readExtensionOverrides(repo, workspaceId) ?? new Map<string, boolean>(),
+  )
   return {approved, enabled, running: approved && enabled}
 }
 
@@ -502,6 +829,48 @@ const runRuntimeBackfill = async (
   }
 }
 
+/** Re-run the drain over a workspace's downloaded-but-unapplied rows.
+ *
+ *  The operator answer to `workspaceViewGap`'s durable arm — rows this device
+ *  downloaded, could not apply, and consumed the queue entry for, which nothing
+ *  re-delivers on its own. A DERIVATION pass over local state (see
+ *  `Repo.rematerializeWorkspace`): no uploads, no claim, no undo-stack clearing,
+ *  safe to re-run. */
+const rematerializeRuntimeWorkspace = async (
+  repo: Repo,
+  input: RematerializeWorkspaceInput,
+): Promise<WorkspaceRematerialization> => {
+  const scope = input.scope ?? 'unapplied'
+  if (scope !== 'all' && scope !== 'unapplied') {
+    throw new Error(`rematerialize-workspace: --scope must be "unapplied" or "all", got "${scope}"`)
+  }
+  // Same rule as `run-backfill`: `--workspace "$UNSET"` must fail rather than
+  // fall back to the active workspace, and for the same reason — the option is
+  // an assertion about which graph is being touched.
+  const workspaceId = assertedWorkspaceOverride(input.workspaceId) ?? resolveWorkspaceId(repo)
+  // The pass rebuilds THIS client's view of the workspace it has open. Its key
+  // state and its block cache are the active workspace's, so pointing it
+  // elsewhere would rewrite rows for a workspace nobody opened — the one thing
+  // workspace-scoped maintenance is not allowed to do.
+  //
+  // Checked ONCE, unlike `assertBackfillMayWrite`, which re-takes the same
+  // question inside every writing transaction of a pass of the same duration.
+  // Accepted, not overlooked: a user who navigates away mid-pass leaves it
+  // writing `blocks` for a workspace they no longer have open, but
+  // `getMaterializability` is keyed on each ROW's workspace_id rather than the
+  // active one, so the write is still correct — the cost is wasted work and
+  // cache growth, and the WK-paste path has had the same shape all along.
+  if (workspaceId !== repo.activeWorkspaceId) {
+    throw new Error(
+      `rematerialize-workspace: --workspace ${workspaceId} is not the active workspace ` +
+      `(${repo.activeWorkspaceId ?? 'none'}). The pass rebuilds the view of the workspace ` +
+      'this client has open, so the option is an assertion, not a target — open that ' +
+      'workspace and re-run.',
+    )
+  }
+  return repo.rematerializeWorkspace(workspaceId, {scope})
+}
+
 const mapPosition = (
   position: BlockPosition | undefined,
 ): {kind: 'first'} | {kind: 'last'} | undefined => {
@@ -526,6 +895,18 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
+/** Install scans must stay on the workspace whose definitions and runtime
+ *  were captured together; otherwise the preset comparison can pin a source
+ *  against a different workspace's registry. */
+const assertInstallScanWorkspace = (repo: Repo, workspaceId: string): void => {
+  if (workspaceId === repo.activeWorkspaceId) return
+  throw new Error(
+    `install-extension: scan workspace ${workspaceId} is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). The preset scan needs that workspace's runtime. `
+    + 'Open the target workspace and retry the install.',
+  )
+}
+
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
@@ -535,8 +916,8 @@ const createRuntimeBlock = async (
   const explicitId = input.data?.id as string | undefined
   // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
   // from an agent/CLI caller can render ambiguously in the outline (control
-  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
-  // way no render-time filter alone can fully rule out.
+  // characters, bidi reordering, homoglyphs) in a way no render-time filter
+  // alone can fully rule out.
   //
   // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
   // would reject this id a few frames later regardless. This check is here
@@ -544,17 +925,28 @@ const createRuntimeBlock = async (
   // write, instead of surfacing a `tx.create:` rejection from three layers
   // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
+  // Before the parent: a [[page]] parent is created when missing, and would
+  // stay behind if the create then failed on a taken id. `tx.create` still
+  // refuses it, should one be taken meanwhile.
+  if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
+    throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
+  }
   const references = input.data?.references as BlockReference[] | undefined
 
-  if (input.parentId) {
-    const id = await repo.mutate.createChild({
-      parentId: input.parentId,
-      content,
-      properties,
-      references,
-      position: mapPosition(input.position),
-      id: explicitId,
-    }) as string
+  if (input.parentId !== undefined) {
+    const parentRef = input.parentId
+    // A [[page]] / date parent is created when missing; one undo entry for both.
+    const id = await repo.undoGroup(async repo => {
+      const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
+      return runAgentMutator(repo, 'create-block', createChild, {
+        parentId: parent.id,
+        content,
+        properties,
+        references,
+        position: mapPosition(input.position),
+        id: explicitId,
+      })
+    })
     return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
@@ -562,7 +954,6 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
-
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
     await tx.create({
@@ -574,7 +965,7 @@ const createRuntimeBlock = async (
       properties,
       references,
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
+  }, agentTxOptions('create-block'))
   return withGrainWarnings(repo, await repo.load(id), properties)
 }
 
@@ -589,7 +980,7 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
  *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
- *  (the daemon passes `claude:reply`).
+ *  (the daemon passes `agent:reply`).
  *
  *  Idempotent by `key`: the tagged blocks are made to carry the parsed
  *  tree's content/parentage by a positional (pre-order) reconcile — update
@@ -613,14 +1004,6 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
-  // shape 'block' → the whole markdown is ONE root block (newlines kept);
-  // 'outline' (default) → split along the markdown outline.
-  const parsed: ParsedBlock[] = shape === 'block'
-    ? (input.markdown.length === 0
-        ? []
-        : [{id: 'block-root', orderKey: '', content: input.markdown}])
-    : parseMarkdownToBlocks(input.markdown)
-
   const ids: string[] = []
   const rootIds: string[] = []
 
@@ -628,6 +1011,11 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
+    tx.assertWritableWorkspace(workspaceId)
+
+    // Parse only after admission so a closed workspace is refused before the
+    // potentially expensive markdown work begins.
+    const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -769,7 +1157,7 @@ const reconcileMarkdownSubtree = async (
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+  }, agentTxOptions('reconcile-markdown-subtree'))
 
   return {ids, rootIds}
 }
@@ -791,6 +1179,13 @@ const updateRuntimeBlock = async (
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
     found = true
+    if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
+      throw new Error(
+        `update-block: block ${input.id}'s content is not the expectedContent passed — nothing was written. `
+        + `Its current content is: ${contentEcho(before.content)}. `
+        + 'Re-plan against it, or use edit-block to change one passage.',
+      )
+    }
     const nextProperties = input.properties === undefined
       ? undefined
       : input.replaceProperties
@@ -809,7 +1204,7 @@ const updateRuntimeBlock = async (
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
+  }, agentTxOptions('update-block'))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -819,7 +1214,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
-  await repo.mutate.move(input)
+  await runAgentMutator(repo, 'move-block', move, input)
   return repo.load(input.id)
 }
 
@@ -827,8 +1222,9 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
-  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
-  await repo.mutate.delete(input)
+  // Programmatic delete: the agent bridge is not a UI gesture, so the UI-layer
+  // deletion guards deliberately don't apply.
+  await runAgentMutator(repo, 'delete-block', deleteBlock, input)
   return {id: input.id, deleted: true}
 }
 
@@ -836,7 +1232,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
-  await repo.mutate.restore(input)
+  await runAgentMutator(repo, 'restore-block', restoreBlock, input)
   return repo.load(input.id)
 }
 
@@ -911,16 +1307,119 @@ const installRuntimeExtension = async (
       }))?.block ?? null
     : null
 
+  // Mint a first install's id HERE rather than inside `tx.create`, so the
+  // candidate row below — and every contribution source, error and warning
+  // resolved from it — already carries the id the block will be stored under.
+  // A synthetic stand-in would put a nonexistent id in `--verify`'s output.
+  const targetId = existing?.id ?? (input.id?.trim() || uuidv4())
+  // The row this source WOULD produce. Only `id`, `content` and `workspaceId`
+  // are read from it; the rest is what a first install's row will hold once
+  // the tx below places it under its parent.
+  const candidate: BlockData = existing
+    ? {...existing, content: source}
+    : {
+        id: targetId,
+        workspaceId,
+        parentId: null,
+        orderKey: '',
+        content: source,
+        properties: {},
+        references: [],
+        createdAt: 0,
+        updatedAt: 0,
+        userUpdatedAt: 0,
+        createdBy: repo.user.id,
+        updatedBy: repo.user.id,
+        deleted: false,
+      }
+  // Was THIS device already running this block? If so the trust decision has
+  // been made and the update arrives through the same authorized local channel
+  // (the paired bridge), so the install re-pins to the new source below rather
+  // than leaving the extension silently dead until someone re-enables it. A
+  // block this device never approved stays unapproved: install is not where
+  // trust gets granted for the first time.
+  const liveness = await resolveInstallLiveness(
+    repo, workspaceId, existing, context.safeMode, Boolean(input.verify))
+  // Every gate this install reads answers TWO questions at once — does the new
+  // source run here, and may the install re-pin the device's approval to it —
+  // and an unread gate answers neither. Refusing is the only response that
+  // keeps them together; the alternative both skips the check and pins the
+  // source it skipped. Transient by nature, so the remedy is to retry.
+  if (liveness.kind === 'unreadable' && !input.allowPresetChange) {
+    throw new Error(
+      `install-extension: ${liveness.why}, so the value-preset check can tell neither whether `
+      + 'this install goes live nor which toggles the new source resolves behind, and would '
+      + 'judge it on a partial view. Refusing rather than installing on one; retry, or pass '
+      + '--allow-preset-change to install without the check.',
+    )
+  }
+  const goesLive = liveness.kind === 'live'
+
+  // Executing the candidate is what reveals the codecs it registers, and #67
+  // says install is not where trust is granted — so it happens only when this
+  // install is itself what makes the source run, or when `--verify` asks for
+  // the evaluation explicitly, which is what it has always meant.
+  let resolution: Awaited<ReturnType<typeof resolveExtensionInIsolation>> | undefined
+  let presetScan: PresetIdentityScan = {conflicts: [], syncGap: null}
+  if (goesLive || input.verify) {
+    // BEFORE the write, and before the re-pin + reload below: a refusal must
+    // leave nothing behind. Writing the source and then refusing would change
+    // the block's hash, which un-pins the approved version on this device and
+    // stops a working extension dead — a silent side effect of saying no.
+    resolution = await resolveExtensionInIsolation(
+      repo, candidate, liveness.kind === 'unreadable' ? new Map() : liveness.overrides)
+    if (liveness.kind !== 'unreadable') {
+      // The scan's inputs are split between the CAPTURED workspace (the
+      // definition rows) and the ACTIVE one (`repo.valuePresetCores` and
+      // `context.runtime`, both re-filtered on a workspace switch), and
+      // compiling the candidate is an await a switch can land inside.
+      // Comparing the two answers about neither: an extension-owned preset
+      // absent from the new workspace reads as "nothing registers this id",
+      // which skips the conflict. Re-checked in the writing tx too, where the
+      // same switch would re-pin this workspace's extension off a scan that
+      // never saw it.
+      assertInstallScanWorkspace(repo, workspaceId)
+      presetScan = await findPresetIdentityConflicts(
+        repo, workspaceId, presetRegistryAfter(context, resolution, targetId, workspaceId))
+    }
+  }
+  const presetConflicts = presetScan.conflicts
+  // Refuse only when the install is what makes the new codec live. A conflict
+  // found under `--verify` on a block that will not run is a fact about a
+  // future enable, not a re-typing this command performs — it is REPORTED
+  // (below) and the enable path is #1046.
+  if (presetConflicts.length > 0 && goesLive && !input.allowPresetChange) {
+    // A candidate that transpiled and then THREW contributes nothing, which
+    // the diff correctly reads as dropping every id it used to register. The
+    // crash is then the CAUSE and the dropped id only its consequence, so the
+    // refusal has to carry it — naming the consequence alone sends the reader
+    // looking for a preset change that is not there. A candidate that errored
+    // and still registered everything is the other case: the errors are worth
+    // printing, but claiming they explain the conflict would be a guess.
+    const dropped = presetConflicts.some(conflict =>
+      conflict.differences.some(line => line.includes('no core registers this id')))
+    const loadErrors = (resolution?.errors ?? [])
+      .map(error => `  ${error.name ? `${error.name}: ` : ''}${error.message}`)
+      .join('\n')
+    throw new Error(
+      presetIdentityRefusal(presetScan, label ? JSON.stringify(label) : targetId, workspaceId)
+      + (loadErrors === '' ? '' : `\nThe new source also failed to load${
+        dropped ? ', which is why it registers less than it used to' : ''}:\n${loadErrors}`),
+    )
+  }
+  const presetChanges: {presetChanges?: PresetIdentityConflict[]} =
+    presetConflicts.length > 0 ? {presetChanges: presetConflicts} : {}
+  // Reported unasked when the candidate failed to load: an install that stores
+  // source nothing can run is worth saying so about, and it is what makes
+  // skipping the preset diff above legible rather than silent.
+  const verification = resolution && (input.verify || resolution.errors.length > 0)
+    ? describeVerification(resolution, candidate)
+    : undefined
+
   if (existing) {
-    // Was THIS device already running this block? If so, the trust decision
-    // has been made and the update arrives through the same authorized local
-    // channel (the paired bridge) — so re-pin it to the new source rather
-    // than leaving the extension silently dead until someone re-enables it.
-    // A block this device never approved stays unapproved: install is not
-    // where trust gets granted for the first time.
-    const wasApproved = Boolean(await readApproval(existing.id).catch(() => null))
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
+      assertInstallScanWorkspace(repo, workspaceId)
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
       const properties = extensionBlockProperties(current.properties, label, description)
@@ -930,17 +1429,15 @@ const installRuntimeExtension = async (
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
-    // Run verify *before* refreshAppRuntime so the verify's isolated
-    // facet resolution doesn't contend with the app-wide runtime
-    // rebuild that the refresh kicks off. Without this ordering, an
-    // install --verify against a large workspace times out the bridge
-    // poll waiting for resolveAppRuntime to settle.
-    const verification = input.verify
-      ? await verifyExtensionBlock(repo, context, existing.id)
-      : undefined
-    if (wasApproved) {
-      // Best-effort: a source that no longer transpiles can't be pinned, and
-      // that failure belongs to verify/reload, not to the install itself.
+    // Both conditions say the same thing: never pin a source this install did
+    // not compare. `live` is the only arm that executed the candidate and
+    // diffed its presets (see `InstallLiveness`); `pinnable` covers a source
+    // that did not transpile — that conclusion is what let the scan skip the
+    // diff, and `approveExtension` transpiles a SECOND time, so a first
+    // failure that was transient would otherwise succeed here unrefused.
+    if (liveness.kind === 'live' && resolution?.pinnable !== false) {
+      // Best-effort otherwise: a source that no longer transpiles can't be
+      // pinned, and that failure belongs to verify/reload, not to the install.
       await approveExtension(existing.id, source).catch(() => undefined)
     }
     const reloaded = input.reload !== false
@@ -955,6 +1452,7 @@ const installRuntimeExtension = async (
       reloaded,
       ...(runState ?? {}),
       ...(hint ? {hint} : {}),
+      ...presetChanges,
       ...(verification ? {verification} : {}),
     }
   }
@@ -964,11 +1462,16 @@ const installRuntimeExtension = async (
     ? null
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
-  // Already validated raw at the top of the function; the trim is now only
-  // the `undefined`/`''` → "no id supplied, mint one" normalization.
-  let installedId = input.id?.trim() || ''
+  // Minted (or taken from the caller) above, where the candidate row the
+  // preset check resolves from needed it.
+  const installedId = targetId
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
+    // As on the update path: the alias lookup above is an await a workspace
+    // switch can land inside, which would leave `typeSnapshot` read from one
+    // workspace while every `tx.create` below writes the extension root,
+    // container and block into another. Refuse rather than write that tree.
+    assertInstallScanWorkspace(repo, workspaceId)
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)
@@ -1016,8 +1519,8 @@ const installRuntimeExtension = async (
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
     const properties = extensionBlockProperties(undefined, label, description)
-    installedId = await tx.create({
-      id: installedId || undefined,
+    await tx.create({
+      id: installedId,
       workspaceId,
       parentId,
       orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
@@ -1027,9 +1530,6 @@ const installRuntimeExtension = async (
     await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
-  const verification = input.verify
-    ? await verifyExtensionBlock(repo, context, installedId)
-    : undefined
   const reloaded = input.reload !== false
   if (reloaded) refreshAppRuntime()
   // A first install grants no trust and sets no intent, so it does NOT run
@@ -1047,6 +1547,7 @@ const installRuntimeExtension = async (
     ...(runState && runStateHint(runState, label ? `"${label}"` : installedId)
       ? {hint: runStateHint(runState, label ? `"${label}"` : installedId)}
       : {}),
+    ...presetChanges,
     ...(verification ? {verification} : {}),
   }
 }
@@ -1145,6 +1646,18 @@ const runtimeBlock = (
   id: unknown,
 ) => isString(id) && id ? repo.block(id) : null
 
+/** The id a dependency's fallback chain actually selects. `runtimeBlock`'s
+ *  `??` chain expressed as the ID rather than the facade, so the workspace
+ *  guard can validate exactly what the handler is handed instead of
+ *  re-deciding precedence over the raw fields — an ignored back-compat id
+ *  belonging to another workspace must not refuse a request whose effective
+ *  dependencies are all local. */
+const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
+  candidates.find((id): id is string => isString(id) && id !== '')
+
+const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
+  context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1158,12 +1671,11 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
-    ?? runtimeBlock(context.repo, command.uiStateBlockId)
+  const uiStateBlockId = chosenBlockId(dependencies.uiStateBlockId, command.uiStateBlockId)
+  const blockId = chosenBlockId(dependencies.blockId, command.blockId)
+  const realUiStateBlock = runtimeBlock(context.repo, uiStateBlockId)
   const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
-  const block = runtimeBlock(context.repo, dependencies.blockId)
-    ?? runtimeBlock(context.repo, command.blockId)
-    ?? uiStateBlock
+  const block = runtimeBlock(context.repo, blockId) ?? uiStateBlock
 
   if (action.context === 'edit-mode-cm' || action.context === 'property-editing') {
     throw new Error(
@@ -1171,11 +1683,16 @@ const runRuntimeAction = async (
     )
   }
 
+  if (contributorsEnabled(context)) {
+    throw new Error('run-action is unavailable while Contributors is enabled: UI action handlers can retain an unbound repository. Use graph commands or eval with the supplied repo instead.')
+  }
+
   const selectedBlockIds = Array.isArray(dependencies.selectedBlockIds)
     ? dependencies.selectedBlockIds.filter(isString)
     : []
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
-  const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
+  const anchorBlockId = chosenBlockId(dependencies.anchorBlockId)
+  const anchorBlock = runtimeBlock(context.repo, anchorBlockId)
 
   // Imperative runner (no React context), so scopeRootId isn't injected
   // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
@@ -1317,9 +1834,14 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  const asserted = assertedWorkspaceOverride(override)
-  if (asserted) return asserted
+  const asserted = await readableWorkspaceOverride(repo, override)
   const data = await repo.load(blockId)
+  if (asserted) {
+    if (data && data.workspaceId !== asserted) {
+      throw new Error(`Block ${blockId} is in workspace ${data.workspaceId}, not ${asserted}.`)
+    }
+    return asserted
+  }
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error(`Cannot resolve a workspace for block ${blockId}; pass workspaceId`)
@@ -1351,7 +1873,7 @@ const runBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<BacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
 
@@ -1400,7 +1922,7 @@ const runGroupedBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<GroupedBacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
   const grouping = await resolveGroupedBacklinksConfig(
@@ -1473,11 +1995,61 @@ const assertedWorkspaceOverride = (override: unknown): string | undefined => {
   return asserted
 }
 
-const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+/** Refuses a named workspace this tab has nothing to read from, instead of
+ *  answering "nothing found" for it (#606). Asks whether its blocks ARE here,
+ *  not whether new synced rows would apply: those differ when a key-store
+ *  read fails or another tab holds a session-only plaintext confirmation.
+ *  A never-opened empty workspace is refused too, and accepted: opening it
+ *  writes its daily note and system pages, so the refusal's advice clears it. */
+const assertReadableWorkspace = async (repo: Repo, workspaceId: string): Promise<void> => {
+  if (!await getLocalWorkspace(repo, workspaceId)) {
+    throw new Error(
+      `Workspace ${workspaceId} is not known on this device: the local workspaces table has `
+      + 'no row for it (`SELECT id, name FROM workspaces` lists the ones it has).',
+    )
+  }
+  const anyBlock = await repo.db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
+  if (!anyBlock) {
+    throw new Error(
+      `Workspace ${workspaceId} has no blocks in this device's local database (one never opened `
+      + 'here has none, nor does an end-to-end encrypted one whose key was not entered here). '
+      + 'Open it in the app, entering its key if asked, then retry.',
+    )
+  }
+}
+
+/** A `workspaceId` override, once it names a workspace readable here; undefined
+ *  when none was given. */
+const readableWorkspaceOverride = async (repo: Repo, override: unknown): Promise<string | undefined> => {
   const asserted = assertedWorkspaceOverride(override)
+  if (asserted) await assertReadableWorkspace(repo, asserted)
+  return asserted
+}
+
+const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string> => {
+  const asserted = await readableWorkspaceOverride(repo, override)
   if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
+}
+
+/** A raw command's block id, accepting every form an agent view prints or
+ *  takes (unique id prefix, page name, date). An unmatched ref passes through
+ *  unchanged, so the command's own not-found answer is unchanged too. */
+const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const resolution = await resolveBlockRef(repo, ref, {
+    workspaceId: assertedWorkspaceOverride(override) ?? repo.activeWorkspaceId,
+    onMissing: 'verbatim',
+  })
+  return resolution.id
+}
+
+/** A raw read's target, from a ref; a named workspace must be readable and
+ *  hold the block, as for the raw backlink reads. */
+const resolveRawReadTarget = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const id = await resolveRawBlockRef(repo, ref, override)
+  if (override !== undefined) await resolveBlockWorkspaceId(repo, id, override)
+  return id
 }
 
 interface PageCommandResult {
@@ -1487,13 +2059,17 @@ interface PageCommandResult {
   candidates: Array<{id: string, alias: string, content: string, deepLink: string}>
 }
 
+/** Candidates are a lookup aid, not a listing: a caller picks a count
+ *  inside this bound. */
+const MAX_PAGE_CANDIDATES = 100
+
 const runPageCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<PageCommandResult> => {
   const name = requireString(command.name, 'name')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
-  const limit = typeof command.limit === 'number' ? command.limit : 20
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
+  const limit = Math.min(typeof command.limit === 'number' ? command.limit : 20, MAX_PAGE_CANDIDATES)
 
   const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
   const candidates = await repo.query.aliasMatches({workspaceId, filter: name, limit}).load()
@@ -1527,7 +2103,7 @@ const runDailyNoteCommand = async (
   command: KnownAgentCommand,
 ): Promise<DailyNoteCommandResult> => {
   const input = requireString(command.date, 'date')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const parsed = parseRelativeDate(input)
   if (!parsed) {
     throw new Error(
@@ -1564,7 +2140,7 @@ const runSearchCommand = async (
   command: KnownAgentCommand,
 ): Promise<SearchCommandResult> => {
   const query = requireString(command.query, 'query')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 50
 
   // Shared merge point (searchSourcesFacet), not a direct
@@ -1654,7 +2230,7 @@ export const createAgentRuntimeContext = ({
     // agent-dispatch's prompt render) already surface each row's property BAG,
     // so emitting field/value rows too would show the same properties a second
     // time as `((fieldId))` blocks pretending to be user content. Agents that
-    // genuinely want raw storage have `sql` (PR #386 review).
+    // genuinely want raw storage have `sql`.
     getSubtree: async rootId =>
       await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
@@ -1669,6 +2245,7 @@ export const createAgentRuntimeContext = ({
     auditExtension: input => auditRuntimeExtension(repo, input),
     auditProperties: input => auditRuntimeProperties(repo, input),
     runBackfill: input => runRuntimeBackfill(repo, input),
+    rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1685,7 +2262,34 @@ export const executeCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
+  const enabled = contributorsEnabled(context)
+  const readOnly = isReadOnlyAgentCommand(command)
+  if (enabled && !readOnly && command.type !== 'create-contributor') {
+    if (command.contributorId !== undefined && command.contributorId !== null) {
+      const id = requireString(command.contributorId, 'contributorId')
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId, {allowHuman: false})
+    }
+    context = createAgentRuntimeContext({
+      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
+      runtime: context.runtime,
+      safeMode: context.safeMode,
+    })
+  }
+  return executeAttributedCommand(command, context)
+}
+
+const executeAttributedCommand = async (
+  command: KnownAgentCommand,
+  context: AgentRuntimeContext,
+) => {
   switch (command.type) {
+    case 'create-contributor':
+      if (!contributorsEnabled(context)) throw new Error('Enable the Contributors plugin to create contributor profiles.')
+      return createContributor(context.repo, viewWorkspace(context.repo, command.workspaceId), command)
+
+    case 'list-contributors':
+      return listContributors(context.repo, viewWorkspace(context.repo, command.workspaceId))
     case 'ping':
       return pingRuntime(context)
 
@@ -1718,18 +2322,40 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
+      const allowSyncedWrite = command.allowSyncedWrite === true
+      if (command.maxRows !== undefined && mode === 'all') {
+        const maxRows = Math.min(command.maxRows, MAX_SQL_ROWS)
+        const limited = limitedSelectSql(sql, maxRows) ?? sql
+        const rows = await context.sql(limited, getParams(command.params), mode, allowSyncedWrite)
+        return boundSqlRows(Array.isArray(rows) ? rows : [], maxRows)
+      }
+      return context.sql(sql, getParams(command.params), mode, allowSyncedWrite)
     }
 
     case 'get-block':
-      return context.getBlock(requireString(command.blockId ?? command.id, 'blockId'))
+      return context.getBlock(await resolveRawReadTarget(
+        context.repo,
+        requireString(command.blockId ?? command.id, 'blockId'),
+        command.workspaceId,
+      ))
 
     case 'get-subtree':
-      return context.getSubtree(requireString(command.rootId, 'rootId'))
+      return context.getSubtree(await resolveRawReadTarget(
+        context.repo,
+        requireString(command.rootId, 'rootId'),
+        command.workspaceId,
+      ))
+
+    case 'view-block':
+    case 'view-outline':
+    case 'view-backlinks':
+    case 'view-grouped-backlinks':
+    case 'view-search':
+      return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
 
     case 'create-block':
       return context.createBlock({
-        parentId: command.parentId === undefined
+        parentId: command.parentId === undefined || command.parentId === null
           ? undefined
           : requireString(command.parentId, 'parentId'),
         position: getPosition(command.position),
@@ -1776,34 +2402,80 @@ export const executeCommand = async (
       }
 
       return context.updateBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'update-block'),
         content: command.content === undefined
           ? undefined
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
+        expectedContent: command.expectedContent === undefined
+          ? undefined
+          : requireString(command.expectedContent, 'expectedContent'),
       })
     }
 
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : requireString(command.parentId, 'parentId')
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds)
       return context.moveBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
-        position: getMoveBlockPosition(command.position),
+        position: await blockPositionField(
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds,
+        ),
       })
     }
 
     case 'delete-block':
       return context.deleteBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'delete-block'),
       })
 
     case 'restore-block':
       return context.restoreBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'restore-block'),
+      })
+
+    case 'append-markdown': {
+      const view = await appendMarkdown(context.repo, {
+        target: requireString(command.target, 'target'),
+        markdown: requireString(command.markdown, 'markdown'),
+        position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        exactIds: command.exactIds,
+      })
+      return command.format === 'json' ? view : renderAppendView(view)
+    }
+
+    case 'edit-block':
+      return editBlock(context.repo, {
+        id: requireString(command.id, 'id'),
+        old: requireString(command.old, 'old'),
+        new: requireString(command.new, 'new'),
+        exactIds: command.exactIds,
+      })
+
+    case 'create-page':
+      return createPage(context.repo, {
+        name: command.name === undefined ? undefined : requireString(command.name, 'name'),
+        date: command.date === undefined ? undefined : requireString(command.date, 'date'),
+      })
+
+    case 'recent-changes':
+      return recentChanges(context.repo, {
+        since: command.since,
+        limit: command.limit,
+        includeUser: command.includeUser === true,
+      })
+
+    case 'resolve-block-id':
+      return {id: await resolveBlockId(context.repo, requireString(command.ref, 'ref'), 'resolve-block-id')}
+
+    case 'block-history':
+      return blockHistory(context.repo, {
+        id: await resolveBlockId(context.repo, requireString(command.id, 'id'), 'block-history'),
+        limit: command.limit,
       })
 
     case 'install-extension':
@@ -1827,6 +2499,9 @@ export const executeCommand = async (
         verify: command.verify === undefined
           ? undefined
           : Boolean(command.verify),
+        allowPresetChange: command.allowPresetChange === undefined
+          ? undefined
+          : Boolean(command.allowPresetChange),
       })
 
     case 'set-extension-enabled':
@@ -1869,6 +2544,16 @@ export const executeCommand = async (
           : requireString(command.workspaceId, 'workspaceId'),
       })
 
+    case 'rematerialize-workspace':
+      return context.rematerializeWorkspace({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
+        scope: command.scope === undefined
+          ? undefined
+          : requireString(command.scope, 'scope'),
+      })
+
     case 'run-action':
     case 'action':
       return runRuntimeAction(command, context)
@@ -1883,7 +2568,7 @@ export const executeCommand = async (
       return runGroupedBacklinksCommand(context.repo, command)
 
     case 'data-model':
-      return DATA_MODEL_GUIDE
+      return dataModelGuide(typeof command.topic === 'string' ? command.topic : undefined)
 
     case 'page':
       return runPageCommand(context.repo, command)

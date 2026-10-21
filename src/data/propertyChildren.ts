@@ -1,6 +1,6 @@
 /**
- * Pure helpers for properties-as-blocks field/value children (PR #288 §5/§9,
- * extracted from the PR #285 spike). A property on a block is a FIELD ROW —
+ * Pure helpers for properties-as-blocks field/value children
+ * (docs/properties-as-blocks-migration.html §5/§9). A property on a block is a FIELD ROW —
  * a child whose content is the MARKED field form `::((fieldId))` (§7 grammar
  * box: `::` + one whole-block reference span), mirrored into the local
  * `reference_target_id` + `is_field_form` columns — whose own
@@ -41,18 +41,21 @@
 
 import {
   CodecError,
+  memberCodecOf,
+  type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
-  type PropertySchema,
   type Tx,
 } from '@/data/api'
 import {
   FIELD_FORM_MARKER,
   isIdCarryingReference,
+  isWholeContentReference,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
 } from '@/data/referenceBlock'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { jsonValuesEqual, persistedJsonKey } from '@/data/internals/jsonCanonical'
+import { hasLoneSurrogate } from '@/utils/string'
 
 export const getPropertyFieldTargetId = (
   data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
@@ -119,7 +122,7 @@ const finiteNumberFromContent = (content: string): number => {
   const trimmed = content.trim()
   // `Number('')` and `Number('   ')` are 0, not NaN, so the isFinite guard
   // below waves blank content through as a real zero — a cleared value row
-  // would silently project 0 over the cell (PR #386 review). Blank is not the
+  // would silently project 0 over the cell. Blank is not the
   // encoding of any number (`encodedValueToContent` writes `String(n)`, and
   // reserves '' for undefined), so it's unparseable: throwing preserves the
   // row's text and surfaces the count, rather than inventing a value.
@@ -144,33 +147,162 @@ const jsonFromContent = (content: string): unknown => {
   }
 }
 
-const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
+/** Does this codec read `null` as a value? Answered by CALLING it, because no
+ *  codec declares it — which means a required codec answers by constructing and
+ *  throwing a `CodecError`, stack capture included. Memoized per codec: the
+ *  member-grain paths ask once per MEMBER, so a workspace pass over every list
+ *  cell would otherwise throw one Error per member of every list in the graph.
+ *  Codecs are immutable and long-lived, so the cache is keyed on identity and
+ *  never invalidated. */
+const nullAcceptance = new WeakMap<AnyCodec, boolean>()
+const codecAcceptsNull = (codec: AnyCodec): boolean => {
+  const cached = nullAcceptance.get(codec)
+  if (cached !== undefined) return cached
+  let accepts: boolean
   try {
-    schema.codec.decode(null)
-    return true
+    codec.decode(null)
+    accepts = true
   } catch {
-    return false
+    accepts = false
   }
+  nullAcceptance.set(codec, accepts)
+  return accepts
 }
 
-/** Is `s` the literal encoded-null sentinel, or a quoted string that would
- *  collide with it one escaping level down (recursive, so `"null"` itself
- *  round-trips through an extra layer of `JSON.stringify`)? Only meaningful
- *  when the codec actually treats bare `'null'` content as the null
- *  sentinel (`codecAcceptsNull`) — otherwise there's no collision to guard
- *  against and the string should stay verbatim. Verbatim string-family
- *  codecs (`string` | `url` | `ref`) store values as raw content, so a
- *  legitimate string value equal to the sentinel — or to a JSON string
- *  literal that itself needs escaping — must be escaped via
- *  `JSON.stringify` instead of written through untouched. */
-const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
-  if (!codecAcceptsNull(schema)) return false
-  const trimmed = s.trim()
-  if (trimmed === 'null') return true
+/** The codec ONE value child's content is encoded by: the MEMBER codec for a
+ *  multi-valued property, the property's own codec otherwise.
+ *
+ *  The grain question asked in ONE place. Every path that touches a single
+ *  value child — materialize, project, the deferred re-encode, find-replace's
+ *  write guard — has to agree about it, and a site reaching for `schema.codec`
+ *  directly would read a list codec's whole-array grammar against one member's
+ *  text: `["a","b"]` and the string `a` are both "not an array", so the errors
+ *  are silent rather than loud. */
+const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
+  memberCodecOf(schema.codec) ?? schema.codec
+
+/** The characters every reference span OPENS with. Escaping these is what
+ *  makes {@link escapeContent}'s output inert to BOTH readers of the grammar:
+ *  quoting alone only stops the whole-block parser, and the inline one
+ *  (`plugins/references/referenceParser`) scans spans anywhere in content, so
+ *  a merely-quoted `"[[Page]]"` is still an inline reference that a rename
+ *  rewrites — silently editing the value. Stated as the opener set rather than
+ *  by consulting the inline parser because core cannot import a plugin, and
+ *  because no span form in either reader can begin any other way. */
+const SPAN_OPENERS_RE = /[[(]/g
+/** The same class without `g`, for `.test`. A global regex carries `lastIndex`
+ *  across calls, so testing with one answers differently on alternate calls. */
+const SPAN_OPENER_RE = /[[(]/
+
+/** Does this codec store a value as RAW content, so that the text in the row
+ *  is the value itself rather than a formatting of it?
+ *
+ *  These are the codecs that escape ({@link needsEscape} /
+ *  {@link escapeContent}) and whose decode can therefore be looking at an
+ *  envelope. One owner because the sites must agree: disagree on the
+ *  write/read pair and a value is escaped and never unwrapped; disagree in
+ *  {@link contentLosesPropertyValue} and find-replace writes a
+ *  value-destroying content instead of refusing it. (A JSON-spelled value can
+ *  be destroyed the same way and is NOT escaped — km-24hg.)
+ *
+ *  `enum` is in the set but reads through its OWN unwrap
+ *  ({@link enumValueFromContent}), which claims the whole quoted form rather
+ *  than only what `escapeContent` could have produced — it has to keep reading
+ *  the JSON spelling its children were written with. Membership in this set is
+ *  still what it needs from here: that its text is the value, so it escapes on
+ *  the way out and find-replace must refuse content that destroys it.
+ *
+ *  A discriminator and not a probe, unlike the neighbouring
+ *  {@link codecAcceptsNull}: `date` also returns a string unchanged, so
+ *  running the codec cannot tell it apart, and it is deliberately NOT in this
+ *  set — its text is a canonical instant, not raw content. */
+const storesContentVerbatim = (codec: AnyCodec): boolean =>
+  codec.type === 'string' || codec.type === 'url' || codec.type === 'enum'
+
+/** Would this text, stored VERBATIM as a value row's content, read back as
+ *  something other than itself? A whole-content reference does — one of the
+ *  two readers takes it as a pointer rather than text, EMBEDS included
+ *  (`isWholeContentReference`, not `isGrammarShapedLabel`: the latter asks
+ *  only the whole-block reader, which has no embed form, so `!((id))` was
+ *  stored verbatim and a merge then rewrote it). A lone surrogate does too —
+ *  the content column returns U+FFFD.
+ *
+ *  The ENCODER's question, and deliberately wider than
+ *  {@link contentLosesPropertyValue}'s — see there for why the two differ. */
+const verbatimContentLosesValue = (content: string): boolean =>
+  isWholeContentReference(content) || hasLoneSurrogate(content)
+
+/** The option value an ENUM value child's content names. The ONE reader, so
+ *  that {@link needsEscape}'s enum clause can be stated as its exact negation
+ *  and the write/read pair cannot drift.
+ *
+ *  BOTH spellings, and permanently. The plain one is new (#1080); every value
+ *  child written before it holds the JSON one, nothing migrates them, and each
+ *  drifts to plain on its next write. So the whole JSON-string-literal form
+ *  stays reserved — which is why an option value that is ITSELF quote-shaped
+ *  has to be escaped, and not only a reference-shaped one.
+ *
+ *  Trimmed, like the `date`/`number`/`boolean` readers: this is text a person
+ *  types, and a stray space must not read as a different option. An option
+ *  whose own value carries edge whitespace is escaped instead, so the round
+ *  trip stays total.
+ *
+ *  One-way across app versions: a client from before #1080 reads only the JSON
+ *  spelling. Accepted rather than versioned, because the only spelling such a
+ *  client decodes is the one this exists to stop writing (#671). */
+const enumValueFromContent = (content: string): string => {
+  const trimmed = content.trim()
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(trimmed)
-      if (typeof parsed === 'string') return needsEscape(schema, parsed)
+      if (typeof parsed === 'string') return parsed
+    } catch {
+      // not a JSON string literal — plain text, returned verbatim below
+    }
+  }
+  return trimmed
+}
+
+/** Would `s`, written VERBATIM as a value child's content, read back as
+ *  something other than `s`? A {@link storesContentVerbatim} codec stores a
+ *  value as raw content, so any divergence is silent value loss — the
+ *  projection reads the child back and writes THAT over the owner's cell. Only
+ *  strings that hit one of these cases are escaped; every other string stays
+ *  verbatim in the tree.
+ *   - the encoded-null SENTINEL: bare `null` content IS the null value to a
+ *     codec that accepts one. Gated on `codecAcceptsNull` — elsewhere there is
+ *     no collision, and the string stays verbatim.
+ *   - anything {@link verbatimContentLosesValue} names, which is where those
+ *     two shapes and why they lose the value are written down.
+ *   - for `enum` ONLY, anything {@link enumValueFromContent} would read as a
+ *     different string. Its reader claims more than the envelope below — the
+ *     whole quoted form, and the trim — so its escape rule is that reader
+ *     negated rather than the recursion.
+ *
+ *  Recursive on the quoted form, or a value that is ITSELF a JSON string
+ *  literal of an escapable string would decode one level short. The recursion
+ *  is unbounded but the ESCAPE is applied once: `escapeContent`'s output opens
+ *  with `"`, carries no span opener and no raw surrogate, so it can never be
+ *  MISREAD once stored.
+ *
+ *  That is not the same as "escaping is idempotent", which it is not: fed back
+ *  in as a VALUE, an envelope escapes again (the quoted-form recursion, and
+ *  correctly so — a value that happens to look like an envelope is still a
+ *  value). Nothing double-escapes today because every re-encode path decodes
+ *  first (`core.migratePropertyDefinition`, the materialize processor).
+ *  A future one must too; content is not a value. */
+const needsEscape = (codec: AnyCodec, s: string): boolean => {
+  const trimmed = s.trim()
+  if (trimmed === 'null' && codecAcceptsNull(codec)) return true
+  if (verbatimContentLosesValue(s)) return true
+  // `enum` reserves MORE than `escapeContent`'s signature, so its escape rule
+  // is not the recursion below: it is literally "would this read back as
+  // itself", asked of the reader that will do the reading.
+  if (codec.type === 'enum') return enumValueFromContent(s) !== s
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (typeof parsed === 'string') return needsEscape(codec, parsed)
     } catch {
       // not valid JSON — falls through to "no escaping needed"
     }
@@ -178,10 +310,95 @@ const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
   return false
 }
 
-const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): string => {
+/** Does this content name one declared option at FACE VALUE and READ as a
+ *  different one? The enum-only destroyer, and the whole of it.
+ *
+ *  Both halves are needed. Without the first, every legacy JSON-spelled row is
+ *  refused a safe edit — replacing `open` with `done` inside the stored
+ *  `"open"` yields `"done"`, which reads as `done` and is exactly right, and
+ *  no other reading of that text is an option at all. Without the second there
+ *  is no ambiguity to resolve, so nothing to refuse.
+ *
+ *  Asked of the CODEC both times, which is the only thing that knows the
+ *  option set — `encode` is where `codecs.enum` keeps its membership check. */
+const enumReadingIsAmbiguous = (codec: AnyCodec, content: string): boolean => {
+  const read = enumValueFromContent(content)
+  if (read === content) return false
+  const names = (value: string): boolean => {
+    try {
+      codec.encode(codec.decode(value))
+      return true
+    } catch {
+      return false
+    }
+  }
+  return names(content) && names(read)
+}
+
+/** Would writing this text into a value row DESTROY the property's value?
+ *  For write paths that set `content` directly rather than encoding a typed
+ *  value — find-replace is the one caller. They bypass
+ *  `encodedValueToContent`, so they cannot escape, and must refuse instead.
+ *
+ *  NARROWER than {@link verbatimContentLosesValue} on purpose: only a MARKED
+ *  span destroys anything — it stamps `is_field_form`, `isFieldValueChild`
+ *  drops the row from the value set, and the owner's key goes with it,
+ *  silently (#688). An UNMARKED span stays in the value set and decodes
+ *  right back, so `Roadmap` → `[[Roadmap]]` must keep working.
+ *
+ *  The null SENTINEL is the third destroyer: bare `null` content IS the
+ *  unset value to a codec that accepts one.
+ *
+ *  Scoped to the codecs that store content verbatim: everything else either
+ *  emits machine-formatted text that cannot take these shapes, or (`ref`) is
+ *  span-shaped by design and already refused by its own decode. */
+export const contentLosesPropertyValue = (
+  schema: AnyPropertySchema,
+  content: string,
+): boolean => {
+  // At GRAIN (`valueChildCodec`): the row being rewritten is ONE value child,
+  // so a `string-list` member is governed by the string rules its own content
+  // was written under, not by the list codec's.
+  const codec = valueChildCodec(schema)
+  if (!storesContentVerbatim(codec)) return false
+  if (content.trim() === 'null' && codecAcceptsNull(codec)) return true
+  // `enum` is the one codec in this set whose text is not simply its own
+  // value, so it has one destroyer the others do not: its reader unwraps the
+  // quoted form, and content carrying none of the shapes below can therefore
+  // land the owner on a DIFFERENT declared option than the text names. Not a
+  // key vanishing — a wrong value, which no later read can tell from a right
+  // one. Narrower than "whatever the encoder would have escaped": that also
+  // refuses a SAFE edit inside a legacy-spelled row, which has only one
+  // reading and is the common case until those rows drift.
+  //
+  // Content naming no option at all needs nothing here — the caller's own
+  // decode throws on it (`valueChildContentToEncoded`).
+  if (codec.type === 'enum' && enumReadingIsAmbiguous(codec, content)) return true
+  return parseExactReferenceBlockContent(content)?.fieldForm === true
+    || hasLoneSurrogate(content)
+}
+
+/** Store `s` as content that reads back as exactly `s` and as nothing else.
+ *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
+ *  escapes); the extra opener escaping neutralizes the reference grammar.
+ *  `JSON.parse` undoes both, so the decode needs no counterpart — only
+ *  {@link isEscapedEnvelope} to know it is looking at one. */
+const escapeContent = (s: string): string =>
+  JSON.stringify(s).replace(SPAN_OPENERS_RE,
+    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** Could `trimmed` have come out of {@link escapeContent}? A JSON string
+ *  literal carrying no literal span opener — the two properties escapeContent
+ *  guarantees, and the second is what makes the shape self-identifying rather
+ *  than merely quote-shaped. Necessary, not sufficient: the caller still
+ *  confirms it parses and that the payload was worth escaping. */
+const isEscapedEnvelope = (trimmed: string): boolean =>
+  trimmed.startsWith('"') && trimmed.endsWith('"') && !SPAN_OPENER_RE.test(trimmed)
+
+const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
   if (encoded === undefined) return ''
-  if (encoded === null) return codecAcceptsNull(schema) ? 'null' : ''
-  if (schema.codec.type === 'ref') {
+  if (encoded === null) return codecAcceptsNull(codec) ? 'null' : ''
+  if (codec.type === 'ref') {
     // A ref value child holds the reference in editable `((id))` form — the
     // same block-reference affordance as everywhere else, and the same shape
     // as the field row's own `((fieldId))` — so `core.deriveReferenceTarget`
@@ -198,22 +415,19 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // `.trim() === ''`: a whitespace-only id is a MALFORMED reference (not a
     // clear), so it must reach `referenceBlockContentForId` — which throws on a
     // whitespace/parens id — rather than silently unsetting the property here,
-    // the same silent property-loss that guard exists to prevent (Codex #386).
+    // the same silent property-loss that guard exists to prevent.
     if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }
-  if (
-    schema.codec.type === 'string'
-    || schema.codec.type === 'url'
-  ) {
+  if (storesContentVerbatim(codec)) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
-    return needsEscape(schema, encoded) ? JSON.stringify(encoded) : encoded
+    return needsEscape(codec, encoded) ? escapeContent(encoded) : encoded
   }
-  if (schema.codec.type === 'date') {
+  if (codec.type === 'date') {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     return encoded
   }
-  if (schema.codec.type === 'number' || schema.codec.type === 'boolean') {
+  if (codec.type === 'number' || codec.type === 'boolean') {
     return String(encoded)
   }
   const serialized = JSON.stringify(encoded)
@@ -221,27 +435,31 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
 }
 
 const contentToEncodedValue = (
-  schema: AnyPropertySchema,
+  codec: AnyCodec,
   content: string,
 ): unknown => {
-  if (
-    (schema.codec.type === 'string' || schema.codec.type === 'url')
-    && content.trim().startsWith('"') && content.trim().endsWith('"')
-  ) {
+  // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
+  // is not that signature: a person can type `"[[Page]]"` into a value row, and
+  // find-replace can turn the inside of an ordinary quoted value into a span —
+  // both then decoded to the unquoted string, silently dropping the quotes the
+  // user wrote. The discriminator is free, because escaping openers is already
+  // what makes the envelope inert: a real envelope carries NO literal `[` or
+  // `(`, so content that has one was written by someone else and is text.
+  if (storesContentVerbatim(codec) && isEscapedEnvelope(content.trim())) {
     try {
       const parsed: unknown = JSON.parse(content.trim())
-      if (typeof parsed === 'string' && needsEscape(schema, parsed)) return parsed
+      if (typeof parsed === 'string' && needsEscape(codec, parsed)) return parsed
     } catch {
       // not valid JSON — falls through to the sentinel/default handling below
     }
   }
-  if (content.trim() === 'null' && codecAcceptsNull(schema)) {
-    return schema.codec.encode(schema.codec.decode(null))
+  if (content.trim() === 'null' && codecAcceptsNull(codec)) {
+    return codec.encode(codec.decode(null))
   }
-  switch (schema.codec.type) {
+  switch (codec.type) {
     case 'ref': {
       // The gate is this content's FORM, never `reference_target_id`'s
-      // nullness (§9; PR #417 review). The column is not the "is this a ref
+      // nullness (§9). The column is not the "is this a ref
       // value" signal it looks like: `core.deriveReferenceTarget` stamps it
       // for a whole-block `[[alias]]` too, and a `[[alias]]` nothing claims
       // MINTS a seat and then resolves. So trusting any non-null target
@@ -282,6 +500,35 @@ const contentToEncodedValue = (
     case 'string':
     case 'url':
       return content
+    case 'enum':
+      // BARE content the encoder would have ESCAPED was not written by the
+      // encoder. `verbatimContentLosesValue` is the encoder's own reason for
+      // escaping ({@link needsEscape}), so an option value in one of those
+      // shapes is only ever stored enveloped — and reading the bare form back
+      // as that option accepts a row the grammar will edit out from under it.
+      // A reference-shaped option typed straight into a value child is the
+      // case: it decodes as the option, and then a rename rewrites the live
+      // span, after which the same row is off-menu and the key is gone.
+      //
+      // Refusing the shape rather than each spelling of it, so a shape added
+      // to `verbatimContentLosesValue` later is covered here without an edit.
+      // The envelope forms are unaffected: an escaped value carries no span
+      // opener by construction, and the legacy JSON spelling of one is
+      // quote-wrapped, so neither is whole-content reference-shaped.
+      if (verbatimContentLosesValue(content)) {
+        throw new CodecError('an escaped enum value', content)
+      }
+      // No membership check here, and deliberately: `valueChildContentToEncoded`
+      // runs the codec's `encode`, which IS `requireMember`, over whatever this
+      // returns — and it is the only route by which a value child reaches a
+      // cell. A second copy here refused nothing the first did not (#1088).
+      //
+      // The unwrap above already answers the ESCAPED subset of what this
+      // reads, and answers it identically — an escaped envelope is a JSON
+      // string literal, so `enumValueFromContent` parses the same payload out
+      // of it. This case is what additionally reads the bare JSON spelling
+      // every value child was written with before #1080.
+      return enumValueFromContent(content)
     case 'date':
       return content.trim() === '' ? null : content.trim()
     case 'number':
@@ -293,51 +540,592 @@ const contentToEncodedValue = (
   }
 }
 
-/** Serialize a typed property value into the editable content of its
- *  backing child. Scalars stay human-readable; structured values fall
- *  back to their codec-encoded JSON. */
-export const propertyValueToChildContent = <T>(
-  schema: PropertySchema<T>,
-  value: T,
-): string => encodedValueToContent(schema, schema.codec.encode(value))
-
-export const encodedPropertyValueToChildContent = (
+/** Encode ONE value child's content, at {@link valueChildCodec} grain — a
+ *  whole scalar value, or one member of a multi-valued property. */
+export const encodedToValueChildContent = (
   schema: AnyPropertySchema,
   encoded: unknown,
-): string => encodedValueToContent(schema, encoded)
+): string => encodedValueToContent(valueChildCodec(schema), encoded)
 
-/** Parse a property-value child back into the canonical encoded value
- *  stored on the parent cell. Throws when the child content cannot be
- *  interpreted for this field's current codec.
+/** Does a failed `encode` mean this value cannot be STORED, or only that it
+ *  cannot be canonicalized?
+ *
+ *  `enum` alone: its option set is a promise to every consumer that switches
+ *  on it, and nothing else on this path asks the write side (#1088). Every
+ *  other codec keeps its stored encoding — it decoded, so it is readable, and
+ *  a codec a runtime extension registers may use the same lenient-read design
+ *  for the same reason `enum` does, where re-canonicalizing through a stricter
+ *  write side would drop a value the codec means to preserve.
+ *
+ *  THROUGH THE WHOLE MEMBER CHAIN, because a `list(enum)` holds options just
+ *  as a scalar `enum` does and nothing about the nesting changes that. Walking
+ *  it is shorter than justifying a depth: stop at one level and the levels
+ *  below are a limit to explain, while the two directions stay in agreement
+ *  for a separate reason — that `propertyCellValueRejection` asks this at
+ *  every storage grain it would materialize.
+ *
+ *  No cycle guard. A codec whose member chain loops describes an infinitely
+ *  nested value, so its own `encode` and `decode` recur forever too; it is
+ *  broken before this asks it anything. */
+const enforcesWriteSide = (codec: AnyCodec): boolean => {
+  if (codec.type === 'enum') return true
+  const member = memberCodecOf(codec)
+  return member !== undefined && enforcesWriteSide(member)
+}
+
+/** The form `encoded` is STORED as under `codec`, or a throw saying it cannot
+ *  be stored at all. `encode(decode(v))`, so tolerant text ("1" for a number,
+ *  a date string) lands in the canonical shape `tx.setProperty` would write.
+ *
+ *  A codec may READ more than it WRITES: `codecs.enum`'s `decode` requires
+ *  only a string, so a value whose option was removed stays editable, while
+ *  its `encode` rejects that value. Whether the write side is ENFORCED is
+ *  decided HERE for every caller and not at each of them — the cell → children
+ *  direction and the children → cell direction disagreeing about it is exactly
+ *  how a raw write is accepted and then silently dropped by the projection
+ *  that follows it.
+ *
+ *  {@link enforcesWriteSide} says which codecs those are. */
+const storedFormOf = (codec: AnyCodec, encoded: unknown): unknown => {
+  const decoded = codec.decode(encoded)
+  try {
+    return codec.encode(decoded)
+  } catch (cause) {
+    if (enforcesWriteSide(codec)) throw cause
+    return encoded
+  }
+}
+
+/** Why the materialize direction cannot carry `encoded` as a value of
+ *  `schema`, or null when it can.
+ *
+ *  ONE owner for the question `MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR`
+ *  rejects a write over, so a producer that wants to refuse a value BEFORE
+ *  the write asks exactly what the processor will ask rather than a
+ *  hand-rolled decode that drifts from it. Content promotion is one such
+ *  producer.
+ *
+ *  TWO legs, because the processor takes two steps on a cell value that can
+ *  fail. The first is {@link storedFormOf} and not a bare `decode`, so this
+ *  asks of a cell exactly what the projection will ask of the children
+ *  materialized from it — the two drifting is how an off-menu `enum` value
+ *  raw-written here was accepted and then dropped by that projection, the
+ *  writing tx long since committed. The second is not redundant:
+ *  `codecs.ref().decode` accepts any
+ *  string, while `referenceBlockContentForId` refuses one that cannot be read
+ *  back as `((id))` — so a ref-typed key meeting `Some Person` passes the
+ *  decode and throws at the render. It asks for EVERY value child the value
+ *  implies, so a refList naming one unrenderable member is refused rather than
+ *  silently losing that member at materialize time.
+ *
+ *  Note what that does NOT cover: `Mary` is refused by neither leg, so a
+ *  ref-typed key can still take a one-word value and store it as a block id
+ *  nothing resolves. This asks exactly what the processor asks, and the
+ *  processor accepts that — a stricter rule belongs in a producer's own
+ *  acceptance check, never here, or the two would disagree about what a write
+ *  may contain. */
+export interface PropertyCellValueRejection {
+  readonly reason: 'decode' | 'content'
+  readonly cause: unknown
+}
+
+export const propertyCellValueRejection = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): PropertyCellValueRejection | null => {
+  try {
+    // {@link storedFormOf}, not a bare `decode`: the projection that reads
+    // these children back runs the write side for `enum`, so asking less here
+    // accepts a raw `tx.update({properties})` of an off-menu value, writes its
+    // child, and then has the projection drop the key — the original tx long
+    // since committed. The two directions ask one question.
+    storedFormOf(schema.codec, encoded)
+  } catch (cause) {
+    return {reason: 'decode', cause}
+  }
+  try {
+    encodedPropertyValueToChildContents(schema, encoded)
+  } catch (cause) {
+    return {reason: 'content', cause}
+  }
+  return null
+}
+
+/** Parse ONE value child's content back into its canonical encoded form, at
+ *  {@link valueChildCodec} grain. Throws when the content cannot be
+ *  interpreted under that codec.
  *
  *  A function of `content` ALONE — for every codec including `ref`, which
  *  parses the id out of the id-carrying span rather than reading the derived
  *  column (see the `ref` case). That makes this decode answerable about
  *  PROPOSED content, which is what find-replace's value guard needs, and
  *  independent of whether a row's stamp has landed yet. */
-export const propertyChildContentToEncodedValue = (
+export const valueChildContentToEncoded = (
   schema: AnyPropertySchema,
   content: string,
 ): unknown => {
-  const encoded = contentToEncodedValue(schema, content)
-  // Decode and re-encode so tolerant user text ("1" for number,
-  // date strings, etc.) lands in the same canonical JSON shape as
-  // tx.setProperty would have stored directly.
-  const decoded = schema.codec.decode(encoded)
+  const codec = valueChildCodec(schema)
+  // {@link storedFormOf} owns the canonicalization AND, for `enum`, the
+  // membership check that keeps an off-menu value child out of the owner's
+  // cell (#1088). Refusing is §9's graceful path: the key reads unset and the
+  // row keeps its text.
+  //
+  // What that costs is NOT "a removed option unsets every block using it" — a
+  // config edit fans out in the editing tx and the fan-out REFUSES rather than
+  // writing, so the removal is rejected and the values stay. It costs where no
+  // row edit fires to be refused: an option set that moves in CODE. #1097.
+  return storedFormOf(codec, contentToEncodedValue(codec, content))
+}
+
+/** What a value child's stored text is worth under a DIFFERENT codec:
+ *  the text to store, or nothing this codec can read.
+ *
+ *  Deliberately NOT a verdict on whether anything was LOST. One unreadable row
+ *  is not a loss — the projection may never have read it, or a sibling may
+ *  carry the same member — and only the aggregate can say. That question has
+ *  one owner, {@link projectedValueCount}, at the grain it is asked about. */
+export type ValueChildConversion =
+  | {readonly outcome: 'converted'; readonly content: string}
+  | {readonly outcome: 'unreadable'}
+
+/** How `to` would spell `held` so that it reads the same value back, at
+ *  {@link valueChildCodec} grain — or null when it has no such spelling.
+ *  Asked by RUNNING it, because only the codec can say: a `to` that re-spells
+ *  the value into text it reads back as something else has moved the value
+ *  rather than carrying it.
+ *
+ *  Null is the answer wherever the two types disagree about the VALUE — the
+ *  number codec reads back 42 where the string `42` went in, so a coercion
+ *  has no spelling that holds and an identity codec has one for anything.
+ *
+ *  `''` is a legal spelling, which is why callers test `=== null`. */
+const spellingThatHolds = (
+  to: AnyPropertySchema,
+  held: unknown,
+): string | null => {
   try {
-    return schema.codec.encode(decoded)
+    const respelled = encodedToValueChildContent(to, held)
+    return jsonValuesEqual(valueChildContentToEncoded(to, respelled), held)
+      ? respelled
+      : null
   } catch {
-    // Lenient-read codec whose write side is stricter than its read side —
-    // `enum` is the case that matters: `decode` deliberately accepts a value
-    // whose option was later removed/renamed so it "still decodes and stays
-    // editable" (codecs.ts), while `encode` rejects it. Canonicalizing through
-    // the CURRENT option set would turn a value the codec intends to preserve
-    // into "unparseable", and the caller (projection / B2 re-encode) would drop
-    // the parent key — silent data loss on a config change, and a regression
-    // against the cell era, which keeps such a value until it is re-set.
-    // It decoded, so it is readable: keep the stored encoding as-is rather
-    // than canonicalizing. A genuine shape error still throws out of `decode`.
-    return encoded
+    // `to` cannot write this value, or cannot read back what it wrote.
+    return null
+  }
+}
+
+/** Does `content`, left exactly as stored, already read back as `held` under
+ *  `to`? Asked by RUNNING it, like {@link spellingThatHolds}, because only the
+ *  codec can say. */
+const holdsUnder = (
+  to: AnyPropertySchema,
+  content: string,
+  held: unknown,
+): boolean => {
+  try {
+    return jsonValuesEqual(valueChildContentToEncoded(to, content), held)
+  } catch {
+    return false
+  }
+}
+
+/** The value `from` holds, re-spelled by `to`. Only the codec that WROTE the
+ *  text can say what it holds.
+ *
+ *  Every decline here is a case the text route then answers. */
+const valueRoute = (
+  from: AnyPropertySchema,
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  let held: unknown
+  try {
+    held = valueChildContentToEncoded(from, content)
+  } catch {
+    // This ROW is stale under the codec that was publishing it — nothing here
+    // knows what it holds, whatever is true of the rest of the property.
+    return {outcome: 'unreadable'}
+  }
+  // ALREADY RIGHT: the stored text reads back as this value under `to` as it
+  // stands, so re-spelling it would rewrite the row to say the same thing.
+  // Checked before canonicalizing because this pass writes every consuming
+  // row in the user's own tx: an `enum` whose children still hold the JSON
+  // spelling would otherwise have every one of them rewritten by an option
+  // being ADDED, an edit that changes no value and that a person reads as
+  // harmless. Those rows drift to the plain spelling when their value is next
+  // written, which is the only time the text needs to move.
+  if (holdsUnder(to, content, held)) return {outcome: 'converted', content}
+  const respelled = spellingThatHolds(to, held)
+  if (respelled === null) return {outcome: 'unreadable'}
+  // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
+  // `codecs.ref().decode` accepts any string, so the string `Mary` re-spells to
+  // `((Mary))` — an identity nobody wrote, pointing at a seat that does not
+  // exist. Only the text route may produce a reference, because the `((id))`
+  // grammar in the TEXT is what says the person wrote one. Asked of the
+  // re-spelled text rather than of `to.codec.type`, which is an open string a
+  // plugin picks: any codec that spells a value as a reference span mints the
+  // same identity, whatever it calls itself.
+  // Gated on the STORED text already carrying a reference. ACCEPTED, not
+  // right: the alias form passes the gate and re-spells to `(([[Page]]))`, a
+  // span whose id is the eight characters `[[Page]]` rather than the block
+  // the alias resolves to — an identity nobody wrote, which is what the
+  // paragraph above exists to stop. Resolving it needs a lookup this pure
+  // function does not have, and declining instead refuses the re-type
+  // outright. #1073 decides which.
+  if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
+    return {outcome: 'unreadable'}
+  }
+  return {outcome: 'converted', content: respelled}
+}
+
+/** `content` re-read under `to`, as if it had just been typed into the row. */
+const textRoute = (
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  let encoded: unknown
+  try {
+    encoded = valueChildContentToEncoded(to, content)
+  } catch {
+    return {outcome: 'unreadable'}
+  }
+  try {
+    return {outcome: 'converted', content: encodedToValueChildContent(to, encoded)}
+  } catch {
+    // DEFENCE IN DEPTH, and unreachable through any caller today: `to` just
+    // produced `encoded` from this text, and the only writer that throws
+    // (`referenceBlockContentForId`) is fed an id the same parser canonicalized.
+    // Keeping the stored text rather than throwing, because a throw here aborts
+    // the caller's whole transaction over a row that already projects correctly.
+    return {outcome: 'converted', content}
+  }
+}
+
+/**
+ * Re-read ONE value child's text for a property whose codec changed, at
+ * {@link valueChildCodec} grain. The owner of which reading wins.
+ *
+ * THE VALUE FIRST, because what the property HELD is what a re-type has to
+ * carry and the text alone cannot say what that is: the JSON `"x"` and the
+ * three-character string `"x"` are the same text
+ * under two codecs (#1055). Taking the text's own reading keeps the spelling
+ * and swaps the value, and swaps the CELL with it.
+ *
+ * The {@link textRoute} answers wherever the {@link valueRoute} declines.
+ *
+ * `from` is null when the definition's previous preset does not build, which
+ * is why this takes a nullable schema at all: nothing can read the row under
+ * the codec that wrote it, so the text route is the only answer.
+ */
+export const convertValueChildContent = (
+  from: AnyPropertySchema | null,
+  to: AnyPropertySchema,
+  content: string,
+): ValueChildConversion => {
+  if (from !== null) {
+    const carried = valueRoute(from, to, content)
+    if (carried.outcome === 'converted') return carried
+  }
+  return textRoute(to, content)
+}
+
+/** How many VALUES a projected cell holds — the grain every "did this change
+ *  take something away" question is asked at.
+ *
+ *  A multi-valued property's count is its member count; a scalar holds one
+ *  value or none. `null` is NOT a value where the codec accepts one: that is
+ *  the encoded form of CLEARED (`optionalRef`/`optionalNumber` encode `unset`
+ *  as `null`), so narrowing such a property to its required twin drops a
+ *  sentinel rather than losing anything a person typed. */
+export const projectedValueCount = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): number => {
+  if (encoded === undefined) return 0
+  if (encoded === null && codecAcceptsNull(valueChildCodec(schema))) return 0
+  return memberCodecOf(schema.codec) === undefined
+    ? 1
+    : (encoded as readonly unknown[]).length
+}
+
+/**
+ * The content of EVERY value child backing one encoded property value, in
+ * sibling order — one for a single-valued property, one PER MEMBER for a
+ * multi-valued one (§5/§9: a refList is N sibling `((id))` values, not a JSON
+ * array in one child). Sibling order IS list order; the reconciler that writes
+ * these keeps the two the same and the projection reads them back in it.
+ *
+ * MULTIPLICITY IS PRESERVED: `[2, 2, 3]` is three value children, and a member
+ * repeated in the value is a repeated sibling. The value children are NOT
+ * deduped, though the scalar rule one grain up does fold equal-content
+ * siblings — there they are redundant copies of ONE value, so folding loses
+ * nothing, while here they are two members and folding would silently rewrite
+ * the user's list.
+ *
+ * Its cost is that two devices concurrently writing `[a, b]` and `[a, c]`
+ * converge to `[a, b, a, c]`. That is a conflict left VISIBLE for the user to
+ * resolve by deleting a row, which is what the scalar rule does with a
+ * divergent peer instead of silently choosing. Properties that are genuinely
+ * sets (`types`, `alias`) get that from their WRITERS, not from storage.
+ */
+export const encodedPropertyValueToChildContents = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): string[] => {
+  const member = memberCodecOf(schema.codec)
+  if (member === undefined) return [encodedValueToContent(schema.codec, encoded)]
+  // Callers reach here only past their own decode gate, which a list codec
+  // fails on anything but an array — so this is a broken-codec assertion, not
+  // a user-reachable path.
+  if (!Array.isArray(encoded)) throw new CodecError('array', encoded)
+  // `undefined` is ABSENCE to a scalar codec, which renders it as empty
+  // content. An array ELEMENT cannot be absent: `JSON.stringify` writes it as
+  // `null`, so that is what the cell already stores for it, and rendering it as
+  // empty content instead would make the same `setProperty` call succeed before
+  // the flip and fail after it. Normalize to the persisted form first.
+  //
+  // `Array.from`, never `map`: a SPARSE array is the second spelling of that
+  // same absence, and `map` skips a hole without calling its callback — so the
+  // normalization right above would be bypassed for exactly the element that
+  // needs it, and `[, 'x']` would store what `[null, 'x']` does not.
+  const members = Array.from(encoded, item => (item === undefined ? null : item))
+  const contents = members.map(item => encodedValueToContent(member, item))
+  // EVERY member must read back as itself. A scalar can afford a content that
+  // does not round-trip — empty content is how `codecs.ref` spells a CLEARED
+  // ref, and a scalar may be cleared — but a list member may not: the
+  // projection reads the content, so a member that comes back as anything else
+  // is silently a different list, one member shorter or one member changed,
+  // with no error anywhere.
+  //
+  // Stated as the round trip rather than as its symptoms, because the symptoms
+  // arrive one per codec: a `null` member of a `string` list renders EMPTY and
+  // reads back as `''`, which the earlier "is the content empty and
+  // unparseable?" test let through — the cell kept `[null]` while the child
+  // said `''`, and the next projection published the `''` over it.
+  //
+  // HERE and not in `codecs.refList().encode`: a refList's member IS the scalar
+  // ref codec, so refusing a value in the list that the member codec accepts
+  // would break the `Codec.member` contract. Pre-flip, where no value child is
+  // written at all, the cell → children pass reports such a key instead.
+  for (const [i, content] of contents.entries()) {
+    let readBack: unknown
+    try {
+      // {@link storedFormOf} as well as the read, because that is the whole
+      // call the projection makes on this content (`valueChildContentToEncoded`
+      // at member grain). Asking less here is how a `list(enum)` cell took an
+      // off-menu member, had its child written, and then had the projection
+      // drop it — and one level further down, how `list(list(enum))` derived
+      // `[]` from a cell that was accepted. The grains agree because each one
+      // is ASKED, not because a predicate models the nesting.
+      readBack = storedFormOf(member, contentToEncodedValue(member, content))
+    } catch {
+      throw new CodecError('a list member that reads back from its content', members[i])
+    }
+    if (!jsonValuesEqual(readBack, members[i])) {
+      throw new CodecError('a list member that reads back from its content', members[i])
+    }
+  }
+  return contents
+}
+
+/**
+ * Aggregate a field row's value children back into the property's encoded
+ * value — `undefined` when nothing parses, which the projection reads as
+ * §9's "key unset, rows stay visible and fixable".
+ *
+ * Single-valued: first parseable wins, unparseable siblings skipped (a
+ * divergent peer is a surfaced conflict, and the cell shows the winner).
+ * Multi-valued: every parseable member, in sibling order, multiplicity and all
+ * ({@link encodedPropertyValueToChildContents} says why the members are not a
+ * set). An unparseable MEMBER
+ * drops only itself — the same rule `decodeRefListIds` already applies to a
+ * malformed element of a stored list (#189), for the same reason: one bad
+ * member must not strip the whole field.
+ *
+ * CALLED ONLY WHEN A LIVE FIELD ROW WAS OBSERVED, which is what lets a
+ * multi-valued property with no parseable member answer `[]` rather than
+ * `undefined`: the field row's existence IS the difference between an
+ * explicitly empty list and an unset key, and removing the field row is how a
+ * property is unset. Every caller gates on that first — the projection on
+ * `fieldRows.length`, the rename and the deferred re-encode on `sawFieldRow` —
+ * so the rule lives here rather than at each of them, and they cannot drift
+ * into disagreeing about what an empty field row means.
+ *
+ * NO whole-list canonicalization: members are canonicalized one at a time, and
+ * the `member` contract (`encode` is element-wise) makes the array of
+ * canonical members the canonical array. Doing it again through the list codec
+ * would also make one member's shape error throw away every other member.
+ */
+export const childContentsToEncodedPropertyValue = (
+  schema: AnyPropertySchema,
+  contents: Iterable<string>,
+): unknown | undefined => {
+  if (memberCodecOf(schema.codec) === undefined) {
+    for (const content of contents) {
+      try {
+        return valueChildContentToEncoded(schema, content)
+      } catch {
+        // Invalid child text should not preserve a stale parent cell
+        // projection. Skip it; if none parse the key is left unset.
+      }
+    }
+    return undefined
+  }
+  const members: unknown[] = []
+  for (const content of contents) {
+    try {
+      members.push(valueChildContentToEncoded(schema, content))
+    } catch {
+      // Drop only this member — see the note above.
+    }
+  }
+  return members
+}
+
+/** What a value row is, for comparison. `denotesValue` is false when the row's
+ *  text does not decode: such a row denotes NOTHING, which is why its `key` is
+ *  its own identity and equal to nothing — not even to another row carrying the
+ *  same broken text. Two rows both edited to `not a reference` are two
+ *  independently fixable blocks; unlike two equal VALID members, neither is in
+ *  the projected cell, so nothing can recreate one that was folded or reaped. */
+export interface MemberKey {
+  readonly key: string
+  readonly denotesValue: boolean
+}
+
+export interface MemberKeys {
+  row: (row: Pick<BlockData, 'id' | 'content'>) => MemberKey
+  /** A DESIRED member's key, from the content the cell implies. Always a value
+   *  key in practice — it came from the encoder — and the fallback is shaped so
+   *  it can never equal a row key. */
+  content: (content: string) => string
+}
+
+/** How one property's value children are compared to EACH OTHER: by decoded
+ *  value for a multi-valued property, by raw text otherwise. ONE factory,
+ *  because every place that folds equal value rows asks — the cross-field-row
+ *  union below, the member reconciler, and the duplicate-field-row collapse —
+ *  and a disagreement between any two of them is silent in both directions. */
+export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
+  if (schema === null || memberCodecOf(schema.codec) === undefined) {
+    // Single-valued: text IS the comparison, unchanged, and equal-content
+    // duplicates are copies of one value rather than occurrences.
+    return {
+      row: row => ({key: `c${row.content}`, denotesValue: true}),
+      content: content => `c${content}`,
+    }
+  }
+  const valueKey = (content: string): string | undefined => {
+    try {
+      return `v${persistedJsonKey(valueChildContentToEncoded(schema, content))}`
+    } catch {
+      return undefined
+    }
+  }
+  return {
+    row: row => {
+      const key = valueKey(row.content)
+      return key === undefined
+        ? {key: `r${row.id}`, denotesValue: false}
+        : {key, denotesValue: true}
+    },
+    content: content => valueKey(content) ?? `c${content}`,
+  }
+}
+
+/**
+ * Fold one definition's value rows ACROSS its field rows, into the order the
+ * owner's cell reads them in.
+ *
+ * THE cross-field-row rule. Duplicate field rows are a transient conflict that
+ * `collapseDuplicateFieldRow` resolves by folding a duplicate's member into an
+ * equal one under the survivor and moving a divergent one over as a peer — so
+ * this is the UNION the collapse will produce, never a concatenation.
+ * Concatenating predicts a list the collapse never builds: two field rows
+ * carrying the same members (two offline devices materializing one value)
+ * double it, and the doubled cell is then what the reconciler is asked to
+ * reproduce, minting a member to match. Every caller that aggregates a cell
+ * from children comes through here for that reason — the projection, the
+ * rename re-key and the deferred re-encode — because a site that skips it
+ * turns a transient duplicate into permanent multiplicity.
+ *
+ * WITHIN one field row multiplicity is KEPT, because there two equal rows are
+ * two members ({@link encodedPropertyValueToChildContents} says why).
+ *
+ * Each entry carries the content the caller will PUBLISH, which is not always
+ * the row's stored text — the re-encode pass canonicalizes a member first, and
+ * passes the canonical form so what it unions is what it publishes.
+ */
+export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
+  schema: AnyPropertySchema | null,
+  perFieldRow: readonly (readonly T[])[],
+): T[] => {
+  const keys = memberKeysFor(schema)
+  const unioned: T[] = []
+  const seen = new Set<string>()
+  for (const values of perFieldRow) {
+    // Each row is judged against the rows BEFORE it and never against itself,
+    // which is what keeps within-row multiplicity a property of every row
+    // rather than only the first: a later row's `[b, b]` is two members, and
+    // marking `b` seen as we went folded the second into the first.
+    const rowKeys: string[] = []
+    for (const value of values) {
+      const {key} = keys.row(value)
+      rowKeys.push(key)
+      if (seen.has(key)) continue
+      unioned.push(value)
+    }
+    for (const key of rowKeys) seen.add(key)
+  }
+  return unioned
+}
+
+/** This definition's value rows under `siblings`, GROUPED BY FIELD ROW and each
+ *  group in `(order_key, id)` order — or `null` when the owner carries no field
+ *  row for it, which is the precondition
+ *  {@link childContentsToEncodedPropertyValue} is called under.
+ *
+ *  Grouped, not flat, because the caller's next step is
+ *  {@link unionValuesAcrossFieldRows} and a flat list has already lost the
+ *  boundary that rule turns on. */
+export const fieldRowValues = async (
+  tx: Pick<Tx, 'childrenOf'>,
+  siblings: readonly BlockData[],
+  fieldId: string,
+  isFieldDefinition: IsPropertyFieldDefinition,
+): Promise<BlockData[][] | null> => {
+  const groups: BlockData[][] = []
+  for (const sibling of siblings) {
+    // Field-row content is `::((fieldId))` — id-addressed and rename-stable
+    // (§7). The fieldId equality picks THIS definition's rows; the shared §9
+    // recognizer supplies the bit + root + resolvability conditions.
+    if (getPropertyFieldTargetId(sibling) !== fieldId) continue
+    if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
+    groups.push(await fieldValueChildren(tx, sibling.id))
+  }
+  return groups.length === 0 ? null : groups
+}
+
+/**
+ * Does `encoded` come back UNCHANGED through the value-child machinery?
+ *
+ * The machinery's own question, asked by running it rather than by reasoning
+ * about what a value looks like: encode it into the children it implies, then
+ * project those back. `propertyDefinitionSynthesis` needs it to prove a preset
+ * can carry a key's stored values before applying a definition retroactively.
+ *
+ * At WHOLE-PROPERTY grain, so a multi-valued schema is asked about all of its
+ * members at once.
+ */
+export const valueSurvivesChildRoundTrip = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): boolean => {
+  try {
+    const contents = encodedPropertyValueToChildContents(schema, encoded)
+    return jsonValuesEqual(childContentsToEncodedPropertyValue(schema, contents), encoded)
+  } catch {
+    return false
   }
 }
 
@@ -345,51 +1133,6 @@ export const propertiesEqual = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,
 ): boolean => jsonValuesEqual(a, b)
-
-/** The names to drop and the assignments to set on ONE parent's cell — the
- *  divergent value-handling half of a definition re-key, computed by the
- *  caller from the parent's live children. */
-export interface CellRekeyPlan {
-  readonly oldNames: readonly string[]
-  readonly assignments: ReadonlyArray<{name: string; value: unknown; unset?: boolean}>
-}
-
-/** Apply a swap-safe property-cell re-key to one parent — shared by the same-tx
- *  rename processor (`core.migratePropertyRename`) and the deferred codec-change
- *  batch (`Repo.runPropertyDefinitionMigrationBatch`). Owns the parts that must
- *  stay IDENTICAL across both, so the load-bearing invariant lives in one place:
- *   - the parent guard (skip a missing/deleted parent);
- *   - the SWAP-SAFE apply — drop EVERY old name before assigning ANY new one, so
- *     a name swap (`a<->b` in one tx) never leaves an intermediate `{b:<a>}` that
- *     clobbers b (and `propertiesEqual` skips the write when nothing changed).
- *  No ancestry gate exists anymore (§9 flat recognition): ANY block owning
- *  recognized field rows — value rows and field rows included — re-keys like
- *  every other owner; its `::` children are its field rows at any depth.
- *  `computePlan` receives the parent's live children and returns the drops +
- *  assignments — the ONLY part the two callers differ in (rename projects the
- *  first parseable value under the tx-start codec; the batch iterates all
- *  values, canonicalizes them under the possibly-new codec, and counts
- *  unconvertibles). The write is `skipMetadata` machinery, not a "last edited"
- *  bump. */
-export const rekeyParentPropertyCell = async (
-  tx: Tx,
-  parentId: string,
-  computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
-): Promise<void> => {
-  const parent = await tx.get(parentId)
-  if (parent === null || parent.deleted) return
-  const {oldNames, assignments} = await computePlan(
-    await tx.childrenOf(parentId, undefined),
-  )
-  const next = {...parent.properties}
-  for (const name of oldNames) delete next[name]
-  for (const assignment of assignments) {
-    if (assignment.unset) delete next[assignment.name]
-    else next[assignment.name] = assignment.value
-  }
-  if (propertiesEqual(parent.properties, next)) return
-  await tx.update(parentId, {properties: next}, {skipMetadata: true})
-}
 
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
  *  field row `source` is a value child of, or null when `source` isn't a
@@ -410,7 +1153,7 @@ const propertyValueFieldRow = async (
 
 /**
  * Is `row` ITSELF a recognized property field row — the `::((fieldId))`
- * child that carries a property's identity on its owner (PR #288 §9)?
+ * child that carries a property's identity on its owner (docs/properties-as-blocks-migration.html §9)?
  * The flat predicate directly: bit ∧ non-null parent ∧ shadow-tolerant
  * definition resolution (`tx.isPropertyFieldDefinition`). Not flip-gated —
  * see the module header: the backfill mints these rows before the flip, and
@@ -427,19 +1170,13 @@ export const isPropertyFieldRow = async (
   tx: Tx,
   row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>,
 ): Promise<boolean> => {
-  // One cheap pre-filter, and it earns its place: the bit is stamped on every
-  // field row, so an unmarked row is decided without the async definition
-  // lookup. The remaining conditions (non-null parent, resolvable definition)
-  // are the composed predicate's own — restating them here would just be a
-  // second copy to keep in sync.
-  if (row.isFieldForm !== true) return false
   return isPropertyFieldInstance(row, (fieldId) =>
     tx.isPropertyFieldDefinition(row.workspaceId, fieldId))
 }
 
 /**
  * Is `source` a property VALUE row — the direct non-`::` child of a
- * recognized field row (PR #288 §9)? Shared write-side primitive: a value
+ * recognized field row (docs/properties-as-blocks-migration.html §9)? Shared write-side primitive: a value
  * child's content IS
  * the property's value (ref-typed as `((targetId))`, scalar-typed as its
  * codec's canonical text), so any write path that rewrites `content` without

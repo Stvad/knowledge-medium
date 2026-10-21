@@ -5,6 +5,7 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
+import { claimedAliases } from '@/data/aliasClaim'
 import { aliasesProp } from '@/data/properties'
 import { foldBlocksInTx } from '@/data/blockMerge'
 import { mergeProperties } from '@/data/mergeProperties'
@@ -96,26 +97,6 @@ const claimableTitles = async (
     if (await tx.aliasLookup(title, into.workspaceId) === null) claimable.add(source.id)
   }
   return claimable
-}
-
-/** Every name this row actually claims, bag order first.
- *
- *  Read from the index rather than decoded from the property, because only the
- *  index knows what the trigger accepted — it takes text values from a bare
- *  scalar and from an OBJECT as well as from an array — and a name missed here
- *  is RELEASED when the row is folded away, taking its links with it. Bag order
- *  is preserved for the plain string array everything writes, since the first
- *  entry reads as the page's primary name; anything the index knows beyond that
- *  is appended, which is also what repairs a malformed bag: what gets written
- *  back is re-encoded from this. */
-const claimedAliases = async (tx: Tx, block: BlockData): Promise<string[]> => {
-  const indexed = await tx.aliasesOf(block.id)
-  const known = new Set(indexed)
-  const raw = block.properties[aliasesProp.name]
-  const inBagOrder = Array.isArray(raw)
-    ? raw.filter((value): value is string => typeof value === 'string' && known.has(value))
-    : []
-  return union([...inBagOrder, ...indexed])
 }
 
 /** The survivor's final alias bag. Precomputed from every participant rather

@@ -134,7 +134,10 @@ describe('UserSchemasService.addSchema', () => {
     expect(schema.name).toBe('homepage')
     expect(schema.codec.type).toBe('url')
     // Synchronous: visible in repo.propertySchemas before any subscription tick.
-    expect(env.repo.propertySchemas.get('homepage')).toBe(schema)
+    // The ambient entry is the plain schema that was published; the return is
+    // that same registration RESOLVED, so they share the built codec.
+    expect(env.repo.propertySchemas.get('homepage')?.codec).toBe(schema.codec)
+    expect(schema.fieldId).toBe(env.service.getSchemaBlockId('homepage'))
     expect(env.repo.propertySchemaResolverFor(WS).resolve('homepage')).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
@@ -191,6 +194,68 @@ describe('UserSchemasService.addSchema', () => {
     await expect(pending).resolves.toMatchObject({name: 'after-prime'})
     expect(whenPrimed).toHaveBeenCalledWith(WS)
     expect(tx).toHaveBeenCalled()
+  })
+
+  it('persists schemas through its bound Repo host', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.userSchemas.addSchema({name: 'bound-schema', presetId: 'string'})
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const regularOptions = tx.mock.calls[0]?.[1]
+    expect(regularOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+  })
+
+  it('keeps schema writes context-bound inside undoGroup facades', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.undoGroup(grouped =>
+      grouped.userSchemas.addSchema({name: 'grouped-bound-schema', presetId: 'string'}),
+    )
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const groupedOptions = tx.mock.calls[0]?.[1]
+    expect(groupedOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    expect(groupedOptions?.groupId).toEqual(expect.any(String))
+  })
+
+  it('shares same-name reservations between the Repo service and bound views', async () => {
+    env = await setup()
+    let release!: () => void
+    const primed = new Promise<void>(resolve => { release = resolve })
+    const handle = env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!
+    vi.spyOn(handle, 'whenPrimed').mockReturnValueOnce(primed)
+
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    const first = bound.userSchemas.addSchema({name: 'shared-reservation', presetId: 'string'})
+    try {
+      await expect(env.service.addSchema({name: 'shared-reservation', presetId: 'string'}))
+        .rejects.toThrow('already being created')
+    } finally {
+      release()
+    }
+    await expect(first).resolves.toMatchObject({name: 'shared-reservation'})
+    expect(env.repo.propertyDefinitions?.definitionsByName.get('shared-reservation'))
+      .toHaveLength(1)
   })
 
   it('rejects concurrent same-name creation before either call can persist', async () => {
@@ -472,10 +537,50 @@ describe('UserSchemasService subscription', () => {
     })
     // Synchronously, the schema is registered. A write through the
     // schema before the subscription tick should encode correctly.
-    expect(env.repo.propertySchemas.get('site')).toBe(schema)
+    expect(env.repo.propertySchemas.get('site')?.codec).toBe(schema.codec)
     // Encoding through the registered schema works (the preset's codec
     // is the URL codec — passes string through).
     expect(schema.codec.encode('https://example.com')).toBe('https://example.com')
+  })
+
+  it('keeps every returned schema writable after later addSchema calls', async () => {
+    env = await setup()
+    // The registering-then-writing rhythm an importer or an extension setup has.
+    // Each projector tick rebuilds the earlier definitions' behavior objects, so
+    // a returned schema that stayed plain would stop being the entry its name
+    // publishes and the write would be refused (#1079).
+    const names = ['batch-a', 'batch-b', 'batch-c']
+    const schemas = []
+    for (const name of names) {
+      schemas.push(await env.service.addSchema({name, presetId: 'string'}))
+    }
+    const targetId = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    for (const [index, schema] of schemas.entries()) {
+      await env.repo.block(targetId).set(schema, `value-${index}`)
+    }
+    const stored = env.repo.block(targetId).peek()!.properties
+    expect(names.map(name => stored[name])).toEqual(['value-0', 'value-1', 'value-2'])
+  })
+
+  it('refuses a superseded ambient entry as stale-schema, not shadowed', async () => {
+    env = await setup()
+    // The ambient registry still hands out the plain built schema, which a
+    // rebuild replaces. Writing through the superseded object is refused — but
+    // the reason must name the staleness rather than claim a rival definition
+    // owns the name (#1079).
+    await env.service.addSchema({name: 'ambient-copy', presetId: 'string'})
+    const captured = env.repo.propertySchemas.get('ambient-copy')!
+    await env.service.addSchema({name: 'unrelated', presetId: 'string'})
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('ambient-copy')).not.toBe(captured)
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+
+    const targetId = await env.repo.mutate.createChild({parentId: env.repo.propertiesPageId!})
+    await expect(env.repo.block(targetId).set(captured, 'refused')).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'stale-schema',
+    })
+    expect(env.repo.block(targetId).peek()!.properties['ambient-copy']).toBeUndefined()
   })
 
   it('rejects ref config that breaks configCodec.decode contract (null targetTypes element)', async () => {
@@ -803,7 +908,7 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
       kernelValuePresetsExtension,
     ]))
     const schema = await addPromise
-    expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
+    expect(env.repo.propertySchemas.get('siteUrl')?.codec).toBe(schema.codec)
   })
 })
 

@@ -15,25 +15,14 @@
  *      caller fails the originating tx (clean rollback) instead of
  *      failing silently when the processor would otherwise fire.
  *
- * The framework does NOT auto-open a writeTransaction for the processor
- * (v4.32 — see §5.7). `apply(event, ctx)` runs as a plain async function
- * with `ctx = { db, repo }`. Pure-side-effect processors do nothing more;
- * write processors open their own `ctx.repo.tx(...)` when they decide to
- * write. This avoids holding a writer slot through read phases (the
- * shape that produced the §10 / `tasks/processor-tx-deadlock.md`
- * deadlock under PowerSync's serialized single-connection config) and
- * lets pure-side-effect processors skip the writer cost entirely.
+ * The framework does NOT auto-open a writeTransaction — `apply(event, ctx)`
+ * is a plain async fn with `ctx = { db, repo }` that opens its own
+ * `ctx.repo.tx(...)` if it writes. Holding a writer slot through a
+ * processor's read phase deadlocks under PowerSync's serialized
+ * single-connection config.
  *
  * Failures are caught + logged so a crashing processor can't poison
  * subsequent jobs.
- *
- * Stage-1.5 deferred:
- *   - per-block content debouncing (§7.2 row "Trigger on content change"):
- *     v1 ships every fire immediately. The dispatcher ordering is
- *     append-only and sequential, so two close-together content writes
- *     run parseReferences twice — that's slightly more work than the
- *     legacy debounced behavior, but is easier to reason about and
- *     covers correctness. Add coalescing if profiling shows pain.
  */
 
 import {
@@ -69,6 +58,8 @@ export interface CommittedTxOutcome {
   /** Merged property-schema registry snapshot taken at the same
    *  boundary as `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Repo host bound to the originating transaction runtime. */
+  repo: Repo
 }
 
 /** Internal helper — convert a snapshots map entry into a ChangedRow. */
@@ -111,7 +102,6 @@ const collectFieldMatches = (
 }
 
 export class ProcessorRunner {
-  private readonly repo: Repo
   private readonly db: PowerSyncDb
   /** In-flight processor promises. Tracked so tests (and any caller
    *  who needs deterministic ordering) can `awaitIdle()` before
@@ -119,8 +109,7 @@ export class ProcessorRunner {
    *  settlement (success or failure). */
   private readonly pending: Set<Promise<void>> = new Set()
 
-  constructor(repo: Repo, db: PowerSyncDb) {
-    this.repo = repo
+  constructor(db: PowerSyncDb) {
     this.db = db
   }
 
@@ -128,7 +117,15 @@ export class ProcessorRunner {
    *  already-fired delayed jobs) resolves. Does NOT advance timers —
    *  delayed jobs that haven't started yet aren't pending. Tests that
    *  need to flush a delayed job should use vi.useFakeTimers /
-   *  vi.runAllTimers (or just sleep). */
+   *  vi.runAllTimers (or just sleep).
+   *
+   *  A processor is tracked from the moment it starts RUNNING, with no way to
+   *  say it has stopped making progress — unlike `PendingIdleJobs`, which has a
+   *  `ParkHandle` for exactly that. So a processor that awaits an external
+   *  signal (a row that must sync, a gate that opens on connectivity) hangs this
+   *  drain from its first await on any device or fixture where that signal never
+   *  comes. Schedule such work into one of the gated idle families instead of
+   *  awaiting it here (#1015). */
   async awaitIdle(): Promise<void> {
     while (this.pending.size > 0) {
       // Snapshot — new jobs scheduled while we wait will be in `pending`
@@ -163,7 +160,7 @@ export class ProcessorRunner {
         user: outcome.user,
         workspaceId: outcome.workspaceId,
       }
-      this.track(this.runOne(processor, event, name, outcome.propertySchemas))
+      this.track(this.runOne(processor, event, name, outcome.propertySchemas, outcome.repo))
     }
 
     // Explicit processors: one job per `tx.afterCommit` call. The tx's
@@ -202,10 +199,10 @@ export class ProcessorRunner {
         // matches the spec: §16.4 calls out that delayMs is real
         // wall-clock time and not part of the synchronous commit step.
         setTimeout(() => {
-          this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
+          this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
         }, job.delayMs)
       } else {
-        this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
+        this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
       }
     }
   }
@@ -216,21 +213,21 @@ export class ProcessorRunner {
   }
 
   /** Invoke the processor's apply with a `{db, repo}` ctx. The framework
-   *  does not wrap apply in a writeTransaction (v4.32) — apply is a
-   *  plain async fn that reads via `ctx.db` and (if it needs to write)
-   *  opens its own tx via `ctx.repo.tx(...)`. Errors are caught + logged
-   *  with the processor name + txId so one buggy processor can't poison
-   *  the dispatch loop. */
+   *  does not wrap apply in a writeTransaction — apply is a plain async fn
+   *  that reads via `ctx.db` and (if it needs to write) opens its own tx
+   *  via `ctx.repo.tx(...)`. Errors are caught + logged with the processor
+   *  name + txId so one buggy processor can't poison the dispatch loop. */
   private async runOne(
     processor: AnyPostCommitProcessor,
     event: CommittedEvent<unknown>,
     name: string,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    repo: Repo,
   ): Promise<void> {
     try {
       const ctx: ProcessorCtx = {
         db: this.db,
-        repo: this.repo,
+        repo,
         propertySchemas,
       }
       await processor.apply(event, ctx)

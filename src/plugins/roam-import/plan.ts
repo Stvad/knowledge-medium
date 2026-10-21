@@ -4,7 +4,8 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
 import type { RoamTodoState } from '@/plugins/todo/schema'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
-import { resolveDailyPage, roamBlockId } from './ids'
+import { roamBlockId } from './blockIds'
+import { resolveDailyPage } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
 import {
   collectAliasesFromPropertyValues,
@@ -68,9 +69,16 @@ export {
 // `PromotionOptions.acceptKey` + `isRegistrablePropertyName`. What it does
 // mutate is values, normalizing them to match the codec it registered — so
 // pass the blocks you are about to write, not copies.
+//
+// The same shape one level down, for the same reason: a key whose definition
+// already exists and is NARROWER than the text (a `number` meeting "many")
+// cannot be reshaped to fit, and post-flip that write is rejected outright.
+// Decline those upstream too, via `PromotionOptions.acceptValue` +
+// `promotedValueAcceptorFor` (#594).
 export {
   ensurePromotedPropertySchemas,
   isRegistrablePropertyName,
+  promotedValueAcceptorFor,
   type PromotedPropertyBag,
 } from './schemaReconciliation'
 export {

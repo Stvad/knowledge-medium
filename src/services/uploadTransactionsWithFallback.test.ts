@@ -2,7 +2,7 @@
  * Deterministic regression suite for `uploadTransactionsWithFallback`
  * (powersync.ts:626-705, exported as `__uploadTransactionsWithFallbackForTest`)
  * — pins the two `complete()` failure sites the model-based fuzz suite
- * (`uploadTransactionsWithFallback.fuzz.test.ts`, PR #448) surfaced but that
+ * (`uploadTransactionsWithFallback.fuzz.test.ts`) surfaced but that
  * suite doesn't itself assert against a fixed, hand-readable expectation.
  * See issue #459.
  *

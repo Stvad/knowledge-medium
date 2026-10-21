@@ -92,8 +92,11 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     Editor: asEditor<boolean>(BooleanPropertyEditor),
   }),
   kernelPresetPresentation(listValuePresetCore, {
+    // "List", not "Options": this is a container of values a person types,
+    // and picking FROM a configured set is `enum` below — which read as the
+    // same thing under the old name, two entries apart in the same picker.
     id: 'list',
-    label: 'Options',
+    label: 'List',
     Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
   }),

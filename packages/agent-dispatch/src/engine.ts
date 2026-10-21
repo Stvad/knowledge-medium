@@ -1,8 +1,8 @@
 /**
  * Orchestration: one `tick()` scans all watchers, claims pending work,
- * and launches bounded-concurrency agent runs. Pure wiring — every
- * decision lives in watchers.ts, every side effect behind an injected
- * dependency, so the whole flow is testable with in-memory fakes.
+ * and launches bounded-concurrency agent runs. The pending/attempt
+ * decisions live in watchers.ts and every side effect sits behind an
+ * injected dependency, so the whole flow is testable with in-memory fakes.
  */
 import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
@@ -53,11 +53,9 @@ const isLoggable = (ch: string): boolean => {
 
 /** One-line, bounded, log-safe quote of a block's text for the daemon
  *  log, so a claimed block is identifiable at a glance (a bare id isn't).
- *  Whitespace is collapsed to one line and non-printable control bytes
- *  are stripped: graph content can be synced/imported from an external
- *  source, and raw ANSI/OSC escapes would otherwise let it spoof or clear
- *  a `tail -f` of the log. JSON-encoded so any embedded quote/backslash
- *  stays unambiguous; empty content renders as `(empty)`. */
+ *  Content can be synced or imported from an external source, so it is
+ *  collapsed to one line, stripped of control bytes ({@link isLoggable})
+ *  and JSON-encoded, leaving an embedded quote or backslash unambiguous. */
 const logPreview = (content: string | null | undefined): string => {
   const cleaned = [...(content ?? '').replace(/\s+/g, ' ')]
     .filter(isLoggable)
@@ -66,21 +64,18 @@ const logPreview = (content: string | null | undefined): string => {
   return cleaned ? JSON.stringify(truncate(cleaned, 100)) : '(empty)'
 }
 
-/** A deleted block surfaces as an `updateBlock: block <id> not found`
-/** Backoff schedule for retrying the IDEMPOTENT terminal reply reconcile
- *  past a transient bridge blip — recovering the billed answer instead of
- *  losing it to `status:error`. Bounded and short (≈1.7s worst case) so a
- *  genuinely-down bridge fails fast. Safe because reconcile is keyed by
- *  `replyKey`: a re-send converges to the same tree rather than duplicating
- *  it (unlike the old one-shot subtree create, which could NOT be retried). */
+/** Backoff schedule for retrying the terminal reply reconcile past a
+ *  transient bridge blip — recovering the billed answer instead of losing
+ *  it to `status:error`. Bounded and short so a genuinely-down bridge fails
+ *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
 
-/** agent:session values are executor-scoped: codex thread ids are
- *  stored as `codex:<id>`, claude session ids bare (back-compat — every
- *  session stored before executors existed is a claude one). A
- *  follow-up under the OTHER executor starts a fresh thread instead of
- *  forwarding the foreign id to resume, which fails the run outright
- *  (`codex exec resume` only accepts codex thread ids, and vice versa). */
+/** agent:session values are executor-scoped: codex thread ids are stored
+ *  as `codex:<id>`, claude session ids bare (anything stored before
+ *  executors existed is a claude one). A follow-up under the OTHER executor
+ *  starts a fresh thread instead of forwarding the foreign id to resume,
+ *  which fails the run outright (`codex exec resume` only accepts codex
+ *  thread ids, and vice versa). */
 const CODEX_SESSION_PREFIX = 'codex:'
 
 /** A resume id is forwarded verbatim as a bare argv token (`--resume <id>`
@@ -116,12 +111,12 @@ export const createEngine = (deps: EngineDeps) => {
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
   /** Live work, keyed by block id / query-watcher key / thread session.
-   *  One structure serves the double-claim guard, the capacity gate,
-   *  and drain(). */
+   *  One structure serves the double-claim guard, the capacity gate and
+   *  drain(). A `session:` key is a thread-dedup placeholder rather than a
+   *  run, so it is not a launch. */
   const running = new Map<string, Promise<void>>()
   /** Abort handle per in-flight mention run, keyed by source block id, so
-   *  a cancel request (agent:cancel) can kill THAT run — and only it.
-   *  Set when the run launches, deleted in its finally. */
+   *  a cancel request (agent:cancel) can kill THAT run — and only it. */
   const abortControllers = new Map<string, AbortController>()
   /** target alias → {id, resolvedAt}. TTL'd: a page deleted-then-
    *  recreated gets a NEW id, and a stale id doesn't error (backlinks of
@@ -136,9 +131,8 @@ export const createEngine = (deps: EngineDeps) => {
   let launchTimes: number[] = []
   let launchTimesLoaded = false
 
-  // `session:` placeholders (thread-dedup, added in processMention) share
-  // the `running` map but are NOT launches — exclude them so one --resume
-  // follow-up doesn't consume two of maxConcurrent's slots.
+  // Excluded so one --resume follow-up doesn't consume two of
+  // maxConcurrent's slots.
   const activeRuns = () => {
     let count = 0
     for (const key of running.keys()) if (!key.startsWith('session:')) count += 1
@@ -184,12 +178,9 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   // INVARIANT: callers must guarantee `key` is unique among LIVE launches.
-  // The .finally below deletes the key unconditionally, so if two live
-  // promises ever shared one key, the first to settle would evict the
-  // other from `running` — breaking drain()/capacity accounting for it.
-  // Today no path collides (serial ticks + the running.has prefilter +
-  // mutually-exclusive claim/park branches keep each source.id/query:/
-  // session: key to one live promise); this comment pins that requirement.
+  // The .finally below deletes the key unconditionally, so two live promises
+  // sharing one key would evict each other from `running`, breaking
+  // drain()/capacity accounting for the survivor.
   const launch = (key: string, work: () => Promise<void>) => {
     const promise = work()
       .catch(error => log(`[${key}] run crashed: ${errorMessage(error)}`))
@@ -231,11 +222,11 @@ export const createEngine = (deps: EngineDeps) => {
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
    *  (the pre-filter used a tick-start snapshot; the ambient session may
-   *  have closed it since), then write the terminal `error` props FIRST
-   *  so the state sticks even if the reply write fails — otherwise a
+   *  have closed it since), then write the terminal `error` props BEFORE
+   *  the reply, so the state sticks even if the reply write fails: a
    *  createReply-succeeds / setTaskProps-fails split would re-enter every
-   *  tick and spam ⚠️ blocks into the user's notes (the one write path
-   *  with no billed-run circuit breaker). */
+   *  tick and spam ⚠️ blocks into the user's notes (the one write path with
+   *  no billed-run circuit breaker). */
   const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
     const fresh = await graph.getBlock(sourceId)
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
@@ -250,8 +241,7 @@ export const createEngine = (deps: EngineDeps) => {
     quietExempt: boolean,
   ) => {
     const {runner} = watcher
-    // Pre-claim bails spawned nothing — refund the budget slot recorded
-    // at the launch decision so phantom launches can't defer real work.
+    // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
     const block = await graph.getBlock(sourceId)
     if (!block) return refundLaunch(launchStamp)
     const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
@@ -267,14 +257,12 @@ export const createEngine = (deps: EngineDeps) => {
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
-    // A fresh run's session id is unknown until mid-run (the runner emits
-    // it on its first line). The instant we write it to the block,
-    // findThreadSession resolves it for a follow-up nested under this
-    // source — so a live session must ALSO hold a dedup key, or that
-    // follow-up, claimed before this run finishes, would pass the guard
-    // above and `--resume` the SAME session concurrently. Registered when
-    // the session event arrives (below), released in finally. null until
-    // (and unless) a resumable session shows up.
+    // A fresh run's session id is unknown until mid-run. The instant it is
+    // written to the block, findThreadSession resolves it for a follow-up
+    // nested under this source — so a live session must ALSO hold a dedup
+    // key, or that follow-up would pass the guard above and `--resume` the
+    // SAME session concurrently. Registered when the session event arrives
+    // (below), released in finally; null until a resumable session shows up.
     let liveSessionKey: string | null = null
 
     // Progress-write chain — hoisted so the infra-catch below can drain it
@@ -288,27 +276,24 @@ export const createEngine = (deps: EngineDeps) => {
     // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
     // has been written. The infra-catch checks it so a transient blip on the
     // *terminal props write* — which lands AFTER a good reply — can't
-    // re-enter the reply write and clobber the answer. See the catch below.
+    // re-enter the reply write and clobber the answer.
     let terminalReplyDelivered = false
     // Per-run reply identity + shape, set once `attempt` is known (below).
-    // Every reconcile of this run tags its blocks with `replyKey`, so it
-    // converges the SAME subtree in place; a rerun uses a fresh key and thus
-    // posts a fresh reply. `replyShape` is the split choice: `'outline'`
-    // splits the reply into a block hierarchy, `'block'` keeps it whole.
     let replyKey = ''
     let replyShape: 'outline' | 'block' = 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
-    // run tells a user cancel apart from a timeout/crash. Registered just
-    // before the run launches (below), deleted in finally.
+    // run tells a user cancel apart from a timeout/crash.
     const abortController = new AbortController()
 
     // The reply is a keyed block subtree the app reconciles to match
-    // `markdown` — `shape:'outline'` splits it into a hierarchy, `'block'`
-    // keeps it whole. Streaming is just repeated reconciles with the growing
-    // text (the last passes `final`). Idempotent by `replyKey`, so the
-    // terminal write is RETRIED (bounded backoff) to recover a transient
-    // bridge blip: a re-send converges to the same tree, never duplicating.
+    // `markdown`: every write tagged with this run's `replyKey` converges
+    // the SAME subtree in place, so streaming is just repeated reconciles
+    // with the growing text (the last passes `final`) and any write can be
+    // re-sent without duplicating. A rerun uses a fresh key, so it posts a
+    // fresh reply instead of mutating the prior attempt's answer.
+    // `shape:'outline'` splits the reply into a block hierarchy, `'block'`
+    // keeps it whole.
     const reconcileReply = async (
       markdown: string,
       {final = false, shape = replyShape}: {final?: boolean, shape?: 'outline' | 'block'} = {},
@@ -333,9 +318,7 @@ export const createEngine = (deps: EngineDeps) => {
 
     try {
       const attempt = taskAttempts(block) + 1
-      // Fresh reply subtree per attempt (a rerun posts a new reply, never
-      // mutating the prior attempt's answer); split unless the watcher opted
-      // out. Reconciles within THIS attempt share the key → converge in place.
+      // Fresh reply subtree per attempt; split unless the watcher opted out.
       replyKey = `reply:${sourceId}:${attempt}`
       replyShape = watcher.splitReply ? 'outline' : 'block'
       const claimStamp = now()
@@ -344,12 +327,12 @@ export const createEngine = (deps: EngineDeps) => {
         status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
       })
 
-      // Claim-verify: re-read and confirm OUR claim stuck — defends only
-      // against a faster LOCAL overwrite (two daemons on one client, e.g.
-      // launchd + a manual --once). It does NOT make cross-machine safe:
-      // each daemon reads its own client, so two machines both see their
-      // own write and proceed. Cross-machine safety relies on the
-      // one-daemon-per-fleet constraint (README) + the pidfile.
+      // Claim-verify: re-read and confirm OUR claim stuck. Defends only
+      // against a faster LOCAL overwrite (two daemons on one client); it
+      // does NOT make cross-machine safe, since each daemon reads its own
+      // client and two machines both see their own write and proceed.
+      // Cross-machine safety rests on one-daemon-per-fleet (README) + the
+      // pidfile.
       const verified = await graph.getBlock(sourceId)
       const props = verified?.properties ?? {}
       if (props[PROPS.watcher] !== watcher.name || props[PROPS.updatedAt] !== claimStamp) {
@@ -361,11 +344,9 @@ export const createEngine = (deps: EngineDeps) => {
       // Register the abort handle NOW, not just before the run: a Stop can
       // land during getSubtree / prompt render / the streamReply write, and
       // the sweep can only abort a run whose controller it can see. Aborting
-      // before the child spawns sets signal.aborted, so runTask below starts
-      // already-cancelled (execProcess skips the spawn) and parks
-      // `error: cancelled`. Registered inside the try so the finally always
-      // clears it (the claim-lost return above happens before this, so its
-      // finally-delete is a harmless no-op).
+      // before the child spawns makes runTask start already-cancelled
+      // (execProcess skips the spawn) and park `error: cancelled`. Inside
+      // the try so the finally always clears it.
       abortControllers.set(sourceId, abortController)
 
       const subtreeRows = await graph.getSubtree(sourceId)
@@ -400,9 +381,8 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       // streamReply: post an immediate placeholder so the reply appears at
-      // once; the first streamed tick reconciles it into real content (the
-      // same keyed write, so the placeholder just becomes the reply's first
-      // block). Best-effort — a cosmetic spinner must not fail the run.
+      // once; the first streamed tick reconciles it into real content.
+      // Best-effort — a cosmetic spinner must not fail the run.
       if (watcher.streamReply) {
         await reconcileReply(`💭 ${executorLabel(runner.executor)} is working…`).catch(() => {})
       }
@@ -438,9 +418,8 @@ export const createEngine = (deps: EngineDeps) => {
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
-          // Reconcile the growing text into the reply subtree (best-effort,
-          // single attempt — the next tick, or the terminal write, supersedes
-          // a dropped one). Idempotent by replyKey, so ticks never duplicate.
+          // Best-effort, single attempt — the next tick, or the terminal
+          // write, supersedes a dropped one.
           queueWrite(() => reconcileReply(event.text))
         } else if (event.kind === 'session') {
           // Persist the session id the moment it arrives (the runner emits
@@ -453,13 +432,11 @@ export const createEngine = (deps: EngineDeps) => {
           const stored = storedSessionFor(runner.executor, event.sessionId)
           if (!stored) return
           const resumeOptions = resumeOptionsForSession(event.sessionId)
-          // Claim a dedup key for the now-live session BEFORE exposing it
+          // Claim the dedup key for the now-live session BEFORE exposing it
           // on the block (the register is synchronous; the block write is
           // only queued), so a follow-up can never observe the session
-          // without also seeing the guard. The key mirrors exactly what a
-          // child computes (resumableSessionFor over the stored value).
-          // Skip when we already hold this key (a run that was itself a
-          // resume) or someone else does — finally only deletes what we set.
+          // without also seeing the guard. Skip when this key is already
+          // held — finally only deletes what we set.
           const resumable = resumableSessionFor(runner.executor, stored)
           const liveKey = resumable ? `session:${resumable}` : null
           if (liveKey && liveKey !== sessionKey && !running.has(liveKey)) {
@@ -482,11 +459,9 @@ export const createEngine = (deps: EngineDeps) => {
         // it as `cancelled`. Only a run that ended WITHOUT a result (the
         // error branch below) inspects signal.aborted to label the reason.
         const finalText = result.resultText.trim() || `(${runner.executor} returned an empty reply)`
-        // Terminal write = the last reconcile of the run's reply subtree
-        // (shape per splitReply). If the run streamed, this converges the
-        // streamed tree onto the final text in place; if it didn't, it
-        // creates the tree fresh. Retried (idempotent by replyKey) so a
-        // transient bridge blip recovers rather than losing the billed answer.
+        // Terminal write: converges a streamed tree onto the final text, or
+        // creates it fresh. Retried so a transient bridge blip recovers
+        // rather than losing the billed answer.
         await reconcileReplyWithRetry(finalText, {final: true})
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
@@ -511,11 +486,10 @@ export const createEngine = (deps: EngineDeps) => {
         const failureNote = cancelled
           ? '⏹️ agent-dispatch run cancelled'
           : `⚠️ agent-dispatch run failed — ${reason}`
-        // A failed run never splits — collapse to a single block (any
-        // streamed partial + the note), keyed like the success write so a
-        // retry recovers it in place. Preserves a streamed partial: a run
-        // that died after streaming most of its billed answer keeps that
-        // text with the note appended, rather than replacing it.
+        // A failed run never splits — collapse to a single block, keyed like
+        // the success write so a retry recovers it in place. A run that died
+        // after streaming most of its billed answer keeps that text with the
+        // note appended, rather than losing it.
         const partial = lastStreamedText.trim()
         await reconcileReplyWithRetry(
           partial ? `${partial}\n\n${failureNote}` : failureNote,
@@ -541,12 +515,10 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
-      // Only post the infra note if no terminal reply landed yet. If the
-      // answer (or failure/partial note) was already delivered and the error
-      // came from the *props* write that follows it, reconciling again would
-      // overwrite the good answer — so we leave the reply intact and only
-      // flip props. Reconciled as a single block (keyed), so any streamed
-      // partial collapses to the note rather than sitting beside it.
+      // Only post the infra note if no terminal reply landed yet: when the
+      // error came from the *props* write that follows a delivered answer,
+      // reconciling again would overwrite that answer, so leave the reply
+      // intact and only flip props.
       if (!terminalReplyDelivered) {
         await reconcileReply(infraNote, {final: true, shape: 'block'}).catch(() => {})
       }
@@ -600,31 +572,25 @@ export const createEngine = (deps: EngineDeps) => {
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
       // Clear a agent:cancel the daemon can't act on. sweepCancellations
-      // aborts runs we OWN (a live abortController); but a Stop on a
-      // channel-delivered task (whose child the ambient session owns, not
-      // us) — or on a run stranded by a hard daemon kill — leaves
-      // status:running with no controller here, so the sweep never fires and
-      // the terminal write that clears the flag never comes: the chip would
-      // read "cancelling…" forever. When a running block is flagged but we
-      // hold no live run for it (not in `running`, no controller), the flag
-      // is inert — clear it, preserving the block's status + timestamp so
-      // the stale-running sweep is undisturbed. A spawn run mid-claim IS in
-      // `running`, so its genuinely-pending Stop is never dropped here.
+      // aborts only runs we OWN (a live abortController); a Stop on a
+      // channel-delivered task, or on a run stranded by a hard daemon kill,
+      // leaves status:running with no controller here, so nothing ever
+      // clears the flag and the chip reads "cancelling…" forever. A spawn
+      // run mid-claim IS in `running`, so its genuinely-pending Stop is
+      // never dropped here.
       if (
         view.properties?.[PROPS.cancel]
         && view.properties?.[PROPS.status] === 'running'
         && !running.has(source.id)
         && !abortControllers.has(source.id)
       ) {
-        // Clear ONLY the cancel property — a merged single-key write that
-        // never touches agent:status. The batched `views` snapshot is stale
-        // by the time we get here, and a channel task's ambient session may
-        // write status:done concurrently; a write that re-affirmed
-        // status:running would revert that, and once agent:updated-at went
-        // stale the stale-running sweep would REDELIVER the task (duplicate
-        // work). A cancel-only write can't clobber a terminal status, and
-        // clearing an already-satisfied flag is an idempotent no-op — so no
-        // re-read is needed. status/updatedAt are left exactly as they are.
+        // Clear ONLY the cancel property, in a merged single-key write. The
+        // batched `views` snapshot is stale by now and a channel task's
+        // ambient session may write status:done concurrently; re-affirming
+        // status:running would revert that, and the stale agent:updated-at
+        // would make the stale-running sweep REDELIVER the task. A
+        // cancel-only write can't clobber a terminal status, and clearing an
+        // already-satisfied flag is idempotent — so no re-read is needed.
         await graph.clearCancel(source.id)
         log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${source.id}`)
         continue
@@ -646,8 +612,6 @@ export const createEngine = (deps: EngineDeps) => {
       }
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
-      // Bails that provably spawned nothing (duplicate session, lost
-      // claim, block gone) refund their slot inside processMention.
       const launchStamp = recordLaunch()
       launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
     }
@@ -688,13 +652,12 @@ export const createEngine = (deps: EngineDeps) => {
     })
 
     if (watcher.delivery === 'channel') {
-      // Deliver FIRST, cursor after: a cheap POST has no re-bill risk,
-      // and advancing the cursor before a failed delivery would lose
-      // these rows permanently (no graph-side state to sweep). The
-      // launch is counted only AFTER delivery succeeds — a failed POST
-      // bills nothing, and counting it would let a down listener drain
-      // the hourly budget in ten polls and defer the rows even once
-      // it's back up.
+      // Deliver FIRST, cursor after: a cheap POST has no re-bill risk, and
+      // advancing the cursor before a failed delivery would lose these rows
+      // permanently (no graph-side state to sweep). The launch is counted
+      // only AFTER delivery succeeds — a failed POST bills nothing, and
+      // counting it would let a down listener drain the hourly budget and
+      // defer the rows even once it is back up.
       await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
       recordLaunch()
       await state.setCursor(watcher.name, diff.seenIds)
@@ -708,10 +671,9 @@ export const createEngine = (deps: EngineDeps) => {
     recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
     launch(key, async () => {
-      // Log the session id the instant it streams (same as the mention
-      // path) so a query-triggered run is findable/inspectable while it's
-      // live, not just from the terminal line. Query runs aren't threaded,
-      // so there's no block to persist it to — the log is the only record.
+      // Query runs aren't threaded, so there is no block to persist the
+      // session id to — logging it as it streams is the only record, and
+      // the only way to inspect a run while it is live.
       let loggedSession: string | null = null
       const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
         if (event.kind === 'session' && !loggedSession) {
@@ -728,17 +690,14 @@ export const createEngine = (deps: EngineDeps) => {
     })
   }
 
-  /** Honor Stop requests (agent:cancel) for every in-flight run, keyed
-   *  off the live abortControllers rather than the backlink scan. A run is
-   *  claimed the instant its block links [[claude]], but the user can edit
-   *  that link away while it runs: the block keeps agent:status:running
-   *  (so the chip's Stop still writes agent:cancel) yet it no longer shows
-   *  up in backlinkSources, so a per-watcher scan would never reach it and
-   *  the child would run to completion/timeout. Polling the abort handles
-   *  directly covers every live run regardless of its current link state.
-   *  Runs once per tick (poll and push both route through tick()). The `?.`
-   *  guards the race where a run settles and clears its controller during
-   *  the blockViews await. */
+  /** Honor Stop requests (agent:cancel) for every in-flight run, keyed off
+   *  the live abortControllers rather than the backlink scan. A user can
+   *  edit the [[claude]] link away while a run is live: the block keeps
+   *  agent:status:running (so the chip's Stop still writes agent:cancel) yet
+   *  drops out of backlinkSources, so a per-watcher scan would never reach
+   *  it and the child would run to completion/timeout. The `?.` guards the
+   *  race where a run settles and clears its controller during the
+   *  blockViews await. */
   const sweepCancellations = async () => {
     if (abortControllers.size === 0) return
     const ids = [...abortControllers.keys()]

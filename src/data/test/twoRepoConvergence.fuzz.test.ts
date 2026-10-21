@@ -8,7 +8,10 @@
  * monotonic-clamp / insert-or-touch / patch-RPC semantics, cited there).
  * Random interleaved kernel-mutator sequences run on device A and device
  * B with random sync points; after a final quiescing round-trip, both
- * devices' `blocks` tables and the server's rows must be IDENTICAL.
+ * devices' `blocks` tables and the server's rows must agree on every
+ * column oracle 1 below compares. What that excludes, and why, is stated
+ * there and not restated here — `expectQuiescedAndConverged` is the one
+ * place the answer lives in code.
  *
  * The sync plumbing on each side is the REAL code, not a reimplementation:
  *  - upload: `__runUploadLoopForTest` (`src/services/powersync.ts`) — the
@@ -34,9 +37,9 @@
  *
  * Oracles:
  *  1. CONVERGENCE — after quiescing (upload both, deliver+drain both, ×3
- *     rounds: round 1 drains uploads, round 2 delivers the resulting
- *     echoes, round 3 proves a fixpoint), `blocks` on A == `blocks` on B
- *     == the server's rows, all 13 columns, ordered by id. Also both
+ *     rounds: the first drains uploads, the second delivers the resulting
+ *     echoes, the third proves a fixpoint), `blocks` on A == `blocks` on B
+ *     == the server's rows, every synced column, ordered by id. Also both
  *     `ps_crud` queues empty, both change queues empty, both delivery
  *     cursors at the server version.
  *  2. No illegal errors: ops may throw the usual domain rejections for
@@ -66,28 +69,28 @@
  * permanently missed the other device's merged-under edit. Keeping the
  * convergence property strict rather than relaxing it to green is what
  * held the bug visible until the base-version protocol fix landed (PR
- * #525); the deep tier passes now, so a red run here is new.
+ * #525).
  *
- * Known blind spot, deliberately unreachable: the reconcile gate's I1
- * assumption (equal nonzero stamps ⟺ same write — reconcile.ts:108-121)
- * breaks only for two devices minting the SAME deterministic id with
- * divergent content in the same ms. This universe mints per-device ids
- * (`a-gen-*` / `b-gen-*`; only 'root' is shared and it's created once on
- * A), so equal-stamp-divergent-content is unreachable: a device's
- * no-pending local stamp is either a delivered server stamp (content
- * matches by construction) or its own acked write's stamp u with the
- * server at s' = max(u, old+1) ≥ u carrying that same write — and any
- * LATER foreign write bumps strictly past s'. undo/redo are excluded
- * from the op set (per-workspace managers have no cross-device meaning).
- * Case (b)'s "s' ≥ u carrying that same write" step itself rests on an
- * unstated premise: every reachable kernel PATCH changes at least one
- * content column (the `updatePatchChangesBlock` no-op gate,
- * `txEngine.ts:94-109` — a metadata-only `tx.update` returns before any
- * write or upload), so the server always +1-bumps past `old.updated_at`
- * for a content-changing patch. A future harness op that emitted a
- * metadata-only PATCH (bypassing that gate) would open a SECOND
- * equal-stamp-divergent-content door — a floor without a bump — distinct
- * from issue #381.
+ * SECOND FIND (fixed): issue #1163 — the same skip, reached through a
+ * stamp the server never issued. The UN-drifted path future-clamps an
+ * author's proposal before flooring it, so it can ack A's write BELOW the
+ * stamp A keeps locally (I3's local bump gets there with no clock skew);
+ * a later drifted bump can then land exactly on A's stamp while carrying
+ * B's columns. Equal stamps were never proof of an equal row — the server
+ * merges each column on its own — so the drain now skips only a row that
+ * is identical (`localHoldsStagedRow`, reconcile.ts). The pinned
+ * counterexamples below hold both the content (#1163) and the display
+ * stamp (#1162) shape of it. A NEW red is one whose counterexample is
+ * neither of these finds.
+ *
+ * undo/redo are excluded from the op set (per-workspace managers have no
+ * cross-device meaning). A separate door, still only latent: every
+ * reachable kernel PATCH changes at least one content column (the
+ * `updatePatchChangesBlock` no-op gate, `txEngine.ts:94-109` — a
+ * metadata-only `tx.update` returns before any write or upload), so the
+ * server always +1-bumps past `old.updated_at` for a content-changing
+ * patch. A future harness op emitting a metadata-only PATCH would open a
+ * floor without a bump, distinct from both #381 and #1163.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -222,16 +225,26 @@ const guard = statefulFuzzGuard()
 // synced column is automatically compared instead of silently skipped.
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const allBlockColumns = (db: TestDb['db']) =>
-  db.getAll(`SELECT ${BLOCK_COLUMN_NAMES.join(', ')} FROM blocks ORDER BY id`)
+  db.getAll<Record<string, unknown>>(`SELECT ${BLOCK_COLUMN_NAMES.join(', ')} FROM blocks ORDER BY id`)
 
-const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => {
+interface Universe {
+  server: FakeSyncServer
+  devices: readonly [Device, Device]
+  rejections: unknown[]
+}
+
+/** Two reset devices sharing one ROOT-seeded workspace and one fake server —
+ *  the starting state of both the property and the pinned counterexamples
+ *  below, so the two cannot drift apart on how the universe is wired. */
+const setUpTwoDevices = async (): Promise<Universe> => {
   await resetTestDb(dbA.db)
   await resetTestDb(dbB.db)
 
   // Server clock strictly ahead of both device clocks (1.8e12 vs 1.7e12)
-  // and monotonic — the future-clamp path stays quiet so the oracle only
-  // reasons about the floor+bump (see fakeSyncServer.ts on why the fake
-  // requires a monotonic clock at all).
+  // and monotonic (see fakeSyncServer.ts on why the fake requires a
+  // monotonic clock at all). This does NOT keep the future-clamp quiet:
+  // I3's local bump can still carry a device's own stamp past server-now,
+  // which is the first step of #1163 (SECOND FIND in the docblock).
   let serverClock = 1_800_000_000_000
   const server = createFakeSyncServer({ now: () => ++serverClock })
   const rejections: unknown[] = []
@@ -245,8 +258,8 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
       // would mint COLLIDING gen-* ids (createTestRepo.ts caveat). The
       // shared default `now` counter (1.7e12+n per repo) is deliberate:
       // cross-device stamp coincidences on the same row are the
-      // interesting LWW inputs, and the docblock argues why they can't
-      // produce divergent-content equal stamps in this universe.
+      // interesting LWW inputs — and they DO reach divergent content at an
+      // equal stamp here (#1163, SECOND FIND in the docblock).
       newId: () => `${tag}-gen-${++idCursor}`,
     })
     repo.setActiveWorkspaceId(WS)
@@ -262,6 +275,63 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
   await upload(devices[0], server, rejections)
   for (const device of devices) await deliverAndDrain(device, server)
 
+  return { server, devices, rejections }
+}
+
+/** Upload both, deliver+drain both, ×3 — oracle 1's quiescing rounds. */
+const quiesce = async ({ server, devices, rejections }: Universe): Promise<void> => {
+  for (let round = 0; round < 3; round++) {
+    for (const device of devices) await upload(device, server, rejections)
+    for (const device of devices) await deliverAndDrain(device, server)
+  }
+}
+
+/**
+ * Oracle 1, in full: the fixpoint held, and every row agrees on every synced
+ * column. ONE owner, called by the property and by the pinned counterexamples
+ * below, so the two cannot come to mean different things by "converged".
+ *
+ * Returns the compared rows so a caller can go on to inspect one of them.
+ */
+const expectQuiescedAndConverged = async (
+  { server, devices, rejections }: Universe,
+): Promise<{
+  rowsA: Array<Record<string, unknown>>
+  rowsB: Array<Record<string, unknown>>
+  rowsServer: Array<Record<string, unknown>>
+}> => {
+  expect(rejections, 'no upload may be quarantined in this universe').toEqual([])
+  for (const device of devices) {
+    expect(
+      await device.db.getAll('SELECT id FROM ps_crud'),
+      'upload queue drained at quiescence',
+    ).toEqual([])
+    expect(
+      await device.db.getAll('SELECT seq FROM blocks_synced_changes'),
+      'staging change queue drained at quiescence',
+    ).toEqual([])
+    expect(device.cursor, 'delivery cursor caught up to the server version').toBe(server.version())
+  }
+
+  // Sync-materialization is a different write shape than kernel txs and
+  // could desync a trigger-maintained derived index (block_references/
+  // block_aliases/block_types/blocks_fts) while the column comparison
+  // below stays green. Reuse repoMutators' sweep (workspace-agnostic
+  // recompute — see its docblock in fuzzKernelHarness.ts — so it
+  // transfers unchanged to this suite's one-workspace, ROOT-pinned pool).
+  for (const device of devices) await sweepDerivedIndexes(device.db)
+
+  const [rowsA, rowsB] = [await allBlockColumns(dbA.db), await allBlockColumns(dbB.db)]
+  const rowsServer = server.rows()
+  expect(rowsA, 'device A == device B after quiescence').toEqual(rowsB)
+  expect(rowsA, 'devices == server ground truth after quiescence').toEqual(rowsServer)
+  return { rowsA, rowsB, rowsServer }
+}
+
+const applySteps = async (
+  { server, devices, rejections }: Universe,
+  steps: readonly Step[],
+): Promise<void> => {
   for (const step of steps) {
     switch (step.kind) {
       case 'op': {
@@ -286,40 +356,18 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
         break
     }
   }
+}
 
-  // ── Quiesce: three full rounds (drain uploads → deliver echoes → prove
-  // fixpoint). No step above generates work spontaneously — materialize
-  // writes are source-NULL so they never re-enter ps_crud — so three
-  // rounds strictly suffice; the assertions below prove it. ──
-  for (let round = 0; round < 3; round++) {
-    for (const device of devices) await upload(device, server, rejections)
-    for (const device of devices) await deliverAndDrain(device, server)
-  }
+const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => {
+  const universe = await setUpTwoDevices()
+  await applySteps(universe, steps)
 
-  expect(rejections, 'no upload may be quarantined in this universe').toEqual([])
-  for (const device of devices) {
-    expect(
-      await device.db.getAll('SELECT id FROM ps_crud'),
-      'upload queue drained at quiescence',
-    ).toEqual([])
-    expect(
-      await device.db.getAll('SELECT seq FROM blocks_synced_changes'),
-      'staging change queue drained at quiescence',
-    ).toEqual([])
-    expect(device.cursor, 'delivery cursor caught up to the server version').toBe(server.version())
-  }
+  // No step above generates work spontaneously — materialize writes are
+  // source-NULL so they never re-enter ps_crud — so `quiesce`'s three rounds
+  // strictly suffice; the assertions below prove it.
+  await quiesce(universe)
 
-  // Sync-materialization is a different write shape than kernel txs and
-  // could desync a trigger-maintained derived index (block_references/
-  // block_aliases/block_types/blocks_fts) while the 13-column `blocks`
-  // comparison below stays green. Reuse repoMutators' sweep (workspace-
-  // agnostic recompute — see its docblock in fuzzKernelHarness.ts — so it
-  // transfers unchanged to this suite's one-workspace, ROOT-pinned pool).
-  for (const device of devices) await sweepDerivedIndexes(device.db)
-
-  const [rowsA, rowsB] = [await allBlockColumns(dbA.db), await allBlockColumns(dbB.db)]
-  expect(rowsA, 'device A == device B after quiescence').toEqual(rowsB)
-  expect(rowsA, 'devices == server ground truth after quiescence').toEqual(server.rows())
+  await expectQuiescedAndConverged(universe)
 }
 
 describe('two-repo sync convergence (issue #372 Batch 3)', () => {
@@ -329,6 +377,84 @@ describe('two-repo sync convergence (issue #372 Batch 3)', () => {
         guard.run(prngSeed, () => runCase({ steps }))),
       fuzzParams(8),
     )
+  }, fuzzTestTimeout())
+})
+
+/** Shrunk counterexamples of the SECOND FIND (docblock), one per column the
+ *  stranded stamp hid. Only ROOT matters in both: both devices split it, so
+ *  both hold it at one server version; then each rewrites it. A's burst is
+ *  compacted into ONE patch whose ack the un-drifted path clamps below A's
+ *  local stamp, and B's drifted patch then lands exactly on that stamp. */
+const COLLISION_CASES: ReadonlyArray<{
+  issue: string
+  /** The column A's stale row disagrees with the server on at the collision. */
+  column: string
+  prngSeed: number | null
+  steps: readonly Step[]
+}> = [
+  {
+    issue: '#1163',
+    column: 'content',
+    prngSeed: 1,
+    steps: [
+      { kind: 'op', device: 0, op: { op: 'split', id: { pool: 0, idx: 0 }, before: '', after: ' ' } },
+      { kind: 'op', device: 1, op: { op: 'split', id: { pool: 0, idx: 0 }, before: '', after: ' ' } },
+      { kind: 'roundTrip' },
+      { kind: 'op', device: 0, op: { op: 'setReferences', id: { pool: 0, idx: 0 }, refs: [{ target: { pool: 0, idx: 0 }, aliased: false, prop: false }] } },
+      { kind: 'op', device: 1, op: { op: 'setContent', id: { pool: 0, idx: 0 }, content: '' } },
+      { kind: 'op', device: 0, op: { op: 'setContent', id: { pool: 0, idx: 0 }, content: '!' } },
+      { kind: 'op', device: 0, op: { op: 'indent', id: { pool: 0, idx: 0 } } },
+    ],
+  },
+  {
+    issue: '#1162',
+    column: 'user_updated_at',
+    prngSeed: null,
+    steps: [
+      { kind: 'op', device: 0, op: { op: 'split', id: { pool: 0, idx: 0 }, before: '', after: ' ' } },
+      { kind: 'op', device: 1, op: { op: 'split', id: { pool: 0, idx: 0 }, before: '', after: ' ' } },
+      { kind: 'roundTrip' },
+      { kind: 'op', device: 0, op: { op: 'setReferences', id: { pool: 0, idx: 0 }, refs: [{ target: { pool: 0, idx: 0 }, aliased: false, prop: false }] } },
+      { kind: 'op', device: 1, op: { op: 'setContent', id: { pool: 0, idx: 0 }, content: '' } },
+      { kind: 'op', device: 0, op: { op: 'setContent', id: { pool: 0, idx: 0 }, content: '' } },
+    ],
+  },
+]
+
+const rootOf = (rows: ReadonlyArray<Record<string, unknown>>) => rows.find(row => row.id === ROOT)!
+
+describe('two-repo sync convergence — a peer write landing on a stamp the server never issued', () => {
+  it.each(COLLISION_CASES)('$issue: A converges on the $column B wrote under A\'s own stamp', async ({ column, prngSeed, steps }) => {
+    await guard.run(prngSeed, async () => {
+      const universe = await setUpTwoDevices()
+      const { server, devices: [a, b], rejections } = universe
+      await applySteps(universe, steps)
+
+      // The collision, asserted rather than assumed: with both patches in and
+      // nothing delivered yet, A's row carries the server's version stamp but
+      // not the server's row. Were the stamps to stop colliding, this case would
+      // pass without ever reaching the equal-stamp decision it exists to pin.
+      await upload(a, server, rejections)
+      await upload(b, server, rejections)
+      const localRoot = rootOf(await allBlockColumns(a.db))
+      const serverRoot = rootOf(server.rows())
+      expect(localRoot.updated_at, "A holds the server's version for ROOT").toBe(serverRoot.updated_at)
+      expect(localRoot[column], `A's ${column} is not the server's`).not.toEqual(serverRoot[column])
+
+      await quiesce(universe)
+      await expectQuiescedAndConverged(universe)
+
+      // Disk is not enough: the in-memory cache gate saw the same equal stamp,
+      // and an open view of ROOT renders from the cache.
+      const cached = a.cache.getSnapshot(ROOT)
+      expect(cached, 'ROOT is cached on A').toBeDefined()
+      expect(cached!.updatedAt).toBe(serverRoot.updated_at)
+      expect(cached!.content, "A's cached ROOT shows the server's content").toBe(rootOf(server.rows()).content)
+      expect(cached!.userUpdatedAt, "A's cached ROOT shows the server's display stamp")
+        .toBe(rootOf(server.rows()).user_updated_at)
+    })
+    // The barrier inside `guard.run` awaits any case the property above
+    // abandoned, which is the wait `fuzzTestTimeout` reserves its budget for.
   }, fuzzTestTimeout())
 })
 

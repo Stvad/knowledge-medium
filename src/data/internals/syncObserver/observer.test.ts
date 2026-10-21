@@ -182,7 +182,7 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
 
     // WK arrives → the workspace becomes materializable; §8 calls drainWorkspace.
     mat = 'decrypt'
-    await observer.drainWorkspace('ws-e2ee')
+    await observer.drainWorkspace('ws-e2ee', 'all')
     expect(await blocks()).toEqual([{ id: 'e1', content: 'locked' }])
   })
 
@@ -215,7 +215,7 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
     // rescan) treat resolution as "the workspace is materialized" and act on it
     // irreversibly, so a pass that stopped two windows in must not report
     // success (km-fsxp).
-    await expect(observer.drainWorkspace('ws')).rejects.toThrow('boom')
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow('boom')
 
     // Window 1 (b0,b1) committed; window 2's throw didn't roll it back.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
@@ -239,7 +239,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
 
     // Set at ENQUEUE, not at the first window: a rescan waiting its turn on the
     // chain will still rewrite `blocks` before any consumer hears otherwise.
-    const rescan = observer.drainWorkspace('ws')
+    const rescan = observer.drainWorkspace('ws', 'all')
     expect(observer.isRematerializingWorkspace('ws')).toBe(true)
     // And scoped to it: someone who navigated to another workspace must not be
     // refused for the whole of this one's rescan.
@@ -267,7 +267,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     // And the re-pass that can finally apply it clears it — the flag is state,
     // not a one-way tripwire.
     mode = 'copy'
-    await observer.drainWorkspace('ws')
+    await observer.drainWorkspace('ws', 'all')
     expect(await unapplied('ws')).toEqual([])
   })
 
@@ -311,13 +311,31 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     expect(await unapplied('ws')).toEqual(['doomed'])
   })
 
+  it('does not leave the workspace flagged as rematerializing when a window throws', async () => {
+    // The count is decremented off the promise precisely so that it settles on
+    // every exit, not just the clean one — and a THROWING window is the exit
+    // that matters, because unlike dispose it leaves the observer live and
+    // reachable. Leaked, `workspaceViewGap` answers `transient: true` for the
+    // rest of the session and the properties-migration runner, which re-arms on
+    // exactly that, retries forever against a refusal nothing will clear.
+    await put(data({ id: 'r1', workspaceId: 'ws', content: 'c' }))
+    await env.db.execute('DELETE FROM blocks_synced_changes')
+    const { observer } = start({
+      getMaterializability: () => { throw new Error('boom') },
+      onError: () => {},
+    })
+
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow('boom')
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
+  })
+
   it('rejects a rescan the observer was disposed before it ever started', async () => {
     // Same rule one step earlier: a rescan still waiting its turn on the chain
     // when the tab closes has materialized nothing, and its awaiter must not be
     // handed the resolution it writes the recovery marker on.
     await put(data({ id: 'b1', workspaceId: 'ws', content: 'c1' }))
     const { observer } = start({ getMaterializability: constMat('copy') })
-    const rescan = observer.drainWorkspace('ws')
+    const rescan = observer.drainWorkspace('ws', 'all')
     observer.dispose()
     await expect(rescan).rejects.toThrow(/disposed/)
   })
@@ -345,7 +363,7 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
 
     mode = 'copy'
     live = observer
-    await expect(observer.drainWorkspace('ws')).rejects.toThrow(/disposed/)
+    await expect(observer.drainWorkspace('ws', 'all')).rejects.toThrow(/disposed/)
     // Window 1 committed before the teardown landed. That the pass is resumable
     // is exactly why its caller has to be told it did not finish.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
@@ -353,6 +371,116 @@ describe('blocksSyncedObserver — the queue-blind rescan is observable', () => 
     // reach the same catch as a genuine failure, and routing them to `onError`
     // means the default handler warns on every tab close mid-drain.
     expect(errors).toEqual([])
+  })
+})
+
+describe('blocksSyncedObserver — operator rematerialization (km-boj1)', () => {
+  /** A delivery whose queue entry a drain consumed without applying it — the
+   *  state the durable gap lives in, and the one nothing re-delivers. */
+  const deliverAndConsumeQueue = async (d: BlockData) => {
+    await put(d)
+    await env.db.execute('DELETE FROM blocks_synced_changes')
+  }
+
+  it('re-applies a durably unapplied row the queue can no longer reach', async () => {
+    // The shape measured on the production graph: `blocks` holds the row at the
+    // stamp-0 speculative-mint sentinel while `blocks_synced` holds the server's
+    // version at a real stamp with byte-identical content, and the queue entry
+    // is long gone. The seed cannot clear the flag (I2 — equal stamps at 0
+    // prove nothing about content), the drain WOULD clear it by applying, and
+    // nothing re-delivers it. So the flag is correct and permanently stuck.
+    await seedLocalBlock(data({
+      id: 'stuck', workspaceId: 'ws', content: 'same',
+      createdAt: 0, updatedAt: 0, userUpdatedAt: 0,
+    }))
+    await deliverAndConsumeQueue(data({
+      id: 'stuck', workspaceId: 'ws', content: 'same',
+      createdAt: 500, updatedAt: 900, userUpdatedAt: 900,
+    }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual(['stuck'])
+
+    expect(await observer.drainWorkspace('ws', 'unapplied'))
+      .toMatchObject({ scope: 'unapplied', scanned: 1, applied: 1, resolved: 1 })
+    expect(await unapplied('ws')).toEqual([])
+    // APPLIED, not declared-fine. The flag drops because `blocks` now holds the
+    // staged row — including the mint metadata a 0-stamped row lacks, which is
+    // the whole of what the staged version was still carrying.
+    expect(await env.db.get('SELECT updated_at, created_at FROM blocks WHERE id = ?', ['stuck']))
+      .toMatchObject({ updated_at: 900, created_at: 500 })
+  })
+
+  it('looks at only the flagged rows, so the pass is the size of the gap', async () => {
+    // Why the narrow scope is the default: on the measured device the durable
+    // gap is ~1.1k rows inside a workspace of hundreds of thousands, and
+    // re-judging every row the flag already vouches for is what makes a remedy
+    // one an operator does not run.
+    await deliverAndConsumeQueue(data({ id: 'stuck', workspaceId: 'ws', content: 'c' }))
+    await put(data({ id: 'fine', workspaceId: 'ws', content: 'c' }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual(['stuck'])
+
+    expect(await observer.drainWorkspace('ws', 'unapplied')).toMatchObject({ scanned: 1 })
+    // And `all` is the wider pass it is narrower than — same workspace, both
+    // rows. It repaired nothing, and says so: at this point every row is
+    // already resolved, and the wide pass re-DECIDES all of them. Counting
+    // decisions instead of flags actually moved would report a settled
+    // workspace as one this pass had just repaired end to end — on a real graph,
+    // hundreds of thousands of rows of it.
+    expect(await observer.drainWorkspace('ws', 'all'))
+      .toMatchObject({ scope: 'all', scanned: 2, applied: 0, resolved: 0 })
+  })
+
+  it('flags the narrow pass as in flight too', async () => {
+    // It writes fewer rows, not none. A reader that saw no rescan outstanding
+    // while `blocks` was being rewritten under it is exactly the blindness this
+    // counter exists to close, and the narrow scope does not exempt itself.
+    await deliverAndConsumeQueue(data({ id: 'stuck', workspaceId: 'ws', content: 'c' }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+
+    const pass = observer.drainWorkspace('ws', 'unapplied')
+    expect(observer.isRematerializingWorkspace('ws')).toBe(true)
+    await pass
+    expect(observer.isRematerializingWorkspace('ws')).toBe(false)
+  })
+
+  it('reports the gap it made BIGGER', async () => {
+    // A rematerialization is not monotonic. A workspace that answers `defer`
+    // re-flags rows an earlier drain had legitimately cleared — here a staged
+    // tombstone that was invisible on both sides until its local row came back —
+    // so the operator's count can go UP. Without this number the only honest
+    // reading of that is "something happened", which is where they started.
+    await put(data({
+      id: 'back', workspaceId: 'ws', content: 'gone', deleted: true, updatedAt: 9,
+    }))
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await observer.flush()
+    expect(await unapplied('ws')).toEqual([])
+
+    await seedLocalBlock(data({ id: 'back', workspaceId: 'ws', content: 'restored' }))
+
+    expect(await observer.drainWorkspace('ws', 'unapplied'))
+      .toMatchObject({ scanned: 0, reflagged: 0 })   // the flag says nothing to do…
+    expect(await observer.drainWorkspace('ws', 'all'))
+      .toMatchObject({ scanned: 1, resolved: 0, reflagged: 1 })  // …and the wide scope disagrees
+    expect(await unapplied('ws')).toEqual(['back'])
+  })
+
+  it('reports why the rows it could not apply are still flagged', async () => {
+    // A pass that leaves the gap open has not failed — these two counts are the
+    // answer to "so why is it still refusing", and they are the two that a
+    // re-run does not change: `deferred` wants the workspace materializable,
+    // `quarantined` wants bytes that decode.
+    await deliverAndConsumeQueue(data({ id: 'locked', workspaceId: 'ws', content: 'c' }))
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await observer.flush()
+
+    expect(await observer.drainWorkspace('ws', 'unapplied'))
+      .toMatchObject({ scanned: 1, applied: 0, deferred: 1, quarantined: 0, resolved: 0 })
+    expect(await unapplied('ws')).toEqual(['locked'])
   })
 })
 

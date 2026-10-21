@@ -1,7 +1,7 @@
 import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
-import type { OperatorBackfillResult, Repo } from '@/data/repo'
+import type { OperatorBackfillResult, Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
@@ -34,6 +34,9 @@ export interface UpdateBlockInput {
   content?: string
   properties?: BlockProperties
   replaceProperties?: boolean
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this, checked inside the writing transaction. */
+  expectedContent?: string
 }
 
 export type MoveBlockPosition =
@@ -97,8 +100,20 @@ export interface InstallExtensionInput {
   parentId?: string
   id?: string
   reload?: boolean
+  /** Execute the source in isolation and report what it contributes. Also the
+   *  way to run the preset-identity check against a block this device has not
+   *  approved: an install that makes nothing live does not evaluate the source
+   *  on its own. */
   verify?: boolean
+  /** Install anyway when a value preset this extension registers would re-type
+   *  values already stored under its id. See `presetIdentity.ts` — the refusal
+   *  names what moved and how many cells are stored under it, and this is the
+   *  caller saying those values are disposable. */
+  allowPresetChange?: boolean
 }
+
+export type {PresetIdentityConflict} from './presetIdentity.ts'
+import type {PresetIdentityConflict} from './presetIdentity.ts'
 
 export interface ExtensionVerificationError {
   blockId: string
@@ -159,6 +174,20 @@ export interface InstallExtensionResult {
   running?: boolean
   /** What to do about `running: false`. */
   hint?: string
+  /** Value preset ids whose effective codec this install changes — one it
+   *  registers differently, or one it stops registering. Present when the
+   *  install went ahead anyway: either `allowPresetChange` let it through — so
+   *  the override records what it overrode — or the block does not pass both
+   *  loader gates here, so nothing it registers runs and the conflict is a fact
+   *  about a future enable rather than a re-typing this command performs.
+   *  Absent when no conflict was found, when the source was never executed to
+   *  look (see `verify`), and when it was executed but a gate's own store could
+   *  not be read — `--allow-preset-change` then buys a SKIPPED check, so absent
+   *  is not "no conflict" there. */
+  presetChanges?: PresetIdentityConflict[]
+  /** Present when `--verify` asked for it, and ALSO when the candidate was
+   *  resolved and failed to load — an install that stores source nothing can
+   *  run says so rather than reporting success. */
   verification?: ExtensionVerificationResult
 }
 
@@ -231,14 +260,25 @@ export interface RunBackfillInput {
  *  its codec rejected — which an operator has to see, since those keys stay
  *  cell-only until the values are repaired and the pass re-run.
  *
- *  Declared off the pass's own progress type rather than re-listed: the
- *  hand-written copy had already fallen behind it by two fields, and both of
- *  them — the exact failure count and whether the workspace was being edited —
- *  are ones the operator acts on. */
+ *  Declared off the pass's own progress type rather than re-listed: a
+ *  hand-written copy falls behind it silently, and the fields it drifts on —
+ *  the exact failure count, the values that could not be migrated — are the
+ *  ones the operator acts on. */
 export type RunBackfillResult =
   OperatorBackfillResult
   & {backfillId: string; workspaceId: string}
   & Partial<PropertyCellBackfillProgress>
+
+export interface RematerializeWorkspaceInput {
+  /** Workspace to re-materialize. Defaults to, and must be, the ACTIVE one —
+   *  the pass rebuilds this client's view of the workspace it has open, so the
+   *  option is an assertion against running it on the wrong graph. */
+  workspaceId?: string
+  /** `'unapplied'` (default) re-delivers exactly the rows the durable refusal
+   *  counts; `'all'` re-judges every staged row of the workspace. Validated
+   *  kernel-side, so it stays a plain string on the wire. */
+  scope?: string
+}
 
 export interface AuditPropertiesInput {
   /** Workspace to audit. Defaults to, and in practice must be, the ACTIVE
@@ -276,6 +316,7 @@ export interface AgentRuntimeContext {
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
   auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
   runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
+  rematerializeWorkspace: (input: RematerializeWorkspaceInput) => Promise<WorkspaceRematerialization>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

@@ -162,6 +162,9 @@ export const getOrCreateDailyNote = async (
   repo: Repo,
   workspaceId: string,
   iso: string,
+  /** Describes the note's own create / repair txs (the agent bridge marks its
+   *  writes this way); the Journal bootstrap keeps its own. */
+  {description}: {description?: string} = {},
 ): Promise<Block> => repo.undoGroup(async repo => {
   const id = dailyNoteBlockId(workspaceId, iso)
   const orderKey = dailyNoteOrderKey(iso)
@@ -259,7 +262,7 @@ export const getOrCreateDailyNote = async (
       if (current.parentId !== journal.id || current.orderKey !== orderKey) {
         await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
       }
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, description})
     return repo.block(id)
   }
 
@@ -324,7 +327,7 @@ export const getOrCreateDailyNote = async (
       {[dailyNoteDateProp.name]: dateValue},
       typeSnapshot,
     )
-  }, {scope: ChangeScope.BlockDefault})
+  }, {scope: ChangeScope.BlockDefault, description})
 
   return repo.block(id)
 })

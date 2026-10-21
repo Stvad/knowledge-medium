@@ -200,7 +200,7 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
 
     try {
       this.subscriptionDisposer = this.repo.subscribeBlocks(
-        { workspaceId, types: [this.descriptor.metaType] },
+        this.subscriptionQuery(workspaceId),
         rows => {
           if (this.disposed || this.generation !== generation) return
           this.rebuild(this.hydrate(rows), false, generation)
@@ -299,6 +299,17 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     this.byKey.set(key, blockId)
     this.byBlockId.set(blockId, contribution)
     this.publish()
+    // Nothing but a subscription delivery takes this back out again, and a
+    // create undone before its own reload settles produces no delivery at all
+    // — the reload reads back the row set that was last delivered, which dedup
+    // drops. Without this the contribution outlives its row forever.
+    this.repo.requireNextBlockDelivery(this.subscriptionQuery(this.pinnedWorkspaceId))
+  }
+
+  /** The row set this projector projects — shared with `upsert`, which has to
+   *  address that same query handle. */
+  private subscriptionQuery(workspaceId: string) {
+    return { workspaceId, types: [this.descriptor.metaType] }
   }
 
   private hydrate(rows: readonly BlockData[]): readonly Row[] {

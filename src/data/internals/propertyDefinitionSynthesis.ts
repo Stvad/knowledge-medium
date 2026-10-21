@@ -1,14 +1,14 @@
 /**
- * §9 orphan-definition synthesis: give every definition-less cell key a
+ * Orphan-definition synthesis: give every definition-less cell key a
  * definition block, so "every key resolves a definition" can be an INVARIANT
  * rather than a branch every consumer has to carry.
  *
- * A key nothing declares — historic residue, a plugin disabled before the
- * unification's cutover, a dormant dynamic extension, a raw bag writer — is
- * the one class of property data a flipped workspace cannot make
- * child-backed: `materializePropertyChildrenForExistingRow` resolves the name,
- * gets nothing, and correctly skips the cell rather than inventing data. Left
- * alone the key rides the cell forever, which the §11 column drop can't allow.
+ * A key nothing declares — historic residue, a dormant dynamic extension, a
+ * raw bag writer — is the one class of property data a flipped workspace
+ * cannot make child-backed: `materializePropertyChildrenForExistingRow`
+ * resolves the name, gets nothing, and correctly skips the cell rather than
+ * inventing data. Left alone the key rides the cell forever, which the
+ * column drop can't allow.
  *
  * So the minting happens HERE instead, as an explicit operator step before
  * the flip — where it can refuse the keys it must not mint for, report the
@@ -19,16 +19,10 @@
  * SEED owner. Doing it the other way round leaves two definitions in the
  * winner machinery, with field rows stranded on the loser's fieldId.
  *
- * A `defineProperty` owner (a plain schema with no definition block — one of
- * the exact shapes that produces an orphan key) is different: `allowUnregisteredPlainSchemas`
- * admits its writes while nothing claims the name, but once a definition
- * exists `resolveBoundary` finds a winner that isn't the caller's schema and
- * every write starts failing `shadowed`. Enabling it first does NOT help here:
- * `resolveName` sees only definition blocks and seeds, so a live plain schema
- * stays invisible and the key stays a candidate either way — there is no
- * registry of plain-schema owners to consult, that being what makes them
- * plain. The gap is tracked separately; the ordering advice above is honest
- * only for SEED owners.
+ * That ordering advice is honest only for SEED owners. A `defineProperty`
+ * owner is invisible to `resolveName`, which sees only definition blocks and
+ * seeds — so enabling it first does not take the key off the candidate list,
+ * and once a definition exists its writes start failing `shadowed`.
  *
  * `audit-properties` names the owner where it can.
  */
@@ -37,6 +31,7 @@ import {
   ChangeScope, propertyValue,
   type AnyPropertySchema, type AnyValuePresetCore, type BlockData,
 } from '@/data/api'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
@@ -60,13 +55,13 @@ import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, type ModePin } from '@/sync/keys/modePin'
-import { readContentKeyHmac } from '@/sync/keys/resolver'
-import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
+import { orNullWhenKeyUnavailable, requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys'
+import { describeNames, firstFew } from '@/utils/nameList'
 import {
-  encodedPropertyValueToChildContent, propertyChildContentToEncodedValue,
+  valueSurvivesChildRoundTrip,
 } from '@/data/propertyChildren'
 import {
-  OBJECT_BAG, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
+  LIVE_CELLS_FOR_NAMES, keyOf, requirePropertyRegistryFor, scanPropertyKeys,
   type UnresolvedPropertyKey,
 } from './propertyKeyScan'
 
@@ -116,10 +111,9 @@ export const synthesizedPropertyDefinitionBlockId = (
  *  value unchanged through `encodedValueToContent` → `contentToEncodedValue`;
  *  see {@link provePresetId} for why that is the selection criterion.
  *
- *  One exception, tracked in #688 and not this module's to fix: a `string`
- *  value that is itself field-form content round-trips to nothing. Synthesis
- *  widens the set that can bite, because these keys come from writers nothing
- *  vetted. */
+ *  The codec pair agreeing proves nothing about the layers between them —
+ *  `needsEscape` is what keeps `encodedValueToContent`'s output storable as
+ *  text, so weakening it silently over-approves this proof (#688). */
 export type SynthesizedPresetId = 'boolean' | 'number' | 'string' | 'raw-json'
 
 /** Tried narrowest-first; the first that carries every stored value wins.
@@ -133,10 +127,8 @@ const PRESET_LADDER: readonly SynthesizedPresetId[] =
  *
  *  Not a sampling cap — sampling would put the guessing back. A key with more
  *  distinct values than this is not checked and so is not proven, which makes
- *  it a blocker: this module hands out no codec it has not run. Measured on a
- *  ~360k-cell production graph the heaviest key of any kind has ~26k distinct
- *  values and the unregistered ones had 23 between them, so this bounds a case
- *  that does not arise rather than trimming one that does. */
+ *  it a blocker: this module hands out no codec it has not run. Set high
+ *  enough that no real key reaches it. */
 export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
 
 /**
@@ -152,22 +144,13 @@ export const PROVE_DISTINCT_VALUE_LIMIT = 10_000
  * instance — it simply fails, because `codecs.date` re-encodes `"2026-08-20"`
  * as `"2026-08-20T00:00:00.000Z"`.
  *
- * WHAT THIS DOES NOT PROVE: only the JS half. Content that survives here can
- * still be transformed at the database text boundary or by a processor —
- * see #688 — which is why that stays tracked separately rather than papered
- * over here.
- *
- * And it proves things about values AS JAVASCRIPT SEES THEM. Anything the
- * JSON-to-JS boundary has already collapsed is invisible here — and equally
- * invisible to the rest of the app, which reads the same cells through the same
- * boundary. Measured: a stored `9007199254740993` arrives from both `json_each`
- * and `json_extract` as `9007199254740992`, so no reader can tell the two
- * apart. Reproducing that distinction here would mean parsing numeric tokens
- * out of the raw JSON text, to refuse a key over a difference nothing in this
- * app can observe. Accepted deliberately, tracked as #712. Do not add a fourth
- * value-shape special case without checking which side of this line it falls
- * on — see `containsNonFinite` and its `-0` note below for where that line
- * runs today.
+ * Proves only the JS half — a value that survives here can still be
+ * transformed at the database text boundary or by a processor (#688) — and
+ * only as JavaScript sees it: anything the JSON-to-JS boundary already
+ * collapses (a number past 2^53) is invisible here, and equally invisible to
+ * every other reader, so it is accepted rather than reproduced (#712). Before
+ * adding a fourth value-shape special case, check which side of that line it
+ * falls on — see `containsNonFinite`.
  */
 export const provePresetId = (
   values: readonly unknown[],
@@ -227,16 +210,12 @@ const containsNonFinite = (value: unknown): boolean => {
 }
 
 /** Does one stored value come back byte-identical through the child machinery
- *  this preset would use? */
-const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean => {
-  if (containsNonFinite(encoded)) return false
-  try {
-    const content = encodedPropertyValueToChildContent(schema, encoded)
-    return jsonValuesEqual(propertyChildContentToEncodedValue(schema, content), encoded)
-  } catch {
-    return false
-  }
-}
+ *  this preset would use? The round trip itself is
+ *  {@link valueSurvivesChildRoundTrip} — the machinery's own question, asked
+ *  at whole-property grain so it stays right for a preset whose values are
+ *  lists; the non-finite pre-check is this pass's own blind spot. */
+const survivesChildRoundTrip = (schema: AnyPropertySchema, encoded: unknown): boolean =>
+  !containsNonFinite(encoded) && valueSurvivesChildRoundTrip(schema, encoded)
 
 /** A key synthesis will mint a definition for. */
 export interface SynthesisCandidate {
@@ -261,8 +240,7 @@ export interface SynthesisBlocker {
 export interface PropertyDefinitionSynthesisPlan {
   workspaceId: string
   /** Non-null when this workspace must not be synthesized into at all — see
-   *  {@link resolveSynthesisNamespace}. `candidates` is still filled
-   *  in, because a refusal only matters when there is something to mint. */
+   *  {@link resolveSynthesisNamespace}. */
   refusal: string | null
   /** Live blocks whose property bag is not a JSON object, so the scan could
    *  not read their keys. NOT a count of bad data — a measure of how much of
@@ -301,6 +279,11 @@ export type SynthesisNamespace =
 const resolveSynthesisMode = async (
   repo: Repo,
   workspaceId: string,
+  /** Who serves the row read: `tx.workspaceEncryptionMode` under a write lock,
+   *  `readWorkspaceEncryptionMode(repo.db, …)` outside one. No default,
+   *  because the wrong one does not fail, it hangs
+   *  (`Repo.assertBackfillMayWrite`). */
+  readMode: () => Promise<string | null>,
 ): Promise<{kind: 'refused'; reason: string} | {kind: 'ready'; mode: ModePin}> => {
   const pin = getModePin(repo.user.id, workspaceId)
   if (pin === null) {
@@ -308,7 +291,7 @@ const resolveSynthesisMode = async (
       'this device has not resolved whether the workspace is end-to-end encrypted; open ' +
       'the workspace once so the first-encounter gate settles that, then run this again'}
   }
-  const mode = await readWorkspaceEncryptionMode(repo.db, workspaceId)
+  const mode = await readMode()
   if (mode === null) {
     return {kind: 'refused', reason:
       'this device has no local row for the workspace yet, so its encryption mode cannot ' +
@@ -344,29 +327,33 @@ const resolveSynthesisMode = async (
  *    all refuse; that costs nothing real, since `workspaceAccess.ts` pins every
  *    workspace at first encounter.
  *  - NO FALLBACK TO THE PLAINTEXT NAMESPACE. An E2EE workspace with no `K_id`
- *    refuses rather than minting under the public constant. `resolveWorkspaceEntry`
- *    already treats such a record as LOCKED, so this is the shape of a bug, not
- *    of a workspace the operator is looking at — and quietly publishing
- *    name-derived ids is the one outcome worse than a refusal.
+ *    refuses rather than minting under the public constant — quietly publishing
+ *    name-derived ids is the one outcome worse than a refusal. The key read
+ *    also locks the workspace (`requireWorkspaceKeys`): its record went missing
+ *    after the entry gate checked it.
+ *
+ * PRE-LOCK ONLY: it reads the key store, which must never run under the write
+ * lock, so its own reads go through the Repo's handle.
  */
 export const resolveSynthesisNamespace = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<SynthesisNamespace> => {
-  const resolved = await resolveSynthesisMode(repo, workspaceId)
+  const resolved = await resolveSynthesisMode(
+    repo, workspaceId, () => readWorkspaceEncryptionMode(repo.db, workspaceId))
   if (resolved.kind === 'refused') return resolved
   if (resolved.mode === 'plaintext') {
     return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
   }
-  const contentKeyHmac = await readContentKeyHmac(
-    getWorkspaceKeyStore(), repo.user.id, workspaceId)
-  if (contentKeyHmac === null) {
+  const keys = await orNullWhenKeyUnavailable(
+    requireWorkspaceKeys(getWorkspaceKeyStore(), repo.user.id, workspaceId))
+  if (keys === null) {
     return {kind: 'refused', reason:
       'this device holds no content key for the encrypted workspace, so the definition ids ' +
       'it would mint could not be kept private — re-paste the workspace key, then run this again'}
   }
   return {kind: 'ready', mode: 'e2ee', namespace:
-    await deriveWorkspaceIdNamespace(contentKeyHmac, SYNTHESIZED_DEFINITION_NS_LABEL)}
+    await deriveWorkspaceIdNamespace(keys.contentKeyHmac, SYNTHESIZED_DEFINITION_NS_LABEL)}
 }
 
 /** Why this key can never have a definition of any kind, or null.
@@ -449,13 +436,13 @@ const distinctValuesByKey = async (
   // of them judges values nothing can observe: `{"k":"obsolete","k":42}` is a
   // number at runtime but would be proven as `raw-json`, and enough dead
   // occurrences could push a key past the limit and block the flip outright.
-  // Same rule, same reason, as `Tx.livePropertyDefinitionNames` and the scan.
+  // Same rule, same reason, as `readPropertyDefinitionBags` — which gets it
+  // from `JSON.parse` instead, being a per-ROW read. This one is per-CELL
+  // over every key, so it has to say it in SQL.
   const lastPerBlock = `
     SELECT b.id AS block, j.key AS property, j.type AS type, j.value AS value,
            ROW_NUMBER() OVER (PARTITION BY b.id, j.key ORDER BY j.id DESC) AS occurrence
-      FROM blocks b, json_each(${OBJECT_BAG}) j
-     WHERE b.workspace_id = ? AND b.deleted = 0
-       AND j.key IN (SELECT value FROM json_each(?))`
+    ${LIVE_CELLS_FOR_NAMES}`
   // Counted first so an oversized key is never READ. A LIMIT on the value
   // query instead would silently truncate one key's values and prove a preset
   // against a subset, which is the guessing this replaced.
@@ -569,47 +556,45 @@ export const planPropertyDefinitionSynthesis = async (
  * Why this workspace must not be flipped to child-backed properties yet, or
  * null. See {@link SynthesisBlocker} for what makes a key hopeless.
  *
- * A workspace refusal blocks only when there is something to mint; otherwise
- * the invariant already holds. Advisory for an ALREADY-flipped workspace,
- * where no irreversible step is left to guard.
+ * Advisory for an ALREADY-flipped workspace, where no irreversible step is
+ * left to guard.
  */
 export const flipBlockedBySynthesis = (
   plan: PropertyDefinitionSynthesisPlan,
   outcome?: SynthesisResult,
 ): string | null => {
+  /** A few of the keys with their reasons, and the rest counted. This text is
+   *  a toast: naming every key of a pathological graph produces one nobody
+   *  reads, and dropping the remainder silently would make the sample read as
+   *  the whole list. */
+  const named = (entries: readonly {key: string; reason: string}[]): string => {
+    const {shown, more} = firstFew(entries)
+    const list = shown.map(e => `${JSON.stringify(e.key)} (${e.reason})`).join('; ')
+    return more > 0 ? `${list} and ${more} more` : list
+  }
   // Asked AGAIN after the write, with its outcome — `plan` is what we expected
   // to be able to do, `outcome.skipped` is what we could not. A key that came
   // back skipped is one the flip must not step over: the backfill excludes
   // unregistered keys from its work list, so the pass would report `ran` with
   // zero failures over a key it silently could not migrate.
   if (outcome && outcome.skipped.length > 0) {
-    const named = outcome.skipped.map(s => `${JSON.stringify(s.key)} (${s.reason})`).join('; ')
     return `${outcome.skipped.length} property key(s) still have no definition after trying ` +
-      `to add one: ${named}. Nothing was switched over; resolve these and run this again.`
+      `to add one: ${named(outcome.skipped)}. Nothing was switched over; resolve these and ` +
+      'run this again.'
   }
-  // An unreadable bag is not "some bad data over there" — it is a hole in the
-  // scan this decision is made from, so "every cell key resolves a definition"
-  // is UNVERIFIED rather than satisfied. Refusing an irreversible step on an
-  // incomplete survey is the whole reason the count is reported at all.
   if (plan.unreadableBlocks > 0) {
     return `${plan.unreadableBlocks} block(s) have a property bag this device cannot read, so ` +
       'their property keys are invisible here and this check cannot vouch for them. That ' +
       'means local database corruption — investigate before migrating anything.'
   }
-  // The same hole from the other direction: rows still staged when the survey
-  // ran are keys it could not see. Read off the PLAN rather than asked again
-  // here, because a gap that has since drained is exactly the dangerous case —
-  // the caller's checks either side of the plan both come back clean while the
-  // plan itself was built without the keys that arrived.
   if (plan.scanSyncGap !== null) {
     return `The property survey ran while this device was still catching up (${plan.scanSyncGap}), `
       + 'so keys that arrived during it are missing from it. Run this again once sync is idle.'
   }
   if (plan.blockers.length > 0) {
-    const named = plan.blockers.map(b => `${JSON.stringify(b.key)} (${b.reason})`).join('; ')
     return `${plan.blockers.length} property key(s) cannot be given a definition, so this ` +
-      `workspace can never finish the migration while they exist: ${named}. Delete or ` +
-      'remap them, then run this again.'
+      `workspace can never finish the migration while they exist: ${named(plan.blockers)}. ` +
+      'Delete or remap them, then run this again.'
   }
   // Whether or not there is anything to mint: "is there something to
   // synthesize" and "may this workspace flip at all" are different questions.
@@ -618,7 +603,8 @@ export const flipBlockedBySynthesis = (
   // here is safe.
   if (plan.refusal !== null) {
     return plan.candidates.length > 0
-      ? `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
+      ? `${plan.candidates.length} property key(s) have no definition `
+        + `(${describeNames(plan.candidates.map(c => c.key))}), and ${plan.refusal}.`
       : `This workspace cannot be switched to property blocks: ${plan.refusal}.`
   }
   return null
@@ -663,6 +649,12 @@ export interface SynthesisResult {
    *  id is occupied by something we will not write through, or the name was
    *  claimed by someone else between the plan and the write. */
   skipped: Array<{key: string; reason: string}>
+  /** Whether this pass DROPPED the workspace's undo history, for the caller to
+   *  tell the user. Owned here rather than decided by the caller, because the
+   *  two halves of a drop are not both reachable from outside: the
+   *  replay-invalidation must happen while the minting transaction still holds
+   *  the write lock, and only this knows whether anything was minted by then. */
+  undoHistoryCleared: boolean
 }
 
 /** The name a live definition row currently answers to, or undefined when the
@@ -717,7 +709,9 @@ export const applyPropertyDefinitionSynthesis = async (
   // point the same way — toward minting.
   requirePropertyRegistryFor(repo, workspaceId)
   const skipped: SynthesisResult['skipped'] = []
-  if (plan.candidates.length === 0) return {created: 0, converged: 0, skipped}
+  if (plan.candidates.length === 0) {
+    return {created: 0, converged: 0, skipped, undoHistoryCleared: false}
+  }
   // Defence in depth, labelled as such: `repo.tx` re-reads `isReadOnly` at
   // commit time and rejects `ChangeScope.BlockDefault` there
   // (`commitPipeline.ts`) regardless — this only turns that into a message
@@ -736,10 +730,13 @@ export const applyPropertyDefinitionSynthesis = async (
   // ORPHANED to the scan, and this pass answers an orphan by MINTING — so
   // "nothing is in flight" is not the question {@link Repo.workspaceViewGap}
   // is asked here.
-  const syncGap = await repo.workspaceViewGap(workspaceId)
-  if (syncGap !== null) {
-    throw new Error(`[propertyDefinitionSynthesis] ${syncGap.reason}`)
-  }
+  // Asked here as well as under the lock below, and not because one of them is
+  // redundant: this one refuses BEFORE the key-store read and the
+  // Properties-page bootstrap, so a device that is merely behind on sync is
+  // told that rather than being handed the namespace resolver's "no local row
+  // for the workspace yet", which is the wrong diagnosis for the same state.
+  const gap = await repo.workspaceViewGap(workspaceId)
+  if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
   // Re-read for the same reason, and because the plan may have been built
   // before this device received the workspace row that says it is encrypted.
   const preflight = await resolveSynthesisNamespace(repo, workspaceId)
@@ -756,23 +753,28 @@ export const applyPropertyDefinitionSynthesis = async (
 
   let created = 0
   let converged = 0
+  /** Set inside the transaction below once it has minted, finished once that
+   *  transaction is durable — see `UndoManager.beginHistoryDrop`. Stays unset
+   *  on an aborted run, which leaves the user's history alone. */
+  let drop: HistoryDrop | undefined
   const registrations: Array<{schema: AnyPropertySchema; blockId: string}> = []
   let lastOrderKey: string | null = null
 
   await repo.tx(async tx => {
-    // INSIDE the write lock, immediately before the first write, because that
-    // is the only place the answer cannot go stale under us: the checks above
-    // are separated from this transaction by the Properties-page bootstrap and
-    // by the lock wait, and the workspace's real row can arrive from sync in
-    // between. Minting under the wrong namespace is not undoable — deleting the
-    // block afterwards does not unpublish the id.
+    // Under the lock, because that is the only place the answer cannot go
+    // stale under us: the probe above is separated from this point by the
+    // Properties-page bootstrap and by the wait for the writer, and the drain
+    // takes that same writer — so a definition for a key we are about to call
+    // ORPHANED can arrive in the window, and minting over it publishes a rival
+    // at our deterministic id that no later run can undo.
     //
-    // The view gap is re-asked in full, the same discipline
-    // `assertBackfillMayWrite` follows: a delivery that cannot be applied can
-    // land between the preflight and the lock, and a key whose real definition
-    // is the one left unapplied still reads as ORPHANED to the plan we are
-    // about to write from. Affordable here only because the durable half is a
-    // partial-index lookup now rather than a scan.
+    // FIRST, before any write in this transaction — `Tx.stagedSyncViewGap`
+    // refuses later, and says why.
+    const gap = await repo.workspaceViewGap(workspaceId, tx)
+    if (gap !== null) throw new Error(`[propertyDefinitionSynthesis] ${gap.reason}`)
+    // The mode, immediately before the first write. Minting under the wrong
+    // namespace is not undoable — deleting the block afterwards does not
+    // unpublish the id.
     //
     // Of the NAMESPACE inputs only the MODE is re-asked, and that is the whole
     // trick: `K_id` cannot change under us (it is HKDF of the workspace key,
@@ -783,14 +785,10 @@ export const applyPropertyDefinitionSynthesis = async (
     // wedged store would hold the app's single writer indefinitely rather than
     // failing.
     //
-    // Read through `repo.db` rather than a tx handle, deliberately and for the
-    // same reason `assertBackfillMayWrite` does: a concurrent drain is excluded
-    // by the write lock, not by read isolation.
-    const lateGap = await repo.workspaceViewGap(workspaceId)
-    if (lateGap !== null) {
-      throw new Error(`[propertyDefinitionSynthesis] ${lateGap.reason}`)
-    }
-    const late = await resolveSynthesisMode(repo, workspaceId)
+    // Served by the TRANSACTION's handle, which is what lets it keep this
+    // position — see `Tx.workspaceEncryptionMode`.
+    const late = await resolveSynthesisMode(
+      repo, workspaceId, () => tx.workspaceEncryptionMode(workspaceId))
     if (late.kind === 'refused') {
       throw new Error(`[propertyDefinitionSynthesis] ${late.reason}`)
     }
@@ -931,20 +929,11 @@ export const applyPropertyDefinitionSynthesis = async (
                           + 'no behavior — repair it rather than adding a second'})
           continue
         }
-        // Built by the SAME function the projector uses, from the RUNTIME
-        // presets — so what this publishes now and what the projector rebuilds
-        // a tick later are the same schema, which is the entire point of
-        // publishing early. Nothing about the block is re-derived here: its
-        // preset, its stored config, its stored default and its change scope
-        // are all the block's own, whatever they are.
-        //
-        // Note the asymmetry with the mint path below, which is deliberate.
-        // There we persist a preset id chosen by proving it against the stored
-        // values, so it must be the kernel core BY IDENTITY. Here the choice
-        // was already made — by the user, or by whichever device wrote this
-        // definition — and our job is to report it faithfully, not to re-judge
-        // it. An extension-provided or config-carrying preset is therefore
-        // published rather than skipped.
+        // Deliberate asymmetry with the mint path below: there we persist a
+        // preset id proven against the stored values, so it must be the kernel
+        // core BY IDENTITY; here the choice is already the block's own and our
+        // job is to report it faithfully — an extension-provided or
+        // config-carrying preset is published, not skipped.
         if (holding.schema === null) {
           skipped.push({key: candidate.key,
                         reason: `block ${id} defines this key with a preset this device cannot `
@@ -1036,6 +1025,12 @@ export const applyPropertyDefinitionSynthesis = async (
       created += 1
       registrations.push({blockId: id, schema: schemaFor(candidate.key, preset)})
     }
+    // Begun here, while the lock is still held — see
+    // `UndoManager.beginHistoryDrop`. Conditional on having MINTED, because a
+    // run that only converged changed nothing and refusing a replay would cost
+    // a cmd-Z for no hazard. The POSITION is NOT PINNED, for the same reason
+    // the backfill runner's is not.
+    if (created > 0) drop = repo.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
   }, {
     scope: ChangeScope.BlockDefault,
     description: 'synthesize property definitions',
@@ -1044,7 +1039,21 @@ export const applyPropertyDefinitionSynthesis = async (
     // two (peer holds the claim, pass defers), leaving these as the only
     // committed write with a live undo entry that cmd-Z would delete.
     skipUndo: true,
+  }).catch((err: unknown) => {
+    // A drop begun inside a transaction that then failed to commit must be
+    // released, or it refuses every replay until reload. Nothing was written,
+    // so the history is not owed either.
+    drop?.abandon()
+    drop = undefined
+    throw err
   })
+  // Finished once the transaction has COMMITTED. About the entries ALREADY on
+  // the stack, not this pass's own writes, which are `skipUndo` above: a key
+  // with no definition was a key nothing materialized, so once one is MINTED a
+  // replayed pre-synthesis snapshot writes a cell for a key that now has
+  // children.
+  const undoHistoryCleared = drop !== undefined
+  drop?.finish()
 
   // Publish synchronously, same reason as `addSchema`: the caller's next step
   // is the backfill, which freezes ONE resolver for the whole multi-minute
@@ -1067,6 +1076,6 @@ export const applyPropertyDefinitionSynthesis = async (
     }
   }
 
-  return {created, converged, skipped}
+  return {created, converged, skipped, undoHistoryCleared}
 }
 

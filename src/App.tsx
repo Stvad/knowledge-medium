@@ -1,189 +1,50 @@
-// App is a BOOT SHIM — do not grow it. It owns workspace resolution
-// (getInitialLayout + its cache), the §6 access gates, the TTI mark, the
+// App is a BOOT SHIM — do not grow it. It owns the first read of the boot
+// layout (src/bootstrap/initialLayout.ts), the §6 access gates, the TTI mark, the
 // always-on hash watcher, reactive role tracking, and provisioning the
 // layout-root seam value (LayoutRootContext). New app-root behavior goes into
 // an overridable seam instead — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
-// See the perspective keep-alive RFC (PR #357).
+// See docs/perspective-keep-alive-design.html.
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@powersync/react'
-import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
-import type { Repo } from './data/repo'
-import { hasRemoteSyncConfig } from '@/services/powersync.js'
 import { useIsLocalOnly } from '@/components/Login.js'
+import { remoteSyncEnabled } from '@/services/powersync.js'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.js'
-import { getLocalMemberRole, getLocalWorkspace } from '@/data/workspaces.js'
-import { layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
+import { layoutWorkspaceChanged } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
-import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
-import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
-import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
-import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
+import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
+import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
+import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
+import { getCurrentHash, getInitialLayout, preparedInitialHash } from '@/bootstrap/initialLayout.js'
 
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
-// without its key, or never-pinned (quarantine) — and App renders the
-// WorkspaceKeyGate. `waiting`: access can't be decided until the workspaces row
-// replicates (opened by URL before sync delivered encryption_mode/wk_canary);
-// App shows a neutral loader and re-resolves when the row lands.
-type InitialLayout =
-  | {kind: 'ready'; workspaceId: string; layoutSessionBlock: Block}
-  | {
-      kind: 'locked'
-      workspaceId: string
-      workspaceName: string | null
-      reason: 'key-required' | 'quarantine'
-      canary: string | null
-    }
-  | {kind: 'waiting'; workspaceId: string}
-
+// without its key, never-pinned (quarantine), or e2ee on the server while this
+// device's pin isn't — and App renders the WorkspaceKeyGate. `waiting`: access
+// can't be decided until the workspaces row replicates (opened by URL before
+// sync delivered encryption_mode/wk_canary); App shows a neutral loader and
+// re-resolves when the row lands.
 interface HashSnapshot {
   hash: string
   version: number
 }
 
-const INITIAL_LAYOUT_CACHE_LIMIT = 64
-const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
-
-const getCurrentHash = (): string =>
-  typeof window === 'undefined' ? '' : window.location.hash
-
-// The bootstrap pipeline's composing function: it owns the phase ORDERING that
-// was previously encoded only in comments. Three extracted phases run in a fixed
-// sequence — resolve the workspace, clear the §6 access gate, then run the
-// bootstrap writes — because each depends on the last: the gate must decide
-// BEFORE any write (those writes would otherwise land plaintext into an
-// encrypted-but-locked workspace). First-run seeding now lives in the
-// onboarding plugin's landing resolver, invoked from within
-// `bootstrapWorkspace`'s landing step.
-const resolveInitialLayout = async (
-  repo: Repo,
-  requestedHash: string,
-  useRemoteSync: boolean,
-): Promise<InitialLayout> => {
-  const route = parseLayout(requestedHash)
-
-  // Phase 1 — resolve which workspace this run lands on (URL / remembered /
-  // ensure-personal / local-only). Pure async; see bootstrap/resolveWorkspace.
-  const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
-    repo,
-    route.workspaceId,
-    useRemoteSync,
-  )
-  repo.setActiveWorkspaceId(workspaceId)
-
-  // Derive read-only from the local membership row. workspace_members rides
-  // the same sync stream as workspaces, so for any workspace we just
-  // resolved as accessible, the role row is normally already local. Null
-  // (membership not yet synced) defaults to read-only=false; if the role
-  // is actually 'viewer', the very next sync tick flips us — and any
-  // edits attempted in the meantime would be RLS-rejected server-side
-  // anyway.
-  const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
-  repo.setReadOnly(role === 'viewer')
-
-  // Phase 2 — §6 rule 3 access gate. Resolve whether this workspace can be
-  // materialized for us right now BEFORE any bootstrap write below — those
-  // writes (daily note, properties/types/recents pages, ui-state) would
-  // otherwise write plaintext into an encrypted-but-locked workspace. If it
-  // can't, return a `locked`/`waiting` layout and App renders the gate/loader.
-  // The read-inputs + decide halves live together in resolveWorkspaceEntry; the
-  // local workspace row read is injected to keep that module within sync/keys.
-  const entry = await resolveWorkspaceEntry(repo.user.id, workspaceId, id =>
-    getLocalWorkspace(repo, id),
-  )
-  markStartup('workspaceResolved')
-  if (entry.kind === 'waiting') {
-    // The workspaces row hasn't replicated yet and the pin can't settle access
-    // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
-    // workspace) and don't gate with a null canary — wait for the row.
-    repo.setReadOnly(true)
-    return {kind: 'waiting', workspaceId}
-  }
-  if (entry.kind === 'locked') {
-    repo.setReadOnly(true)
-    return {
-      kind: 'locked',
-      workspaceId,
-      workspaceName: entry.workspaceName,
-      reason: entry.reason,
-      canary: entry.canary,
-    }
-  }
-
-  // Phase 3 — bootstrap writes (remember-as-default, backfills, tutorial, the
-  // Properties/Types/Recents pages, ui-state) + URL→layout application. Runs
-  // only past the gate; see bootstrap/workspaceBootstrap.
-  const layoutSessionBlock = await bootstrapWorkspace({
-    repo,
-    workspaceId,
-    freshlyCreated,
-    requestedHash,
-    requestedWorkspaceId: route.workspaceId,
-  })
-  markStartup('bootstrapDone')
-
-  return {kind: 'ready', workspaceId, layoutSessionBlock}
-}
-
-const initialLayoutCacheKey = (
-  repo: Repo,
-  requestedHash: string,
-  useRemoteSync: boolean,
-  navigationVersion: number,
-): string =>
-  [
-    repo.instanceId,
-    requestedHash || '__empty_hash__',
-    useRemoteSync ? 'remote' : 'local',
-    navigationVersion,
-  ].join(':')
-
-const getInitialLayout = (
-  repo: Repo,
-  requestedHash: string,
-  useRemoteSync: boolean,
-  navigationVersion: number,
-): Promise<InitialLayout> => {
-  const key = initialLayoutCacheKey(repo, requestedHash, useRemoteSync, navigationVersion)
-  const cached = initialLayoutCache.get(key)
-  if (cached) {
-    initialLayoutCache.delete(key)
-    initialLayoutCache.set(key, cached)
-    return cached
-  }
-
-  const promise = resolveInitialLayout(repo, requestedHash, useRemoteSync)
-  initialLayoutCache.set(key, promise)
-  if (initialLayoutCache.size > INITIAL_LAYOUT_CACHE_LIMIT) {
-    const oldest = initialLayoutCache.keys().next().value
-    if (oldest) initialLayoutCache.delete(oldest)
-  }
-  void promise.catch(() => {
-    if (initialLayoutCache.get(key) === promise) initialLayoutCache.delete(key)
-  })
-  return promise
-}
-
 const App = () => {
   const repo = useRepo()
   const [hashSnapshot, setHashSnapshot] = useState<HashSnapshot>(() => ({
-    hash: getCurrentHash(),
+    hash: preparedInitialHash(repo) ?? getCurrentHash(),
     version: 0,
   }))
   const safeMode = hasSafeModeSearchParam(useSearchParam('safeMode'))
-  // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
-  // override (the user clicked "Use without sync" on the login screen).
-  // Both close the door on Supabase RPCs, so AND them together once here.
   const localOnly = useIsLocalOnly()
-  const useRemoteSync = hasRemoteSyncConfig && !localOnly
+  const useRemoteSync = remoteSyncEnabled(localOnly)
 
   const initial = use(
     getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),
@@ -273,6 +134,13 @@ const App = () => {
     setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
   }, [])
 
+  // A workspace the server converts to e2ee while it's open here closes into
+  // the gate: until this device's pin is upgraded it can't sync the workspace.
+  useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', reResolve)
+  // So does one whose key this device stops holding: the browser evicted it.
+  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, reResolve)
+  const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
+
   if (initial.kind === 'waiting') {
     return <WorkspaceSyncWaiting workspaceId={initial.workspaceId} onReady={reResolve}/>
   }
@@ -280,18 +148,19 @@ const App = () => {
   if (initial.kind === 'locked') {
     return (
       <WorkspaceKeyGate
+        // One instance per workspace: a hash change between two locked
+        // workspaces must not carry one gate's state into the other's.
+        key={initial.workspaceId}
         userId={repo.user.id}
         workspaceId={initial.workspaceId}
         workspaceName={initial.workspaceName ?? undefined}
         reason={initial.reason}
         canary={initial.canary}
-        onResolved={async () => {
-          // Re-materialize the now-decryptable staged rows BEFORE re-resolving,
-          // so the bootstrap getOrCreate*s no-op against the synced content
-          // rather than racing it.
-          await repo.drainSyncWorkspace(initial.workspaceId)
-          reResolve()
-        }}
+        // The gate drains the now-decryptable staged rows BEFORE this re-resolve,
+        // so the bootstrap getOrCreate*s no-op against the synced content rather
+        // than racing it.
+        deps={gateDeps}
+        onResolved={reResolve}
       />
     )
   }

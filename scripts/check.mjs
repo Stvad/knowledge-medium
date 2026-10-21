@@ -148,24 +148,33 @@ const abortFromSignal = signal => {
 process.once('SIGINT', () => abortFromSignal('SIGINT'))
 process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
 
-const startedAt = performance.now()
-const installResult = await runTask(installTask)
-if (installResult.code !== 0) {
-  process.exit(installResult.code ?? 1)
+// Returns the exit code rather than taking it: every failure path here has
+// just relayed a failing task's entire output, and `process.exit()` drops what
+// is still queued on a piped stdout once the writes outrun the reader, which a
+// failing task's output does comfortably. Nothing is still running when any of
+// these returns, so the loop drains and ends.
+const runGate = async () => {
+  const startedAt = performance.now()
+  const installResult = await runTask(installTask)
+  if (installResult.code !== 0) return installResult.code ?? 1
+
+  const compileResult = await runTask(compileTask)
+  if (compileResult.code !== 0) return compileResult.code ?? 1
+
+  console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
+  const {firstFailure} = await runParallel(parallelTasks)
+  const duration = formatDuration(performance.now() - startedAt)
+
+  if (firstFailure) {
+    console.error(`[check] failed in ${duration}`)
+    return firstFailure.code ?? 1
+  }
+
+  console.log(`[check] passed in ${duration}`)
+  return 0
 }
 
-const compileResult = await runTask(compileTask)
-if (compileResult.code !== 0) {
-  process.exit(compileResult.code ?? 1)
-}
-
-console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
-const {firstFailure} = await runParallel(parallelTasks)
-const duration = formatDuration(performance.now() - startedAt)
-
-if (firstFailure) {
-  console.error(`[check] failed in ${duration}`)
-  process.exit(firstFailure.code ?? 1)
-}
-
-console.log(`[check] passed in ${duration}`)
+const code = await runGate()
+// Assigned only on failure: a signal leaves through abortFromSignal, which
+// already set 130/143, and cancels every task so no firstFailure is reported.
+if (code !== 0) process.exitCode = code

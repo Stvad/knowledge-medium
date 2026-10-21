@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 
+export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -39,8 +41,8 @@ export default defineConfig({
     // start zero test files. Forks is vitest 4's default and what we run.
     execArgv: ['--no-experimental-webstorage', '--expose-gc'],
     // node_modules + dist are vitest defaults; .claude/worktrees and
-    // .codex/worktrees hold full repo copies from agent runs (Claude Code and
-    // Codex respectively) whose tests we don't want to re-execute here.
+    // .codex/worktrees hold full repo copies from agent runs whose tests
+    // we don't want to re-execute here.
     // The agent-extensions SUBDIRECTORIES are standalone packages with their own
     // dependency installs and Vitest configs (they alias `@` to the generated
     // kernel-types stubs, which are .d.ts only — no runtime), so root collection
@@ -54,9 +56,12 @@ export default defineConfig({
     // (see AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
     // next to an extension — gitignored, and skipped here so a leftover one
     // can't redden an unrelated run.
+    // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
+    // starts one and runs those through vitest.supabase.config.ts.
     exclude: [
       '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
+      SUPABASE_STACK_TESTS,
     ],
     coverage: {
       reporter: ['text', 'json', 'html'],
@@ -65,7 +70,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src')
+      '@': resolve(__dirname, './src'),
+      // Same as vite.config.ts: the app reads the wire protocol from the
+      // agent-cli SOURCE, not its last build in dist/.
+      '@knowledge-medium/agent-cli/protocol': resolve(__dirname, './packages/agent-cli/src/protocol.ts'),
     }
   }
 })

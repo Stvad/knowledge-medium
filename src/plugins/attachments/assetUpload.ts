@@ -20,6 +20,7 @@
 
 import { getActiveUserId, isRemoteSyncActive, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
@@ -39,16 +40,10 @@ import {
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
 import { recoverFailedUploads } from './uploadRecovery.js'
-import { reconcileUploads } from './uploadReconcile.js'
+import { isAssetBlockPresent, reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
 let blobStoreSingleton: BlobStore | null = null
-/** The app's Supabase-backed blob store, or null when there's nothing to upload to.
- *  Gated on the RUNTIME remote-sync state, NOT just `supabase != null`: a local-only
- *  session (the user opted out of remote at login, or toggled local-only) keeps a
- *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
- *  lane is a no-op (Codex P1). Re-checked each call (before the singleton) so the gate
- *  is dynamic across an account/mode switch. */
 /** The active Supabase session's access token, or null when there's no live session
  *  (signed out / offline with an unrefreshable token). Shared by the blob store's
  *  authenticated PUT and §9 recovery's session gate — recovery must NOT trust a probe's
@@ -56,7 +51,13 @@ let blobStoreSingleton: BlobStore | null = null
 const getSupabaseAccessToken = async (): Promise<string | null> =>
   supabase ? ((await supabase.auth.getSession()).data.session?.access_token ?? null) : null
 
-const getBlobStore = (): BlobStore | null => {
+/** The app's Supabase-backed blob store, or null when there's nothing to upload to.
+ *  Gated on the RUNTIME remote-sync state, NOT just `supabase != null`: a local-only
+ *  session (the user opted out of remote at login, or toggled local-only) keeps a
+ *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
+ *  lane is a no-op. Re-checked each call (before the singleton) so the gate
+ *  is dynamic across an account/mode switch. */
+export const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
   if (!blobStoreSingleton) {
     const client = supabase
@@ -96,6 +97,7 @@ const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   byteStore: getByteStore(),
   blobStore,
   ...laneKeyDeps(resolver),
+  readLiveWorkspace: (workspaceId: string) => fetchWorkspaceConversionState(workspaceId),
 })
 
 // One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner
@@ -154,7 +156,7 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   if (!getBlobStore()) return
   await reconcileUploads(userId, {
     store: getByteUploadStore(),
-    isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+    isBlockPresent: (_ws, id) => isAssetBlockPresent(repo, id),
   })
   armUploadDrain(userId)
 }
@@ -227,7 +229,7 @@ export const captureMediaFromFiles = async (
       bytes,
       // Derive the MIME from the bytes when File.type is missing/generic — a typeless
       // image must still render inline, and the stored MIME must be a function of the
-      // bytes so it can't disagree with a content-dedup'd row (Codex P2).
+      // bytes so it can't disagree with a content-dedup'd row.
       mime: resolveCaptureMime(file.type, bytes),
       filename: file.name || undefined,
     }

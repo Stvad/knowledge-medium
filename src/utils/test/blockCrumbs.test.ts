@@ -13,11 +13,12 @@ const WS = 'ws-1'
 const ancestor = (
   id: string,
   content: string,
-  {properties = {}, parentId = null, workspaceId = WS, isFieldForm = false}: {
+  {properties = {}, parentId = null, workspaceId = WS, isFieldForm = false, referenceTargetId = null}: {
     properties?: Record<string, unknown>
     parentId?: string | null
     workspaceId?: string
     isFieldForm?: boolean
+    referenceTargetId?: string | null
   } = {},
 ): BlockData => ({
   id,
@@ -26,6 +27,7 @@ const ancestor = (
   workspaceId,
   parentId,
   isFieldForm,
+  referenceTargetId,
   orderKey: 'a0',
   updatedAt: 0,
   userUpdatedAt: 0,
@@ -33,15 +35,26 @@ const ancestor = (
   deleted: false,
 } as unknown as BlockData)
 
-/** The common case: a nested block whose chain we're rendering. `parentId`
- *  is what tells a genuine root from a block whose parent was excluded
- *  from the walk, so it has to be explicit at every call site. */
-const crumbsOf = (ancestors: BlockData[], parentId: string | null = 'parent') =>
-  crumbsFromAncestors(ancestors, {workspaceId: WS, parentId})
+/** The common case: a chain that reached a root. `stoppedAtParentId` is
+ *  the walk's own report of where it stopped, and the only thing that
+ *  tells a root from a chain cut short — so a cut case passes it. */
+const crumbsOf = (
+  ancestors: BlockData[],
+  stoppedAtParentId: string | null = null,
+  propertyName?: (fieldId: string) => string | undefined,
+) => crumbsFromAncestors(ancestors, {workspaceId: WS, stoppedAtParentId, propertyName})
+
+/** A field row as the migration mints it: the `::` marker plus a whole-block
+ *  reference to the definition, mirrored into `referenceTargetId`. */
+const fieldRow = (id: string, fieldId: string, parentId: string) =>
+  ancestor(id, `::((${fieldId}))`, {parentId, isFieldForm: true, referenceTargetId: fieldId})
+
+const NAMES: Record<string, string> = {'field-def-status-0000': 'status', 'field-def-alias-0000': 'alias'}
+const nameOf = (fieldId: string) => NAMES[fieldId]
 
 describe('crumbsFromAncestors', () => {
   it('reads root-first, reversing the leaf-to-root chain the query returns', () => {
-    // core.manyAncestors returns depth-ascending (immediate parent first).
+    // core.ancestors returns depth-ascending (immediate parent first).
     const crumbs = crumbsOf([
       ancestor('parent', 'Meeting notes', {parentId: 'grandparent'}),
       ancestor('grandparent', 'Q3', {parentId: 'root'}),
@@ -123,7 +136,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     // gone.
     const crumbs = crumbsOf([
       ancestor('parent', 'Meeting notes', {parentId: 'deleted-section'}),
-    ])
+    ], 'deleted-section')
 
     expect(crumbs).toEqual(['…', 'Meeting notes'])
   })
@@ -132,8 +145,8 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     // The likeliest cut of all — `core.restore` brings back one block and
     // leaves a live child under a tombstone — and the one an empty
     // ancestors array cannot express on its own: a genuine top-level
-    // block returns exactly the same `[]`. Only the block's own parent
-    // edge separates them, so it is the thing that must decide.
+    // block returns exactly the same `[]`. Only the walk's own report
+    // separates them, so it is the thing that must decide.
     expect(crumbsOf([], 'deleted-parent')).toEqual(['…'])
   })
 
@@ -144,9 +157,10 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
   })
 
   it('shows only the marker when the chain leaves the workspace at once', () => {
+    // Cut by the workspace boundary ALONE: the walk itself reached a root.
     expect(crumbsFromAncestors(
       [ancestor('foreign', 'Other workspace page', {workspaceId: 'ws-2'})],
-      {workspaceId: WS, parentId: 'foreign'},
+      {workspaceId: WS, stoppedAtParentId: null},
     )).toEqual(['…'])
   })
 
@@ -157,7 +171,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     const crumbs = crumbsFromAncestors([
       ancestor('parent', 'My section', {parentId: 'foreign-root'}),
       ancestor('foreign-root', 'Someone else private page', {workspaceId: 'ws-2'}),
-    ], {workspaceId: WS, parentId: 'parent'})
+    ], {workspaceId: WS, stoppedAtParentId: null})
 
     expect(crumbs).toEqual(['…', 'My section'])
   })
@@ -166,32 +180,66 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     const deep = Array.from({length: 8}, (_, i) =>
       ancestor(`a${i}`, `level ${i}`, {parentId: `a${i + 1}`}))
 
-    expect(crumbsOf(deep)).toEqual(['…', 'level 2', 'level 1', 'level 0'])
+    expect(crumbsOf(deep, 'a8')).toEqual(['…', 'level 2', 'level 1', 'level 0'])
   })
 })
 
 describe('crumbsFromAncestors: property machinery', () => {
-  it('drops field rows instead of rendering their raw reference syntax', () => {
-    // A field row's content is literally `::((fieldId))`; every other
-    // surface in the app treats these as invisible machinery.
-    const crumbs = crumbsOf([
-      ancestor('field', '::((field-def-status-0000))', {
-        parentId: 'owner',
-        isFieldForm: true,
-      }),
-      ancestor('owner', 'Task Board'),
-    ])
-
-    expect(crumbs).toEqual(['Task Board'])
-  })
-
-  it('still reaches the owner above a dropped field row', () => {
+  it('names a field row by its property rather than its raw reference syntax', () => {
+    // A field row's content is literally `::((fieldId))`. Dropping it left a
+    // value row's crumbs reading as the owner's title alone — which for a
+    // page's `alias` row is the row's own label repeated, so the crumb line
+    // said nothing about where the row lives.
     const crumbs = crumbsOf([
       ancestor('value', 'Done', {parentId: 'field'}),
-      ancestor('field', '::((field-def-status-0000))', {
-        parentId: 'owner',
-        isFieldForm: true,
-      }),
+      fieldRow('field', 'field-def-status-0000', 'owner'),
+      ancestor('owner', 'Task Board'),
+    ], null, nameOf)
+
+    expect(crumbs).toEqual(['Task Board', 'status', 'Done'])
+  })
+
+  it('tells a page apart from its own alias value row', () => {
+    // The whole point: this row's content IS the page's title, so without the
+    // property in the line the crumb repeats the label beside it.
+    const crumbs = crumbsOf([
+      fieldRow('field', 'field-def-alias-0000', 'page'),
+      ancestor('page', 'Tutorial', {properties: {[aliasesProp.name]: ['Tutorial']}}),
+    ], null, nameOf)
+
+    expect(crumbs).toEqual(['Tutorial', 'alias'])
+  })
+
+  it('drops a field row the workspace cannot name, rather than showing `::((…))`', () => {
+    // A `::` block someone typed by hand targets no definition, and a
+    // shadowed definition's name belongs to the winner. Either way there is
+    // nothing to say, and raw reference syntax is never a crumb.
+    const crumbs = crumbsOf([
+      ancestor('value', 'Done', {parentId: 'field'}),
+      fieldRow('field', 'not-a-definition', 'owner'),
+      ancestor('owner', 'Task Board'),
+    ], null, nameOf)
+
+    expect(crumbs).toEqual(['Task Board', 'Done'])
+  })
+
+  it('does not name a marked row at the workspace ROOT, which owns no property', () => {
+    // §9: a marker with no parent has no block to be a field OF, so it is
+    // ordinary content — and labelling its descendants `alias` would place
+    // them under a property they are not in. Its raw `::((…))` is still no
+    // crumb, so it drops.
+    const crumbs = crumbsOf([
+      ancestor('child', 'Done', {parentId: 'root-marker'}),
+      fieldRow('root-marker', 'field-def-alias-0000', null as unknown as string),
+    ], null, nameOf)
+
+    expect(crumbs).toEqual(['Done'])
+  })
+
+  it('drops every field row when no resolver is bound at all', () => {
+    const crumbs = crumbsOf([
+      ancestor('value', 'Done', {parentId: 'field'}),
+      fieldRow('field', 'field-def-status-0000', 'owner'),
       ancestor('owner', 'Task Board'),
     ])
 

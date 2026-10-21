@@ -3,7 +3,7 @@ WITH tx_size AS (
 ),
 all_blocks AS (
   SELECT id FROM blocks
-  WHERE workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND deleted=0
+  WHERE workspace_id=?1 AND deleted=0
 ),
 written AS (
   -- updated_at always advances on a synced edit, so an equal-stamp block can
@@ -11,7 +11,7 @@ written AS (
   -- json_each); the local path scans all_blocks to catch pre-clamp
   -- skipMetadata writes that froze updated_at at created_at.
   SELECT id FROM blocks
-  WHERE workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND deleted=0 AND created_at < updated_at
+  WHERE workspace_id=?1 AND deleted=0 AND created_at < updated_at
 ),
 local_pres AS (
   -- genuine user edit: a SMALL tx (bulk ops are machine regardless of label —

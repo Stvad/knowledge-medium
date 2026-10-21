@@ -13,6 +13,7 @@ import {
   pasteEditModeMultilineText,
   pasteFromClipboard,
   pasteMultilineText,
+  pasteResolvedDecision,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
@@ -237,43 +238,6 @@ describe('pasteMultilineText', () => {
     expect(await childContents('parent')).toEqual(['Old child'])
   })
 
-  it('pastes the whole text as one block when asSingleBlock is set', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('target', 'Target', 'root', 'a0')
-    await createBlock('sibling', 'Sibling', 'root', 'a1')
-
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
-
-    // No markdown split, no bullet stripping — the whole clipboard becomes
-    // one block (the block-shell "single-block" override path).
-    expect(pasted).toHaveLength(1)
-    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
-    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
-  })
-
-  it('absorbs an asSingleBlock paste into a blank target, keeping newlines', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('empty', '', 'root', 'a0')
-    await createBlock('next', 'Next', 'root', 'a1')
-
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('empty'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
-
-    expect(pasted).toHaveLength(1)
-    expect(pasted[0]?.id).toBe('empty')
-    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
-    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
-  })
-
   describe("position: 'before'", () => {
     const abcWithBlankB = async (): Promise<void> => {
       await createBlock('root', 'Root', null, 'a0')
@@ -378,20 +342,71 @@ describe('pasteMultilineText', () => {
     })
   })
 
-  it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
+})
+
+describe('pasteResolvedDecision', () => {
+  // `text` is what a parse would have used; the tree must win over it.
+  const treeDecision = {
+    decision: {
+      kind: 'split' as const,
+      blocks: [
+        {content: '## Heading', children: [{content: 'line one\nline two'}, {content: '- not a bullet'}]},
+        {content: 'Second root'},
+      ],
+    },
+    text: 'IGNORED',
+  }
+
+  it('creates the decision tree as-is: no markdown parse, multi-line content kept', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteResolvedDecision(treeDecision, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted.map(block => block.peek()?.content)).toEqual(['## Heading', 'Second root'])
+    expect(await childContents('root')).toEqual(['Target', '## Heading', 'Second root', 'Next'])
+    expect(await childContents(pasted[0].id)).toEqual(['line one\nline two', '- not a bullet'])
+  })
+
+  const singleBlock = (text: string) => ({decision: {kind: 'single-block' as const}, text})
+
+  it('pastes a single-block decision\'s text whole as one block', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('sibling', 'Sibling', 'root', 'a1')
+
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    // No markdown split, no bullet stripping.
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
+  })
+
+  it('absorbs a single-block paste into a blank target, keeping newlines', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.id).toBe('empty')
+    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
+  })
+
+  it('no-ops a single-block paste of blank text, as a parse would', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
 
-    const pasted = await pasteMultilineText(
-      '   \n  ',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
+    const pasted = await pasteResolvedDecision(singleBlock('   \n  '), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
     expect(pasted).toEqual([])
     expect(await childContents('root')).toEqual(['Target'])
   })
+
 })
 
 describe('pasteEditModeMultilineText', () => {
@@ -441,6 +456,24 @@ describe('pasteEditModeMultilineText', () => {
     expect(env.repo.block('target').peek()?.content).toBe(`note: ${fence}`)
     // A single-root fence adds no extra blocks.
     expect(await childContents('root')).toEqual([`note: ${fence}`])
+  })
+
+  it('merges a pre-built tree root whole at the caret — no first-line or bullet rule', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'see  now', 'root', 'a0')
+
+    const plan = planEditModeMultilinePaste(
+      [{content: '- kept\nverbatim', children: [{content: 'child'}]}, {content: 'last'}],
+      'see  now',
+      {from: 'see '.length, to: 'see '.length},
+    )
+    expect(plan?.targetContent).toBe('see - kept\nverbatim')
+    expect(plan?.suffix).toBe(' now')
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(await childContents('root')).toEqual(['see - kept\nverbatim', 'last now'])
+    expect(await childContents('target')).toEqual(['child'])
   })
 
   it('inserts edit-mode paste siblings between tied neighbours without losing content (#198)', async () => {
@@ -645,9 +678,8 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     vi.stubGlobal('navigator', {clipboard: {readText: async () => text}})
 
   it('honors a forced single-block override from the verb (no split)', async () => {
-    // The gap Codex flagged: shortcut paste used to bypass pasteDecisionVerb,
-    // so a plugin preference like "always paste verbatim" was silently
-    // ignored. It must now apply here too.
+    // Shortcut paste goes through pasteDecisionVerb too, so a plugin
+    // preference like "always paste verbatim" applies here as well.
     stubClipboard('alpha\nbeta')
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
@@ -674,6 +706,20 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
     expect(pasted[0]?.peek()?.content).toBe('one-rewritten')
+  })
+
+  it('pastes a block tree a verb override built', async () => {
+    stubClipboard('ignored')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    env.repo.setRuntimeContributions(pasteDecisionVerb.implFacet, 'test-paste', [
+      () => ({kind: 'split', blocks: [{content: 'Parent', children: [{content: 'Child'}]}]}),
+    ])
+
+    const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(await childContents('root')).toEqual(['Target', 'Parent'])
+    expect(await childContents(pasted[0].id)).toEqual(['Child'])
   })
 
   it('defaults to the historical outline paste with no contributions', async () => {
@@ -726,6 +772,39 @@ describe('resolvePasteWithMediaCapture', () => {
     // Re-decided with files stripped → no longer media; clipboard text then one reference/line.
     expect(r?.decision.kind).toBe('split')
     expect(r?.text).toBe('note\n((a))\n((b))')
+  })
+
+  it('re-decides without the html, which describes the text before the references were spliced in', async () => {
+    const htmlSeen: (string | undefined)[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      pasteDecisionVerb.before(r => { htmlSeen.push(r.html) }),
+      captureMediaVerb.impl(() => ({ references: ['((a))'] })),
+    ])
+    const r = await resolvePasteWithMediaCapture(
+      runtime,
+      { ...req({ text: 'note', files }), html: '<img src="https://e.com/a.png">' },
+      { repo, workspaceId: 'ws' },
+    )
+    expect(htmlSeen).toEqual(['<img src="https://e.com/a.png">', undefined])
+    expect(r?.text).toBe('note\n((a))')
+  })
+
+  it('keeps the html for the re-decision when nothing was captured', async () => {
+    const htmlSeen: (string | undefined)[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      pasteDecisionVerb.before(r => { htmlSeen.push(r.html) }),
+      captureMediaVerb.impl(() => ({ references: [] })),
+    ])
+    const r = await resolvePasteWithMediaCapture(
+      runtime,
+      { ...req({ text: '', files }), html: '<h1>Doc</h1>' },
+      { repo, workspaceId: 'ws' },
+    )
+    // Not null: the html alone is still something to paste.
+    expect(r).not.toBeNull()
+    expect(htmlSeen).toEqual(['<h1>Doc</h1>', '<h1>Doc</h1>'])
   })
 
   it('returns null when capture yields no references and there is no text', async () => {

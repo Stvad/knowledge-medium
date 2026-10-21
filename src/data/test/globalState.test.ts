@@ -59,8 +59,12 @@ import {
   getUserPrefsBlock,
   layoutSessionBlockIdForKey,
   layoutSessionsContainerBlockId,
+  pluginPrefsBlockId,
+  readPluginPref,
   resetBlockSelection,
 } from '@/data/stateBlocks'
+import type { FulfilledThenable } from '@/utils/resolvedThenable'
+import type { Block } from '@/data/block'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -78,8 +82,9 @@ interface Harness {
 const setup = async (types: readonly TypeSeedDeclaration[] = []): Promise<Harness> => {
   // Match the Repo production defaults (uuid ids + a per-Repo monotonic
   // tx-seq) rather than the harness's deterministic counters: several tests
-  // build a SECOND Repo over the SAME shared db, and shared-deterministic
-  // newId/newTxSeq would collide on command_events.tx_id.
+  // build a SECOND Repo over the SAME shared db, where both counters restart
+  // and collide — on the `blocks` primary key, and on the tx-seq that groups
+  // a tx's rows for upload.
   let txSeq = Date.now()
   const { repo } = createTestRepo({
     db: sharedDb.db,
@@ -261,6 +266,25 @@ describe('getPluginPrefsBlock', () => {
     }
   })
 
+  it('has a derivable id, so a read finds a stored preference without creating the prefs blocks', async () => {
+    registerTypes(env.repo, [examplePrefsType])
+    const blockCount = async () =>
+      (await env.h.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
+    const before = await blockCount()
+
+    expect(await readPluginPref(env.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(showPropertiesProp.defaultValue)
+    expect(await blockCount()).toBe(before)
+
+    const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    expect(pluginPrefs.id).toBe(pluginPrefsBlockId(WS, USER.id, examplePrefsType.id))
+    const fresh = await setup([examplePrefsType])
+    try {
+      expect(await readPluginPref(fresh.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(true)
+    } finally {
+      await fresh.h.cleanup()
+    }
+  })
+
   it('is idempotent — same type resolves to the same block', async () => {
     registerTypes(env.repo, [examplePrefsType])
     const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
@@ -382,6 +406,48 @@ describe('getUIStateBlock', () => {
 
     const block = await getUIStateBlock(env.repo, WS, USER, {panelId: PANEL_ID})
     expect(block.id).toBe(PANEL_ID)
+  })
+
+  it('with panelId: a cached panel row resolves to an already-fulfilled thenable', async () => {
+    // The row a split tx just created is in the block cache when the tx
+    // resolves; `use()` must be able to read it without suspending.
+    const PANEL_ID = 'panel-cached'
+    await env.repo.tx(tx => tx.create({
+      id: PANEL_ID,
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'a0',
+      content: 'main',
+    }), {scope: ChangeScope.BlockDefault})
+    expect(env.repo.block(PANEL_ID).peek()).toBeDefined()
+
+    const thenable = getUIStateBlock(env.repo, WS, USER, {panelId: PANEL_ID}) as FulfilledThenable<Block>
+    expect(thenable.status).toBe('fulfilled')
+    expect(thenable.value).toBe(env.repo.block(PANEL_ID))
+    expect(await thenable).toBe(env.repo.block(PANEL_ID))
+  })
+
+  it('with panelId: an uncached row still loads before resolving', async () => {
+    const PANEL_ID = 'panel-cold'
+    await env.repo.tx(tx => tx.create({
+      id: PANEL_ID,
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'a0',
+      content: 'main',
+    }), {scope: ChangeScope.BlockDefault})
+    // A second Repo over the same DB has an empty cache and its own memo key.
+    const cold = await setup()
+    try {
+      expect(cold.repo.block(PANEL_ID).peek()).toBeUndefined()
+      const thenable = getUIStateBlock(cold.repo, WS, USER, {panelId: PANEL_ID}) as FulfilledThenable<Block>
+      expect(thenable.status).toBeUndefined()
+      const block = await thenable
+      expect(block).toBe(cold.repo.block(PANEL_ID))
+      expect(cold.repo.block(PANEL_ID).peek()?.content).toBe('main')
+    } finally {
+      await cold.h.cleanup()
+    }
   })
 
   it('without panelId: ensures a ui-state child of the user page', async () => {

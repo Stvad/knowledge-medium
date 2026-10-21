@@ -62,16 +62,19 @@ import {
   extractIssueRefs,
   fetchIssueInfo,
   initializedDbRoot,
-  isMainModule,
   carriesPublishableText,
   isPostVerifiable,
   issueRefsTable,
   matchesAnyPublish,
   matchesApiPublish,
+  matchesCliPublish,
   matchesPrCommand,
+  moreRefsNote,
   publishableKinds,
+  refsCap,
   tryRun,
 } from './bd-github-sync.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 // ---------------------------------------------------------------------------
 // Pure logic (unit-tested in bd-publish-verify.test.ts)
@@ -149,7 +152,7 @@ export const publishedTargets = (cmd, output) => {
   // whenever a CLI publisher rode along. In that mixed case the CLI scan also
   // sees the api response's body, so a URL quoted there can be reported as
   // published; with nothing writing any more, that costs an echoed line.
-  if (matchesPrCommand(cmd)) collect(output, publishableKinds(cmd))
+  if (matchesCliPublish(cmd)) collect(output, publishableKinds(cmd))
   if (matchesApiPublish(cmd)) collect(topLevelUrls(output).join('\n'), null)
   return [...seen.values()]
 }
@@ -193,12 +196,6 @@ export const apiPathFor = t =>
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
             : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
-// The echo sizes itself to the time left: each lookup is bounded by
-// GH_TIMEOUT, so echoing more refs than the remaining budget divides into
-// could overrun the deadline and lose the whole report.
-const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1))
-const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
-
 // additionalContext shares the host's ~10K inline budget with every other
 // hook on the event (measured for SessionStart in issue #643; assume the
 // same order here). The trailing surrogate strip keeps a clipped emoji from
@@ -214,10 +211,6 @@ export const clipContext = (s, max = 9_000) =>
 
 const MAX_TARGETS = 5
 const MAX_MERGED_PRS = 2
-// Defence in depth: with the shipped DEADLINE_MS the budget term below caps
-// at 6, and this would need ~160s of remaining budget to bind. It is here so
-// raising the deadline cannot uncap the echo by accident.
-const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
 // Self-imposed budget well under the 120s hook timeout in settings.json, so
 // the host's kill never lands with the report unemitted. Every step is one
@@ -311,7 +304,7 @@ const verifyTarget = (t, { reportIds, deadline }) => {
 
   const refs = [...new Set([...extractIssueRefs(text), ...[...byId.values()].filter(Boolean)])]
   if (refs.length) {
-    const cap = refsCap(deadline)
+    const cap = refsCap(deadline - Date.now())
     const capNote = moreRefsNote(refs.length, cap)
     if (cap > 0) notes.push(`${label}\n${issueRefsTable(text, refs.slice(0, cap), 'post')}${capNote}`)
     else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
@@ -347,7 +340,7 @@ const verifyMergeCommit = (n, deadline) => {
   // it back would be pure noise.
   const refs = extractIssueRefs(message).filter(r => r !== n)
   if (!refs.length) return notes
-  const cap = refsCap(deadline)
+  const cap = refsCap(deadline - Date.now())
   if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
   // Only the HEAD commit's text is known to have landed under every merge
   // strategy — a squash with custom subject/body does not land the PR's own
@@ -411,15 +404,18 @@ const hookPostPublish = () => {
   }
   const cmd = payload?.tool_input?.command ?? ''
   const failedEvent = payload?.hook_event_name === 'PostToolUseFailure'
-  // The Bash tool merges stderr into tool_response.stdout; on
-  // PostToolUseFailure there is NO tool_response and the output rides inside
-  // the `error` string (both measured 2026-08-20).
+  // String shell responses omit exit status. Their URLs may name existing
+  // objects from a failed command.
+  const unknownOutcome = typeof payload?.tool_response === 'string'
+  // Claude returns merged output in stdout, or in error on PostToolUseFailure.
   const out =
-    typeof payload?.tool_response?.stdout === 'string' && payload.tool_response.stdout
-      ? payload.tool_response.stdout
-      : typeof payload?.error === 'string'
-        ? payload.error
-        : ''
+    unknownOutcome
+      ? payload.tool_response
+      : typeof payload?.tool_response?.stdout === 'string' && payload.tool_response.stdout
+        ? payload.tool_response.stdout
+        : typeof payload?.error === 'string'
+          ? payload.error
+          : ''
   // Empty output is NOT an early exit: a covered publish that printed
   // nothing is precisely a coverage claim that cannot be honoured, and the
   // no-target branch below is what says so. Returning here would make the
@@ -456,14 +452,11 @@ const hookPostPublish = () => {
   const reportIds = !allowsBeadIds(cmd)
   const deadline = Date.now() + DEADLINE_MS
   const notes = []
-  // gh prints existing objects in its ERROR text too ("a pull request for
-  // branch X already exists: <url>"), so on a failure event the objects below
-  // were merely NAMED by the output — attribution is unknown, and the
-  // per-target notes' "already published, fix it now" framing would send the
-  // agent to edit a stranger's object.
-  if (failedEvent && targets.length)
+  // gh errors can name existing objects. Without confirmed success, qualify
+  // the per-target edit suggestions so they cannot authorize changing one.
+  if ((failedEvent || unknownOutcome) && (targets.length || mergedPrs.length))
     notes.push(
-      `the command FAILED, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
+      `${failedEvent ? 'the command FAILED' : 'the command exit status is unavailable'}, so attribution of the object(s) below is UNKNOWN — an earlier segment may really have published one, and gh also prints EXISTING objects in its error text ("a pull request … already exists: <url>"). Confirm which before editing anything`,
     )
   if (all.length > targets.length)
     notes.push(`only the first ${MAX_TARGETS} of ${all.length} published objects named in the output were verified`)
@@ -503,5 +496,7 @@ if (isMainModule(import.meta.url)) {
     // never fail: the publish already happened; a broken verifier must not
     // surface as a hook error on every gh command
   }
-  process.exit(0)
+  // No `exit()`: the echoed title tables are a queued write to a piped
+  // stdout, and `exit()` drops whatever is still queued. Nothing holds the
+  // loop open (spawnSync adds no handles), so the hook still ends promptly.
 }

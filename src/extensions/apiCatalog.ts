@@ -40,6 +40,10 @@
 // `@/data/api` is the data layer's own stable public barrel (a directory), so
 // extensions must write its explicit `/index.js` form; every other entry here
 // is a single file.
+//
+// `react` / `react-dom` (and their subpaths) are not listed: they are not app
+// modules — the page importmap supplies the host's copies and an extension must
+// never bundle its own (packages/agent-cli/README.md, "React in extensions").
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */
@@ -148,9 +152,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'paste',
     importPath: '@/paste/decision.js',
-    description: 'Paste decision seam — override how clipboard content lands (outline vs single block).',
+    description: 'Paste decision seam — override how clipboard content lands (outline vs single block, or a block tree built from e.g. the clipboard HTML).',
     exports: ['pasteDecisionVerb', 'defaultPasteDecision'],
-    types: ['PasteDecision', 'PasteRequest', 'PasteSurface'],
+    types: ['PasteDecision', 'PasteRequest', 'PasteSurface', 'OutlineNode'],
   },
 
   // --- Navigation seams -----------------------------------------------------
@@ -203,6 +207,16 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: ['bindBlockActionContext', 'createSharedBlockActions', 'extendSelectionDown', 'extendSelectionUp'],
     types: [],
   },
+  {
+    category: 'ui',
+    importPath: '@/context/backgroundSubtree.js',
+    description: 'Mark a subtree BACKGROUND — alive and rendering, but not entitled to claim single-holder app resources (today the keyboard, via declarative shortcut activations). For hosts that keep several layout sessions mounted and show one. NOT a signal to stop working.',
+    exports: [
+      'BackgroundSubtreeContext', 'BackgroundSubtreeProvider',
+      'useIsBackgroundSubtree',
+    ],
+    types: [],
+  },
 
   // --- Data / block primitives ----------------------------------------------
   {
@@ -224,8 +238,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/data/stateBlocks.js',
     description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session). layoutSessionBlockIdForKey / layoutSessionsContainerBlockId are the canonical session-key → block-id derivations for out-of-core session hosts — never re-derive the uuid chain.',
     exports: [
-      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUserBlock',
-      'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
+      'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
+      'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
+      'readPluginPref',
     ],
     types: [],
   },
@@ -340,6 +355,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/context/repo.js',
     description: 'useRepo hook — the live Repo from inside a mounted (appMountsFacet) component.',
     exports: ['useRepo'],
+    types: [],
+  },
+  {
+    category: 'react',
+    importPath: '@/context/block.js',
+    description: 'useBlockContext hook — which pane / surface / scope the block being rendered sits in.',
+    exports: ['useBlockContext'],
     types: [],
   },
   {

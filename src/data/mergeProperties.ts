@@ -1,4 +1,4 @@
-import { stableJsonValue } from './internals/jsonCanonical'
+import { persistedJsonKey } from './internals/jsonCanonical'
 
 /**
  * Merge two encoded property bags into one. Used by `core.merge` to fold
@@ -57,7 +57,7 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   const seen = new Set<string>()
   const out: unknown[] = []
   for (const item of [...into, ...from]) {
-    const key = dedupeKey(item)
+    const key = persistedJsonKey(item)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(item)
@@ -65,17 +65,4 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   return out
 }
 
-/**
- * Dedupe key for a list item, aligned with how the merged result is persisted.
- *
- * Merged properties are stored via `JSON.stringify`, so the equivalence that
- * matters is the persisted-JSON one: object key order is irrelevant and
- * `NaN`/`undefined` collapse to `null`. `stableJsonValue` sorts object keys
- * (fixing the key-order-sensitivity that left reordered-equal objects as
- * duplicates), and wrapping the item in an array before `JSON.stringify`
- * normalizes `NaN`/`undefined` array elements to `null` exactly as the real
- * `properties_json` serialization does — so we never keep two items the
- * storage layer would persist as identical.
- */
-const dedupeKey = (item: unknown): string =>
-  JSON.stringify(stableJsonValue([item]))
+

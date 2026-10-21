@@ -68,48 +68,6 @@ export const addProperty = async (
   }
 }
 
-export const renameProperty = async (args: {
-  block: Block
-  properties: Record<string, unknown>
-  schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  oldName: string
-  newName: string
-}) => {
-  const nextName = args.newName.trim()
-  if (!nextName || nextName === args.oldName) return
-  if (args.oldName === typesProp.name || nextName === typesProp.name) return
-  if (
-    isPropertyPanelReadOnlyProperty(args.oldName) ||
-    isPropertyPanelReadOnlyProperty(nextName)
-  ) return
-  if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
-  const definitions = args.block.repo.propertyDefinitions
-  if (declarationOnlyDefinitionForName(args.oldName, definitions)) return
-  if (declarationOnlyDefinitionForName(nextName, definitions)) return
-  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
-  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
-
-  // Cheap pre-gate on the panel snapshot; the authoritative check is in-tx.
-  if (!Object.hasOwn(args.properties, args.oldName)) return
-
-  await args.block.repo.tx(async tx => {
-    // Re-read the CURRENT bag inside the tx rather than trusting the panel's
-    // (possibly stale) `args.properties` snapshot — a whole-bag write off the
-    // snapshot would clobber any OTHER property a concurrent write changed
-    // between the panel opening and this commit. The tx serialises read+write.
-    const current = await tx.get(args.block.id)
-    if (!current || !Object.hasOwn(current.properties, args.oldName)) return
-    const next = {...current.properties}
-    next[nextName] = next[args.oldName]
-    delete next[args.oldName]
-    await tx.update(args.block.id, {properties: next})
-  }, {
-    scope: ChangeScope.BlockDefault,
-    description: `rename property ${args.oldName} to ${nextName}`,
-  })
-}
-
 export const deleteProperty = async (args: {
   block: Block
   properties: Record<string, unknown>

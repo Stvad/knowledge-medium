@@ -8,7 +8,9 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
-import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
+import { encryptUploadColumns, type GetCek, type UploadMode } from '@/sync/transform.js'
+
+// `§` references in this file cite docs/e2ee-design.html.
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
@@ -38,6 +40,11 @@ export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
+
+/** Whether a session syncs: the build has the remote config and the user did
+ *  not choose local-only. The boot and App's layout cache key must derive this
+ *  the same way for App's first lookup to hit the prepared entry. */
+export const remoteSyncEnabled = (localOnly: boolean): boolean => hasRemoteSyncConfig && !localOnly
 
 type BlockUploadPayload = Record<string, unknown> & {id: string}
 
@@ -81,11 +88,25 @@ export interface UploadDeps {
   ) => Promise<readonly CompactedBlockOperation[]>
 }
 
-/** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
- *  policy (mode pin, §6) is injected; today's default is uniformly 'none'
- *  (no e2ee workspace exists pre-rollout), so encryption is a no-op until the
- *  §8 flows wire a real resolver + key store. */
-export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
+/** Resolve a workspace's upload mode for the encrypt-on-upload decision. Answered
+ *  for the ROW's own workspace, never the Repo's active one, so a write that
+ *  lands while the active-workspace pin is moving is still sealed under the
+ *  mode of the workspace it belongs to. The policy (mode pin, §6) is injected;
+ *  production binds it to the §6 resolver in `repoProvider`. */
+export type GetWorkspaceMode = (workspaceId: string) => UploadMode | Promise<UploadMode>
+
+/** Thrown for a write to a workspace whose upload mode is `hold`: the server
+ *  says e2ee and this device can't seal yet. It takes the same path as a missing
+ *  key — out of the upload pass, so the tx stays first in `ps_crud` and PowerSync
+ *  retries it — because a held write must be neither sent nor quarantined. While
+ *  it waits, the core publishes no checkpoint (`ps_crud_hold_downloads`); that
+ *  stall is accepted. */
+export class UploadHeldError extends Error {
+  constructor(readonly workspaceId: string) {
+    super(`upload held for ${workspaceId}: the server says e2ee and this device's pin is not upgraded`)
+    this.name = 'UploadHeldError'
+  }
+}
 
 /** Seal the content columns of each create/patch op whose workspace is e2ee,
  *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
@@ -104,8 +125,8 @@ const encryptUploadOps = async (
   // means thousands of main-thread reads + awaits for one value per
   // workspace. Memoize per workspaceId (mirrors `materializabilityByWs` in
   // syncObserver/materialize.ts).
-  const modeByWs = new Map<string, SyncMode>()
-  const resolveMode = async (workspaceId: string): Promise<SyncMode> => {
+  const modeByWs = new Map<string, UploadMode>()
+  const resolveMode = async (workspaceId: string): Promise<UploadMode> => {
     const cached = modeByWs.get(workspaceId)
     if (cached !== undefined) return cached
     const resolved = await getMode(workspaceId)
@@ -115,6 +136,8 @@ const encryptUploadOps = async (
 
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
+    // Never held, because never queued: blocks have no DELETE upload trigger (a
+    // soft delete is a PATCH, which carries workspace_id and is held like any).
     if (op.kind === 'delete') {
       out.push(op)
       continue
@@ -125,6 +148,7 @@ const encryptUploadOps = async (
       continue
     }
     const mode = await resolveMode(workspaceId)
+    if (mode === 'hold') throw new UploadHeldError(workspaceId)
     if (mode === 'none') {
       out.push(op)
       continue
@@ -139,9 +163,10 @@ const encryptUploadOps = async (
   return out
 }
 
-// Pre-rollout defaults: every workspace is plaintext and no keys exist, so the
-// default encryptOps is identity. The §8 flows replace these with a mode-pin
-// resolver + IndexedDB key-store lookup when e2ee ships.
+// Fallbacks for a connector built WITHOUT the §6 resolver — tests, and any
+// caller that omits `encryption`. No pin to consult and no key store, so the
+// transform is identity. Production binds the real resolver (`repoProvider`),
+// so these never decide an e2ee workspace's upload.
 const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
 const defaultUploadGetCek: GetCek = async () => null
 
@@ -661,9 +686,10 @@ const forgetAmbiguousAttempts = (
  *  in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
- *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
- *  throw. The BATCH encryption is guarded so that failure DOESN'T abort the
- *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  workspace whose key is momentarily missing/unreadable, or for a workspace
+ *  whose upload is held ({@link UploadHeldError}), makes `encryptOps` throw.
+ *  The BATCH encryption is guarded so that failure DOESN'T abort the whole
+ *  preflight — it falls through to the per-tx loop, which drains every
  *  earlier (encryptable) tx and then stops at the un-encryptable one (its
  *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
  *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a
@@ -685,7 +711,9 @@ const uploadTransactionsWithFallback = async (
   try {
     batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
   } catch (err) {
-    console.warn('[powersync] batch encryption failed — isolating per tx', err)
+    // A hold recurs on every retry until the pin is upgraded, so it is not news.
+    if (err instanceof UploadHeldError) console.debug('[powersync] batch holds a write —', err.message)
+    else console.warn('[powersync] batch encryption failed — isolating per tx', err)
   }
 
   if (batchOps) {
@@ -797,21 +825,24 @@ const fetchCredentials = async () => {
   }
 }
 
-/** §9.2 encrypt-on-upload wiring. The mode/key resolvers are injected so the
- *  app binds them to the signed-in user's mode pins + workspace-key store;
- *  omitted (e.g. in tests, or before e2ee is wired) they default to plaintext
- *  pass-through. */
+/** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
+ *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
+ *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
+ *  throw classifies transient — so that tx would retry forever and jam the
+ *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
 export interface PowerSyncConnectorOptions {
-  readonly getWorkspaceMode?: GetWorkspaceMode
-  readonly getCek?: GetCek
+  readonly encryption?: {
+    readonly getWorkspaceMode: GetWorkspaceMode
+    readonly getCek: GetCek
+  }
 }
 
 export const createPowerSyncConnector = (
   options: PowerSyncConnectorOptions = {},
 ): PowerSyncBackendConnector => {
   const deps = makeUploadDeps(
-    options.getWorkspaceMode ?? defaultGetWorkspaceMode,
-    options.getCek ?? defaultUploadGetCek,
+    options.encryption?.getWorkspaceMode ?? defaultGetWorkspaceMode,
+    options.encryption?.getCek ?? defaultUploadGetCek,
   )
   // Per-connector so `ambiguous` retry counts persist across the repeated
   // `uploadData` invocations PowerSync makes while a tx stays queued.

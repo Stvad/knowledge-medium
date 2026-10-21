@@ -9,9 +9,9 @@
  *
  * `stableJsonValue` canonicalizes by sorting object keys recursively;
  * `jsonValuesEqual` compares two values under that canonical form. The tx
- * engine uses these for no-op detection; `mergeProperties` uses
- * `stableJsonValue` to key its list dedupe so a merge never persists a value
- * the storage layer would consider a duplicate.
+ * engine uses these for no-op detection; `persistedJsonKey` is the Set/Map key
+ * form, so nothing folds two values the storage layer would keep apart, or
+ * keeps two it would persist as one.
  */
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -39,3 +39,17 @@ export const stableJsonValue = (value: unknown): unknown => {
 
 export const jsonValuesEqual = (a: unknown, b: unknown): boolean =>
   JSON.stringify(stableJsonValue(a)) === JSON.stringify(stableJsonValue(b))
+
+/** A Set/Map key under which two values are the SAME once persisted.
+ *
+ *  Wrapping in an array before stringifying is what makes it total: bare
+ *  `JSON.stringify(undefined)` returns the JS value `undefined` rather than a
+ *  string, and `NaN` stringifies to `"null"` — so unwrapped, those two collide
+ *  with a literal `null` inconsistently, while storage persists all three
+ *  identically. Inside an array every one of them serializes as `null`, exactly
+ *  as the real `properties_json` write does.
+ *
+ *  Asked wherever equal values must fold into one: `mergeProperties`' list
+ *  union, and the value-child comparison in `propertyChildren`. */
+export const persistedJsonKey = (value: unknown): string =>
+  JSON.stringify(stableJsonValue([value]))

@@ -20,6 +20,7 @@ import {
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
 import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
+import { EncryptionSection } from './conversion/EncryptionSection'
 
 type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
@@ -57,6 +58,9 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
               subsection needs a setState-in-effect on workspace change. */}
           <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
           <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
+          {isOwner && (
+            <EncryptionSection key={workspace.id} workspace={workspace} userId={repo.user.id} onStart={() => onOpenChange(false)} />
+          )}
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">
@@ -305,7 +309,7 @@ function DangerSection({workspace, onDeleted}: {workspace: Workspace, onDeleted:
     <div className="space-y-2 rounded-md border border-destructive/40 p-3">
       <Label className="text-destructive">Delete workspace</Label>
       <p className="text-sm text-muted-foreground">
-        This permanently deletes the workspace and all its blocks. To confirm, type the workspace name below.
+        This permanently deletes the workspace for everyone in it: all its blocks and their edit history. It can't be undone. To confirm, type the workspace name below.
       </p>
       <Input
         placeholder={workspace.name}

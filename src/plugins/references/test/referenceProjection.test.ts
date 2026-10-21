@@ -33,6 +33,7 @@ const reviewerProp = defineProperty<string>('reviewer', {
 const legacyRefListCodec: RefListCodec = {
   type: 'refList',
   targetTypes: [],
+  member: codecs.ref(),
   encode: v => v.map(item => item),
   decode: j => {
     if (!Array.isArray(j)) throw new CodecError('array', j)

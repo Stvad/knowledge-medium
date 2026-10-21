@@ -8,6 +8,7 @@ import type {
   WorkspaceRole,
 } from '@/types'
 import type { Repo } from './repo'
+import type { ParkHandle } from '@/data/internals/idleMarkerJobs'
 import {
   parsePropertiesMigration,
   readIsChildBackedWorkspace,
@@ -43,7 +44,7 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
-  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6). Optional: RPCs
   // deployed before the column exist return rows without it; absence
   // parses as 'cell' (dormant).
   properties_migration?: string | null
@@ -267,6 +268,19 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
   if (error) throw error
 }
 
+// The marker a `flipWorkspaceToChildBackedProperties` rejection carries when
+// the server's answer could not be got at all, so the PATCH may have landed.
+const UNKNOWN_FLIP = 'unknown' as const
+
+/** Did this rejection PROVE the flip did not land?
+ *
+ *  True only when the confirming re-read came back and still said `cell`. False
+ *  for a rejection that could not establish the outcome — which the caller must
+ *  treat as "it may have landed", because the undo history it would otherwise
+ *  keep is replayable over a flip that did. */
+export const flipRejectionProvesNoWrite = (err: unknown): boolean =>
+  (err as {flipLanded?: unknown} | null)?.flipLanded === false
+
 /**
  * Advance a workspace to child-backed properties, then stamp the local replica
  * so the caller can act on it without waiting for sync to bring it back.
@@ -286,11 +300,11 @@ export const renameWorkspace = async (workspaceId: string, name: string): Promis
  * legitimately ABSENT — `resolveWorkspace` admits a URL-hash workspace on the
  * server's say-so before PowerSync has replicated it — and a 0-row UPDATE is not
  * an error. Silently, the flip would then be invisible to
- * `tx.isPropertyChildBackedWorkspace`, and the pass would take its RECONCILE
- * branch against a workspace that is in fact flipped, which is the one thing the
- * create-only path exists to prevent. Reported rather than thrown: past the
- * PostgREST call the flip HAS committed, and a throw here would be caught as
- * "the flip failed" and reported as "nothing was migrated".
+ * `tx.isPropertyChildBackedWorkspace`, and the pass — which re-asserts it in
+ * every writing transaction — would refuse a workspace that is in fact flipped.
+ * Reported rather than thrown: past the PostgREST call the flip HAS committed,
+ * and a throw here would be caught as "the flip failed" and reported as
+ * "nothing was migrated".
  *
  * @returns whether the local replica now reflects the flip.
  */
@@ -317,7 +331,15 @@ export const flipWorkspaceToChildBackedProperties = async (
       .select('properties_migration, update_time')
       .eq('id', workspaceId)
       .maybeSingle()
-    if (reread === null || reread.properties_migration !== 'children') throw error
+    // The two rejections are NOT the same news, and the caller acts on the
+    // difference: one has to assume the flip may have landed and drop the undo
+    // history for it, the other knows it did not and must not charge the user
+    // that. Marked rather than described, because both carry the same
+    // underlying PostgREST error and nothing in its text distinguishes them.
+    if (reread === null) throw Object.assign(error, {flipLanded: UNKNOWN_FLIP})
+    if (reread.properties_migration !== 'children') {
+      throw Object.assign(error, {flipLanded: false})
+    }
     row = reread
   }
   if (row === null) throw new Error('flip: no workspace row came back')
@@ -505,6 +527,11 @@ export const getLocalMemberRole = async (
 
 export interface AwaitLocalMemberRoleOptions {
   readonly signal?: AbortSignal
+  /** Declares the caller parked for the duration of the SUBSCRIPTION wait — the
+   *  unbounded half, entered only once the row is known to be absent. A caller
+   *  running inside a `PendingIdleJobs` job passes its `ParkHandle` so a drain
+   *  does not mistake this wait for work it can wait out (issue #1015). */
+  readonly onPark?: ParkHandle
 }
 
 const memberRoleAbortError = (): DOMException =>
@@ -531,8 +558,28 @@ export const awaitLocalMemberRole = async (
     let settled = false
     let unsubscribe: (() => void) | null = null
     let disposeRequested = false
+    // Rechecks in flight. The park says "waiting on the outside world", so it is
+    // held exactly when no bounded local read is running: `check` lifts it on the
+    // way in and the LAST one out re-enters it. Counting rather than re-entering
+    // per check, because overlapping notifications would otherwise re-park while
+    // a read was still running — which is the same lie the park exists to avoid.
+    let runningChecks = 0
+    // Opened before the subscription and closed on every settle path, since
+    // `dispose` is what both `succeed` and `fail` run — and run SYNCHRONOUSLY,
+    // before resolve/reject, so a drain racing an abort sees the job progressing
+    // again rather than still parked. A mutable slot, because the region is
+    // re-entered rather than opened once.
+    let releasePark = options.onPark?.()
+    const unpark = (): void => {
+      releasePark?.()
+      releasePark = undefined
+    }
+    const repark = (): void => {
+      if (!settled && !releasePark) releasePark = options.onPark?.()
+    }
 
     const dispose = (): unknown | null => {
+      unpark()
       signal?.removeEventListener('abort', onAbort)
       if (unsubscribe) {
         const current = unsubscribe
@@ -564,6 +611,8 @@ export const awaitLocalMemberRole = async (
     }
     const check = async () => {
       if (settled) return
+      runningChecks += 1
+      unpark()
       try {
         const role = await getLocalMemberRole(repo, workspaceId, userId)
         if (signal?.aborted) {
@@ -573,6 +622,10 @@ export const awaitLocalMemberRole = async (
         }
       } catch (error) {
         fail(error)
+      } finally {
+        runningChecks -= 1
+        // A settled wait has already disposed, and `repark` declines then.
+        if (runningChecks === 0) repark()
       }
     }
     function onAbort() {
@@ -638,6 +691,30 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.wkCanary,
       workspace.propertiesMigration,
     ],
+  )
+}
+
+/**
+ * Mark this device's `workspaces` row e2ee with the server's canary, as the
+ * flip just made the server row. The resolver reads the synced row, and until a
+ * checkpoint delivers the flip it would still say plaintext and let this
+ * device upload its own writes in plaintext — which the server now refuses, and
+ * the device then quarantines. Marked, those writes are held instead.
+ *
+ * Local only: the `workspaces` table has no upload trigger, and the synced row
+ * that later replaces it carries the same values. A checkpoint from before the
+ * flip, still being applied, can put plaintext back; that is accepted, since
+ * every run past the flip marks the row again and writes refused meanwhile are
+ * quarantined, not lost.
+ */
+export const markLocalWorkspaceConverted = async (
+  db: {execute(sql: string, params?: unknown[]): Promise<unknown>},
+  workspaceId: string,
+  wkCanary: string,
+): Promise<void> => {
+  await db.execute(
+    `UPDATE workspaces SET encryption_mode = 'e2ee', wk_canary = ? WHERE id = ?`,
+    [wkCanary, workspaceId],
   )
 }
 

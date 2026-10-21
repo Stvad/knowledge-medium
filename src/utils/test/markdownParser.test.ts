@@ -21,6 +21,13 @@ const childrenOf = (blocks: ParsedBlock[], parent: ParsedBlock): ParsedBlock[] =
 
 const isRoot = (block: ParsedBlock): boolean => block.parentId === undefined
 
+/** The parsed forest as indented content lines, two spaces per level. */
+const outline = (blocks: ParsedBlock[]): string[] => {
+  const depth = (block: ParsedBlock): number =>
+    block.parentId === undefined ? 0 : 1 + depth(blocks.find(b => b.id === block.parentId)!)
+  return blocks.map(block => '  '.repeat(depth(block)) + block.content)
+}
+
 describe('parseMarkdownToBlocks', () => {
   it('parses two adjacent lines as siblings at root', () => {
     const blocks = parseMarkdownToBlocks(`
@@ -300,6 +307,136 @@ Root
       const blocks = parseMarkdownToBlocks('- a\n  - b\n\t- c')
 
       expect(findByContent(blocks, 'c').parentId).toBe(findByContent(blocks, 'b').id)
+    })
+  })
+
+  it('reads only a CommonMark ATX heading as a heading', () => {
+    expect(outline(parseMarkdownToBlocks('#tag line\nnext\n####### seven\nlast\n#\nunder'))).toEqual([
+      '#tag line',
+      'next',
+      '####### seven',
+      'last',
+      '#',
+      '  under',
+    ])
+  })
+
+  describe('a list introduced by a paragraph', () => {
+    it('nests the list under the paragraph before it', () => {
+      expect(outline(parseMarkdownToBlocks('Options:\n- a\n- b\nAfter'))).toEqual([
+        'Options:',
+        '  a',
+        '  b',
+        'After',
+      ])
+    })
+
+    it('nests under the paragraph inside a heading section', () => {
+      expect(outline(parseMarkdownToBlocks('## Steps\nIn order:\n1. one\n2. two\n## Next'))).toEqual([
+        '## Steps',
+        '  In order:',
+        '    1. one',
+        '    2. two',
+        '## Next',
+      ])
+    })
+
+    it('does not nest a list under a code block or a table', () => {
+      expect(outline(parseMarkdownToBlocks('```\ncode\n```\n- a\n| x | y |\n|---|---|\n- b'))).toEqual([
+        '```\ncode\n```',
+        'a',
+        '| x | y |\n|---|---|',
+        'b',
+      ])
+    })
+  })
+
+  describe('quotes', () => {
+    it('keeps a run of quote lines as ONE block', () => {
+      expect(outline(parseMarkdownToBlocks('Before\n> q1\n>\n> q2\nAfter'))).toEqual(['Before', '> q1\n>\n> q2', 'After'])
+    })
+
+    it('ends the quote at a line without `>`, unlike a CommonMark lazy continuation', () => {
+      expect(outline(parseMarkdownToBlocks('> quoted\na reply'))).toEqual(['> quoted', 'a reply'])
+    })
+
+    it('nests an indented quote under its bullet and strips the indent', () => {
+      expect(outline(parseMarkdownToBlocks('- said\n  > a\n  > b'))).toEqual(['said', '  > a\n> b'])
+    })
+
+    it('ends the quote at a line at another indent', () => {
+      expect(outline(parseMarkdownToBlocks('- item\n  > under item\n> at root'))).toEqual([
+        'item',
+        '  > under item',
+        '> at root',
+      ])
+    })
+
+    it('reads Windows line endings as plain newlines', () => {
+      expect(outline(parseMarkdownToBlocks('> q1\r\n> q2\r\nafter'))).toEqual(['> q1\n> q2', 'after'])
+    })
+  })
+
+  describe('GFM tables', () => {
+    const table = '| a | b |\n| :- | -: |\n| 1 | 2 |\n| 3 | 4 |'
+
+    it('keeps a table as ONE block', () => {
+      expect(outline(parseMarkdownToBlocks(`Before\n${table}\n\nAfter`))).toEqual(['Before', table, 'After'])
+    })
+
+    it('ends the table at a line without a pipe, unlike a GFM lazy row', () => {
+      expect(outline(parseMarkdownToBlocks(`${table}\na note`))).toEqual([table, 'a note'])
+    })
+
+    it('keeps the rows of a table nested four columns deep', () => {
+      const indented = table.split('\n').map(row => `    ${row}`).join('\n')
+      expect(outline(parseMarkdownToBlocks(`- a\n  - b\n${indented}`))).toEqual(['a', '  b', `    ${table}`])
+    })
+
+    it('ends the table at a row at another indent', () => {
+      const t = '| a | b |\n| - | - |'
+      expect(outline(parseMarkdownToBlocks(`- item\n  ${t.replace('\n', '\n  ')}\n| 1 | 2 |`))).toEqual([
+        'item',
+        `  ${t}`,
+        '| 1 | 2 |',
+      ])
+    })
+
+    it('nests an indented table under its bullet and strips the indent', () => {
+      const indented = table.split('\n').map(row => `  ${row}`).join('\n')
+      expect(outline(parseMarkdownToBlocks(`- Results\n${indented}`))).toEqual(['Results', `  ${table}`])
+    })
+
+    it('accepts a table without outer pipes', () => {
+      expect(outline(parseMarkdownToBlocks('a | b\n--- | ---\n1 | 2'))).toEqual(['a | b\n--- | ---\n1 | 2'])
+    })
+
+    it('does not count an escaped pipe as a column', () => {
+      const escaped = '| a \\| b | value |\n| --- | --- |\n| `x\\|y` | 2 |'
+      expect(outline(parseMarkdownToBlocks(escaped))).toEqual([escaped])
+    })
+
+    it('counts a pipe after an escaped backslash as a column', () => {
+      const evenBackslashes = '| a \\\\| b | c |\n| - | - | - |\n| 1 | 2 | 3 |'
+      expect(outline(parseMarkdownToBlocks(evenBackslashes))).toEqual([evenBackslashes])
+    })
+
+    it('ends the table where another block starts, even one with a pipe', () => {
+      const t = '| a | b |\n| - | - |\n| 1 | 2 |'
+      expect(outline(parseMarkdownToBlocks(`${t}\n> note | status\n- item | x`))).toEqual([t, '> note | status', 'item | x'])
+    })
+
+    it('reads a one-column table without a pipe in its header or delimiter row as text', () => {
+      expect(outline(parseMarkdownToBlocks('Status\n|:-:|\n| ok |'))).toEqual(['Status', '|:-:|', '| ok |'])
+      expect(outline(parseMarkdownToBlocks('| Status |\n:-:'))).toEqual(['| Status |', ':-:'])
+    })
+
+    it('falls back to a block per line when the delimiter row does not match the header', () => {
+      expect(outline(parseMarkdownToBlocks('| a | b |\n| --- |\n| 1 | 2 |'))).toEqual([
+        '| a | b |',
+        '| --- |',
+        '| 1 | 2 |',
+      ])
     })
   })
 })

@@ -14,17 +14,26 @@
  * behaviour (deleting the cell value would be worse), but it means an
  * unregistered key is the one class of property data a flipped workspace
  * cannot make child-backed. §9's orphan-definition synthesis is the intended
- * converter and the migration doc requires it to run BEFORE the flip, with
- * extension-owned keys claimed by their owner first — so knowing the list,
- * and which bucket each key is in, is a prerequisite for that runbook step.
+ * converter and runs BEFORE the flip, with extension-owned keys claimed by
+ * their owner first — the ordering this report exists to make possible, since
+ * the sampled types below are the only signal about who owns a key. The
+ * migration gesture runs this same scan and names a few keys per bucket on
+ * its consent screen, so this is no longer the only way to see them — but it
+ * is the only one that lists every key the scan can READ (`unreadableBlocks`
+ * bounds that), and it adds a fix per key plus provenance for the keys the
+ * sample reaches.
+ *
+ * PAST THE FLIP it also reports COVERAGE — registered cells with no live
+ * field row (`surveyPropertyCellCoverage`). A cell-only write leaves those
+ * while every key still registers, so the key scan cannot see them.
  *
  * Deliberately no exemption list. `grainAudit` skips `system:*` / `agent:*`
  * to keep a per-extension report readable; here an exemption would hide keys
  * the flip still has to carry, which is the failure mode this verb exists to
  * fix. Registered keys drop out by being registered.
  *
- * WHAT THIS DOES NOT DETECT. The contract is "keys the registry does not
- * resolve", nothing wider. Two adjacent definition problems are outside it,
+ * WHAT THE KEY HALF DOES NOT DETECT. Its contract is "keys the registry does
+ * not resolve", nothing wider. Two adjacent definition problems are outside it,
  * and both are invisible here rather than mis-reported:
  *   - a SHADOWED definition (two definition blocks competing for one name):
  *     the name still resolves, via the winner, so no key is listed. The
@@ -49,10 +58,14 @@
 import type { PropertySchemaIdentityUnavailableReason } from '@/data/api'
 import { keyCannotBeDefined } from '@/data/internals/propertyDefinitionSynthesis'
 import {
-  OBJECT_BAG, keyOf, scanPropertyKeys,
+  LIVE_CELLS_FOR_NAMES, keyOf, scanPropertyKeys,
   type PropertyKeyScan, type UnresolvedPropertyKey,
 } from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
+import {
+  surveyPropertyCellCoverage, type PropertyCellCoverage,
+} from '@/data/internals/propertyCellBackfill'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export interface UnregisteredPropertyTypeUsage {
   /** A type carried by blocks holding this key. */
@@ -102,6 +115,12 @@ export interface PropertyRegistrationAudit
   syncedThrough: string | null
   unregistered: UnregisteredProperty[]
   unregisteredCells: number
+  /** Registered cells with no live field row, once the workspace reads as
+   *  switched to property blocks — a gap this registry audit is otherwise blind
+   *  to, since every key involved registers. `missing` is what a re-run of
+   *  "Migrate properties to child blocks" writes. Null before the flip, where
+   *  no cell is expected to have blocks yet. */
+  coverage: PropertyCellCoverage | null
 }
 
 /** Keys we read provenance (types + samples) for, highest cell count first.
@@ -152,8 +171,9 @@ const hopelessKeyFix = (reason: string): string =>
 
 /** Reason → what to do.
  *
- *  Only `definition-unavailable` is reachable through this module: it asks the
- *  resolver by NAME, and `resolveName`
+ *  Only `definition-unavailable` and `behavior-unavailable` are reachable
+ *  through this module, and both fall through to the definition-count split
+ *  at the end: it asks the resolver by NAME, and `resolveName`
  *  (`src/data/internals/propertySchemaResolution.ts`) cannot return the other
  *  two. `shadowed` requires resolving a non-winner's own fieldId directly —
  *  a name always routes to its group head, so the head trivially matches
@@ -250,6 +270,9 @@ export const auditPropertyRegistration = async (
     syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     unregistered,
     unregisteredCells: unregistered.reduce((sum, entry) => sum + entry.cells, 0),
+    coverage: await readIsChildBackedWorkspace(repo.db, workspaceId)
+      ? await surveyPropertyCellCoverage(repo, workspaceId)
+      : null,
   }
 }
 
@@ -282,16 +305,14 @@ const attachProvenance = async (
          SELECT property, blockId,
                 ROW_NUMBER() OVER (PARTITION BY property ORDER BY blockId) AS rn
            FROM (
-             -- DISTINCT because a stored bag CAN repeat a key: JSON.stringify
-             -- cannot produce one, but a raw SQL write can, and the types
-             -- trigger sees only one row so nothing rejects it. Without this,
+             -- DISTINCT because a stored bag can repeat a key (see
+             -- readPropertyDefinitionBags for why one can exist). This read
+             -- wants PRESENCE, not which occurrence wins: without DISTINCT,
              -- json_each emits a row per occurrence and one block could eat
              -- the whole per-key cap: repeating in sampleBlockIds, inflating
              -- sampledBlocks, and hiding the blocks that actually differ.
              SELECT DISTINCT j.key AS property, b.id AS blockId
-               FROM blocks b, json_each(${OBJECT_BAG}) j
-              WHERE b.workspace_id = ? AND b.deleted = 0
-                AND j.key IN (SELECT value FROM json_each(?))
+             ${LIVE_CELLS_FOR_NAMES}
            )
        ) ranked
       WHERE ranked.rn <= ?`,

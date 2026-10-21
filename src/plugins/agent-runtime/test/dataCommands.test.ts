@@ -25,6 +25,7 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
+import { DATA_MODEL_TOPICS, knownCommandRegistry } from '@knowledge-medium/agent-cli/protocol'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -213,12 +214,43 @@ describe('grouped-backlinks command', () => {
 })
 
 describe('data-model command', () => {
-  it('returns the guide markdown', async () => {
-    const guide = await executeCommand({commandId: 'dm-1', type: 'data-model'}, context)
-    expect(typeof guide).toBe('string')
-    expect(guide).toContain('block_references')
-    expect(guide).toContain('grouped-backlinks')
-    expect(guide).toContain('source_field')
+  const guide = async (topic?: string) =>
+    await executeCommand({commandId: 'dm', type: 'data-model', ...(topic === undefined ? {} : {topic})}, context) as string
+
+  it('returns the whole guide markdown for topic all', async () => {
+    const all = await guide('all')
+    expect(all).toContain('block_references')
+    expect(all).toContain('grouped-backlinks')
+    expect(all).toContain('source_field')
+  })
+
+  it('answers with an index of its topics by default, and one section per topic', async () => {
+    const index = await guide()
+    expect(index).toContain('`properties` — Types & properties')
+    expect(index.length).toBeLessThan((await guide('all')).length / 5)
+    const section = await guide('properties')
+    expect(section.startsWith('## Types & properties')).toBe(true)
+    expect(section).not.toContain('## Lower-level access')
+  })
+
+  it('indexes exactly the topics the command registry lists', async () => {
+    const indexed = [...(await guide()).matchAll(/^- `([^`]+)` — /gm)].map(match => match[1])
+    expect(indexed).toEqual([...DATA_MODEL_TOPICS])
+    expect(knownCommandRegistry['data-model'].description).toContain(`(${indexed.join(', ')})`)
+  })
+
+  it('reads the section a guessed topic plainly means, and the index for any other guess', async () => {
+    const byName = await guide('Page')
+    expect(byName).toMatch(/^\(No topic "Page"; reading `pages`\.\)\n\n## Pages, aliases/)
+    expect(await guide('property')).toMatch(/^\(No topic "property"; reading `properties`\.\)/)
+    const byText = await guide('spaced-repetition')
+    expect(byText).toMatch(/^\(No topic "spaced-repetition"; reading `block-kinds`\.\)\n\n## Other block kinds/)
+
+    // Two headings name backlinks, and so does more than one section's text.
+    const ambiguous = await guide('backlinks')
+    expect(ambiguous.startsWith('No topic "backlinks".\n\n# Knowledge Medium')).toBe(true)
+    expect(ambiguous).toContain('`grouped-backlinks` — ')
+    expect((await guide('nope')).startsWith('No topic "nope".\n\n# Knowledge Medium')).toBe(true)
   })
 })
 
@@ -398,7 +430,7 @@ describe('reconcile-markdown-subtree command', () => {
     key: opts.key ?? KEY,
     ...(opts.shape ? {shape: opts.shape} : {}),
     ...(opts.final ? {final: true} : {}),
-    properties: {'claude:reply': true},
+    properties: {'agent:reply': true},
   }, context) as Promise<ReconcileResult>
 
   const replyRoots = async () =>
@@ -424,7 +456,7 @@ describe('reconcile-markdown-subtree command', () => {
     expect(childA1.parentId).toBe(topA.id)
     // Every block carries the passed marker AND the reconcile key.
     for (const row of [topA, topB, childA1]) {
-      expect(row.properties?.['claude:reply']).toBe(true)
+      expect(row.properties?.['agent:reply']).toBe(true)
       expect(row.properties?.['agent:subtreeKey']).toBe(KEY)
     }
   })

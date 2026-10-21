@@ -3,22 +3,17 @@
  *
  * `Repo` runs three one-time-per-workspace maintenance passes off the
  * cold-start critical path — ref-typed-property reprojection, workspace
- * backfills, and the reconcile rescan. Each one hand-rolled the same two
- * mechanisms: an idle-deferred scheduler tracking its in-flight promises in
- * a pending set (so tests can drain it), and a lazy in-memory mirror of its
- * completion markers in `client_schema_state`.
- *
- * This module owns both mechanisms once:
+ * backfills, and the reconcile rescan. This module gives them one
+ * drain-barrier scheduler and one completion-marker store to share:
  *   - `PendingIdleJobs` — a pending-set drain barrier over an injectable
- *     idle scheduler (defaults to `scheduleIdle`; the data-layer callers all
- *     inject `scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE)` so the catch-ups run on
- *     genuine idle off the cold-start window). One instance per job kind so
- *     each `await*` test helper drains only its own work.
+ *     idle scheduler. One instance per job kind so each `await*` test
+ *     helper drains only its own work.
  *   - `MarkerStore` — the lazy prefixed-key set: load once, then `has` /
  *     `set` / `clear` in memory + write-through to `client_schema_state`.
  */
 
 import { scheduleIdle } from '@/utils/scheduleIdle'
+import { CallbackSet } from '@/utils/callbackSet'
 
 /** Minimal `client_schema_state` access surface — the `PowerSyncDb`
  *  read/write calls `MarkerStore` needs, structurally typed so the store
@@ -28,16 +23,32 @@ export interface MarkerDb {
   execute(sql: string, params?: unknown[]): Promise<unknown>
 }
 
+/** Declares the calling job PARKED: it is waiting on a signal only the outside
+ *  world can produce (a row that must sync, a subscription that must fire), so
+ *  it is not work `drain()` can wait out. Returns the release, which every
+ *  settle path must call — idempotently, so a doubled release is harmless.
+ *  Handed to the job body by `PendingIdleJobs.schedule`. */
+export type ParkHandle = () => () => void
+
+interface JobState {
+  /** Nesting depth of the job's open park regions; 0 means it is progressing. */
+  parked: number
+}
+
+/** The one place "is this job parked?" is decided, so `drain` and `parkedSize`
+ *  cannot disagree about a depth the release guard is there to prevent. */
+const isParked = (state: JobState): boolean => state.parked > 0
+
 /** Tracks idle-deferred jobs so deterministic tests can wait for them.
- *  `schedule` defers `task` via the configured scheduler — `scheduleIdle`
- *  by default (next idle frame in the browser, task tick under Node/jsdom),
- *  or a `scheduleDeepIdle` wrapper for work that must stay out of the
- *  cold-start window. The task's promise is added to the pending set when
- *  the deferred callback fires and removed on settle. `drain` awaits
- *  everything whose timer has already fired — it does NOT advance timers,
- *  so fake-timer callers must bump the clock first. */
+ *  The task's promise is added to the pending set when the deferred
+ *  callback fires and removed on settle. `drain` awaits everything whose
+ *  timer has already fired — it does NOT advance timers, so fake-timer
+ *  callers must bump the clock first. */
 export class PendingIdleJobs {
-  private readonly pending = new Set<Promise<void>>()
+  private readonly pending = new Map<Promise<void>, JobState>()
+  /** Woken when any job enters a park region, so a `drain` already awaiting that
+   *  job re-evaluates instead of waiting on it forever. */
+  private readonly parkWaiters = new CallbackSet('PendingIdleJobs.park')
 
   /** @param scheduler defers a callback off the critical path. Defaults to
    *  `scheduleIdle`; pass a `scheduleDeepIdle(fn, opts)` wrapper for jobs
@@ -47,30 +58,100 @@ export class PendingIdleJobs {
 
   /** Defer `task` off the critical path. Fire-and-forget: the caller's path
    *  is not blocked. The promise enters the pending set only once the
-   *  deferred callback runs (mirroring the historical hand-rolled behavior). */
-  schedule(task: () => Promise<void>): void {
+   *  deferred callback runs.
+   *
+   *  A job owns its errors: every family here catches what it can retry from and
+   *  reports it with the workspace and pass in hand, so nothing currently reaches
+   *  the catch below — it is the backstop for a future family that forgets, and
+   *  is pinned by a unit test rather than through any real job. What escapes is
+   *  logged and dropped, because `drain` is a barrier and not an error channel —
+   *  a test that needs a failure asserts on the outcome the job should produce.
+   *
+   *  A job that awaits an EXTERNAL signal — a row that must sync, a gate that
+   *  opens on connectivity — must either wait for that signal BEFORE scheduling
+   *  (what `Repo.scheduleWorkspaceBackfills` does with its sync gate) or wrap the
+   *  wait in the `ParkHandle` passed to `task`. Neither, and on a device or
+   *  fixture where the signal never comes the job sits in the pending set and
+   *  every `drain()` hangs — issue #1015. */
+  schedule(task: (park: ParkHandle) => Promise<void>): void {
     this.scheduler(() => {
-      const p = task().finally(() => { this.pending.delete(p) })
-      this.pending.add(p)
+      const state: JobState = {parked: 0}
+      const p = task(() => this.park(state))
+        .catch((error: unknown) => {
+          console.error('[PendingIdleJobs] deferred job failed:', error)
+        })
+        .finally(() => { this.pending.delete(p) })
+      this.pending.set(p, state)
     })
   }
 
-  /** Await every job whose deferral timer has already fired. Loops so a
-   *  job that settles while we await an earlier one is still drained.
+  /** Open a park region for `state` and wake every drain awaiting it.
    *
-   *  NOT a settle barrier for every caller: a workspace backfill that defers
-   *  on the sync gate re-arms itself, so it can enqueue a SUCCESSOR job. That
-   *  successor's deferral timer has not fired yet, so this returns without it
-   *  — which is what makes the loop terminate, and also why a test asserting
-   *  "the pass has finished" must wait on the outcome rather than on this. */
+   *  The idempotent release is the single mechanism keeping the depth honest. A
+   *  `Math.max(0, …)` clamp was the other candidate and is strictly weaker: it
+   *  stops the depth going negative, but not a doubled release closing a nested
+   *  region that is still open. */
+  private park(state: JobState): () => void {
+    state.parked += 1
+    this.parkWaiters.notify()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      state.parked -= 1
+    }
+  }
+
+  /** A promise that resolves the next time any job parks. */
+  private whenSomeJobParks(): {promise: Promise<void>; dispose: () => void} {
+    let wake!: () => void
+    const promise = new Promise<void>(resolve => { wake = resolve })
+    return {promise, dispose: this.parkWaiters.add(wake)}
+  }
+
+  /** Await every job whose deferral timer has already fired AND that can still
+   *  progress on its own. Loops so a job that settles while we await an earlier
+   *  one is still drained.
+   *
+   *  NOT a settle barrier for every caller, in two ways.
+   *
+   *  A workspace backfill that defers on the sync gate re-arms itself, so it can
+   *  enqueue a SUCCESSOR job. That successor's deferral timer has not fired yet,
+   *  so this returns without it — which is what makes the loop terminate, and
+   *  also why a test asserting "the pass has finished" must wait on the outcome
+   *  rather than on this.
+   *
+   *  A job inside a `ParkHandle` region is likewise not awaited: it is blocked on
+   *  something only the outside world can deliver, so awaiting it is a hang
+   *  rather than a drain. Parking during the await counts too, which is why this
+   *  races the pending jobs against the park signal instead of awaiting them
+   *  outright.
+   *
+   *  Resolves whatever the jobs did — see `schedule` for where a failure goes. */
   async drain(): Promise<void> {
-    while (this.pending.size > 0) {
-      await Promise.all([...this.pending])
+    for (;;) {
+      const active: Promise<void>[] = []
+      for (const [job, state] of this.pending) if (!isParked(state)) active.push(job)
+      if (active.length === 0) return
+      const parkedSignal = this.whenSomeJobParks()
+      try {
+        await Promise.race([Promise.all(active), parkedSignal.promise])
+      } finally {
+        parkedSignal.dispose()
+      }
     }
   }
 
   get size(): number {
     return this.pending.size
+  }
+
+  /** Pending jobs currently inside a park region — what `drain()` returned
+   *  without. */
+  get parkedSize(): number {
+    let n = 0
+    for (const state of this.pending.values()) if (isParked(state)) n += 1
+    return n
   }
 }
 

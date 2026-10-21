@@ -41,8 +41,45 @@ describe('routeProcessorRejection', () => {
 
     routeProcessorRejection(error, repo, new Map())
 
-    expect(showError).toHaveBeenCalledWith('something failed')
+    // Keyed by code AND sentence, so a refusal the user meets on every attempt
+    // replaces its toast instead of stacking another copy of the same sentence.
+    expect(showError).toHaveBeenCalledWith(
+      'something failed', {id: 'unknown.code:something failed'})
     expect(showCustom).not.toHaveBeenCalled()
+  })
+
+  it('keeps two rejections apart when they share a code and differ in what they say', () => {
+    // One transaction can report several properties whose values would not
+    // convert, one rejection each, all under the same code — and that toast is
+    // the only place the user is told. Keyed by code alone, the last would
+    // overwrite the rest.
+    routeProcessorRejection(
+      new ProcessorRejection('"status" lost 2 values', 'codec.unconvertible'),
+      repo, new Map())
+    routeProcessorRejection(
+      new ProcessorRejection('"owner" lost 1 value', 'codec.unconvertible'),
+      repo, new Map())
+
+    const ids = [
+      'codec.unconvertible:"status" lost 2 values',
+      'codec.unconvertible:"owner" lost 1 value',
+    ]
+    expect(showError).toHaveBeenNthCalledWith(1, '"status" lost 2 values', {id: ids[0]})
+    expect(showError).toHaveBeenNthCalledWith(2, '"owner" lost 1 value', {id: ids[1]})
+  })
+
+  it('reuses one slot for the SAME sentence met over and over', () => {
+    const repeated = () => routeProcessorRejection(
+      new ProcessorRejection('"status" lost 2 values', 'codec.unconvertible'),
+      repo, new Map())
+
+    repeated()
+    repeated()
+
+    expect(showError).toHaveBeenNthCalledWith(1, '"status" lost 2 values',
+      {id: 'codec.unconvertible:"status" lost 2 values'})
+    expect(showError).toHaveBeenNthCalledWith(2, '"status" lost 2 values',
+      {id: 'codec.unconvertible:"status" lost 2 values'})
   })
 })
 
@@ -86,7 +123,8 @@ describe('surfaceProcessorRejection (resolved-runtime wiring)', () => {
       repoStub,
     )
 
-    expect(showError).toHaveBeenCalledWith('bootstrap collision')
+    expect(showError).toHaveBeenCalledWith(
+      'bootstrap collision', {id: 'alias.collision:bootstrap collision'})
     expect(showCustom).not.toHaveBeenCalled()
   })
 })

@@ -58,7 +58,7 @@ beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 describe('blocks_synced staging table', () => {
   it('mirrors the blocks column shape exactly, minus the local-only columns (name + type + nullability)', async () => {
-    // PR #288 slice A: `blocks` gained LOCAL-only derived columns
+    // `blocks` gained LOCAL-only derived columns
     // (`reference_target_id`, `is_field_form`) that are deliberately never
     // staged/synced.
     // `blocks_synced` must still match `blocks` on every STORAGE column.
@@ -78,7 +78,7 @@ describe('blocks_synced staging table', () => {
   })
 
   it('keeps every local column local-only: present on blocks, absent on blocks_synced', async () => {
-    // PR #288 slice A: this asymmetry is deliberate, not an oversight — see
+    // This asymmetry is deliberate, not an oversight — see
     // BLOCK_LOCAL_COLUMNS in blockSchema.ts.
     const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
     const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')

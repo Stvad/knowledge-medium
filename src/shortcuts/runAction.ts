@@ -4,11 +4,11 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
   useActiveContextsState,
-  type ActiveContextsDispatch,
   type ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import {
   ActionTrigger,
+  type ActionDispatch,
   type ActionContextConfig,
   type ActionContextType,
   type BaseShortcutDependencies,
@@ -25,7 +25,10 @@ export interface RunByIdContext {
   runtime: FacetRuntime
   active: ActiveContextsMap
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>
-  dispatch: ActiveContextsDispatch
+  /** Only the IMPERATIVE pair reaches handlers (`ActionDispatch`) — the
+   *  declarative claim/release pair on `ActiveContextsDispatch` is for
+   *  `useActionContextActivations`, not for action code. */
+  dispatch: ActionDispatch
 }
 
 /**

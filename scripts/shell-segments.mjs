@@ -61,6 +61,14 @@ export const shellSegmentsWithDepth = cmd => {
       continue
     }
     if (ch === '\\') {
+      // Inside double quotes bash lets a backslash escape only $ ` " \ and a
+      // newline; before any other character the backslash stays in the word.
+      const next = cmd[i + 1]
+      if (quote === '"' && (next === undefined || !'$`"\\\n'.includes(next))) {
+        cur += ch
+        started = true
+        continue
+      }
       escaped = true
       continue
     }

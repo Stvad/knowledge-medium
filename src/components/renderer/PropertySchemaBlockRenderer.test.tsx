@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { RepoContext } from '@/context/repo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { seedProperty } from '@/data/propertySeeds'
@@ -29,6 +31,17 @@ const seed = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const SEED_ID = propertyDefinitionBlockId(WS, seed.seedKey)
+
+// A second seed, on a preset that CONTRIBUTES a ConfigEditor — the surface the
+// name field and the type picker do not cover.
+const refSeed = seedProperty({
+  seedKey: 'system:test/property/ref-config-demo',
+  revision: 1,
+  name: 'test:refConfigDemo',
+  preset: 'ref',
+  changeScope: ChangeScope.BlockDefault,
+})
+const REF_SEED_ID = propertyDefinitionBlockId(WS, refSeed.seedKey)
 
 describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
   let sharedDb: TestDb
@@ -60,6 +73,29 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
         content: seed.name,
         properties: canonicalPropertySeedProperties(seed),
       })
+      await tx.create({
+        id: REF_SEED_ID,
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a3',
+        content: refSeed.name,
+        properties: canonicalPropertySeedProperties(refSeed),
+      })
+      // A user-created schema on the SAME preset, so the config editor's
+      // enabled behaviour can be compared against the seed's.
+      await tx.create({
+        id: 'user-ref-schema',
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a4',
+        content: 'test:myRef',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'test:myRef',
+          'property-schema:preset': 'ref',
+          'property-schema:config': {},
+        },
+      })
       // User-created schema: no seed marker.
       await tx.create({
         id: 'user-schema',
@@ -84,9 +120,14 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
 
   const renderSchema = (blockId: string) =>
     render(
-      <AppRuntimeContextProvider value={runtime}>
-        <PropertySchemaContentRenderer block={repo.block(blockId)} />
-      </AppRuntimeContextProvider>,
+      // `RepoContext` as well as the runtime: `RefTargetTypePicker` reads the
+      // type registry through it, so the config-editor case does not render
+      // without one.
+      <RepoContext value={repo}>
+        <AppRuntimeContextProvider value={runtime}>
+          <PropertySchemaContentRenderer block={repo.block(blockId)} />
+        </AppRuntimeContextProvider>
+      </RepoContext>,
     )
 
   it('renders a materialized seed read-only: type locked, no delete, with a note', () => {
@@ -104,6 +145,42 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     expect(screen.getByText(/Built-in property defined in code/)).toBeTruthy()
   })
 
+  it('snaps the type picker back when the kernel REFUSES the re-type', async () => {
+    // The picker must not be left displaying a type the kernel refused. React's
+    // controlled-state restore is what delivers this, not anything in the
+    // renderer — pinned because the property is user-facing and an `onChange`
+    // that ever writes local state before awaiting would silently lose it.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    // Prose under a string property: `number` cannot read it, so the re-type
+    // below is refused rather than dropping it.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'host',
+      })
+      await tx.setProperty('host', schema, 'not a number')
+    }, {scope: ChangeScope.BlockDefault})
+
+    renderSchema('user-schema')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('string')
+
+    fireEvent.change(screen.getByRole('combobox'), {target: {value: 'number'}})
+
+    await waitFor(() => {
+      expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('string')
+    })
+    expect(repo.block('user-schema')).toBeTruthy()
+  })
+
   it('keeps a user-created schema editable', () => {
     renderSchema('user-schema')
 
@@ -115,5 +192,42 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
 
     expect(screen.getByText(/Delete schema/)).toBeTruthy()
     expect(screen.queryByText(/Built-in property defined in code/)).toBeNull()
+  })
+
+  it('writes nothing when a SEED\'s config editor is driven from the keyboard', async () => {
+    // `pointer-events-none` blocks the POINTER and nothing else. The config
+    // editors are extension-contributed, take no readOnly prop, and render
+    // ordinary inputs and buttons, so behind a pointer-only block a keyboard
+    // user tabs into a code-owned seed's options and edits them — and nothing
+    // downstream catches it, because `core.migratePropertyDefinition` skips
+    // seeded rows rather than refusing them.
+    //
+    // FOCUS, never click: a click is a pointer action, which the old block
+    // stopped on its own, so a test that clicks cannot tell the two apart.
+    renderSchema(REF_SEED_ID)
+    const user = userEvent.setup()
+    const txSpy = vi.spyOn(repo, 'tx')
+
+    const configInput = screen.getByPlaceholderText('Add a block type…')
+    configInput.focus()
+    await user.keyboard('page{Enter}')
+
+    expect(txSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes a config change for a user-created schema on the same preset', async () => {
+    // The control: these keystrokes really do reach `writeConfig`, so the
+    // assertion above is not green for want of a working path.
+    renderSchema('user-ref-schema')
+    const user = userEvent.setup()
+
+    const configInput = screen.getByPlaceholderText('Add a block type…')
+    configInput.focus()
+    await user.keyboard('page{Enter}')
+
+    await vi.waitFor(() => {
+      expect(repo.block('user-ref-schema').peek()?.properties['property-schema:config'])
+        .toEqual({targetTypes: ['page']})
+    })
   })
 })

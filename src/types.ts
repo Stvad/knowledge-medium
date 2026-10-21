@@ -36,7 +36,8 @@ export interface Workspace {
   // local prime after create_workspace doesn't null them out before sync.
   encryptionMode: string
   wkCanary: string | null
-  // Properties-as-blocks rollout lever (PR #288 §6): 'cell' →
+  // Properties-as-blocks rollout lever
+  // (docs/properties-as-blocks-migration.html §6): 'cell' →
   // 'children' → 'cell-off', operator-written server-side (forward-only
   // trigger), synced to every client. "Flipped" is ALWAYS the
   // at-or-past-'children' test (`isChildBackedPropertiesWorkspace`),
@@ -51,7 +52,8 @@ export type PropertiesMigrationState = 'cell' | 'children' | 'cell-off'
  *  (recognition, dual-write, projection, reconcile): child-backed =
  *  workspace flipped = at or past 'children'. Never an equality test —
  *  an equality gate would un-recognize every field row the moment a
- *  workspace advances to 'cell-off' (PR #288 §6). */
+ *  workspace advances to 'cell-off'
+ *  (docs/properties-as-blocks-migration.html §6). */
 export const isChildBackedPropertiesWorkspace = (
   state: PropertiesMigrationState,
 ): boolean => state === 'children' || state === 'cell-off'

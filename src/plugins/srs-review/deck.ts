@@ -1,7 +1,12 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
+import { ChangeScope } from '@/data/api'
 import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage.js'
-import { SRS_REVIEW_DECK_TYPE } from './schema.ts'
+import {
+  SRS_REVIEW_DECK_TYPE,
+  reviewDeckStartedProp,
+  reviewDeckTagProp,
+} from './schema.ts'
 
 // Fresh uuid-v5 namespace so each workspace's review deck lands on one
 // deterministic row — re-launching review reuses the same block (and
@@ -23,3 +28,16 @@ export const getOrCreateReviewDeck = (repo: Repo, workspaceId: string): Promise<
     alias: REVIEW_DECK_ALIAS,
     markerType: SRS_REVIEW_DECK_TYPE,
   })
+
+/** Point the deck at a tag (`''` = all due) and flip it into the review
+ *  session. Shared by the deck picker and the daily-note hint, so both
+ *  start a deck the same way. */
+export const startReviewDeck = async (deck: Block, tagName: string): Promise<void> => {
+  await deck.repo.tx(
+    async tx => {
+      await tx.setProperty(deck.id, reviewDeckTagProp, tagName)
+      await tx.setProperty(deck.id, reviewDeckStartedProp, true)
+    },
+    {scope: ChangeScope.BlockDefault, description: 'start srs review deck'},
+  )
+}

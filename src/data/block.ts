@@ -112,18 +112,11 @@ export class Block implements Handle<BlockData | null> {
    *  paths can throw a stable promise across renders. Returns null when
    *  the row doesn't exist.
    *
-   *  Cache fast-path: if a live row is already in `BlockCache` we
-   *  return synchronously without going to SQL. The cache is the
-   *  source of truth post-tx (`repo.tx`'s commit pipeline writes it)
-   *  and post-sync (`rowEventsTail`'s `applyIfNewer` keeps it
-   *  current), so a redundant SQL read just costs a connection round-
-   *  trip that contends with PowerSync's upload/download work. The
-   *  hot path
-   *  (keyboard navigation through `nextVisibleBlock` /
-   *  `previousVisibleBlock`) does 2-3 of these per arrow press —
-   *  occasionally blocked behind a slow sync drain (p99 ~600 ms in a
-   *  big-DB profile). Mirrors `repo.exists`'s short-circuit and the
-   *  `block.peek() ?? await block.load()` idiom.
+   *  Cache fast-path: the cache is authoritative post-tx (`repo.tx`'s
+   *  commit pipeline writes it) and post-sync (`rowEventsTail`'s
+   *  `applyIfNewer`), so a redundant SQL read only costs a round-trip
+   *  that contends with PowerSync's own work. Mirrors `repo.exists`'s
+   *  short-circuit and the `block.peek() ?? await block.load()` idiom.
    *
    *  The `confirmed-missing` marker is NOT a fast-path — `load()` is an
    *  "ensure loaded" operation, and a missing marker is just the cached
@@ -336,7 +329,7 @@ export class Block implements Handle<BlockData | null> {
     await this.repo.mutate.setContent({id: this.id, content})
   }
 
-  /** Subtree-aware soft-delete (mirrors legacy `Block.delete`). */
+  /** Subtree-aware soft-delete. */
   async delete(): Promise<void> {
     // eslint-disable-next-line no-restricted-syntax -- programmatic delete: this IS the primitive the UI choke point wraps
     await this.repo.mutate.delete({id: this.id})

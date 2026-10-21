@@ -11,7 +11,9 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import {
+  BLOCK_STORAGE_COLUMNS, BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams,
+} from '@/data/blockSchema'
 import {
   RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL,
   STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY,
@@ -19,6 +21,7 @@ import {
 } from '@/data/internals/clientSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
+import { SEALED_COLUMNS } from '@/sync/transform'
 
 const WS = 'ws-migration'
 
@@ -49,6 +52,16 @@ const rewindToPreMigration = async () => {
 const deliver = (d: BlockData) =>
   sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(d))
 
+/** A live `blocks` row built from the SAME fixture and the SAME column list the
+ *  seed's identity clause derives from, so "identical in every synced column" is
+ *  true by construction rather than by two hand-aligned literal lists — and a
+ *  thirteenth column cannot quietly break these tests. */
+const seedLocalFrom = (d: BlockData) =>
+  sharedDb.db.execute(
+    `INSERT INTO blocks (${BLOCK_STORAGE_COLUMNS.map(c => c.name).join(', ')})
+     VALUES (${BLOCK_STORAGE_COLUMNS.map(() => '?').join(', ')})`,
+    blockToSyncedRowParams(d))
+
 const seedLocal = (id: string, updatedAt: number, deleted = false) =>
   sharedDb.db.execute(
     `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
@@ -66,7 +79,7 @@ beforeEach(rewindToPreMigration)
 describe('ensureStagingNeedsApplyColumn', () => {
   it('seeds each staged row from what the two tables can still show', async () => {
     await deliver(row({id: 'applied', updatedAt: 5}))
-    await seedLocal('applied', 5)                       // I1: same nonzero stamp
+    await seedLocal('applied', 5)                       // same nonzero stamp, clear columns equal
     await deliver(row({id: 'behind', updatedAt: 9}))
     await seedLocal('behind', 4)                        // server ahead
     await deliver(row({id: 'never-arrived', updatedAt: 5}))   // no local row
@@ -75,6 +88,78 @@ describe('ensureStagingNeedsApplyColumn', () => {
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual(['behind', 'never-arrived'])
+  })
+
+  it('clears a row identical in every synced column, both stamps 0', async () => {
+    // The shape measured on a production graph: rows whose synced columns all
+    // match and whose stamps are 0 on BOTH sides. I1's `<> 0` guard rejects
+    // them — correctly, as a claim about what a stamp proves — and they are then
+    // flagged with only the operator verb able to clear them. Comparing the
+    // columns proves directly what the stamp is used to infer.
+    const twin = row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await deliver(twin)
+    await seedLocalFrom(twin)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual([])
+  })
+
+  // EVERY column, not one. The clause CLEARS a flag, so its safety rests
+  // entirely on being total over the synced columns — and a version comparing
+  // only `content` passes a single-column test just as happily. Reduced to one
+  // column, this loop fails eleven times.
+  //
+  // The STAGED side carries the perturbation: `blocks_synced` is a raw table
+  // with no trigger that parses its JSON, whereas the same value on `blocks`
+  // reaches `json_each` in the alias/type triggers and throws there instead of
+  // reaching the assertion — which on a shared DB takes the rest of the file
+  // with it.
+  const PERTURBABLE = BLOCK_STORAGE_COLUMNS.map(c => c.name).filter(name => name !== 'id')
+  it.each(PERTURBABLE)('keeps the flag when %s alone differs', async (column) => {
+    const twin = row({id: 'not-twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await seedLocalFrom(twin)
+    const params = blockToSyncedRowParams(twin)
+    const at = BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === column)
+    params[at] = typeof params[at] === 'number' ? (params[at] as number) + 7 : 'perturbed'
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual(['not-twins'])
+  })
+
+  // A nonzero stamp vouches only for the sealed columns, which the seed cannot
+  // compare against local plaintext; a CLEAR column that differs at an equal
+  // stamp is a peer write landing on this device's stamp (#1163), not an echo.
+  const CLEAR = PERTURBABLE.filter(name => !(SEALED_COLUMNS as readonly string[]).includes(name))
+  it.each(CLEAR)('keeps the flag at an equal nonzero stamp when clear column %s differs', async (column) => {
+    const twin = row({id: 'same-stamp', updatedAt: 5, userUpdatedAt: 5})
+    await seedLocalFrom(twin)
+    const params = blockToSyncedRowParams(twin)
+    const at = BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === column)
+    params[at] = typeof params[at] === 'number' ? (params[at] as number) + 7 : 'perturbed'
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual(['same-stamp'])
+  })
+
+  it('re-seeds a device that recorded the PREVIOUS marker version', async () => {
+    // The version bump is the whole reach of this rule: every device that
+    // matters already ran the old seed, so without it the wider arm is dead
+    // everywhere it was written for.
+    await sharedDb.db.execute(
+      "INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES (?, 1)",
+      ['staging_needs_apply_seeded'])
+    const twin = row({id: 'twins', updatedAt: 0, userUpdatedAt: 0, createdAt: 0})
+    await deliver(twin)
+    await seedLocalFrom(twin)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual([])
   })
 
   it('leaves the flag SET for a local row that is strictly newer', async () => {
@@ -117,6 +202,13 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['arrived-later'])
   })
 
+  // 1200 serial round-trips through the write lock: ~250ms on an idle checkout,
+  // but measured past 5000ms on a loaded one, so the default is not a safe budget
+  // for it even outside a full gate run. Explicit because a timeout HERE also
+  // breaks the tests after it: vitest does not cancel the abandoned body, whose
+  // writes keep landing in the shared DB past the next `resetTestDb`. Making the
+  // rewind tolerate an already-dropped column does NOT fix that — tried, and the
+  // schema error just becomes a row-leak assertion. Not timing out is the fix.
   it('seeds a backlog larger than one chunk', async () => {
     // Bounded statements, so the loop — not the WHERE — is what finishes it.
     for (let i = 0; i < 600; i++) {
@@ -127,7 +219,7 @@ describe('ensureStagingNeedsApplyColumn', () => {
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual([])
-  })
+  }, 30_000)
 
   it('is a no-op on a table that already has the column and the marker', async () => {
     await sharedDb.db.execute(

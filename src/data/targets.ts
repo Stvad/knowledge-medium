@@ -1,50 +1,13 @@
 /**
- * Target-block primitives for parseReferences + Roam import (spec §7,
- * §13.1, v4.31).
+ * Target-block primitives for parseReferences + Roam import: alias and
+ * daily-note seat blocks — a Layer-1 create-or-restore primitive plus
+ * per-domain wrappers.
  *
- *   Layer 1 — `createOrRestoreTargetBlock(tx, args)` is the shared
- *   primitive: SELECT-then-branch via `tx.createOrGet`, restore
- *   tombstones via `tx.restore`. Same semantics every domain helper
- *   gets the catch-and-restore boilerplate from. Returns
- *   `{id, inserted}` where `inserted: true` covers both fresh-insert
- *   and tombstone-restore (both are "this tx wrote the row").
+ * Restore is domain policy, which is why `tx.createOrGet` throws
+ * `DeletedConflictError` instead of restoring.
  *
- *   Layer 2 — `ensureAliasTarget` (here) and `ensureDailyNoteTarget`
- *   (in `@/plugins/daily-notes`) are thin per-domain wrappers. Each
- *   computes its own deterministic id, picks `freshContent` (the
- *   alias text — so the freshly-materialised seat renders with a
- *   non-empty title; steady-state drift after a rename is still
- *   allowed and healed by the A3 sync rule), and supplies an
- *   `onInsertedOrRestored` callback that writes the alias list via
- *   `tx.setProperty`.
- *   Per-domain also drives the cleanup-eligibility routing in §7.6:
- *   only ensureAliasTarget results enter the newlyInsertedAliasTargetIds
- *   list passed to `references.cleanupOrphanAliases` (date-shaped aliases
- *   never enter the cleanup list — daily notes persist regardless of
- *   whether a referencing block is removed within 4s).
- *
- * Why `tx.createOrGet` doesn't restore on tombstone (v4.26):  Restore
- * is domain policy. The primitive throws DeletedConflictError loudly
- * and lets the domain helper decide what fields to refresh. The
- * shared helper here is the canonical refresh policy for parseReferences
- * + Roam import.
- *
- * Indexed-deterministic seat ids: rather than a single deterministic
- * id per `(alias, workspaceId)`, alias seats live in a probed sequence
- * `id₀, id₁, id₂, …` derived from `uuidv5("${ws}:${alias}:${i}",
- * ALIAS_NS)`. `ensureAliasTarget` walks the sequence until it finds
- * an empty slot (insert here) or a live row that already claims the
- * alias (reuse). Live rows that claim a different alias — typical
- * post-rename case — and tombstones are skipped. Two offline clients
- * with the same world-state probe the same way and land on the same
- * slot, preserving the deterministic-id convergence guarantee. The
- * "claims this alias?" check is what preserves the happy-path
- * convergence at slot 0; without it the probe would always run past
- * the existing seat.
- *
- * NOTE: `createOrRestoreTargetBlock` is helper-layer, NOT exposed on
- * the public Tx surface (per v4.31). Plugin authors writing their own
- * deterministic-id flows can import it from `@/data/targets`.
+ * `createOrRestoreTargetBlock` is helper-layer, deliberately not on the
+ * public `Tx` surface.
  */
 
 import {
@@ -54,6 +17,7 @@ import {
   type TypeRegistrySnapshot,
 } from '@/data/api'
 import { derivedBlockId } from '@/data/derivedIds'
+import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
@@ -81,15 +45,10 @@ export interface CreateOrRestoreArgs {
    *  creators (Roam import, which uses its own tx.create, not this
    *  primitive) do not. */
   systemMint?: boolean
-  /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
-   *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
-   *  (the alias/daily seat wrappers): a tombstoned seat can carry a
-   *  stale claim, and restoring it as-is trips the alias-uniqueness
-   *  trigger against the current claimant before the callback can
-   *  correct it (whole-tx rollback; found by
-   *  referencesRecompute.fuzz.test.ts). Callers that do NOT re-write
-   *  aliases (sidebar shortcuts, media assets) must leave this unset so
-   *  a user-set alias survives the restore. */
+  /** Strip the tombstone's `aliases` in the same restore UPDATE. Set it
+   *  iff your `onInsertedOrRestored` re-writes the alias list (alias/daily
+   *  seats); leave it unset so a user-set alias survives (shortcuts,
+   *  media). See {@link restorePropertiesStrippingAliases}. */
   stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
@@ -116,22 +75,10 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** The canonical aliases `id` may claim right now: any alias a DIFFERENT live
- *  block already holds is dropped.
- *
- *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`, and
- *  that rejection rolls back the CALLER's whole transaction. For a
- *  get-or-create that is fatal rather than partial: the page is minted in the
- *  same tx, so it dies with the rollback and the next call repeats it — the
- *  page becomes permanently uncreatable (issue #378). Yielding the contested
- *  alias instead keeps the page reachable; resolving the duplicate name is a
- *  separate, user-driven merge.
- *
- *  Call inside the writing transaction, so the answer reflects writes this tx
- *  has already made. That is necessary but NOT sufficient on its own: a
- *  sync-applied row can co-own an alias (the uniqueness trigger deliberately
- *  skips sync-apply), and re-writing a row's own alias bag re-inserts every
- *  entry, so a pre-existing duplicate can still abort the write. */
+/** Return aliases with no other live claimant, including sync co-claims that
+ * a single oldest-row lookup would hide. Call inside the writing transaction:
+ * rewriting an alias bag reinserts every claim, and one competing claim would
+ * abort the caller's whole transaction. Yielding it keeps the page reachable. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
@@ -140,8 +87,8 @@ export const partitionClaimableAliases = async (
 ): Promise<string[]> => {
   const claimable: string[] = []
   for (const alias of aliases) {
-    const owner = await tx.aliasLookup(alias, workspaceId)
-    if (owner === null || owner.id === id) claimable.push(alias)
+    const owners = await tx.aliasClaimants(alias, workspaceId)
+    if (owners.every(owner => owner.id === id)) claimable.push(alias)
   }
   return claimable
 }
@@ -166,18 +113,6 @@ export const createOrRestoreTargetBlock = async (
     return result
   } catch (err) {
     if (err instanceof DeletedConflictError) {
-      // Tombstone — restore + apply onInsertedOrRestored. v4.26 / v4.27
-      // / v4.31 design: the typed `tx.restore` primitive accepts a
-      // BlockDataPatch, so we can refresh content in the same UPDATE.
-      // Property writes that need codec encoding still go through
-      // tx.setProperty inside the callback.
-      //
-      // See `stripAliasesOnRestore`'s docblock for why alias-owning
-      // callers strip the tombstone bag's aliases in the same UPDATE
-      // (stale-claim resurrection trips the uniqueness trigger and rolls
-      // back the whole tx; found by referencesRecompute.fuzz.test.ts) —
-      // and why non-alias-owning callers must NOT (a user-set alias on
-      // a restored shortcuts/media row must survive).
       if (args.stripAliasesOnRestore) {
         const restoredProperties = await restorePropertiesStrippingAliases(tx, args.id)
         await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
@@ -197,14 +132,7 @@ export const createOrRestoreTargetBlock = async (
   }
 }
 
-// ──── Deterministic-id namespaces (UUIDv5) ────
-
-/** Namespace for alias-seat ids. The probe input is
- *  `${workspaceId}:${alias}:${index}`; two workspaces typing the same
- *  alias get distinct seats, and within a workspace the index lets
- *  parallel probes resolve to additional slots when slot 0 was claimed
- *  by a previous alias that has since been renamed. */
-const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
+// ──── Deterministic seat ids (UUIDv5) ────
 
 /** Probe cap. The expected indexed depth is 0–2 in realistic
  *  workloads (one rename per alias is rare; multiple is rarer). A cap
@@ -213,16 +141,28 @@ const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
  *  hang. */
 export const ALIAS_SEAT_PROBE_SLOTS = 64
 
+/** The probe input is `${workspaceId}:${alias}:${index}`: two workspaces
+ *  typing the same alias get distinct seats, and within a workspace the
+ *  index lets parallel probes resolve to additional slots when slot 0 was
+ *  claimed by a previous alias that has since been renamed. */
+const seatSlotId = (namespace: string, alias: string, workspaceId: string, index: number): string =>
+  derivedBlockId({namespace, key: `${workspaceId}:${alias}:${index}`})
+
 /** Deterministic id for the `index`-th alias-seat slot. Slot 0 is the
  *  happy-path id; higher slots are claimed by probes that skipped a
  *  live row claiming a different alias (post-rename) or a tombstoned
  *  prior occupant. Two clients in the same world-state hit the same
- *  index for a given `(alias, workspaceId)`. */
+ *  index for a given `(alias, workspaceId)`.
+ *
+ *  `seats` is NOT defaulted: the public namespace is the wrong answer for
+ *  an encrypted workspace, and a default is how a caller gets it without
+ *  asking (`@/data/aliasSeatNamespace`). */
 export const computeAliasSeatId = (
+  seats: AliasSeatNamespaces,
   alias: string,
   workspaceId: string,
   index: number = 0,
-): string => derivedBlockId({namespace: ALIAS_NS, key: `${workspaceId}:${alias}:${index}`})
+): string => seatSlotId(seats.mint, alias, workspaceId, index)
 
 /** Single source of truth for the freshly-materialised alias-seat
  *  shape. `ensureAliasTarget` writes a row whose `(content, properties)`
@@ -365,8 +305,9 @@ const propertiesMatchSeed = (
  *  drifted (a rename, a user-added property, or an extra alias all break
  *  the match). Liveness/children checks are the caller's: the tombstone
  *  predicate below wants no live children at all, while the reaper
- *  additionally tolerates the seat's own GENERATED property children — in
- *  any workspace, since the backfill mints them before the flip. */
+ *  additionally tolerates the seat's own GENERATED property children — but only
+ *  in a child-backed workspace, where an edit to one shows up in the cell this
+ *  predicate reads. */
 export const matchesAliasSeatSeed = (
   row: Pick<AliasSeatRow, 'content' | 'properties'>,
 ): boolean => {
@@ -386,10 +327,13 @@ export const matchesAliasSeatSeed = (
  *  seat". Every caller gating on children has to subtract these ids first,
  *  and only when the workspace is FLIPPED: there an edit to a generated value
  *  row reprojects into the cell, so the seed match can still see drift. The
- *  backfill mints these rows pre-flip too, but the projection is dormant
- *  there, so nothing can vouch for the subtree and the caller must not
- *  subtract (km-mzsv). Subtract on the `::` bit AND the id — a bare column
- *  match is a content stamp an ordinary `((fieldId))` child carries too. */
+ *  backfill no longer mints these rows before the flip, but they remain
+ *  reachable there — `is_field_form` is stamped from CONTENT, so a
+ *  `::((definition))` block a user writes has the shape, and `blockMerge`'s
+ *  catch-up mints it un-gated — so un-flipped nothing can vouch for the subtree
+ *  and the caller must not subtract (km-mzsv). Subtract on the `::` bit AND the
+ *  id — a bare column match is a content stamp an ordinary `((fieldId))` child
+ *  carries too. */
 export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
   propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
   propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
@@ -410,26 +354,30 @@ const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boole
   && matchesAliasSeatSeed(row)
 
 /** Is `id` one of the deterministic seat-slot ids for `(alias,
- *  workspaceId)`? Pure compute over the same slot window the probe
- *  walks. The reference-drop orphan reaper (issue #402) uses this as
+ *  workspaceId)`, under any namespace in `seats.recognized`? Pure compute
+ *  over the same slot window the probe walks. The reference-drop orphan
+ *  reaper (issue #402) uses this as
  *  its machine-mint discriminator: a user-created page can share the
  *  seat SEED SHAPE exactly (quick-find's create-page writes content +
  *  alias + PAGE_TYPE), but it gets a random uuid — only
  *  `ensureAliasTarget` mints rows at these ids, so shape + slot-id
  *  together mean "ours to reap". */
 export const isAliasSeatSlotId = (
+  seats: AliasSeatNamespaces,
   id: string,
   alias: string,
   workspaceId: string,
 ): boolean => {
-  for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    if (computeAliasSeatId(alias, workspaceId, index) === id) return true
+  for (const namespace of seats.recognized) {
+    for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
+      if (seatSlotId(namespace, alias, workspaceId, index) === id) return true
+    }
   }
   return false
 }
 
-/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`
- *  until one of:
+/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`,
+ *  under `seats.mint` only, until one of:
  *   - empty slot → return that id (caller will insert),
  *   - live row claiming `alias` → return that id (reuse / convergence),
  *   - pristine transient tombstone for `alias` → return that id (caller
@@ -441,6 +389,11 @@ export const isAliasSeatSlotId = (
  *  user-added props, live children — i.e. anything that wasn't a
  *  pristine cleanup target).
  *
+ *  A pristine tombstone under another recognized namespace stays dead and
+ *  the probe mints afresh: restoring it would write at an id that names the
+ *  alias, and by the predicate it holds nothing to keep. Restoring that
+ *  tombstone later by other means meets the fresh seat holding its alias.
+ *
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
  *  guarantee. The restorable predicate is a pure function of the row,
@@ -450,12 +403,13 @@ export const isAliasSeatSlotId = (
  *  by alias text, so a second parseReferences pass on either client
  *  resolves through the lookup rather than the probe. */
 export const resolveAliasSeatId = async (
+  seats: AliasSeatNamespaces,
   read: AliasSeatReader,
   alias: string,
   workspaceId: string,
 ): Promise<string> => {
   for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    const id = computeAliasSeatId(alias, workspaceId, index)
+    const id = computeAliasSeatId(seats, alias, workspaceId, index)
     const row = await read(id)
     if (row === null) return id
     if (row.deleted) {
@@ -469,17 +423,6 @@ export const resolveAliasSeatId = async (
     `resolveAliasSeatId: ${ALIAS_SEAT_PROBE_SLOTS} slots exhausted for alias "${alias}" in workspace "${workspaceId}"`,
   )
 }
-
-// Note on alias-collision detection: this used to live here as
-// `findAliasClaimant` walking seat-id slots. That was incorrect — it
-// only found claimants whose block id matched
-// `computeAliasSeatId(alias, ws, *)`, missing blocks that claim an
-// alias but were created via `tx.create` with an unrelated id. The
-// correct primitive is `tx.aliasLookup(alias, workspaceId)` which
-// reads the trigger-maintained `block_aliases` table directly,
-// covering every claimant regardless of id provenance. See
-// docs/alias-rename-cases.html ("Alias collisions") and
-// `tx.aliasLookup` in tx.ts.
 
 // ──── Layer 2 — per-domain wrappers ────
 
@@ -502,6 +445,7 @@ export const ensureAliasTarget = async (
   alias: string,
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
+  options: {systemMint?: boolean} = {},
 ): Promise<{ id: string; inserted: boolean }> => {
   // Lookup-first INSIDE the tx, not just at the caller's read phase:
   // the read-phase lookup can go stale between plan build and apply —
@@ -514,10 +458,11 @@ export const ensureAliasTarget = async (
   // converges with what a fresh read-phase lookup would have produced.
   // The seat-slot probe can't catch this case: it only inspects
   // deterministic seat ids, and a claimant created via tx.create has an
-  // unrelated id (see the findAliasClaimant note above).
+  // unrelated id.
   const claimant = await tx.aliasLookup(alias, workspaceId)
   if (claimant !== null) return {id: claimant.id, inserted: false}
-  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
+  const seats = await aliasSeatNamespacesInTx(tx, repo, workspaceId)
+  const id = await resolveAliasSeatId(seats, aliasSeatReaderFromTx(tx), alias, workspaceId)
   const seed = aliasSeatSeed(alias)
   return createOrRestoreTargetBlock(tx, {
     id,
@@ -526,9 +471,8 @@ export const ensureAliasTarget = async (
     orderKey: keyAtEnd(),
     freshContent: seed.content,
     stripAliasesOnRestore: true,
-    // A freshly-probed alias seat is a speculative default: if the server
-    // already has a real page for this alias, the local seat must yield.
-    systemMint: true,
+    // Reference stubs yield to an authoritative server page; explicit page creators opt out.
+    systemMint: options.systemMint ?? true,
     // The setProperty + addTypeInTx pair below must produce exactly
     // `seed.properties` on disk; the `ensureAliasTarget writes the seed
     // shape` test in targets.test.ts asserts this and is the contract

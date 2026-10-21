@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { claimFromProperties, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
+import { claimFromProperties, claimHoldingGraph, createGraphBackfillClaim, decideClaim, type GraphBackfillClaim } from './graphBackfillClaim'
 
 const ME = 'device-a'
 const THEM = 'device-b'
@@ -43,6 +43,42 @@ describe('a live row that is not a decodable claim', () => {
   })
 })
 
+describe('claimHoldingGraph, over the row a subscription hands back', () => {
+  const live = {
+    deleted: false,
+    workspaceId: 'ws',
+    properties: {'migration:claimant': ME, 'migration:claimed-at': 1000},
+  }
+
+  it('reads a live claim for THIS workspace', () => {
+    expect(claimHoldingGraph(live, 'ws')).toEqual({claimantId: ME, claimedAt: 1000})
+  })
+
+  it('reads nothing from a TOMBSTONE — releasing a claim deletes the block', () => {
+    // Unreachable through the migration dialog, whose handle maps a tombstone
+    // to null before this sees it; pinned here because the parameter is a raw
+    // row and this is the clause that keeps a released claim from holding a
+    // modal over the workspace for good.
+    expect(claimHoldingGraph({...live, deleted: true}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a row owned by ANOTHER workspace', () => {
+    // The id is derived from the workspace, but a row can still arrive at it
+    // owned by someone else — an import that keeps its ids is the realistic
+    // route — and this workspace would then be blocked by a stranger's run.
+    expect(claimHoldingGraph({...live, workspaceId: 'ws-other'}, 'ws')).toBeNull()
+  })
+
+  it('reads nothing from a COMPLETED claim, or from a bag that is not one', () => {
+    expect(claimHoldingGraph(
+      {...live, properties: {...live.properties, 'migration:completed-at': 2000}}, 'ws',
+    )).toBeNull()
+    expect(claimHoldingGraph({...live, properties: {}}, 'ws')).toBeNull()
+    expect(claimHoldingGraph(null, 'ws')).toBeNull()
+    expect(claimHoldingGraph(undefined, 'ws')).toBeNull()
+  })
+})
+
 describe('a claim that arrives between the read and the transaction', () => {
   it('is honoured — tryClaim returns false rather than running anyway', async () => {
     // The interleaving: the pre-read sees nothing, so we decide to claim; by
@@ -68,7 +104,39 @@ describe('a claim that arrives between the read and the transaction', () => {
       ensureHome: async () => undefined,
     } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
 
-    expect(await claim.tryClaim('ws', 'race-v1')).toBe(false)
+    expect(await claim.tryClaim('ws', 'race-v1')).toBe('declined')
+  })
+})
+
+describe('a live claim that already names this claimant', () => {
+  it('is INHERITED, not minted — the caller may run on it but must not release it', async () => {
+    // The distinction the return type exists for. `claimantId` is a browser
+    // PROFILE, so this row may be a sibling TAB's claim for a pass running
+    // right now; a caller that read this as "I own it" would delete a live
+    // claim on its way out and free a third device to start the same
+    // source-of-truth pass. Nothing is written here either — asserted, because
+    // "wrote nothing" is what makes the row somebody else's.
+    const updates: string[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => ({
+        id: 'c', workspace_id: 'ws', deleted: 0,
+        properties_json: JSON.stringify({
+          'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
+        }),
+      })},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: false, properties: {}}),
+        create: async () => { updates.push('create'); return 'unused' },
+        update: async () => { updates.push('update') },
+        delete: async () => { updates.push('delete') },
+        restore: async () => { updates.push('restore') },
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+
+    expect(await claim.tryClaim('ws', 'pass-v1')).toBe('inherited')
+    expect(updates).toEqual([])
   })
 })
 
@@ -115,7 +183,7 @@ describe('an operator reclaiming a completed pass', () => {
     // claim rather than the test-repo stub, which cannot model this.
     const {claim, updates} = claimWith(completed)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(true)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('minted')
     expect(updates).toHaveLength(1)
     expect(updates[0]!['migration:claimant']).toBe('device-a')
     expect(updates[0]!['migration:completed-at']).toBeUndefined()
@@ -127,7 +195,7 @@ describe('an operator reclaiming a completed pass', () => {
     // writer.
     const {claim, updates} = claimWith(running)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('declined')
     expect(updates).toEqual([])
   })
 
@@ -140,14 +208,95 @@ describe('an operator reclaiming a completed pass', () => {
     // pre-read already sees the running claim and backs off outside the tx.
     const {claim, updates} = claimWith(completed, running)
 
-    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1', {reclaimCompleted: true})).toBe('declined')
     expect(updates).toEqual([])
   })
 
   it('leaves a completed pass alone when nobody asked to re-run it', async () => {
     const {claim} = claimWith(completed)
 
-    expect(await claim.tryClaim('ws', 'pass-v1')).toBe(false)
+    expect(await claim.tryClaim('ws', 'pass-v1')).toBe('declined')
+  })
+})
+
+describe('releasing a claim the pass already completed', () => {
+  /** A claim block this device owns, carrying whatever bookkeeping is passed.
+   *  Records deletions, which is what a release does. */
+  const ownClaim = (properties: Record<string, unknown>) => {
+    const deleted: string[] = []
+    const claim = createGraphBackfillClaim({
+      db: {getOptional: async () => null},
+      tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+        get: async () => ({workspaceId: 'ws', deleted: false, properties}),
+        create: async () => 'unused',
+        update: async () => undefined,
+        restore: async () => undefined,
+        delete: async (id: string) => { deleted.push(id) },
+      } as never),
+      claimantId: 'device-a',
+      ensureHome: async () => undefined,
+    } as unknown as Parameters<typeof createGraphBackfillClaim>[0])
+    return {claim, deleted}
+  }
+
+  it('is a no-op — the completion record outlives the gesture that made it', async () => {
+    // LOAD-BEARING for `Repo.withOperatorBackfillClaim`, which releases in a
+    // `finally` and therefore releases a claim the pass has just stamped
+    // complete. Deleting it there would erase the graph's record that the
+    // migration ran, and every device would read the pass as never done.
+    const {claim, deleted} = ownClaim({
+      'migration:claimant': 'device-a',
+      'migration:claimed-at': 1000,
+      'migration:completed-at': 2000,
+    })
+
+    await claim.releaseClaim('ws', 'pass-v1')
+
+    expect(deleted).toEqual([])
+  })
+
+  it('hands back a claim that is still in flight', async () => {
+    const {claim, deleted} = ownClaim({
+      'migration:claimant': 'device-a', 'migration:claimed-at': 1000,
+    })
+
+    await claim.releaseClaim('ws', 'pass-v1')
+
+    expect(deleted).toHaveLength(1)
+  })
+})
+
+describe('completing a claim this run does not own', () => {
+  const markCompleteOver = (
+    properties: Record<string, unknown>,
+  ): Promise<void> => createGraphBackfillClaim({
+    db: {getOptional: async () => null},
+    tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
+      get: async () => ({workspaceId: 'ws', deleted: false, properties}),
+      update: async () => { throw new Error('[test] stamped a claim it does not own') },
+      restore: async () => undefined,
+      create: async () => 'unused',
+      delete: async () => undefined,
+    } as never),
+    claimantId: 'device-a',
+    ensureHome: async () => undefined,
+  } as unknown as Parameters<typeof createGraphBackfillClaim>[0]).markComplete('ws', 'v1')
+
+  it('refuses — the row may be a LIVE claim a later run took', async () => {
+    // Reachable without anything exotic now that a peer can release a claim
+    // from the migration dialog: this run's claim is cleared, a third device
+    // takes a fresh one, and stamping THAT one completed tells every device the
+    // migration is over — dropping the blocking dialog and the undo pause while
+    // that run is still rewriting the graph.
+    await expect(markCompleteOver({
+      'migration:claimant': 'device-c', 'migration:claimed-at': 2000,
+    })).rejects.toThrow(/another client's claim/)
+  })
+
+  it('refuses a bag that carries no readable claim', async () => {
+    // Same reason the missing row is refused: stamping it records nothing any
+    // reader can see, and the operator is told the pass ran.
+    await expect(markCompleteOver({})).rejects.toThrow(/no readable claim/)
   })
 })
 
@@ -213,7 +362,13 @@ describe('completing a claim that was tombstoned underneath us', () => {
     const claim = createGraphBackfillClaim({
       db: {getOptional: async () => null},
       tx: async <R,>(fn: (tx: never) => Promise<R>): Promise<R> => fn({
-        get: async () => ({workspaceId: 'ws', deleted: true, properties: {}}),
+        // OUR claim, tombstoned. A bag with no claim in it would be refused
+        // now — a completion has to record a run somebody can read.
+        get: async () => ({
+          workspaceId: 'ws',
+          deleted: true,
+          properties: {'migration:claimant': 'device-a', 'migration:claimed-at': 1000},
+        }),
         restore: async () => { calls.push('restore') },
         update: async () => { calls.push('update') },
         create: async () => 'unused',

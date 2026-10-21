@@ -25,6 +25,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -59,6 +60,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // (repo read-only) is the same case for a different reason.
   const isSeedBacked = data ? isValidSeededDefinition(data) : false
   const readOnly = block.repo.isReadOnly || isSeedBacked
+
 
   const presetId = useMemo<string>(() => {
     if (!data) return ''
@@ -103,9 +105,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     setDraftName(propertyName)
   }
 
-  const writeName = useCallback(async (next: string) => {
+  const writeName = useCallback(async (draft: string) => {
+    const next = trimIfEdited(draft, propertyName)
     if (next === propertyName) return
-    // Same invariant addSchema enforces at creation (PR #288 §7): the name
+    // Same invariant addSchema enforces at creation
+    // (docs/properties-as-blocks-migration.html §7): the name
     // must survive a `[[name]]` round-trip — field-row retitles and every
     // re-derive-by-content path bind through that form, so a lossy label
     // (e.g. one containing `]]`) would strand the schema's field rows.
@@ -221,7 +225,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName.trim()) }}
+          onBlur={() => { void writeName(draftName) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
@@ -239,7 +243,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             value={presetId}
             disabled={readOnly}
-            onChange={(e) => { void writePresetId(e.target.value) }}
+            onChange={(e) => {
+              // A refusal is already surfaced: `repo.tx` notifies the
+              // user-error channel before it rethrows, and the toast layer
+              // listens. Catching keeps the rethrow from becoming an unhandled
+              // rejection — nothing here has anything to add to it. Routine
+              // now that a re-type over values the new type cannot read is one
+              // of the refusals (#1024).
+              writePresetId(e.target.value).catch(() => {})
+            }}
           >
             {presetEntries.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
@@ -259,15 +271,20 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       {preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
-          {/* The config editors don't take a readOnly prop; block interaction
-              at the wrapper so a read-only schema (seed-backed or viewer)
-              still shows its options without letting them be edited. */}
-          <div
-            className={readOnly ? 'pointer-events-none opacity-60' : undefined}
-            aria-disabled={readOnly || undefined}
+          {/* A real `fieldset[disabled]`, which is what makes the descendant
+              form controls inert. The config editors take no readOnly prop and
+              render ordinary inputs and buttons, and those stay focusable and
+              operable from the KEYBOARD behind a pointer-only block — so a
+              locked editor could still dispatch `writeConfig`, whose refusal
+              then arrives as an unhandled rejection. `pointer-events-none`
+              stays for whatever in an editor is not a form control. */}
+          <fieldset
+            disabled={readOnly}
+            className={`m-0 min-w-0 border-0 p-0${
+              readOnly ? ' pointer-events-none opacity-60' : ''}`}
           >
             {renderConfigEditor(preset, decodedConfig, writeConfig)}
-          </div>
+          </fieldset>
         </div>
       )}
 

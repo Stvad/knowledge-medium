@@ -4,6 +4,7 @@ import {
   type CompiledModuleCache,
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
 // Bump when the Babel preset list / transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
@@ -13,7 +14,20 @@ import {
 // change (which Phase 2 / #67 would treat as needing re-approval).
 // '2': transpile now emits an inline source map + a stable `//# sourceURL`
 // (debuggable extensions). Bumping regenerates older map-less cached output.
-const COMPILER_VERSION = '2'
+// '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
+// map) instead of the `React` global.
+export const COMPILER_VERSION = '3'
+
+/** Babel presets the extension loader transpiles with; tests that mirror the
+ *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
+ *  an extension's JSX on the host's React: it imports its factory from
+ *  `react/jsx-runtime`, which the page import map resolves to the module the
+ *  app itself uses. The classic runtime would emit `React.createElement` and
+ *  depend on whichever `React` global happens to be in scope. */
+export const EXTENSION_BABEL_PRESETS: Array<string | [string, object]> = [
+  ['react', {runtime: 'automatic'}],
+  'typescript',
+]
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -147,7 +161,7 @@ async function defaultTranspileViaBabel(content: string, blockId?: string): Prom
     filename: sourceName,
     sourceFileName: sourceName,
     sourceMaps: 'inline',
-    presets: ['react', 'typescript'],
+    presets: EXTENSION_BABEL_PRESETS,
   }).code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
   return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`
@@ -185,6 +199,10 @@ function resolveCachedModule(
   blockId: string,
   factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
+  // Start the Tailwind safelist load on every resolution, cache hit included;
+  // the runtime apply awaits it before extensions render.
+  void ensureExtensionUtilitiesCss()
+
   let modulesForBlock = cache.byBlockAndHash.get(blockId)
   if (!modulesForBlock) {
     modulesForBlock = new Map()
@@ -393,11 +411,29 @@ export async function loadApprovedExtension(
 }
 
 /**
+ * A source that could not be TRANSPILED, as opposed to one that transpiled and
+ * then failed to run.
+ *
+ * The difference is whether the source can be PINNED: `approveExtension` stores
+ * the transpiled output, so a transpile failure leaves the previous pin in
+ * place and the old code running, while anything later still pins and still
+ * takes effect at the next reload. A caller reasoning about what an install
+ * will change needs to tell those apart, and the thrown error otherwise cannot
+ * say which half it came from.
+ */
+export class ExtensionTranspileError extends Error {
+  constructor(blockId: string, override readonly cause: unknown) {
+    super(`Extension ${blockId} could not be transpiled: ${(cause as Error)?.message ?? cause}`)
+    this.name = 'ExtensionTranspileError'
+  }
+}
+
+/**
  * Compile LIVE source into a module WITHOUT persisting or requiring an
- * approval. Used only by the agent install `--verify` path, which resolves
- * a brand-new block's source in an isolated runtime to inspect its
- * contributions before any approval exists. Never used on the user-facing
- * load path — that one runs only approved, pinned output.
+ * approval. Used by the agent install path, which resolves a block's source in
+ * an isolated runtime to inspect its contributions before any approval exists.
+ * Never used on the user-facing load path — that one runs only approved,
+ * pinned output.
  */
 export async function compileForVerification(
   content: string,
@@ -406,7 +442,11 @@ export async function compileForVerification(
 ): Promise<CompileResult> {
   const contentHash = await hashExtensionSource(content)
   const module = await resolveCachedModule(cache, contentHash, blockId, () =>
-    compileImplOverride ? compileImplOverride(content) : transpileImpl(content, blockId).then(instantiateImpl),
+    compileImplOverride
+      ? compileImplOverride(content)
+      : transpileImpl(content, blockId)
+          .catch(error => { throw new ExtensionTranspileError(blockId, error) })
+          .then(instantiateImpl),
   )
   return {module, contentHash}
 }

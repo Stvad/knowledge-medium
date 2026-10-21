@@ -122,10 +122,10 @@ const insertAtCaretForMisplacedDiff = Prec.highest(
  *  completion writes a span the parser reads no reference from, so it
  *  renders as literal text and gains no backlink, with nothing on screen
  *  saying why. Reachable today — a workspace can already hold over-cap
- *  aliases (this PR's phantom pages are exactly that, and several begin
+ *  aliases (phantom pages are exactly that, and several begin
  *  `import {`, so typing `[[import ` surfaces them). Filtering is also the
  *  right end state: those names cannot be linked to at all, so listing
- *  them offers a broken choice (Codex on PR #540).
+ *  them offers a broken choice.
  *
  *  Split out and exported so the filter is testable — inside the
  *  `getAliases` closure it is reachable only through a live CodeMirror
@@ -202,7 +202,15 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
           query,
           limit: 12,
         })
-        : await repo.query.recentBlocks({
+        // USER-AUTHORED recents, not `recentBlocks`: the latter is every live
+        // non-empty row, which includes each plugin's ui-state — panel rows,
+        // per-device group labels, whatever a plugin files under the user's
+        // state roots. With twelve results to offer, app bookkeeping crowds out
+        // the blocks someone might actually want to reference. Same definition
+        // of "authored" the Recents view uses — one shared resolver, so the
+        // two cannot drift — but without its ancestor chains, which this
+        // picker never shows and would re-query on every open.
+        : await repo.query.recentUserBlocks({
           workspaceId,
           limit: 12,
         }).load()

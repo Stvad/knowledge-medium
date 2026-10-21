@@ -18,7 +18,7 @@
  *     `seedKey` → override appears in `repo.propertyEditorOverrides`;
  *     resolvePropertyDisplay's pre-resolved `override` arg returns it.
  *
- * It also pins the variance-erasure work (chunk B reviewer P2):
+ * It also pins the variance-erasure work:
  * `Query<{x:number}, string>` / `PropertySchema<Date | undefined>` /
  * `PropertyEditorOverride<Date | undefined>` register cleanly without
  * having to widen to <unknown>.

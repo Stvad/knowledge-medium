@@ -1,10 +1,10 @@
-import { CodecError } from './errors'
-
 /** Bidirectional encode/decode for typed values stored in the JSON-shaped
  *  `properties_json` column. Codecs run at exactly four boundary call sites
  *  (`block.set`, `block.get`, `tx.setProperty`, `tx.getProperty`); storage
  *  and cache always hold the encoded shape. See spec §5.6 and the
  *  user-defined-properties §1a doc for the open-string `type` discriminator. */
+
+import { CodecError } from './errors'
 
 /** Scalar value compatible with `json_extract(...) = ?` parameter binding.
  *  Excludes null deliberately — typed-query callers use `null` to mean
@@ -14,11 +14,28 @@ import { CodecError } from './errors'
  *  here makes that mistake unrepresentable. */
 export type WhereValue = string | number
 
+/** The cell shape a where-capable codec writes, and so the only shape its
+ *  comparators admit. SQLite orders `json_extract` results ACROSS storage
+ *  classes — numbers below text, JSON booleans extracting as 1/0, an array as
+ *  its JSON text — so a cell of another shape (what a re-type leaves behind)
+ *  would compare anyway: a stale `'abc'` is `> 3`. The typed-query compiler
+ *  owns the SQL test for each.
+ *
+ *  - `text`: a JSON string.
+ *  - `number`: a JSON number.
+ *  - `boolean`: JSON `true` / `false`.
+ *  - `iso-date`: a JSON string in `toISOString()` form with a four-digit
+ *    year, the one spelling whose text order is chronological. The test is
+ *    on the shape, not the calendar. */
+export type WhereStorage = 'text' | 'number' | 'boolean' | 'iso-date'
+
 export interface WhereCapability<T> {
+  readonly storage: WhereStorage
   /** Encode a decoded value to its scalar SQLite-comparable form. The
    *  caller can pass any runtime value, so this MUST validate that the
-   *  input is actually a value of type T and throw `CodecError`
-   *  otherwise — the same shape as `decode` validating its JSON input. */
+   *  input is actually a value of type T that `storage` can compare, and
+   *  throw `CodecError` otherwise — the same shape as `decode` validating
+   *  its JSON input. */
   encode(value: T): WhereValue
 }
 
@@ -40,7 +57,22 @@ export interface Codec<T> {
    *  Presence of `where` is the authoritative signal that the property
    *  is queryable. */
   readonly where?: WhereCapability<T>
+  /** Optional capability: this codec encodes a LIST, member-wise, through
+   *  `member`. Presence is the authoritative signal that the property is
+   *  MULTI-VALUED — same capability-by-presence discipline as `where` — and
+   *  is what makes properties-as-blocks store one value child PER MEMBER
+   *  instead of the whole array as JSON text in one child (§5/§9). A
+   *  list-shaped codec that does not expose one keeps the single-child
+   *  shape, so opting in is a deliberate act by the codec's author.
+   *
+   *  THE CONTRACT, relied on by both directions of the projection and
+   *  pinned by `codecs.test.ts`: `encode(v)` equals `v.map(member.encode)`
+   *  and `decode(j)` equals `j.map(member.decode)`. A codec whose list
+   *  encoding is not member-wise must not expose a member — the
+   *  materializer would write children the projection cannot rebuild. */
+  readonly member?: AnyCodec
 }
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyCodec = Codec<any>
@@ -57,6 +89,9 @@ export interface RefCodec extends Codec<string> {
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  /** One ref. See the `refList` builder for why it is the scalar ref codec
+   *  itself rather than a list-shaped lookalike. */
+  readonly member: RefCodec
   /** Lenient element-wise decode for reference projection. Decodes each
    *  element through the element codec, *dropping* (never throwing on)
    *  the ones that fail, and returns the well-formed ids. Non-array input
@@ -65,13 +100,8 @@ export interface RefListCodec extends Codec<readonly string[]> {
    *  `[]` (issue #189). `decode` stays strict for the write/read boundary
    *  call sites that want shape errors surfaced.
    *
-   *  Optional because `RefListCodec` is a public, exported boundary that
-   *  predates this method: a third-party or older plugin may implement
-   *  only the original shape. Reference projection must reach it through
-   *  `decodeRefListIds`, which feature-detects this method so a legacy
-   *  codec can't throw `decodeValid is not a function` and abort the
-   *  block's whole projection. Codecs built by `codecs.refList()` always
-   *  provide it. */
+   *  Optional — always reach it through `decodeRefListIds`, never
+   *  directly. */
   decodeValid?(json: unknown): string[]
 }
 
@@ -90,6 +120,7 @@ const stringCodec: Codec<string> = {
     return j
   },
   where: {
+    storage: 'text',
     encode: v => {
       if (typeof v !== 'string') throw new CodecError('string', v)
       return v
@@ -108,7 +139,7 @@ const numberCodec: Codec<number> = {
   type: 'number',
   encode: requireFiniteNumber,
   decode: requireFiniteNumber,
-  where: { encode: requireFiniteNumber },
+  where: {storage: 'number', encode: requireFiniteNumber},
 }
 
 const booleanCodec: Codec<boolean> = {
@@ -119,6 +150,7 @@ const booleanCodec: Codec<boolean> = {
     return j
   },
   where: {
+    storage: 'boolean',
     encode: v => {
       if (typeof v !== 'boolean') throw new CodecError('boolean', v)
       return v ? 1 : 0
@@ -142,6 +174,7 @@ const dateCodec: Codec<Date | undefined> = {
     return d
   },
   where: {
+    storage: 'iso-date',
     encode: v => {
       // null is short-circuited to IS NULL by the typed-query compiler
       // before reaching where.encode. undefined arriving here is a
@@ -155,19 +188,22 @@ const dateCodec: Codec<Date | undefined> = {
       // would break every saved date-range filter on reload. Both
       // shapes normalise to the same ISO string so storage stays
       // bit-stable. Strings that don't parse as dates still throw.
-      if (typeof v === 'string') {
-        const d = new Date(v)
-        if (Number.isNaN(d.getTime())) throw new CodecError('date', v)
-        return d.toISOString()
-      }
-      if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v)
-      return v.toISOString()
+      const d = typeof v === 'string' ? new Date(v) : v
+      if (!(d instanceof Date) || Number.isNaN(d.getTime())) throw new CodecError('date', v)
+      // Past year 9999 (or before 0) `toISOString()` spells a signed
+      // six-digit year, which sorts before every four-digit one and which
+      // no `iso-date` comparator admits — so it is refused, not compared.
+      const year = d.getUTCFullYear()
+      if (year < 0 || year > 9999) throw new CodecError('date in years 0000-9999', v)
+      return d.toISOString()
     },
   },
 }
 
 const list = <T>(inner: Codec<T>): Codec<T[]> => ({
   type: 'list',
+  // Member-wise by construction, which is exactly what `member` promises.
+  member: inner,
   encode: v => v.map(item => inner.encode(item)),
   decode: j => {
     if (!Array.isArray(j)) throw new CodecError('array', j)
@@ -193,13 +229,21 @@ const optionalRef = (options?: RefCodecOptions): OptionalRefCodec => ({
 })
 
 const refList = (options?: RefCodecOptions): RefListCodec => {
+  // A refList member is one ref, in every sense that matters downstream: the
+  // same `((id))` value-child content, the same decode that refuses prose typed
+  // into a ref property, the same `targetTypes`. Everything below is built OUT
+  // of it, so the `member` contract — a list's encode is its member's applied
+  // element-wise — holds by construction rather than by two definitions
+  // happening to agree.
+  const member = ref(options)
   return {
     type: 'refList',
     targetTypes: normalizeTargetTypes(options),
-    encode: v => v.map(item => stringCodec.encode(item)),
+    member,
+    encode: v => v.map(item => member.encode(item)),
     decode: j => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
-      return j.map(item => stringCodec.decode(item))
+      return j.map(item => member.decode(item))
     },
     decodeValid: j => {
       // Element-wise + fault-tolerant: a non-array has nothing to recover,
@@ -209,7 +253,7 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
       const out: string[] = []
       for (const item of j) {
         try {
-          out.push(stringCodec.decode(item))
+          out.push(member.decode(item))
         } catch {
           // Drop only the malformed element; keep the well-formed ids.
         }
@@ -279,7 +323,7 @@ const enumCodec = <const T extends string>(
     options: normalized,
     encode: requireMember,
     decode: requireString,
-    where: {encode: requireMember},
+    where: {storage: 'text', encode: requireMember},
   }
 }
 
@@ -291,6 +335,27 @@ export const isRefCodec = (codec: unknown): codec is RefLikeCodec =>
 
 export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'refList'
+
+/** The codec for ONE member of a multi-valued property, or undefined when the
+ *  property is single-valued — the one place the multi-value question is
+ *  ASKED, so no call site restates it as a `codec.type` list.
+ *
+ *  Capability-by-presence, not by discriminator: `type` is an open string a
+ *  plugin picks, and two codecs already share `'list'` (the `list` and
+ *  `string-list` presets) while differing in member type, so the type can
+ *  neither answer "is this multi-valued" nor "what is a member". */
+export const memberCodecOf = (codec: AnyCodec): AnyCodec | undefined => {
+  if (codec.member !== undefined) return codec.member
+  // A `refList` authored against the pre-`member` interface still satisfies
+  // `isRefListCodec`, which narrows on the discriminator alone, so one can
+  // reach here from a DB-stored extension that this build never type-checked.
+  // Its member is DETERMINED by the type rather than guessed — a refList is a
+  // list of refs, which is the same assumption `decodeRefListIds` already
+  // makes — so deriving it keeps such a codec on the N-`((id))`-children shape
+  // instead of silently dropping it back to the one-JSON-child storage this
+  // slice exists to remove.
+  return isRefListCodec(codec) ? ref({targetTypes: codec.targetTypes}) : undefined
+}
 
 export const decodeRefId = (codec: RefLikeCodec, value: unknown): string | undefined => {
   try {
@@ -316,9 +381,7 @@ export const decodeRefListIds = (codec: RefListCodec, value: unknown): string[] 
   return value.filter((item): item is string => typeof item === 'string')
 }
 
-/** URL codec: plain string with light validation on encode/decode.
- *  Currently accepts any non-empty string; tightening the validation
- *  (URL parser, allowed schemes) is a follow-up. */
+/** URL codec: an unvalidated string today — no scheme or parse check. */
 const validateUrlString = (value: unknown): string => {
   if (typeof value !== 'string') throw new CodecError('url', value)
   return value
@@ -327,7 +390,7 @@ const urlCodec: Codec<string> = {
   type: 'url',
   encode: validateUrlString,
   decode: validateUrlString,
-  where: { encode: validateUrlString },
+  where: {storage: 'text', encode: validateUrlString},
 }
 
 /** Explicitly unsafe identity codec. Reserved for kernel-internal use where
@@ -356,6 +419,7 @@ const optionalStringCodec: Codec<string | undefined> = {
     return j
   },
   where: {
+    storage: 'text',
     encode: v => {
       if (v === undefined) throw new CodecError('string (use null for unset)', v)
       if (typeof v !== 'string') throw new CodecError('string', v)
@@ -374,6 +438,7 @@ const optionalNumberCodec: Codec<number | undefined> = {
     return j
   },
   where: {
+    storage: 'number',
     encode: v => {
       if (v === undefined) throw new CodecError('number (use null for unset)', v)
       if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v)

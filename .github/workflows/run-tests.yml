@@ -62,6 +62,14 @@ jobs:
       - name: Run checks
         run: pnpm run check
 
+      # `pnpm run check` does not build, so nothing else in the PR gate would
+      # notice an export vanishing from the emitted bundle — that check lives in
+      # the build (scripts/check-dist-exports.ts). pr-preview.yml builds but
+      # skips forks, and deploy-pages.yml runs only after merge, so without this
+      # step a fork PR's first signal is a failed deploy on master.
+      - name: Build (also runs the emitted-export check)
+        run: pnpm run build
+
       - name: Generate agent extension type stubs
         run: pnpm agent types --force
 

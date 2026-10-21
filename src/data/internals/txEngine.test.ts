@@ -46,6 +46,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 
 // ──── Test fixtures ────
 
@@ -1217,11 +1218,13 @@ describe('commit pipeline bookkeeping', () => {
 
 // ──── Block-id shape contract (issue #456) ────
 //
-// The guard is in `buildNewBlockRow`, shared by `tx.create` and
-// `tx.createOrGet` — see `@/data/blockId` for why there. What needs pinning
+// The guard is in `buildNewBlockRow`, which EVERY minting path builds its row
+// through — see `@/data/blockId` for why there. Stated as a property rather
+// than a list of today's paths, and covered that way below, because the list
+// is what went out of date when bulk insert became the third. What needs pinning
 // beyond the predicate itself (blockId.test.ts) is the WIRING, and its
 // polarity in particular: these tests build a Repo the way production does,
-// with `new Repo({db, cache, user})` and no id options at all, so they fail
+// with `trackTestRepo(new Repo({db, cache, user}))` and no id options at all, so they fail
 // if `blockIdPolicy` stops defaulting to `'canonical'` or stops being passed
 // down through `runTx`. Using `createTestRepo` here would prove neither — it
 // injects `blockIdPolicy: 'any'` for its mnemonic ids.
@@ -1231,13 +1234,13 @@ describe('block id contract (issue #456)', () => {
 
   /** A Repo with production's id configuration: none. */
   const strictRepo = (overrides?: {newId?: () => string}): Repo =>
-    new Repo({
+    trackTestRepo(new Repo({
       db: sharedDb.db,
       cache: new BlockCache(),
       user: {id: 'user-1', name: 'Test'},
       startSyncObserver: false,
       ...overrides,
-    })
+    }))
 
   const liveIds = async (): Promise<string[]> => {
     const rows = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks ORDER BY id')
@@ -1248,6 +1251,34 @@ describe('block id contract (issue #456)', () => {
     const repo = strictRepo()
     await expect(repo.tx(async tx => {
       await tx.create({id: 'my-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('rejects a non-canonical explicit id at tx.createMany too', async () => {
+    const repo = strictRepo()
+    await expect(repo.tx(async tx => {
+      await tx.create({id: VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.createMany([
+        {id: OTHER_VALID_ID, workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a1'},
+        {id: 'my-bulk-block', workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a2'},
+      ])
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
+
+    expect(await liveIds()).toEqual([])
+  })
+
+  it('rejects a non-canonical id the MINTER produced in a bulk batch', async () => {
+    // The other half of the contract: a Repo wired with a `newId` that mints
+    // something non-canonical is as much a violation as a caller passing one,
+    // and the batch path has to fail the same way rather than writing rows the
+    // guard claims cannot exist.
+    let n = 0
+    const repo = strictRepo({newId: () => `bulk-minted-${++n}`})
+    await expect(repo.tx(async tx => {
+      await tx.create({id: VALID_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.createMany([{workspaceId: 'ws-1', parentId: VALID_ID, orderKey: 'a1'}])
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(InvalidBlockIdError)
 
     expect(await liveIds()).toEqual([])
@@ -1309,14 +1340,14 @@ describe('block id contract (issue #456)', () => {
   // guard off stays a deliberate, visible act rather than something a future
   // default flip could do silently to the whole suite.
   it("lets a repo opt out with blockIdPolicy: 'any' — the test-harness shape", async () => {
-    const repo = new Repo({
+    const repo = trackTestRepo(new Repo({
       db: sharedDb.db,
       cache: new BlockCache(),
       user: {id: 'user-1', name: 'Test'},
       startSyncObserver: false,
       blockIdPolicy: 'any',
       newId: () => 'gen-1',
-    })
+    }))
     await repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})

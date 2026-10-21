@@ -3,7 +3,6 @@ import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { isRefCodec, isRefListCodec } from '@/data/api'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeButton } from './shapeUi'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
@@ -47,7 +46,6 @@ export function PropertyRow({
   onNavigate,
   onConfigure,
   onChange,
-  onRename,
   onDelete,
 }: {
   row: PropertyPanelModelRow
@@ -63,13 +61,10 @@ export function PropertyRow({
   onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onConfigure: () => void
   onChange: (next: unknown) => void
-  onRename: (newName: string) => void
   onDelete: () => void
 }) {
   const Editor = row.Editor
   const rowReadOnly = readOnly || row.readOnly
-  const renameAllowed = row.canRename && !rowReadOnly
-  const renameFocusHandlers = usePropertyEditingActivation(block)
   // Activation for the VALUE cell lives here rather than in each editor: the
   // row renders whatever editor a value preset resolved to, including one a
   // plugin registered, and Escape has to exit those too. Focus events carry
@@ -111,37 +106,16 @@ export function PropertyRow({
       />
       <div className="flex min-w-0 items-center gap-1.5">
         <div className="min-w-0 flex-1">
-          {renameAllowed ? (
-            <Input
-              className="h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none focus-visible:border-transparent focus-visible:ring-0"
-              defaultValue={row.name}
-              aria-label={`Field ${row.labelText}`}
-              data-property-label="true"
-              title={hintText}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === 'Tab') {
-                  event.preventDefault()
-                  onRename(event.currentTarget.value)
-                }
-              }}
-              onFocus={renameFocusHandlers.onFocus}
-              onBlur={(event) => {
-                renameFocusHandlers.onBlur()
-                onRename(event.target.value)
-              }}
-            />
-          ) : (
-            <div
-              className="truncate text-foreground"
-              data-property-label="true"
-              tabIndex={-1}
-              title={hintText}
-            >
-              {row.labelText}
-              {row.schemaUnknown && <span className="ml-1 text-amber-600">*</span>}
-              {row.decodeFailed && <span className="ml-1 text-destructive">*</span>}
-            </div>
-          )}
+          <div
+            className="truncate text-foreground"
+            data-property-label="true"
+            tabIndex={-1}
+            title={hintText}
+          >
+            {row.labelText}
+            {row.schemaUnknown && <span className="ml-1 text-amber-600">*</span>}
+            {row.decodeFailed && <span className="ml-1 text-destructive">*</span>}
+          </div>
           {row.statusText && (
             <span
               className="block min-w-0 truncate text-[10px] text-amber-700 dark:text-amber-300"
@@ -175,7 +149,7 @@ export function PropertyRow({
         ) : (
           <RawJsonValue
             value={row.readOnly ? row.encodedValue : row.value}
-            reason={row.statusText ?? 'No editor registered'}
+            reason={row.statusText ?? (row.schemaUnknown ? 'Schema not registered' : 'No editor registered')}
           />
         )}
       </div>

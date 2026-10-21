@@ -60,7 +60,7 @@ describe('planFromPrescription', () => {
   })
 
   it('asks for it on the left side only, which is the side progression reads', () => {
-    // `progressionSets` drops `side: 'R'` rows and `allSetsAtOrBelowRpe` reads
+    // `progressionSets` drops `side: 'R'` rows and the catch-up reads
     // through it, so a rating on the right is never read by anything. The
     // control exists under one rule — it appears only where it can change a
     // future prescription — and a prompt per side breaks that rule while

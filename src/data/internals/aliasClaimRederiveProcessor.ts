@@ -1,21 +1,11 @@
 /**
  * `core.aliasClaimRederive` — kernel post-commit hook on "a block's
- * alias list gained entries" (issue #402, the alias-rederive scheduling
- * gap).
+ * alias list gained entries" (issue #402).
  *
- * A `[[Foo]]` row written before anything claimed "Foo" derives its
- * local `reference_target_id` to NULL, and nothing content-driven ever
- * revisits it — the CLAIM is the trigger that makes it resolvable. The
- * late-binding repair (`repo.scheduleReferenceTargetNameRederive`) used
- * to be invoked by per-caller `schedule` calls at the two seat-minting
- * sites in `references.parseReferences`, which meant every OTHER path
- * that adds an alias — the property panel, the agent bridge,
- * `alias.sync`'s own amendments, typeify claiming a type label, a
- * collision merge, an undo restoring an aliased page — silently left
- * matching NULL-stamped rows stale until the next workspace open's
- * sweep. Per-caller discipline reproduces exactly the forget-me failure
- * this issue exists to end; this processor centralizes the rule at a
- * seam that OBSERVES the field instead.
+ * A `[[Foo]]` row written before anything claimed "Foo" stamps NULL and
+ * nothing content-driven revisits it — the CLAIM is the trigger. Observed
+ * at this seam rather than scheduled per-caller, because every
+ * alias-adding path would otherwise have to remember.
  *
  * Effective-claim diff: a tombstoned block claims nothing (the alias
  * index excludes deleted rows), so a restore counts every alias as
@@ -26,10 +16,8 @@
  * `drainNameRederives`' docblock).
  *
  * Sync arrivals don't run post-commit processors; they are covered by
- * the materializer's `onAliasTargetsAdded` seam (`repo.ts`), which
- * calls the same schedule. Both funnels stay cheap: the schedule
- * batches names per workspace, no-ops before the per-open sweep, and
- * drains with one candidate scan.
+ * the materializer's `onAliasTargetsAdded` seam (`repo.ts`), which calls
+ * the same schedule.
  */
 
 import {

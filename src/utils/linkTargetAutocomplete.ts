@@ -2,6 +2,8 @@ import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
+  isActiveSearchFilter,
+  matchesTypeFilter,
   searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -11,6 +13,11 @@ import {
   type SearchSourceOutcome,
 } from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
+import {
+  propertyValueContexts,
+  type PropertyValueContext,
+} from '@/utils/propertyValueContext.js'
+import { collapseWhitespace, firstLine, truncate } from '@/utils/string.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
@@ -66,10 +73,12 @@ export interface LinkTargetBlockMatch {
   blockId: string
   content: string
   label: string
-  /** The block's own parent edge. Carried so a consumer showing the
-   *  block's ancestry can tell "this block has no parent" from "its
-   *  parent was excluded from the ancestor walk" — an empty ancestor
-   *  chain looks identical either way (see `crumbsFromAncestors`). */
+  /** The block's own parent edge. Carried because it is settled at first
+   *  paint, which the ancestor walk is not: a consumer can reserve the
+   *  line its crumbs will land on without waiting (see `hasCrumbLine`).
+   *  Not a source of truth about the chain — this rides on a payload with
+   *  no row dep, so a block moved since the query still claims its old
+   *  parent here. */
   parentId: string | null
   /** Raw type ids, for a consumer that wants to show what KIND of thing
    *  the row is alongside where it lives. Free here — these rows are
@@ -95,7 +104,24 @@ export interface LinkTargetIdCandidate {
   id: string
   label: string
   detail: string
+  /** For a row that lives under a property FIELD ROW, where it belongs —
+   *  `alias of Tutorial`. Absent for an ordinary block.
+   *
+   *  A picker without it presents a page and that page's own `alias` value
+   *  row as two rows with the SAME label and nothing to choose between them
+   *  (km-1iia). Property rows are ordinary blocks and belong in search — the
+   *  answer is to say which is which, not to hide one. */
+  context?: string
 }
+
+/** The muted secondary text a picker shows beside a candidate's label.
+ *  A property row's CONTEXT wins over its content, because that content is
+ *  exactly what makes the row ambiguous — a page's `alias` value row repeats
+ *  the page's own label, so echoing it says nothing while "alias of <page>"
+ *  says which row this is. One owner, because every picker over these
+ *  candidates asks the same question. */
+export const linkTargetCandidateDetail = (candidate: LinkTargetIdCandidate): string =>
+  candidate.context ?? candidate.detail
 
 export interface LinkTargetValueCandidate {
   key: string
@@ -105,7 +131,7 @@ export interface LinkTargetValueCandidate {
 }
 
 export const labelForBlockData = (
-  data: BlockData | null | undefined,
+  data: Pick<BlockData, 'properties' | 'content'> | null | undefined,
   fallback: string,
 ): string => {
   const aliases = data?.properties[aliasesProp.name]
@@ -505,7 +531,8 @@ const blockSearchTextScore = (content: string, query: string): number => {
  *  defaults are wired. */
 export const coreContentSearchSource: SearchSourceContribution = {
   id: 'core.content',
-  search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
+  supportsFilter: true,
+  search: async (repo, {workspaceId, query, limit, recentBlockIds, filter}) => {
     // Over-fetch so the score below (which promotes exact/prefix/recent
     // hits over the SQL engine's own rank) has room to reorder before the
     // merge point's final slice to `limit`. Same multiplier/ceiling as the
@@ -515,7 +542,12 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // the ceiling (the ceiling is a headroom cap for the common case, not
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
-    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    const rows = await repo.query.searchByContent({
+      workspaceId,
+      query,
+      limit: fetchLimit,
+      ...(isActiveSearchFilter(filter) ? {filter} : {}),
+    }).load()
     return rows.map((block): SearchSourceCandidate => ({
       block,
       score: blockSearchTextScore(block.content, query) +
@@ -673,9 +705,18 @@ export const searchBlocksAcrossSources = async (
   const generation = ++searchHealthGeneration
 
   const sources = repo.facetRuntime?.read(searchSourcesFacet)
-  const contributions = sources && sources.size > 0
+  const registered = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
+  const filter = isActiveSearchFilter(args.filter) ? args.filter : undefined
+  const contributions = filter?.underId !== undefined
+    ? registered.filter(source => source.supportsFilter === true)
+    : registered
+  if (contributions.length === 0) return []
+  const keep = (source: SearchSourceContribution, candidates: readonly SearchSourceCandidate[]) =>
+    filter && source.supportsFilter !== true
+      ? candidates.filter(candidate => matchesTypeFilter(readTypeIds(candidate.block), filter))
+      : candidates
 
   const failures: {index: number; error: unknown}[] = []
   // Written by INDEX, not pushed: a push orders outcomes by settle order, so
@@ -690,7 +731,7 @@ export const searchBlocksAcrossSources = async (
         outcomes[index] = detail === null
           ? {sourceId: source.id, kind: 'ok'}
           : {sourceId: source.id, kind: 'malformed-candidate', detail}
-        return candidates
+        return keep(source, candidates)
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
         outcomes[index] = {sourceId: source.id, kind: 'threw', error}
@@ -703,7 +744,9 @@ export const searchBlocksAcrossSources = async (
   // After the barrier, so the report names exactly the set of sources this
   // search ran — a source that has left the runtime is absent from it, which
   // is how a consumer retires state it could never be told to clear.
-  reportSearchSourceHealth(repo, generation, outcomes)
+  // A report names the whole set of sources (an absent one reads as having
+  // left the runtime), so a filtered search that skipped some reports nothing.
+  if (contributions.length === registered.length) reportSearchSourceHealth(repo, generation, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure
@@ -853,6 +896,67 @@ export const searchLinkTargetsProgressively = async (
   return result
 }
 
+/** Longest owner name a context line carries before it is ellipsised. The
+ *  owner is there to identify the row, and a whole paragraph of body text
+ *  identifies nothing a phrase doesn't — while the line shares its width with
+ *  the label the user actually searched for. */
+const CONTEXT_OWNER_MAX_CHARS = 40
+
+/** The context line for a row under a property field row: the property, and
+ *  the block it is on. Falls back to the property alone when the owner has
+ *  nothing to show — a nameless owner is still better identified by "alias"
+ *  than by a blank. */
+const describePropertyValueContext = (context: PropertyValueContext): string => {
+  const ownerLabel = truncate(
+    collapseWhitespace(firstLine(labelForBlockData(context.owner, ''))),
+    CONTEXT_OWNER_MAX_CHARS,
+  )
+  return ownerLabel ? `${context.propertyName} of ${ownerLabel}` : context.propertyName
+}
+
+/** Put every block that owns a property row in this list ahead of that row.
+ *
+ *  A page and its own `alias` value row match the same query text with the
+ *  same content, so nothing in the text ranking can separate them and the
+ *  winner falls out of SQL order — which the migration that minted the value
+ *  row leaves pointing at the machinery. Picking the preselected default then
+ *  stores a property row's id as the reference. The owner is the thing a
+ *  picker is for; its machinery goes under it.
+ *
+ *  Moves the OWNER UP rather than pushing the property row down, and that
+ *  direction is the load-bearing part: a caller may FILTER this result
+ *  afterwards — the ref editor drops candidates failing the property's
+ *  `targetTypes` — and dropping an owner this moved leaves every other row in
+ *  the order it already had. Pushing the row down instead stranded it behind
+ *  blocks it had outranked, on behalf of an owner no longer on screen.
+ *
+ *  A row whose owner is absent keeps its rank; there is nothing to rank it
+ *  against. Marking a candidate before recursing is what keeps the walk
+ *  total — ownership is a tree so it cannot cycle, but a cycle would
+ *  otherwise recur forever rather than merely ordering two rows oddly. */
+const ownersBeforeTheirPropertyRows = (
+  candidates: readonly LinkTargetIdCandidate[],
+  contexts: ReadonlyMap<string, PropertyValueContext>,
+): LinkTargetIdCandidate[] => {
+  const byId = new Map(candidates.map(candidate => [candidate.id, candidate]))
+  const ordered: LinkTargetIdCandidate[] = []
+  // By identity, not by id: two rows for one block would be a bug upstream,
+  // but dropping one here would turn it into a missing candidate.
+  const emitted = new Set<LinkTargetIdCandidate>()
+
+  const emit = (candidate: LinkTargetIdCandidate): void => {
+    if (emitted.has(candidate)) return
+    emitted.add(candidate)
+    const ownerId = contexts.get(candidate.id)?.ownerId
+    const owner = ownerId === undefined ? undefined : byId.get(ownerId)
+    if (owner) emit(owner)
+    ordered.push(candidate)
+  }
+
+  candidates.forEach(candidate => emit(candidate))
+  return ordered
+}
+
 export const searchLinkTargetIdCandidates = async (
   repo: Repo,
   args: {
@@ -869,7 +973,7 @@ export const searchLinkTargetIdCandidates = async (
     excludeBlockIds: args.excludeIds,
   })
 
-  return [
+  const candidates = [
     ...matches.aliases.map((row): LinkTargetIdCandidate => ({
       id: row.blockId,
       label: row.alias,
@@ -881,6 +985,22 @@ export const searchLinkTargetIdCandidates = async (
       detail: block.content,
     })),
   ].slice(0, args.limit)
+
+  // Resolved on the sliced list, not the whole result: this annotates the rows
+  // that will be shown, and a row past the cut has neither a label to carry
+  // nor an owner to sit under.
+  const contexts = await propertyValueContexts(
+    repo,
+    args.workspaceId,
+    candidates.map(candidate => candidate.id),
+  )
+  return ownersBeforeTheirPropertyRows(
+    candidates.map(candidate => {
+      const context = contexts.get(candidate.id)
+      return context ? {...candidate, context: describePropertyValueContext(context)} : candidate
+    }),
+    contexts,
+  )
 }
 
 export const searchLinkTargetValueCandidates = async (

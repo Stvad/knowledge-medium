@@ -52,12 +52,24 @@
  *
  * Id pool: 3 ids per workspace (`${ws}-b${0,1,2}`, 9 total). Stamp pool: index
  * into `[0, 1, 2, 3, 5, 8, 1_000_000]` — deliberately small so equal-stamp
- * collisions (the I1 skip-stale exemption boundary, reconcile.ts:88-99) actually
- * happen under random generation. Content: a per-case monotonic counter
+ * collisions actually happen under random generation — which now exercises the
+ * case #1163 is about: a staged row and a local row at the SAME stamp with
+ * DIFFERENT content (the drain must apply it, not skip on the stamp), alongside
+ * the identical-row case (a no-op at any stamp, 0 included). Content: a per-case monotonic counter
  * (`c0`, `c1`, ...) so every write is distinguishable. `parent_id` null,
  * `order_key` 'a0', `properties` `{}`, `references` `[]` EVERYWHERE — avoids
  * alias/FTS trigger interactions and cycle concerns; only `content`,
  * `updated_at`, and `deleted` vary.
+ *
+ * Fixture columns (checked, not assumed): the real drain compares ALL synced
+ * columns bar `id` (`localHoldsStagedRow`, reconcile.ts) while the mirror tracks
+ * only stamp/content/deleted. That is sound because every staged row and every
+ * local write is built by the one `blockData()` builder, so for a given id they
+ * differ ONLY in content/updatedAt/deleted: workspace_id is fixed by the id
+ * (`${ws}-b*`), created_at/user_updated_at/created_by/updated_by/parent_id/
+ * order_key are builder constants, and properties_json/references_json are
+ * '{}'/'[]' on both sides (an e2ee row round-trips to the same strings). A new
+ * op that varies any other column must extend the mirror, not this note.
  *
  * ──── Model (the differential oracle) ────
  *
@@ -77,10 +89,12 @@
  *     two generated cases during authoring.
  *
  * On `doFlush()`: consume+clear `mirror.delta` (matching the real seq-consume).
- * For each upserted id still present in `staged`, call the REAL `decideStagingRow`
- * with the mirrored local/pending state; `apply` → GARBAGE means quarantine
- * (mirror unchanged), else `mirror.local` takes the staged row's values;
- * `defer`/`skip-stale` → mirror unchanged. For each 'delete' id: if `staged` has
+ * For each upserted id still present in `staged`, decide in the drain's order:
+ * the REAL `decideStagingRow` (defer, or skip-stale for a pending upload — no
+ * stamps involved); then, on `apply`, GARBAGE → quarantine (mirror unchanged);
+ * then a staged row identical to the mirrored local row (same stamp, content,
+ * deleted) → skip-stale, local unchanged, at ANY stamp including 0; else
+ * `mirror.local` takes the staged row's values and it counts as applied. For each 'delete' id: if `staged` has
  * no row for it, materialize hard-deletes UNCONDITIONALLY — even with no local
  * row (`../materialize.ts` Phase-2 removed loop, ~L392-399: `deleted.push(id)`
  * runs before checking whether a `beforeRow` existed) — so the model does the
@@ -105,9 +119,8 @@
  * Final phase per case: flush, then drain every workspace, asserting model
  * agreement throughout; then drain every workspace a SECOND time and assert the
  * raw `blocks` snapshot is byte-identical to the snapshot after the first round
- * — an idempotent-rescan check independent of the model. (Stamp-0 rows legally
- * re-apply on every redelivery per the I2 exemption, reconcile.ts:100-105, but
- * with identical content each time, so byte-identical equality still holds.)
+ * — an idempotent-rescan check independent of the model. (A rescan re-delivers
+ * rows identical to local, which the drain does not write at all.)
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
@@ -154,7 +167,7 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
 
 // Storage + local columns: this is a LOCAL `blocks` write (not staging), and
 // `blockToRowParams` produces params for the full set including the local
-// `reference_target_id` (PR #288 slice A). Building the INSERT from the
+// `reference_target_id`. Building the INSERT from the
 // storage-only set would under-count the placeholders vs. the 14 params.
 const BLOCKS_COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const INSERT_OR_REPLACE_BLOCKS_SQL =
@@ -276,16 +289,28 @@ const runCase = async ({ ops, readChunkSize }: {
   }
 
   const decideFor = (id: string, staged: StagedMirrorRow) =>
-    decideStagingRow(materializabilityState.get(staged.ws)!, staged.stamp, {
-      localUpdatedAt: mirror.local.get(id)?.stamp ?? null,
+    decideStagingRow(materializabilityState.get(staged.ws)!, {
       hasPendingUpload: mirror.pending.has(id),
     })
 
+  /** `localHoldsStagedRow` over the mirror's tracked columns (see the fixture
+   *  note in the docblock for why those suffice). */
+  const localHoldsStaged = (id: string, staged: StagedMirrorRow): boolean => {
+    const local = mirror.local.get(id)
+    return local !== undefined && local.stamp === staged.stamp &&
+      local.content === staged.content && local.deleted === staged.deleted
+  }
+
   const applyStagedToLocal = (
-    id: string, staged: StagedMirrorRow, applied: string[], quarantined: string[],
+    id: string, staged: StagedMirrorRow,
+    applied: string[], skippedStale: string[], quarantined: string[],
   ): void => {
     if (staged.content === GARBAGE_MARKER) {
       quarantined.push(id)
+      return
+    }
+    if (localHoldsStaged(id, staged)) {
+      skippedStale.push(id)
       return
     }
     applied.push(id)
@@ -321,7 +346,7 @@ const runCase = async ({ ops, readChunkSize }: {
       const action = decideFor(id, staged)
       if (action.kind === 'defer') { deferred.push(id); continue }
       if (action.kind === 'skip-stale') { skippedStale.push(id); continue }
-      applyStagedToLocal(id, staged, applied, quarantined)
+      applyStagedToLocal(id, staged, applied, skippedStale, quarantined)
     }
     mirror.delta.clear()
 
@@ -351,7 +376,7 @@ const runCase = async ({ ops, readChunkSize }: {
       const action = decideFor(id, staged)
       if (action.kind === 'defer') { deferred.push(id); continue }
       if (action.kind === 'skip-stale') { skippedStale.push(id); continue }
-      applyStagedToLocal(id, staged, applied, quarantined)
+      applyStagedToLocal(id, staged, applied, skippedStale, quarantined)
     }
 
     sortedEq(outcome.applied, applied)
@@ -460,9 +485,7 @@ const runCase = async ({ ops, readChunkSize }: {
   const afterIdempotencyCheck = await rawBlocksSnapshot()
   expect(
     afterIdempotencyCheck,
-    'idempotent rescan: a second drainWs pass over every workspace changes nothing ' +
-      '— stamp-0 rows legally re-apply (I2 exemption, reconcile.ts:100-105) but with ' +
-      'identical content each time, so the raw snapshot is unchanged',
+    'idempotent rescan: a second drainWs pass over every workspace changes nothing',
   ).toEqual(beforeIdempotencyCheck)
 }
 

@@ -30,9 +30,15 @@ import { open, seal } from './crypto/aead.js'
 
 export type SyncMode = 'none' | 'e2ee'
 
-/** Resolve the workspace key for a workspace, or null if not available on
- *  this device (locked / never pasted / plaintext). Returns a usable
- *  CryptoKey handle, never raw bytes (§5). */
+/** The upload decision for a workspace: seal (`e2ee`), pass through (`none`), or
+ *  `hold` — keep the write queued, because the server says e2ee while this device
+ *  can't seal yet (its pin hasn't been upgraded). A held write is never sent. */
+export type UploadMode = SyncMode | 'hold'
+
+/** Resolve the workspace key for a workspace. The production resolver throws
+ *  `WorkspaceKeyUnavailableError` when this device holds none; null is for a
+ *  lookup with nothing to answer (signed out, or a stub scoped to other
+ *  workspaces). Returns a usable CryptoKey handle, never raw bytes (§5). */
 export type GetCek = (workspaceId: string) => Promise<CryptoKey | null>
 
 /** How a workspace's rows should be materialized into `blocks`. This is
@@ -86,8 +92,9 @@ export interface WireBlockColumns {
   readonly references_json: string
 }
 
-/** The three columns sealed independently in E2EE mode (§9.1). */
-const CONTENT_COLUMNS = ['content', 'properties_json', 'references_json'] as const
+/** The three columns sealed independently in E2EE mode (§9.1). Every other
+ *  synced column travels in the clear in both modes. */
+export const SEALED_COLUMNS = ['content', 'properties_json', 'references_json'] as const
 
 /** Resolve the workspace CryptoKey or throw — the shared fail-closed guard for
  *  every seam that seals/opens under the WK (the text content columns here, the
@@ -117,8 +124,8 @@ const transformContentColumns = async <T extends WireBlockColumns>(
 ): Promise<T> => {
   if (mode === 'none') return row
   const key = await requireCek(getCek, row.workspace_id)
-  const transformed: Partial<Record<(typeof CONTENT_COLUMNS)[number], string>> = {}
-  for (const column of CONTENT_COLUMNS) {
+  const transformed: Partial<Record<(typeof SEALED_COLUMNS)[number], string>> = {}
+  for (const column of SEALED_COLUMNS) {
     transformed[column] = await xform(key, row[column], contentAad(row.id, row.workspace_id, column))
   }
   return { ...row, ...transformed }
@@ -161,7 +168,7 @@ export const encryptUploadColumns = async (
   if (mode === 'none') return payload
   const key = await requireCek(getCek, workspaceId)
   const out: Record<string, unknown> = { ...payload }
-  for (const column of CONTENT_COLUMNS) {
+  for (const column of SEALED_COLUMNS) {
     const value = out[column]
     if (typeof value === 'string') {
       out[column] = await seal(key, value, contentAad(id, workspaceId, column))

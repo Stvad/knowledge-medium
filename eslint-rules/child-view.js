@@ -1,4 +1,4 @@
-// Guardrail for the properties-as-blocks child-visibility model (PR #288/#386):
+// Guardrail for the properties-as-blocks child-visibility model:
 // `tx.childrenOf` / `repo.query.{children,subtree,childIds}` default to the
 // STRUCTURAL everything-view (every child, including hidden property field-row
 // machinery). The VISIBLE / outline view (machinery excluded, §9) is opt-in via

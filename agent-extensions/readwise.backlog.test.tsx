@@ -40,7 +40,10 @@ const YESTERDAY = '2026-07-19'
 const TOMORROW = '2026-07-21'
 
 const readwiseDataAndUi = readwiseContributions
-  .filter(c => !['core.app-mounts', 'core.app-effects'].includes(c.facet.id)) as unknown as AppExtension[]
+  // `'facet' in c` also drops the nested AppExtension arrays (the dialog host),
+  // which is what these suites want: they exclude every app mount anyway.
+  .filter(c => 'facet' in (c as object)
+    && !['core.app-mounts', 'core.app-effects'].includes((c as any).facet.id)) as unknown as AppExtension[]
 
 let sharedDb: TestDb
 

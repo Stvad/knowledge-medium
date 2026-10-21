@@ -3,10 +3,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { workspaceBackfillsFacet, type WorkspaceBackfill } from '@/data/facets'
-import { Repo } from '@/data/repo'
+import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { spyOnOverfullLog } from '@/data/test/overfullWriteAheadLog'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
  *  backfill: when it is allowed to run, and what its writes are allowed to do
@@ -204,6 +206,261 @@ describe('workspace backfill runner — sync gating', () => {
     await repo.awaitWorkspaceBackfills()
 
     expect(runs).toEqual([])
+  })
+
+  it('aborts a batch when write access is revoked while the gap probe is in flight', async () => {
+    // The commit pipeline gates on `isReadOnly` when the transaction STARTS, so
+    // a revocation between two batches is already refused there. This is the
+    // window that gate cannot see: the precondition runs INSIDE the transaction
+    // and awaits a probe, and a role change is a synchronous field write that
+    // lands cleanly in that await. Unre-sampled, this batch uploads
+    // source-of-truth rows as a viewer.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-role-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      // Only once the first batch is through, so the run gets far enough to
+      // show that the SECOND batch is the one refused — and late enough that
+      // the transaction it refuses had already passed the pipeline's own gate.
+      if (batches.length === 1) repo.setReadOnly(true)
+      return gap
+    })
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+  })
+
+  it('aborts a batch when the workspace changes while the gap probe is in flight', async () => {
+    // POSITION, not outcome. The probe AWAITS, and `setActiveWorkspaceId` is a
+    // synchronous field write that lands cleanly in that window — so a staleness
+    // check placed BEFORE the probe has already passed by the time the write
+    // happens, and this batch would go on to upload into the session's new
+    // access state. The sibling tests above leave the workspace between batches,
+    // which a check on either side of the probe catches.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-switch-in-probe-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      // Only once the first batch is through, so the run gets far enough to
+      // show that the SECOND batch is the one refused.
+      if (batches.length === 1) repo.setActiveWorkspaceId(OTHER_WS)
+      return gap
+    })
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0])
+  })
+
+  it('tells the operator a lost role is not worth retrying', async () => {
+    // `retryable` is the only part of a deferral a human can act on, and the
+    // two paths that produce one must agree. The REFUSAL path already says a
+    // role flip cannot be waited out (`retryableAfter`); the THROW path left it
+    // at the default and told the operator to run it again — for a workspace
+    // this device may no longer write at all.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-role-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    const realGap = repo.syncViewGap.bind(repo)
+    vi.spyOn(repo, 'syncViewGap').mockImplementation(async () => {
+      const gap = await realGap()
+      if (batches.length === 1) repo.setReadOnly(true)
+      return gap
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-role-v1')
+    warn.mockRestore()
+
+    expect(batches).toEqual([0])
+    expect(result).toMatchObject({outcome: 'deferred', retryable: false})
+  })
+
+  it('does not re-arm, or promise a retry, for a blocker nothing will clear', async () => {
+    // `retryable: false` means waiting changes nothing, so a re-arm buys a run
+    // that refuses again — and the log would be telling the operator to wait
+    // for something that is not coming.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-durable-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: '3 synced row(s) have not reached `blocks`', transient: false}
+        : null
+    ))
+    const scheduled = vi.spyOn(repo, 'scheduleWorkspaceBackfills')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await repo.runWorkspaceBackfillNow(WS, 'operator-durable-v1')
+
+    expect(scheduled).not.toHaveBeenCalled()
+    expect(warn.mock.calls.some(([msg]) =>
+      typeof msg === 'string' && msg.includes('will retry when it clears'))).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('tells the operator a DURABLE view gap is not worth retrying either', async () => {
+    // Same defect, and it predates this pass's role check: the gap refusal
+    // carries `transient`, but the gap THROW discarded it, so rows nothing is
+    // draining reported as "run it again".
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-gap-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: '3 synced row(s) have not reached `blocks`', transient: false}
+        : null
+    ))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-gap-v1')
+    warn.mockRestore()
+
+    expect(batches).toEqual([0])
+    expect(result).toMatchObject({outcome: 'deferred', retryable: false})
+  })
+
+  it('still tells the operator a transient blocker IS worth retrying', async () => {
+    // The other side of the same rule — a thrower that says nothing still means
+    // "worth retrying", which is right for the transient DB failures that make
+    // up most of this path.
+    const batches: number[] = []
+    const repo = makeRepo({
+      id: 'operator-transient-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async () => { batches.push(i) }, {description: `batch ${i}`})
+        }
+      },
+    })
+    await seedTarget(repo)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
+      batches.length === 1
+        ? {reason: 'synced rows are still draining into `blocks`', transient: true}
+        : null
+    ))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    await vi.waitFor(() => expect(batches).toEqual([0]))
+    await vi.advanceTimersByTimeAsync(30_000)
+    const result = await running
+    warn.mockRestore()
+
+    expect(result).toMatchObject({outcome: 'deferred', retryable: true})
+  })
+
+  it('aborts a batch whose workspace changed WHILE the batch body ran', async () => {
+    // The entry precondition is as stale by the end of a batch as the commit
+    // pipeline's own gate: `fn` can span a whole insert budget of awaited reads
+    // and writes. A switch landing in there would otherwise commit
+    // source-of-truth rows under a session this device has left.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-switch-in-body-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async t => {
+            batches.push(i)
+            await t.update('target', {content: `batch ${i}`})
+            // INSIDE the body, after the entry check has passed.
+            if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    // The WRITE, not the batch counter: the counter cannot tell this apart from
+    // the NEXT batch's entry check refusing, which also leaves [0, 1]. Only the
+    // exit check makes batch 1 roll back what it had already written.
+    expect(batches).toEqual([0, 1])
+    expect((await repo.load('target'))?.content).toBe('batch 0')
+  })
+
+  it('aborts a batch whose write access was revoked WHILE the batch body ran', async () => {
+    // Same window, the other arm.
+    const g = controllableGate()
+    const batches: number[] = []
+    const chunked: WorkspaceBackfill = {
+      id: 'chunked-revoke-in-body-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 3; i++) {
+          await tx(async t => {
+            batches.push(i)
+            await t.update('target', {content: `batch ${i}`})
+            if (i === 1) repo.setReadOnly(true)
+          }, {description: `batch ${i}`})
+        }
+      },
+    }
+    const repo = makeRepo(chunked, g.gate)
+    await seedTarget(repo)
+
+    g.open()
+    await drain(repo)
+
+    expect(batches).toEqual([0, 1])
+    expect((await repo.load('target'))?.content).toBe('batch 0')
   })
 
   it('aborts mid-run when rows start staging between batches', async () => {
@@ -443,7 +700,8 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        stillOwned: async () => true,
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -478,7 +736,12 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { if (claimed.has(id)) return false; claimed.add(id); return true },
+        stillOwned: async () => true,
+        tryClaim: async (_ws, id) => {
+          if (claimed.has(id)) return 'declined' as const
+          claimed.add(id)
+          return 'minted' as const
+        },
         markComplete: async () => {},
         releaseClaim: async (_ws, id) => {
           if (!claimed.has(id)) { unheldReleases.push(id); return }
@@ -650,6 +913,105 @@ describe('workspace backfill runner — undo', () => {
     expect(depthAfterFirstBatch).toBe(0)
   })
 
+  it('clears after EVERY batch, so an edit made between two of them goes too', async () => {
+    // The window a first-batch-only clear leaves open, for as long as the pass
+    // runs: the user edits a row the pass has not reached yet, so their entry
+    // holds that row's PRE-pass state. The later batch rewrites the row, the
+    // pass records completion, and their next cmd-Z reverts it permanently.
+    let depthAfterMidPassEdit = -1
+    const repo = makeRepo({
+      id: 'probe-backfill-v1',
+      trigger: 'workspace-open' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        // Between the batches, on a row batch two has still to rewrite.
+        await repo.tx(async t => { await t.update('later', {content: 'user edit mid-pass'}) },
+          {scope: ChangeScope.BlockDefault, description: 'user edit mid-pass'})
+        depthAfterMidPassEdit = repo.undoManager.depths(ChangeScope.BlockDefault).undo
+        await tx(async t => { await t.update('later', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'later', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'original'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed later'})
+
+    await drain(repo)
+
+    // The edit was recorded — it is a legitimate user edit made while the pass
+    // was between batches, and the assertion below is that the NEXT batch's
+    // clear took it, not that it was never there.
+    expect(depthAfterMidPassEdit).toBe(1)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('later'))?.content).toBe('batch two')
+  })
+
+  it('says the history was cleared ONCE, however many batches it wrote', async () => {
+    // Clearing per batch must not become telling the user per batch.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.update('target', {content: 'batch one'}) },
+          {description: 'batch one'})
+        await tx(async t => { await t.update('target', {content: 'batch two'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(warn.mock.calls.filter(([msg]) =>
+      typeof msg === 'string' && msg.includes('undo history was cleared'))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('refuses a replay queued behind a batch that commits before the clear runs', async () => {
+    // The replay is popped and waiting on the write lock the batch holds, so
+    // the after-commit clear cannot reach it — `clear()` only empties the
+    // manager, and the entry is already off it. Left unrefused, the replay
+    // takes the lock next and writes the pre-pass row back over the batch.
+    let releaseBatch: (() => void) | null = null
+    let announceBatch: (() => void) | null = null
+    const batchInFlight = new Promise<void>(resolve => { announceBatch = resolve })
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => {
+          await t.update('target', {content: 'migrated'})
+          announceBatch!()
+          await new Promise<void>(resolve => { releaseBatch = () => resolve() })
+        }, {description: 'batch one'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+    // Fenced on the batch's own progress: the probe runs INSIDE its
+    // transaction, so reaching here means the write lock is held right now.
+    await batchInFlight
+
+    // Pops synchronously, then queues its replay behind that held lock.
+    const undoing = repo.undo(ChangeScope.BlockDefault)
+    releaseBatch!()
+    await running
+    warn.mockRestore()
+
+    await expect(undoing).resolves.toBe(false)
+    expect((await repo.load('target'))?.content).toBe('migrated')
+  })
+
   it('leaves undo history alone when the pass writes nothing', async () => {
     // Clearing is a real cost to the user, so it is owed only when the pass
     // actually committed something that history could be replayed over.
@@ -667,6 +1029,69 @@ describe('workspace backfill runner — undo', () => {
     await repo.undo(ChangeScope.BlockDefault)
 
     expect((await repo.load('target'))?.content).toBe('original')
+  })
+
+  it('leaves it alone for a pass whose batches COMMIT and write nothing', async () => {
+    // The re-run of a finished migration, which is the shape the drop used to
+    // over-approximate into: the scan still selects every candidate and every
+    // batch still opens a transaction, so clearing per committed batch charged
+    // the operator their whole stack for a pass that changed nothing — and the
+    // banner then announced the cost.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      // READS, in a real transaction, which is what a re-run's batches do:
+      // every candidate is visited and found to owe nothing.
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.get('target') }, {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    // Both halves: the history is still there, and the run does not claim to
+    // have taken it. The operator reads the claim, not the stack.
+    expect(result.undoHistoryCleared).toBe(false)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBeGreaterThan(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('original')
+    expect(warn.mock.calls.filter(([msg]) =>
+      typeof msg === 'string' && msg.includes('undo history was cleared'))).toHaveLength(0)
+    warn.mockRestore()
+  })
+
+  it('still clears once a later batch DOES write, after empty ones', async () => {
+    // The emptiness test is per batch, so a pass that reads its way through the
+    // first half of the graph must still pay for the first batch that writes —
+    // the entries at risk are the ones recorded before it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.update('target', {content: 'migrated'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('migrated')
+    warn.mockRestore()
   })
 
   it('still uploads — suppressing undo must not make it a local-only write', async () => {
@@ -727,6 +1152,82 @@ describe('workspace backfill runner — operator trigger', () => {
   })
 })
 
+describe('workspace backfill runner — write-ahead log', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('waits for a log a long read kept growing to be checkpointed before EVERY batch', async () => {
+    const events: string[] = []
+    const repo = makeRepo({
+      id: 'operator-chunked-v1',
+      trigger: 'operator',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) await tx(async () => { events.push(`batch ${i}`) }, {})
+      },
+    })
+    await seedTarget(repo)
+    // The RAW database, which `repo.db` meters through a proxy, and restored
+    // after: every test in this file shares it.
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    try {
+      expect((await repo.runWorkspaceBackfillNow(WS, 'operator-chunked-v1')).outcome).toBe('ran')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0', 'checkpoint', 'batch 1'])
+  })
+
+  it('does not wait on the log for a batch whose run the user already left', async () => {
+    // The wait can last as long as any read; a run that is aborting anyway
+    // must not hold the writer for it.
+    const events: string[] = []
+    const repo: Repo = makeRepo({
+      id: 'chunked-left-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) {
+          if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          await tx(async () => { events.push(`batch ${i}`) }, {})
+        }
+      },
+    }, cb => { cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0'])
+  })
+
+  it('asks whether the device is still caught up AFTER that wait, which lasts as long as any read', async () => {
+    const events: string[] = []
+    let caughtUp = true
+    const repo = makeRepo({
+      id: 'chunked-wa-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => { await tx(async () => { events.push('batch') }, {}) },
+    }, cb => { if (caughtUp) cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => {
+      events.push('checkpoint')
+      // A download starts while the writer waits out the read.
+      caughtUp = false
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint'])
+  })
+})
+
 describe('workspace backfill runner — operator outcomes', () => {
   it('does not claim while this device is behind the server', async () => {
     // `tryClaim` WRITES (the Migrations page, then the claim row). Claiming
@@ -742,7 +1243,8 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
-        tryClaim: async (_ws, id) => { claimAttempts.push(id); return true },
+        stillOwned: async () => true,
+        tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -773,7 +1275,8 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
-    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return true },
+    stillOwned: async () => true,
+    tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
   })
@@ -862,7 +1365,8 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        stillOwned: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -898,7 +1402,8 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
-        tryClaim: async () => true,
+        stillOwned: async () => true,
+        tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
       },
@@ -923,5 +1428,328 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
 
     release()
     expect((await first).outcome).toBe('ran')
+  })
+})
+
+/**
+ * `withOperatorBackfillClaim` — a gesture whose steps BEFORE the pass also
+ * write source-of-truth rows (the properties migration synthesizes definition
+ * blocks and flips the workspace), so it has to hold the graph-wide claim
+ * across all of them rather than take it inside the pass.
+ */
+describe('workspace backfill runner — a claim held across a gesture', () => {
+  /** Records the claim seam's calls in order, so a test can assert the claim
+   *  came before the body rather than merely that both happened. */
+  const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    stillOwned: async () => true,
+    // A win MINTS. `inherited` is a separate axis with its own test below —
+    // folding it in here would silence every release assertion at once.
+    tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
+    markComplete: async () => { events.push('markComplete') },
+    releaseClaim: async () => { events.push('releaseClaim') },
+  })
+
+  const gestureRepo = (events: string[], backfill: WorkspaceBackfill, won = true): Repo => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: spyClaim(events, {won}),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [backfill])
+    return repo
+  }
+
+  const noopPass = (runs: string[] = []): WorkspaceBackfill => ({
+    id: 'gesture-v1',
+    trigger: 'operator' as const,
+    run: async ({workspaceId}) => { runs.push(workspaceId) },
+  })
+
+  it('takes the claim before the body writes anything, and hands it back after', async () => {
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      events.push('body-writes')
+      await pass.run()
+    })
+
+    expect(outcome).toEqual({claimed: true})
+    // The pass re-asks: a peer's claim can sync in during the body, and
+    // `tryClaim` on a claim we still hold is a read that answers `proceed`
+    // without writing. What matters here is the FIRST one, before the body.
+    expect(events).toEqual([
+      'tryClaim', 'body-writes', 'tryClaim', 'markComplete', 'releaseClaim',
+    ])
+  })
+
+  it('does not let the body run at all when a peer holds the claim', async () => {
+    // The regression this method exists for. Told "held by a peer" AFTER
+    // synthesizing, a device has already published its own definitions.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass(), false)
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {outcome: 'held-by-peer', undoHistoryCleared: false},
+    })
+    // Nothing to hand back — releasing a claim this device never won would
+    // take it from the peer that does hold it.
+    expect(events).toEqual(['tryClaim'])
+  })
+
+  it('hands the claim back when the body throws', async () => {
+    // A body that dies partway has to release, or one device's bad moment
+    // blocks the pass for the whole graph until a human deletes the block.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    await expect(repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      throw new Error('synthesis exploded')
+    })).rejects.toThrow(/synthesis exploded/)
+
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('still reports `claimed` for a body that refused and never ran the pass', async () => {
+    // The migration's own shape: several branches report their own refusal and
+    // return before reaching `pass.run()` — a flip the server declined, a
+    // definition that could not be minted. Those are still CLAIMED runs, and
+    // the caller keys its own reporting off that: `claimed: false` would have
+    // the action print a second, contradictory outcome over the one the body
+    // just showed.
+    const events: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(outcome).toEqual({claimed: true, value: undefined})
+    expect(events).toEqual(['tryClaim', 'releaseClaim'])
+  })
+
+  it('never releases a claim it only inherited from a sibling tab', async () => {
+    // Two tabs of one browser profile share a claimant id, and the
+    // single-flight set is per-Repo — so the second tab's `tryClaim` reads the
+    // first tab's LIVE claim as its own and succeeds without writing. Released
+    // on the way out, that deletes a claim the sibling is still writing under,
+    // and a third device is then free to start the same source-of-truth pass.
+    // Running on it is the accepted overlap; releasing it is not.
+    const events: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        stillOwned: async () => true,
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    // A body that refuses and returns early — the shape that reaches the
+    // `finally` without the pass having recorded anything.
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {})
+
+    expect(outcome).toEqual({claimed: true, value: undefined})
+    expect(events).toEqual(['tryClaim'])
+    expect(events).not.toContain('releaseClaim')
+  })
+
+  it('still runs the pass on an inherited claim — the overlap is tolerated, the delete is not', async () => {
+    // The other half: inheriting must not turn into a refusal. These passes
+    // are idempotent per row, which is what makes a two-tab overlap
+    // acceptable; only the release is the hazard.
+    const events: string[] = []
+    const runs: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        stillOwned: async () => true,
+        tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
+        markComplete: async () => { events.push('markComplete') },
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass(runs)])
+    await seedTarget(repo)
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'gesture-v1')
+
+    expect(result.outcome).toBe('ran')
+    expect(runs).toEqual([WS])
+    expect(events).not.toContain('releaseClaim')
+  })
+
+  it('does not let a failing pass hand back the claim the gesture still holds', async () => {
+    // The pass releases on its own failure paths — correct when the pass IS
+    // the gesture, wrong here: the body keeps running after `pass.run()`
+    // returns, and a release from inside it would leave those steps unclaimed.
+    // One owner, one release.
+    const events: string[] = []
+    const repo = gestureRepo(events, {
+      id: 'gesture-v1',
+      trigger: 'operator' as const,
+      run: async () => { throw new Error('pass exploded') },
+    })
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let outcome: OperatorBackfillResult | null = null
+    await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async pass => {
+      outcome = await pass.run()
+      events.push('body-continues')
+    })
+
+    expect(outcome).toMatchObject({outcome: 'failed'})
+    // Exactly one release, and it lands AFTER the body is done.
+    expect(events).toEqual(['tryClaim', 'tryClaim', 'body-continues', 'releaseClaim'])
+  })
+
+  it('does not claim, or run the body, while this device is behind the server', async () => {
+    // `tryClaim` WRITES. The gate that protected the pass has to protect the
+    // gesture too, or the claim moves in front of it.
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillSyncGate: () => () => {},
+      backfillCompletionClaim: spyClaim(events),
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(events).toEqual([])
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'deferred',
+        undoHistoryCleared: false,
+        retryable: true,
+        reason: 'this device is not caught up with the server '
+          + '(still downloading, disconnected, or a download error)',
+      },
+    })
+  })
+
+  it('does not tell the operator to wait out a claim error that waiting cannot clear', async () => {
+    // A foreign block parked at the deterministic claim id needs someone to
+    // move it. Reported as retryable, the palette says "try again shortly"
+    // and the operator retries a gesture that will refuse identically forever.
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        stillOwned: async () => true,
+        tryClaim: async () => {
+          throw new DeterministicIdCrossWorkspaceError('claim-id', 'ws-other', WS)
+        },
+        markComplete: async () => {},
+        releaseClaim: async () => {},
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    expect(outcome).toMatchObject({claimed: false, result: {retryable: false}})
+  })
+
+  it('single-flights the whole gesture, not just the pass', async () => {
+    // Two invocations in one Repo share a claimant, so the claim reads the
+    // second as the same owner. Stopped only at the pass, the second would
+    // have synthesized and flipped first.
+    const events: string[] = []
+    const bodies: string[] = []
+    const repo = gestureRepo(events, noopPass())
+    await seedTarget(repo)
+    let release!: () => void
+
+    const first = repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('first')
+      await new Promise<void>(resolve => { release = resolve })
+    })
+    await vi.waitFor(() => { expect(bodies).toHaveLength(1) })
+
+    expect(await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('second')
+    })).toEqual({
+      claimed: false,
+      result: {outcome: 'already-running', undoHistoryCleared: false},
+    })
+    expect(bodies).toEqual(['first'])
+
+    release()
+    await first
+  })
+
+  it('defers without releasing when the claim write throws, rather than running the body', async () => {
+    const events: string[] = []
+    const bodies: string[] = []
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      backfillCompletionClaim: {
+        stillOwned: async () => true,
+        tryClaim: async () => { throw new Error('claim write failed') },
+        markComplete: async () => {},
+        releaseClaim: async () => { events.push('releaseClaim') },
+      },
+    })
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(workspaceBackfillsFacet, 'test-backfills', [noopPass()])
+    await seedTarget(repo)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const outcome = await repo.withOperatorBackfillClaim(WS, 'gesture-v1', async () => {
+      bodies.push('ran')
+    })
+
+    expect(bodies).toEqual([])
+    // NOT released. A throw does not prove the row is unwritten, but
+    // `releaseClaim` cannot tell this device's half-written claim from a
+    // SIBLING TAB's live one — `claimantId` is per browser profile, so both
+    // name this claimant. Deleting a live claim frees a second device to start
+    // an uploading pass while the first tab is still writing; a claim this
+    // device may have stranded is recoverable through the migration dialog.
+    expect(events).toEqual([])
+    // `deferred`, not `failed`: nothing started, and "stopped partway" would
+    // send an operator looking for half-migrated data.
+    expect(outcome).toEqual({
+      claimed: false,
+      result: {
+        outcome: 'deferred', undoHistoryCleared: false,
+        reason: 'claim write failed', retryable: true,
+      },
+    })
   })
 })

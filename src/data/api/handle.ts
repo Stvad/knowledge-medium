@@ -12,7 +12,8 @@ export type HandleStatus = 'idle' | 'loading' | 'ready' | 'error' | 'disposed'
 export type Unsubscribe = () => void
 
 /** Single read primitive. Identity-stable per `(name, JSON.stringify(args))`.
- *  GC after `gcTime` of zero subscribers + zero in-flight loads. See §5.1. */
+ *  GC'd `gcTime` after its last reference drops — what counts as a reference
+ *  is `LoaderHandle.refCount`, which owns that list. See §5.1. */
 export interface Handle<T> {
   readonly key: string
 

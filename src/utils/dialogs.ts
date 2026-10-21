@@ -81,3 +81,21 @@ export const __resetDialogsForTests = (): void => {
   for (const entry of drained) entry.finalize(null)
   subscribers.notify()
 }
+
+
+/** True when `Component` is already queued for `workspaceId`.
+ *
+ *  Actions that are cheap and repeatable (a status-chip button invites
+ *  re-clicking) must not stack copies — but a dialog pinned to a DIFFERENT
+ *  workspace does not cover the request, so that one still opens. The `unknown`
+ *  casts live here because this module owns the decision to keep queue entries
+ *  untyped; callers should not each restate it. */
+export const isDialogOpenForWorkspace = (
+  Component: unknown,
+  workspaceId: string | null,
+): boolean =>
+  getDialogQueue().some(
+    (entry) =>
+      (entry.Component as unknown) === Component &&
+      (entry.props.workspaceId as string | undefined) === (workspaceId ?? undefined),
+  )

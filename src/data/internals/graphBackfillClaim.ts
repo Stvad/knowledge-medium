@@ -2,55 +2,34 @@
  * The production `BackfillCompletionClaim`: block-backed, synced, one claim
  * per (workspace, backfill).
  *
- * A workspace backfill repairs SOURCE-OF-TRUTH rows and uploads them, so
- * running it on every device is the hazard rather than a side effect — the
+ * A workspace backfill repairs SOURCE-OF-TRUTH rows and uploads them, so the
  * record has to live in synced data so one device runs and the rest see it
- * taken.
+ * taken. WORKSPACE-scoped, not per-user — a shared workspace's other users'
+ * devices must see the claim too, or they run the same upload-carrying pass
+ * again. Being a real block is the point rather than an accident: a device
+ * that dies mid-pass leaves a claim nobody will release, and the recovery is to
+ * look at it and clear it — through {@link releaseStrandedGraphBackfillClaim},
+ * which refuses the two rows a hand-delete cannot tell apart.
  *
- * `blocks` is the only synced table a client writes, so the claim is a block:
- * a state child under the workspace's Migrations page, at a deterministic id,
- * one per backfill. Being a real block is the point rather than an accident —
- * a device that dies mid-pass leaves a claim nobody will release, and the
- * recovery for that is "look at it, delete it".
- *
- * WORKSPACE-scoped, not per-user. A workspace can be shared, and a claim
- * hanging off one user's page would be invisible to another user's devices —
- * which would run the same upload-carrying pass again, the exact hazard this
- * seam exists to prevent.
- *
- * ## This RECORDS a run; it does not arbitrate one
- *
- * Exactly-once comes from the pass being `trigger: 'operator'` — a human runs
- * it, on one device, deliberately (§11, "operator-run-once per workspace").
- * Nothing here decides who may run; there is no race to decide.
+ * This RECORDS a run; it does not arbitrate one. Exactly-once comes from the
+ * pass being `trigger: 'operator'` — a human runs it, on one device,
+ * deliberately.
  *
  * Do not add arbitration back. Exactly-once across N devices over a
  * last-write-wins layer with no server arbitration is not reachable: every
  * layer of the pipeline is another place a local read is stale (upload queue,
  * download checkpoint, the throttled `blocks_synced` drain, the rejection
  * quarantine), and each wait added to cover one needs a timeout, which
- * strands a claim, which needs reclaim, which needs arbitration. An earlier
- * revision tried and the regress had no fixed point.
- *
- * What the record buys:
- *  - a completed pass is visible to every device, so a second operator is
- *    told it is done. Duplicate "done" is harmless under LWW, which is why
- *    recording needs no arbitration.
- *  - an in-flight claim is a readable, deletable block, so an interrupted run
- *    is diagnosable rather than invisible.
- *
- * What it does not: two operators triggering simultaneously on two devices
- * both run. Accepted — it takes deliberate human action on two machines at
- * once, and these passes are idempotent per row.
+ * strands a claim, which needs reclaim, which needs arbitration.
  */
 
-import { ChangeScope, type Tx } from '@/data/api'
-import type { BackfillCompletionClaim } from '@/data/facets'
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
+import type { BackfillCompletionClaim, ClaimAttempt } from '@/data/facets'
 import { keyAtStart } from '@/data/orderKey'
 import { MIGRATION_CLAIM_TYPE } from '@/data/blockTypes'
 import { classifyOccupant, stateChildBlockId } from '@/data/derivedIds'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
-import { migrationsPageBlockId } from '@/data/migrationsPage'
+import { MIGRATIONS_PAGE_ALIAS, migrationsPageBlockId } from '@/data/migrationsPage'
 import {
   addBlockTypeToProperties,
   migrationClaimantProp,
@@ -108,10 +87,6 @@ export const graphBackfillClaimBlockId = (
   backfillId: string,
 ): string => stateChildBlockId(migrationsPageBlockId(workspaceId), backfillId)
 
-/** Read the claim as the local DB currently has it. `null` when no row
- *  exists, and also when the row is a tombstone — deleting the claim block
- *  IS the documented recovery for a device that died mid-pass, so a
- *  tombstone must read as "unclaimed", not as "claimed by a ghost". */
 /** Decode a claim from a property bag. `null` when the bag is not a claim —
  *  which the callers treat as UNCLAIMED, so a hand-edited or half-written row
  *  can never wedge every future run of every backfill. Kept separate from the
@@ -123,12 +98,21 @@ export const claimFromProperties = (
   const claimantId = props[migrationClaimantProp.name]
   const claimedAt = props[migrationClaimedAtProp.name]
   if (typeof claimantId !== 'string' || typeof claimedAt !== 'number') return null
+  // A `completedAt` of some OTHER type reads as still running, which holds the
+  // migration dialog up on every device until someone releases the claim. That
+  // is the permissive direction on purpose — the same one the whole decoder
+  // takes — and it costs a modal rather than a lost record. Only a hand-edit or
+  // a foreign writer can produce it; `markComplete` writes `Date.now()`.
   const completedAt = props[migrationCompletedAtProp.name]
   return typeof completedAt === 'number'
     ? {claimantId, claimedAt, completedAt}
     : {claimantId, claimedAt}
 }
 
+/** Read the claim as the local DB currently has it. `null` when no row
+ *  exists, and also when the row is a tombstone — releasing a claim deletes the
+ *  block, so a tombstone must read as "unclaimed", not as "claimed by a
+ *  ghost". */
 export const readGraphBackfillClaim = async (
   db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
   claimId: string,
@@ -153,6 +137,75 @@ export const readGraphBackfillClaim = async (
   }
 }
 
+/** Does this claim, as decoded, hold the graph?
+ *
+ *  A COMPLETED claim deliberately does not: it records a finished run and is
+ *  never released, so reading it as holding would refuse this graph's writes for
+ *  the rest of its life. `null` does not either — absent, tombstoned and
+ *  undecodable all land there, which is the same permissive direction
+ *  {@link readGraphBackfillClaim} takes and for the same reason: a half-written
+ *  bag must never wedge a workspace shut for good.
+ *
+ *  One predicate because three callers ask it — the dialog that blocks the
+ *  workspace, the release it offers, and the gesture's own report — and a copy
+ *  that drifts means one of them saying "nothing is held" while the others
+ *  hold a modal over the app. */
+export const claimHoldsGraph = (
+  claim: GraphBackfillClaim | null,
+): claim is GraphBackfillClaim => claim !== null && claim.completedAt === undefined
+
+/** The claim a BLOCK ROW carries, when that row is this workspace's live claim.
+ *
+ *  For the reader that holds the row rather than a db handle: the migration
+ *  dialog subscribes to the claim block, so the claim reaches every device —
+ *  and clears again — through the same invalidation any other block read uses,
+ *  with no polling and nothing to arm at startup.
+ *
+ *  Workspace-SCOPED for the reason {@link readGraphBackfillClaim} spells out: a
+ *  row owned by another workspace can arrive at this id, and holding a modal
+ *  over this workspace because of it would be unrecoverable from inside the
+ *  app. */
+export const claimHoldingGraph = (
+  row: Pick<BlockData, 'deleted' | 'workspaceId' | 'properties'> | null | undefined,
+  workspaceId: string,
+): GraphBackfillClaim | null => {
+  if (!row || row.deleted || row.workspaceId !== workspaceId) return null
+  const claim = claimFromProperties(row.properties)
+  return claimHoldsGraph(claim) ? claim : null
+}
+
+/** Is a run of `backfillId` in flight for this workspace, as the caller's own
+ *  view of `blocks` has it?
+ *
+ *  Asked by anything that must not write while a once-per-graph pass is midway
+ *  through the same data — today the definition-change refusal
+ *  (`propertyDefinitionChangeProcessor`), which asks it INSIDE the user's
+ *  transaction so the answer is that transaction's own. The claim lives in
+ *  SYNCED data, so a peer device that has received the claim row refuses too;
+ *  one that has not yet is the same staleness every other reader of this row
+ *  has. */
+export const isGraphBackfillClaimActive = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  workspaceId: string,
+  backfillId: string,
+): Promise<boolean> =>
+  claimHoldsGraph(await readGraphBackfillClaim(
+    db, graphBackfillClaimBlockId(workspaceId, backfillId), workspaceId,
+  ))
+
+/** Where a claim nobody will release is found and cleared, in the one wording
+ *  every message that needs it uses.
+ *
+ *  Every message that mentions a held claim — the pass reporting one held by
+ *  another client, the definition-change refusal, the gesture reporting that it
+ *  did not hand the workspace back — describes the SAME recovery, and an
+ *  operator who reads them as different situations goes looking for a second
+ *  thing to do. */
+export const STRANDED_CLAIM_RECOVERY =
+  'open the workspace and release it from the dialog it puts up there — the '
+  + `claim block is on the "${MIGRATIONS_PAGE_ALIAS}" page, but deleting it by `
+  + 'hand can destroy the record that the migration ran'
+
 // ---------------------------------------------------------------------------
 // The seam implementation
 // ---------------------------------------------------------------------------
@@ -163,7 +216,11 @@ export interface GraphBackfillClaimDeps {
   readonly db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>}
   tx<R>(
     fn: (tx: Tx) => Promise<R>,
-    opts: {scope: ChangeScope; skipUndo?: boolean; description?: string},
+    opts: {
+      scope: ChangeScope
+      skipUndo?: boolean
+      description?: string
+    },
   ): Promise<R>
   /** Who holds the claim. LOAD-BEARING: `decideClaim` returns `proceed` only
    *  when a live claim names this id, and `releaseClaim` refuses unless it
@@ -173,6 +230,21 @@ export interface GraphBackfillClaimDeps {
   readonly claimantId: string
   ensureHome(workspaceId: string): Promise<unknown>
 }
+
+/** Every write this module makes, under the one set of options they all need.
+ *
+ *  `skipUndo` because none of this is a document edit the user could mean to
+ *  undo, and `BlockDefault` because the row is an ordinary block that must stay
+ *  read-only-gated and seed-guarded. */
+const claimTx = <R>(
+  deps: Pick<GraphBackfillClaimDeps, 'tx'>,
+  description: string,
+  fn: (tx: Tx) => Promise<R>,
+): Promise<R> => deps.tx(fn, {
+  scope: ChangeScope.BlockDefault,
+  skipUndo: true,
+  description,
+})
 
 /** Refuse a row at the claim id that belongs to ANOTHER workspace.
  *
@@ -191,9 +263,63 @@ const refuseForeignOccupant = (
   throw new DeterministicIdCrossWorkspaceError(claimId, row!.workspaceId, workspaceId)
 }
 
+/**
+ * Clear a claim nobody will release, from a device that does not hold it.
+ *
+ * The operator recovery for a claimant that died mid-pass. `releaseClaim`
+ * cannot serve: it decides ownership by claimant id, which is per browser
+ * PROFILE, so it does nothing for the case that actually strands a workspace —
+ * the device that took the claim is gone. Deleting the block by hand can, and
+ * that is the problem: it deletes whatever is at the id, and two of the rows
+ * that can be there must survive.
+ *
+ * So this releases ONLY a claim that is actually holding the workspace: a
+ * COMPLETED claim is the record that the migration ran and deleting it would
+ * read as never-migrated, and a row that does not decode as a claim is holding
+ * nothing and belongs to something else.
+ *
+ * It cannot tell a dead claimant from a live one — nothing can, over a
+ * last-write-wins layer with no arbitration. The caller confirms, and passes
+ * back the claim they confirmed AGAINST, so consent cannot be spent on a
+ * different one.
+ */
+export const releaseStrandedGraphBackfillClaim = async (
+  deps: Pick<GraphBackfillClaimDeps, 'tx'>,
+  workspaceId: string,
+  backfillId: string,
+  /** The claim the caller showed the user and got consent for. A different one
+   *  in the row means the situation they agreed to is gone — the original
+   *  finished, or someone released it and a fresh run took the graph — so this
+   *  refuses rather than deleting a claim nobody consented to deleting. The
+   *  gap is a human pause, which is as long as gaps get. */
+  expected: Pick<GraphBackfillClaim, 'claimantId' | 'claimedAt'>,
+): Promise<'released' | 'not-held' | 'changed'> => {
+  const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+  return claimTx(deps, `release stranded backfill claim ${backfillId}`, async tx => {
+    const row = await tx.get(claimId)
+    // DEFENCE IN DEPTH here specifically: this is only ever reached from the
+    // migration dialog, which `claimHoldingGraph` never raises over a foreign
+    // row in the first place. Kept because the id is deterministic and the
+    // throw is what stops a delete landing in another workspace's data.
+    refuseForeignOccupant(row, workspaceId, claimId)
+    if (!row || row.deleted) return 'not-held'
+    const live = claimFromProperties(row.properties)
+    if (!claimHoldsGraph(live)) return 'not-held'
+    if (live.claimantId !== expected.claimantId || live.claimedAt !== expected.claimedAt) {
+      return 'changed'
+    }
+    await tx.delete(claimId)
+    return 'released'
+  })
+}
+
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => ({
+  async stillOwned(tx, workspaceId, backfillId) {
+    const row = await tx.get(graphBackfillClaimBlockId(workspaceId, backfillId))
+    return claimHoldingGraph(row, workspaceId)?.claimantId === deps.claimantId
+  },
   async tryClaim(workspaceId, backfillId, opts) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
     // Ensure our own parent rather than trusting bootstrap ordering: a claim
@@ -202,7 +328,7 @@ export const createGraphBackfillClaim = (
     await deps.ensureHome(workspaceId)
 
     const first = decideClaim(await readGraphBackfillClaim(deps.db, claimId, workspaceId), deps.claimantId)
-    if (first === 'back-off') return false
+    if (first === 'back-off') return 'declined'
     // A recorded completion stops an UNATTENDED pass, which is its job. It
     // must not stop a human who deliberately asked for one: this seam's passes
     // are idempotent per row, so a redundant run is a scan and no writes, while
@@ -210,7 +336,7 @@ export const createGraphBackfillClaim = (
     // its cursor, a legacy value repaired since — is unmigrated forever. The
     // claim's safety property is mutual exclusion (`back-off`, above), and
     // that still holds.
-    if (first === 'already-complete' && !opts?.reclaimCompleted) return false
+    if (first === 'already-complete' && !opts?.reclaimCompleted) return 'declined'
     // `proceed` means a claim here already names us — normally our own from a
     // previous operator run of the same pass. Taken at face value: there is
     // nothing to wait for, because nothing arbitrates (see the module header).
@@ -223,13 +349,8 @@ export const createGraphBackfillClaim = (
     // rows beneath it. Via `addBlockTypeToProperties` because this is raw
     // BlockData being planned, which is the one sanctioned direct-write path.
     //
-    // KNOWN GAP, deliberately not fixed here: post-flip these properties
-    // materialize into field/value CHILDREN, which carry no system type, so
-    // they still read as user activity. The honest fix is not claim-specific
-    // — "property machinery must not look like an edit" is the invisibility
-    // half of slice C (#389), and it needs a decision about whether Recents
-    // excludes descendants of system-typed rows or maps machinery to its
-    // owner. Tagging one block's descendants would leave the class untouched.
+    // KNOWN GAP: post-flip the value CHILDREN carry no system type and still
+    // read as user activity — not claim-specific, tracked in #389.
     const claimProperties = addBlockTypeToProperties({
       [migrationClaimantProp.name]: deps.claimantId,
       [migrationClaimedAtProp.name]: Date.now(),
@@ -238,78 +359,72 @@ export const createGraphBackfillClaim = (
     // the row exists and carries a completion stamp, which has to be replaced
     // by a fresh claim or `markComplete` would be re-stamping someone else's
     // record of a run that is not this one.
-    const won = first === 'proceed' ? true : await deps.tx(async tx => {
-      // Re-checked inside the WRITING tx against this row: the read above
-      // happened outside it, and a peer's claim can arrive in between.
-      const existing = await tx.get(claimId)
-      refuseForeignOccupant(existing, workspaceId, claimId)
-      if (existing && !existing.deleted) {
-        // Yield only to a row that DECODES as a claim, and tell the caller —
-        // a claim that arrived since the read above is authoritative, and a
-        // caller not told runs a migration it just watched someone else take.
-        // A live row whose bookkeeping is malformed reads as unclaimed to
-        // every reader, so yielding on mere existence wedged the migration
-        // shut for good; the id is machinery-owned, so overwriting a non-claim
-        // there is repair.
-        //
-        // Except a COMPLETED claim under `reclaimCompleted`: it names a
-        // finished pass, and an operator asking again is asking on purpose.
-        // The overwrite is the point — leaving the completion stamp would make
-        // `markComplete` re-stamp a record of someone else's run. An in-flight
-        // claim still refuses, which is the mutual exclusion this seam
-        // actually provides.
-        const live = claimFromProperties(existing.properties)
-        if (live !== null
-            && !(opts?.reclaimCompleted === true && live.completedAt !== undefined)) {
-          return false
+    // `proceed` writes NOTHING — a live claim already names us. Reported as
+    // `inherited` rather than as a win: this claimant is a browser profile, so
+    // the row may be a sibling TAB's live claim, and a caller that released it
+    // would delete a claim somebody is still writing under.
+    const won: ClaimAttempt = first === 'proceed'
+      ? 'inherited'
+      : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {
+        // Re-checked inside the WRITING tx against this row: the read above
+        // happened outside it, and a peer's claim can arrive in between.
+        const existing = await tx.get(claimId)
+        refuseForeignOccupant(existing, workspaceId, claimId)
+        if (existing && !existing.deleted) {
+          // Yield only to a row that DECODES as a claim, and tell the caller —
+          // a claim that arrived since the read above is authoritative, and a
+          // caller not told runs a migration it just watched someone else take.
+          // A live row whose bookkeeping is malformed reads as unclaimed to
+          // every reader, so yielding on mere existence wedged the migration
+          // shut for good; the id is machinery-owned, so overwriting a non-claim
+          // there is repair.
+          //
+          // Except a COMPLETED claim under `reclaimCompleted`: it names a
+          // finished pass, and an operator asking again is asking on purpose.
+          // The overwrite is the point — leaving the completion stamp would make
+          // `markComplete` re-stamp a record of someone else's run. An in-flight
+          // claim still refuses, which is the mutual exclusion this seam
+          // actually provides.
+          const live = claimFromProperties(existing.properties)
+          if (live !== null
+              && !(opts?.reclaimCompleted === true && live.completedAt !== undefined)) {
+            return 'declined'
+          }
+          await tx.update(claimId, {properties: claimProperties})
+          return 'minted'
         }
-        await tx.update(claimId, {properties: claimProperties})
-        return true
-      }
-      if (existing?.deleted) {
-        // Deleting the claim block IS the documented recovery for a claimant
-        // that never came back, and it leaves a TOMBSTONE at this
-        // deterministic id. `tx.create` is a plain INSERT that throws
-        // DuplicateIdError on one, which the caller swallows as "skip" — so
-        // the gesture meant to REOPEN the migration would instead wedge it
-        // shut for good. Restore the row instead of inserting a new one.
-        //
-        // ACCEPTED, not overlooked: this reclaim is NOT single-winner the way
-        // the create above is. `systemMint` is an insert-only option by
-        // design — a row may be born a speculative default, never promoted
-        // into one — so restore+update emits ordinary nonzero-stamped
-        // patches, and two clients reopening after the same deletion can each
-        // end up believing they hold it. Making it single-winner needs
-        // server-side arbitration this stack does not have.
-        //
-        // Taken because the outcome sits in the residual we already accept:
-        // a duplicate run of a per-row-idempotent pass, in a window that
-        // opens only after a human has deliberately deleted a claim AND two
-        // clients reopen concurrently. The alternative — generation-suffixed
-        // ids so each reclaim is a fresh systemMint create — buys single-
-        // winner recovery for a permanent complication of the id scheme.
-        await tx.restore(claimId, {content: backfillId})
-        await tx.update(claimId, {properties: claimProperties})
-        return true
-      }
-      // `systemMint` (stamp 0) like every other deterministic-id creator.
-      // Without it this is a nonzero-stamp mint of a shared id, which
-      // `syncObserver/reconcile.ts` names as its known blind spot: two devices
-      // minting the same id produce equal nonzero stamps from different
-      // writes, invariant I1 reads them as identical, the incoming row is
-      // skip-stale'd, and the loser strands believing it won. Stamp 0 yields
-      // via I2 instead, so both devices adopt the server's answer.
-      await tx.create({
-        id: claimId,
-        workspaceId,
-        parentId: migrationsPageBlockId(workspaceId),
-        orderKey: keyAtStart(),
-        content: backfillId,
-        properties: claimProperties,
-      }, {systemMint: true})
-      return true
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
-        description: `claim backfill ${backfillId}`})
+        if (existing?.deleted) {
+          // Restore, don't create: deleting the claim is the documented
+          // recovery for a dead claimant and leaves a TOMBSTONE here, on which
+          // `tx.create` throws DuplicateIdError — the caller swallows that as
+          // "skip", so the gesture meant to REOPEN the migration would wedge
+          // it shut.
+          //
+          // ACCEPTED: unlike the create below, this reclaim is not
+          // single-winner — `systemMint` is insert-only, so restore+update
+          // emits nonzero-stamped patches and two clients reopening
+          // concurrently can both believe they hold it. The residual is a
+          // duplicate run of a per-row-idempotent pass, after a human
+          // deliberately deleted a claim.
+          await tx.restore(claimId, {content: backfillId})
+          await tx.update(claimId, {properties: claimProperties})
+          return 'minted'
+        }
+        // `systemMint` (stamp 0) like every other deterministic-id creator.
+        // Without it this is a nonzero-stamp mint of a shared id: two devices
+        // minting it in one millisecond get equal stamps from different writes,
+        // which a reader that cannot decode the row takes for one write
+        // (`blocksAlreadyReflects`, #744). Stamp 0 never vouches.
+        await tx.create({
+          id: claimId,
+          workspaceId,
+          parentId: migrationsPageBlockId(workspaceId),
+          orderKey: keyAtStart(),
+          content: backfillId,
+          properties: claimProperties,
+        }, {systemMint: true})
+        return 'minted'
+      })
 
     // No convergence wait. Under an operator trigger there is nothing to
     // arbitrate, and the wait was unwinnable anyway — see the module header.
@@ -318,7 +433,7 @@ export const createGraphBackfillClaim = (
 
   async markComplete(workspaceId, backfillId) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
-    await deps.tx(async tx => {
+    await claimTx(deps, `complete backfill ${backfillId}`, async tx => {
       const row = await tx.get(claimId)
       refuseForeignOccupant(row, workspaceId, claimId)
       if (!row) {
@@ -326,6 +441,29 @@ export const createGraphBackfillClaim = (
           `[graphBackfillClaim] cannot record completion of "${backfillId}": its claim ` +
           `block is gone. The pass ran but nothing records it, so the next operator ` +
           `would repeat it.`,
+        )
+      }
+      // OUR run's record, not whatever holds the row now. The two are not the
+      // same once a claim can be RELEASED from the migration dialog: a peer
+      // clears this run's claim, a third device takes a fresh one, and stamping
+      // that one completed tells every device the migration is over — ending
+      // the modal AND the undo pause while that run is still rewriting the
+      // graph. That is the hazard the pause exists for, reached by recording a
+      // completion rather than by a write.
+      //
+      // A bag that does not decode is refused for the same reason the missing
+      // row above is: stamping it records nothing any reader can see, and the
+      // operator is told the pass ran.
+      //
+      // CLAIMANT-level, so two TABS of one browser still cannot be told apart —
+      // that needs the claim's identity to travel with the run (km-ij26), and
+      // duplicate runs from one profile are an accepted residual already.
+      const live = claimFromProperties(row.properties)
+      if (live === null || live.claimantId !== deps.claimantId) {
+        throw new Error(
+          `[graphBackfillClaim] cannot record completion of "${backfillId}": the claim ` +
+          `block holds ${live === null ? 'no readable claim' : 'another client\'s claim'}, ` +
+          `so this run is not the one it records. The pass ran; nothing was stamped.`,
         )
       }
       // A TOMBSTONE has to be restored, not stamped. Two operators can run
@@ -339,13 +477,12 @@ export const createGraphBackfillClaim = (
       await tx.update(claimId, {
         properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
       })
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
-        description: `complete backfill ${backfillId}`})
+    })
   },
 
   async releaseClaim(workspaceId, backfillId) {
     const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
-    await deps.tx(async tx => {
+    await claimTx(deps, `release backfill claim ${backfillId}`, async tx => {
       // Ownership is decided from the TRANSACTION's own row, not from a read
       // taken before it. Sync can replace this device's claim with the
       // winner's in that gap, and deleting on the strength of the stale read
@@ -362,8 +499,12 @@ export const createGraphBackfillClaim = (
       // today the difference is unobservable. Preserving it needs a second
       // key carried through the reclaim — worth it only once something reads
       // "was this graph migrated" as durable state (km-bmka).
+      //
+      // `Repo.withOperatorBackfillClaim` WIDENED this: it reclaims before its
+      // body writes, so any pre-pass abort — a synthesis that threw, a flip
+      // that was refused — now reaches this delete with the prior completion
+      // stamp already overwritten. Same residual, more ways in.
       await tx.delete(claimId)
-    }, {scope: ChangeScope.BlockDefault, skipUndo: true,
-        description: `release backfill claim ${backfillId}`})
+    })
   },
 })

@@ -1,31 +1,54 @@
 // @vitest-environment node
 /**
- * Properties-as-blocks slice B1 (PR #288 §5/§6/§9): dual-writing
+ * Properties-as-blocks slice B1 (docs/properties-as-blocks-migration.html §5/§6/§9): dual-writing
  * `tx.setProperty`, the project/materialize processor pair, and the
  * `childrenOf` visible-children exclusion — all gated on the per-workspace
  * flip column (`workspaces.properties_migration`), dormant at 'cell'.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
-import { keyAtStart } from './orderKey'
+import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
+import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { projectedPropertyDefinitionsFacet } from '@/data/facets'
-import { mergeBlocksInTx } from './blockMerge'
+import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { exactBlockRefPrefill } from '@/plugins/references/contentPrefill'
+import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
-  encodedPropertyValueToChildContent,
-  propertyChildContentToEncodedValue,
-  propertyValueToChildContent,
+  childContentsToEncodedPropertyValue,
+  convertValueChildContent,
+  encodedPropertyValueToChildContents,
+  encodedToValueChildContent,
+  propertyCellValueRejection,
+  valueChildContentToEncoded,
+  type ValueChildConversion,
 } from './propertyChildren'
+import {
+  reprojectOwnersForRowStates,
+  type ProjectableRow,
+} from './internals/propertyChildrenProcessor'
 import { propertyDefinitionBlockId } from './definitionSeeds'
+import { deleteSubtreeInTx } from './subtreeDelete'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
 import { BLOCK_TYPE_TYPE } from './blockTypes'
+import { kernelValuePresetCoresById } from './kernelValuePresetCores'
+
+/** One scalar value's child content. Every schema in this file is
+ *  single-valued, so grain and property value are the same thing here. */
+const propertyValueToChildContent = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): string => encodedToValueChildContent(schema, schema.codec.encode(value))
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
+/** A synthetic block id for values that LOOK like references. All-2s, so it
+ *  is plainly not a real graph id — it only has to be UUID-shaped. */
+const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
 
 const statusSchema = defineProperty('status', {
   codec: codecs.string,
@@ -49,26 +72,34 @@ const seedWorkspace = async (
   )
 }
 
-const setup = (): Repo => {
-  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-  repo.setActiveWorkspaceId(WS)
+/** Publish one projected property definition into `repo`'s facet runtime.
+ *  Contributions bucket by (sourceId, workspaceId), so each call ADDS a
+ *  definition rather than replacing the ones before it. */
+const registerDefinition = (
+  repo: Repo,
+  sourceId: string,
+  fieldId: string,
+  schema: AnyPropertySchema,
+): void => {
   repo.setRuntimeContributions(
     projectedPropertyDefinitionsFacet,
-    'test-status-definition',
+    sourceId,
     [{
       metadata: {
-        fieldId: STATUS_FIELD_ID,
-        workspaceId: WS,
-        createdAt: 1,
-        name: statusSchema.name,
-        changeScope: statusSchema.changeScope,
-        hidden: false,
-        origin: 'user' as const,
+        fieldId, workspaceId: WS, createdAt: 1,
+        name: schema.name, changeScope: schema.changeScope,
+        hidden: false, origin: 'user' as const,
       },
-      schema: statusSchema,
+      schema,
     }],
     {workspaceId: WS},
   )
+}
+
+const setup = (): Repo => {
+  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+  repo.setActiveWorkspaceId(WS)
+  registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
   return repo
 }
 
@@ -92,27 +123,55 @@ const createBlock = async (repo: Repo, id: string, content = ''): Promise<void> 
 interface ChildRow {
   id: string
   content: string
+  order_key: string
   reference_target_id: string | null
   deleted: number
 }
 
 const childrenRows = async (parentId: string): Promise<ChildRow[]> =>
   sharedDb.db.getAll<ChildRow>(
-    `SELECT id, content, reference_target_id, deleted FROM blocks
+    `SELECT id, content, order_key, reference_target_id, deleted FROM blocks
       WHERE parent_id = ? ORDER BY order_key, id`,
     [parentId],
   )
 
-const liveFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-  (await childrenRows(parentId)).filter(
-    r => r.deleted === 0 && r.reference_target_id === STATUS_FIELD_ID,
-  )
+const liveFieldRowsFor = (fieldId: string) =>
+  async (parentId: string): Promise<ChildRow[]> =>
+    (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === fieldId,
+    )
 
-const cellValue = async (id: string): Promise<unknown> => {
+const liveFieldRows = liveFieldRowsFor(STATUS_FIELD_ID)
+
+const bagOf = async (id: string): Promise<Record<string, unknown>> => {
   const row = await sharedDb.db.get<{properties_json: string}>(
     'SELECT properties_json FROM blocks WHERE id = ?', [id],
   )
-  return (JSON.parse(row.properties_json) as Record<string, unknown>)[statusSchema.name]
+  return JSON.parse(row.properties_json) as Record<string, unknown>
+}
+
+const cellValue = async (id: string): Promise<unknown> =>
+  (await bagOf(id))[statusSchema.name]
+
+const referencesOf = async (id: string): Promise<unknown> => {
+  const row = await sharedDb.db.get<{references_json: string}>(
+    'SELECT references_json FROM blocks WHERE id = ?', [id],
+  )
+  return JSON.parse(row.references_json) as unknown
+}
+
+/** What the escaped envelope must BE, rather than how it is spelled: it carries
+ *  the value back, and carries no span OPENER. Asserting the spelling instead
+ *  would only prove `escapeContent` agrees with a copy of itself.
+ *
+ *  The opener check is deliberately stronger than asking the whole-block parser
+ *  whether the content is a reference: every span form in EITHER reader has to
+ *  open with `[` or `(`, so no opener means no span for the inline reader
+ *  either — and that reader is the one a rename or merge rewrites through. */
+const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, content: string): void => {
+  expect(content).not.toBe(value)
+  expect(content).not.toMatch(/[[(]/)
+  expect(valueChildContentToEncoded(schema, content)).toBe(value)
 }
 
 describe('dormant at properties_migration = cell', () => {
@@ -162,6 +221,7 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
+
   it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -207,6 +267,97 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await cellValue('p')).toBe('done')
   })
 
+  const eagerSets = [
+    ['setProperty', (tx: Tx, value: string) => tx.setProperty('p', statusSchema, value)],
+    ['setProperties', (tx: Tx, value: string) =>
+      tx.setProperties('p', {set: [propertyValue(statusSchema, value)]})],
+  ] as const
+
+  // The cell is derived, so a write equal to it can still owe the children.
+  describe.each(eagerSets)('%s of the value the cell already holds', (_, write) => {
+    it('materializes it when no field row backs the cell (#1209)', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      // Sync-shaped: no processor runs, so nothing materializes the key.
+      await sharedDb.db.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({[statusSchema.name]: 'done'}), 'p'],
+      )
+      expect(await liveFieldRows('p')).toEqual([])
+
+      await repo.tx(tx => write(tx, 'done'), {scope: ChangeScope.BlockDefault})
+
+      const fields = await liveFieldRows('p')
+      expect(fields).toHaveLength(1)
+      const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
+      expect(values.map(v => v.content)).toEqual(['done'])
+    })
+
+    it('wins over a value-child edit earlier in the same tx', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+        {scope: ChangeScope.BlockDefault})
+      const [field] = await liveFieldRows('p')
+      const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+      // The cell still says `draft` when the write runs: PROJECT folds the
+      // child edit back only after the tx body returns.
+      await repo.tx(async tx => {
+        await tx.update(value!.id, {content: 'shipped'})
+        await write(tx, 'draft')
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await cellValue('p')).toBe('draft')
+      const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+      expect(values.map(v => v.content)).toEqual(['draft'])
+    })
+
+    it('is still a no-op on an owner deleted with its children', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
+
+      // No live row may sit under a tombstone, so converging here would throw.
+      await repo.tx(tx => write(tx, 'done'), {scope: ChangeScope.BlockDefault})
+
+      expect((await childrenRows('p')).filter(r => r.deleted === 0)).toEqual([])
+    })
+  })
+
+  it.each(eagerSets)('%s of a NEW value still writes a deleted owner', async (_, write) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => write(tx, 'shipped'), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('shipped')
+  })
+
+  it('setProperties deletes no field row for an unset that changes nothing the cell shows', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Sync-shaped: the cell lost the key with no processor to reconcile it.
+    await sharedDb.db.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', ['{}', 'p'])
+
+    await repo.tx(tx => tx.setProperties('p', {unset: [statusSchema]}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await liveFieldRows('p')).toHaveLength(1)
+  })
+
   it('the same-tx projection is idempotent — the cell is written once per tx', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -250,6 +401,180 @@ describe('flipped workspace (properties_migration = children)', () => {
 
     await repo.tx(tx => tx.delete(field!.id), {scope: ChangeScope.BlockDefault})
     expect(await cellValue('p')).toBeUndefined()
+  })
+
+  /** #1083: the projection pass is fed the BEFORE and AFTER of every changed
+   *  row, and both sides of one change share a parent — so a pass that reads
+   *  the parent per row state pays for the same point read twice on a single
+   *  edit, and 2N times for an N-row tx whose rows are siblings. The read is
+   *  what classifies the row (value child of a field row, or not), so it
+   *  cannot be skipped from row-local data; reading it once per parent is the
+   *  whole of the saving. Asserted per parent id, not as a total, so an
+   *  unrelated read added elsewhere in the pass does not redden this. */
+  it('reads each parent once per pass, however many row states share it', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    // Move the value child out from under the cell with a RAW write, which
+    // fires no processor — so the pass below is the only thing that can bring
+    // the cell to 'shipped', and an assertion on it observes a change instead
+    // of re-reading what `setProperty` already left there.
+    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?',
+      [propertyValueToChildContent(statusSchema, 'shipped'), value!.id])
+    expect(await cellValue('p')).toBe('draft')
+
+    const reads: string[] = []
+    await repo.tx(async tx => {
+      const counting = new Proxy(tx, {
+        get: (target, prop, receiver) => {
+          const member = Reflect.get(target, prop, receiver)
+          if (prop !== 'get') {
+            return typeof member === 'function' ? member.bind(target) : member
+          }
+          return (id: string) => { reads.push(id); return tx.get(id) }
+        },
+      })
+      const rowState: ProjectableRow = {
+        id: value!.id, parentId: field!.id, workspaceId: WS,
+        referenceTargetId: null, isFieldForm: false,
+      }
+      // The shape one content edit produces: the same row, twice.
+      await reprojectOwnersForRowStates(
+        counting, [rowState, rowState],
+        {resolveFieldSchema: fieldId => fieldId === STATUS_FIELD_ID ? statusSchema : undefined},
+        'full',
+      )
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(reads.filter(id => id === field!.id)).toEqual([field!.id])
+    // The memoized row is the one the classification actually used: had it come
+    // back wrong, the value child would not have been recognized as one and the
+    // cell would still hold the pre-pass value.
+    expect(await cellValue('p')).toBe('shipped')
+  })
+})
+
+/** #688: a string value the content column cannot hold AS ITSELF. Both shapes
+ *  survive the cell era (`properties_json` is JSON) and were destroyed by the
+ *  flip — the reason this is a must-fix BEFORE the first workspace flips.
+ *  End-to-end because the loss is not in the codec pair: encode and decode
+ *  agreed, and the value disappeared between them, in the derive processor and
+ *  the projection's value-set filter. */
+describe('flipped workspace: string values that verbatim content would destroy (#688)', () => {
+  const valueRows = async (parentId: string): Promise<Array<{
+    id: string
+    content: string
+    is_field_form: number | null
+    reference_target_id: string | null
+    deleted: number
+  }>> => {
+    const [field] = await liveFieldRows(parentId)
+    return sharedDb.db.getAll(
+      `SELECT id, content, is_field_form, reference_target_id, deleted
+         FROM blocks WHERE parent_id = ?`,
+      [field!.id],
+    )
+  }
+
+  // The headline shape: content that IS the §7 marked field form. The derive
+  // stamps `is_field_form`, `isFieldValueChild` drops the row from the value
+  // set, and the projection unsets the owner's key — silently.
+  it('a `::((id))` value keeps the property, and its row stays a VALUE not a field row', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    // Escaped, so the derive reads it as prose: the bit is what the value-set
+    // filter keys on, and the whole loss followed from it being stamped.
+    expect(values[0]!.is_field_form).not.toBe(1)
+    expectEscapedEnvelope(statusSchema, value, values[0]!.content)
+  })
+
+  // An UNMARKED span never set the bit, so it never dropped the key — it
+  // stamped `reference_target_id` instead, making a string value a live
+  // reference that reference maintenance rewrites. Escaped for that reason,
+  // and pinned so a narrowing of the predicate to just the marked form shows up.
+  it('an unmarked `((id))` value is stored as text, not as a reference', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `((${SAMPLE_UUID}))`
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.reference_target_id ?? null).toBeNull()
+  })
+
+  // The second shape (bead comment): the cell keeps a lone surrogate, the
+  // content column returns U+FFFD, and the projection writes the mangled
+  // spelling back over the cell as authoritative.
+  it.each([
+    ['high', 'a\uD800b'],
+    ['low', 'a\uDC00b'],
+  ])('a lone %s surrogate survives instead of projecting back as U+FFFD', async (_kind, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    expect(await cellValue('p')).not.toContain('�')
+  })
+
+  // The scope line for the escape: it engages only for values verbatim content
+  // cannot hold. A well-formed emoji is a surrogate PAIR, and padding, control
+  // characters and newlines all round-trip the column verbatim (measured), so
+  // none of them are escaped — the tree keeps showing the value as itself.
+  it.each([
+    ['an emoji (a valid surrogate pair)', 'a😀b'],
+    ['padding', '  padded  '],
+    ['a newline', 'a\r\nb'],
+    ['a NUL byte', 'a\u0000b'],
+  ])('leaves %s verbatim — the escape is not a blanket re-encoding', async (_name, value) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
+    const values = (await valueRows('p')).filter(v => v.deleted === 0)
+    expect(values[0]!.content).toBe(value)
+  })
+
+  // The projection is the half that actually lost the value, so drive it on
+  // its own: an unrelated edit under the field row reprojects the cell from
+  // the value children, and must reconstruct the same string.
+  it('reprojects the escaped value unchanged when the field row is touched again', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    const value = `::((${SAMPLE_UUID}))`
+    await repo.tx(tx => tx.setProperty('p', statusSchema, value),
+      {scope: ChangeScope.BlockDefault})
+
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.update(field!.id, {content: field!.content}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe(value)
   })
 })
 
@@ -355,26 +680,11 @@ describe('tx.setProperties (batch set + unset)', () => {
   const setupWithTwo = async (migration: string): Promise<Repo> => {
     await seedWorkspace(migration)
     const repo = setup()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-priority-definition',
-      [{
-        metadata: {
-          fieldId: PRIORITY_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: prioritySchema.name, changeScope: prioritySchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: prioritySchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-priority-definition', PRIORITY_FIELD_ID, prioritySchema)
     return repo
   }
 
-  const priorityFieldRows = async (parentId: string): Promise<ChildRow[]> =>
-    (await childrenRows(parentId)).filter(
-      r => r.deleted === 0 && r.reference_target_id === PRIORITY_FIELD_ID,
-    )
+  const priorityFieldRows = liveFieldRowsFor(PRIORITY_FIELD_ID)
 
   it('cell workspace: applies set + unset in ONE bag rewrite', async () => {
     const repo = await setupWithTwo('cell')
@@ -406,19 +716,7 @@ describe('tx.setProperties (batch set + unset)', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     const repo = await setupWithTwo('cell')
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-count-definition',
-      [{
-        metadata: {
-          fieldId: 'field-count-children', workspaceId: WS, createdAt: 1,
-          name: countSchema.name, changeScope: countSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: countSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-count-definition', 'field-count-children', countSchema)
     await createBlock(repo, 'p')
     await repo.tx(tx => tx.setProperty('p', countSchema, 5),
       {scope: ChangeScope.BlockDefault})
@@ -426,7 +724,7 @@ describe('tx.setProperties (batch set + unset)', () => {
     // `NaN` is invalid for the number codec (encode throws). Because `count` is
     // ALSO unset in the same batch, the discarded set value must be skipped
     // rather than encoded — otherwise the whole batch throws instead of applying
-    // the explicit clear (Codex #386). unset wins.
+    // the explicit clear. unset wins.
     await repo.tx(tx => tx.setProperties('p', {
       set: [propertyValue(countSchema, Number.NaN)],
       unset: [countSchema],
@@ -535,28 +833,12 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     await seedWorkspace('children')
     const repo = setup()
     // A second projected definition alongside `status`, ref-typed.
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-related-definition',
-      [{
-        metadata: {
-          fieldId: RELATED_FIELD_ID, workspaceId: WS, createdAt: 1,
-          name: relatedSchema.name, changeScope: relatedSchema.changeScope,
-          hidden: false, origin: 'user' as const,
-        },
-        schema: relatedSchema,
-      }],
-      {workspaceId: WS},
-    )
+    registerDefinition(repo, 'test-related-definition', RELATED_FIELD_ID, relatedSchema)
     return repo
   }
 
-  const relatedCell = async (id: string): Promise<unknown> => {
-    const row = await sharedDb.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id],
-    )
-    return (JSON.parse(row.properties_json) as Record<string, unknown>)[relatedSchema.name]
-  }
+  const relatedCell = async (id: string): Promise<unknown> =>
+    (await bagOf(id))[relatedSchema.name]
 
   const relatedValueChild = async (parentId: string): Promise<ChildRow | undefined> => {
     const fields = (await childrenRows(parentId)).filter(
@@ -580,6 +862,7 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     // ...and the synced cell keeps the bare id.
     expect(await relatedCell('p')).toBe('target-xyz')
   })
+
 
   it('re-projects the cell from the column when the ref is retargeted in the tree', async () => {
     const repo = await setupWithRef()
@@ -702,12 +985,15 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(await liveFieldRows('p')).toEqual([])
   })
 
-  it('unknown cell keys are left alone (pending §9 orphan synthesis, never deleted)', async () => {
+  it('leaves pre-existing unknown cell keys alone during unrelated writes', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'p')
-    await repo.tx(tx => tx.update('p', {properties: {'no-such-schema': 42}}),
-      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({'no-such-schema': 42}), 'p'],
+    ))
+    await repo.tx(tx => tx.update('p', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
 
     expect(await childrenRows('p')).toEqual([])
     const row = await sharedDb.db.get<{properties_json: string}>(
@@ -880,7 +1166,7 @@ describe('merge integration (§9, slice B3)', () => {
     expect(strandedLive).toEqual([])
   })
 
-  it('honors a custom mergeProperties that drops a source-only property (no reproject-back)', async () => {
+  it('a custom mergeProperties dropping a source-only key does not reap its rows', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'into')
@@ -892,18 +1178,17 @@ describe('merge integration (§9, slice B3)', () => {
     await repo.tx(async tx => {
       const into = await tx.get('into')
       const from = await tx.get('from')
-      // Strategy keeps ONLY into's bag → deliberately drops from's `status`.
+      // Strategy keeps ONLY into's bag → drops from's `status` from the bag.
       await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
     }, {scope: ChangeScope.BlockDefault})
 
-    // The dropped property must NOT reappear via a moved-and-reprojected field
-    // row — the merge honors the strategy.
-    expect(await cellValue('into')).toBeUndefined()
-    expect(await liveFieldRows('into')).toEqual([])
-    const ff = await sharedDb.db.get<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
-    )
-    expect(ff.deleted).toBe(1)
+    // Child-backed properties are owned by their ROWS (§5's one-direction
+    // rule), so editing the merged BAG is not a way to delete one: the row
+    // moves over intact and PROJECT re-derives the cell from it. A strategy
+    // that means to drop a property has to remove the rows itself, knowing
+    // what is nested under them (#728).
+    expect((await liveFieldRows('into')).map(f => f.id)).toEqual([fromField!.id])
+    expect(await cellValue('into')).toBe('from-only')
   })
 
   it('preserves user-authored descendants of the source value child', async () => {
@@ -975,9 +1260,9 @@ describe('merge integration (§9, slice B3)', () => {
   })
 
   it("a source's ordinary block-ref child is not mistaken for the survivor's field row once re-homed", async () => {
-    // The sibling case to the PR #386 one below, and the half the fold's
-    // visible-child SET exists for. `from`'s ordinary `((STATUS))` child is
-    // re-homed under `into` BEFORE the field-row scan runs, so unless the set
+    // The sibling case to the ordinary-child-of-a-value-row case below, and
+    // the half the fold's visible-child SET exists for. `from`'s ordinary
+    // `((STATUS))` child is re-homed under `into` BEFORE the field-row scan runs, so unless the set
     // grows to include it the scan sees a child of `into` carrying a
     // definition-shaped `reference_target_id` and registers it as `into`'s
     // field row for Status — after which `from`'s genuine field row collapses
@@ -1079,6 +1364,155 @@ describe('merge integration (§9, slice B3)', () => {
   })
 })
 
+describe('merge never reaps a source field row (#728)', () => {
+  const COUNT_FIELD_ID = 'field-count-children'
+  const countSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** `setup()` plus a NUMBER property. The state this suite is about — cell
+   *  key unset, rows still live — needs a codec that can REJECT a value
+   *  child's text, which `codecs.string` never does. */
+  const setupWithCount = (): Repo => {
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    return repo
+  }
+
+  const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+
+  const rowOf = async (id: string) => sharedDb.db.get<{
+    deleted: number; parent_id: string; content: string
+  }>('SELECT deleted, parent_id, content FROM blocks WHERE id = ?', [id])
+
+  /** Root of `id`'s LIVE ancestry, or null if `id` or any ancestor is
+   *  tombstoned — the difference between "not deleted" and "reachable", which
+   *  is what a merge left under a source tombstone gets wrong. */
+  const liveRootOf = async (id: string): Promise<string | null> => {
+    let cursor: string | null = id
+    while (cursor !== null) {
+      const row: {parent_id: string | null; deleted: number} = await sharedDb.db.get(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [cursor],
+      )
+      if (row.deleted === 1) return null
+      if (row.parent_id === null) return cursor
+      cursor = row.parent_id
+    }
+    return null
+  }
+
+  /** `from` holds a field row whose value no longer decodes, so PROJECT has
+   *  unset the cell key while keeping the rows visible/fixable (§9) — plus a
+   *  user-authored note under the value. Returns the three row ids. */
+  const seedKeylessFieldRow = async (
+    repo: Repo, owner: string,
+  ): Promise<{fieldId: string; valueId: string; noteId: string}> => {
+    await repo.tx(tx => tx.setProperty(owner, countSchema, 42),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows(owner)
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.setContent({id: value!.id, content: 'about forty-two'})
+    const noteId = `note-${owner}`
+    await repo.tx(async tx => {
+      await tx.create({
+        id: noteId, workspaceId: WS, parentId: value!.id, orderKey: 'a',
+        content: 'measured on the old scale',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Preconditions, asserted rather than assumed: an un-flipped workspace or
+    // a still-parsing value would never reach the branch under test.
+    expect(Object.hasOwn(await bagOf(owner), countSchema.name)).toBe(false)
+    expect((await countFieldRows(owner)).map(r => r.id)).toEqual([field!.id])
+    return {fieldId: field!.id, valueId: value!.id, noteId}
+  }
+
+  it('moves the row, its unparseable value and the user note onto the survivor', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'into'})
+    expect(await rowOf(valueId)).toMatchObject({
+      deleted: 0, parent_id: fieldId, content: 'about forty-two',
+    })
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('into')
+    // The cell stays unset: the adopted row still has no value that decodes,
+    // so PROJECT adds nothing. Moving it is inert for the survivor's bag.
+    expect(Object.hasOwn(await bagOf('into'), countSchema.name)).toBe(false)
+    // Nothing stranded live under the `from` tombstone.
+    expect(await sharedDb.db.getAll(
+      `SELECT b.id FROM blocks b JOIN blocks p ON p.id = b.parent_id
+        WHERE p.deleted = 1 AND b.deleted = 0 AND b.workspace_id = ?`, [WS],
+    )).toEqual([])
+  })
+
+  it('undo restores the row under the source, cell still unset', async () => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    const {fieldId, valueId, noteId} = await seedKeylessFieldRow(repo, 'from')
+    repo.undoManager.clear()
+
+    await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+    expect(await liveRootOf(noteId)).toBe('into')
+
+    expect(await repo.undo()).toBe(true)
+    expect(await rowOf('from')).toMatchObject({deleted: 0})
+    expect(await rowOf(fieldId)).toMatchObject({deleted: 0, parent_id: 'from'})
+    expect(await rowOf(valueId)).toMatchObject({deleted: 0, parent_id: fieldId, content: 'about forty-two'})
+    expect(await rowOf(noteId)).toMatchObject({deleted: 0, parent_id: valueId})
+    expect(await liveRootOf(noteId)).toBe('from')
+    expect(Object.hasOwn(await bagOf('from'), countSchema.name)).toBe(false)
+
+    expect(await repo.redo()).toBe(true)
+    expect(await liveRootOf(noteId)).toBe('into')
+  })
+
+  it.each([
+    ['keyless source first', ['a', 'b']],
+    ['keyless source second', ['b', 'a']],
+  ] as const)('survives either fold order — %s', async (_label, order) => {
+    await seedWorkspace('children')
+    const repo = setupWithCount()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'a')
+    await createBlock(repo, 'b')
+    const {valueId, noteId} = await seedKeylessFieldRow(repo, 'a')
+    // `b` holds the same property with a value that DOES decode, so one source
+    // supplies the survivor's field row and the other has to fold into it.
+    await repo.tx(tx => tx.setProperty('b', countSchema, 7),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const froms = await Promise.all(order.map(id => tx.get(id)))
+      await foldBlocksInTx(tx, {into: into!, froms: froms.map(f => f!)})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // `foldBlocksInTx` folds in whatever order its caller supplies — for the
+    // alias-collision flow, its own claimant order, which the user never chose
+    // — so the outcome must not depend on it. Only the keyless-source-FIRST arm
+    // exercises the adopt branch; folding it second routes through
+    // `collapseDuplicateFieldRow`, which never reaped — that arm is the control
+    // the first is compared against. Which value TEXT wins is still
+    // order-dependent, via MATERIALIZE's cell-wins overwrite of the primary
+    // value child; that is a `setProperty` rule reachable with no merge at all,
+    // so it is deliberately not asserted here.
+    expect(await liveRootOf(valueId)).toBe('into')
+    expect(await liveRootOf(noteId)).toBe('into')
+    expect((await bagOf('into'))[countSchema.name]).toBe(7)
+  })
+})
+
 describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9)', () => {
   /** The flip is an operator UPDATE of the workspace row; between it and the
    *  backfill reaching a block, that block has a full cell and zero field
@@ -1146,6 +1580,68 @@ describe('pre-backfill window: merging into a cell-only target (§5, #389 item 9
   })
 })
 
+describe('the catch-up runs UN-flipped too, and must (km-g5ev)', () => {
+  /** Builds `from`'s field row the way a user would. `::((fieldId))` is
+   *  recognized from CONTENT, so the derive pass stamps a hand-written row like
+   *  a generated one — which is what lets an un-flipped block carry one at all.
+   *  (Not the only route: the catch-up under test mints them un-flipped too,
+   *  once some block already has one.) */
+  const handAuthoredFieldRow = async (
+    repo: Repo, owner: string, value: string,
+  ): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: `${owner}-field`, workspaceId: WS, parentId: owner, orderKey: 'a0',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+      })
+      await tx.create({
+        id: `${owner}-value`, workspaceId: WS, parentId: `${owner}-field`,
+        orderKey: 'a0', content: value,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+  }
+
+  it('keeps the target-wins value reachable through a later flip', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'into')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'target-value'),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'from')
+    await handAuthoredFieldRow(repo, 'from', 'source-value')
+    // Un-flipped precondition, asserted rather than assumed: the dual-write is
+    // flip-gated so `into` is cell-only, and `from`'s row is here because the
+    // helper above typed one.
+    expect(await liveFieldRows('into')).toEqual([])
+    expect((await liveFieldRows('from')).length).toBe(1)
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Gating the catch-up on the flip is the tempting reading of "no pre-flip
+    // machinery", and it LOSES DATA: `from`'s row is adopted instead, so
+    // `into`'s only value row is the source's and the projection below
+    // publishes it over the target's. Measured, not reasoned.
+    const [intoField] = await liveFieldRows('into')
+    const values = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['target-value', 'source-value'])
+
+    // The stake, played out: the projection is dormant until the flip, so the
+    // first touch of this field row afterwards is what publishes its first
+    // value into the cell. Target-wins has to still hold there.
+    await sharedDb.db.execute(
+      'UPDATE workspaces SET properties_migration = ? WHERE id = ?', ['children', WS],
+    )
+    await repo.tx(tx => tx.update(values[1]!.id, {content: 'source-value-edited'}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('into')).toBe('target-value')
+  })
+})
+
 describe('duplicate collapse preservation (§9, slice B3)', () => {
   it('keeps a divergent losing value as a sibling (with its comments) instead of deleting', async () => {
     await seedWorkspace('children')
@@ -1177,8 +1673,7 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // A REAL cell change triggers materialize, which dedups field rows at
-    // 'p' (an equal-value setProperty short-circuits before any write).
+    // The write dedups the field rows at 'p'.
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'gamma'),
       {scope: ChangeScope.BlockDefault})
 
@@ -1356,6 +1851,1051 @@ describe('delete cascade (machinery traversal, §9)', () => {
       )
       expect(row.deleted).toBe(1)
     }
+  })
+})
+
+describe('revival re-materializes property children (#778)', () => {
+  /** Delete-then-restore of a block that owns a materialized property. The
+   *  subtree delete tombstones the field/value rows; the restore flips only
+   *  the owner row and leaves its bag untouched. */
+  const deleteAndRestore = async (repo: Repo): Promise<void> => {
+    await repo.mutate.delete({id: 'p'})
+    expect(await liveFieldRows('p')).toEqual([])
+    await repo.mutate.restore({id: 'p'})
+  }
+
+  const liveValueContents = async (parentId: string): Promise<string[]> => {
+    const out: string[] = []
+    for (const field of await liveFieldRows(parentId)) {
+      for (const value of await childrenRows(field.id)) {
+        if (value.deleted === 0) out.push(value.content)
+      }
+    }
+    return out
+  }
+
+  const seedMaterializedProperty = async (): Promise<Repo> => {
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    return repo
+  }
+
+  it('restore rebuilds the field/value rows an unchanged bag would never trigger', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+
+    await deleteAndRestore(repo)
+
+    // The cell survived the round-trip on its own — that is exactly what made
+    // this silent: post-flip the children are the truth, and only they were
+    // gone.
+    expect(await cellValue('p')).toBe('done')
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('covers restore paths other than the mutator — the seam is liveness, not core.restore', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    // The shape `targets.ts` / `stateBlocks.ts` / `graphBackfillClaim.ts` use:
+    // a raw `tx.restore` with a content patch and no properties patch.
+    await repo.tx(tx => tx.restore('p', {content: 'fresh'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a patched restore updates the original property rows and reconnects nested content', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+    expect(await liveFieldRows('p')).toEqual([])
+
+    await repo.tx(tx => tx.restore('p', {properties: {status: 'changed'}}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    const restoredValues = (await childrenRows(field!.id)).filter(row => row.deleted === 0)
+    expect(restoredValues.map(row => [row.id, row.content])).toEqual([[value!.id, 'changed']])
+    expect(await cellValue('p')).toBe('changed')
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment).toEqual({deleted: 1, parent_id: value!.id})
+  })
+
+  it('stays dormant in an un-flipped workspace', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await childrenRows('p')).toEqual([])
+
+    await repo.mutate.delete({id: 'p'})
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue('p')).toBe('done')
+    expect(await childrenRows('p')).toEqual([])
+  })
+
+  it('the re-materialized children ride the restore undo entry (cmd-Z, then redo)', async () => {
+    // Undo/redo replay drives rows to recorded snapshots with the same-tx pass
+    // SKIPPED, so nothing re-materializes on replay. What makes cmd-Z correct
+    // is that these writes happen INSIDE the restoring tx and are therefore
+    // part of its snapshots.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await deleteAndRestore(repo)
+    const [rebuilt] = await liveFieldRows('p')
+
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    const afterUndo = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [rebuilt!.id])
+    expect(afterUndo.deleted).toBe(1)
+
+    expect(await repo.redo(ChangeScope.BlockDefault)).toBe(true)
+    expect(await liveFieldRows('p')).toHaveLength(1)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('undoing the DELETE restores the original rows, and adds no duplicate field row', async () => {
+    // The other way a tombstoned owner comes back. NOT a pin on the revival
+    // rule — it passes with that deleted, because replay skips the same-tx pass
+    // outright. It pins the CLAIM the rule rests on: that cmd-Z after a delete
+    // rebuilds the subtree from the delete tx's own snapshots and needs no
+    // revival handling, so no second field row for the same definition appears.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [original] = await liveFieldRows('p')
+
+    await repo.mutate.delete({id: 'p'})
+    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
+
+    const restored = await liveFieldRows('p')
+    expect(restored).toHaveLength(1)
+    expect(restored[0]!.id).toBe(original!.id)
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a restore patch that DROPS a key reaps children the delete left live', async () => {
+    // `tx.delete` (not the subtree mutator) tombstones the owner alone, so its
+    // field row is still live when the restore lands. A restore whose patch
+    // drops the key must reap it — which is why the reconciled name set spans
+    // the BEFORE bag too, not just the restored one.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+
+    await repo.tx(tx => tx.restore('p', {properties: {}}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('does not resurrect a property the bag no longer carries', async () => {
+    // Boundary guard, not a pin: with the cell key gone from both bags the
+    // reconciled name set is empty, so no mutation of the revival rule can fail
+    // this. It fences the direction #787 would take — reviving the TOMBSTONED
+    // field row instead of minting a fresh one must not walk past the cell and
+    // resurrect a property the user deleted through its children.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toEqual([])
+
+    await deleteAndRestore(repo)
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('revives the ORIGINAL field/value rows rather than minting replacements', async () => {
+    // Minting converges the value but abandons the tombstoned originals, so the
+    // property's row identity does not survive a delete→restore round-trip and
+    // two devices restoring the same block mint rival field rows for one
+    // definition (#787).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    await deleteAndRestore(repo)
+
+    const restoredFields = await liveFieldRows('p')
+    expect(restoredFields).toHaveLength(1)
+    expect(restoredFields[0]!.id).toBe(field!.id)
+    const restoredValues = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(restoredValues).toHaveLength(1)
+    expect(restoredValues[0]!.id).toBe(value!.id)
+    expect(restoredValues[0]!.content).toBe('done')
+  })
+
+  it('reconnects user content nested under a revived value child', async () => {
+    // A comment thread under a property value is arbitrary user content. Reviving
+    // does not un-delete it — a restored block's own descendants stay
+    // tombstoned — but it must stop being STRANDED: minting left it under a
+    // tombstoned value child nothing would ever revive, so it was unreachable
+    // and unrestorable for good.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+
+    await deleteAndRestore(repo)
+
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment.parent_id).toBe(value!.id)
+    // Still tombstoned, but every ancestor is live again, so it is reachable and
+    // the user can restore it.
+    expect(comment.deleted).toBe(1)
+    const ancestors = await sharedDb.db.getAll<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id IN (?, ?, ?)', [value!.id, field!.id, 'p'])
+    expect(ancestors.map(a => a.deleted)).toEqual([0, 0, 0])
+  })
+
+  it('brings back the properties of a value row it revives, not just the value row', async () => {
+    // §9 flat recognition: a value row can own properties of its own. The
+    // revival restores the value row WITH its bag, so the value row is a
+    // revived row too — and its own field rows must come back, or its cell
+    // claims a property no child backs (the #778 shape, one level down).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+
+    await deleteAndRestore(repo)
+
+    expect(await cellValue(value!.id)).toBe('nested')
+    expect((await liveFieldRows(value!.id)).map(row => row.id)).toEqual([nestedField!.id])
+    expect(await liveValueContents(value!.id)).toEqual(['nested'])
+  })
+
+  it('re-projects the cell from a field row sync left LIVE under the tombstoned owner', async () => {
+    // A peer that never saw the delete re-delivers the field and value rows
+    // live. The restore writes nothing under them, so nothing marked them
+    // changed — but the revived owner's cell is still the pre-delete one, and
+    // the children win (the test above, for the tombstoned-value shape).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [field!.id])
+    await sharedDb.db.execute(
+      'UPDATE blocks SET deleted = 0, content = ? WHERE id = ?', ['arrived', value!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await cellValue('p')).toBe('arrived')
+  })
+
+  it('re-projects a revived value row from its own field row sync left live', async () => {
+    // The same shape one level down: the value row comes back through the
+    // owner's revival, and its OWN property was edited by a peer meanwhile.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    const [nestedValue] = (await childrenRows(nestedField!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+    await sharedDb.db.execute(
+      'UPDATE blocks SET deleted = 0, content = ? WHERE id = ?', ['arrived', nestedValue!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue(value!.id)).toBe('arrived')
+  })
+
+  it('does not mint into a field row sync left live and EMPTY under the tombstoned owner', async () => {
+    // The peer deleted the value; its field row arrived live, its value as a
+    // tombstone. The children say "unset", and the children win — minting the
+    // stale cell back into that field row would resurrect the peer's delete.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [field!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await liveValueContents('p')).toEqual([])
+    expect(await cellValue('p')).toBeUndefined()
+  })
+
+  it('does not mint into an empty live field row of a revived value row either', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await liveValueContents(value!.id)).toEqual([])
+    expect(await cellValue(value!.id)).toBeUndefined()
+  })
+
+  it('keeps a key the SAME tx wrote on a value row that the revival brings back', async () => {
+    // The value row comes back through its owner's revival, not its own — but
+    // a name this tx wrote is the user's word, not an untouched one, so the
+    // children may not override it the way they override a stale cell.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.tx(async tx => {
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 'local-new'}})
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue(value!.id)).toBe('local-new')
+    expect(await liveValueContents(value!.id)).toEqual(['local-new'])
+  })
+
+  it('keeps a key the tx wrote when a LATER processor triggers the revival (pass two)', async () => {
+    // MATERIALIZE's re-run pass sees only rows dirtied after its first pass,
+    // with a merged baseline — so which keys a recursively revived row had
+    // written must come from the tx's own write log, not from that event.
+    const restorer = defineSameTxProcessor({
+      name: 'test.restoreOnRequest',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          const target = row.after?.properties['restore']
+          if (typeof target !== 'string') continue
+          if ((await ctx.tx.get(target))?.deleted) await ctx.tx.restore(target)
+        }
+      },
+    })
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      sameTxProcessorsFacet.of(restorer, {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId(WS)
+    registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
+    registerDefinition(repo, 'test-restore-trigger', 'field-restore-trigger', defineProperty('restore', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    }))
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'trigger')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.tx(async tx => {
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 'local-new'}})
+      await tx.update('trigger', {properties: {restore: 'p'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue(value!.id)).toBe('local-new')
+    expect(await liveValueContents(value!.id)).toEqual(['local-new'])
+  })
+
+  it('treats every key of a revived row CREATED in this tx as written by it', async () => {
+    // A row created and tombstoned earlier in the same tx has no tx-start
+    // state: all of its bag is this tx's own writing, so a value it cannot
+    // carry is rejected rather than skipped as untouched legacy data.
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.mutate.delete({id: 'p'})
+
+    await expect(repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'fresh')
+      const [field] = (await tx.childrenOf('p', undefined)).filter(c => c.isFieldForm === true)
+      const [value] = await tx.childrenOf(field!.id, undefined)
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 123}})
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(/Cannot materialize property/)
+  })
+
+  it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
+    // The mirror image of the test above, and the reason it is settled the same
+    // way: an unobserved cell write and an unobserved child arrival reach the
+    // revival in the SAME shape — a tombstoned value whose content disagrees
+    // with the bag — so no rule can honour both. Declined: LWW by `updated_at`,
+    // which would need a clock comparison between two rows to be right about
+    // which device wrote last. The tie goes to the child instead, because §5
+    // makes the children the only property truth that crosses sync and the cell
+    // a local read surface. Nothing diverges either way — PROJECT rebuilds the
+    // cell from the child in the same tx.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'moved-on'}), 'p'])
+
+    await repo.mutate.restore({id: 'p'})
+
+    const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    expect(values[0]!.content).toBe('done')
+    expect(await cellValue('p')).toBe('done')
+  })
+
+  it('keeps a value that arrived under the tombstoned row over the cell it diverged from', async () => {
+    // The scalar twin of the list rule (#1010): revival re-materializes names
+    // the tx never wrote, and sync-apply skips the parent-liveness trigger — so
+    // a peer's edit lands on a value row while the owner is deleted. Post-flip
+    // the children are the only property truth that crosses sync, so the cell
+    // may not be allowed to overwrite one; doing so destroys text this device
+    // never showed anyone.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // The arrival: raw, because sync-apply never passes through `repo.tx` — it
+    // moves the content and leaves the tombstone alone.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET content = ? WHERE id = ?', ['arrived', value!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(live.map(v => v.content)).toEqual(['arrived'])
+    expect(await cellValue('p')).toBe('arrived')
+  })
+
+  it('keeps a field row respelled while the owner was deleted', async () => {
+    // The same staleness one level up. A field row's content is machinery, but
+    // `::[[Name]]` resolves to the same fieldId and is what a rename's clean
+    // 1-for-1 leaves behind — so an arrival can respell the row while the owner
+    // is down, and canonicalizing it on the way back reverts an edit the tx
+    // never observed. Canonicalizing is still right on an OBSERVED write; the
+    // test below the guard's twin pins that half.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Status']),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    // Content only: the alias resolves to the same block, so an arrival's
+    // re-derive leaves `reference_target_id` exactly where it was.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET content = ? WHERE id = ?', ['::[[Status]]', field!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(f => f.content)).toEqual(['::[[Status]]'])
+  })
+
+  it('canonicalizes a respelled field row on a write that DID observe intent', async () => {
+    // The other side of that guard: `setProperty` is the user writing the
+    // property, so the marked canonical form (§7) is restored under it.
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Status']),
+      {scope: ChangeScope.BlockDefault})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.update(field!.id, {content: '::[[Status]]'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'next'),
+      {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(f => f.content))
+      .toEqual([propertyFieldContent(STATUS_FIELD_ID)])
+  })
+
+  it('does not revive a value the user deleted before the owner went down', async () => {
+    // A field row keeps DIVERGENT value siblings as a surfaced conflict, so a
+    // user can resolve one by deleting it. The owner's later subtree delete
+    // tombstones the survivor too — and at revival time both are just
+    // tombstoned value children, with nothing structural telling them apart.
+    // Reviving both would put the resolved conflict back.
+    //
+    // So the ambiguity rule is the same at both levels: revive only what is
+    // unambiguous. Several tombstoned values revive none, and the loop mints
+    // one from the cell; the tombstones stay reachable under the live field row
+    // rather than resurrected.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(tx => tx.create({
+      id: 'peer', workspaceId: WS, parentId: field!.id, orderKey: 'zz', content: 'rival',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('peer'), {scope: ChangeScope.BlockDefault})
+
+    await deleteAndRestore(repo)
+
+    // Field-row identity still survives — only the value level was ambiguous.
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).toBe(field!.id)
+    const live = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    expect(live.map(v => v.content)).toEqual(['done'])
+    const peer = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['peer'])
+    expect(peer.deleted).toBe(1)
+    expect(peer.parent_id).toBe(field!.id)
+  })
+
+  it('does not revive a value when sync left a live one under the tombstoned field row', async () => {
+    // Sync-apply skips the parent-liveness trigger, so a LIVE value child can
+    // sit under a tombstoned field row. The tombstone count alone then reads as
+    // unambiguous while a competing sibling is live and simply excluded from it
+    // — reviving would put two divergent values back.
+    //
+    // Same clause the field-row level already has: revive only when nothing
+    // live is holding the slot.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [ownValue] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'arrived', workspaceId: WS, parentId: field!.id, orderKey: 'zz', content: 'rival',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+    // The sync-shaped state: a live value under a tombstoned field row.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', ['arrived'])
+
+    await repo.mutate.restore({id: 'p'})
+
+    // Nothing under the old field row was touched: the arrived value keeps its
+    // OWN content. Asserting the content, not just the id — an id-only check
+    // stayed green while the cell overwrote the text underneath it.
+    const arrived = await sharedDb.db.get<{deleted: number; content: string}>(
+      'SELECT deleted, content FROM blocks WHERE id = ?', ['arrived'])
+    expect(arrived.content).toBe('rival')
+    expect(arrived.deleted).toBe(0)
+    const own = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [ownValue!.id])
+    expect(own.deleted).toBe(1)
+    // The field row stayed dead and the caller minted, exactly as it did before
+    // revival existed.
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['done'])
+  })
+
+  it('mints instead of reviving when the tombstone is ambiguous', async () => {
+    // Two tombstoned field rows for one definition — an unset/re-set cycle
+    // before the owner was deleted. Picking one would need a rule that is
+    // deterministic across replicas AND right about which was live last; there
+    // is no such rule that does not resurrect a row the user deleted on
+    // purpose. Keep the ambiguous case on the minting behaviour.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [first] = await liveFieldRows('p')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [second] = await liveFieldRows('p')
+    expect(second!.id).not.toBe(first!.id)
+
+    await deleteAndRestore(repo)
+
+    const restored = await liveFieldRows('p')
+    expect(restored).toHaveLength(1)
+    expect([first!.id, second!.id]).not.toContain(restored[0]!.id)
+    expect((await childrenRows(restored[0]!.id))
+      .filter(v => v.deleted === 0)[0]!.content).toBe('done')
+  })
+
+  it('leaves the tombstone alone when the same tx already minted a live field row', async () => {
+    // The `createOrRestoreTargetBlock` shape: restore, then `setProperty` in the
+    // same tx. setProperty's dual-write mints a live field row before
+    // materialize runs, so identity is already decided — reviving the tombstone
+    // on top would only add a duplicate, and folding a duplicate RELOCATES its
+    // children, dragging the old value's comment thread onto the new value.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [oldField] = await liveFieldRows('p')
+    const [oldValue] = (await childrenRows(oldField!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: oldValue!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'new')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(oldField!.id)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['new'])
+    // The old value's comment stayed put — not relocated onto the new value.
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment.parent_id).toBe(oldValue!.id)
+  })
+
+  it('still mints when there is no tombstone to revive', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    // Cell-only: a raw bag write that no processor saw, so no field row ever
+    // existed for this key.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'fresh'}), 'p'])
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect((await childrenRows(fields[0]!.id))
+      .filter(v => v.deleted === 0)[0]!.content).toBe('fresh')
+  })
+
+  it('a pre-existing undecodable cell value does not block the restore', async () => {
+    // Why the exemption exists is at `UndecodableCellPolicy`; this pins the
+    // regression it prevents — a restore that aborts on a key nobody touched.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    // Raw UPDATE: maintains the trigger-backed indexes, fires no processor —
+    // the shape a legacy row or a sync arrival has locally. `tx.update` cannot
+    // produce this state; the guard under test rejects it.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null}), 'p'],
+    )
+
+    await deleteAndRestore(repo)
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The bad key is left exactly as the revival found it — no children, cell
+    // junk intact. A real write to it still rejects.
+    expect(await liveFieldRows('p')).toEqual([])
+    await expect(
+      repo.tx(tx => tx.update('p', {properties: {[statusSchema.name]: 42}}),
+        {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+  })
+  it('a pre-existing value that decodes but cannot be RENDERED does not block the restore', async () => {
+    // The second leg of the rejection. `codecs.ref().decode` accepts any
+    // string, so a cell holding a NAME passes the decode and fails one step
+    // later at `referenceBlockContentForId`, which refuses content that cannot
+    // be read back as `((id))`. While the exemption covered only the decode,
+    // this shape still aborted the restore — the same permanently
+    // un-restorable row the exemption exists to prevent, reached the other way.
+    const REL_FIELD_ID = 'field-rel-children'
+    const relSchema = defineProperty<string>('rel', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-rel-definition', REL_FIELD_ID, relSchema)
+    // Raw UPDATE: the shape a legacy row or a sync arrival has locally.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: 'done', [relSchema.name]: 'Someone Else'}), 'p'],
+    )
+
+    await deleteAndRestore(repo)
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The key that CAN be carried came back with its value…
+    expect(await liveValueContents('p')).toEqual(['done'])
+    // …and the one that cannot is left exactly as the revival found it.
+    expect(await liveFieldRowsFor(REL_FIELD_ID)('p')).toEqual([])
+    expect((await bagOf('p'))[relSchema.name]).toBe('Someone Else')
+  })
+  it('still rejects an undecodable value the RESTORING tx itself writes', async () => {
+    // The exemption above is scoped to "this tx wrote no property value". A tx
+    // that restores AND raw-writes junk in one go must not launder past the
+    // guard just because it happens to also revive the row.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    await expect(
+      repo.tx(async tx => {
+        await tx.restore('p')
+        await tx.update('p', {properties: {[statusSchema.name]: null}})
+      }, {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+
+    // Rolled back atomically — the restore went with it.
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(1)
+  })
+  it('a valid write to ANOTHER key does not make a junk key veto the restore', async () => {
+    // The `createOrRestoreTargetBlock` shape (src/data/targets.ts): restore the
+    // tombstone, then re-claim one key via `setProperty` in the SAME tx. The
+    // rejection is per KEY, not per tx — a value the tx did not write stays
+    // exempt even when the tx wrote a different one, or this whole restore
+    // path aborts on a key nobody touched.
+    await seedWorkspace('children')
+    const repo = setup()
+    const OTHER_FIELD_ID = 'field-other-children'
+    const otherSchema = defineProperty<string>('other', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-other-definition',
+      [{
+        metadata: {
+          fieldId: OTHER_FIELD_ID, workspaceId: WS, createdAt: 1,
+          name: otherSchema.name, changeScope: otherSchema.changeScope,
+          hidden: false, origin: 'user' as const,
+        },
+        schema: otherSchema,
+      }],
+      {workspaceId: WS},
+    )
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Raw UPDATE: fires no processor, so `status` holds a value no primitive
+    // could have written — the legacy / sync-arrival shape.
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null}), 'p'],
+    )
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', otherSchema, 'fresh')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // The written key materialized; the untouched junk key was left alone.
+    const others = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === OTHER_FIELD_ID)
+    expect(others).toHaveLength(1)
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+  it('survives a same-tx re-run of the revival branch (issue #402 pass two)', async () => {
+    // MATERIALIZE opts into `rerunOnDirtyRows`, and DERIVE — registered right
+    // after it — stamps any row whose content changed. A restore that patches
+    // content into a resolving `((ref))` therefore dirties the owner AFTER
+    // materialize ran, re-entering the revival branch a second time in the same
+    // tx. It converges only because `rerunBefore` reconstructs the same bag
+    // pair; nothing else pins that, so pin it here: no duplicate field row, no
+    // spurious rejection of the untouched junk key.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await createBlock(repo, 'target', 'a target')
+    await sharedDb.db.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[statusSchema.name]: null, keep: 'x'}), 'p'],
+    )
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(tx => tx.restore('p', {content: '((target))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{deleted: number; reference_target_id: string | null}>(
+      'SELECT deleted, reference_target_id FROM blocks WHERE id = ?', ['p'])
+    expect(row.deleted).toBe(0)
+    // DERIVE really did stamp the owner after materialize — without this the
+    // test would not be exercising the re-run at all.
+    expect(row.reference_target_id).toBe('target')
+    // One pass or two, the junk key stays unmaterialized and unrejected, and no
+    // duplicate field row appears.
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('brings the properties back when the delete and the restore share ONE tx (#1211)', async () => {
+    // Net, the owner went live → live, so nothing about it changed; only its
+    // field rows did, live → dead. Read as a net diff that is the user unsetting
+    // every key — the owner passing through a tombstone is in the write log.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('done')
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('keeps the untouched keys when a same-tx delete + restore also writes one (#1211)', async () => {
+    // The owner IS in MATERIALIZE's event here, with a LIVE tx-start state, so
+    // it would take the diff path — which materializes only the key written.
+    const NOTE_FIELD_ID = 'field-note-children'
+    const noteSchema = defineProperty('note', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-note-definition', NOTE_FIELD_ID, noteSchema)
+    await repo.tx(tx => tx.setProperty('p', noteSchema, 'kept'), {scope: ChangeScope.BlockDefault})
+    const [noteField] = await liveFieldRowsFor(NOTE_FIELD_ID)('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'new')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await bagOf('p')).toEqual({[statusSchema.name]: 'new', [noteSchema.name]: 'kept'})
+    expect((await liveFieldRowsFor(NOTE_FIELD_ID)('p')).map(row => row.id)).toEqual([noteField!.id])
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('revives the owner\'s own field row when the same tx unmarks a row moved under it (#1210)', async () => {
+    // MATERIALIZE runs before DERIVE, so on its first pass the moved row still
+    // carries the bit its old content earned and reads as the restored owner's
+    // live field row — which leaves the owner's own tombstone where it lies.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [ownField] = await liveFieldRows('p')
+    await createBlock(repo, 'q')
+    await repo.tx(tx => tx.setProperty('q', statusSchema, 'other'), {scope: ChangeScope.BlockDefault})
+    const [movedField] = await liveFieldRows('q')
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.move(movedField!.id, {parentId: 'p', orderKey: 'zz'})
+      await tx.update(movedField!.id, {content: 'plain text'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('done')
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([ownField!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+    expect(await cellValue('q')).toBeUndefined()
+  })
+
+  it('a pass-two revival reads PROJECT\'s unset as settled, not as the tx removing the key', async () => {
+    // PROJECT unsets a key whose value no longer parses and keeps the rows for
+    // the user to repair (§9) — a SETTLED write. When a later writer dirties the
+    // revived row, the revival runs again, and its "what did this tx write" diff
+    // has to start from a baseline that already holds that unset. From raw tx
+    // start, the key reads as removed by this tx, and its rows get tombstoned.
+    const COUNT_FIELD_ID = 'field-count-revival'
+    const countSchema = defineProperty<number>('count', {
+      codec: codecs.number, defaultValue: 0, changeScope: ChangeScope.BlockDefault,
+    })
+    const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'target', 'a target')
+    await repo.tx(tx => tx.setProperty('p', countSchema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // A peer's edit that landed while the owner was dead.
+    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['not a number', value!.id])
+
+    await repo.tx(tx => tx.restore('p', {content: '((target))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{reference_target_id: string | null}>(
+      'SELECT reference_target_id FROM blocks WHERE id = ?', ['p'])
+    // DERIVE stamped the owner after MATERIALIZE, so the revival ran twice.
+    expect(row.reference_target_id).toBe('target')
+    expect((await bagOf('p'))[countSchema.name]).toBeUndefined()
+    expect((await countFieldRows('p')).map(r => r.id)).toEqual([field!.id])
+    expect((await childrenRows(field!.id)).filter(v => v.deleted === 0).map(v => v.content))
+      .toEqual(['not a number'])
+  })
+
+  it('does not bring back a field row the restoring tx itself deleted under the live owner', async () => {
+    // The revival brings back what the owner's death took down. A field row this
+    // tx deleted AFTER restoring the owner is the user unsetting the property
+    // through the tree, and neither reviving it nor minting from the cell may
+    // undo that.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // The sync-shaped state: the field row and its value live under the tombstone.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('mints a fresh field row for a key the tx writes after deleting its old one', async () => {
+    // The write is the user's word for the key, so it materializes — but into a
+    // new row, not the one this same tx deleted.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('new')
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('revives the duplicate field row the owner\'s delete took, past one the tx deleted on its own', async () => {
+    // Provenance is per tombstone, not per property: the one the cascade took
+    // was live when the owner died, so the property was still set then.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'twin-field', workspaceId: WS, parentId: 'p', orderKey: 'zz',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+      })
+      await tx.create({
+        id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'other',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual(['twin-field'])
+    expect(await cellValue('p')).toBe('other')
+  })
+
+  it('revives the field row the owner\'s delete took over an older tombstone for the property', async () => {
+    // An unset/re-set cycle leaves an older tombstone; with only the before-tx
+    // view that pair is ambiguous and mints. The write log says which one died
+    // with the owner.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([current!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a key written after the tx deleted its live field row does not revive an older one', async () => {
+    // The tx's own delete of the row that was live outranks a tombstone from
+    // before it, which was deleted before that row was ever made.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [older] = await liveFieldRows('p')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+    const [currentValue] = (await childrenRows(current!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [current!.id, currentValue!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, current!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect([older!.id, current!.id]).not.toContain(fields[0]!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('does not bring back a field row deleted before the owner, in one delete + restore tx', async () => {
+    // Only the owner's subtree delete takes its field rows down AFTER the owner:
+    // the cascade tombstones the root first. A field row that died while the
+    // owner was still live was deleted on its own.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
   })
 })
 
@@ -1592,12 +3132,11 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
   })
 })
 
-describe('content <-> value codecs: lenient-read codecs keep values the write side rejects', () => {
-  // `enum` deliberately splits its read/write strictness (codecs.ts): `encode`
-  // rejects out-of-set values, but `decode` accepts a value whose option was
-  // later removed/renamed so it "still decodes and stays editable". Projection
-  // re-canonicalizes via encode(decode(...)) — which must NOT turn such a
-  // preserved value into "unparseable" and drop the owning cell key.
+describe('content <-> value codecs: an enum value child names a DECLARED option', () => {
+  // `enum` splits its read/write strictness (codecs.ts): `encode` rejects
+  // out-of-set values, `decode` only requires a string. The content -> encoded
+  // path asks the WRITE side, because nothing downstream does and an off-menu
+  // string would otherwise be published to the owner's cell verbatim (#1088).
   const currentOptionsSchema = defineProperty<string>('priority', {
     codec: codecs.enum(['low', 'high']),
     defaultValue: 'low',
@@ -1612,20 +3151,48 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
     changeScope: ChangeScope.BlockDefault,
   })
 
-  it('a value whose option was removed survives the projection round-trip', () => {
-    // Written while 'urgent' was still valid; the option list has since dropped it.
-    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
-    // The read/write split that makes this preservable: decode keeps it, encode rejects it.
-    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
-    expect(() => currentOptionsSchema.codec.encode('urgent')).toThrow()
+  it('refuses a value that is not a declared option', () => {
+    // Plainly spelled, which is all it takes to type one by hand now (#1080).
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, 'bananas'))
+      .toThrow(CodecError)
+  })
 
-    // Must NOT throw — throwing marks it unparseable and the caller drops the cell key.
-    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('urgent')
+  it('refuses it through the JSON spelling too, so the old form is no way in', () => {
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, '"bananas"'))
+      .toThrow(CodecError)
+  })
+
+  it('refuses it through an ESCAPED envelope, the third route into the reader', () => {
+    // A quote-shaped off-menu value escapes on the way out, so it comes back
+    // through `contentToEncodedValue`'s envelope unwrap rather than through
+    // the enum case. Asserted because that is a different return, and the
+    // check has to sit downstream of every one of them.
+    const content = encodedToValueChildContent(currentOptionsSchema, '"bananas"')
+    expect(content).not.toBe('"bananas"') // it escaped, so the unwrap will fire
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
+  })
+
+  it('refuses a value whose option was REMOVED — the accepted cost of the above', () => {
+    // Written while 'urgent' was still valid; the option list has since dropped
+    // it. Post-flip the cell is derived purely from the children, so a device
+    // that has only just synced them has no prior cell to grandfather this
+    // from — "off-menu" has to have one answer. Nothing is destroyed: the row
+    // keeps its text, and re-adding the option projects it again.
+    //
+    // Reaching this state through the UI is a separate matter: an option
+    // removed while blocks still hold it is REFUSED, not applied — see
+    // `propertyDefinitionChange.test.ts`. What is left is an option set that
+    // moves in CODE, with no definition row edit to refuse (#1097).
+    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
+    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
+    expect(() => valueChildContentToEncoded(currentOptionsSchema, content))
+      .toThrow(CodecError)
   })
 
   it('still canonicalizes values that ARE in the current option set', () => {
     const content = propertyValueToChildContent(currentOptionsSchema, 'high')
-    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('high')
+    expect(valueChildContentToEncoded(currentOptionsSchema, content)).toBe('high')
   })
 
   it('a genuine shape error still throws (decode failure is not swallowed)', () => {
@@ -1634,7 +3201,213 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
       defaultValue: 0,
       changeScope: ChangeScope.BlockDefault,
     })
-    expect(() => propertyChildContentToEncodedValue(numberSchema, 'not-a-number')).toThrow()
+    expect(() => valueChildContentToEncoded(numberSchema, 'not-a-number')).toThrow()
+  })
+})
+
+describe('propertyCellValueRejection asks what the projection will ask', () => {
+  // The cell -> children direction and the children -> cell direction have to
+  // agree about whether a codec's write side is enforced. When they did not,
+  // a raw `tx.update({properties})` of an off-menu Choice value was ACCEPTED
+  // here, its value child written, and the owner's key then dropped by the
+  // projection that read the child back — with the writing tx long committed
+  // and nothing reported. Refused at the write instead, so the tx rolls back.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu enum cell, which its own decode would have accepted', () => {
+    // The leniency that made this reachable: decode says yes.
+    expect(choiceSchema.codec.decode('bananas')).toBe('bananas')
+    expect(propertyCellValueRejection(choiceSchema, 'bananas')).toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a declared option', () => {
+    expect(propertyCellValueRejection(choiceSchema, 'done')).toBeNull()
+  })
+
+  // At MEMBER grain too. A cell is offered whole, but the projection reads it
+  // back one value child at a time, so asking only the outer codec let a
+  // `list(enum)` take an off-menu member — the list's decode is exactly as
+  // lenient as its member's — and then dropped that member on the way back,
+  // deriving a list one shorter with nothing reported.
+  const choiceListSchema = defineProperty<readonly string[]>('tags', {
+    codec: codecs.list(codecs.enum(['a', 'b'])) as AnyPropertySchema['codec'],
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('refuses an off-menu MEMBER of a list of options', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'bananas']))
+      .toMatchObject({reason: 'decode'})
+  })
+
+  it('accepts a list whose members are all declared', () => {
+    expect(propertyCellValueRejection(choiceListSchema, ['a', 'b'])).toBeNull()
+  })
+
+  // At every depth, because an `enum` nested in lists still declares an
+  // option set. Two mechanisms hold this up and the cases below separate
+  // them: the member CHAIN is walked when deciding whether the write side is
+  // enforced, and the question is re-asked at every storage GRAIN — so a
+  // depth the chain missed used to be accepted whole and then dropped by the
+  // projection, and a depth the grain missed used to keep an off-menu value.
+  it.each([1, 2, 3])('refuses an off-menu option nested %i list(s) deep', depth => {
+    let codec = codecs.enum(['a', 'b']) as AnyPropertySchema['codec']
+    let ok: unknown = 'a'
+    let bad: unknown = 'retired'
+    for (let i = 0; i < depth; i += 1) {
+      codec = codecs.list(codec) as AnyPropertySchema['codec']
+      ok = [ok]
+      bad = [bad]
+    }
+    const nested = defineProperty<unknown>('tags', {
+      codec, defaultValue: [], changeScope: ChangeScope.BlockDefault,
+    })
+    expect(propertyCellValueRejection(nested, bad)).not.toBeNull()
+    expect(propertyCellValueRejection(nested, ok)).toBeNull()
+  })
+
+  it('and the projection agrees, rather than quietly returning a shorter list', () => {
+    // The symptom the disagreement produced: this is what the cell would have
+    // become if the write above had been accepted.
+    const contents = encodedPropertyValueToChildContents(choiceListSchema, ['a', 'b'])
+    expect(childContentsToEncodedPropertyValue(choiceListSchema, contents)).toEqual(['a', 'b'])
+  })
+})
+
+describe('content <-> value codecs: only `enum` has its write side enforced', () => {
+  // The membership check is scoped to `enum`, whose option set is a promise
+  // to every consumer that switches on it. A codec a runtime extension
+  // registers may use the SAME lenient-read/strict-write design for its own
+  // reasons — decoding a retired value so it stays editable — and enforcing
+  // its write side here would make every value child under it vanish from the
+  // derived cell. Nothing in the tree has that asymmetry, so this is the only
+  // thing holding the scope in place.
+  const lenientReadSchema = defineProperty<string>('flavour', {
+    codec: {
+      type: 'test-lenient-read',
+      encode: (v: string) => {
+        if (v === 'retired') throw new CodecError('flavour', v)
+        return v
+      },
+      decode: (j: unknown) => {
+        if (typeof j !== 'string') throw new CodecError('flavour', j)
+        return j
+      },
+    },
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('keeps a value the codec READS but will not WRITE, for a non-enum codec', () => {
+    // JSON-spelled, because a codec outside the verbatim family takes the
+    // default branch.
+    expect(valueChildContentToEncoded(lenientReadSchema, '"retired"')).toBe('retired')
+  })
+
+  it('still canonicalizes through that codec when its write side accepts', () => {
+    expect(valueChildContentToEncoded(lenientReadSchema, '"vanilla"')).toBe('vanilla')
+  })
+
+  it('and a genuine shape error still throws out of its decode', () => {
+    expect(() => valueChildContentToEncoded(lenientReadSchema, '42')).toThrow(CodecError)
+  })
+})
+
+describe('content <-> value codecs: an enum value child is spelled plainly', () => {
+  // #1080: the text the UI shows for a Choice value has to be the text that
+  // reads back as it, or the obvious correction is the one that loses the
+  // property. Both `enum` and `strict-enum` build a codec whose type is
+  // 'enum', so one branch covers the user-facing preset and the code-declared
+  // one; the two differ only in what they do with the unset sentinel.
+  const choiceSchema = defineProperty<string>('status', {
+    codec: kernelValuePresetCoresById.enum.build({
+      options: [{value: 'open', label: 'Open'}, {value: 'done', label: 'Done'}],
+    }),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const strictSchema = defineProperty<string>('status', {
+    codec: codecs.enum(['open', 'done']),
+    defaultValue: 'open',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('writes the option value with no quotes, and reads it back', () => {
+    expect(propertyValueToChildContent(strictSchema, 'done')).toBe('done')
+    expect(valueChildContentToEncoded(strictSchema, 'done')).toBe('done')
+  })
+
+  it('still reads the JSON spelling every existing value child holds', () => {
+    // No migration: these drift to the plain form on their next write.
+    expect(valueChildContentToEncoded(strictSchema, '"open"')).toBe('open')
+  })
+
+  it('reads a hand-typed value with stray whitespace', () => {
+    expect(valueChildContentToEncoded(strictSchema, '  done \n')).toBe('done')
+  })
+
+  describe('an option value that would be MISREAD is escaped, both ways', () => {
+    // The trap this pins: the escape side and the unwrap side are one
+    // predicate here (`needsEscape`'s enum clause is the negation of
+    // `enumValueFromContent`), so extending one without the other is not
+    // expressible. Each case below asserts the content is NOT the raw value
+    // AND that it reads back — a one-way escape fails the second half.
+    const cases: readonly (readonly [string, string])[] = [
+      ['quote-shaped', '"open"'],
+      ['reference-shaped', `((${SAMPLE_UUID}))`],
+      ['alias-shaped', '[[Some Page]]'],
+      ['edge whitespace', ' spaced '],
+    ]
+    for (const [label, option] of cases) {
+      it(`round-trips a ${label} option value`, () => {
+        const schema = defineProperty<string>('status', {
+          codec: codecs.enum([option]),
+          defaultValue: option,
+          changeScope: ChangeScope.BlockDefault,
+        })
+        const content = propertyValueToChildContent(schema, option)
+        expect(content).not.toBe(option)
+        expect(valueChildContentToEncoded(schema, content)).toBe(option)
+      })
+    }
+  })
+
+  it('refuses a reference-shaped option typed in BARE, and reads its escaped form', () => {
+    // The encoder escapes such an option, so bare content in that shape was
+    // written by a hand-edit or a find-replace, not by the encoder. Accepting
+    // it would decode as the option while leaving a LIVE span in the row: a
+    // rename then rewrites the content, and the same row is off-menu
+    // afterwards with the owner's key gone.
+    const linkSchema = defineProperty<string>('status', {
+      codec: codecs.enum(['[[Page]]', 'plain']),
+      defaultValue: 'plain',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(() => valueChildContentToEncoded(linkSchema, '[[Page]]')).toThrow(CodecError)
+    // The spelling the encoder actually writes still round-trips, and the
+    // legacy JSON one still reads — neither is bare reference-shaped.
+    const escaped = propertyValueToChildContent(linkSchema, '[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, escaped)).toBe('[[Page]]')
+    expect(valueChildContentToEncoded(linkSchema, JSON.stringify('[[Page]]'))).toBe('[[Page]]')
+  })
+
+  it("the user-facing preset's unset sentinel round-trips as empty content", () => {
+    // '' is the Choice preset's unset/default sentinel and is deliberately not
+    // a configured option — the same spelling a cleared `ref` uses, which is
+    // why this is asserted rather than assumed.
+    expect(propertyValueToChildContent(choiceSchema, '')).toBe('')
+    expect(valueChildContentToEncoded(choiceSchema, '')).toBe('')
+  })
+
+  it('empty content is refused for a code-declared strict enum', () => {
+    // `strict-enum` has no unset sentinel — '' is simply not an option — so
+    // the key reads unset and the row keeps its text, as for any other
+    // off-menu value.
+    expect(() => valueChildContentToEncoded(strictSchema, '')).toThrow(CodecError)
   })
 })
 
@@ -1647,7 +3420,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
 
   // `Number('')` is 0 (not NaN), so a plain isFinite guard waves blank content
   // through as a real zero: clearing a value row would silently project 0 over
-  // the cell instead of being treated as unparseable (PR #386 review).
+  // the cell instead of being treated as unparseable.
   it.each([['', 'empty'], ['   ', 'spaces'], ['\t\n', 'other whitespace']])(
     'rejects %j (%s) rather than coercing it to 0',
     content => {
@@ -1656,7 +3429,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
       expect(Number(content)).toBe(0)
       expect(Number.isFinite(Number(content))).toBe(true)
 
-      expect(() => propertyChildContentToEncodedValue(numberSchema, content)).toThrow()
+      expect(() => valueChildContentToEncoded(numberSchema, content)).toThrow()
     },
   )
 
@@ -1664,7 +3437,7 @@ describe('content <-> value codecs: blank numeric content is unparseable, not ze
     // The value blank must NOT be confused with: 0 has its own content ('0').
     const content = propertyValueToChildContent(numberSchema, 0)
     expect(content).toBe('0')
-    expect(propertyChildContentToEncodedValue(numberSchema, content)).toBe(0)
+    expect(valueChildContentToEncoded(numberSchema, content)).toBe(0)
   })
 })
 
@@ -1682,32 +3455,32 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(nullableStringSchema, 'null')
     expect(content).toBe(JSON.stringify('null'))
     expect(content).not.toBe('null')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('null')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe('null')
   })
 
   it('the string value " null " (trims to the token) round-trips', () => {
     const content = propertyValueToChildContent(nullableStringSchema, ' null ')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe(' null ')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe(' null ')
   })
 
   it('the string value \'"null"\' (a quoted-null literal) round-trips', () => {
     const content = propertyValueToChildContent(nullableStringSchema, '"null"')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('"null"')
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBe('"null"')
   })
 
   it('encoded null still materializes as content "null" and parses back to encoded null', () => {
-    const content = encodedPropertyValueToChildContent(nullableStringSchema, null)
+    const content = encodedToValueChildContent(nullableStringSchema, null)
     expect(content).toBe('null')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBeNull()
+    expect(valueChildContentToEncoded(nullableStringSchema, content)).toBeNull()
   })
 
   it('ordinary strings are stored verbatim, unchanged', () => {
     expect(propertyValueToChildContent(nullableStringSchema, 'hello')).toBe('hello')
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, 'hello')).toBe('hello')
+    expect(valueChildContentToEncoded(nullableStringSchema, 'hello')).toBe('hello')
 
     const withQuotes = 'say "hi"'
     expect(propertyValueToChildContent(nullableStringSchema, withQuotes)).toBe(withQuotes)
-    expect(propertyChildContentToEncodedValue(nullableStringSchema, withQuotes)).toBe(withQuotes)
+    expect(valueChildContentToEncoded(nullableStringSchema, withQuotes)).toBe(withQuotes)
   })
 
   it('a non-null-accepting string schema stores "null" verbatim — no escaping needed', () => {
@@ -1715,7 +3488,124 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     // never applies to it and there's nothing to escape.
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
-    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+    expect(valueChildContentToEncoded(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: escaping strings content cannot hold as itself (#688)', () => {
+  const urlSchema = defineProperty<string>('link', {
+    codec: codecs.url,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const UUID = SAMPLE_UUID
+
+  // Every §7 span form, marked and unmarked. The marked ones are the ones that
+  // DELETE the property; the rest make a string value a live reference. The
+  // predicate is `isWholeContentReference` — the parser itself, plus the embed
+  // marker — rather than a second copy of the grammar, so a form added to it is
+  // covered here for free.
+  const GRAMMAR_SHAPED = [
+    `::((${UUID}))`,
+    '::[[Some Page]]',
+    `::[Mary](((${UUID})))`,
+    `((${UUID}))`,
+    '[[Some Page]]',
+    `[Mary](((${UUID})))`,
+    `  ::((${UUID}))  `,
+  ]
+
+  it.each(GRAMMAR_SHAPED)('escapes %j and round-trips it exactly', value => {
+    for (const schema of [statusSchema, urlSchema]) {
+      const content = propertyValueToChildContent(schema, value)
+      expectEscapedEnvelope(schema, value, content)
+    }
+  })
+
+  it('escapes a lone surrogate, which the content column would return as U+FFFD', () => {
+    for (const value of ['a\uD800b', 'a\uDC00b', '\uD800']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      // JSON spells it `\ud800` — pure ASCII, so nothing below the content
+      // column has an ill-formed sequence to replace.
+      expectEscapedEnvelope(statusSchema, value, content)
+      // ...and specifically ASCII-escaped, which is what the content column
+      // needs — a raw surrogate there comes back as U+FFFD.
+      expect(/[\uD800-\uDFFF]/.test(content)).toBe(false)
+    }
+  })
+
+  it('leaves strings content CAN hold verbatim (valid pairs, NUL, controls, padding)', () => {
+    for (const value of ['a😀b', 'a\u0000b', 'a\u0001\u001Fb', '  padded  ', 'a\r\nb', '((']) {
+      expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+      expect(valueChildContentToEncoded(statusSchema, value)).toBe(value)
+    }
+  })
+
+  // The recursion's job: without it the escaped content of `'"::((id))"'` and
+  // of `'::((id))'` would be the same string, so one of the two could not come
+  // back. Nesting is what makes the escape injective.
+  it('a value that is ITSELF a quoted escapable string nests one level deeper', () => {
+    const inner = `::((${UUID}))`
+    const quoted = JSON.stringify(inner)
+    expectEscapedEnvelope(statusSchema, quoted,
+      propertyValueToChildContent(statusSchema, quoted))
+    expect(propertyValueToChildContent(statusSchema, quoted))
+      .not.toBe(propertyValueToChildContent(statusSchema, inner))
+    for (const value of [inner, quoted, JSON.stringify(quoted)]) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
+    }
+  })
+
+  // A quoted string whose inner text needs NO escaping must stay verbatim, or
+  // the decode would unquote a value the user actually typed with quotes.
+  it('an ordinary quoted string is still stored verbatim, quotes and all', () => {
+    const value = '"hello"'
+    expect(propertyValueToChildContent(statusSchema, value)).toBe(value)
+    expect(valueChildContentToEncoded(statusSchema, value)).toBe(value)
+  })
+
+  // The EMBED forms. `((id))` was escaped and `!((id))` was
+  // not, though they differ by one character and the inline reader indexes
+  // both — so a merge rewrote the second and silently edited the value.
+  it.each([
+    [`!((${SAMPLE_UUID}))`],
+    ['![[Some Page]]'],
+    [`  !((${SAMPLE_UUID}))  `],
+  ])('escapes the embed form %j, which the whole-block reader alone misses', value => {
+    const content = propertyValueToChildContent(statusSchema, value)
+    expect(content).not.toBe(value)
+    expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
+  })
+
+  // Quote-wrapping alone was treated as "this is an escaped
+  // envelope", so text a PERSON wrote with quotes lost them on the way back.
+  // A real envelope carries no literal span opener; this content does.
+  it('does not unwrap quoted text that escapeContent could not have produced', () => {
+    for (const content of ['"[[Page]]"', `"::((${SAMPLE_UUID}))"`, '"(x)"']) {
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(content)
+    }
+  })
+
+  // ...while a real envelope still unwraps, including one whose PAYLOAD is a
+  // quoted string (the nesting case), which is what stops the discriminator
+  // from being "never unwrap".
+  it('still unwraps a genuine envelope', () => {
+    for (const value of [`::((${SAMPLE_UUID}))`, '[[Page]]', '"null"', 'a\uD800b']) {
+      const content = propertyValueToChildContent(statusSchema, value)
+      expect(valueChildContentToEncoded(statusSchema, content)).toBe(value)
+    }
+  })
+
+  // The ref codec renders `((id))` DELIBERATELY (#16) — that branch runs before
+  // the string one and must not start escaping its own canonical form.
+  it('does not touch the ref codec, whose value content IS a span by design', () => {
+    const refSchema = defineProperty<string>('rel', {
+      codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const content = propertyValueToChildContent(refSchema, UUID)
+    expect(content).toBe(`((${UUID}))`)
+    expect(valueChildContentToEncoded(refSchema, content)).toBe(UUID)
   })
 })
 
@@ -1740,10 +3630,10 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
 
   it('writes a ref value as `((id))`, not the bare id', () => {
     expect(propertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
-    expect(encodedPropertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
+    expect(encodedToValueChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
   })
 
-  // Regression (PR #386 review): `referenceBlockContentForId` was hardened to
+  // Regression: `referenceBlockContentForId` was hardened to
   // refuse ids it cannot round-trip, which made the ordinary "clear a ref
   // property" path — `codecs.ref` encodes a cleared value as EXACTLY `''` —
   // throw and roll back the whole transaction. An empty ref is the ABSENCE of a
@@ -1751,17 +3641,17 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // column stays NULL, and the projection reads the key as unset.
   it('renders an exactly-empty ref as empty content, but rejects a whitespace-only id', () => {
     expect(propertyValueToChildContent(refSchema, '')).toBe('')
-    expect(encodedPropertyValueToChildContent(refSchema, '')).toBe('')
-    // A whitespace-only id is a MALFORMED reference, not a clear (Codex #386):
+    expect(encodedToValueChildContent(refSchema, '')).toBe('')
+    // A whitespace-only id is a MALFORMED reference, not a clear:
     // matching it as "empty" would silently unset the property; it must reach
     // `referenceBlockContentForId`, which throws on whitespace/parens ids.
     expect(() => propertyValueToChildContent(refSchema, '   ')).toThrow()
-    expect(() => encodedPropertyValueToChildContent(refSchema, '   ')).toThrow()
+    expect(() => encodedToValueChildContent(refSchema, '   ')).toThrow()
   })
 
   it('reads the bare id back out of the `((id))` span', () => {
     const content = propertyValueToChildContent(refSchema, 'block-abc')
-    expect(propertyChildContentToEncodedValue(refSchema, content)).toBe('block-abc')
+    expect(valueChildContentToEncoded(refSchema, content)).toBe('block-abc')
   })
 
   it('accepts the aliased blockref form, keeping the id and dropping the label', () => {
@@ -1769,7 +3659,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     // merge rewrite pins a span to. A ref VALUE written that way still names
     // an id, so it decodes; the label is display text the cell has no room for.
     const uuid = '0123abcd-4567-89ef-0123-456789abcdef'
-    expect(propertyChildContentToEncodedValue(refSchema, `[Mary](((${uuid})))`)).toBe(uuid)
+    expect(valueChildContentToEncoded(refSchema, `[Mary](((${uuid})))`)).toBe(uuid)
   })
 
   it('rejects prose typed into a ref value instead of coercing it', () => {
@@ -1777,7 +3667,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     // throws → the projection skips it → the cell key reads unset while the
     // row text is preserved.
     expect(() =>
-      propertyChildContentToEncodedValue(refSchema, 'saw a bug in prod today'),
+      valueChildContentToEncoded(refSchema, 'saw a bug in prod today'),
     ).toThrow()
   })
 
@@ -1787,7 +3677,7 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // into the cell. The end-to-end test above is the one that proves the column
   // really is populated; here it's the form alone that decides.
   it('rejects a whole-block wikilink', () => {
-    expect(() => propertyChildContentToEncodedValue(refSchema, '[[Mary]]')).toThrow()
+    expect(() => valueChildContentToEncoded(refSchema, '[[Mary]]')).toThrow()
   })
 
   // ...and it must be THIS clause doing the refusing, not a downstream codec.
@@ -1798,24 +3688,24 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
   // clause here would stop the value scan on a wikilink row and skip a later
   // sibling that does name an id.
   it('rejects a wikilink in an OPTIONAL ref too, where no codec catches it', () => {
-    expect(() => propertyChildContentToEncodedValue(optionalRefSchema, '[[Mary]]')).toThrow()
+    expect(() => valueChildContentToEncoded(optionalRefSchema, '[[Mary]]')).toThrow()
   })
 
   it('rejects the MARKED id-carrying form — `::((id))` is a field row, not a value', () => {
     // §7: the marker makes the row machinery. Load-bearing through
     // find-replace, whose guard asks this function about PROPOSED content.
-    expect(() => propertyChildContentToEncodedValue(refSchema, `::((${STATUS_FIELD_ID}))`))
+    expect(() => valueChildContentToEncoded(refSchema, `::((${STATUS_FIELD_ID}))`))
       .toThrow()
   })
 
   it('an optional ref preserves an explicit null (sentinel wins over the form check)', () => {
-    const content = encodedPropertyValueToChildContent(optionalRefSchema, null)
+    const content = encodedToValueChildContent(optionalRefSchema, null)
     expect(content).toBe('null')
     // Must NOT throw despite `null` being no reference form at all — the
     // generic null sentinel runs first, so an intentionally-unset optional ref
     // decodes to its unset form (encoded as null, like every other
     // null-accepting codec).
-    expect(propertyChildContentToEncodedValue(optionalRefSchema, content)).toBeNull()
+    expect(valueChildContentToEncoded(optionalRefSchema, content)).toBeNull()
   })
 })
 
@@ -1962,5 +3852,1176 @@ describe('block-type typeify amendments materialize in the same tx (§5/§9 proc
       const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
       expect(values.length, `${name} value child`).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('multi-value properties are N sibling value children (km-h1hy)', () => {
+  const TAGS_FIELD_ID = 'field-tags-children'
+  const PEOPLE_FIELD_ID = 'field-people-children'
+  const BAG_FIELD_ID = 'field-bag-children'
+
+  /** `string-list`: the preset behind the kernel's own `types` and `alias`. */
+  const tagsSchema = defineProperty<readonly string[]>('tags', {
+    codec: kernelValuePresetCoresById['string-list'].build(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  /** `refList`: members are `((id))` spans, like a scalar ref. */
+  const peopleSchema = defineProperty<readonly string[]>('people', {
+    codec: codecs.refList(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  /** `list`: the identity codec over unknown members — what synthesis picks
+   *  for an importer's array-valued key. */
+  const bagSchema = defineProperty<unknown[]>('bag', {
+    codec: codecs.list(codecs.unsafeIdentity<unknown>()),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  const setupWithLists = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-tags-definition', TAGS_FIELD_ID, tagsSchema)
+    registerDefinition(repo, 'test-people-definition', PEOPLE_FIELD_ID, peopleSchema)
+    registerDefinition(repo, 'test-bag-definition', BAG_FIELD_ID, bagSchema)
+    return repo
+  }
+
+  const fieldRowFor = async (parentId: string, fieldId: string): Promise<ChildRow> => {
+    const rows = (await liveFieldRowsFor(fieldId)(parentId))
+    expect(rows).toHaveLength(1)
+    return rows[0]!
+  }
+
+  /** The member contents under a field row, in sibling order — the shape the
+   *  whole slice is about, read the way the projection reads it. */
+  const memberContents = async (parentId: string, fieldId: string): Promise<string[]> => {
+    const field = await fieldRowFor(parentId, fieldId)
+    return (await childrenRows(field.id))
+      .filter(v => v.deleted === 0)
+      .map(v => v.content)
+  }
+
+  /** A valid order key after everything currently under `parentId` — hand-
+   *  written keys are not fractional indices and the generator refuses them. */
+  const appendKey = async (parentId: string): Promise<string> =>
+    keysBetween((await childrenRows(parentId)).at(-1)?.order_key ?? null, null, 1)[0]!
+
+  const memberRows = async (parentId: string, fieldId: string): Promise<ChildRow[]> => {
+    const field = await fieldRowFor(parentId, fieldId)
+    return (await childrenRows(field.id)).filter(v => v.deleted === 0)
+  }
+
+  describe('materialize: one child per member', () => {
+    it('string-list writes one plain child per member, in list order', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'beta', 'gamma'])
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'gamma'])
+    })
+
+    it('refList writes each member as an `((id))` span with its column stamped', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', 'john-id']),
+        {scope: ChangeScope.BlockDefault})
+
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+      expect(members.map(m => m.content)).toEqual(['((mary-id))', '((john-id))'])
+      // Each member is a real reference to reference maintenance — which is
+      // the whole reason a refList is not stored as JSON ids.
+      expect(members.map(m => m.reference_target_id)).toEqual(['mary-id', 'john-id'])
+      // The cell still keeps bare ids.
+      expect((await bagOf('p')).people).toEqual(['mary-id', 'john-id'])
+    })
+
+    it('a list member that is itself an object is JSON at MEMBER grain', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [{a: 1}, 'plain', 2]),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['{"a":1}', '"plain"', '2'])
+      expect((await bagOf('p')).bag).toEqual([{a: 1}, 'plain', 2])
+    })
+
+    it('an EXPLICITLY empty list keeps its key; unsetting removes the field row', async () => {
+      // The live field row is what tells the two apart. Reading an empty list
+      // as an absent key made the write disappear — `getProperty` would answer
+      // the schema's `defaultValue`, which is a different value for any list
+      // schema whose default is not `[]`.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, []),
+        {scope: ChangeScope.BlockDefault})
+
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      expect((await childrenRows(field.id)).filter(v => v.deleted === 0)).toEqual([])
+      expect((await bagOf('p')).tags).toEqual([])
+
+      // Unsetting is what removes the key, and it takes the field row with it.
+      await repo.tx(tx => tx.unsetProperty('p', tagsSchema),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toBeUndefined()
+      expect(await liveFieldRowsFor(TAGS_FIELD_ID)('p')).toEqual([])
+    })
+
+    it('a member repeated in the value is a repeated sibling', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 2, 3, 5, 5]),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['2', '2', '3', '5', '5'])
+      expect((await bagOf('p')).bag).toEqual([2, 2, 3, 5, 5])
+    })
+
+    it('dropping ONE of two equal members leaves the other', async () => {
+      // The reconciler matches members to rows one-for-one, so the row a
+      // shortened list no longer asks for is the surplus one — not both, and
+      // not the wrong one.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 2, 3]),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', BAG_FIELD_ID)
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 3]),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', BAG_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['2', '3'])
+      expect(after.map(m => m.id)).toEqual([before[0]!.id, before[2]!.id])
+      expect((await bagOf('p')).bag).toEqual([2, 3])
+    })
+  })
+
+  describe('project: the siblings ARE the list', () => {
+    it('editing one member re-projects only that position', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[1]!.id, {content: 'BETA'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'BETA'])
+    })
+
+    it('deleting one member drops it from the list and keeps the rest', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.delete(members[1]!.id), {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'gamma'])
+    })
+
+    it('adding a member is creating a sibling — no property API involved', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+
+      const omegaKey = await appendKey(field.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, content: 'omega', orderKey: omegaKey,
+      }), {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'omega'])
+    })
+
+    it('reordering the siblings reorders the list', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      // Move the last member to the front.
+      const front = keysBetween(null, members[0]!.order_key, 1)[0]!
+      await repo.tx(tx => tx.move(members[2]!.id, {parentId: field.id, orderKey: front}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['gamma', 'alpha', 'beta'])
+      expect((await bagOf('p')).tags).toEqual(['gamma', 'alpha', 'beta'])
+    })
+
+    it('an unparseable MEMBER drops only itself', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', 'john-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      // Prose typed into a ref member — the shape the design refuses to
+      // coerce. The row keeps its text and stays fixable in the tree.
+      await repo.tx(tx => tx.update(members[0]!.id, {content: 'lunch with Mary'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toEqual(['john-id'])
+      expect(await memberContents('p', PEOPLE_FIELD_ID))
+        .toEqual(['lunch with Mary', '((john-id))'])
+    })
+
+    it('every member unparseable reads as an empty list, rows intact', async () => {
+      // The field row is still there, so the property is still SET — it just
+      // has no readable member. The rows keep their text and stay fixable.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[0]!.id, {content: 'not a reference'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toEqual([])
+      expect(await memberContents('p', PEOPLE_FIELD_ID)).toEqual(['not a reference'])
+    })
+
+    it('deleting the last member row unsets the key', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['solo']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      const members = await memberRows('p', TAGS_FIELD_ID)
+
+      // The MEMBER goes, not the field row: the property is still set, and now
+      // explicitly empty.
+      await repo.tx(tx => tx.delete(members[0]!.id), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual([])
+
+      // The FIELD ROW going is what unsets it.
+      await repo.tx(tx => tx.delete(field.id), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toBeUndefined()
+    })
+
+    it('retargeting ONE refList member follows into the cell, at its position', async () => {
+      // The concrete payoff of `((id))` members over JSON ids: reference
+      // maintenance (merge retarget, rename) rewrites the span inside the
+      // member row, and the cell follows. A JSON array of bare ids is out of
+      // its reach entirely.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'b-id', 'c-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+
+      await repo.tx(tx => tx.update(members[1]!.id, {content: '((b-merged))'}),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).people).toEqual(['a-id', 'b-merged', 'c-id'])
+      expect((await memberRows('p', PEOPLE_FIELD_ID))[1]!.reference_target_id)
+        .toBe('b-merged')
+    })
+
+    it('two siblings with the same text are two members, conflict left visible', async () => {
+      // What two devices concurrently writing overlapping lists arrives as.
+      // The duplicate is NOT collapsed: the user resolves it by deleting a
+      // row, which is what the scalar rule does with a divergent peer rather
+      // than silently choosing one.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+
+      const twinKey = await appendKey(field.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, content: 'alpha', orderKey: twinKey,
+      }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'alpha'])
+
+      // ...and resolving it is an ordinary block delete.
+      const members = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete(members[1]!.id), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha'])
+    })
+  })
+
+  describe('the cell write is authoritative for the members it names', () => {
+    it('re-setting a list to a subset removes the dropped members', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha'])
+      expect((await bagOf('p')).tags).toEqual(['alpha'])
+    })
+
+    it('a member keeps its ROW IDENTITY across a reorder through the cell', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', TAGS_FIELD_ID)
+      // A comment under a member — ordinary user content hanging off the row.
+      const commentKey = await appendKey(before[0]!.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: before[0]!.id, content: 'why alpha',
+        orderKey: commentKey,
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['beta', 'alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['beta', 'alpha'])
+      // The SAME rows, permuted — not two rows rewritten in place, which
+      // would have left the comment under 'beta'.
+      expect(after.map(m => m.id)).toEqual([before[1]!.id, before[0]!.id])
+      expect((await childrenRows(before[0]!.id)).map(c => c.content)).toEqual(['why alpha'])
+    })
+
+    it('writing the same list again writes nothing', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', TAGS_FIELD_ID)
+
+      await repo.tx(tx => tx.update('p', {properties: {tags: ['alpha', 'beta']}}),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => ({id: m.id, content: m.content})))
+        .toEqual(before.map(m => ({id: m.id, content: m.content})))
+    })
+
+    it('a raw cell write materializes members, replacing a legacy JSON-text child', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      // The shape a pre-km-h1hy build wrote: the whole list as JSON in ONE
+      // child. It is NOT specially decoded — at member grain it is one
+      // string member, and no heuristic can tell it from a member whose text
+      // happens to look like JSON (`["a","b"]` is a legal string). Nothing
+      // in production holds one: no workspace was flipped before this
+      // landed, which is the reason the ambiguity costs nothing.
+      const legacyKey = await appendKey(field.id)
+      const legacy = await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, orderKey: legacyKey,
+        content: JSON.stringify(['beta', 'gamma']),
+      }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', '["beta","gamma"]'])
+
+      // The next cell write heals it: the legacy child matches no member and
+      // is reaped, and the members it stood for become real siblings.
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'beta', 'gamma'])
+      expect(await memberRows('p', TAGS_FIELD_ID)).not.toContainEqual(
+        expect.objectContaining({id: legacy}))
+    })
+  })
+
+  describe('degenerate inputs the reconciler has to survive', () => {
+    it('collapses a duplicate field row BEFORE reconciling, so a removal sticks', async () => {
+      // A synced conflict can leave two field rows for one property. Collapsing
+      // after the reconcile relocates the duplicate's members under the
+      // survivor where nothing has reaped them, and the projection aggregates
+      // them straight back — the removal silently does not stick.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'b']),
+        {scope: ChangeScope.BlockDefault})
+      const dupKey = await appendKey('p')
+      const dupId = await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: 'p', orderKey: dupKey,
+        content: propertyFieldContent(TAGS_FIELD_ID),
+        referenceTargetId: TAGS_FIELD_ID, isFieldForm: true,
+      }), {scope: ChangeScope.BlockDefault})
+      const memberKey = keysBetween(null, null, 1)[0]!
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: dupId, orderKey: memberKey, content: 'c',
+      }), {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['a', 'b', 'c'])
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['a'])
+      expect((await bagOf('p')).tags).toEqual(['a'])
+    })
+
+    it('survives a sibling whose order key the generator cannot parse', async () => {
+      // `tx.create` validates no order key and the design invites hand-made
+      // sibling rows into the value set, so a member can carry `zzz`. The key
+      // generator REFUSES such an anchor, and it sits on the ordinary
+      // add-a-member path — so without a fallback one such row makes every
+      // growth write to that property throw out of the processor and roll the
+      // user's whole transaction back, for as long as the row exists.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: field.id, orderKey: 'zzz', content: 'stray',
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('gives members distinct slots when existing rows share an order key', async () => {
+      // Synced or imported rows can tie. A tie cannot express an order at all,
+      // so the reorder completes and then projects back the old way.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'b']),
+        {scope: ChangeScope.BlockDefault})
+      const rows = await memberRows('p', TAGS_FIELD_ID)
+      await sharedDb.db.execute('UPDATE blocks SET order_key = ? WHERE id = ?',
+        [rows[0]!.order_key, rows[1]!.id])
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['b', 'a']),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', TAGS_FIELD_ID)
+      expect(after.map(m => m.content)).toEqual(['b', 'a'])
+      expect(new Set(after.map(m => m.order_key)).size).toBe(2)
+      expect((await bagOf('p')).tags).toEqual(['b', 'a'])
+    })
+
+    it('matches a member by VALUE, so a hand-spelled row keeps its identity', async () => {
+      // ` 1 ` and `1` project to the same member. Matching on raw text instead
+      // would reap the row the person edited, and its comment with it, to mint
+      // a replacement for a value that never changed.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [1, 2]),
+        {scope: ChangeScope.BlockDefault})
+      const before = await memberRows('p', BAG_FIELD_ID)
+      await repo.tx(tx => tx.update(before[0]!.id, {content: ' 1 '}),
+        {scope: ChangeScope.BlockDefault})
+      const noteKey = await appendKey(before[0]!.id)
+      await repo.tx(tx => tx.create({
+        workspaceId: WS, parentId: before[0]!.id, orderKey: noteKey, content: 'why 1',
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [2, 1]),
+        {scope: ChangeScope.BlockDefault})
+
+      const after = await memberRows('p', BAG_FIELD_ID)
+      expect(after.map(m => m.id)).toEqual([before[1]!.id, before[0]!.id])
+      // Its own spelling survives too — the row matched by value, so there is
+      // nothing to canonicalize and no reason to edit a person's text.
+      expect(after[1]!.content).toBe(' 1 ')
+      expect((await childrenRows(before[0]!.id)).filter(c => c.deleted === 0)
+        .map(c => c.content)).toEqual(['why 1'])
+    })
+
+    it('stores an undefined member as null, the same as the cell would', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [undefined, 'x']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['null', '"x"'])
+      expect((await bagOf('p')).bag).toEqual([null, 'x'])
+    })
+
+    it('stores a HOLE as null too — a sparse slot is the same absence', async () => {
+      // `[, 'x']` is not `[undefined, 'x']` to `Array.prototype.map`, which
+      // skips holes without calling its callback — so the normalization above
+      // it never ran and the member reached the child create as `undefined`,
+      // landing as empty content the projection cannot read. The cell says
+      // `[null, 'x']` either way (JSON has no hole), so the two spellings have
+      // to store the same thing.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      // eslint-disable-next-line no-sparse-arrays -- the case under test
+      await repo.tx(tx => tx.setProperty('p', bagSchema, [, 'x']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', BAG_FIELD_ID)).toEqual(['null', '"x"'])
+      expect((await bagOf('p')).bag).toEqual([null, 'x'])
+    })
+
+    it('an unparseable member survives an unrelated write to the same property', async () => {
+      // It is not a member the cell removed — it is one the cell never held,
+      // because the projection could not read it. Reaping it on the next write
+      // deletes a row the user still has to repair, and its sub-children too.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'b-id']),
+        {scope: ChangeScope.BlockDefault})
+      const members = await memberRows('p', PEOPLE_FIELD_ID)
+      await repo.tx(tx => tx.update(members[1]!.id, {content: 'Marry'}),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).people).toEqual(['a-id'])
+
+      // An unrelated growth write to the same property.
+      await repo.tx(tx => tx.setProperty('p', peopleSchema, ['a-id', 'c-id']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', PEOPLE_FIELD_ID))
+        .toContain('Marry')
+    })
+
+    it('refuses a list member whose content cannot be read back', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await expect(
+        repo.tx(tx => tx.setProperty('p', peopleSchema, ['mary-id', '']),
+          {scope: ChangeScope.BlockDefault}),
+      ).rejects.toThrow(/reads back/)
+
+      expect((await bagOf('p')).people).toBeUndefined()
+    })
+  })
+
+  describe('conflicts between two field rows for one property', () => {
+    /** A second field row for the same fieldId, carrying `members` — the shape
+     *  two offline devices leave when each materializes a property that had no
+     *  field row yet. Raw, because sync-apply never passes through `repo.tx`. */
+    const addDuplicateFieldRow = async (
+      repo: Repo, owner: string, fieldId: string, members: readonly string[],
+    ): Promise<void> => {
+      const dupKey = await appendKey(owner)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('dupfield', ?, ?, ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, owner, dupKey, propertyFieldContent(fieldId), fieldId],
+      )
+      for (const i of members.keys()) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+             properties_json, deleted, created_at, updated_at, user_updated_at,
+             created_by, updated_by)
+           VALUES (?, ?, 'dupfield', ?, 'placeholder', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+          [`dupmember-${i}`, WS, `a${i}`],
+        )
+      }
+      // Through the tx layer, so the write is a REAL content change and the
+      // projection actually re-runs over the arrived rows. Writing the final
+      // text raw would leave the cell untouched and the test passing on the
+      // value it already had.
+      await repo.tx(async tx => {
+        for (const [i, member] of members.entries()) {
+          await tx.update(`dupmember-${i}`, {content: member})
+        }
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('a duplicate field row holding the SAME members does not double the list', async () => {
+      // The projection aggregates ACROSS field rows, and the collapse FOLDS an
+      // equal member rather than making it a peer — so concatenating predicts a
+      // list the collapse will never build. One value materialized twice is one
+      // value.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+
+      await addDuplicateFieldRow(repo, 'p', TAGS_FIELD_ID, ['alpha', 'beta'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('a duplicate field row holding DIVERGENT members still unions', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+
+      await addDuplicateFieldRow(repo, 'p', TAGS_FIELD_ID, ['gamma'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'gamma'])
+    })
+  })
+
+  describe('round eleven', () => {
+    /** One extra member row under an EXISTING field row, raw — the shape a
+     *  synced arrival has, which never passes through `repo.tx` and so leaves
+     *  the owner's cell stale until PROJECT next runs. */
+    const addArrivedMember = async (
+      fieldRowId: string, id: string, content: string,
+    ): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [id, WS, fieldRowId, await appendKey(fieldRowId), content],
+      )
+    }
+
+    /** A SECOND field row for the same definition, carrying `members` — what two
+     *  offline devices materializing one value leave behind. Raw, then the
+     *  members' content is written through the tx layer so the projection
+     *  actually re-runs over them. */
+    const addSecondFieldRow = async (
+      repo: Repo, owner: string, fieldId: string, members: readonly string[],
+    ): Promise<void> => {
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('r11-dupfield', ?, ?, ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, owner, await appendKey(owner), propertyFieldContent(fieldId), fieldId],
+      )
+      for (const i of members.keys()) {
+        await sharedDb.db.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+             properties_json, deleted, created_at, updated_at, user_updated_at,
+             created_by, updated_by)
+           VALUES (?, ?, 'r11-dupfield', ?, 'placeholder', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+          [`r11-dupmember-${i}`, WS, `a${i}`],
+        )
+      }
+      await repo.tx(async tx => {
+        for (const [i, member] of members.entries()) {
+          await tx.update(`r11-dupmember-${i}`, {content: member})
+        }
+      }, {scope: ChangeScope.BlockDefault})
+    }
+
+    it('a merge keeps a synced member the source cell had not projected yet', async () => {
+      // A merge RELOCATES and never reaps — but it builds the target bag from
+      // the SOURCE CELL, and MATERIALIZE runs before PROJECT, so a member that
+      // arrived under the source and has not reprojected yet reads as surplus
+      // against that stale cell and is tombstoned. The merge never observed it.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('from', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const fromField = await fieldRowFor('from', TAGS_FIELD_ID)
+      await addArrivedMember(fromField.id, 'arrived-beta', 'beta')
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', TAGS_FIELD_ID)).toEqual(['alpha', 'beta'])
+      expect((await bagOf('into')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('a duplicate field row keeps its OWN repeated member', async () => {
+      // Multiplicity is kept WITHIN a field row — including a field row that is
+      // not the first. Folding the second `beta` here is the cross-row rule
+      // reaching inside one row, where two equal rows are two members.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await addSecondFieldRow(repo, 'p', TAGS_FIELD_ID, ['beta', 'beta'])
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'beta'])
+
+      // And it SURVIVES the collapse. A write to the property runs MATERIALIZE,
+      // which folds the two field rows into one before reconciling — so if the
+      // collapse folded equal members the way the projection used to, the list
+      // would quietly shorten on the next touch and the cell above would have
+      // been a value nothing could reproduce.
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta', 'beta', 'gamma']),
+        {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'beta', 'gamma'])
+      expect(await memberContents('p', TAGS_FIELD_ID))
+        .toEqual(['alpha', 'beta', 'beta', 'gamma'])
+    })
+
+    it('refuses a null member a string member codec would read back as empty', async () => {
+      // A hole normalizes to `null`, which the string member codec renders as
+      // EMPTY content and reads back as `''` — so the cell would say `[null]`
+      // while the child says `''`. Every member has to read back as itself.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+
+      await expect(repo.tx(
+        // eslint-disable-next-line no-sparse-arrays -- the case under test
+        tx => tx.setProperty('p', tagsSchema, [, 'x'] as unknown as string[]),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toThrow()
+    })
+  })
+
+  describe('a caller that did not observe intent may not reap a member', () => {
+    it('restoring an EMPTY list does not resurrect the member that emptied it', async () => {
+      // An explicitly empty list leaves exactly one tombstoned value under a
+      // live field row — the member the user deleted. That is the one count at
+      // which the scalar revival rule matches for a list, and taking it undoes
+      // the deletion; `additive` then stops the reconciler undoing that.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, []),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual([])
+
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual([])
+      expect((await bagOf('p')).tags).toEqual([])
+    })
+
+    it('keeps an arrived member that DUPLICATES one already there', async () => {
+      // `additive` has to govern folding too, not just deletion: a fold
+      // takes the row away just the same, and multiplicity is part of a list's
+      // value, so collapsing an unobserved arrival onto its twin shortens the
+      // list exactly as reaping it would.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      const arrivedKey = await appendKey(field.id)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('twin', ?, ?, ?, 'alpha', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, field.id, arrivedKey],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
+    })
+
+    it('folding a repeated member folds its own properties into the survivor', async () => {
+      // §9 flat recognition: a member row owns properties like any block. When
+      // a shortened list folds an equal member into its survivor, the folded
+      // member's field rows join the survivor's — a second field row for one
+      // property on the survivor would be a duplicate the fold itself made.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(keep!.id, tagsSchema, ['x']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+      const [keepField] = await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['a'])
+      // ONE field row on the survivor — its own — holding both members.
+      expect((await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)).map(row => row.id)).toEqual([keepField!.id])
+      expect(await memberContents(keep!.id, TAGS_FIELD_ID)).toEqual(['x', 'y'])
+      expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
+    })
+
+    it('folding a member that owns two field rows for one property leaves the survivor one', async () => {
+      // The survivor gains each row the fold moves over, so the folded member's
+      // second field row for a property folds into the first rather than
+      // landing beside it as a duplicate the fold made.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+      const twinKey = await appendKey(fold!.id)
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'twin-field', workspaceId: WS, parentId: fold!.id, orderKey: twinKey,
+          content: propertyFieldContent(TAGS_FIELD_ID),
+        })
+        await tx.create({
+          id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'z',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      expect(await liveFieldRowsFor(TAGS_FIELD_ID)(fold!.id)).toHaveLength(2)
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      expect([...await memberContents(keep!.id, TAGS_FIELD_ID)].sort()).toEqual(['y', 'z'])
+    })
+
+    it('folding a repeated member folds field rows of a seed whose block the same tx deletes', async () => {
+      // A seed's declaration resolves its fieldId with or without the block,
+      // so these are still field rows at commit — declining the fold would
+      // leave the survivor two of them for one property.
+      const repo = await setupWithLists()
+      const aliasFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+      await repo.tx(tx => tx.create({
+        id: aliasFieldId, workspaceId: WS, parentId: null, orderKey: 'zz', content: 'alias',
+      }), {scope: ChangeScope.BlockDefault})
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(keep!.id, aliasesProp, ['k']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, aliasesProp, ['f']), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        await tx.delete(aliasFieldId)
+        await tx.setProperty('p', tagsSchema, ['a'])
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await liveFieldRowsFor(aliasFieldId)(keep!.id)).toHaveLength(1)
+    })
+
+    it('folding a repeated member keeps the marked rows no definition resolves', async () => {
+      // A `::` row whose target resolves to no definition is not a field row
+      // (§9 condition 3) — two of them sharing a target are two user blocks,
+      // and folding one into the other would tombstone one of them.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      const unresolved = propertyFieldContent('field-nobody-defines')
+      await repo.tx(async tx => {
+        await tx.create({id: 'keep-note', workspaceId: WS, parentId: keep!.id, orderKey: 'a0', content: unresolved})
+        await tx.create({id: 'fold-note', workspaceId: WS, parentId: fold!.id, orderKey: 'a0', content: unresolved})
+      }, {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      const notes = await sharedDb.db.getAll<{id: string; parent_id: string; deleted: number}>(
+        `SELECT id, parent_id, deleted FROM blocks WHERE id IN ('keep-note', 'fold-note') ORDER BY id`)
+      expect(notes).toEqual([
+        {id: 'fold-note', parent_id: keep!.id, deleted: 0},
+        {id: 'keep-note', parent_id: keep!.id, deleted: 0},
+      ])
+    })
+
+    it('keeps a twin that arrived under a DUPLICATE field row', async () => {
+      // The collapse of duplicate field rows runs before the reconciler is
+      // handed the policy, so it has to carry it too: folding a member on the
+      // way past removes the occurrence the reconciler was meant to preserve,
+      // and the reconciler never learns it existed.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      const dupKey = await appendKey('p')
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, reference_target_id, is_field_form, deleted,
+           created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES ('dupfield', ?, 'p', ?, ?, '{}', ?, 1, 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, dupKey, propertyFieldContent(TAGS_FIELD_ID), TAGS_FIELD_ID],
+      )
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('twin', ?, 'dupfield', 'a0', 'alpha', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
+    })
+
+    it('restoring the owner keeps a member that arrived while it was deleted', async () => {
+      // Revival re-materializes names the tx never wrote, from a cell that can
+      // be STALE against the children: sync-apply skips the parent-liveness
+      // trigger, so a peer's member lands under a tombstoned field row. Reaping
+      // it would be silent loss of a value this device never saw — and the
+      // scalar path keeps the same arrival as a live divergent peer, so the
+      // list path reaping it was an asymmetry, not a policy.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['alpha', 'beta']),
+        {scope: ChangeScope.BlockDefault})
+      const field = await fieldRowFor('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+      // The arrival: raw, because sync-apply never passes through `repo.tx`.
+      const arrivedKey = await appendKey(field.id)
+      await sharedDb.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+           properties_json, deleted, created_at, updated_at, user_updated_at,
+           created_by, updated_by)
+         VALUES ('arrived', ?, ?, ?, 'gamma', '{}', 0, 1, 1, 1, 'user-1', 'user-1')`,
+        [WS, field.id, arrivedKey],
+      )
+
+      await repo.tx(tx => tx.restore('p'), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID))
+        .toEqual(['alpha', 'beta', 'gamma'])
+      // The cell lags the children until the next reprojection (§5's
+      // pending-reprojection rule) — post-flip the children are the truth, and
+      // touching any value row for the field heals it.
+      await repo.tx(tx => tx.update('arrived', {content: 'gamma!'}),
+        {scope: ChangeScope.BlockDefault})
+      expect((await bagOf('p')).tags).toEqual(['alpha', 'beta', 'gamma!'])
+    })
+  })
+
+  describe('merge unions two divergent sets (§5 merge policy)', () => {
+    it('keeps two identically BROKEN members as two fixable rows', async () => {
+      // Equal valid members may fold: the reconciler restores the multiplicity
+      // from the cell. Two unparseable rows are not in any cell, so a fold
+      // destroys one for good — they are two independently fixable blocks.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', peopleSchema, ['a-id']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', peopleSchema, ['b-id']),
+        {scope: ChangeScope.BlockDefault})
+      // Both edited to the SAME prose — the shape a person types into a ref.
+      for (const owner of ['into', 'from']) {
+        const member = (await memberRows(owner, PEOPLE_FIELD_ID))[0]!
+        await repo.tx(tx => tx.update(member.id, {content: 'not a reference'}),
+          {scope: ChangeScope.BlockDefault})
+      }
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', PEOPLE_FIELD_ID))
+        .toEqual(['not a reference', 'not a reference'])
+    })
+
+    it('folds members that are EQUAL though spelled differently', async () => {
+      // The cell merge dedupes by value, so the collapse has to compare the
+      // same way. Comparing raw text moved both rows under the survivor, the
+      // merged cell was already deduped so nothing reconciled them, and the
+      // projection then published the member twice over it.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', bagSchema, [1]),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', bagSchema, [1]),
+        {scope: ChangeScope.BlockDefault})
+      // Same value, different editable spelling — what a person types.
+      const fromMember = (await memberRows('from', BAG_FIELD_ID))[0]!
+      await repo.tx(tx => tx.update(fromMember.id, {content: ' 1 '}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('into')).bag).toEqual([1])
+      expect(await memberContents('into', BAG_FIELD_ID)).toHaveLength(1)
+    })
+
+    it('folds the source field row and keeps every member once', async () => {
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', tagsSchema, ['shared', 'mine']),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', tagsSchema, ['shared', 'theirs']),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        const into = await tx.get('into')
+        const from = await tx.get('from')
+        await mergeBlocksInTx(tx, {into: into!, from: from!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('into', TAGS_FIELD_ID))
+        .toEqual(['shared', 'mine', 'theirs'])
+      expect((await bagOf('into')).tags).toEqual(['shared', 'mine', 'theirs'])
+    })
+  })
+})
+
+describe('convertValueChildContent: which reading of a value child wins (#1055)', () => {
+  // Direct, because the route decisions are pure: no workspace seed, no
+  // processor round, and the exact respelled text rather than its effect.
+  type PresetId = keyof typeof kernelValuePresetCoresById
+  const schemaOf = (presetId: PresetId): AnyPropertySchema => {
+    const core = kernelValuePresetCoresById[presetId]
+    return {
+      name: 'p',
+      codec: core.build(core.defaultConfig as never),
+      defaultValue: core.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    } as AnyPropertySchema
+  }
+  const convert = (
+    from: PresetId | null, to: PresetId, content: string,
+  ): ValueChildConversion =>
+    convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
+
+  it('carries the VALUE across a pure spelling disagreement, both directions', () => {
+    expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
+    expect(convert('list', 'string-list', '"x"')).toEqual({outcome: 'converted', content: 'x'})
+  })
+
+  it('re-reads the TEXT where the target cannot hold the value', () => {
+    // The round trip fails on a type change, which is what routes every
+    // coercion here without an ordering rule of its own. Asserted on the
+    // canonicalized content: carrying the value would have kept the spacing.
+    expect(convert('string', 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
+    expect(convert('string', 'boolean', ' true ')).toEqual({outcome: 'converted', content: 'true'})
+  })
+
+  it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
+    expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
+  })
+
+  it('re-reads the text for a row the OLD codec cannot read', () => {
+    // A decline that has nothing to do with the target: within ONE `number`
+    // property re-typed to `list`, the readable row keeps its number while
+    // this stale one is re-read as JSON.
+    expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
+  })
+
+  it('re-spells a reference the stored text ALREADY carried', () => {
+    // The mint decline is gated on the stored text, not on the target: an
+    // alias the person wrote is an identity they wrote. Nothing else can
+    // answer here — the text route cannot read the alias form under `ref` at
+    // all, so declining would refuse the re-type rather than answer it
+    // differently.
+    expect(convert('string', 'ref', '[[Page]]'))
+      .toEqual({outcome: 'converted', content: '(([[Page]]))'})
+    expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
+  })
+
+  it('treats the EMPTY spelling as a spelling', () => {
+    // `''` is what `string` spells the empty string as, so a route that tested
+    // the spelling for truthiness rather than for null would fall through to
+    // the text route and keep the JSON `""` verbatim — #1055 again, at the one
+    // value where it is invisible.
+    expect(convert('list', 'string', '""')).toEqual({outcome: 'converted', content: ''})
+  })
+
+  it('keeps a bare `null` the OLD codec read as the literal word (#1030)', () => {
+    // `null` is the unset SENTINEL to a codec that accepts it and the literal
+    // word to one that does not. `string` rejects null, so the row held the
+    // word and the value route carries it. Settled only where a spelling
+    // holds: `list` -> `string` has none, and the text route decides it the
+    // other way.
+    expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
+  })
+
+  it('falls to the text route when no old codec records the encoding', () => {
+    expect(convert(null, 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
+  })
+})
+
+describe('machinery rows are born with the references the parse would recompute', () => {
+  /** The prefill exists so `references.parseReferences` finds the row already
+   *  correct and never opens its transaction. That only holds for references
+   *  the plugin's INLINE scanner would itself produce, and that scanner is
+   *  UUID-only — narrower than the whole-block grammar a field row is read
+   *  with. Prefilling outside it writes a reference the recompute retracts. */
+  const UUID_FIELD_ID = '33333333-3333-4333-8333-333333333333'
+  const UUID_TARGET = '44444444-4444-4444-8444-444444444444'
+
+  const uuidRefSchema = defineProperty<string>('uuidref', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** Core mints the rows; what a machinery span means is answered by whoever
+   *  parses content in this configuration. The real contribution, so the test
+   *  cannot agree with a prediction the plugin has since stopped making. */
+  const withReferencesPlugin = (repo: Repo): void => {
+    repo.setRuntimeContributions(
+      contentReferencePrefillsFacet, 'references', [exactBlockRefPrefill],
+    )
+  }
+
+  const setupUuidRef = async (
+    {references = true}: {references?: boolean} = {},
+  ): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    if (references) withReferencesPlugin(repo)
+    registerDefinition(repo, 'test-uuidref-definition', UUID_FIELD_ID, uuidRefSchema)
+    return repo
+  }
+
+  const valueChildOf = async (ownerId: string): Promise<ChildRow | undefined> => {
+    const fields = (await childrenRows(ownerId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    if (fields.length === 0) return undefined
+    return (await childrenRows(fields[0]!.id)).find(v => v.deleted === 0)
+  }
+
+  it('a field row and a ref value child both carry theirs at create', async () => {
+    const repo = await setupUuidRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, UUID_TARGET),
+      {scope: ChangeScope.BlockDefault})
+
+    const fields = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    expect(await referencesOf(fields[0]!.id))
+      .toEqual([{id: UUID_FIELD_ID, alias: UUID_FIELD_ID}])
+    expect(await referencesOf((await valueChildOf('p'))!.id))
+      .toEqual([{id: UUID_TARGET, alias: UUID_TARGET}])
+  })
+
+  it('carries none when nothing parses references, so the toggle still means off', async () => {
+    // With References disabled there is no parser to hand an answer to, and
+    // none to retract one either: a row born with a backlink here would keep
+    // it through every later edit. Core therefore asks rather than derives,
+    // and the answer with no contributor is "nothing".
+    const repo = await setupUuidRef({references: false})
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, UUID_TARGET),
+      {scope: ChangeScope.BlockDefault})
+
+    const fields = (await childrenRows('p')).filter(
+      r => r.deleted === 0 && r.reference_target_id === UUID_FIELD_ID)
+    // The LOCAL derived column is core's own and is stamped either way — it is
+    // per-device, re-derived on arrival, and nothing about it is the plugin's.
+    expect(fields[0]!.reference_target_id).toBe(UUID_FIELD_ID)
+    expect(await referencesOf(fields[0]!.id)).toEqual([])
+    expect(await referencesOf((await valueChildOf('p'))!.id)).toEqual([])
+  })
+
+  it('a ref value child whose target is NOT uuid-shaped is left to the parse', async () => {
+    // A ref property accepts these — `((target-xyz))` is a legal stored value
+    // and the whole-block reading calls it a blockRef — but the inline scanner
+    // will not, so a prefill here is a reference nothing recomputes and the
+    // plugin would strip it right back out.
+    const repo = await setupUuidRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', uuidRefSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+
+    const value = await valueChildOf('p')
+    expect(value?.content).toBe('((target-xyz))')
+    expect(await referencesOf(value!.id)).toEqual([])
   })
 })

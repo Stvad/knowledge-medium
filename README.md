@@ -102,11 +102,17 @@ Run the SQL migration test suite with:
 pnpm check:db
 ```
 
-This starts a local Supabase Postgres test container, applies
-`supabase/migrations/*.sql` as `supabase_admin`, runs every pgTAP test in
-`supabase/tests`, and then removes the test database container so the next run
-starts clean. It is not part of `pnpm check`; the pre-commit gate stays JS-only
-and does not require a container runtime.
+This starts a local Supabase Postgres test container and the Storage API,
+applies `supabase/migrations/*.sql` as `supabase_admin`, and runs every pgTAP
+test in `supabase/tests`. Storage starts first, as on the hosted project, so the
+migrations' Storage blocks (the attachments bucket and its policies) run. It
+then starts GoTrue and PostgREST against that database and runs the vitest files
+named `*.supabase.test.ts` (through `vitest.supabase.config.ts`), which drive the
+app's own PostgREST and Storage code against it. Finally it removes the
+containers and their network so the next run starts clean. It is not part of
+`pnpm check`; the pre-commit gate stays JS-only and does not require a container
+runtime. `pnpm check:db --hold` brings the stack up, prints its `CHECK_DB_*`
+exports and keeps it running until Ctrl-C, so one stack test can run alone.
 
 For Apple Container, install `container` and `socktainer`. `pnpm check:db`
 uses the shared runtime helper and starts the Apple container system plus a
@@ -115,6 +121,24 @@ managed Socktainer process when `DOCKER_HOST` is unset:
 ```bash
 pnpm check:db
 ```
+
+Socktainer needs to be at least 1.0.0. Older releases set the hostname to
+`<container name>-<uuid>` without capping it at Linux's 64 characters. The test
+container's name is long enough to go over that limit, so its start fails with
+`vmexec error ... Invalid argument`. Each Socktainer release is built against
+one Apple Container version (Socktainer 1.5.x against container 1.5.0), so
+upgrade the two together:
+
+```bash
+container system stop && brew upgrade container socktainer && container system start
+```
+
+Socktainer now ships in homebrew-core. If you installed it from the old
+`socktainer/tap`, run `brew untap socktainer/tap` first, as upstream recommends.
+
+The managed Socktainer logs to
+`$TMPDIR/knowledge-medium-socktainer-<pid>.log`, and its startup version check
+reports a mismatch there.
 
 The runtime helper is also available directly:
 

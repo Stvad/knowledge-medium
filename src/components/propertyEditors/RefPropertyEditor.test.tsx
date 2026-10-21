@@ -3,7 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
+import type { LinkTargetIdCandidate } from '@/utils/linkTargetAutocomplete'
 import { ReferenceSearch } from './RefPropertyEditor'
+
+const searchIdCandidates = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/linkTargetAutocomplete.js', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  searchLinkTargetIdCandidates: searchIdCandidates,
+}))
 
 // ReferenceSearch reads the owner's workspace id via the reactive
 // `useWorkspaceId` Handle hook, which needs a fully wired Block/repo to drive
@@ -110,5 +117,40 @@ describe('ReferenceSearch — Escape ownership', () => {
     } finally {
       window.removeEventListener('keydown', reachedShortcuts)
     }
+  })
+})
+
+describe('ReferenceSearch — telling a block from its own property rows apart', () => {
+  // A page and the `alias` value row under it have the SAME content, so both
+  // reach the picker with the same label. The rows are distinguishable only if
+  // the candidate's context makes it to the screen (km-1iia).
+  const sameLabelCandidates: LinkTargetIdCandidate[] = [
+    {id: 'page', label: 'Reading List', detail: 'Reading List'},
+    {id: 'value', label: 'Reading List', detail: 'Reading List', context: 'alias of Reading List'},
+  ]
+
+  it('shows the property row where it belongs, and says nothing extra about the block', async () => {
+    searchIdCandidates.mockResolvedValue(sameLabelCandidates)
+    render(
+      <ReferenceSearch
+        owner={owner}
+        excludeIds={[]}
+        targetTypes={[]}
+        placeholder="Add block"
+        selectionMode="multiple"
+        onPick={vi.fn()}
+        propertyField
+      />,
+    )
+    const input = screen.getByRole('combobox')
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'Reading List'}})
+    await flush()
+
+    const rows = screen.getAllByRole('option')
+    expect(rows.map(row => row.textContent)).toEqual([
+      'Reading List',
+      'Reading List' + 'alias of Reading List',
+    ])
   })
 })

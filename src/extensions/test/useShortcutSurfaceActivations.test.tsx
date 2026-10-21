@@ -21,6 +21,7 @@ import {
   type BlockShortcutDependencies,
 } from '@/shortcuts/types'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations'
+import { BackgroundSubtreeProvider } from '@/context/backgroundSubtree'
 import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction'
 import {
   activePanelIdProp,
@@ -236,6 +237,44 @@ describe('useShortcutSurfaceActivations', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('active-normal-mode')).toHaveTextContent('block-a:panel-a')
+    })
+  })
+
+  // Suspension is unit-tested against `useActionContextActivations` directly in
+  // `shortcuts/test/shortcutSurfaceSuspension.test.tsx`. This drives the REAL
+  // surface path instead — the resolver, a real repo and real ui-state — because
+  // that is the path every block surface takes, and (via `BlockEditor`'s
+  // 'codemirror' surface) the one EDIT_MODE_CM arrives on. Nothing between the
+  // resolver and the funnel gets to opt out of the gate.
+  it('drops and restores a real surface\'s contexts as its subtree suspends', async () => {
+    const tree = (suspended: boolean) => (
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <Suspense fallback={<div>Loading...</div>}>
+            <BackgroundSubtreeProvider background={suspended}>
+              <PanelBlockSurface
+                blockId="block-b"
+                layoutSessionBlockId="layout-session"
+                panelId="panel-b"
+              />
+            </BackgroundSubtreeProvider>
+            <ActiveNormalModeProbe/>
+          </Suspense>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>
+    )
+
+    const {rerender} = render(tree(false))
+    await screen.findByText('block-b:panel-b')
+
+    rerender(tree(true))
+    await waitFor(() => {
+      expect(screen.getByTestId('active-normal-mode')).toHaveTextContent('none')
+    })
+
+    rerender(tree(false))
+    await waitFor(() => {
+      expect(screen.getByTestId('active-normal-mode')).toHaveTextContent('block-b:panel-b')
     })
   })
 })

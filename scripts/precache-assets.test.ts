@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {collectRestAssets, isPrecacheableAsset} from './precache-assets'
+import {bootWorkerAssets, collectRestAssets, isPrecacheableAsset} from './precache-assets'
 
 describe('isPrecacheableAsset', () => {
   it('accepts the same-origin runtime asset types the SW serves cache-first', () => {
@@ -87,5 +87,47 @@ describe('collectRestAssets', () => {
       toBaseUrl: baseUrl,
     })
     expect(restAssets).toEqual(['/knowledge-medium/src/lazy.js'])
+  })
+})
+
+describe('bootWorkerAssets', () => {
+  it('selects the DB worker graph and its selectable VFS + wasm variants, never the cipher builds', () => {
+    const files = [
+      'assets/WASQLiteDB.worker-1pScv-ee.js',
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+      'assets/SharedSyncImplementation.worker-DLI2cC4_.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
+      'assets/FacadeVFS-BssyCf6W.js',
+      'assets/AccessHandlePoolVFS-D652Ioon.js',
+      'assets/IDBBatchAtomicVFS-CPkeeMBk.js',
+      'assets/wa-sqlite-Di4Pf_yS.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+      'assets/wa-sqlite-async-B563xfYH.js',
+      'assets/wa-sqlite-async-rHzzC98y.wasm',
+      'assets/mc-wa-sqlite-CwE5dkAg.js',
+      'assets/mc-wa-sqlite-CnHbhWvs.wasm',
+      'src/main.js',
+      'wa-sqlite.wasm',
+    ]
+    expect(new Set(bootWorkerAssets(files))).toEqual(new Set([
+      'assets/FacadeVFS-BssyCf6W.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
+      'assets/WASQLiteDB.worker-1pScv-ee.js',
+      'assets/wa-sqlite-Di4Pf_yS.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+      'assets/wa-sqlite-async-B563xfYH.js',
+      'assets/wa-sqlite-async-rHzzC98y.wasm',
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+    ]))
+  })
+
+  it('fails the build when a required member of the DB worker graph is not emitted under its pinned name', () => {
+    expect(() => bootWorkerAssets([
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+    ])).toThrow(/WASQLiteDB/)
   })
 })

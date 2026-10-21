@@ -187,7 +187,7 @@ describe('net-zero watched-field revert (Codex review on PR #428)', () => {
     expect(row.reference_target_id).toBe(X)
   })
 
-  // Same class, one level deeper (Codex on PR #428, round 2): dirtiness
+  // Same class, one level deeper: dirtiness
   // dispatch alone is not enough for an apply that diffs field content
   // INTERNALLY. MATERIALIZE computes changed property names from the
   // event's before/after — with a tx-start `before`, a later processor
@@ -357,7 +357,7 @@ describe('alias reverse-sync → PROJECT (same tx)', () => {
   // Matrix row: "alias.sync content → PROJECT" — an AR1 alias swap
   // rewrites a child's content to `::((fieldId))` AFTER the kernel PROJECT
   // pass ran, so the row becomes a field row with the owner's cell unset
-  // until some unrelated tree edit (found by Codex on PR #386).
+  // until some unrelated tree edit.
   it('projects the owner cell when an alias swap turns a child into a field row', async () => {
     const repo = await setup()
     await repo.tx(async tx => {

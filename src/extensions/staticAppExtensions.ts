@@ -33,6 +33,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { attachmentsPlugin } from '@/plugins/attachments'
+import { richPastePlugin } from '@/plugins/rich-paste'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
@@ -45,6 +46,7 @@ import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
+import { contributorsPlugin } from '@/plugins/contributors'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -56,8 +58,12 @@ import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { searchHealthExtension } from '@/plugins/search-health'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
+import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
+import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
+import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
+import { perfMonitorPlugin } from '@/plugins/perf-monitor'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
@@ -129,6 +135,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,
+  richPastePlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
@@ -154,12 +161,21 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   searchHealthExtension,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
+  dbMirrorPlugin,
   propertiesMigrationPlugin({repo}),
   startupMetricsPlugin,
+  interactionMetricsPlugin,
+  perfMonitorPlugin({repo}),
+  // Deliberately OUTSIDE both metrics toggles: the rule that page-global
+  // counters belong to one workspace can only hold if every workspace
+  // activation is seen, and a plugin that was disabled for part of the session
+  // saw none of them.
+  observeWorkspaceEffectContribution,
   updateIndicatorPlugin,
   blockInfoPlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
+  contributorsPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

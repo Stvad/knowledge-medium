@@ -18,11 +18,13 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { storeWorkspaceKey, stubLocalStorage } from '@/data/test/e2eeFixtures'
 import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
+import { onWorkspaceKeyUnavailable } from '@/sync/keys/openWorkspaceKeys'
 import {
   applyPropertyDefinitionSynthesis,
   planPropertyDefinitionSynthesis,
@@ -39,28 +41,9 @@ const PLAINTEXT_NS = 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'
 let sharedDb: TestDb
 let repo: Repo
 
-/** `setModePin` refuses to pin `e2ee` without a durable localStorage — by
- *  design, since the pin is the only local authority on the mode. Node has
- *  none, so give it one; the store is per-test, so a pin never leaks across. */
-const stubLocalStorage = () => {
-  const entries = new Map<string, string>()
-  const storage = {
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => { entries.set(key, String(value)) },
-    removeItem: (key: string) => { entries.delete(key) },
-  }
-  vi.stubGlobal('localStorage', storage)
-  vi.stubGlobal('window', {localStorage: storage})
-}
-
 /** Put `K_id` where the pass looks for it: the same per-device store an unlock
  *  flow writes, holding the same subkey the asset path uses. */
-const storeContentKey = async (fill = 7) => {
-  const contentKeyHmac = await deriveContentKeyHmac(new Uint8Array(32).fill(fill))
-  const wk = await crypto.subtle.generateKey(
-    {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac})
-}
+const storeContentKey = (fill = 7) => storeWorkspaceKey(USER, WS, fill)
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
@@ -135,11 +118,13 @@ describe('resolveSynthesisNamespace on an e2ee workspace', () => {
   it('refuses when the device holds no content key, rather than falling back to the public one',
     async () => {
       // The whole guard: a fallback here would publish name-derived ids for the
-      // one workspace kind that must never have them. `resolveWorkspaceEntry`
-      // already locks a K_id-less e2ee record, so reaching this is a bug — and a
-      // refusal is how a bug stays a bug instead of becoming a leak.
-      const resolved = await resolveSynthesisNamespace(repo, WS)
+      // one workspace kind that must never have them. The entry gate saw a key,
+      // so the record went missing since, and the read locks the workspace too.
+      const locked = vi.fn()
+      const unsubscribe = onWorkspaceKeyUnavailable(locked)
+      const resolved = await resolveSynthesisNamespace(repo, WS).finally(unsubscribe)
       expect(resolved).toEqual({kind: 'refused', reason: expect.stringMatching(/no content key/)})
+      expect(locked).toHaveBeenCalledWith(USER, WS)
     })
 
   it('refuses when the pin says e2ee but the row reads plaintext', async () => {
@@ -179,11 +164,11 @@ describe('applyPropertyDefinitionSynthesis on an e2ee workspace', () => {
     // block there, which is what `converged: 1` means.
     const plan = await planPropertyDefinitionSynthesis(repo, WS)
     expect(await applyPropertyDefinitionSynthesis(repo, plan))
-      .toEqual({created: 1, converged: 0, skipped: []})
+      .toEqual({created: 1, converged: 0, skipped: [], undoHistoryCleared: true})
 
     const again = await applyPropertyDefinitionSynthesis(repo, plan)
 
-    expect(again).toEqual({created: 0, converged: 1, skipped: []})
+    expect(again).toEqual({created: 0, converged: 1, skipped: [], undoHistoryCleared: false})
     const definitions = await repo.db.getAll<{n: number}>(
       `SELECT COUNT(*) AS n FROM blocks b JOIN block_types t ON t.block_id = b.id
         WHERE t.type = 'property-schema' AND b.workspace_id = ? AND b.deleted = 0

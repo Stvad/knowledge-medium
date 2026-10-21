@@ -1,7 +1,6 @@
 /**
  * Guardrail for the "raw write to a synced table silently never uploads" bug
- * class — the failure that stranded the `daily-note:date` backfill (added
- * 2026-05-18, removed in `8c50f167`).
+ * class — the failure that stranded the `daily-note:date` backfill.
  *
  * Uploads from the local SQLite DB to the server are driven by the
  * `blocks_upload_*` triggers, gated `WHEN (SELECT source FROM tx_context) IS

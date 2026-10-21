@@ -46,14 +46,14 @@ describe('summarizeOp', () => {
     const data = JSON.stringify({
       op: 'PUT',
       type: 'blocks',
-      id: '13087947-c577-5422-b43f-c169e0358c3d',
+      id: '01234567-89ab-5cde-8f01-23456789abcd',
       data: {/* full row state */},
     })
     expect(summarizeOp(data)).toEqual({
       op: 'PUT',
       table: 'blocks',
-      id: '13087947-c577-5422-b43f-c169e0358c3d',
-      idShort: '13087947…8c3d',
+      id: '01234567-89ab-5cde-8f01-23456789abcd',
+      idShort: '01234567…abcd',
     })
   })
 

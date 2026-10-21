@@ -24,6 +24,7 @@
  * still unlocked).
  */
 
+import type {WorkspaceObjectKeys} from '../crypto/contentKey.js'
 import {IdbKeyedStore, idbKeyPrefix, idbRecordId} from '@/utils/idbKeyedStore.js'
 
 /**
@@ -50,6 +51,11 @@ export interface WorkspaceKeyRecord {
   readonly contentKeyHmac: CryptoKey | null
 }
 
+/** The keys that seal and name a workspace's objects, or null for a record
+ *  with no K_id yet (the legacy shape). */
+export const objectKeysOf = (record: WorkspaceKeyRecord): WorkspaceObjectKeys | null =>
+  record.contentKeyHmac ? {cek: record.wk, contentKeyHmac: record.contentKeyHmac} : null
+
 /** Normalize a raw stored value to a {@link WorkspaceKeyRecord}: a new-shape
  *  record passes through; a LEGACY bare `CryptoKey` (pre-K_id) becomes
  *  `{ wk, contentKeyHmac: null }`; `null`/`undefined` stays `null`. Exported for
@@ -60,6 +66,38 @@ export const normalizeKeyRecord = (stored: unknown): WorkspaceKeyRecord | null =
   // WK CryptoKey itself (no `wk` property).
   if (typeof stored === 'object' && 'wk' in stored) return stored as WorkspaceKeyRecord
   return { wk: stored as CryptoKey, contentKeyHmac: null }
+}
+
+/**
+ * The stored record if it can open the workspace fully: a WK AND its K_id. A
+ * LEGACY record (no K_id) can decrypt text but not media, and K_id can't be
+ * re-derived from the stored non-extractable WK — only a re-paste repopulates
+ * it — so it counts as no key: the gate prompts the re-paste instead of opening
+ * into permanently-broken media. Throws when the store can't be read.
+ */
+export const getUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  const record = await keyStore.get(userId, workspaceId)
+  return record?.contentKeyHmac ? record : null
+}
+
+/** {@link getUsableKeyRecord}, reading an unreadable store (IndexedDB
+ *  unavailable / corrupt / quota) as "no key" — for callers that fail closed on
+ *  absence and must not throw. */
+export const readUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  try {
+    return await getUsableKeyRecord(keyStore, userId, workspaceId)
+  } catch (err) {
+    console.warn(`[keyStore] key read failed for ${workspaceId}; treating as absent`, err)
+    return null
+  }
 }
 
 export interface WorkspaceKeyStore {
@@ -166,7 +204,7 @@ export const createWorkspaceKeyStore = (): WorkspaceKeyStore => {
 // store so a WK pasted/minted in a flow is the same handle the observer and
 // upload connector resolve — an IndexedDB-backed instance is shared storage,
 // but a single instance also keeps the in-memory fallback coherent within a
-// session. Tests inject their own store and never touch this singleton.
+// session.
 let sharedKeyStore: WorkspaceKeyStore | null = null
 export const getWorkspaceKeyStore = (): WorkspaceKeyStore =>
   (sharedKeyStore ??= createWorkspaceKeyStore())

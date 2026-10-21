@@ -15,6 +15,7 @@ import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.js'
 import {
   labelForBlockData,
+  linkTargetCandidateDetail,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
@@ -24,6 +25,7 @@ import {
   dismissOnFieldEscape,
   usePropertyEditingActivation,
 } from '@/components/propertyPanel/usePropertyEditingActivation.js'
+import { collapseWhitespace } from '@/utils/string.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -40,14 +42,11 @@ const targetTypesForSchema = (schema?: PropertySchema<unknown>): readonly string
   return EMPTY_REFS
 }
 
-const compactDetail = (text: string): string =>
-  text.replace(/\s+/g, ' ').trim()
-
 const candidateLabel = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.label) || candidate.id
+  collapseWhitespace(candidate.label) || candidate.id
 
 const candidateDetail = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.detail)
+  collapseWhitespace(linkTargetCandidateDetail(candidate))
 
 const blockMatchesTargetTypes = async (
   repo: Repo,
@@ -101,13 +100,19 @@ const searchReferenceCandidates = async (
       excludeIds: excluded,
     })
   } else {
-    const [aliasRows, recentBlocks] = await Promise.all([
+    const [aliasRows, recentRows] = await Promise.all([
       repo.query.aliasMatches({
         workspaceId,
         filter: '',
         limit: SEARCH_LIMIT,
       }).load(),
-      repo.query.recentBlocks({
+      // USER-AUTHORED recents, not `recentBlocks`: the latter is every live
+      // non-empty row, and where properties are blocks that includes each
+      // property's generated field and VALUE rows — a value row's content is
+      // the serialized property, so telemetry payloads and the like would be
+      // offered as things to link to, and crowd out real candidates within the
+      // bounded limit. Same query the `((` picker uses.
+      repo.query.recentUserBlocks({
         workspaceId,
         limit: SEARCH_LIMIT,
       }).load(),
@@ -123,7 +128,7 @@ const searchReferenceCandidates = async (
         detail: row.content,
       })
     }
-    for (const block of recentBlocks ?? []) {
+    for (const block of recentRows ?? []) {
       if (seen.has(block.id)) continue
       seen.add(block.id)
       candidates.push({

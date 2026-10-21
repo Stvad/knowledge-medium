@@ -14,7 +14,7 @@
 // WITHOUT paying for another full audit. Results are kept PER WORKSPACE (not a
 // single slot) so a cadenced/manual audit for one workspace can't evict the
 // result an already-open dialog for a *different* workspace is showing.
-import { CallbackSet } from '@/utils/callbackSet.js'
+import { createWorkspaceSnapshotStore } from '@/utils/workspaceSnapshotStore.js'
 import type { ConsistencyAuditResult } from './audit.js'
 
 /** Id of the global action that runs the built-in audit on demand (registered by
@@ -30,31 +30,16 @@ export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
  *  expensive re-scan). */
 export const VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = 'view_data_integrity_audit'
 
-// One entry per audited workspace, so results for different workspaces coexist.
-const byWorkspace = new Map<string, ConsistencyAuditResult>()
-const listeners = new CallbackSet('data-integrity-audit')
+// One entry per audited workspace, so results for different workspaces coexist —
+// a publish for one does not blank a subscriber reading another. That rule, and
+// the shape enforcing it, live in the shared factory.
+const store = createWorkspaceSnapshotStore<ConsistencyAuditResult>('data-integrity-audit')
 
 /** Publish a completed audit result and notify subscribers. */
-export const publishConsistencyAudit = (result: ConsistencyAuditResult): void => {
-  byWorkspace.set(result.workspaceId, result)
-  listeners.notify()
-}
-
-/** The last result FOR `workspaceId` — a stable reference until THAT workspace is
- *  re-audited, or null. This is the single place the "the store is per-workspace,
- *  scope it before use" invariant lives: a publish for another workspace does not
- *  change what this returns, so a subscriber keyed on it (a dialog, the
- *  diagnostics source) is never blanked by an unrelated audit. */
-export const getConsistencyAuditSnapshotFor = (
-  workspaceId: string | null | undefined,
-): ConsistencyAuditResult | null =>
-  (workspaceId != null ? byWorkspace.get(workspaceId) : undefined) ?? null
-
-export const subscribeConsistencyAudit = (listener: () => void): (() => void) =>
-  listeners.add(listener)
-
+export const publishConsistencyAudit = store.publish
+/** The last result FOR `workspaceId` — a stable reference until THAT workspace
+ *  is re-audited, or null. */
+export const getConsistencyAuditSnapshotFor = store.getFor
+export const subscribeConsistencyAudit = store.subscribe
 /** Test helper — clear the published results + listeners. */
-export const resetConsistencyAuditStore = (): void => {
-  byWorkspace.clear()
-  listeners.clear()
-}
+export const resetConsistencyAuditStore = store.reset

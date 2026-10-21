@@ -37,6 +37,47 @@ export const srsReviewDeckType = seedType({
   properties: [reviewDeckTagProp, reviewDeckStartedProp],
 })
 
+/** Decks whose due count is surfaced on today's daily note, as deck tags
+ *  (`''` is the all-due deck, matching `reviewDeckTagProp`). `null` means
+ *  never configured — the hint then shows the all-due deck, so the surface
+ *  works before the user has picked anything. An explicit `[]` is "none":
+ *  the user deselected every deck, and the hint stays off. */
+export const dailyNoteDecksProp = seedProperty<string[] | null>({
+  seedKey: 'system:srs-review/property/daily-note-decks',
+  revision: 1,
+  name: 'srs-review:daily-note-decks',
+  preset: 'json',
+  defaultValue: null,
+  changeScope: ChangeScope.UserPrefs,
+})
+
+/** Stored prefs are untrusted (older builds, hand edits): keep strings only,
+ *  first occurrence wins. `''` is preserved — it names the all-due deck — so
+ *  `uniqueStrings` (which drops empties) doesn't fit here. */
+export const normalizeDailyNoteDecks = (value: unknown): string[] | null => {
+  if (!Array.isArray(value)) return null
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+/** Per-plugin prefs sub-block for SRS review. Holds the daily-note deck
+ *  selection. */
+export const srsReviewPrefsType = seedType({
+  seedKey: 'system:srs-review/type/srs-review-prefs',
+  revision: 1,
+  id: 'srs-review-prefs',
+  label: 'SRS review',
+  properties: [dailyNoteDecksProp],
+})
+
 export const SRS_REVIEW_PROGRESS_TYPE = 'srs-review-progress'
 
 /** A frozen review session's persisted state. Stored on a per-deck child

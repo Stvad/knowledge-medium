@@ -8,10 +8,12 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
-  propertyMachinerySourceIds,
-  workspaceHasPropertyMachinery,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import {
+  propertyMachinerySourceIds,
+  workspaceHasPropertyMachinery,
+} from '@/plugins/backlinks/machinery.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -23,7 +25,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -38,6 +40,14 @@ import {
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
+/** A source and its ancestry, root-first.
+ *
+ *  Two readers, neither of them the grouping: `parentIds` is the chain
+ *  each entry PAINTS for as long as that source is the block it shows —
+ *  captured here, so a paused panel keeps the ancestry its grouping was
+ *  built from — and `sourceId` is what the sticky-claim pass reads as the
+ *  current source set. Grouping itself reads the context chain from its
+ *  own candidates SQL and never looks here. */
 export interface GroupedBacklinkSourceParents {
   sourceId: string
   parentIds: string[]
@@ -125,9 +135,9 @@ const resolveBacklinkSourceIds = async (
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
-  // Same property-machinery exclusion `backlinks.forBlock` applies (PR #386
-  // review): grouped backlinks resolve their own sources rather than routing
-  // through that query, so without this a hidden value row's `[[Target]]`
+  // Same property-machinery exclusion `backlinks.forBlock` applies: grouped
+  // backlinks resolve their own sources rather than routing through that
+  // query, so without this a hidden value row's `[[Target]]`
   // disappears from Linked References and the inline count but still shows up
   // here — duplicating the owner's projected property backlink on the one
   // surface that didn't filter. Un-gated for the reason given there: the
@@ -135,7 +145,7 @@ const resolveBacklinkSourceIds = async (
   // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
   if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 
@@ -149,7 +159,8 @@ const resolveSourceParents = async (
   // core.manyAncestors returns one entry per input id (input order), each
   // with the leaf-to-root chain (depth-asc, excluding self) as hydrated
   // BlockData — the same ordering manyAncestorsSql produced. deps:'none'
-  // because the context-node deps are declared explicitly below.
+  // because the context-node deps declared below are the point of the walk;
+  // grouping itself reads the context chain from its own candidates SQL.
   const entries = await ctx.run('core.manyAncestors', {ids: sourceIds}, {deps: 'none'})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
   for (const entry of entries) {
@@ -195,8 +206,8 @@ export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
 export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
     ${SOURCE_IDS_CTE},
-    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path, ws) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/', b.workspace_id
       FROM source_ids s
       JOIN blocks b ON b.id = s.id
       WHERE b.deleted = 0
@@ -206,10 +217,14 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         parent.id,
         parent.parent_id,
         ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
+        ancestor_chain.path || '!' || hex(parent.id) || '/',
+        ancestor_chain.ws
       FROM ancestor_chain
       JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
       WHERE parent.deleted = 0
+        -- A sync-applied parent edge can leave the source's workspace; the
+        -- context walk stops there, so nothing past it becomes a group.
+        AND parent.workspace_id = ancestor_chain.ws
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
@@ -219,7 +234,16 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         refs.target_id AS context_id,
         'ref' AS context_kind
       FROM ancestor_chain
-      JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
+      -- CROSS JOIN pins the join ORDER (results are identical either way).
+      -- Here refs is constrained only by workspace_id -- no target_id, unlike
+      -- the sibling statements -- so idx_block_references_ws_alias looks usable
+      -- on its leading column, and a recursive CTE carries no cardinality
+      -- estimate for the planner to weigh against it. It therefore drove from
+      -- every edge in the workspace and built a throwaway index on the chain,
+      -- instead of probing the (source_id, ...) primary key once per chain row.
+      -- ANALYZE does not fix this: the table stats are already right, it is the
+      -- CTE's size that is unknown.
+      CROSS JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
       WHERE refs.workspace_id = ?
         AND (refs.source_field = '' OR refs.target_id != ?)
       UNION
@@ -237,6 +261,11 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   FROM group_context_refs cr
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
+    -- A sync-applied edge (a parent or a reference) can reach another
+    -- workspace's block; it is not a group of this one. The requested
+    -- workspace is bound, not read off the source: sync rewrites a row's
+    -- workspace_id in place, so the source may have moved since it was listed.
+    AND group_block.workspace_id = ?
   ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -273,6 +302,10 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
+    -- The main statement's workspace rule, here as defence in depth: no
+    -- test reaches a groupWith target that its source's direct context
+    -- does not already outrank.
+    AND group_block.workspace_id = refs.workspace_id
   ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -387,7 +420,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
-      [sourceIdsJson, workspaceId, id],
+      [sourceIdsJson, workspaceId, id, workspaceId],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
       SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,

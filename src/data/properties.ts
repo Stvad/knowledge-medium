@@ -4,16 +4,6 @@
  * object remains the typed, workspace-agnostic handle passed to block.get/set.
  * Per-definition editor overrides for the rare property that needs one live
  * separately under `propertyEditorOverridesFacet` during the B3 cutover.
- *
- * Migration note (1.6): legacy creator helpers (`stringProperty`,
- * `boolProp`, `objectProperty`, etc.) returned a record-shape
- * `{name, type, value}` that doubled as schema AND value. The new
- * shape is flat — `block.set(schema, value)` / `block.get(schema)`
- * encode/decode through the codec; storage holds the encoded value
- * directly. Helpers like `aliasProp(['x','y'])` (which embedded a
- * default value into the descriptor) are gone — the handle's
- * `defaultValue` is the single source of truth, callers pass values
- * via `block.set(schema, value)`.
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
@@ -215,6 +205,11 @@ export const isCollapsedProp = seedProperty({
   hidden: true,
 })
 
+/** Deliberately NOT a `refList`, though the value children are now N siblings
+ *  either way: a seeded type's token is a short string that must resolve with
+ *  no backing block, so a ref codec would point every membership at a block
+ *  that does not exist. `mergeTypeMembershipProcessor`'s header has the second
+ *  reason and what covers merge retargeting instead. */
 export const typesProp = seedProperty({
   seedKey: 'system:kernel-data/property/types',
   revision: 1,
@@ -474,17 +469,6 @@ export const userIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Alias list stored on alias-target / daily-note blocks (§7). The
- *  encoded shape in `properties_json` is `string[]`; the codec is the
- *  list-of-strings combinator.
- *
- *  This is the schema `parseReferences` writes when a tx inserts a
- *  target block (e.g. `[[Inbox]]` produces a target with
- *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
- *  consult to resolve `[[alias]]` to a target id. */
-// The shared string-list core exposes readonly values, while its decoder
-// returns a fresh mutable array. Preserve aliasesProp's historical string[]
-// handle contract without widening the public seedProperty overloads.
 /** Fields of a `per-graph` backfill claim (see
  *  `internals/graphBackfillClaim.ts`). Declared as seeds rather than written
  *  as raw keys because an unregistered key is exactly what property
@@ -517,6 +501,17 @@ export const migrationCompletedAtProp = seedProperty({
   hidden: true,
 })
 
+/** Alias list stored on alias-target / daily-note blocks (§7). The
+ *  encoded shape in `properties_json` is `string[]`; the codec is the
+ *  list-of-strings combinator.
+ *
+ *  This is the schema `parseReferences` writes when a tx inserts a
+ *  target block (e.g. `[[Inbox]]` produces a target with
+ *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
+ *  consult to resolve `[[alias]]` to a target id. */
+// The shared string-list core exposes readonly values, while its decoder
+// returns a fresh mutable array. Preserve aliasesProp's historical string[]
+// handle contract without widening the public seedProperty overloads.
 export const aliasesProp = seedProperty({
   seedKey: 'system:kernel-data/property/alias',
   revision: 1,
@@ -582,6 +577,22 @@ export const addBlockTypeToProperties = (
     [typesProp.name]: typesProp.codec.encode([...current, typeId]),
   }
 }
+
+/** Raw membership writer that REPLACES the whole list, for callers holding a
+ *  properties bag and no Repo (the merge membership retarget). Unlike
+ *  `TypeTagger.setBlockTypes` it neither validates the tokens against the type
+ *  registry nor seeds a type's initial values — deliberately: a retarget moves
+ *  an EXISTING tag onto a merge survivor whose definition the post-commit
+ *  registry rebuild has not published yet, so registry validation would reject
+ *  the very write that keeps membership alive, and initial-value seeding would
+ *  invent user data during a repair. */
+export const setBlockTypesInProperties = (
+  properties: Record<string, unknown>,
+  typeIds: readonly string[],
+): Record<string, unknown> => ({
+  ...properties,
+  [typesProp.name]: typesProp.codec.encode([...typeIds]),
+})
 
 /** Set the editing flag on the UI-state block. Refuses to enter edit
  *  mode in a read-only repo (workspace viewer) — the wrappers also

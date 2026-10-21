@@ -54,7 +54,7 @@ describe('writeTargets / syncedWriteTarget', () => {
     expect(syncedWriteTarget('CREATE TRIGGER t AFTER DELETE ON blocks BEGIN SELECT 1; END')).toBeNull()
   })
 
-  // DESTRUCTIVE DDL (PR #386 review). The guard exists so a raw path can't
+  // DESTRUCTIVE DDL. The guard exists so a raw path can't
   // quietly desync the local store; `DROP TABLE blocks` does that far more
   // thoroughly than any UPDATE, and the DML-only scan let it through. The line
   // is drawn at destructive shapes — DROP TABLE, and the ALTER forms that
@@ -142,7 +142,7 @@ describe('writeTargets / syncedWriteTarget', () => {
   // false positive here refuses real local-schema work rather than a lint nit.
   // Iterates the actual collections rather than a hand-copied subset: the
   // first version of this test listed 7 constants from ONE plugin while
-  // claiming to cover everything (PR #386 areview), so the 65 kernel trigger
+  // claiming to cover everything, so the 65 kernel trigger
   // and index statements — the ones most likely to trip a DDL pattern, since
   // they all name `blocks` — went unchecked by the test that existed to check
   // them.

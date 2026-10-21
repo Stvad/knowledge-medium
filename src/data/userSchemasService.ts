@@ -14,6 +14,7 @@ import {
   ChangeScope,
   normalizePresetDefault,
   type AnyPropertySchema,
+  type AnyResolvedPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
 } from '@/data/api'
@@ -23,7 +24,11 @@ import {
   parsePropertyDefinitionMetadata,
   type PropertyDefinitionMetadata,
 } from '@/data/propertyDefinitionMetadata'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  isParsedPropertyDefinition,
+  projectedPropertyDefinitionFieldId,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {peekRowProperty} from '@/data/rowProperty'
 import {
@@ -46,7 +51,7 @@ import {createChild as createChildMutator} from '@/data/mutators'
  *  ask `isRegistrablePropertyName`. Kept as one function so a new rule cannot
  *  land on the throwing path while the predicate keeps saying yes.
  *
- *  Both rules are name hygiene (PR #288 §7). A name must survive the
+ *  Both rules are name hygiene (docs/properties-as-blocks-migration.html §7). A name must survive the
  *  `[[wikilink]]` round trip — `]]` is lossy there — and must not itself BE a
  *  reference span: the definition keeps its name in a property rather than
  *  its content, so it mints nothing on its own, but the name is written as
@@ -79,6 +84,29 @@ const rawPresetConfig = (
   if (preset.defaultConfig === undefined || preset.configCodec === undefined) return {}
   return preset.configCodec.encode(preset.defaultConfig)
 }
+
+/** The value `preset.build` is called with for a definition row's stored
+ *  `property-schema:config` — `undefined` for a preset declaring no
+ *  `configCodec`. Throws whatever that codec throws.
+ *
+ *  Exported for the install-time preset-identity check
+ *  (`@/plugins/agent-runtime/presetIdentity`), which has to build the codec a
+ *  definition would ACTUALLY get from a candidate preset core. A second
+ *  reading of the same two inputs beside this one is how the two would drift
+ *  into disagreeing about what a row's codec is.
+ *
+ *  `preset.build` deliberately stays at the call site: a config decode is
+ *  caught here (a stale config is a fixable row), while a throwing `build` is
+ *  extension code failing and each caller has its own answer for it — the
+ *  projector publishes metadata only, `buildSchemaOrNull` swallows it rather
+ *  than aborting the user's transaction, and the check below reports it. */
+export const decodePresetConfig = (
+  preset: AnyValuePresetCore,
+  storedConfig: unknown,
+): unknown =>
+  preset.configCodec
+    ? preset.configCodec.decode(rawPresetConfig(preset, storedConfig))
+    : undefined
 
 /** Decode the row's stored default with the built codec, falling back to the
  *  preset default when the stored value is incompatible. An incompatible stored
@@ -136,18 +164,13 @@ export const tryBuildSchema = (
     return null
   }
   let config: unknown
-  if (preset.configCodec) {
-    try {
-      const raw = rawPresetConfig(preset, peekRowProperty(row, presetConfigProp))
-      config = preset.configCodec.decode(raw)
-    } catch (err) {
-      console.warn(
-        `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
-      )
-      return null
-    }
-  } else {
-    config = undefined
+  try {
+    config = decodePresetConfig(preset, peekRowProperty(row, presetConfigProp))
+  } catch (err) {
+    console.warn(
+      `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
+    )
+    return null
   }
   const codec = preset.build(config as never)
   return {
@@ -170,10 +193,12 @@ export const userSchemasProjector: DefinitionBlockProjector<
   metaType: PROPERTY_SCHEMA_TYPE,
   targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
-  keyOf: definition => definition.metadata.fieldId,
+  keyOf: projectedPropertyDefinitionFieldId,
   project: (row, ctx) => {
     const metadata = parsePropertyDefinitionMetadata(row)
-    if (!metadata) return null
+    if (!metadata) {
+      return {unparseable: {fieldId: row.id, workspaceId: row.workspaceId}}
+    }
     let schema: AnyPropertySchema | null = null
     try {
       schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
@@ -200,13 +225,19 @@ export interface AddSchemaArgs {
 
 /** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
  * contribution state, and indexes live in the `ProjectorHandle`, reached
- * through `repo.projectors`; this facade owns only in-flight name reservations
- * that serialize same-Repo creation attempts. Singleton on `Repo` so
- * imperative callers share both the projector generation and reservations. */
+ * through `repo.projectors`; service views share the in-flight name
+ * reservations that serialize same-Repo creation attempts. */
 export class UserSchemasService {
-  private readonly pendingCreations = new Set<string>()
+  constructor(
+    private readonly repo: Repo,
+    private readonly pendingCreations = new Set<string>(),
+  ) {}
 
-  constructor(private readonly repo: Repo) {}
+  /** Bind imperative writes to another Repo host while sharing the name
+   * reservations owned by the original Repo service. */
+  withRepo(repo: Repo): UserSchemasService {
+    return new UserSchemasService(repo, this.pendingCreations)
+  }
 
   private get handle() {
     return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)
@@ -224,7 +255,7 @@ export class UserSchemasService {
    * invalid, and shadowed rows return undefined. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
     const definition = this.handle?.contributionForBlockId(blockId)
-    if (!definition) return undefined
+    if (!definition || !isParsedPropertyDefinition(definition)) return undefined
     return resolveSelectedPropertyDefinition(
       definition.metadata,
       this.repo.propertySchemaResolverFor(definition.metadata.workspaceId),
@@ -245,10 +276,14 @@ export class UserSchemasService {
     this.handle?.upsert({metadata, schema}, blockId, workspaceId)
   }
 
-  /** Create a property-schema block in the workspace's Properties
-   *  page AND register the schema synchronously. Returns the freshly
-   *  registered schema. */
-  async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
+  /** Create a property-schema block in the workspace's Properties page AND
+   *  register the schema synchronously. Returns the new definition RESOLVED,
+   *  so it keeps resolving by field id through later registry rebuilds. The
+   *  plain schema this publishes into the ambient registry would not: the
+   *  projector rebuilds each definition's behavior object per tick, and the
+   *  boundary admits a plain schema only as the object it currently
+   *  publishes. */
+  async addSchema(args: AddSchemaArgs): Promise<AnyResolvedPropertySchema> {
     const name = args.name.trim()
     const rejection = propertySchemaNameRejection(name)
     if (rejection) throw new Error(`[addSchema] ${rejection}`)
@@ -378,7 +413,16 @@ export class UserSchemasService {
 
       assertGeneration('registration')
       this.appendUserSchema(newSchema, childId, workspaceId)
-      return newSchema
+      const resolution = this.repo
+        .propertySchemaResolverFor(workspaceId)
+        .resolveField(childId)
+      if (resolution.status !== 'resolved') {
+        throw new Error(
+          `[addSchema] definition block ${childId} for ${JSON.stringify(name)} ` +
+          `does not resolve after registration (${resolution.reason})`,
+        )
+      }
+      return resolution.schema
     } finally {
       this.pendingCreations.delete(reservationKey)
     }
