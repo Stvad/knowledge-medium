@@ -921,3 +921,74 @@ describe('re-typing a property with many consumers', () => {
     expect(properties['property-schema:preset']).toBe('string')
   })
 })
+
+describe('a definition whose current type does not load', () => {
+  /** One REAL consumer of `test:myProp`, then its preset made one no plugin
+   *  here provides — a raw write, as a synced row would arrive. */
+  const consumedDefinitionWithUnloadedPreset = async (): Promise<void> => {
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: 'root', orderKey: 'a9', content: 'host',
+      })
+      await tx.setProperty('host', schema, 'done')
+    }, {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json =
+         json_set(properties_json, '$."property-schema:preset"', 'test-unloaded-preset')
+        WHERE id = ?`,
+      [SCHEMA_ID])
+  }
+
+  it('does not ask before a change its transaction will refuse', async () => {
+    // The processor's own refusal is what answers; the stub only puts the
+    // count past the threshold.
+    await consumedDefinitionWithUnloadedPreset()
+    consumersAre(LARGE_FANOUT_CONSUMERS)
+    const refusals: string[] = []
+    repo.onUserError(error => { refusals.push(error.code) })
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => {
+      expect(refusals).toEqual(['property.definition-change.current-type-unavailable'])
+    })
+    expect(getDialogQueue()).toHaveLength(0)
+    expect(await storedName()).toBe('test:myProp')
+  })
+
+  it('writes nothing unasked when the type starts building before the write', async () => {
+    // The confirmation is skipped on the strength of a refusal; if a synced
+    // edit repairs the preset while the change waits, nothing refuses it, and
+    // a rename across every consumer must not land unasked.
+    await consumedDefinitionWithUnloadedPreset()
+    vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockImplementation(async () => {
+      await sharedDb.db.execute(
+        `UPDATE blocks SET properties_json =
+           json_set(properties_json, '$."property-schema:preset"', 'string')
+          WHERE id = ?`,
+        [SCHEMA_ID])
+      return LARGE_FANOUT_CONSUMERS
+    })
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith(expect.stringContaining('nothing was written'))
+    })
+    expect(getDialogQueue()).toHaveLength(0)
+    expect(await storedName()).toBe('test:myProp')
+  })
+})

@@ -9,7 +9,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import {readValuePresets} from '@/data/valuePresetRegistry'
+import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
+import { definitionSchema, type UnbuildableCause } from '@/data/userSchemasService'
+import { openExtensionsSettings } from '@/extensions/openExtensionsSettings.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
@@ -25,6 +27,7 @@ import {
   ProcessorRejection,
   propertyValue,
   type AnyJoinedValuePreset,
+  type AnyValuePresetCore,
   type BlockData,
   type Tx,
 } from '@/data/api'
@@ -111,6 +114,17 @@ const rowKind = (row: BlockData): RowKind => {
   return 'other'
 }
 
+/** Whether this device builds a codec for the definition `row` describes. A
+ *  row that is no published definition has none to build, and is not refused
+ *  for it. */
+const typeBuildsHere = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+): boolean => {
+  const metadata = parsePropertyDefinitionMetadata(row)
+  return metadata === null || definitionSchema(row, presets, metadata).schema !== null
+}
+
 const withoutFirst = (names: readonly string[], name: string): readonly string[] => {
   const at = names.indexOf(name)
   return at === -1 ? names : [...names.slice(0, at), ...names.slice(at + 1)]
@@ -140,6 +154,90 @@ const renderConfigEditor = (
   return <ConfigEditor key={generation} value={value} onChange={onChange} />
 }
 
+/** The question the definition-change processor refuses on, asked of the
+ *  definition row as it stands: does its CURRENT type build a codec here, and
+ *  if not, why. `null` when the controls stay: the type builds, or the row
+ *  names no type yet — choosing one is how such a definition is finished. A
+ *  USED one with no type is refused in the tx with its way out; only an
+ *  out-of-band write reaches it, since clearing a used definition's preset is
+ *  refused, so it is not worth an async consumer count here. */
+const useCurrentTypeUnavailable = (
+  block: BlockRendererProps['block'],
+): Exclude<UnbuildableCause, 'no-preset'> | null => {
+  const cores = readValuePresetRegistry(useAppRuntime()).cores
+  return useHandle(block, {
+    selector: row => {
+      if (!row) return null
+      const metadata = parsePropertyDefinitionMetadata(row)
+      if (metadata === null) return null
+      const built = definitionSchema(row, cores, metadata)
+      return built.schema !== null || built.cause === 'no-preset' ? null : built.cause
+    },
+  })
+}
+
+/** Who is looking decides which ways out this editor can offer. A seed is
+ *  code-owned, so its only way out is its plugin or the app. */
+type NoticeAudience = 'editor' | 'viewer' | 'seed'
+
+const NOTICE_PROBLEM: Record<
+  Exclude<UnbuildableCause, 'no-preset'>,
+  (type: React.ReactNode) => React.ReactNode
+> = {
+  'preset-not-loaded': type => <>This property uses {type}, from a plugin, or a newer
+    version of the app, that isn&rsquo;t loaded on this device.</>,
+  'config-unreadable': type => <>The stored settings of {type} can&rsquo;t be read on
+    this device.</>,
+  'build-failed': type => <>This property uses {type}, which fails to build on this
+    device.</>,
+}
+
+const noticeWayOut = (
+  cause: Exclude<UnbuildableCause, 'no-preset'>,
+  audience: NoticeAudience,
+): string => {
+  // Updating first: under version skew this definition works on a newer
+  // device, and deleting it here deletes it there too.
+  const fix = cause === 'preset-not-loaded'
+    ? 'Enable the plugin or update the app on this device'
+    : 'Update the plugin or the app on this device'
+  if (audience === 'seed') return `${fix}.`
+  if (audience === 'viewer') {
+    return `${fix}, or ask someone who can edit this workspace to delete the schema.`
+  }
+  return `${fix}, or delete the schema; the values blocks hold under it stay.`
+}
+
+/** Why this definition's type and config are locked, and the ways out. */
+const CurrentTypeUnavailableNotice = ({presetId, cause, audience}: {
+  presetId: string
+  cause: Exclude<UnbuildableCause, 'no-preset'>
+  audience: NoticeAudience
+}) => {
+  const type = presetId
+    ? <>the <code className="font-mono">{presetId}</code> type</>
+    : <>this property&rsquo;s type</>
+  return (
+    <div className="space-y-1 text-xs text-muted-foreground">
+      <div>
+        {NOTICE_PROBLEM[cause](type)}
+        {' '}Its type and settings can&rsquo;t be changed here, and while blocks use
+        it, it can&rsquo;t be renamed either: only that type can read the values they
+        hold under it. {noticeWayOut(cause, audience)}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => openExtensionsSettings('property-schema-type-unavailable')}
+      >
+        Manage extensions
+      </Button>
+    </div>
+  )
+}
+
 /** Exported for the read-only regression test; production mounts it only
  *  through `PropertySchemaBlockRenderer` below. */
 export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
@@ -152,6 +250,12 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   })
   const runtime = useAppRuntime()
   const presets = readValuePresets(runtime)
+  // With no codec for what its consumers hold, every re-type and config change
+  // is refused, so the controls that make one are not offered. Renames stay
+  // with the transaction, which allows one that strands nothing. Not gated on
+  // consumers as the transaction is: an unused definition loses nothing to
+  // delete-and-recreate, and the gate would be an async count the tx re-checks.
+  const typeUnavailable = useCurrentTypeUnavailable(block)
 
   // A materialized seed row is a kernel/plugin property *defined in code*.
   // In v1 these are code-owned and unshadowable: their name, type, config,
@@ -224,7 +328,12 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       }
       const {change, stillCurrent, write} = planned
       const consumers = await block.repo.countPropertyDefinitionConsumers(block.id, ws)
-      const large = isLargeFanout(consumers)
+      // While blocks use it, every change to a definition whose CURRENT type
+      // builds nothing here is refused in its transaction, which says why —
+      // so there is nothing to ask the user to approve.
+      const refusedAnyway = !typeBuildsHere(atStart, block.repo.valuePresetCores)
+      const skipsConfirmation = isLargeFanout(consumers) && refusedAnyway
+      const large = isLargeFanout(consumers) && !refusedAnyway
       // `repo.tx` admits writes to the workspace open when it STARTS and no
       // other, and the user can switch while this waits. Asked before the
       // confirmation, so nobody is asked about a workspace they left, and
@@ -249,6 +358,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         // a deleted definition out too.
         if (current === null || rowKind(current) !== kindAtStart) return
         if (!stillCurrent(definitionFacts(current.properties))) return
+        // The confirmation was skipped because nothing would let this land; a
+        // type that builds NOW (its plugin loaded, a synced edit repaired it)
+        // would let it, so it must not land unasked.
+        if (skipsConfirmation && typeBuildsHere(current, block.repo.valuePresetCores)) return
         // Makes this transaction's reports attributable; see
         // `PropertyDefinitionFanoutSnapshot.transactionRunning`.
         markPropertyDefinitionFanoutRunning(block.id)
@@ -522,31 +635,35 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 
       <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
         <label className="text-xs font-semibold text-muted-foreground">Type</label>
-        <div className="relative max-w-xs">
-          <select
-            className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-            value={presetId}
-            disabled={readOnly}
-            // `void`, not a catch: the gate turns every failure into a
-            // non-write, so `writePresetId` does not reject.
-            onChange={(e) => { void writePresetId(e.target.value) }}
-          >
-            {presetEntries.map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-            {!preset && presetId !== '' && (
-              <option value={presetId}>{presetId} (unknown)</option>
-            )}
-          </select>
-          <ChevronDown
-            className={`pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 ${
-              readOnly ? 'text-muted-foreground/45' : 'text-foreground/70'
-            }`}
-          />
-        </div>
+        {typeUnavailable !== null ? (
+          <code className="font-mono text-sm text-muted-foreground">{presetId || 'none'}</code>
+        ) : (
+          <div className="relative max-w-xs">
+            <select
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              value={presetId}
+              disabled={readOnly}
+              // `void`, not a catch: the gate turns every failure into a
+              // non-write, so `writePresetId` does not reject.
+              onChange={(e) => { void writePresetId(e.target.value) }}
+            >
+              {presetEntries.map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+              {!preset && presetId !== '' && (
+                <option value={presetId}>{presetId} (unknown)</option>
+              )}
+            </select>
+            <ChevronDown
+              className={`pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 ${
+                readOnly ? 'text-muted-foreground/45' : 'text-foreground/70'
+              }`}
+            />
+          </div>
+        )}
       </div>
 
-      {preset?.ConfigEditor && (
+      {typeUnavailable === null && preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
           {/* A real `fieldset[disabled]`, which is what makes the descendant
@@ -573,11 +690,12 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         </div>
       )}
 
-      {!preset && presetId !== '' && (
-        <div className="text-xs text-muted-foreground">
-          The plugin contributing preset <code className="font-mono">{presetId}</code> is not loaded.
-          Schemas using this preset stay registered when the plugin loads.
-        </div>
+      {typeUnavailable !== null && (
+        <CurrentTypeUnavailableNotice
+          presetId={presetId}
+          cause={typeUnavailable}
+          audience={isSeedBacked ? 'seed' : readOnly ? 'viewer' : 'editor'}
+        />
       )}
 
       {!readOnly && (
