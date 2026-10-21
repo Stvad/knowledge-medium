@@ -67,6 +67,20 @@ jobs:
             }
             core.setOutput('sha', pr.head.sha);
 
+      # Before the deploy lands: the edit bumps the PR's updated_at, and the idle
+      # sweep (remove-pr-previews.yml) reads open PRs after fetching gh-pages, so
+      # any sweep that sees this deploy also sees the PR as active.
+      - name: Link the preview being redeployed
+        if: github.event_name == 'workflow_dispatch'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ inputs.pr_number }}
+          header: pr-preview
+          message: |
+            :rocket: Preview at https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ inputs.pr_number }}/, redeployed from `${{ steps.redeploy.outputs.sha }}` (the PR head, not a merge build) for @${{ github.actor }}.
+
+            It is live once [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) succeeds. A push to the PR replaces it with a fresh build as usual.
+
       # A dispatch builds the PR head; a pull_request run builds its merge with the base.
       - name: Checkout
         uses: actions/checkout@v6
@@ -101,7 +115,6 @@ jobs:
       # source-dir must match the build output; umbrella-dir + the pr-<n>/ subdir
       # must match APP_BASE_PATH above.
       - name: Deploy preview
-        id: deploy
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./dist/
@@ -122,16 +135,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ensure-pages-published.sh
-
-      # Editing the comment bumps the PR's updated_at, which restarts the idle
-      # clock remove-pr-previews.yml expires previews by.
-      - name: Link the redeployed preview
-        if: github.event_name == 'workflow_dispatch'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          number: ${{ inputs.pr_number }}
-          header: pr-preview
-          message: |
-            :rocket: [View preview](${{ steps.deploy.outputs.preview-url }}), redeployed from `${{ steps.redeploy.outputs.sha }}` (the PR head, not a merge build) by @${{ github.actor }}.
-
-            A push to the PR replaces it with a fresh build as usual.

@@ -11,9 +11,10 @@ https://stvad.github.io/knowledge-medium/pr-preview/pr-<number>/
 
 `rossjrw/pr-preview-action` posts a sticky comment on the PR with that link on
 each push. A separate workflow removes the preview when the PR is merged or
-closed. Fork **preview builds** do not run automatically; a maintainer can
-explicitly approve one current fork head for the same URL. Its sticky comment
-records the approved SHA and deployment run.
+closed, or once the PR has been idle for 30 days (by default); a maintainer can bring an
+expired preview back without a push. Fork **preview builds** do not run
+automatically; a maintainer can explicitly approve one current fork head for
+the same URL. Its sticky comment records the approved SHA and deployment run.
 
 ## How it works
 
@@ -23,8 +24,9 @@ GitHub Pages serves a single site per repo:
 - `gh-pages` **root** — production (`.github/workflows/deploy-pages.yml`, on push
   to `master`). Built with `APP_BASE_PATH=/knowledge-medium/`.
 - `gh-pages` **`pr-preview/pr-<n>/`** — one subtree per open PR. Same-repo PRs
-  use `.github/workflows/pr-preview.yml` on `pull_request`; maintainer-approved
-  fork PRs use `.github/workflows/approved-pr-preview.yml`.
+  use `.github/workflows/pr-preview.yml` on `pull_request`, or on a
+  maintainer's dispatch ([Redeploying an expired preview](#redeploying-an-expired-preview));
+  maintainer-approved fork PRs use `.github/workflows/approved-pr-preview.yml`.
   Both build with `APP_BASE_PATH=/knowledge-medium/pr-preview/pr-<n>/`.
 
 The build is already base-path aware: Vite's `base` comes from `APP_BASE_PATH`
@@ -172,10 +174,15 @@ PR head. Rerun it after a fork push to approve that new commit.
 ### Removal
 
 `.github/workflows/remove-pr-previews.yml` removes previews for fork and
-same-repository PRs alike. It runs `scripts/sweep-pr-previews.ts`, which deletes
-every `pr-preview/pr-<n>/` whose PR is no longer open, in one `gh-pages` commit.
-It never force-pushes: if a deploy lands mid-sweep, the sweep starts again from
-the new tip. It runs:
+same-repository PRs alike. It runs `scripts/sweep-pr-previews.ts`, which deletes,
+in one `gh-pages` commit, every `pr-preview/pr-<n>/` whose PR is no longer open,
+or is open but **idle**: its GitHub `updated_at` is older than
+`PR_PREVIEW_IDLE_DAYS` days. That is a repository variable (Settings → Secrets
+and variables → Actions → Variables), 30 when unset. Pushes, comments, reviews
+and edits all count as activity, so a PR under discussion keeps its preview.
+The sweep never force-pushes: if a deploy lands mid-sweep, it starts again from
+the new tip and re-reads the open PRs, so a PR redeployed meanwhile is kept. It
+runs:
 
 - on **PR close**, through `pull_request_target`. A `pull_request` workflow does
   not run at all while the PR has a merge conflict, which is how abandoned,
@@ -183,15 +190,45 @@ the new tip. It runs:
   trusted close event, and the workflow checks out only `master`, never
   contributor code. A close shares that PR's `pr-preview-<n>` concurrency group,
   so it waits for an in-flight deploy of the same PR.
-- **daily**, to catch anything a close missed.
+- **daily**, to catch anything a close missed. Idle previews expire on the
+  first run, of any trigger, after their threshold passes.
 - on **`workflow_dispatch`** from `master`. The optional `pr_number` input also
   removes that PR's preview while the PR is still open.
 
 A close or a dispatch with `pr_number` also deletes that PR's preview-link
-comment.
+comment. Every run rewrites each expired PR's preview comment in place to say
+the preview expired and how to redeploy it. An edit notifies nobody, where a
+new comment on each expired PR would. A closed PR's comment is left alone,
+since its link merely 404s.
 
 GitHub retains only the newest pending request in each concurrency group, so
 avoid issuing another manual request while one is pending.
+
+### Redeploying an expired preview
+
+A push to a same-repository PR redeploys its preview as usual. To bring one
+back without a push, which also works while the PR has a merge conflict and
+`pull_request` workflows do not run, dispatch **PR Preview** with the PR number:
+
+```sh
+gh workflow run pr-preview.yml --repo Stvad/knowledge-medium --ref master -f pr_number=<n>
+```
+
+or **Actions → PR Preview → Run workflow** in the GitHub UI. It refuses a
+closed PR and a fork PR. It builds the PR's current **head**, not the merge with
+`master` that a push builds, under the same base path and the PR's
+`pr-preview-<n>` concurrency group. Before it builds, it rewrites the sticky
+comment with the link. That edit bumps the PR's `updated_at`, so the redeployed
+preview lasts another idle period, and a sweep that sees the new deploy also
+sees the PR as active. The PR's code runs with the same write token a push gives
+it, so the dispatching branch grants nothing extra. Use `master` for the
+current workflow anyway. The workflow sets `cache-mode: read`, so a dispatch
+from `master` cannot save PR code into the cache scope production restores from.
+
+Re-running the PR's last **PR Preview** run is not a substitute: GitHub allows a
+re-run only within 30 days of the original run, and an expired preview's last
+run is older than that. A fork PR's preview comes back the way it went up: run
+**Deploy approved PR preview** with its current head.
 
 ## One-time setup (required — the workflows don't work until this is done)
 
@@ -250,6 +287,12 @@ permissions → **Read and write permissions**.
   `gh-pages` writer retries on a rejected push rather than forcing it, so
   production never goes dark. The worst case is a removed preview subtree that
   lingers until the next daily sweep.
+- **An approved fork redeploy can be expired again by a concurrent sweep.**
+  `approved-pr-preview.yml` edits the PR's comment only after its preview is
+  live, so a sweep that runs in those few minutes still sees an idle PR and
+  removes the new preview. Run the approval again. This is accepted because fork
+  approvals are rare, while closing the gap would mean posting the approval
+  record before the deploy it records.
 - **`gh-pages` history grows** (no `single-commit`, since squashing the branch
   would drop live preview subtrees). Squash the branch manually if it ever gets
   unwieldy.
