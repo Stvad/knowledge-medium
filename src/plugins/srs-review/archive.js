@@ -1,1 +1,1 @@
-import{Is as e}from"../../../chunks/app-B_2aMVTz.js";export{e as archiveSrsCard};
+import{Ls as e}from"../../../chunks/app-3Md0nf6R.js";export{e as archiveSrsCard};

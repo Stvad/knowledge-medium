@@ -1,1 +1,1 @@
-import{$C as e,ew as t,nw as n,rw as r,tw as i}from"../../chunks/app-B_2aMVTz.js";export{e as CRUMB_ELLIPSIS,t as CRUMB_MAX_CHARS,i as CRUMB_MAX_SEGMENTS,n as collapseCrumbs,r as crumbsFromAncestors};
+import{aw as e,cw as t,iw as n,ow as r,sw as i}from"../../chunks/app-3Md0nf6R.js";export{n as CRUMB_ELLIPSIS,e as CRUMB_MAX_CHARS,r as CRUMB_MAX_SEGMENTS,i as collapseCrumbs,t as crumbsFromAncestors};

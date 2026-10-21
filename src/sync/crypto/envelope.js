@@ -1,1 +1,1 @@
-import{_0 as e,b0 as t,g0 as n,h0 as r,v0 as i,x0 as a,y0 as o}from"../../../chunks/app-B_2aMVTz.js";export{r as ENVELOPE_PREFIX,n as GCM_TAG_BYTES,e as NONCE_BYTES,i as SCHEMA_VERSION,o as decodeEnvelope,t as encodeEnvelope,a as hasEnvelopePrefix};
+import{C0 as e,S0 as t,T0 as n,b0 as r,w0 as i,x0 as a,y0 as o}from"../../../chunks/app-3Md0nf6R.js";export{o as ENVELOPE_PREFIX,r as GCM_TAG_BYTES,a as NONCE_BYTES,t as SCHEMA_VERSION,e as decodeEnvelope,i as encodeEnvelope,n as hasEnvelopePrefix};
