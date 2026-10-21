@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import { parsePrNumber } from './approved-pr-preview.ts'
 import { isMainModule } from './is-main-module.mjs'
 
+const BRANCH = 'gh-pages'
+const REMOTE_REF = `refs/remotes/origin/${BRANCH}`
 const PREVIEW_ROOT = 'pr-preview'
 const PREVIEW_DIR = /^pr-([1-9][0-9]*)$/
 const PUSH_ATTEMPTS = 5
@@ -32,9 +34,9 @@ export type Gh = (args: string[]) => string
 export type OpenPr = { number: number; updatedAt: Date }
 type OpenPull = OpenPr & { fork: boolean }
 
-export const gitIn = (cwd: string, env: NodeJS.ProcessEnv = {}): Git => (args, opts = {}) =>
+export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
-    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env, ...opts.env },
+    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...opts.env },
   }).trim()
 
 /**
@@ -84,18 +86,16 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
  * PR was open and still counts as open, and as active, unless that read says
  * otherwise.
  */
-export function sweepPreviews<P extends OpenPr>({ git, branch, openPrs, idleBefore, alsoRemove = [] }: {
+export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [] }: {
   git: Git
-  branch: string
   openPrs: () => readonly P[]
   idleBefore: Date
   alsoRemove?: number[]
 }): { removed: string[]; expired: P[] } {
-  const remoteRef = `refs/remotes/origin/${branch}`
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
-    git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${branch}:${remoteRef}`])
-    const tip = git(['rev-parse', remoteRef])
+    git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
+    const tip = git(['rev-parse', REMOTE_REF])
     const open = openPrs()
     const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
       .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
@@ -103,11 +103,11 @@ export function sweepPreviews<P extends OpenPr>({ git, branch, openPrs, idleBefo
     if (result.removed.length === 0) return result
     const commit = commitWithout(git, tip, result.removed)
     try {
-      git(['push', '--quiet', 'origin', `${commit}:refs/heads/${branch}`])
+      git(['push', '--quiet', 'origin', `${commit}:refs/heads/${BRANCH}`])
       return result
     } catch (error) {
       if (attempt === PUSH_ATTEMPTS) throw error
-      console.warn(`push to ${branch} rejected (attempt ${attempt}/${PUSH_ATTEMPTS}); rebuilding on the new tip`)
+      console.warn(`push to ${BRANCH} rejected (attempt ${attempt}/${PUSH_ATTEMPTS}); rebuilding on the new tip`)
     }
   }
 }
@@ -145,6 +145,8 @@ export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull
   return true
 }
 
+// A PR opening or closing between pages can shift another past the page boundary;
+// accepted while the open PRs fit on one page.
 function openPullRequests(gh: Gh, repository: string): OpenPull[] {
   const out = gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
     '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // ""] | @tsv'])
@@ -167,7 +169,7 @@ if (isMainModule(import.meta.url)) {
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const gh: Gh = args => execFileSync('gh', args, { encoding: 'utf8' })
   const { removed, expired } = sweepPreviews({
-    git: gitIn(process.cwd()), branch: 'gh-pages', openPrs: () => openPullRequests(gh, repository),
+    git: gitIn(process.cwd()), openPrs: () => openPullRequests(gh, repository),
     idleBefore: new Date(Date.now() - idleDays * DAY_MS), alsoRemove,
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')

@@ -92,13 +92,12 @@ live.
 
 Every new Pages build cancels the one in flight, and a build of the whole site
 takes about three minutes. So the retry is skipped while the latest build has
-been `queued` or `building` for under ten minutes (`PAGES_BUILD_STALL_SECS`):
+been `queued` or `building` for under six minutes (`PAGES_BUILD_STALL_SECS`):
 that build started after the push and includes it. A build in flight longer than
-that counts as stalled and is replaced. When
-several deploy jobs were waiting at once, their unconditional retries kept
-cancelling the build they were all waiting for. Pushes still cancel in-flight
-builds, so a burst of preview pushes delays every publish until the burst
-ends.
+that counts as stalled and is replaced. When several deploy jobs were waiting at
+once, their unconditional retries kept cancelling the build they were all
+waiting for. Pushes still cancel in-flight builds, so a burst of preview pushes
+delays every publish until the burst ends.
 
 ### Why same-origin matters here
 

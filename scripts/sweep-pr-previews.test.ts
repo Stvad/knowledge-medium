@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -7,12 +6,7 @@ import {
   type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, previewsToRemove, sweepPreviews,
 } from './sweep-pr-previews.ts'
 
-const identity = {
-  GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
-  GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.invalid',
-}
-const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', args, { cwd, env: { ...process.env, ...identity }, encoding: 'utf8' }).trim()
+const git = (cwd: string, ...args: string[]) => gitIn(cwd)(args)
 
 function commitFiles(repo: string, files: Record<string, string>, remove: string[] = []) {
   for (const path of remove) git(repo, 'rm', '-r', '--quiet', path)
@@ -41,6 +35,8 @@ beforeAll(() => {
   for (const repo of ['publisher', 'work']) {
     git(root, 'init', '--quiet', '--initial-branch', 'gh-pages', join(template, repo))
     git(join(template, repo), 'remote', 'add', 'origin', '../origin.git')
+    git(join(template, repo), 'config', 'user.name', 'test')
+    git(join(template, repo), 'config', 'user.email', 'test@example.invalid')
   }
   commitFiles(join(template, 'publisher'), {
     'index.html': 'production',
@@ -66,14 +62,14 @@ const publish = (files: Record<string, string>, remove: string[] = []) => commit
 const publishedFiles = () => git(origin, 'ls-tree', '-r', '--name-only', 'gh-pages').split('\n')
 const tip = () => git(origin, 'rev-parse', 'gh-pages')
 
-const workGit = (): Git => gitIn(work, identity)
+const workGit = (): Git => gitIn(work)
 
 const idleBefore = new Date('2026-09-21T00:00:00Z')
 const active = (number: number): OpenPr => ({ number, updatedAt: new Date('2026-10-20T00:00:00Z') })
 const idle = (number: number): OpenPr => ({ number, updatedAt: new Date('2026-09-01T00:00:00Z') })
 
-const sweep = (options: Omit<Parameters<typeof sweepPreviews>[0], 'git' | 'branch' | 'idleBefore'> & { git?: Git }) =>
-  sweepPreviews({ git: workGit(), branch: 'gh-pages', idleBefore, ...options })
+const sweep = (options: Omit<Parameters<typeof sweepPreviews>[0], 'git' | 'idleBefore'> & { git?: Git }) =>
+  sweepPreviews({ git: workGit(), idleBefore, ...options })
 
 describe('previewsToRemove', () => {
   it('names only pr-<n> directories whose PR is closed, named, or idle, and reports the idle ones', () => {
