@@ -1,1 +1,1 @@
-import{Up as e}from"../../../chunks/app-CSHtBix-.js";export{e as blockInfoPlugin};
+import{Up as e}from"../../../chunks/app-AGBCgTQE.js";export{e as blockInfoPlugin};

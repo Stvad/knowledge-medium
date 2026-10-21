@@ -1,1 +1,1 @@
-import{Jn as e}from"../../../chunks/app-CSHtBix-.js";export{e as extensionsDataExtension};
+import{Jn as e}from"../../../chunks/app-AGBCgTQE.js";export{e as extensionsDataExtension};

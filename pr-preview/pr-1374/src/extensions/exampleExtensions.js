@@ -1,1 +1,1 @@
-import{TO as e,wO as t}from"../../chunks/app-CSHtBix-.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{TO as e,wO as t}from"../../chunks/app-AGBCgTQE.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

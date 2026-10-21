@@ -1,1 +1,1 @@
-import{CC as e}from"../../chunks/app-CSHtBix-.js";export{e as useMinuteClock};
+import{CC as e}from"../../chunks/app-AGBCgTQE.js";export{e as useMinuteClock};

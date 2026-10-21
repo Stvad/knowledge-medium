@@ -1,1 +1,1 @@
-import{Gb as e}from"../../../chunks/app-CSHtBix-.js";export{e as BreadcrumbList};
+import{Gb as e}from"../../../chunks/app-AGBCgTQE.js";export{e as BreadcrumbList};

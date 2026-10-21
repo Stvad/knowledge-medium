@@ -1,1 +1,1 @@
-import{us as e}from"../chunks/app-CSHtBix-.js";export{e as appVersion};
+import{us as e}from"../chunks/app-AGBCgTQE.js";export{e as appVersion};
