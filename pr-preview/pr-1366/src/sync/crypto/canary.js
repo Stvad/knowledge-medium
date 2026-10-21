@@ -1,1 +1,1 @@
-import{_S as e,vS as t}from"../../../chunks/app-_1UUw23d.js";export{e as mintCanary,t as validateCanary};
+import{_S as e,vS as t}from"../../../chunks/app-DCfu1mJX.js";export{e as mintCanary,t as validateCanary};
