@@ -1,1 +1,1 @@
-import{v8 as e,y8 as t}from"../../chunks/app-CedqaPWb.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
+import{v8 as e,y8 as t}from"../../chunks/app-BP_pDSZG.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
