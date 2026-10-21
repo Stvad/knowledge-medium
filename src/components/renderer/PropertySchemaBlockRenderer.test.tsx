@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope, codecs, type AnyValuePresetCore } from '@/data/api'
 import { valuePresetCoresFacet } from '@/data/facets'
@@ -430,6 +430,24 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       fireEvent.blur(nameInput)
 
       await waitFor(() => { expect(nameInput.value).toBe('test:broken') })
+    })
+
+    it('keeps a name typed AFTER a rename whose refusal arrives late', async () => {
+      renderSchema('missing-preset-schema')
+      let refuse!: (error: Error) => void
+      const tx = vi.spyOn(repo, 'tx').mockReturnValueOnce(
+        new Promise<never>((_resolve, reject) => { refuse = reject }))
+      const nameInput = screen.getByPlaceholderText('property name') as HTMLInputElement
+
+      fireEvent.change(nameInput, {target: {value: 'test:first'}})
+      fireEvent.blur(nameInput)
+      await waitFor(() => { expect(tx).toHaveBeenCalled() })
+      fireEvent.change(nameInput, {target: {value: 'test:second'}})
+      refuse(new Error('[test] refused'))
+
+      // Fenced on the refusal having been handled: a later microtask turn.
+      await act(async () => {})
+      expect(nameInput.value).toBe('test:second')
     })
 
     it('offers the picker again once the preset loads', async () => {

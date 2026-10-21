@@ -43,7 +43,10 @@ const renderConfigEditor = (
 /** The question the definition-change processor refuses on, asked of the
  *  definition row as it stands: does its CURRENT type build a codec here, and
  *  if not, why. `null` when the controls stay: the type builds, or the row
- *  names no type yet — choosing one is how such a definition is finished. */
+ *  names no type yet — choosing one is how such a definition is finished. A
+ *  USED one with no type is refused in the tx with its way out; only an
+ *  out-of-band write reaches it, since clearing a used definition's preset is
+ *  refused, so it is not worth an async consumer count here. */
 const useCurrentTypeUnavailable = (
   block: BlockRendererProps['block'],
 ): Exclude<UnbuildableCause, 'no-preset'> | null => {
@@ -316,8 +319,15 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
           // A refused rename is already surfaced by `repo.tx`; putting the
-          // stored name back keeps the field from showing one that never landed.
-          onBlur={() => { writeName(draftName).catch(() => setDraftName(propertyName)) }}
+          // stored name back keeps the field from showing one that never landed
+          // — unless the user has typed again since, which a late refusal must
+          // not discard.
+          onBlur={() => {
+            const attempted = draftName
+            writeName(attempted).catch(() => {
+              setDraftName(current => (current === attempted ? propertyName : current))
+            })
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
