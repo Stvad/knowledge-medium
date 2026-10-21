@@ -41,6 +41,7 @@ export const aliasClaimConflicts = async (
   const held = new Set(await tx.aliasesOf(blockId))
   const conflicts: AliasClaimConflict[] = []
   for (const alias of new Set(aliases)) {
+    // Blank is defence in depth: no writer claims '', and the trigger skips it.
     if (alias === '' || held.has(alias)) continue
     const holders = (await tx.aliasClaimants(alias, workspaceId)).filter(block => block.id !== blockId)
     if (holders.length > 0) conflicts.push({alias, holders})
@@ -50,7 +51,9 @@ export const aliasClaimConflicts = async (
 
 /** The names a stored alias bag claims, read the way the maintenance trigger
  *  reads it (`json_each` over `$.alias`, text values only) rather than through
- *  the codec, which reads a partly malformed bag as claiming nothing. */
+ *  the codec, which reads a partly malformed bag as claiming nothing. Accepted
+ *  gap: the trigger also indexes a NESTED array or object as its JSON text,
+ *  which this skips — no name anyone links to is spelled that way. */
 export const storedAliasNames = (properties: Record<string, unknown>): string[] => {
   const raw = properties[aliasesProp.name]
   const values = Array.isArray(raw) ? raw : raw !== null && typeof raw === 'object' ? Object.values(raw) : [raw]

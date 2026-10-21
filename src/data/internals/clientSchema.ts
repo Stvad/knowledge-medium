@@ -919,7 +919,7 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
  *
  *  Only a NEW claim reaches this check: `blocks_alias_update` never
  *  re-inserts a name the row already holds, so a local write can keep a
- *  co-claimed name but can never add one. `contestedAliasClaims`
+ *  co-claimed name but can never add one. `aliasClaimConflicts`
  *  (`src/data/aliasClaim.ts`) is this rule for writers that ask first. */
 export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS block_aliases_workspace_alias_unique

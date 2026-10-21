@@ -153,20 +153,15 @@ describe('getOrCreateKernelPage', () => {
       expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
     })
 
-    it('keeps a sync-co-owned canonical alias while repairing its marker and preserving its custom alias', async () => {
-      env.repo.startSyncObserver()
-      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
-      const syncedRow = (
-        blockId: string,
-        createdAt: number,
-        aliases: string[],
-        types: string[],
-      ): BlockData => ({
+    /** Lands a row through sync apply, which skips the uniqueness trigger —
+     *  the only way two live blocks come to claim one name. */
+    const putSynced = async (blockId: string, createdAt: number, aliases: string[], types: string[]) => {
+      const row: BlockData = {
         id: blockId,
         workspaceId: WS,
         parentId: null,
         orderKey: 'a0',
-        content: blockId === id ? 'Foo' : 'Remote claimant',
+        content: blockId === kernelPageBlockId(WS, FOO_PAGE_NS) ? 'Foo' : 'Remote claimant',
         properties: {[aliasesProp.name]: aliases, [typesProp.name]: types},
         references: [],
         createdAt,
@@ -175,16 +170,17 @@ describe('getOrCreateKernelPage', () => {
         createdBy: 'remote',
         updatedBy: 'remote',
         deleted: false,
-      })
+      }
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
+    }
 
-      // Sync apply allows duplicate claims; the kernel page sorts first by
-      // created_at, so a LIMIT 1 lookup incorrectly sees only itself.
-      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(
-        syncedRow(id, 10, ['Foo', 'My Foo'], [PAGE_TYPE]),
-      ))
-      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(
-        syncedRow('remote-foo-claimant', 20, ['Foo'], []),
-      ))
+    it('keeps a sync-co-owned canonical alias while repairing its marker and preserving its custom alias', async () => {
+      env.repo.startSyncObserver()
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      // The kernel page sorts first by created_at, so a LIMIT 1 lookup
+      // incorrectly sees only itself.
+      await putSynced(id, 10, ['Foo', 'My Foo'], [PAGE_TYPE])
+      await putSynced('remote-foo-claimant', 20, ['Foo'], [])
       await env.repo.flushSyncObserver()
 
       const claimants = await sharedDb.db.get<{count: number}>(
@@ -216,6 +212,25 @@ describe('getOrCreateKernelPage', () => {
         [WS, 'Foo'],
       )
       expect(remainingFooClaimants.count).toBe(2)
+    })
+
+    it('re-claims a lost canonical alias without releasing a custom one a synced block co-claims', async () => {
+      env.repo.startSyncObserver()
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      await putSynced(id, 10, ['My Foo'], [PAGE_TYPE, FOO_PAGE_TYPE])
+      await putSynced('remote-foo-claimant', 20, ['My Foo'], [])
+      await env.repo.flushSyncObserver()
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
+      const myFooClaimants = await sharedDb.db.get<{count: number}>(
+        'SELECT COUNT(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, 'My Foo'],
+      )
+      expect(myFooClaimants.count).toBe(2)
     })
   })
 
