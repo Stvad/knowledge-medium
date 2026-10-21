@@ -1,1 +1,0 @@
-import{ch as e,lh as t,sh as n}from"../../../chunks/app-D9FflrMA.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};

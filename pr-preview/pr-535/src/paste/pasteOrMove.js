@@ -1,1 +1,0 @@
-import{vC as e}from"../../chunks/app-D9FflrMA.js";export{e as pasteOrMove};

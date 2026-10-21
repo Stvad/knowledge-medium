@@ -1,1 +1,0 @@
-import{BA as e,zA as t}from"../../../chunks/app-D9FflrMA.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

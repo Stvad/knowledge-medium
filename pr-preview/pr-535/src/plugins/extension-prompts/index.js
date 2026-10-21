@@ -1,1 +1,0 @@
-import{QC as e,ZC as t}from"../../../chunks/app-D9FflrMA.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,1 +1,0 @@
-import{DC as e,OC as t}from"../../chunks/app-D9FflrMA.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

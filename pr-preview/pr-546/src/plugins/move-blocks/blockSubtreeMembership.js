@@ -1,2 +1,0 @@
-var e=async(e,t,n)=>{if(n.has(t))return!0;await e.load(t,{ancestors:!0});let r=new Set([t]),i=e.block(t).peek()?.parentId??null;for(;i;){if(r.has(i))return!1;if(n.has(i))return!0;r.add(i),i=e.cache.getSnapshot(i)?.parentId??null}return!1};export{e as isWithinSubtreeOfAny};
-//# sourceMappingURL=blockSubtreeMembership.js.map

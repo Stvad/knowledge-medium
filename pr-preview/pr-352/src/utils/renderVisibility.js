@@ -1,2 +1,0 @@
-var e=Object.freeze({}),t=(e,t)=>e?.includes(t)??!1,n=e=>({forceOpenBlockIds:[e]}),r=(e,n,r)=>t(e.forceClosedBlockIds,n)?{open:!1,reason:`force-closed`}:t(e.forceOpenBlockIds,n)?{open:!0,reason:`force-open`}:{open:!r,reason:`stored`},i=(e,t,n)=>r(e,t,n).open;export{e as EMPTY_RENDER_VISIBILITY_POLICY,i as areChildrenEffectivelyOpen,n as forceOpenScopeRootPolicy,r as getEffectiveChildrenVisibility};
-//# sourceMappingURL=renderVisibility.js.map

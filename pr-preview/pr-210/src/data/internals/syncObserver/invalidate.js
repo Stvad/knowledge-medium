@@ -1,2 +1,0 @@
-import{snapshotsToChangeNotification as e}from"../handleStore.js";var t=(t,n,r,i=[])=>{let a=new Map;for(let[e,n]of r)(n.after?t.applyIfNewer(n.after,`sync`):t.markMissing(e))&&a.set(e,n);if(a.size===0)return null;let o=e(a,i);return n.invalidate(o),o};export{t as applySyncInvalidation};
-//# sourceMappingURL=invalidate.js.map

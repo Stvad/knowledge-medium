@@ -1,1 +1,0 @@
-import{aw as e,gt as t,iw as n}from"../../../chunks/app-D9FflrMA.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

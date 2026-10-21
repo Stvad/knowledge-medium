@@ -1,2 +1,0 @@
-import{defineFacet as e}from"../../facets/facet.js";import{DEFAULT_NON_NAVIGABLE_SURFACES as t}from"./walker.js";var n=e({id:`spatial-navigation.non-navigable-surfaces`,combine:e=>new Set(e),empty:()=>new Set,validate:e=>typeof e==`string`}),r=e=>{if(!e)return t;let r=e.read(n);return r.size>0?r:t};export{r as resolveSpatialNavExclusions,n as spatialNavExclusionsFacet};
-//# sourceMappingURL=exclusionsFacet.js.map

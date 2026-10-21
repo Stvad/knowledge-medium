@@ -1,2 +1,0 @@
-import{dedupeVariantRegistrations as e}from"../facets/variantFacet.js";import{blockRendererFacet as t}from"./blockInteraction.js";var n=n=>{let r=n.contributionsById(t.id).toSorted((e,t)=>(e.precedence??0)-(t.precedence??0)).map(e=>e.value);return Object.fromEntries(e(r).map(e=>[e.id,e]))};export{n as readRuntimeRenderers};
-//# sourceMappingURL=runtimeRenderers.js.map

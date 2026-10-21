@@ -1,1 +1,0 @@
-import{AK as e,MK as t,NK as n,OK as r,jK as i,kK as a}from"../../chunks/app-D9FflrMA.js";export{r as USER_SCHEMAS_PROJECTOR_ID,a as UserSchemasService,e as isRegistrablePropertyName,i as propertySchemaNameRejection,t as tryBuildSchema,n as userSchemasProjector};

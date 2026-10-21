@@ -1,1 +1,0 @@
-import{GC as e,WC as t}from"../../chunks/app-CI5gmZF7.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

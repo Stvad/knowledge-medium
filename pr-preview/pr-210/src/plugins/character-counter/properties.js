@@ -1,2 +1,0 @@
-import{ChangeScope as e}from"../../data/api/changeScope.js";import{codecs as t}from"../../data/api/codecs.js";import{defineProperty as n}from"../../data/api/propertySchema.js";import"../../data/api/index.js";var r=n(`char:limit`,{codec:t.optionalNumber,defaultValue:void 0,changeScope:e.BlockDefault});export{r as charLimitProp};
-//# sourceMappingURL=properties.js.map

@@ -1,1 +1,0 @@
-import{FK as e,IK as t,LK as n,PK as r,RK as i,zK as a}from"../../chunks/app-CI5gmZF7.js";export{r as USER_SCHEMAS_PROJECTOR_ID,e as UserSchemasService,t as isRegistrablePropertyName,n as propertySchemaNameRejection,i as tryBuildSchema,a as userSchemasProjector};

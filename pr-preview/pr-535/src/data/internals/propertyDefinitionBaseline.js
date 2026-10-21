@@ -1,1 +1,0 @@
-import{fU as e,pU as t}from"../../../chunks/app-D9FflrMA.js";export{e as observePropertyDefinitionCodecs,t as recordAppliedPropertyDefinitionCodecs};

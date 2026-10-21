@@ -1,2 +1,0 @@
-import{decodeEnvelope as e,encodeEnvelope as t}from"./envelope.js";var n=new TextEncoder,r=new TextDecoder,i=async(e,r,i)=>{let a=crypto.getRandomValues(new Uint8Array(12));return t(a,new Uint8Array(await crypto.subtle.encrypt({name:`AES-GCM`,iv:a,additionalData:i},e,n.encode(r))))},a=async(t,n,i)=>{let{nonce:a,ciphertext:o}=e(n),s=await crypto.subtle.decrypt({name:`AES-GCM`,iv:a,additionalData:i},t,o);return r.decode(s)};export{a as open,i as seal};
-//# sourceMappingURL=aead.js.map
