@@ -1,1 +1,1 @@
-import{G8 as e}from"../../../chunks/app-CFebZztS.js";export{e as deriveWorkspaceIdNamespace};
+import{K8 as e}from"../../../chunks/app-e4PaHptj.js";export{e as deriveWorkspaceIdNamespace};
