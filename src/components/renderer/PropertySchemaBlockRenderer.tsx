@@ -316,7 +316,13 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       }
       const {change, stillCurrent, write} = planned
       const consumers = await block.repo.countPropertyDefinitionConsumers(block.id, ws)
-      const large = isLargeFanout(consumers)
+      // While blocks use it, every change to a definition whose CURRENT type
+      // builds nothing here is refused in its transaction, which says why —
+      // so there is nothing to ask the user to approve.
+      const atStartMetadata = parsePropertyDefinitionMetadata(atStart)
+      const refusedInTx = atStartMetadata !== null
+        && definitionSchema(atStart, block.repo.valuePresetCores, atStartMetadata).schema === null
+      const large = isLargeFanout(consumers) && !refusedInTx
       // `repo.tx` admits writes to the workspace open when it STARTS and no
       // other, and the user can switch while this waits. Asked before the
       // confirmation, so nobody is asked about a workspace they left, and

@@ -921,3 +921,45 @@ describe('re-typing a property with many consumers', () => {
     expect(properties['property-schema:preset']).toBe('string')
   })
 })
+
+describe('a definition whose current type does not load', () => {
+  it('does not ask before a change its transaction will refuse', async () => {
+    // One REAL consumer, so the processor's own refusal is what answers; the
+    // stub only puts the count past the threshold.
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode,
+          wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS])
+    const schema = await vi.waitFor(() => {
+      const registered = repo.propertySchemas.get('test:myProp')
+      if (!registered) throw new Error('[test] test:myProp not registered yet')
+      return registered
+    }, {timeout: 3000})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: 'root', orderKey: 'a9', content: 'host',
+      })
+      await tx.setProperty('host', schema, 'done')
+    }, {scope: ChangeScope.BlockDefault})
+    // The preset's plugin gone from this device: a raw write, as a synced row.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json =
+         json_set(properties_json, '$."property-schema:preset"', 'test-unloaded-preset')
+        WHERE id = ?`,
+      [SCHEMA_ID])
+    consumersAre(LARGE_FANOUT_CONSUMERS)
+    const refusals: string[] = []
+    repo.onUserError(error => { refusals.push(error.code) })
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => {
+      expect(refusals).toEqual(['property.definition-change.current-type-unavailable'])
+    })
+    expect(getDialogQueue()).toHaveLength(0)
+    expect(await storedName()).toBe('test:myProp')
+  })
+})
