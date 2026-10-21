@@ -134,6 +134,22 @@ const mountSettles = () => waitFor(() => {
 const bar = () => screen.getByRole('progressbar')
 
 describe('the fan-out progress surface', () => {
+  it('shows a small change only once its fan-out turns out large', async () => {
+    // Every change opens a run; the count before the transaction is what the
+    // user was asked about, and a writer adding consumers before this one
+    // reached the writer can make the walk far bigger than that. The surface
+    // follows the fan-out's own total.
+    renderMount()
+    await openRun(999)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    transactionStarts()
+    report(1, 5_000)
+
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(screen.getByText('1 of 5,000 blocks checked')).toBeTruthy()
+  })
+
   it('shows nothing while no change is running', () => {
     renderMount()
 

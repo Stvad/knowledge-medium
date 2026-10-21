@@ -23,9 +23,11 @@ import {
   ProcessorRejection,
   propertyValue,
   type AnyJoinedValuePreset,
+  type BlockData,
   type Tx,
 } from '@/data/api'
 import { decodeRowProperty } from '@/data/rowProperty.js'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
@@ -91,6 +93,11 @@ type PlanResult = PlannedChange | {skip: string | null}
 const OVERTAKEN = (name: string): string =>
   `“${name}” changed before this was applied, so nothing was written. `
   + 'The editor is showing where it stands now — make the change again from there.'
+
+/** What the processor fans a change out from: only a published definition's
+ *  edit reaches its consumers. */
+const isPublishedDefinition = (row: BlockData): boolean =>
+  parsePropertyDefinitionMetadata(row) !== null
 
 const withoutFirst = (names: readonly string[], name: string): readonly string[] => {
   const at = names.indexOf(name)
@@ -172,7 +179,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
    *
    *  DECLINED: re-checking the count inside the transaction — it prevents no
    *  wrong write, and a transaction holding the writer cannot raise a
-   *  confirmation. */
+   *  confirmation. Every change opens a run instead, and the surface follows
+   *  the fan-out's OWN total, so one that grew past the threshold meanwhile
+   *  still shows its progress. */
   const throughFanoutGate = useCallback((
     plan: (atStart: DefinitionFacts) => PlanResult,
   ): Promise<boolean> => queueDefinitionChange(async () => {
@@ -194,6 +203,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // The definition's OWN workspace — this renderer is mounted per block.
       const ws = atStart.workspaceId
       workspaceId = ws
+      const publishedAtStart = isPublishedDefinition(atStart)
       const planned = plan(definitionFacts(atStart.properties))
       if ('skip' in planned) {
         if (planned.skip !== null) showError(planned.skip)
@@ -216,17 +226,20 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         )
         if (confirmed !== true) return false
         if (!isOpen(ws)) return notOpen()
-        run = beginPropertyDefinitionFanout(block.id, change.propertyName, consumers)
       }
+      run = beginPropertyDefinitionFanout(block.id, change.propertyName, consumers)
       let applied = false
       await block.repo.tx(async tx => {
         const current = await tx.get(block.id)
-        // `tx.get` hands back a TOMBSTONE with its bag intact, so comparing
-        // the bag alone would write through to a deleted definition — which
-        // the fan-out then skips, leaving its consumers under the old name or
-        // encoding with nothing to re-derive them. Deleted, not "unpublished":
-        // a schema block with no name yet is one this editor exists to name.
+        // The row must still be what the change was planned against. `tx.get`
+        // hands back a TOMBSTONE with its bag intact, and a definition whose
+        // type tag or metadata was taken away meanwhile reads as unpublished:
+        // either way the edit would land with no fan-out, leaving consumers
+        // under the old name or encoding once it is a definition again. A
+        // schema block that was never published — one with no name yet — is
+        // still this editor's to name.
         if (current === null || current.deleted) return
+        if (isPublishedDefinition(current) !== publishedAtStart) return
         if (!stillCurrent(definitionFacts(current.properties))) return
         // Makes this transaction's reports attributable; see
         // `PropertyDefinitionFanoutSnapshot.transactionRunning`.

@@ -44,6 +44,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
   LARGE_FANOUT_CONSUMERS,
+  isLargeFanout,
   propertyDefinitionFanout,
   subscribePropertyDefinitionFanout,
   type PropertyDefinitionFanoutSnapshot,
@@ -426,6 +427,25 @@ describe('renaming a property with many consumers', () => {
     expect(await storedName()).toBe('test:myProp')
   })
 
+  it('writes nothing to a definition that stopped being one while the user was deciding', async () => {
+    // Live, same name — but with its type tag gone the fan-out would skip it,
+    // and the consumers would be left on the old name once it is restored.
+    consumersAre(4_000)
+    renderSchema()
+    await renameTo('test:renamed')
+    await screen.findByRole('button', {name: 'Rename'})
+
+    await repo.tx(async tx => {
+      const properties = {...(await tx.get(SCHEMA_ID))!.properties}
+      delete properties.types
+      await tx.update(SCHEMA_ID, {properties})
+    }, {scope: ChangeScope.BlockDefault})
+    await user().click(screen.getByRole('button', {name: 'Rename'}))
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(await storedName()).toBe('test:myProp')
+  })
+
   it('does not ask, or open a surface, for a change nobody will notice', async () => {
     consumersAre(LARGE_FANOUT_CONSUMERS - 1)
     const seen = recordFanoutRuns()
@@ -435,7 +455,10 @@ describe('renaming a property with many consumers', () => {
 
     await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
     expect(screen.queryByText(/Rename “test:myProp”/)).toBeNull()
-    expect(seen).toEqual([])
+    // A run is opened for every change; the surface shows one only at the
+    // threshold, which this never reached.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.filter(run => run !== null && isLargeFanout(run.total))).toEqual([])
   })
 })
 

@@ -151,7 +151,9 @@ export interface PropertyDefinitionFanoutRun {
   end: () => void
 }
 
-/** Open the surface for a change the user has agreed to wait for.
+/** Open a run for a gesture's change, whatever its size. The surface shows it
+ *  only while {@link isLargeFanout} holds for its total, which the fan-out's
+ *  own count replaces once it starts.
  *
  *  FIRST-WINS, the same rule the migration's run slot uses. DEFENCE IN DEPTH
  *  now that {@link queueDefinitionChange} admits one change at a time: a

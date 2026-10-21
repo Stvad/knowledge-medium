@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  isLargeFanout,
   propertyDefinitionFanout,
   subscribePropertyDefinitionFanout,
   type PropertyDefinitionFanoutSnapshot,
@@ -81,7 +82,10 @@ export const DefinitionFanoutProgress = () => {
     propertyDefinitionFanout,
     propertyDefinitionFanout,
   )
-  return run === null ? null : <FanoutProgressDialog run={run} />
+  // By the run's CURRENT total, which the fan-out's own count replaces once it
+  // starts: a change counted small that grew before its transaction reached
+  // the writer still gets its surface.
+  return run === null || !isLargeFanout(run.total) ? null : <FanoutProgressDialog run={run} />
 }
 
 /** While the modal is up the surface underneath must stop claiming keys, and
@@ -93,7 +97,11 @@ export const DefinitionFanoutProgress = () => {
  *  the user has not opened here yet, creating that block waits on the very
  *  writer this fan-out holds. Above the dialog, that wait would take the modal
  *  down for the rest of the run. A failed read still throws the whole mount
- *  away; nothing else rides on it, so that costs the modal and nothing more. */
+ *  away; nothing else rides on it, so that costs the modal and nothing more.
+ *
+ *  The claim itself still waits with the block, so the surface behind the
+ *  modal is unshadowed for that wait — a context with no dependencies should
+ *  not need the block at all, which is #1068's to fix in the shared funnel. */
 const ShadowSurfaceShortcuts = (): null => {
   useModalShadowing(true)
   return null
