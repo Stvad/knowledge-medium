@@ -49,6 +49,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 26
+      # No ensure-pages-published.sh here: a removal whose Pages build fails goes
+      # live with the next gh-pages push, since every build publishes the whole branch.
       - name: Remove previews of closed PRs
         env:
           GH_TOKEN: ${{ github.token }}

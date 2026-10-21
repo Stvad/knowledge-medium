@@ -19,9 +19,9 @@
 # concurrent deploys: no build-id/timestamp correlation (the Pages "build"
 # object has no id field, and timestamps race), just "is my content live yet?".
 # On stall it re-requests a build via POST /pages/builds (the "try again later"),
-# but only while no build is queued or building: every new build cancels the one
-# in flight, so with several jobs waiting at once their rebuild requests would
-# keep cancelling the build they are all waiting for.
+# but not while a build has been queued or building for under STALL_SECS: every
+# new build cancels the one in flight, so with several jobs waiting at once their
+# rebuild requests would keep cancelling the build they are all waiting for.
 #
 # Requires: GITHUB_REPOSITORY, APP_BASE_PATH, and a token with `pages: write` in
 # GH_TOKEN. `dist/version.json` (produced by the build) must still be present.
@@ -44,11 +44,21 @@ echo "waiting for ${url} to serve sha=${want}"
 builds="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
-# Prints the latest Pages build's status (queued/building/built/errored), or
-# empty if it can't be read.
-latest_build_status() {
+# A whole-site build takes ~3-4 minutes; one in flight longer than this has stalled.
+STALL_SECS="${PAGES_BUILD_STALL_SECS:-600}"
+
+# Prints e.g. "building for 95s" while the latest Pages build is in flight and
+# younger than STALL_SECS. Prints nothing when it finished, stalled, or can't be read.
+build_in_flight() {
   curl -fsS "${auth[@]}" "${builds}/latest" 2>/dev/null \
-    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null \
+    | STALL_SECS="$STALL_SECS" python3 -c '
+import json, os, sys
+from datetime import datetime, timezone
+b = json.load(sys.stdin)
+age = (datetime.now(timezone.utc) - datetime.fromisoformat(b["created_at"].replace("Z", "+00:00"))).total_seconds()
+if b.get("status") in ("queued", "building") and age < int(os.environ["STALL_SECS"]):
+    print(b["status"] + " for " + str(int(age)) + "s")
+' 2>/dev/null \
     || true
 }
 
@@ -68,9 +78,9 @@ for round in $(seq 1 "$ROUNDS"); do
   # actual retry: explicitly request a fresh Pages build of the current branch.
   # A build that is already in flight started after our push, so it includes it.
   if [ "$round" -gt 1 ]; then
-    status="$(latest_build_status)"
-    if [ "$status" = queued ] || [ "$status" = building ]; then
-      echo "== not live yet; a Pages build is ${status}, waiting on it (round ${round}/${ROUNDS}) =="
+    in_flight="$(build_in_flight)"
+    if [ -n "$in_flight" ]; then
+      echo "== not live yet; a Pages build is ${in_flight}, waiting on it (round ${round}/${ROUNDS}) =="
     else
       echo "== not live yet; requesting a Pages rebuild (round ${round}/${ROUNDS}) =="
       curl -fsS -X POST "${auth[@]}" "$builds" >/dev/null || true
