@@ -76,7 +76,7 @@ describe('stalePreviewDirs', () => {
 describe('sweepPreviews', { timeout: 20_000 }, () => {
   it('removes closed previews in one fast-forward commit and leaves everything else', () => {
     const before = tip()
-    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: new Set([2]) })
+    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([2]) })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3'])
     expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
@@ -85,32 +85,46 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
 
   it('pushes nothing when no preview is stale', () => {
     const before = tip()
-    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: new Set([1, 2, 3]) })
+    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([1, 2, 3]) })
 
     expect(result.removed).toEqual([])
     expect(tip()).toBe(before)
   })
 
   it('also removes explicitly named PRs, open or not', () => {
-    sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: new Set([1, 2, 3]), alsoRemove: [2] })
+    sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([1, 2, 3]), alsoRemove: [2] })
 
     expect(publishedFiles()).toEqual([
       '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-1/index.html', 'pr-preview/pr-3/.nojekyll',
     ])
   })
 
-  it('rebuilds on the new tip when a deploy lands mid-sweep, keeping that deploy', () => {
+  // A PR that opens mid-sweep and deploys: its preview must survive, so the open
+  // set has to be read after the fetch that first sees the preview.
+  function openingMidSweep(at: 'fetch' | 'push') {
+    const open = new Set([2])
     const inner = workGit()
     let raced = false
-    const racing: Git = (args, opts) => {
-      if (args[0] === 'push' && !raced) {
+    const git: Git = (args, opts) => {
+      if (args[0] === at && !raced) {
         raced = true
+        open.add(4)
         publish({ 'pr-preview/pr-4/index.html': 'new open PR', 'index.html': 'production v2' })
       }
       return inner(args, opts)
     }
+    return { git, openPrs: () => new Set(open) }
+  }
 
-    const result = sweepPreviews({ git: racing, branch: 'gh-pages', openPrs: new Set([2, 4]) })
+  it('reads open PRs after fetching, so a preview deployed just before the fetch is kept', () => {
+    const result = sweepPreviews({ ...openingMidSweep('fetch'), branch: 'gh-pages' })
+
+    expect(result.removed).toEqual(['pr-1', 'pr-3'])
+    expect(publishedFiles()).toContain('pr-preview/pr-4/index.html')
+  })
+
+  it('rebuilds on the new tip when a deploy lands mid-sweep, keeping that deploy', () => {
+    const result = sweepPreviews({ ...openingMidSweep('push'), branch: 'gh-pages' })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3'])
     expect(publishedFiles()).toEqual([
@@ -123,7 +137,7 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     publish({}, ['pr-preview'])
     const before = tip()
 
-    expect(sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: new Set() }).removed).toEqual([])
+    expect(sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set() }).removed).toEqual([])
     expect(tip()).toBe(before)
   })
 })

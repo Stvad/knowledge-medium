@@ -187,6 +187,9 @@ the new tip. It runs:
 - on **`workflow_dispatch`** from `master`. The optional `pr_number` input also
   removes that PR's preview while the PR is still open.
 
+A close or a dispatch with `pr_number` also deletes that PR's preview-link
+comment.
+
 GitHub retains only the newest pending request in each concurrency group, so
 avoid issuing another manual request while one is pending.
 

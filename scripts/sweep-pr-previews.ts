@@ -48,19 +48,21 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
 
 /**
  * Never force-pushes: a deploy that lands mid-sweep rejects the push, and the
- * sweep starts over from the new tip so that deploy survives.
+ * sweep starts over from the new tip so that deploy survives. `openPrs` is read
+ * after each fetch, so every preview in the fetched tip was deployed while its
+ * PR was open and still counts as open unless it has since closed.
  */
 export function sweepPreviews({ git, branch, openPrs, alsoRemove = [] }: {
   git: Git
   branch: string
-  openPrs: ReadonlySet<number>
+  openPrs: () => ReadonlySet<number>
   alsoRemove?: number[]
 }): { removed: string[] } {
-  const keep = new Set([...openPrs].filter(number => !alsoRemove.includes(number)))
   const remoteRef = `refs/remotes/origin/${branch}`
   for (let attempt = 1; ; attempt++) {
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${branch}:${remoteRef}`])
     const tip = git(['rev-parse', remoteRef])
+    const keep = new Set([...openPrs()].filter(number => !alsoRemove.includes(number)))
     const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
       .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
     const removed = stalePreviewDirs(names, keep)
@@ -88,7 +90,7 @@ if (isMainModule(import.meta.url)) {
   if (!repository) throw new Error('set GITHUB_REPOSITORY (owner/repo)')
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const { removed } = sweepPreviews({
-    git: gitIn(process.cwd()), branch: 'gh-pages', openPrs: openPullRequests(repository), alsoRemove,
+    git: gitIn(process.cwd()), branch: 'gh-pages', openPrs: () => openPullRequests(repository), alsoRemove,
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
 }
