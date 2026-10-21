@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, previewsToRemove, sweepPreviews,
+  expiredPrs, type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, previewsToRemove, sweepPreviews,
 } from './sweep-pr-previews.ts'
 
 const git = (cwd: string, ...args: string[]) => gitIn(cwd)(args)
@@ -72,14 +72,19 @@ const sweep = (options: Omit<Parameters<typeof sweepPreviews>[0], 'git' | 'idleB
   sweepPreviews({ git: workGit(), idleBefore, ...options })
 
 describe('previewsToRemove', () => {
-  it('names only pr-<n> directories whose PR is closed, named, or idle, and reports the idle ones', () => {
+  it('names only pr-<n> directories whose PR is closed, named, or idle', () => {
     const names = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'pr-03', 'pr-x', 'shared']
-    const result = previewsToRemove(names, [active(2), idle(3), idle(4)], {
-      alsoRemove: [4], isIdle: pr => pr.updatedAt < idleBefore,
-    })
 
-    expect(result.removed).toEqual(['pr-1', 'pr-3', 'pr-4'])
-    expect(result.expired).toEqual([idle(3)])
+    expect(previewsToRemove(names, [active(2), idle(3), active(4)], { idleBefore, alsoRemove: [4] }))
+      .toEqual(['pr-1', 'pr-3', 'pr-4'])
+  })
+})
+
+describe('expiredPrs', () => {
+  it('names the idle open PRs left without a preview, except those removed by name', () => {
+    const open = [active(2), idle(3), active(4), idle(5), idle(6)]
+
+    expect(expiredPrs(['pr-2', 'pr-5'], open, { idleBefore, alsoRemove: [6] })).toEqual([idle(3)])
   })
 })
 
@@ -110,30 +115,11 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     ])
   })
 
-  it('expires previews of idle open PRs and reports which', () => {
-    const result = sweep({ openPrs: () => [active(2), idle(3)] })
+  it('expires previews of idle open PRs and reports every idle PR left without one', () => {
+    const result = sweep({ openPrs: () => [active(2), idle(3), idle(7)] })
 
-    expect(result.removed).toEqual(['pr-1', 'pr-3'])
-    expect(result.expired).toEqual([idle(3)])
+    expect(result).toEqual({ removed: ['pr-1', 'pr-3'], expired: [idle(3), idle(7)] })
     expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
-  })
-
-  it('marks expired PRs before pushing, and keeps the preview of one whose mark failed for a later run', () => {
-    const before = tip()
-    const tipsWhenMarked: string[] = []
-    const result = sweep({
-      openPrs: () => [idle(1), active(2), idle(3)],
-      markExpired: pr => {
-        tipsWhenMarked.push(tip())
-        if (pr.number === 3) throw new Error('comments API unavailable')
-      },
-    })
-
-    expect(tipsWhenMarked).toEqual([before, before])
-    expect(result).toEqual({ removed: ['pr-1'], expired: [idle(1)], unmarked: [idle(3)] })
-    expect(publishedFiles()).toEqual([
-      '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html', 'pr-preview/pr-3/.nojekyll',
-    ])
   })
 
   // A PR that becomes active mid-sweep (opened, or pushed to after idling) and
@@ -170,39 +156,10 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     expect(git(origin, 'show', 'gh-pages:index.html')).toBe('production v2')
   })
 
-  // Its own notice bumps the PR's updated_at, so a retry must not read that as activity.
-  it('keeps the expired verdict when an unrelated deploy rejects the push', () => {
-    const inner = workGit()
-    let open = [active(2), idle(3)]
-    let raced = false
-    const racingGit: Git = (args, opts) => {
-      if (args[0] === 'push' && !raced) {
-        raced = true
-        publish({ 'index.html': 'production v2' })
-      }
-      return inner(args, opts)
-    }
-    const marked: number[] = []
-    const result = sweep({
-      git: racingGit,
-      openPrs: () => open,
-      markExpired: pr => {
-        marked.push(pr.number)
-        open = [active(2), active(3)]
-      },
-    })
-
-    expect(result.removed).toEqual(['pr-1', 'pr-3'])
-    expect(result.expired.map(pr => pr.number)).toEqual([3])
-    expect(marked).toEqual([3])
-    expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
-    expect(git(origin, 'show', 'gh-pages:index.html')).toBe('production v2')
-  })
-
   it('keeps an idle PR whose redeploy lands mid-sweep, and does not report it expired', () => {
     const result = sweep(deployingMidSweep('push', 3, [active(2), idle(3)]))
 
-    expect(result).toEqual({ removed: ['pr-1'], expired: [], unmarked: [] })
+    expect(result).toEqual({ removed: ['pr-1'], expired: [] })
     expect(git(origin, 'show', 'gh-pages:pr-preview/pr-3/index.html')).toBe('deployed mid-sweep')
   })
 
@@ -250,6 +207,16 @@ describe('markPreviewExpired', () => {
 
     expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
     expect(patches).toEqual([])
+  })
+
+  // Every run re-notifies every expired PR, so an edit that already landed must not be repeated.
+  it('edits nothing when the comment already says the preview expired', () => {
+    const first = fakeGh([{ id: 12, user: bot, body: marker }])
+    markPreviewExpired(first.gh, 'o/r', { number: 5, fork: false }, 30)
+    const again = fakeGh([{ id: 12, user: bot, body: first.body()!.slice('body='.length) }])
+
+    expect(markPreviewExpired(again.gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
+    expect(again.patches).toEqual([])
   })
 
   // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.

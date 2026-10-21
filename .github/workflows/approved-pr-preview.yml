@@ -166,7 +166,7 @@ jobs:
           header: pr-preview
           message: |
             ### Deploying approved PR preview
-            Commit `${{ needs.approve.outputs.sha }}` is being published by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), requested by @${{ github.actor }}.
+            Commit `${{ needs.approve.outputs.sha }}` is being published by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), requested by @${{ github.actor }}. If that run fails, run **Deploy approved PR preview** again.
       - name: Deploy approved preview
         id: deploy
         uses: rossjrw/pr-preview-action@v1
@@ -195,4 +195,4 @@ jobs:
             Approved commit: `${{ needs.approve.outputs.sha }}` (PR head, not a merge build).
             [Deployment run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) · requested by @${{ github.actor }}.
 
-            ${{ needs.approve.outputs.repository == github.repository && 'A push to the PR replaces it with its usual merge build.' || 'Later pushes do not update this preview. Run **Deploy approved PR preview** again to approve a new head.' }}
+            ${{ needs.approve.outputs.repository == github.repository && 'A push to the PR replaces it with its usual merge build once the PR has no merge conflict.' || 'Later pushes do not update this preview. Run **Deploy approved PR preview** again to approve a new head.' }}

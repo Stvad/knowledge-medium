@@ -1,8 +1,8 @@
 // Removes, in one commit, every pr-preview/pr-<n>/ on gh-pages whose PR is no
-// longer open or has been idle (no update) for PR_PREVIEW_IDLE_DAYS days, first
-// rewriting each idle PR's preview-link comment to say how to redeploy. Run by
-// .github/workflows/remove-pr-previews.yml on PR close and on a schedule; extra
-// arguments name PRs to remove even while open.
+// longer open or has been idle (no update) for PR_PREVIEW_IDLE_DAYS days, then
+// rewrites the preview-link comment of each open PR left without one that way
+// to say how to redeploy. Run by .github/workflows/remove-pr-previews.yml on PR
+// close and on a schedule; extra arguments name PRs to remove even while open.
 //
 //   GITHUB_REPOSITORY=owner/repo [PR_PREVIEW_IDLE_DAYS=30] node scripts/sweep-pr-previews.ts [pr-number ...]
 //
@@ -26,6 +26,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // The hidden header marocchino/sticky-pull-request-comment finds the preview comment by.
 const PREVIEW_COMMENT_MARKER = '<!-- Sticky Pull Request Commentpr-preview -->'
 const PREVIEW_COMMENT_AUTHOR = 'github-actions[bot]'
+const EXPIRED_HEADING = '### PR preview expired'
 
 export type Git = (args: string[], opts?: { env?: NodeJS.ProcessEnv }) => string
 export type Gh = (args: string[]) => string
@@ -39,31 +40,35 @@ export const gitIn = (cwd: string): Git => (args, opts = {}) =>
     cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...opts.env },
   }).trim()
 
+const isIdle = (pr: OpenPr, idleBefore: Date) => pr.updatedAt < idleBefore
+
 /**
  * The pr-<n> directory names to remove: the PR is not open, is named in
- * `alsoRemove`, or `isIdle`. Only that last kind is `expired`, since its PR
- * stays open. Any other name is never touched.
+ * `alsoRemove`, or is idle. Any other name is never touched.
  */
-export function previewsToRemove<P extends OpenPr>(names: string[], open: readonly P[], { alsoRemove, isIdle }: {
+export function previewsToRemove(names: string[], open: readonly OpenPr[], { idleBefore, alsoRemove }: {
+  idleBefore: Date
   alsoRemove: readonly number[]
-  isIdle: (pr: P) => boolean
-}): { removed: string[]; expired: P[] } {
+}): string[] {
   const byNumber = new Map(open.map(pr => [pr.number, pr]))
-  const removed: string[] = []
-  const expired: P[] = []
-  for (const name of names) {
+  return names.filter(name => {
     const match = PREVIEW_DIR.exec(name)
-    if (match === null) continue
-    const number = Number(match[1])
-    const pr = byNumber.get(number)
-    if (pr === undefined || alsoRemove.includes(number)) {
-      removed.push(name)
-    } else if (isIdle(pr)) {
-      removed.push(name)
-      expired.push(pr)
-    }
-  }
-  return { removed, expired }
+    if (match === null) return false
+    const pr = byNumber.get(Number(match[1]))
+    return pr === undefined || alsoRemove.includes(pr.number) || isIdle(pr, idleBefore)
+  })
+}
+
+/**
+ * The open PRs that idled and have no preview among `names`: those whose
+ * comment should say it expired. Derived from what is left rather than from
+ * what one run removed, so a notice that failed is retried by the next run.
+ */
+export function expiredPrs<P extends OpenPr>(names: readonly string[], open: readonly P[], { idleBefore, alsoRemove }: {
+  idleBefore: Date
+  alsoRemove: readonly number[]
+}): P[] {
+  return open.filter(pr => isIdle(pr, idleBefore) && !alsoRemove.includes(pr.number) && !names.includes(`pr-${pr.number}`))
 }
 
 function commitWithout(git: Git, tip: string, dirs: string[]): string {
@@ -79,16 +84,6 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
   }
 }
 
-function marked<P extends OpenPr>(markExpired: (pr: P) => void, pr: P): boolean {
-  try {
-    markExpired(pr)
-    return true
-  } catch (error) {
-    console.warn(`could not mark PR ${pr.number}'s preview expired; keeping it for a later run:`, error)
-    return false
-  }
-}
-
 /**
  * Never force-pushes: a deploy that lands mid-sweep rejects the push, and the
  * sweep starts over from the new tip so that deploy survives. `openPrs` is read
@@ -96,48 +91,30 @@ function marked<P extends OpenPr>(markExpired: (pr: P) => void, pr: P): boolean 
  * PR was open and still counts as open, and as active, unless that read says
  * otherwise.
  *
- * `markExpired` runs before the push, so a preview whose notice failed stays
- * up (`unmarked`) for a later run to retry, and a failure never leaves a live
- * link pointing at a removed preview. The notice itself bumps the PR's
- * `updatedAt`, so a PR marked in a rejected attempt stays expired until its
- * preview subtree changes, which only a redeploy does. Other activity in those
- * seconds counts as coming after the decision, like activity just after the
- * push: telling it from the notice's own bump would rest on two GitHub
- * timestamps agreeing.
+ * Write expiry notices only after this returns: a notice bumps the PR's
+ * `updatedAt`, which would read as activity on a retry. A redeploy of
+ * byte-identical content moves no tip, so one that lands between this read
+ * and the push is still swept; accepted, since only a maintainer redeploying
+ * an unchanged head in those seconds meets it.
  */
-export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [], markExpired = () => {} }: {
+export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [] }: {
   git: Git
   openPrs: () => readonly P[]
   idleBefore: Date
   alsoRemove?: number[]
-  markExpired?: (pr: P) => void
-}): { removed: string[]; expired: P[]; unmarked: P[] } {
-  const markedTrees = new Map<number, string>()
+}): { removed: string[]; expired: P[] } {
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
     const tip = git(['rev-parse', REMOTE_REF])
     const open = openPrs()
-    // `<mode> tree <hash>\t<root>/<name>` per preview directory.
-    const trees = new Map(git(['ls-tree', '-d', tip, `${PREVIEW_ROOT}/`]).split('\n').filter(Boolean).map(line => {
-      const [meta, path] = line.split('\t')
-      return [path.slice(PREVIEW_ROOT.length + 1), meta.split(' ')[2]]
-    }))
-    const treeOf = (pr: P) => trees.get(`pr-${pr.number}`)
-    const markedUnchanged = (pr: P) => markedTrees.has(pr.number) && markedTrees.get(pr.number) === treeOf(pr)
-    const found = previewsToRemove([...trees.keys()], open, {
-      alsoRemove, isIdle: pr => markedUnchanged(pr) || pr.updatedAt < idleBefore,
-    })
-    const unmarked = found.expired.filter(pr => !markedUnchanged(pr) && !marked(markExpired, pr))
-    const expired = found.expired.filter(pr => !unmarked.includes(pr))
-    for (const pr of expired) markedTrees.set(pr.number, treeOf(pr)!)
-    const result = {
-      removed: found.removed.filter(name => !unmarked.some(pr => name === `pr-${pr.number}`)),
-      expired,
-      unmarked,
-    }
-    if (result.removed.length === 0) return result
-    const commit = commitWithout(git, tip, result.removed)
+    const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
+      .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
+    const removed = previewsToRemove(names, open, { idleBefore, alsoRemove })
+    const left = names.filter(name => !removed.includes(name))
+    const result = { removed, expired: expiredPrs(left, open, { idleBefore, alsoRemove }) }
+    if (removed.length === 0) return result
+    const commit = commitWithout(git, tip, removed)
     try {
       git(['push', '--quiet', 'origin', `${commit}:refs/heads/${BRANCH}`])
       return result
@@ -152,10 +129,10 @@ function expiredPreviewComment({ number, fork }: Pick<OpenPull, 'number' | 'fork
   // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.
   const [how, headSha] = fork
     ? ['A maintainer can approve a reviewed head to bring it back:', '<reviewed head SHA>']
-    : ['A push brings it back. To redeploy the current head without one:',
+    : ['A push brings it back once the PR has no merge conflict. To redeploy the current head without one:',
         `"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`]
   return [
-    '### PR preview expired',
+    EXPIRED_HEADING,
     `This PR had no activity for ${idleDays} days, so its preview was removed to keep the Pages site small.`,
     how,
     [
@@ -168,15 +145,16 @@ function expiredPreviewComment({ number, fork }: Pick<OpenPull, 'number' | 'fork
 }
 
 /**
- * Rewrites the PR's preview-link comment in place, keeping the marker so the
- * next deploy updates it rather than adding another. Editing notifies nobody,
- * which a new comment on every expired PR would.
+ * Rewrites the PR's preview-link comment in place, unless it already says the
+ * preview expired, keeping the marker so the next deploy updates it rather
+ * than adding another. Editing notifies nobody, which a new comment on every
+ * expired PR would.
  */
 export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork'>, idleDays: number): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const comment = pages.flat().find(c => c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER))
-  if (comment === undefined) return false
+  if (comment === undefined || comment.body?.startsWith(EXPIRED_HEADING)) return false
   gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
     '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
   return true
@@ -205,13 +183,18 @@ if (isMainModule(import.meta.url)) {
   const idleDays = idleDaysFromEnv()
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const gh: Gh = args => execFileSync('gh', args, { encoding: 'utf8' })
-  const { removed, unmarked } = sweepPreviews({
+  const { removed, expired } = sweepPreviews({
     git: gitIn(process.cwd()), openPrs: () => openPullRequests(gh, repository),
     idleBefore: new Date(Date.now() - idleDays * DAY_MS), alsoRemove,
-    markExpired: pr => {
-      if (!markPreviewExpired(gh, repository, pr, idleDays)) console.log(`PR ${pr.number} has no preview comment to update`)
-    },
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
-  if (unmarked.length > 0) process.exitCode = 1
+  // A failure only warns: the PR stays expired, so the next run retries it, and a
+  // failing exit would skip the workflow's own comment cleanup.
+  for (const pr of expired) {
+    try {
+      if (markPreviewExpired(gh, repository, pr, idleDays)) console.log(`Marked PR ${pr.number}'s preview expired`)
+    } catch (error) {
+      console.log(`::warning::Could not mark PR ${pr.number}'s preview expired; the next run retries: ${error}`)
+    }
+  }
 }

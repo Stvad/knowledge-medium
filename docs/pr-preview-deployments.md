@@ -197,20 +197,24 @@ runs:
   removes that PR's preview while the PR is still open.
 
 A close or a dispatch with `pr_number` also deletes that PR's preview-link
-comment. Before removing an idle PR's preview, every run rewrites that PR's
-preview comment in place to say the preview expired and how to redeploy it. A
-PR whose edit fails keeps its preview until a later run retries, so no comment
-keeps advertising a removed preview. An edit notifies nobody, where a new
-comment on each expired PR would. A closed PR's comment is left alone, since
-its link merely 404s.
+comment. After its push, every run rewrites the preview comment of each open
+PR that idled and has no preview, in place, to say the preview expired and how
+to redeploy it. A comment that already says so is left as it is. Because that
+set is derived from what is left on `gh-pages`, an edit that failed is retried
+by the next run, and only warns, so it never skips the workflow's own comment
+cleanup. The edit waits for the push because it bumps the PR's `updated_at`,
+which a retried push would otherwise read as activity. An edit notifies nobody,
+where a new comment on each expired PR would. A closed PR's comment is left
+alone, since its link merely 404s.
 
 GitHub retains only the newest pending request in each concurrency group, so
 avoid issuing another manual request while one is pending.
 
 ### Redeploying an expired preview
 
-A push to a same-repository PR redeploys its preview as usual. To bring one
-back without a push, approve its head with **Deploy approved PR preview**. The
+A push to a same-repository PR redeploys its preview as usual, once the PR has
+no merge conflict. To bring one back without a push, approve its head with
+**Deploy approved PR preview**. The
 expired comment carries the command with the PR number filled in; for a
 same-repository PR it reads the current head itself:
 
@@ -232,7 +236,7 @@ PR's code never runs with write credentials, and the publishing step uses
 publish job rewrites the sticky comment twice. The first edit lands before the
 deploy, and it bumps the PR's `updated_at`, so the redeployed preview lasts
 another idle period and a sweep that sees the new deploy also sees the PR as
-active. The second edit lands after publishing, so the live link replaces an
+active. If the run fails, that edit tells you to run it again. The second edit lands after publishing, so the live link replaces an
 expiry notice a concurrent sweep wrote meanwhile.
 
 Re-running the PR's last **PR Preview** run is not a substitute: GitHub allows a
