@@ -128,6 +128,30 @@ describe('a revival yields a name taken while the block was dead (#883)', () => 
     expect(await holders('Inbox')).toEqual(['q'])
   })
 
+  // The trigger indexes text from a malformed bag too, so a taken name is
+  // yielded in whatever shape it is stored, and nothing else in it is touched.
+  it.each([
+    {shape: 'a bare string', stored: 'Inbox', restored: undefined},
+    {shape: 'an array with a non-string entry', stored: ['Inbox', 7, 'Mine'], restored: [7, 'Mine']},
+    {shape: 'an object', stored: {a: 'Inbox', b: 'Mine'}, restored: {b: 'Mine'}},
+  ])('restores a page whose bag is $shape with a taken name in it', async ({stored: storedBag, restored}) => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, 'a0', 'My Page', ?, '[]', 1, 1, 1, 'u', 'u', 1)`,
+      [PAGE, WS, JSON.stringify({[aliasesProp.name]: storedBag})],
+    )
+    await createPage('q', 'Q', ['Inbox'], 'a1')
+
+    await repo.mutate.restore({id: PAGE})
+
+    const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [PAGE])
+    expect(row.deleted).toBe(0)
+    expect(JSON.parse(row.properties_json)[aliasesProp.name]).toEqual(restored)
+    expect(await holders('Inbox')).toEqual(['q'])
+  })
+
   it('undoes the delete of a page whose name a synced block took', async () => {
     await createPage(PAGE, 'My Page', ['My Page', 'Inbox'])
     await repo.awaitProcessors()
