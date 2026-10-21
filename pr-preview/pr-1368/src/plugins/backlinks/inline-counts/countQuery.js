@@ -1,1 +1,1 @@
-import{_W as e,gW as t}from"../../../../chunks/app-BYq4CgbF.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
+import{_W as e,gW as t}from"../../../../chunks/app-Dx3NBMU7.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};

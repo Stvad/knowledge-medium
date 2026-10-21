@@ -1,1 +1,1 @@
-import{AW as e,kW as t}from"../../chunks/app-BYq4CgbF.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};
+import{AW as e,kW as t}from"../../chunks/app-Dx3NBMU7.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};
