@@ -1,0 +1,1 @@
+import{$R as e}from"../../chunks/app-Pn7jDUku.js";export{e as usePropertySchemas};

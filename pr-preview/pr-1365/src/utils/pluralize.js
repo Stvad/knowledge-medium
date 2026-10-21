@@ -1,0 +1,1 @@
+import{FQ as e,IQ as t}from"../../chunks/app-Pn7jDUku.js";export{e as agree,t as pluralize};

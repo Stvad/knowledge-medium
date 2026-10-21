@@ -1,0 +1,1 @@
+import{ON as e}from"../../chunks/app-Pn7jDUku.js";export{e as useShortcutSurfaceActivations};

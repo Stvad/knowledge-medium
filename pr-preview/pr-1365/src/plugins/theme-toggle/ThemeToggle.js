@@ -1,0 +1,1 @@
+"use client";import{XS as e}from"../../../chunks/app-Pn7jDUku.js";export{e as ThemeToggle};

@@ -1,0 +1,1 @@
+import{Ad as e,Cd as t,Dd as n,Ed as r,Od as i,Td as a,kd as o,wd as s}from"../../../chunks/app-Pn7jDUku.js";export{t as PROVE_DISTINCT_VALUE_LIMIT,s as applyPropertyDefinitionSynthesis,a as flipBlockedBySynthesis,r as keyCannotBeDefined,n as planPropertyDefinitionSynthesis,i as provePresetId,o as resolveSynthesisNamespace,e as synthesizedPropertyDefinitionBlockId};

@@ -1,0 +1,1 @@
+import{vB as e,yB as t}from"../../../chunks/app-Pn7jDUku.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

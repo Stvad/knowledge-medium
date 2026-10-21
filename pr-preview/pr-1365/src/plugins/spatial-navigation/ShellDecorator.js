@@ -1,0 +1,1 @@
+import{Ay as e}from"../../../chunks/app-Pn7jDUku.js";export{e as SpatialNavigationShellDecorator};

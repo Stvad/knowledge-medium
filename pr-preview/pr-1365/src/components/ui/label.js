@@ -1,0 +1,1 @@
+import{kw as e}from"../../../chunks/app-Pn7jDUku.js";export{e as Label};

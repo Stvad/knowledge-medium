@@ -1,0 +1,1 @@
+import{FX as e,IX as t}from"../../chunks/app-Pn7jDUku.js";export{e as Block,t as requireLoadedBlock};

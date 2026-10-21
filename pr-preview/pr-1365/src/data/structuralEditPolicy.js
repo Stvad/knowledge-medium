@@ -1,0 +1,1 @@
+import{DO as e,OO as t}from"../../chunks/app-Pn7jDUku.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

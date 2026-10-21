@@ -1,0 +1,1 @@
+import{SF as e,xF as t}from"../../../chunks/app-Pn7jDUku.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
