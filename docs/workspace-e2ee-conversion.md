@@ -231,7 +231,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   So the proof's result is **passed, with these blocks unrecoverable**. The flow lists them together with every object the pass kept and reported, and `finish_conversion` follows the user's confirmation, so nothing left behind is silent. Preflight already lists the same blocks before the flip (step 0).
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
-**9. Done.** The flow calls `finish_conversion`, then tells the user to open each other device with the key and to keep the bundle with it. The operator's follow-ups ([§8](#8-runbook) steps 10–13) and the "safe from" date they set ([§9.4](#94-the-safe-from-rule)) belong to this runbook, not to the app.
+**9. Done.** The flow calls `finish_conversion`, then tells the user to open each other device with the key and to keep the bundle with it. The rest, [§8](#8-runbook)'s **After** steps and the "safe from" date they set ([§9.4](#94-the-safe-from-rule)), belongs to this runbook, not to the app.
 
 ### 6.4 Other devices
 
@@ -280,56 +280,95 @@ The first production run is #1288.
    - The re-seal writes new row versions (about 1.33×), history rows holding both old and new values (about 2.3×), and WAL for all of it.
    - So confirm free disk of about **6×** that figure, plus room for `VACUUM FULL` to copy each table it rewrites. Auto-scaling disk grows only on a cooldown.
 7. **Ordering against the properties-as-blocks switch** is an open decision (#1288). Converting first keeps the ids of definitions synthesized at the switch keyed under `K_id`. Switching first leaves them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap.
-8. **Rehearse** the conversion on a scratch workspace first. The rehearsal of 2026-10-21 is below the checklist. Run it again after a change to the flow, to the conversion's server functions, or to the hosted Postgres or PostgREST version.
+8. **Rehearse** the conversion on a scratch workspace first. The record is under **Rehearsal of 2026-10-20**, below the checklist. Run it again after a change to the flow, to the conversion's server functions, or to the hosted Postgres or PostgREST version.
 9. Run from desktop Chromium, on the device that holds the most attachment bytes locally.
 
-**Run-day checklist.** The steps above in the order they're done:
-1. Every device is on a build with #1293. Check each one's version, PWAs and phones included.
-2. Disk headroom is confirmed (step 6), with room for `VACUUM FULL` on top.
-3. The key's two places are ready (step 4), and so is an encrypted volume with room for the bundle. Preflight shows the bundle's size.
-4. The workspace is renamed if its name is sensitive (step 5).
-5. Every device's queue is drained. Then every other tab and device is closed: PWA windows, other browser profiles, phones and tablets, and any agent-bridge tab.
-6. The operator runs `ANALYZE public.blocks_history;`. It takes seconds and blocks no reads or writes. Preflight and the bundle page through the workspace's history, and a stale estimate can make every page cost the whole rest of it (below).
-7. On the desktop Chromium profile from step 9: workspace settings → **Encrypt this workspace…**. Keep the tab in front and the machine awake until the flow says it's done.
-   - If a history read times out, run step 6's `ANALYZE` again and retry. Nothing is lost: before the flip, preflight just stops; after it, a retry takes the bundle again.
-   - If the purge times out, raise `purge_workspace_history`'s `statement_timeout` before retrying, because each attempt repeats the whole delete. The rehearsal puts that past 3 million history rows.
-8. Then the **After** steps, in order.
+**Run-day checklist.** In order. Each item names the step above that owns it.
 
-**Rehearsal of 2026-10-21.**
+a. **Settled beforehand:**
+   - the deploys (step 1);
+   - the ordering against the properties-as-blocks switch (step 7). Neither preflight nor the flip checks it, so confirm the switch hasn't started on this workspace and won't run during the conversion;
+   - disk headroom (step 6);
+   - the key's two places (step 4), and an encrypted volume with room for the bundle;
+   - the name (step 5).
+
+b. **Fleet** (step 3). Drain every queue, then close every other tab and device: PWA windows, other browser profiles, phones and tablets, and any agent-bridge tab.
+
+c. **Fresh statistics.** The operator runs `ANALYZE public.blocks_history;`.
+   - Name the table. A bare `ANALYZE` also locks `blocks`, and the flip would have to wait.
+   - It blocks no reads or writes. It does wait behind an autovacuum of the table.
+   - Why: preflight and the bundle page through the workspace's history, and with stale statistics each page costs the rest of it (the rehearsal, below).
+   - Run operator SQL as `postgres` over a direct connection, such as psql. The Dashboard's SQL editor caps queries at 60 s.
+
+d. **Predict the purge.** It deletes the history plus one re-seal row per block. The rehearsal ran at about 9.4 s per 100k of those rows together, and preflight's confirmation shows both counts.
+   - Supabase documents a 60 s cap on client queries. Through the API, the purge has only been seen to pass at 11 s.
+   - If the prediction nears a minute, either probe a long RPC on the hosted project first, or plan on the direct-connection purge in (g).
+
+e. **Start.** On the profile from step 9: workspace settings → **Encrypt this workspace…**.
+   - Note how long preflight takes. Its history scan is the same read the bundle makes after the flip, so it predicts the bundle.
+   - If preflight runs for minutes, close the flow at its confirmation, where nothing has changed yet. Repeat (c), then start again.
+
+f. **Keep the tab in front** and the machine awake until the flow says it's done.
+
+g. **If a step times out:**
+   - **A history read before the flip:** preflight stops. Repeat (c) and start again.
+   - **A history read after the flip:** **Try again** carries on from the server's phase.
+     - With no verified bundle recorded, it takes the bundle again.
+     - Otherwise it repeats the re-seal pass and verify before the purge.
+     - Every device holds its writes for this workspace until the purge passes. The flow has no remedy beyond (c).
+   - **The purge:** the flow makes 4 attempts on its own before it shows the error, and each attempt is a whole delete, rolled back. Then do one of these:
+     - **Raise the function's timeout**, if that was the limit hit, then **Try again**:
+       - run `alter function public.purge_workspace_history(text, bigint, bigint) set statement_timeout = '15min';`;
+       - PostgREST picks the change up when it reloads its schema; `notify pgrst, 'reload schema';` forces that;
+       - set it back to `'5min'` afterwards.
+     - **Run the purge over a direct connection as `postgres`**, then **Try again**. The flow reads `cleaning` and carries on.
+       ```sql
+       begin;
+       set local statement_timeout = '30min';
+       select set_config('request.jwt.claims', json_build_object('sub', '<owner user id>', 'role', 'authenticated')::text, true);
+       select public.purge_workspace_history('<workspace id>', <through>, <archived count>);
+       commit;
+       ```
+       `<through>` is the bundle's `manifest.json` `through`. `<archived count>` is its `parts["server-history.jsonl"].lines`.
+
+h. Then the **After** steps, in order.
+
+**Rehearsal of 2026-10-20.**
 
 **Setup.**
-- **Where:** the hosted project, on the production build, in desktop Chrome.
-- **Workspace:** a synthetic scratch workspace of 50,281 blocks, written through the app. 7% of them are soft-deleted. There were also 66,407 history rows, and 12 attachments totalling 12 MB, one of them on a soft-deleted media block.
-- **Result:** every step passed on the first try.
-  - Afterwards, every block row's three content columns were envelopes, and the history was empty.
-  - Every Storage object was under its keyed name, 36 bytes larger than its plaintext.
-  - A second browser unlocked the workspace with the key and showed its content and images.
+- **Where:** the hosted project, on Postgres 17.11 and PostgREST 14.18. Desktop Chrome, on the production build `8858f449`.
+- **Workspace:** a synthetic scratch workspace of 50,281 blocks, 7% of them soft-deleted. It also had 66,415 history rows and 12 attachments totalling 12 MB.
+- **Result:** it passed end to end, and a second browser unlocked the workspace with the key.
+- **Not covered:**
+  - a device whose local copy survived the flip (step 10);
+  - Stop and resume;
+  - the **After** steps.
 
-| Phase | Measured | Per 100k |
-|---|---|---|
-| Preflight: blocks | 15 s | 30 s of blocks |
-| Preflight: history (slow plan, below) | 2 min 3 s | 3.1 min of history rows |
-| Flip | 11 ms on the server, no lock retries | — |
-| Bundle: this device's database | 11 s | grows with the device's database, not the workspace |
-| Bundle: history (slow plan) | 2 min 0 s | 3 min of history rows |
-| Bundle: blocks, attachments, check | 12 s, 15 s, 7 s | 24 s of blocks |
-| Re-seal | 2 min 53 s, 290 rows/s | 5.7 min of blocks |
-| Verify | 3 min 49 s, 220 rows/s | 7.6 min of blocks |
-| Purge, 116,696 history rows | 11.0 s on the server | 9.4 s of history rows |
-| Pin upgrade on this device | 58 s | 1.9 min of blocks |
-| Attachments, 12 objects | 46 s | grows with attachment bytes |
+Times measured, and per 100k rows where that scales:
 
-What it showed:
-- **The hosted PostgREST (v14.18) applies a function's own `statement_timeout`.**
-  - The purge ran 11 s, past `authenticated`'s 8 s limit, and succeeded.
-  - Before the run, a refused anonymous call of `conversion_workspace_counts` left a transaction prelude in `pg_stat_statements` with the function's setting hoisted after `request.cookies`.
+| Phase | Measured | Per 100k blocks | Per 100k history rows |
+|---|---|---|---|
+| Preflight: blocks | 15 s | 30 s | |
+| Preflight: history, on the slow plan | 2 min 3 s | | doesn't scale: grows with the square of the history |
+| Flip | 11 ms on the server | | |
+| Bundle: this device's database | 11 s | | grows with that database |
+| Bundle: history, on the slow plan | 2 min 0 s | | doesn't scale |
+| Bundle: blocks | 12 s | 24 s | |
+| Bundle: attachments, then its check | 15 s, 7 s | | grows with attachment bytes |
+| Re-seal | 2 min 53 s | 5.7 min | |
+| Verify | 3 min 49 s | 7.6 min | |
+| Purge: 66,415 history rows plus 50,281 re-seal rows | 11.0 s on the server | | 9.4 s, of the two together |
+| Pin upgrade | 58 s | 1.9 min | |
+| Attachments: 12 objects | 46 s | | grows with attachment bytes |
+
+**What it showed:**
+- **The hosted PostgREST applies a function's own `statement_timeout`.** The purge ran 11 s, past `authenticated`'s 8 s limit, and succeeded. *(measured)*
 - **History reads depend on the planner's statistics.**
-  - The scratch workspace's history was written after the table's last `ANALYZE`. Its pages never used the `(workspace_id, event_id)` index; the index's scan counter showed none from them.
-  - Each page cost the rows still ahead of it, so the read sped up from 327 rows/s at the start to 1,645 rows/s at the end.
-  - With current statistics, the planner picks that index, and a page of 500 took 26–78 ms on the server.
-  - That is why the checklist's step 6 runs `ANALYZE`. On a history of hundreds of thousands of rows, the slow plan would put every page past the 8 s limit, and halving the page size does not shrink that cost.
-- **Re-seal and verify set the length of the run:** about 13 minutes per 100k blocks between them.
-- **A device whose local database is gone re-downloads everything before it can ask for the key.** It shows only "Loading workspace…" while it does, about 2.3 minutes for 50k sealed rows.
+  - **What happened.** The scratch history had been written after the table's last `ANALYZE`, and its pages never used the `(workspace_id, event_id)` index. The cost of a page fell as the cursor advanced: the read ran at 327 rows/s at the start and 1,645 rows/s at the end, and its slowest page took 1.85 s with about 66k rows still ahead. *(measured)*
+  - **With current statistics,** the planner picks that index, and a page of 500 took 26–78 ms on the server. *(measured on a smaller workspace)*
+  - **Why it matters at scale.** The slow plan reads every row still ahead of the page. From about 290k rows ahead, a page passes the 8 s limit, and halving the page size doesn't help. Hence (c). *(inferred)*
+- **Re-seal and verify set the run's length:** about 13 minutes per 100k blocks between them. That holds at the rehearsal's ratio of about 1.3 history rows per block; a history much larger than its blocks shifts the weight to the two history reads.
+- **A device whose local copy was gone** showed only "Loading workspace…" for 2.3 minutes while it downloaded 50k sealed rows, then asked for the key. *(measured)*
 
 **After:**
 
@@ -341,6 +380,9 @@ What it showed:
       - The hourly Supabase Health probe fails `replication_slots` while two slots exist.
       - Its slot count is no proof on its own: a Defragment that fails also ends with one slot, the old one.
     - Then open the other devices one at a time, and paste the key on each.
+      - **A device whose local copy is gone** shows only "Loading workspace…" until it has downloaded everything: about 4.6 minutes per 100k rows in the rehearsal.
+      - **A device whose copy is intact** opens the old view until its download reaches the flip. Writes it makes meanwhile go up as plaintext, and the server refuses them ([§3](#3-the-single-client-contract)). Once it's unlocked, open **Rejected sync changes** and press **Retry** on each. *(from the design; the rehearsal didn't cover it)*
+      - Either way, don't clear site data (step 2).
     - Once every device is back, the owner runs **Clean up attachments** ([§3](#3-the-single-client-contract)). Its report must list no object left in place; investigate any it does before going on.
 11. **Operator: `VACUUM FULL`** on five tables: `blocks`, `blocks_history`, `storage.objects` and `workspaces`, then `pg_catalog.pg_statistic`.
     - It takes ACCESS EXCLUSIVE locks, which block reads **and** writes on each table for a time proportional to the table's **total** size across all workspaces. Schedule it.
