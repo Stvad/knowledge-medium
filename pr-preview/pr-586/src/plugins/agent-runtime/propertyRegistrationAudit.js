@@ -1,1 +1,1 @@
-import{Dd as e,Ed as t,Od as n,kd as r}from"../../../chunks/app-Bhg-gPTt.js";export{t as PROVENANCE_BLOCKS_PER_KEY,e as PROVENANCE_KEY_LIMIT,n as auditPropertyRegistration,r as describeUnregisteredProperty};
+import{Dd as e,Ed as t,Od as n,kd as r}from"../../../chunks/app-CIf3Ornw.js";export{t as PROVENANCE_BLOCKS_PER_KEY,e as PROVENANCE_KEY_LIMIT,n as auditPropertyRegistration,r as describeUnregisteredProperty};

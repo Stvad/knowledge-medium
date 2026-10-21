@@ -1,1 +1,1 @@
-import{MA as e,NA as t}from"../../chunks/app-Bhg-gPTt.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
+import{MA as e,NA as t}from"../../chunks/app-CIf3Ornw.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

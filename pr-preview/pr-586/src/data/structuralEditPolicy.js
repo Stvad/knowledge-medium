@@ -1,1 +1,1 @@
-import{RO as e,zO as t}from"../../chunks/app-Bhg-gPTt.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{RO as e,zO as t}from"../../chunks/app-CIf3Ornw.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

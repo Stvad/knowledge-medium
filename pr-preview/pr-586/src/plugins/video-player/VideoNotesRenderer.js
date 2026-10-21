@@ -1,1 +1,1 @@
-import{Dv as e,Ev as t,Ov as n,kv as r}from"../../../chunks/app-Bhg-gPTt.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutRegistration,r as videoNotesRendererRegistration};
+import{Dv as e,Ev as t,Ov as n,kv as r}from"../../../chunks/app-CIf3Ornw.js";export{t as VideoNotesLayout,e as VideoNotesRenderer,n as videoNotesLayoutRegistration,r as videoNotesRendererRegistration};

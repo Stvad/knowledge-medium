@@ -1,1 +1,1 @@
-import{Nt as e,Pt as t}from"../../../chunks/app-Bhg-gPTt.js";export{e as decideWorkspaceEntry,t as resolveWorkspaceAccess};
+import{Nt as e,Pt as t}from"../../../chunks/app-CIf3Ornw.js";export{e as decideWorkspaceEntry,t as resolveWorkspaceAccess};

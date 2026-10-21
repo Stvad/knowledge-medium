@@ -1,1 +1,1 @@
-import{fA as e,pA as t}from"../../../chunks/app-Bhg-gPTt.js";export{e as CodeMirrorExtensionBlockRenderer,t as codeMirrorExtensionRendererRegistration};
+import{fA as e,pA as t}from"../../../chunks/app-CIf3Ornw.js";export{e as CodeMirrorExtensionBlockRenderer,t as codeMirrorExtensionRendererRegistration};

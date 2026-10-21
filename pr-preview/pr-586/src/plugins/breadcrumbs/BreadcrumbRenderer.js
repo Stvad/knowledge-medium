@@ -1,1 +1,1 @@
-import{$b as e,Qb as t}from"../../../chunks/app-Bhg-gPTt.js";export{t as BreadcrumbRenderer,e as breadcrumbRendererRegistration};
+import{$b as e,Qb as t}from"../../../chunks/app-CIf3Ornw.js";export{t as BreadcrumbRenderer,e as breadcrumbRendererRegistration};

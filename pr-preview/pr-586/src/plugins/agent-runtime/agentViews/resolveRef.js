@@ -1,1 +1,1 @@
-import{ap as e,ip as t,np as n,rp as r}from"../../../../chunks/app-Bhg-gPTt.js";export{n as BlockRefError,r as MIN_ID_PREFIX,t as resolveBlockRef,e as shortIds};
+import{ap as e,ip as t,np as n,rp as r}from"../../../../chunks/app-CIf3Ornw.js";export{n as BlockRefError,r as MIN_ID_PREFIX,t as resolveBlockRef,e as shortIds};

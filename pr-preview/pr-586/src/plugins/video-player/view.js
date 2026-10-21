@@ -1,1 +1,1 @@
-import{Gv as e,Kv as t,Wv as n}from"../../../chunks/app-Bhg-gPTt.js";export{n as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,t as videoNotesPaneRatioProp};
+import{Gv as e,Kv as t,Wv as n}from"../../../chunks/app-CIf3Ornw.js";export{n as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,t as videoNotesPaneRatioProp};

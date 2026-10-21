@@ -1,1 +1,1 @@
-import{Qb as e,Xb as t,Yb as n,Zb as r,ex as i,nx as a,tx as o}from"../../../chunks/app-Bhg-gPTt.js";export{a as BreadcrumbList,e as BreadcrumbRenderer,o as Breadcrumbs,r as PromotableBreadcrumbList,n as breadcrumbsPlugin,i as getBreadcrumbContentPreview,t as usePromotableBreadcrumb};
+import{Qb as e,Xb as t,Yb as n,Zb as r,ex as i,nx as a,tx as o}from"../../../chunks/app-CIf3Ornw.js";export{a as BreadcrumbList,e as BreadcrumbRenderer,o as Breadcrumbs,r as PromotableBreadcrumbList,n as breadcrumbsPlugin,i as getBreadcrumbContentPreview,t as usePromotableBreadcrumb};

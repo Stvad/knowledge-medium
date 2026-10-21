@@ -1,1 +1,1 @@
-import{a_ as e,i_ as t,o_ as n}from"../../../chunks/app-Bhg-gPTt.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,n as mediaBlockId};
+import{a_ as e,i_ as t,o_ as n}from"../../../chunks/app-CIf3Ornw.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,n as mediaBlockId};

@@ -1,1 +1,1 @@
-import{IM as e}from"../../chunks/app-Bhg-gPTt.js";export{e as ExtensionRenderBoundary};
+import{IM as e}from"../../chunks/app-CIf3Ornw.js";export{e as ExtensionRenderBoundary};

@@ -1,1 +1,1 @@
-import{ng as e,rg as t,tg as n}from"../../../chunks/app-Bhg-gPTt.js";export{n as CLEANUP_ATTACHMENTS_ACTION_ID,e as cleanupAttachmentsAction,t as prepareCleanup};
+import{ng as e,rg as t,tg as n}from"../../../chunks/app-CIf3Ornw.js";export{n as CLEANUP_ATTACHMENTS_ACTION_ID,e as cleanupAttachmentsAction,t as prepareCleanup};

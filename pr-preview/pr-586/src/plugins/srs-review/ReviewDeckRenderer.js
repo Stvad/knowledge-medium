@@ -1,1 +1,1 @@
-import{vs as e,ys as t}from"../../../chunks/app-Bhg-gPTt.js";export{e as SrsReviewDeckRenderer,t as srsReviewDeckRendererRegistration};
+import{vs as e,ys as t}from"../../../chunks/app-CIf3Ornw.js";export{e as SrsReviewDeckRenderer,t as srsReviewDeckRendererRegistration};

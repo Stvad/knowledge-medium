@@ -1,1 +1,1 @@
-import{nC as e,rC as t,vC as n,yC as r}from"../../../chunks/app-Bhg-gPTt.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};
+import{nC as e,rC as t,vC as n,yC as r}from"../../../chunks/app-CIf3Ornw.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};
