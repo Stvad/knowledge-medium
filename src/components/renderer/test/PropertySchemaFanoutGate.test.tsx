@@ -189,9 +189,9 @@ const renameTo = async (next: string) => {
   await session.tab()
 }
 
-const storedName = async (): Promise<unknown> => {
+const storedName = async (blockId = SCHEMA_ID): Promise<unknown> => {
   const row = await sharedDb.db.get<{properties_json: string}>(
-    'SELECT properties_json FROM blocks WHERE id = ?', [SCHEMA_ID],
+    'SELECT properties_json FROM blocks WHERE id = ?', [blockId],
   )
   return (JSON.parse(row.properties_json) as Record<string, unknown>)['property-schema:name']
 }
@@ -410,6 +410,90 @@ describe('renaming a property with many consumers', () => {
     await waitFor(async () => { expect(await storedName()).toBe('test:renamed') })
     expect(screen.queryByText(/Rename “test:myProp”/)).toBeNull()
     expect(seen).toEqual([])
+  })
+})
+
+describe('a change that cannot go ahead', () => {
+  const NOT_OPEN = /its workspace is no longer the one open/
+
+  it('asks nothing about a workspace the user switched away from', async () => {
+    vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockImplementation(async () => {
+      repo.setActiveWorkspaceId('ws-elsewhere')
+      return 4_000
+    })
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledWith(expect.stringMatching(NOT_OPEN)) })
+    expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull()
+    expect(await storedName()).toBe('test:myProp')
+    await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
+  })
+
+  it('opens no run when the workspace changed while the user was deciding', async () => {
+    consumersAre(4_000)
+    const seen = recordFanoutRuns()
+    renderSchema()
+    await renameTo('test:renamed')
+    await screen.findByRole('button', {name: 'Rename'})
+
+    repo.setActiveWorkspaceId('ws-elsewhere')
+    await user().click(screen.getByRole('button', {name: 'Rename'}))
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledWith(expect.stringMatching(NOT_OPEN)) })
+    expect(seen).toEqual([])
+    expect(await storedName()).toBe('test:myProp')
+  })
+
+  it('says why when the switch lands inside the transaction itself', async () => {
+    consumersAre(0)
+    const tx = repo.tx.bind(repo)
+    vi.spyOn(repo, 'tx').mockImplementationOnce((fn, options) => {
+      repo.setActiveWorkspaceId('ws-elsewhere')
+      return tx(fn, options)
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledWith(expect.stringMatching(NOT_OPEN)) })
+    expect(consoleError).not.toHaveBeenCalled()
+    expect(await storedName()).toBe('test:myProp')
+  })
+
+  it('names a schema block that has no name yet', async () => {
+    // A block tagged `property-schema` before it is named is a live editor
+    // subject that is not a PUBLISHED definition yet; the first name is what
+    // publishes it.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'unnamed-schema', workspaceId: WS, parentId: 'root', orderKey: 'a4', content: '',
+        properties: {types: ['property-schema'], 'property-schema:preset': 'string'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    consumersAre(0)
+    renderSchema('unnamed-schema')
+
+    await renameTo('test:named')
+
+    await waitFor(async () => { expect(await storedName('unnamed-schema')).toBe('test:named') })
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('treats a failure before the transaction as not written, cleanup and all', async () => {
+    vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockRejectedValue(new Error('count failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    renderSchema()
+
+    await renameTo('test:renamed')
+
+    await waitFor(() => {
+      expect(showError).toHaveBeenCalledWith('The property could not be changed. See the console.')
+    })
+    await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
+    expect(await storedName()).toBe('test:myProp')
   })
 })
 

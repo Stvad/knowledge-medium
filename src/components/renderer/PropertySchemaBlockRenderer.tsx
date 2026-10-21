@@ -26,7 +26,6 @@ import {
   type Tx,
 } from '@/data/api'
 import { decodeRowProperty } from '@/data/rowProperty.js'
-import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -40,6 +39,7 @@ import {
   isLargeFanout,
   markPropertyDefinitionFanoutRunning,
   queueDefinitionChange,
+  type PropertyDefinitionFanoutRun,
 } from '@/data/propertyDefinitionFanout.js'
 import {
   ConfirmDefinitionChangeDialog,
@@ -91,6 +91,10 @@ type PlanResult = PlannedChange | {skip: string | null}
 const OVERTAKEN = (name: string): string =>
   `“${name}” changed before this was applied, so nothing was written. `
   + 'The editor is showing where it stands now — make the change again from there.'
+
+const NOT_OPEN =
+  'The property was not changed: its workspace is no longer the one open. '
+  + 'Open it again and make the change there.'
 
 const TX_DESCRIPTIONS: Record<DefinitionChangeKind, string> = {
   rename: 'rename property',
@@ -200,94 +204,89 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const throughFanoutGate = useCallback((
     plan: (atStart: DefinitionFacts) => PlanResult,
   ): Promise<boolean> => queueDefinitionChange(async () => {
-    // The definition's OWN workspace, never the active one — this renderer is
-    // mounted per block. With no row loaded there is nothing to scope the
-    // count to, and no gesture either: every control below renders from `data`.
-    const workspaceId = data?.workspaceId
-    if (workspaceId === undefined) return false
-    // From SQL, not from the render snapshot this closure captured: the point
-    // of planning at start is that the row may have moved since.
-    const atStart = await block.repo.load(block.id)
-    if (atStart === null) return false
-    const planned = plan(definitionFacts(atStart.properties))
-    if ('skip' in planned) {
-      if (planned.skip !== null) showError(planned.skip)
+    // Every await from the read to the commit can throw, and one that escapes
+    // leaves a void event handler holding the rejection and the caller's
+    // cleanup unrun — so a throw anywhere is one more way of not writing.
+    let workspaceId: string | null = null
+    let run: PropertyDefinitionFanoutRun | null = null
+    const isOpen = (id: string): boolean => block.repo.activeWorkspaceId === id
+    const notOpen = (): false => {
+      showError(NOT_OPEN)
       return false
     }
-    const {change, stillCurrent, write} = planned
-    const consumers = await block.repo.countPropertyDefinitionConsumers(
-      block.id, workspaceId,
-    )
-    const large = isLargeFanout(consumers)
-    if (large) {
-      const confirmed = await openDialog(
-        ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
-      )
-      if (confirmed !== true) return false
-    }
-    const run = large
-      ? beginPropertyDefinitionFanout(
-        workspaceId, block.id, change.propertyName, consumers,
-      )
-      : null
-    // Three outcomes, not two. A kernel REFUSAL (a re-type that would discard
-    // stored values, say) comes out of `repo.tx` as a throw, and a caller
-    // that let it escape leaves its cleanup unrun and a void event handler
-    // holding an unhandled rejection.
-    //
-    // `guardPassed` is what the CALLBACK reached, `wrote` is what the
-    // TRANSACTION did, and they are not the same moment: same-tx processors
-    // run after the callback returns, so the fan-out this change asks for
-    // can still refuse it — the commonest refusal there is. Success is
-    // therefore only assignable once `repo.tx` resolves.
-    let guardPassed = false
-    let wrote = false
-    let refused = false
     try {
+      // From SQL, not from the render snapshot this closure captured: the
+      // point of planning at start is that the row may have moved since.
+      const atStart = await block.repo.load(block.id)
+      if (atStart === null) return false
+      // The definition's OWN workspace — this renderer is mounted per block.
+      const ws = atStart.workspaceId
+      workspaceId = ws
+      const planned = plan(definitionFacts(atStart.properties))
+      if ('skip' in planned) {
+        if (planned.skip !== null) showError(planned.skip)
+        return false
+      }
+      const {change, stillCurrent, write} = planned
+      const consumers = await block.repo.countPropertyDefinitionConsumers(block.id, ws)
+      const large = isLargeFanout(consumers)
+      // `repo.tx` admits writes to the workspace open when it starts and no
+      // other, and the user can switch while this waits. Asked before the
+      // confirmation, so nobody is asked about a workspace they left, and
+      // again after it, so no run opens for a write that cannot land.
+      if (!isOpen(ws)) return notOpen()
+      if (large) {
+        const confirmed = await openDialog(
+          ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
+        )
+        if (confirmed !== true) return false
+        if (!isOpen(ws)) return notOpen()
+        run = beginPropertyDefinitionFanout(ws, block.id, change.propertyName, consumers)
+      }
+      let applied = false
       await block.repo.tx(async tx => {
         const current = await tx.get(block.id)
-        // A row that is no longer a PUBLISHED definition is not one to edit,
-        // and a tombstone is the reachable case: `tx.get` hands one back, its
-        // bag still reads as it did, so comparing the bag alone would write
-        // through to a deleted row. The fan-out then skips it — the processor
-        // stops at a deleted `after` — and a later restore fans nothing out
-        // either, because by then both sides of the restore carry the edit.
-        // Consumers are left under the old name or encoding with nothing to
-        // re-derive them. `parsePropertyDefinitionMetadata` is the existing
-        // owner of that question, so it answers it here rather than a list of
-        // states kept in step by hand.
-        if (current === null || parsePropertyDefinitionMetadata(current) === null) return
+        // `tx.get` hands back a TOMBSTONE with its bag intact, so comparing
+        // the bag alone would write through to a deleted definition — which
+        // the fan-out then skips, leaving its consumers under the old name or
+        // encoding with nothing to re-derive them. Deleted, not "unpublished":
+        // a schema block with no name yet is one this editor exists to name.
+        if (current === null || current.deleted) return
         if (!stillCurrent(definitionFacts(current.properties))) return
         // From INSIDE the transaction, which is the only thing that makes a
         // progress report attributable: a run opens at the confirmation, and
         // a headless change to the same definition can hold the writer in
         // that gap. The writer is exclusive, so once this is set, whatever
         // reports next is this transaction's fan-out.
-        markPropertyDefinitionFanoutRunning(workspaceId, block.id)
+        markPropertyDefinitionFanoutRunning(ws, block.id)
         await write(tx)
-        guardPassed = true
+        applied = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
-      wrote = guardPassed
-    } catch (error) {
-      refused = true
-      // `repo.tx` notifies the user-error channel before it rethrows, so a
-      // rejection has already said why in the kernel's own words and ours
-      // would only contradict it. Anything else has told nobody.
-      if (!(error instanceof ProcessorRejection)) {
-        console.error('[PropertySchemaContentRenderer] the change failed:', error)
-        showError(`“${change.propertyName}” could not be changed. See the console.`)
+      // Read only once `repo.tx` has RESOLVED: same-tx processors run after
+      // the callback returns, so the fan-out can still refuse a change the
+      // callback reached the end of.
+      if (!applied) {
+        showError(
+          `“${change.propertyName}” changed somewhere else before this was applied, `
+          + 'so nothing was written. Take another look and try again.',
+        )
       }
+      return applied
+    } catch (error) {
+      // `repo.tx` notifies the user-error channel before it rethrows, so a
+      // kernel refusal has already said why in its own words and ours would
+      // only contradict it. Anything else has told nobody — and a switch that
+      // lands inside `repo.tx`, after the checks above, is refused there with
+      // an error that says nothing a user can act on.
+      if (error instanceof ProcessorRejection) return false
+      if (workspaceId !== null && !isOpen(workspaceId)) return notOpen()
+      console.error('[PropertySchemaContentRenderer] the change failed:', error)
+      showError('The property could not be changed. See the console.')
+      return false
     } finally {
       run?.end()
     }
-    if (!wrote && !refused) {
-      showError(
-        `“${change.propertyName}” changed somewhere else while you were deciding, `
-        + 'so nothing was written. Take another look and try again.',
-      )
-    }
-    return wrote
-  }), [block, data])
+  }), [block])
 
   const decodedConfig = useMemo<unknown>(() => {
     if (!preset?.configCodec) return undefined
@@ -531,9 +530,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             value={presetId}
             disabled={readOnly}
-            // The gate owns the refusal now — it catches it, leaves the
-            // kernel's own message standing, and reports a non-write to the
-            // caller — so there is nothing left here to catch.
+            // `void`, not a catch: the gate turns every failure into a
+            // non-write, so `writePresetId` does not reject.
             onChange={(e) => { void writePresetId(e.target.value) }}
           >
             {presetEntries.map(p => (

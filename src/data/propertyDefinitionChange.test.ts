@@ -410,6 +410,21 @@ describe('consumingParentIds', () => {
   })
 })
 
+describe('anyBlockHoldsFieldRowFor', () => {
+  it('looks past a chunk that holds nothing', async () => {
+    const calls: unknown[][] = []
+    const db = {
+      getOptional: async <T,>(_sql: string, params?: unknown[]): Promise<T | null> => {
+        calls.push(params ?? [])
+        return (params?.[1] === 'f2' ? {held: 1} : null) as T | null
+      },
+    }
+
+    expect(await anyBlockHoldsFieldRowFor(db, WS, ['f1', 'f2'], 1)).toBe(true)
+    expect(calls.map(params => params[1])).toEqual(['f1', 'f2'])
+  })
+})
+
 describe('rename', () => {
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
@@ -501,9 +516,8 @@ describe('rename', () => {
   })
 
   it('skips a soft-deleted consumer instead of failing the whole edit', async () => {
-    // A tombstoned parent keeps its live field rows, so the consumer query
-    // still returns it — and `tx.update` on a tombstone throws, which would
-    // roll the user's rename back over a block they already deleted.
+    // A bare delete leaves the parent's field rows live, and re-keying a
+    // tombstone's bag is declined, so the walk's own query must leave it out.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p', 'status', 'done')
@@ -2402,9 +2416,9 @@ describe('sizing the fan-out before it starts', () => {
   })
 
   describe('while a deleted owner still holds the definition for the refusals', () => {
-    // Left out of the count and the walk, but not out of the refusals: its
-    // field rows still bind it to the definition by id, and a restore brings
-    // it back reading whatever that name resolves to then.
+    // A bare delete leaves the owner's field rows live: left out of the count
+    // and the walk, but not out of the refusals, since those rows still bind
+    // it to the definition by id.
     const FIELD_PEER = 'field-peer-sizing'
 
     const setupDeletedOnlyConsumer = async (): Promise<Repo> => {

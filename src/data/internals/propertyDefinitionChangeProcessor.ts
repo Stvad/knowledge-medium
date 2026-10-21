@@ -78,11 +78,12 @@
  *    bug this pass exists to fix.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The refusals split on that gate and
+ * `consumingParentIds`, which is its gate. The refusals split on field rows and
  * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
- * a consumer with no field row YET is invisible to it, while the unconvertible
- * refusal is a fact about values this pass actually read and so can only be
- * reached through it.
+ * a consumer with no field row YET is invisible to them, while the
+ * unconvertible refusal is a fact about values this pass actually read and so
+ * can only be reached through the walk. The contested and shared-name refusals
+ * ask the wider `anyBlockHoldsFieldRowFor`.
  */
 
 import {
@@ -616,12 +617,15 @@ const consumingParentsFromSql = (targetCount: number): string =>
       )`
 
 /** Whether any block holds a live field row for one of `fieldIds`, a DELETED
- *  block included — the question the refusals ask, which is wider than the
- *  fan-out's. Declining to re-key a deleted owner is a cost bound; it does not
- *  stop the owner depending on the definition. Its field rows still bind it
- *  by id, and a restore brings it back reading whatever that name resolves to
- *  by then, so a change that would leave the name contested or the cell
- *  unconverted is refused over it as over a live one. */
+ *  owner included — the question the contested and shared-name refusals ask,
+ *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
+ *  cost bound, not independence from the definition: while its field rows are
+ *  live they still bind it by id, and a restore brings it back reading
+ *  whatever the name resolves to then.
+ *
+ *  Only that shape: a subtree delete tombstones the field rows with the owner,
+ *  so a block deleted through the UI is not counted here, and a later restore
+ *  of it is #1023's to reconcile. */
 export const anyBlockHoldsFieldRowFor = async (
   db: Pick<SameTxCtx['db'], 'getOptional'>,
   workspaceId: string,
