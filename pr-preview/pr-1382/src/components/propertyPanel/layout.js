@@ -1,1 +1,1 @@
-import{OF as e,kF as t}from"../../../chunks/app-8SStuPs6.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};
+import{OF as e,kF as t}from"../../../chunks/app-i5mMCO1v.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};
