@@ -1,1 +1,1 @@
-import{QR as e}from"../../chunks/app-DCfu1mJX.js";export{e as usePropertySchemas};
+import{QR as e}from"../../chunks/app-CqspBX4P.js";export{e as usePropertySchemas};
