@@ -27,6 +27,7 @@ import {
   ProcessorRejection,
   propertyValue,
   type AnyJoinedValuePreset,
+  type AnyValuePresetCore,
   type BlockData,
   type Tx,
 } from '@/data/api'
@@ -111,6 +112,17 @@ const rowKind = (row: BlockData): RowKind => {
   if (parsePropertyDefinitionMetadata(row) !== null) return 'definition'
   if (!row.deleted && hasBlockType(row, PROPERTY_SCHEMA_TYPE)) return 'unpublished-schema'
   return 'other'
+}
+
+/** Whether this device builds a codec for the definition `row` describes. A
+ *  row that is no published definition has none to build, and is not refused
+ *  for it. */
+const typeBuildsHere = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+): boolean => {
+  const metadata = parsePropertyDefinitionMetadata(row)
+  return metadata === null || definitionSchema(row, presets, metadata).schema !== null
 }
 
 const withoutFirst = (names: readonly string[], name: string): readonly string[] => {
@@ -319,10 +331,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // While blocks use it, every change to a definition whose CURRENT type
       // builds nothing here is refused in its transaction, which says why —
       // so there is nothing to ask the user to approve.
-      const atStartMetadata = parsePropertyDefinitionMetadata(atStart)
-      const refusedInTx = atStartMetadata !== null
-        && definitionSchema(atStart, block.repo.valuePresetCores, atStartMetadata).schema === null
-      const large = isLargeFanout(consumers) && !refusedInTx
+      const refusedAnyway = !typeBuildsHere(atStart, block.repo.valuePresetCores)
+      const skipsConfirmation = isLargeFanout(consumers) && refusedAnyway
+      const large = isLargeFanout(consumers) && !refusedAnyway
       // `repo.tx` admits writes to the workspace open when it STARTS and no
       // other, and the user can switch while this waits. Asked before the
       // confirmation, so nobody is asked about a workspace they left, and
@@ -347,6 +358,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         // a deleted definition out too.
         if (current === null || rowKind(current) !== kindAtStart) return
         if (!stillCurrent(definitionFacts(current.properties))) return
+        // The confirmation was skipped because nothing would let this land; a
+        // type that builds NOW (its plugin loaded, a synced edit repaired it)
+        // would let it, so it must not land unasked.
+        if (skipsConfirmation && typeBuildsHere(current, block.repo.valuePresetCores)) return
         // Makes this transaction's reports attributable; see
         // `PropertyDefinitionFanoutSnapshot.transactionRunning`.
         markPropertyDefinitionFanoutRunning(block.id)
