@@ -1,1 +1,0 @@
-import{_G as e}from"../../../chunks/app-OYev4nhW.js";export{e as aliasDataExtension};
