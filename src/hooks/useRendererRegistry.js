@@ -1,1 +1,1 @@
-import{BA as e,HA as t,VA as n}from"../../chunks/app-Dky3xId6.js";export{t as defaultRegistry,e as refreshRendererRegistry,n as useRenderer};
+import{HA as e,UA as t,WA as n}from"../../chunks/app-CbrF0ltP.js";export{n as defaultRegistry,e as refreshRendererRegistry,t as useRenderer};
