@@ -41,6 +41,7 @@ import {
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyDefinitionClaimantsForName } from './propertyDefinitionRegistry'
 import {
+  anyBlockHoldsFieldRowFor,
   consumingParentIds,
   contestedChanges,
   type NameClaim,
@@ -55,6 +56,12 @@ import {
   migrationCompletedAtProp,
 } from './properties'
 import type { Repo } from './repo'
+import {
+  beginPropertyDefinitionFanout,
+  markPropertyDefinitionFanoutRunning,
+  propertyDefinitionFanout,
+  __resetPropertyDefinitionFanoutForTests,
+} from './propertyDefinitionFanout'
 
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
@@ -403,6 +410,21 @@ describe('consumingParentIds', () => {
   })
 })
 
+describe('anyBlockHoldsFieldRowFor', () => {
+  it('looks past a chunk that holds nothing', async () => {
+    const calls: unknown[][] = []
+    const db = {
+      getOptional: async <T,>(_sql: string, params?: unknown[]): Promise<T | null> => {
+        calls.push(params ?? [])
+        return (params?.[1] === 'f2' ? {held: 1} : null) as T | null
+      },
+    }
+
+    expect(await anyBlockHoldsFieldRowFor(db, WS, ['f1', 'f2'], 1)).toBe(true)
+    expect(calls.map(params => params[1])).toEqual(['f1', 'f2'])
+  })
+})
+
 describe('rename', () => {
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
@@ -494,9 +516,8 @@ describe('rename', () => {
   })
 
   it('skips a soft-deleted consumer instead of failing the whole edit', async () => {
-    // A tombstoned parent keeps its live field rows, so the consumer query
-    // still returns it — and `tx.update` on a tombstone throws, which would
-    // roll the user's rename back over a block they already deleted.
+    // A bare delete leaves the parent's field rows live, and re-keying a
+    // tombstone's bag is declined, so the walk's own query must leave it out.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p', 'status', 'done')
@@ -2138,9 +2159,9 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
   it('refuses although the definition has NO field row anywhere', async () => {
     // The WORST case, not an exempt one: a definition with no field rows is one
-    // whose every consumer is cell-only. The fan-out is dormant for it —
-    // `consumingParentIds` finds nothing — so a refusal that asked "does this
-    // have consumers" the way the two other refusals do would pass it through.
+    // whose every consumer is cell-only. The fan-out is dormant for it, and the
+    // field-row question the two other refusals ask finds nothing, so a
+    // refusal that asked it too would pass this through.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
@@ -2151,7 +2172,7 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
     })
     // The gate itself, asserted rather than assumed: it is blind to this
     // parent, which is why the refusal must not consult it.
-    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual([])
+    expect(await anyBlockHoldsFieldRowFor(sharedDb.db, WS, [FIELD_ID])).toBe(false)
     expect(await cell('cell-only')).toEqual({status: 'pending'})
   })
 
@@ -2336,5 +2357,169 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
     expect((await cell(FIELD_ID))[blockTypeLabelProp.name]).toBe('note')
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+})
+
+describe('sizing the fan-out before it starts', () => {
+  /** The gesture's count and the fan-out's walk answer the same question
+   *  through one predicate, so these are about what that predicate CALLS a
+   *  consumer — a number that over-reports asks the user to wait for work
+   *  that never happens, and one that under-reports lets the app freeze after
+   *  promising it would not. */
+  it('counts the parents the fan-out will actually visit, once each', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(2)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toHaveLength(2)
+  })
+
+  it('does not count a plain reference to the definition', async () => {
+    // An unmarked `((fieldId))` row is a link somebody wrote, not a field row,
+    // and the fan-out passes it by. Counting it would put a number in the
+    // confirmation that nothing in the transaction corresponds to.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await createHost(repo, 'mentions')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'mention-row', workspaceId: WS, parentId: 'mentions', orderKey: 'm0',
+        content: `((${FIELD_ID}))`,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the row DID resolve to the
+    // definition, so it is only the field-form bit keeping it out.
+    expect(await referenceTargetOf('mention-row')).toBe(FIELD_ID)
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+
+  it('leaves out an owner that is itself deleted', async () => {
+    // `deleted = 0` on the field row does not cover the OWNER, and a
+    // tombstoned block can still hold live field rows. The fan-out declines
+    // to re-key those, so counting them tells the user their change will
+    // rewrite blocks it then passes over — and on a graph with a long delete
+    // history that number is what decides whether they are asked at all.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+    await repo.tx(tx => tx.delete('p2'), {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the field row under the dead
+    // owner is still live, so only the owner's own state keeps it out.
+    expect(await liveFieldRow('p2', FIELD_ID)).toBeDefined()
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(1)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual(['p1'])
+  })
+
+  describe('while a deleted owner still holds the definition for the refusals', () => {
+    // A bare delete leaves the owner's field rows live: left out of the count
+    // and the walk, but not out of the refusals, since those rows still bind
+    // it to the definition by id.
+    const FIELD_PEER = 'field-peer-sizing'
+
+    const setupDeletedOnlyConsumer = async (): Promise<Repo> => {
+      await seedWorkspace('children')
+      const repo = makeRepo()
+      await createDefinition(repo, FIELD_PEER, 'count', 'number')
+      await awaitDefinition(repo, 'count', 'number')
+      await createDefinition(repo, FIELD_ID, 'status', 'string')
+      await awaitDefinition(repo, 'status', 'string')
+      await seedProperty(repo, 'gone', 'status', 'done')
+      await repo.tx(tx => tx.delete('gone'), {scope: ChangeScope.BlockDefault})
+      // The precondition both tests are about: nothing LIVE consumes either
+      // definition, so only the deleted owner can make the refusal fire.
+      expect(await liveFieldRow('gone', FIELD_ID)).toBeDefined()
+      expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+      return repo
+    }
+
+    it('refuses an unused definition taking its name', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(rename(repo, FIELD_PEER, 'status')).rejects.toMatchObject({
+        code: 'property.definition-change.shared-name',
+      })
+      expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('count')
+    })
+
+    it('refuses a rename onto a name another definition arrives at', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(repo.tx(async tx => {
+        await tx.setProperty(FIELD_ID, propertyNameProp, 'phase')
+        await tx.setProperty(FIELD_PEER, propertyNameProp, 'phase')
+      }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+        code: 'property.definition-change.contested',
+      })
+      expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    })
+  })
+
+  it('stops counting a consumer whose field row is gone', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await repo.tx(tx => tx.unsetProperty('p1', schemaFor(repo, 'status')),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+})
+
+describe('reporting fan-out progress', () => {
+  afterEach(() => { __resetPropertyDefinitionFanoutForTests() })
+
+  it('reports into a run the gesture opened', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 1)
+    try {
+      expect(propertyDefinitionFanout()?.done).toBeNull()
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
+
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanout()).toMatchObject({done: 1, total: 1})
+    } finally {
+      run.end()
+    }
+    expect(propertyDefinitionFanout()).toBeNull()
+  })
+
+  it('reports the LAST consumer, whatever the stride lands on', async () => {
+    // Without it the surface sits at the previous stride for the whole tail —
+    // "1,000 of 1,124 blocks updated" while the transaction commits, and then
+    // it vanishes. Three consumers is the cheapest total that is neither 1
+    // nor a multiple of the stride.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    for (const id of ['p1', 'p2', 'p3']) await seedProperty(repo, id, 'status', 'done')
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 3)
+    try {
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanout()).toMatchObject({done: 3, total: 3})
+    } finally {
+      run.end()
+    }
+  })
+
+  it('opens no surface of its own for a caller that did not ask for one', async () => {
+    // A headless rename — the agent CLI, an importer — has nobody to show a
+    // modal to, and a store entry nothing clears would strand one over the
+    // next tab that reads it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(propertyDefinitionFanout()).toBeNull()
   })
 })
