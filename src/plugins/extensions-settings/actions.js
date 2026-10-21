@@ -1,1 +1,1 @@
-import{or as e}from"../../../chunks/app-D957Xrhx.js";export{e as openExtensionsSettingsAction};
+import{or as e}from"../../../chunks/app--KS_4ZsC.js";export{e as openExtensionsSettingsAction};

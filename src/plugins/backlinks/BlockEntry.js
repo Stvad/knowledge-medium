@@ -1,1 +1,1 @@
-import{km as e}from"../../../chunks/app-D957Xrhx.js";export{e as LazyBlockEntry};
+import{km as e}from"../../../chunks/app--KS_4ZsC.js";export{e as LazyBlockEntry};

@@ -1,1 +1,1 @@
-import{vm as e}from"../../../../chunks/app-D957Xrhx.js";export{e as inlineBacklinksApplies};
+import{vm as e}from"../../../../chunks/app--KS_4ZsC.js";export{e as inlineBacklinksApplies};
