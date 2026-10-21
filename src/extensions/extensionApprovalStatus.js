@@ -1,1 +1,1 @@
-import{dk as e,fk as t,mk as n,pk as r}from"../../chunks/app-CTPbtAv5.js";export{e as ExtensionApprovalStatusProvider,t as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,n as useExtensionApprovalStatuses};
+import{dk as e,fk as t,mk as n,pk as r}from"../../chunks/app-QxvdFvHz.js";export{e as ExtensionApprovalStatusProvider,t as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,n as useExtensionApprovalStatuses};

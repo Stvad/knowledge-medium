@@ -1,1 +1,1 @@
-import{XO as e,YO as t}from"../../../chunks/app-CTPbtAv5.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{XO as e,YO as t}from"../../../chunks/app-QxvdFvHz.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

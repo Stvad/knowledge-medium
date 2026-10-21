@@ -1,1 +1,1 @@
-import{X2 as e}from"../../../chunks/app-CTPbtAv5.js";export{e as ancestorWalk};
+import{X2 as e}from"../../../chunks/app-QxvdFvHz.js";export{e as ancestorWalk};
