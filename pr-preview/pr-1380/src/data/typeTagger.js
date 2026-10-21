@@ -1,1 +1,1 @@
-import{iJ as e,rJ as t}from"../../chunks/app-BoIiFl9L.js";export{t as TypeTagger,e as applyTypeTagInTx};
+import{iJ as e,rJ as t}from"../../chunks/app-kR7huhoa.js";export{t as TypeTagger,e as applyTypeTagInTx};

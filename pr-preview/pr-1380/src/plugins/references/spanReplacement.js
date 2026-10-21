@@ -1,1 +1,1 @@
-import{QB as e}from"../../../chunks/app-BoIiFl9L.js";export{e as preferredSpanReplacement};
+import{QB as e}from"../../../chunks/app-kR7huhoa.js";export{e as preferredSpanReplacement};
