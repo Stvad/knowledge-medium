@@ -1,1 +1,0 @@
-import{QS as e}from"../../../chunks/app-DnIZnQkO.js";export{e as TypeChip};

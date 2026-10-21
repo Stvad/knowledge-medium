@@ -1,3 +1,0 @@
-import{defineVerbFacet as e}from"../facets/verbFacet.js";var t=e({id:`core.paste-decision`,defaultImpl:e=>e.intent===`single-block`?{kind:`single-block`}:e.text.includes(`
-`)?{kind:`split`}:e.surface===`editor`?{kind:`single-block`}:{kind:`split`},onError:`fallback`,validateResult:e=>e!=null&&(e.kind===`single-block`||e.kind===`split`||e.kind===`media`)&&(e.text===void 0||typeof e.text==`string`)});export{t as pasteDecisionVerb};
-//# sourceMappingURL=decision.js.map

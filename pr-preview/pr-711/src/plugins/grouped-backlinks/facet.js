@@ -1,2 +1,0 @@
-import{defineFacet as e}from"../../facets/facet.js";var t=e({id:`grouped-backlinks.group-header-actions`,validate:e=>typeof e==`object`&&!!e&&typeof e.actionId==`string`});export{t as groupedBacklinksGroupHeaderActionsFacet};
-//# sourceMappingURL=facet.js.map

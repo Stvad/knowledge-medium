@@ -1,2 +1,0 @@
-import{Facet as e}from"../../node_modules/.pnpm/@codemirror_state@6.6.0/node_modules/@codemirror/state/dist/index.js";var t=e.define({combine:e=>e[0]??null}),n=e=>{e.state.facet(t)?.()};export{t as editorContentFlushFacet,n as flushEditorContent};
-//# sourceMappingURL=contentFlush.js.map

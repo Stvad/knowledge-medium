@@ -1,2 +1,0 @@
-import{cn as e}from"../lib/utils.js";import{c as t}from"react/compiler-runtime";import{jsx as n}from"react/jsx-runtime";var r=` › `,i=i=>{let a=t(7),{crumbs:o,className:s}=i,c;a[0]===s?c=a[1]:(c=e(`h-4 min-w-0 truncate text-xs leading-4 text-muted-foreground`,s),a[0]=s,a[1]=c);let l;a[2]===o?l=a[3]:(l=o&&o.length>0?o.join(r):null,a[2]=o,a[3]=l);let u;return a[4]!==c||a[5]!==l?(u=n(`div`,{className:c,"data-block-crumbs":``,children:l}),a[4]=c,a[5]=l,a[6]=u):u=a[6],u};export{i as BlockCrumbs};
-//# sourceMappingURL=BlockCrumbs.js.map
