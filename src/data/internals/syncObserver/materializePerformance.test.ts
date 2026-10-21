@@ -4,7 +4,7 @@ import type {BlockData} from '@/data/api'
 import type {PowerSyncDb} from '@/data/internals/commitPipeline'
 import {MAX_IDS_PER_IN_CLAUSE} from '@/data/internals/sqlBinds'
 import {encodeForWire} from '@/sync/transform'
-import {materializeStagingRows} from './materialize'
+import {materializeStagingRows, type MaterializeOutcome} from './materialize'
 import {constMat, noKey, setupObserverTestDb, stagingCiphertextParams} from './test/harness'
 
 const h = setupObserverTestDb()
@@ -87,6 +87,7 @@ it('decodes other records while one crypto operation is pending, before opening 
   const pass = materializeStagingRows(h.env.db, {upserted: records.map(b => b.id), removed: []}, {
     getMaterializability: constMat('decrypt'), getCek: async () => key,
   })
+  let outcome!: MaterializeOutcome
   try {
     await vi.waitFor(() => expect(calls).toBeGreaterThan(3))
     expect(txSpy).not.toHaveBeenCalled()
@@ -94,10 +95,14 @@ it('decodes other records while one crypto operation is pending, before opening 
     expect(peak).toBeLessThan(records.length)
   } finally {
     release()
-    await pass
-    spy.mockRestore()
-    txSpy.mockRestore()
+    try { outcome = await pass }
+    finally {
+      spy.mockRestore()
+      txSpy.mockRestore()
+    }
   }
+  expect(outcome.applied).toEqual(records.map(b => b.id))
+  expect([...outcome.snapshots.values()].map(s => s.after?.content)).toEqual(records.map(b => b.content))
   expect(await h.blocks()).toEqual(records.map(b => ({id: b.id, content: b.content})))
 })
 
