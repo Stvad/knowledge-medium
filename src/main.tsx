@@ -4,8 +4,7 @@
 // into an overridable seam — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
 // See docs/perspective-keep-alive-design.html.
-import React, { StrictMode, Suspense } from 'react'
-import ReactDOM from 'react-dom'
+import { StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
 import './index.css'
@@ -38,10 +37,6 @@ installDbForensicsLifecycle()
 // L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).
 setDevAssertionsEnabled(import.meta.env.DEV)
-
-// Todo remember why I need this something about version mismatch/having implied react in custom blocks
-window.React = React
-window.ReactDOM = ReactDOM
 
 registerServiceWorker()
 

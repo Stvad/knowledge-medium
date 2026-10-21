@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { stageOf } from '@/sync/conversion/stage'
 import type { Workspace } from '@/types'
-import { CONVERSION_START_ENABLED, openConversionFlow } from './conversionFlowStore'
+import { openConversionFlow } from './conversionFlowStore'
 
 /** What the server shows of a conversion on this e2ee workspace: a stage still
  *  running, none, or a read that failed and so may be hiding one. */
@@ -29,7 +29,7 @@ const useConversionCheck = (workspaceId: string, userId: string, check: boolean)
 
 export function EncryptionSection({workspace, userId, onStart}: {workspace: Workspace, userId: string, onStart: () => void}) {
   const {result, retry} = useConversionCheck(workspace.id, userId, workspace.encryptionMode === 'e2ee')
-  const canStart = CONVERSION_START_ENABLED && workspace.encryptionMode === 'none'
+  const canStart = workspace.encryptionMode === 'none'
   if (!canStart && !result) return null
   if (result === 'unavailable') {
     return (

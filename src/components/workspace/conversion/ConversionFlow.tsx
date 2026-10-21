@@ -32,7 +32,8 @@ import {
 } from './attachmentPrompts'
 import type { ConversionSetup, ConversionUnavailable } from './conversionFlowDeps'
 import { ChooseBundleFolderPrompt, ChooseExistingBundlePrompt, ReopenBundleFolderPrompt } from './bundleFolderPrompts'
-import { Actions, ConfirmCheck, errorMessage, formatBytes } from './flowUi'
+import { Actions, ConfirmCheck, errorMessage } from './flowUi'
+import { formatBytes } from '@/utils/formatBytes'
 import { useConversionRun, type PromptChannel, type RunState } from './useConversionRun'
 
 interface Props {
@@ -524,25 +525,17 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
   }
 }
 
-/** Step 9: what is left to do, by the user and by the server's operator. */
+/** Step 9: what is left for the user to do. The operator's follow-ups live in
+ *  the runbook, not here. */
 function DoneView({bundleFolder, onClose}: {bundleFolder: string | null; onClose: () => void}) {
   return (
     <>
       <Explanation>This workspace is end-to-end encrypted.</Explanation>
       <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-        <li>Open each other device one at a time, and paste the key there.</li>
+        <li>Open each other device, and paste the key there.</li>
         <li>
-          Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key: if
-          the key is lost, the workspace is restored from the newest one.
-        </li>
-        <li>
-          For the server's operator: <span className="font-mono text-xs">VACUUM FULL</span> on blocks,
-          blocks_history, storage.objects and workspaces (it locks each table while it runs), and drop
-          leftover ad-hoc tables.
-        </li>
-        <li>
-          Server backups keep the old plaintext until they age out. A breach of a backup is safe only
-          once the longest retention window has passed since that clean-up.
+          Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key. If
+          the key is lost, this bundle is what the workspace can be restored from.
         </li>
       </ul>
       <Actions secondary={{label: 'Close', onClick: onClose}}/>

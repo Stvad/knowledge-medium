@@ -14,6 +14,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __setCompileImplForTest,
   __setTranspileImplForTest,
+  COMPILER_VERSION,
   hashExtensionSource,
   readApproval,
 } from '@/extensions/compileExtensionModule'
@@ -1385,7 +1386,7 @@ describe('agent runtime commands', () => {
       // Enabling pinned the live source on this device — the REAL block
       // content, not '' (findExtensionBlock must carry `content`).
       expect(await readApproval(installed.id)).toMatchObject({
-        compilerVersion: '2',
+        compilerVersion: COMPILER_VERSION,
         approvedSource: 'export default []',
       })
 

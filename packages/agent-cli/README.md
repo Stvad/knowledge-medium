@@ -71,7 +71,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
-| `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Active workspace only; refuses rather than mis-reporting. |
+| `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Past the flip, also `coverage`: registered cells with no property blocks, and what re-running the migration would write. Active workspace only; refuses rather than mis-reporting. |
 | `kmagent rematerialize-workspace [--scope unapplied\|all]` | Re-run the sync drain over rows this device downloaded but never applied — the remedy when a one-way pass refuses with "N synced row(s) … have not reached `blocks` on this device". Local-only and idempotent: uploads nothing, clears no undo history, safe to re-run. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
@@ -228,6 +228,14 @@ kmagent types --module '@/data/api'
 ```
 
 Single-module output is not bundled with its transitive dependencies; use the directory form above for editor/typechecker setup.
+
+## React in extensions
+
+`react` and `react-dom` are **host-provided peer dependencies**: an extension renders into the app's React tree, so it must run on the app's copy of React. A second copy fails with "Invalid hook call" and a context the host's components never see.
+
+- **Imports.** Write `import {useState} from 'react'` and `import {createRoot} from 'react-dom/client'`. The page import map resolves `react`, `react/…`, `react-dom` and `react-dom/…` to the host's modules, so the extension gets the same module instances the app uses; `react`, `react/jsx-runtime`, `react-dom` and `react-dom/client` are integrity-pinned.
+- **JSX.** The app's in-browser compiler uses the automatic JSX runtime: JSX becomes an import from `react/jsx-runtime`, which the import map resolves to the host's. No `import React` is needed, and the app sets no `React` / `ReactDOM` global, so import whatever you use. JSX no longer calls a local `React` binding, and a `/** @jsx */` or `/** @jsxFrag */` pragma fails to compile unless the file also says `/** @jsxRuntime classic */`.
+- **Bundled extensions** (`kmagent new-extension`) keep `react`, `react/*`, `react-dom`, `react-dom/*` and every `@/…` module external, and compile JSX with the automatic runtime (`@vitejs/plugin-react` does by default) so the bundle imports `react/jsx-runtime` instead of carrying a factory of its own. The `react` / `react-dom` entries in the scaffold's `devDependencies` supply types and the test environment only; they are never bundled.
 
 ## Upgrading
 

@@ -21,8 +21,8 @@
  *   - command_events.scope='block-default:references' on processor txs
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { ChangeScope, codecs, defineProperty, type AnyPostCommitProcessor, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -44,8 +44,10 @@ import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
+  cleanupOrphanAliasesProcessor,
   isExtensionSource,
   parseReferencesProcessor,
+  reapOrphanAliasSeatsProcessor,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -1717,6 +1719,51 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
   })
 })
 
+/** Runs `write` just before `processor` opens its write tx — after every
+ *  pre-tx read it made, so only a check inside that tx can see the write.
+ *  Writes are RAW: they keep the trigger-backed indexes current but fire no
+ *  processor, so no re-parse can repair the outcome before the assertion.
+ *  Returns whether the race completed — the write landed and the processor's
+ *  own tx then committed — for the precondition: the runner swallows an
+ *  `apply` rejection, so a failed write would otherwise look like a kept seat. */
+const raceBeforeWriteTx = (
+  processor: AnyPostCommitProcessor,
+  write: (db: TestDb['db']) => Promise<unknown>,
+): (() => boolean) => {
+  const apply = processor.apply
+  let injected = false
+  let raced = false
+  const spy = vi.spyOn(processor, 'apply').mockImplementation((event, ctx) => {
+    const racingRepo = Object.create(ctx.repo) as Repo
+    racingRepo.tx = async (fn, opts) => {
+      if (injected) return ctx.repo.tx(fn, opts)
+      injected = true
+      await write(env.h.db)
+      const result = await ctx.repo.tx(fn, opts)
+      raced = true
+      return result
+    }
+    return apply.call(processor, event, {...ctx, repo: racingRepo})
+  })
+  onTestFinished(() => spy.mockRestore())
+  return () => raced
+}
+
+const rawReferrer = (targetId: string, alias: string) => (db: TestDb['db']) =>
+  db.writeTransaction(tx => tx.execute(
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                         properties_json, references_json, created_at, updated_at,
+                         created_by, updated_by, deleted)
+     VALUES ('racing-referrer', ?, NULL, 'z0', ?, '{}', ?, 1, 1, 'u', 'u', 0)`,
+    [WS, `see [[${alias}]]`, JSON.stringify([{id: targetId, alias}])],
+  ))
+
+/** Drops `src`'s references without a processor seeing the drop. */
+const rawClearSource = (db: TestDb['db']) =>
+  db.writeTransaction(tx => tx.execute(
+    `UPDATE blocks SET content = '', references_json = '[]' WHERE id = 'src'`,
+  ))
+
 describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', () => {
   it('a rewrite (not a clear) that drops the last mark reaps the seat — the rename-window shape', async () => {
     await env.repo.tx(
@@ -1945,6 +1992,65 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     await env.repo.mutate.setContent({id: 'src', content: ''})
     await flush(5000)
     expect((await env.read(aliasId('baz')))!.deleted).toBe(0)
+  })
+
+  it('keeps a seat that gains a reference after the orphan probe, before the reap tx (in-tx referrer re-check)', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[raced]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('raced')
+    const raced = raceBeforeWriteTx(reapOrphanAliasSeatsProcessor, rawReferrer(seatId, 'raced'))
+
+    await env.repo.mutate.setContent({id: 'src', content: 'nothing now'})
+    await flush()
+
+    expect(raced()).toBe(true)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+
+  it('mint-time cleanup keeps a seat that gains a reference after its orphan probe, before the delete', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[fresh]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('fresh')
+    // The reference-drop reaper never sees this drop, so the pending 4s mint
+    // check is the one that finds the orphan.
+    await rawClearSource(env.h.db)
+    const raced = raceBeforeWriteTx(cleanupOrphanAliasesProcessor, rawReferrer(seatId, 'fresh'))
+
+    await flush(5000)
+
+    expect(raced()).toBe(true)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+
+  it('a seat reaped between a parse read phase and its write is restored by that parse re-firing', async () => {
+    // The other ordering of the same race, which no reap-side check can see:
+    // the parse resolved `[[back]]` to the live seat, and the reap committed
+    // before the parse's write. Raw tombstone = the row a reap leaves.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[back]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('back')
+    await rawClearSource(env.h.db)
+    const raced = raceBeforeWriteTx(parseReferencesProcessor, db => db.writeTransaction(tx =>
+      tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [seatId])))
+
+    await env.repo.tx(
+      tx => tx.create({id: 'late', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[back]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect(raced()).toBe(true)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect(JSON.parse((await env.read('late'))!.references_json)).toEqual([{id: seatId, alias: 'back'}])
   })
 
   it('keeps a seat the user ADOPTED between the orphan check and the reap tx (in-tx shape re-check)', async () => {

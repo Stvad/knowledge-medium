@@ -85,6 +85,10 @@ export interface PowerSyncDbChangeOptions {
 
 export interface PowerSyncDb {
   writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
+  /** One lease on the writer connection, with no transaction opened: for
+   *  statements that must run back to back with no other writer between them
+   *  (`writeAheadLog`'s drain, the raw-file export). */
+  writeLock<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>

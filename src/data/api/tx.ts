@@ -500,6 +500,17 @@ export interface Tx {
    *  own writes. */
   aliasesOf(blockId: string): Promise<string[]>
 
+  /** Does any LIVE block in `workspaceId` reference `targetId` by an edge in
+   *  `block_references`? Edges mirror the `references` column — committed, or
+   *  written in this tx — and the references parse derives that column
+   *  post-commit, so a link written into content or a property in THIS tx has
+   *  no edge yet and reads as no referrer.
+   *
+   *  The in-tx half of a delete-if-unreferenced decision: a probe taken before
+   *  the tx is stale by the time the lock is held, because a reference can
+   *  commit in between. */
+  hasLiveReferrer(targetId: string, workspaceId: string): Promise<boolean>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own

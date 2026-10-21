@@ -10,7 +10,7 @@
  * the flip materializes its own children.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -23,7 +23,7 @@ import type { WorkspaceBackfillContext } from '@/data/facets'
 import {
   CANDIDATE_SQL, PROPERTY_CELL_BACKFILL_ID, SCAN_PAGE, TARGET_INSERT_ROWS,
   flipBlockedByCellValues, onPropertyCellBackfillProgress, runPropertyCellBackfill,
-  surveyPropertyCellRejections,
+  surveyPropertyCellCoverage, surveyPropertyCellRejections,
 } from './propertyCellBackfill'
 
 const WS = 'ws-cell-backfill'
@@ -955,5 +955,128 @@ describe('the pre-flip survey of cells no codec will carry', () => {
     await create('b1', {'demo:note': 'fine', 'demo:tags': ['a', 'b']})
 
     expect(flipBlockedByCellValues(await surveyPropertyCellRejections(repo, WS))).toBeNull()
+  })
+})
+
+describe('the post-flip survey of cells with no property blocks', () => {
+  const NONE = {cells: 0, blocks: 0, keys: []}
+
+  it('finds a registered cell with no field row although every key registers', async () => {
+    // The class `audit-properties` used to be blind to: the key resolves, its
+    // value carries, the workspace is past the flip — and the owner still has
+    // no field row for it. Past the flip only a write around the per-write
+    // maintainers leaves this, so seeded with a raw cell write.
+    await create('b1', {'demo:note': 'migrated'})
+    await create('b2', {})
+    await flip()
+    expect((await run()).outcome).toBe('ran')
+    await rawCell('b2', {'demo:note': 'never got its blocks'})
+
+    const coverage = await surveyPropertyCellCoverage(repo, WS)
+
+    expect(coverage.missing).toEqual({
+      cells: 1, blocks: 1, keys: [{key: 'demo:note', cells: 1, blockIds: ['b2']}],
+    })
+    expect(coverage.refused).toEqual(NONE)
+    expect(coverage.deletedThroughChildren).toEqual(NONE)
+  })
+
+  it('agrees with the pass about what it writes, refuses and leaves alone', async () => {
+    // Running both over one graph is the only proof they decide alike: the
+    // survey is what an operator reads to size the repair, and afterwards to
+    // call it finished.
+    await create('covered', {'demo:note': 'migrated'})
+    await create('deleted', {'demo:note': 'deleted on a peer'})
+    await create('two-keys', {})
+    await create('refused', {})
+    await create('unregistered', {})
+    // A field row for a DIFFERENT property must not cover this owner's key —
+    // the count comparison the pass's own predicate replaced was fooled by it.
+    await create('stray', {})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'stray-field', workspaceId: WS, parentId: 'stray', orderKey: 'a0',
+        content: '::((00000000-0000-4000-8000-000000000000))',
+        referenceTargetId: '00000000-0000-4000-8000-000000000000',
+        isFieldForm: true,
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'unrelated field row'})
+    await flip()
+    await runPropertyCellBackfill(makeCtx())
+    const deletedField = (await fieldRowsOf('deleted'))[0]!
+    await sharedDb.db.execute(
+      `UPDATE blocks SET deleted = 1 WHERE id = ? OR parent_id = ?`,
+      [deletedField.id, deletedField.id])
+    await rawCell('two-keys', {'demo:note': 'a', 'demo:extra': 'b'})
+    await rawCell('stray', {'demo:note': 'c'})
+    await rawCell('refused', {'demo:note': {not: 'a string'}})
+    await rawCell('unregistered', {'demo:nobody-declares-this': 'x'})
+
+    const before = await surveyPropertyCellCoverage(repo, WS)
+    const progress = await runPropertyCellBackfill(makeCtx())
+    const after = await surveyPropertyCellCoverage(repo, WS)
+
+    expect(before.missing.cells).toBe(3)
+    expect(before.missing.blocks).toBe(2)
+    expect(before.missing.cells).toBe(progress.valuesMaterializedTotal)
+    expect(before.refused.cells).toBe(progress.failureCount)
+    expect(before.refused.keys).toEqual([{key: 'demo:note', cells: 1, blockIds: ['refused']}])
+    expect(before.deletedThroughChildren.keys)
+      .toEqual([{key: 'demo:note', cells: 1, blockIds: ['deleted']}])
+    expect(after.missing).toEqual(NONE)
+    expect(after.refused).toEqual(before.refused)
+    expect(after.deletedThroughChildren).toEqual(before.deletedThroughChildren)
+  })
+
+  it('counts a cell whose definition fieldId will not render as refused, as the pass does', async () => {
+    // The pass fails that key when it builds the field row, so calling it
+    // missing would promise a write no re-run makes — and a zero never reached.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+    const resolver = repo.propertySchemaResolverFor(WS)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      ...resolver,
+      resolve: ((name: string) => {
+        const resolution = resolver.resolve(name)
+        return name === 'demo:extra' && resolution.status === 'resolved'
+          ? {...resolution, schema: {...resolution.schema, fieldId: 'not a renderable id'}}
+          : resolution
+      }) as typeof resolver.resolve,
+    })
+
+    const coverage = await surveyPropertyCellCoverage(repo, WS)
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(coverage.missing.keys).toEqual([{key: 'demo:note', cells: 1, blockIds: ['b1']}])
+    expect(coverage.refused.keys).toEqual([{key: 'demo:extra', cells: 1, blockIds: ['b1']}])
+    expect(coverage.missing.cells).toBe(progress.valuesMaterializedTotal)
+    expect(coverage.refused.cells).toBe(progress.failureCount)
+  })
+
+  it('refuses a workspace whose registry is not loaded rather than reporting nothing missing', async () => {
+    // Past the retained previous workspace the resolver fails closed, so every
+    // key would read as unresolved and every bucket as empty.
+    await create('b1', {'demo:note': 'never got its blocks'})
+    await flip()
+    repo.setActiveWorkspaceId('ws-elsewhere')
+    repo.setActiveWorkspaceId('ws-elsewhere-too')
+
+    await expect(surveyPropertyCellCoverage(repo, WS)).rejects.toThrow(/registry is not loaded/)
+  })
+
+  it('reads every page, naming a few owners per key and counting all of them', async () => {
+    // Cursor-paginated like the pass, with the field rows read per page. A
+    // survey that stopped early would report a repair finished that was not.
+    const ids = await seedNotes(SCAN_PAGE + 5)
+    await flip()
+
+    const coverage = await surveyPropertyCellCoverage(repo, WS)
+
+    expect(coverage.blocksScanned).toBe(ids.length)
+    expect(coverage.missing.cells).toBe(ids.length)
+    expect(coverage.missing.blocks).toBe(ids.length)
+    expect(coverage.missing.keys).toEqual([
+      {key: 'demo:note', cells: ids.length, blockIds: ids.slice(0, 3)},
+    ])
   })
 })

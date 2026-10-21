@@ -58,6 +58,7 @@ import {
 } from '@/data/aliasSeatNamespace'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
+import { awaitWriteAheadHeadroom, runBulkWrite } from '@/data/writeAheadLog'
 import {
   parseRoamImportReferences,
   planImport,
@@ -370,117 +371,155 @@ export const importRoam = async (
     }
   }
 
-  // 4. Make sure the daily-note rows referenced by daily-page
-  //    reconciliations OR by daily-shaped aliases used in content
-  //    exist. getOrCreateDailyNote opens its own tx, sets up the
-  //    journal-page parent link, and is idempotent — first call per
-  //    iso writes, subsequent calls hit the repo cache. Folding into
-  //    the main import tx would require duplicating the journal
-  //    creation logic, and dailies are typically O(years) not
-  //    O(unique_aliases), so the gain isn't worth the duplication.
-  const dailyIsos = collectDailyIsos(
-    reconciliations,
-    aliasResolution.aliasIdMap,
-    plan.aliasesUsed,
-    plan.diagnostics,
-  )
-  if (dailyIsos.length > 0) log(`Materialising ${dailyIsos.length} daily notes…`)
-  // Throttle progress to every 100 dailies — emitting per-iteration
-  // would flood any UI banner with redraws when an export references
-  // years of dailies.
-  //
-  // Per-iso failure isolation: a single bad iso (e.g. one that slipped
-  // past the perimeter shape filter for some reason we haven't seen
-  // yet) shouldn't sink an otherwise-successful import. Catch, log to
-  // diagnostics, continue.
-  for (let i = 0; i < dailyIsos.length; i++) {
-    const iso = dailyIsos[i]
-    try {
-      await getOrCreateDailyNote(repo, options.workspaceId, iso)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      plan.diagnostics.push(`Failed to materialise daily note for ${iso}: ${message}`)
-      log(`Daily note ${iso} failed: ${message} — continuing`)
+  // Every write phase below is one bulk write: a long read on this device
+  // pauses it rather than letting the log grow, and the log is drained however
+  // the import ends — a failed chunk leaves as much behind as a finished import.
+  return runBulkWrite(repo.db, line => log(line ?? 'Resuming the import.'), async () => {
+    // 4. Make sure the daily-note rows referenced by daily-page
+    //    reconciliations OR by daily-shaped aliases used in content
+    //    exist. getOrCreateDailyNote opens its own tx, sets up the
+    //    journal-page parent link, and is idempotent — first call per
+    //    iso writes, subsequent calls hit the repo cache. Folding into
+    //    the main import tx would require duplicating the journal
+    //    creation logic, and dailies are typically O(years) not
+    //    O(unique_aliases), so the gain isn't worth the duplication.
+    const dailyIsos = collectDailyIsos(
+      reconciliations,
+      aliasResolution.aliasIdMap,
+      plan.aliasesUsed,
+      plan.diagnostics,
+    )
+    if (dailyIsos.length > 0) log(`Materialising ${dailyIsos.length} daily notes…`)
+    // Throttle progress to every 100 dailies — emitting per-iteration
+    // would flood any UI banner with redraws when an export references
+    // years of dailies.
+    //
+    // Per-iso failure isolation: a single bad iso (e.g. one that slipped
+    // past the perimeter shape filter for some reason we haven't seen
+    // yet) shouldn't sink an otherwise-successful import. Catch, log to
+    // diagnostics, continue.
+    for (let i = 0; i < dailyIsos.length; i++) {
+      const iso = dailyIsos[i]
+      await awaitWriteAheadHeadroom(repo.db)
+      try {
+        await getOrCreateDailyNote(repo, options.workspaceId, iso)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        plan.diagnostics.push(`Failed to materialise daily note for ${iso}: ${message}`)
+        log(`Daily note ${iso} failed: ${message} — continuing`)
+      }
+      if ((i + 1) % 100 === 0 && i + 1 < dailyIsos.length) {
+        log(`Daily notes ${i + 1}/${dailyIsos.length}`)
+      }
     }
-    if ((i + 1) % 100 === 0 && i + 1 < dailyIsos.length) {
-      log(`Daily notes ${i + 1}/${dailyIsos.length}`)
-    }
-  }
-  if (dailyIsos.length > 0) log(`Materialised ${dailyIsos.length} daily notes (${sinceLastPhase()})`)
+    if (dailyIsos.length > 0) log(`Materialised ${dailyIsos.length} daily notes (${sinceLastPhase()})`)
 
-  // 5. Write the import in two phases — one frontmatter tx (alias
-  //    seats + placeholders + pages) followed by chunked descendant
-  //    txs. Two reasons we don't ship one giant tx:
-  //
-  //    Memory: TxEngine accumulates a snapshot per write in an
-  //    in-memory Map until commit. A 150-MB Roam graph hits millions
-  //    of rows; the snapshots map (plus the post-commit
-  //    handle-invalidation walk that's O(snapshots)) would dominate
-  //    heap and stall the UI on commit.
-  //
-  //    Progress: a single tx is all-or-nothing — the user has no idea
-  //    how far in we are, and a crash 90 % through means restarting
-  //    from zero. Chunked txs commit incrementally so re-runs land on
-  //    populated rows (idempotent via createOrGet / DeletedConflict
-  //    restore) and the `onProgress` callback can show meaningful
-  //    counts.
-  //
-  //    What we lose: cross-chunk atomicity. If the descendant phase
-  //    fails halfway, the workspace is left with frontmatter + a
-  //    prefix of descendants. That's recoverable (re-running the
-  //    import upserts the rest at the same ids); a millions-row tx
-  //    that fails and rolls back is also recoverable but at much
-  //    higher cost in time + memory. Net favourable.
-  let pagesCreated = 0
-  let pagesMerged = 0
-  let aliasBlocksCreated = 0
-  const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
-  await repo.tx(async tx => {
-    // 5a. Alias-target seats for unowned aliases. Same idempotent
-    //     shape as references.parseReferences' ensureAliasTarget — at
-    //     the indexed deterministic seat, with `aliases: [alias]` on
-    //     insert / restore. A live row that already claims the alias
-    //     (e.g. created earlier by parseReferences when the user typed
-    //     `[[alias]]` before importing) is reused. Post-rename occupants
-    //     and tombstones are skipped by the probe. The legacy
-    //     code wrote `content: alias` so the imported alias-block had
-    //     a visible title — preserved here for UI parity (user types
-    //     `[[Foo]]` → empty stub; Roam imports `[[Foo]]` → "Foo"
-    //     content for findability).
-    for (const alias of aliasResolution.aliasesNeedingSeat) {
-      const result = await ensureAliasSeat(
-        tx,
-        repo,
-        {alias, workspaceId: options.workspaceId},
-        typeSnapshot,
-      )
-      if (result.inserted) aliasBlocksCreated += 1
-    }
+    // 5. Write the import in two phases — one frontmatter tx (alias
+    //    seats + placeholders + pages) followed by chunked descendant
+    //    txs. Two reasons we don't ship one giant tx:
+    //
+    //    Memory: TxEngine accumulates a snapshot per write in an
+    //    in-memory Map until commit. A 150-MB Roam graph hits millions
+    //    of rows; the snapshots map (plus the post-commit
+    //    handle-invalidation walk that's O(snapshots)) would dominate
+    //    heap and stall the UI on commit.
+    //
+    //    Progress: a single tx is all-or-nothing — the user has no idea
+    //    how far in we are, and a crash 90 % through means restarting
+    //    from zero. Chunked txs commit incrementally so re-runs land on
+    //    populated rows (idempotent via createOrGet / DeletedConflict
+    //    restore) and the `onProgress` callback can show meaningful
+    //    counts.
+    //
+    //    What we lose: cross-chunk atomicity. If the descendant phase
+    //    fails halfway, the workspace is left with frontmatter + a
+    //    prefix of descendants. That's recoverable (re-running the
+    //    import upserts the rest at the same ids); a millions-row tx
+    //    that fails and rolls back is also recoverable but at much
+    //    higher cost in time + memory. Net favourable.
+    let pagesCreated = 0
+    let pagesMerged = 0
+    let aliasBlocksCreated = 0
+    const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
+    await awaitWriteAheadHeadroom(repo.db)
+    await repo.tx(async tx => {
+      // 5a. Alias-target seats for unowned aliases. Same idempotent
+      //     shape as references.parseReferences' ensureAliasTarget — at
+      //     the indexed deterministic seat, with `aliases: [alias]` on
+      //     insert / restore. A live row that already claims the alias
+      //     (e.g. created earlier by parseReferences when the user typed
+      //     `[[alias]]` before importing) is reused. Post-rename occupants
+      //     and tombstones are skipped by the probe. The legacy
+      //     code wrote `content: alias` so the imported alias-block had
+      //     a visible title — preserved here for UI parity (user types
+      //     `[[Foo]]` → empty stub; Roam imports `[[Foo]]` → "Foo"
+      //     content for findability).
+      for (const alias of aliasResolution.aliasesNeedingSeat) {
+        const result = await ensureAliasSeat(
+          tx,
+          repo,
+          {alias, workspaceId: options.workspaceId},
+          typeSnapshot,
+        )
+        if (result.inserted) aliasBlocksCreated += 1
+      }
 
-    // 5b. Placeholder stand-ins. Idempotent — re-running is a no-op
-    //     against a live row, and a future import that contains the
-    //     real block upserts onto the same row via upsertImportedBlock
-    //     (5d). On a tombstone we restore with the empty stub so
-    //     references[] in other blocks can still resolve.
-    for (const placeholder of plan.placeholders) {
-      await ensurePlaceholderRow(tx, {
-        id: placeholder.blockId,
-        workspaceId: options.workspaceId,
-      })
-    }
+      // 5b. Placeholder stand-ins. Idempotent — re-running is a no-op
+      //     against a live row, and a future import that contains the
+      //     real block upserts onto the same row via upsertImportedBlock
+      //     (5d). On a tombstone we restore with the empty stub so
+      //     references[] in other blocks can still resolve.
+      for (const placeholder of plan.placeholders) {
+        await ensurePlaceholderRow(tx, {
+          id: placeholder.blockId,
+          workspaceId: options.workspaceId,
+        })
+      }
 
-    // 5c. Non-daily pages. Pages must land BEFORE descendants — the
-    //     workspace-invariant trigger requires parent rows to exist
-    //     at insert time, and descendants are emitted leaves-first
-    //     (post-order) so their parents (intermediate blocks + the
-    //     page row) need to be in place. Daily pages were already
-    //     created in step 4. Merging pages get an alias union via
-    //     mergeIntoExistingPage; non-merging pages create the row.
-    const rootReconciliations = reconciliations.filter(r => !r.aliasRuleMerged)
-    const aliasRuleMergedReconciliations = reconciliations.filter(r => r.aliasRuleMerged)
+      // 5c. Non-daily pages. Pages must land BEFORE descendants — the
+      //     workspace-invariant trigger requires parent rows to exist
+      //     at insert time, and descendants are emitted leaves-first
+      //     (post-order) so their parents (intermediate blocks + the
+      //     page row) need to be in place. Daily pages were already
+      //     created in step 4. Merging pages get an alias union via
+      //     mergeIntoExistingPage; non-merging pages create the row.
+      const rootReconciliations = reconciliations.filter(r => !r.aliasRuleMerged)
+      const aliasRuleMergedReconciliations = reconciliations.filter(r => r.aliasRuleMerged)
 
-    for (const recon of rootReconciliations) {
-      if (recon.page.isDaily) {
+      for (const recon of rootReconciliations) {
+        if (recon.page.isDaily) {
+          await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
+          await applyPromotedAttributes(
+            tx,
+            recon.finalId,
+            recon.page.promotedFromChildren,
+            repo.propertySchemas,
+          )
+          continue
+        }
+        if (recon.merging) {
+          pagesMerged += 1
+          await mergeIntoExistingPage(tx, recon, repo, typeSnapshot)
+          await applyPromotedAttributes(
+            tx,
+            recon.finalId,
+            recon.page.promotedFromChildren,
+            repo.propertySchemas,
+          )
+          continue
+        }
+        pagesCreated += 1
+        if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
+        await upsertImportedBlock(
+          tx,
+          withPageAliases(recon.page.data, recon.aliasesToApply),
+          repo.propertySchemas,
+          pageImportMergeOptions(),
+        )
+      }
+
+      for (const recon of aliasRuleMergedReconciliations) {
+        if (!recon.page.isDaily) pagesMerged += 1
         await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
         await applyPromotedAttributes(
           tx,
@@ -488,122 +527,92 @@ export const importRoam = async (
           recon.page.promotedFromChildren,
           repo.propertySchemas,
         )
-        continue
       }
-      if (recon.merging) {
-        pagesMerged += 1
-        await mergeIntoExistingPage(tx, recon, repo, typeSnapshot)
-        await applyPromotedAttributes(
-          tx,
-          recon.finalId,
-          recon.page.promotedFromChildren,
-          repo.propertySchemas,
-        )
-        continue
-      }
-      pagesCreated += 1
-      if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-      await upsertImportedBlock(
-        tx,
-        withPageAliases(recon.page.data, recon.aliasesToApply),
-        repo.propertySchemas,
-        pageImportMergeOptions(),
-      )
+    }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
+
+    log(`Wrote frontmatter: ${plan.placeholders.length} placeholders, ` +
+      `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes, ` +
+      `${aliasBlocksCreated} alias seats (${sinceLastPhase()})`)
+
+    // 5d. Descendants in chunks. Planner emits them in post-order
+    //     (leaves before parents); we walk in reverse so each
+    //     descendant's parent is already committed (either from
+    //     frontmatter tx above, or from an earlier descendant chunk).
+    //     A parent + child split across two chunks is safe — the
+    //     parent commits first, the child sees it via the workspace-
+    //     invariant trigger's committed-state read.
+    const total = plan.descendants.length
+    const chunkSize = options.descendantChunkSize ?? DESCENDANT_CHUNK_SIZE
+    const descendantsStart = Date.now()
+    let written = 0
+    for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
+      const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
+      await awaitWriteAheadHeadroom(repo.db)
+      const chunkBeganAt = Date.now()
+      await repo.tx(async tx => {
+        for (let i = chunkStart; i >= chunkEnd; i--) {
+          const desc = plan.descendants[i]
+          const data = applyReparent(desc.data, reparentMap)
+          appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
+          await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
+          await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
+        }
+      }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
+      const chunkRows = chunkStart - chunkEnd + 1
+      written += chunkRows
+      const chunkSec = (Date.now() - chunkBeganAt) / 1000
+      const elapsedSec = (Date.now() - descendantsStart) / 1000
+      const rate = elapsedSec > 0 ? written / elapsedSec : 0
+      const remaining = total - written
+      const etaSec = rate > 0 ? remaining / rate : 0
+      log(`Wrote descendants ${written}/${total} ` +
+        `(chunk ${chunkRows} rows in ${chunkSec.toFixed(1)}s, ` +
+        `${rate.toFixed(0)} rows/s, eta ~${formatEta(etaSec)})`)
+    }
+    if (total > 0) log(`All ${total} descendants written (${sinceLastPhase()})`)
+
+    // 6. Append a one-block import log under today's daily-note. Diagnostics
+    //    that the planner / orchestrator surfaced (deep property nesting,
+    //    placeholders, etc.) become sub-bullets so the user has a
+    //    findable record of anything weird without grepping the console.
+    //    Per-import failure isolation: a broken log write (e.g. corrupt
+    //    daily-note row) shouldn't fail the whole import — the data has
+    //    already landed. Catch and surface via the progress callback.
+    try {
+      await writeImportLog(repo, options.workspaceId, {
+        pagesCreated,
+        pagesMerged,
+        pagesDaily,
+        blocksWritten: plan.descendants.length,
+        placeholdersCreated: plan.placeholders.length,
+        aliasBlocksCreated,
+        typeCandidates,
+        roamMemo: plan.roamMemo,
+        durationMs: Date.now() - start,
+        diagnostics: plan.diagnostics,
+        uidMap: plan.uidMap,
+      })
+      log(`Wrote import-log block to today's daily (${sinceLastPhase()})`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log(`Could not write import-log block: ${message}`)
     }
 
-    for (const recon of aliasRuleMergedReconciliations) {
-      if (!recon.page.isDaily) pagesMerged += 1
-      await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
-      await applyPromotedAttributes(
-        tx,
-        recon.finalId,
-        recon.page.promotedFromChildren,
-        repo.propertySchemas,
-      )
-    }
-  }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
-
-  log(`Wrote frontmatter: ${plan.placeholders.length} placeholders, ` +
-    `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes, ` +
-    `${aliasBlocksCreated} alias seats (${sinceLastPhase()})`)
-
-  // 5d. Descendants in chunks. Planner emits them in post-order
-  //     (leaves before parents); we walk in reverse so each
-  //     descendant's parent is already committed (either from
-  //     frontmatter tx above, or from an earlier descendant chunk).
-  //     A parent + child split across two chunks is safe — the
-  //     parent commits first, the child sees it via the workspace-
-  //     invariant trigger's committed-state read.
-  const total = plan.descendants.length
-  const chunkSize = options.descendantChunkSize ?? DESCENDANT_CHUNK_SIZE
-  const descendantsStart = Date.now()
-  let written = 0
-  for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
-    const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
-    const chunkBeganAt = Date.now()
-    await repo.tx(async tx => {
-      for (let i = chunkStart; i >= chunkEnd; i--) {
-        const desc = plan.descendants[i]
-        const data = applyReparent(desc.data, reparentMap)
-        appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
-        await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
-        await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
-      }
-    }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
-    const chunkRows = chunkStart - chunkEnd + 1
-    written += chunkRows
-    const chunkSec = (Date.now() - chunkBeganAt) / 1000
-    const elapsedSec = (Date.now() - descendantsStart) / 1000
-    const rate = elapsedSec > 0 ? written / elapsedSec : 0
-    const remaining = total - written
-    const etaSec = rate > 0 ? remaining / rate : 0
-    log(`Wrote descendants ${written}/${total} ` +
-      `(chunk ${chunkRows} rows in ${chunkSec.toFixed(1)}s, ` +
-      `${rate.toFixed(0)} rows/s, eta ~${formatEta(etaSec)})`)
-  }
-  if (total > 0) log(`All ${total} descendants written (${sinceLastPhase()})`)
-
-  // 6. Append a one-block import log under today's daily-note. Diagnostics
-  //    that the planner / orchestrator surfaced (deep property nesting,
-  //    placeholders, etc.) become sub-bullets so the user has a
-  //    findable record of anything weird without grepping the console.
-  //    Per-import failure isolation: a broken log write (e.g. corrupt
-  //    daily-note row) shouldn't fail the whole import — the data has
-  //    already landed. Catch and surface via the progress callback.
-  try {
-    await writeImportLog(repo, options.workspaceId, {
+    return {
       pagesCreated,
       pagesMerged,
       pagesDaily,
       blocksWritten: plan.descendants.length,
-      placeholdersCreated: plan.placeholders.length,
+      aliasesResolved: aliasResolution.aliasIdMap.size,
       aliasBlocksCreated,
       typeCandidates,
       roamMemo: plan.roamMemo,
-      durationMs: Date.now() - start,
+      placeholdersCreated: plan.placeholders.length,
       diagnostics: plan.diagnostics,
-      uidMap: plan.uidMap,
-    })
-    log(`Wrote import-log block to today's daily (${sinceLastPhase()})`)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    log(`Could not write import-log block: ${message}`)
-  }
-
-  return {
-    pagesCreated,
-    pagesMerged,
-    pagesDaily,
-    blocksWritten: plan.descendants.length,
-    aliasesResolved: aliasResolution.aliasIdMap.size,
-    aliasBlocksCreated,
-    typeCandidates,
-    roamMemo: plan.roamMemo,
-    placeholdersCreated: plan.placeholders.length,
-    diagnostics: plan.diagnostics,
-    durationMs: Date.now() - start,
-    dryRun: false,
-  }
+      durationMs: Date.now() - start,
+      dryRun: false,
+    }
+  })
 }
 
 // Render a remaining-seconds estimate as e.g. "12s", "1m20s", "1h05m".

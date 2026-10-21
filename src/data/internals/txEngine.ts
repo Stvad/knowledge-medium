@@ -79,10 +79,11 @@ import {
   type BlockRow,
 } from '@/data/blockSchema'
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
-import { IS_DESCENDANT_OF_SQL } from './treeQueries'
+import { IS_DESCENDANT_OF_SQL, propertyFieldRowsForParentsSql } from './treeQueries'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL,
+  readHasLiveReferrer,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
@@ -604,14 +605,7 @@ export class TxImpl implements Tx {
     const out: BlockData[] = []
     for (const chunk of chunksOf(parentIds, MAX_IDS_PER_IN_CLAUSE)) {
       const rows = await this.ctx.txDb.getAll<BlockRow>(
-        // Same INDEXED BY, and the same workspace term to reach it, as
-        // `tombstonedPropertyFieldRows` — and for the same reason: every other
-        // field-row index is `WHERE deleted = 0`, so letting the planner choose
-        // scans the whole database's field rows.
-        `SELECT ${COLUMN_LIST} FROM blocks INDEXED BY idx_blocks_any_field_form
-          WHERE workspace_id = ? AND parent_id IN (${buildInClause(chunk.length)})
-            AND is_field_form = 1 AND reference_target_id IS NOT NULL
-          ORDER BY order_key, id`,
+        propertyFieldRowsForParentsSql(COLUMN_LIST, chunk.length),
         [workspaceId, ...chunk],
       )
       out.push(...rows.map(parseBlockRow))
@@ -1424,6 +1418,10 @@ export class TxImpl implements Tx {
       [workspaceId, alias],
     )
     return rows.map(parseBlockRow)
+  }
+
+  hasLiveReferrer(targetId: string, workspaceId: string): Promise<boolean> {
+    return readHasLiveReferrer(this.ctx.txDb, targetId, workspaceId)
   }
 
   // ──── Post-commit scheduling ────
