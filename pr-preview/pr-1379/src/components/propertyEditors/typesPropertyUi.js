@@ -1,1 +1,1 @@
-import{HD as e,UD as t,VD as n}from"../../../chunks/app-DB6NNAPp.js";export{n as kernelPropertyUiExtension,e as typesPropertyUi,t as typesPropertyUiExtension};
+import{JD as e,YD as t,qD as n}from"../../../chunks/app-BEE_jMdz.js";export{n as kernelPropertyUiExtension,e as typesPropertyUi,t as typesPropertyUiExtension};

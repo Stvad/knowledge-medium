@@ -1,1 +1,1 @@
-import{nk as e,qn as t,tk as n}from"../../../chunks/app-DB6NNAPp.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-BEE_jMdz.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

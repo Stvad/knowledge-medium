@@ -1,1 +1,1 @@
-import{Wp as e}from"../../../chunks/app-DB6NNAPp.js";export{e as BlockMetaCard};
+import{Xp as e}from"../../../chunks/app-BEE_jMdz.js";export{e as BlockMetaCard};
