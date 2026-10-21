@@ -1,1 +1,0 @@
-import{nk as e,qn as t,tk as n}from"../../../chunks/app-B0lLxz0c.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
