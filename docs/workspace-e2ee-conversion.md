@@ -279,7 +279,7 @@ The first production run is #1288.
    - Measure `sum(octet_length(content) + octet_length(properties_json) + octet_length(references_json))` over the workspace.
    - The re-seal writes new row versions (about 1.33×), history rows holding both old and new values (about 2.3×), and WAL for all of it.
    - So confirm free disk of about **6×** that figure, plus room for `VACUUM FULL` to copy each table it rewrites. Auto-scaling disk grows only on a cooldown.
-7. **Ordering against the properties-as-blocks switch** is an open decision (#1288). Converting first keeps the ids of definitions synthesized at the switch keyed under `K_id`. Switching first leaves them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap.
+7. **Convert before the properties-as-blocks switch** (the owner's call, 2026-10-20). Converting first keys the ids of definitions synthesized at the switch under `K_id`. Switching first would leave them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap, so the switch waits until `finish_conversion` has run.
 8. **Rehearse** the conversion on a scratch workspace first. The record is under **Rehearsal of 2026-10-20**, below the checklist. Run it again after a change to the flow, to the conversion's server functions, or to the hosted Postgres or PostgREST version.
 9. Run from desktop Chromium, on the device that holds the most attachment bytes locally.
 
