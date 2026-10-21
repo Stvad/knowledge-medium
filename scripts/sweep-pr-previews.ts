@@ -100,7 +100,10 @@ function marked<P extends OpenPr>(markExpired: (pr: P) => void, pr: P): boolean 
  * up (`unmarked`) for a later run to retry, and a failure never leaves a live
  * link pointing at a removed preview. The notice itself bumps the PR's
  * `updatedAt`, so a PR marked in a rejected attempt stays expired until its
- * preview subtree changes, which only a redeploy does.
+ * preview subtree changes, which only a redeploy does. Other activity in those
+ * seconds counts as coming after the decision, like activity just after the
+ * push: telling it from the notice's own bump would rest on two GitHub
+ * timestamps agreeing.
  */
 export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [], markExpired = () => {} }: {
   git: Git
