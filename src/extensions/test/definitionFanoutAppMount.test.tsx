@@ -122,6 +122,15 @@ const report = (
   act(() => { reportPropertyDefinitionFanout(fieldIds, done, total) })
 }
 
+/** The dialog comes up before the shortcut shadowing under it has resolved,
+ *  and while that is still suspended a store update commits a moment after a
+ *  synchronous `act` rather than inside it — so a report asserted on at once
+ *  would read the state from before it, and an "ignored" check would pass
+ *  either way. Every synchronous assertion on a report waits for this. */
+const mountSettles = () => waitFor(() => {
+  expect(screen.getByTestId('shadowing').textContent).toBe('true')
+})
+
 const bar = () => screen.getByRole('progressbar')
 
 describe('the fan-out progress surface', () => {
@@ -173,10 +182,27 @@ describe('the fan-out progress surface', () => {
     // with it.
     renderMount()
     await openRun()
-    act(() => { repo.setActiveWorkspaceId('ws-somewhere-else') })
-
     expect(await screen.findByRole('dialog')).toBeTruthy()
-    expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
+    // HELD, as the fan-out holds it: on a workspace not opened here yet the
+    // shortcut shadowing has to create its UI-state block, which waits on the
+    // writer — the modal must not wait with it.
+    let release!: () => void
+    let holding!: () => void
+    const writerHeld = new Promise<void>(resolve => { holding = resolve })
+    const held = repo.db.writeTransaction(() => new Promise<void>(resolve => {
+      release = resolve
+      holding()
+    }))
+    await writerHeld
+    try {
+      await act(async () => { repo.setActiveWorkspaceId('ws-somewhere-else') })
+
+      expect(screen.getByRole('dialog')).toBeTruthy()
+      expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
+    } finally {
+      release()
+      await held
+    }
   })
 
   it('ignores a report arriving before its own transaction starts', async () => {
@@ -188,6 +214,7 @@ describe('the fan-out progress surface', () => {
     renderMount()
     await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
+    await mountSettles()
 
     report(500)
 
@@ -207,6 +234,7 @@ describe('the fan-out progress surface', () => {
     renderMount()
     await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
+    await mountSettles()
 
     transactionStarts()
     report(500, 4_000, ['field-somebody-elses'])
@@ -223,6 +251,7 @@ describe('the fan-out progress surface', () => {
     renderMount()
     const first = await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
+    await mountSettles()
 
     const second = await openRunNamed('otherProperty', 9_000)
     transactionStarts()

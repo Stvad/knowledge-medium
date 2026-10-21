@@ -26,7 +26,7 @@
  * app that is just as frozen. A surface that went away on the switch would
  * take the only account of why with it.
  */
-import { useSyncExternalStore } from 'react'
+import { Suspense, useSyncExternalStore } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -84,49 +84,59 @@ export const DefinitionFanoutProgress = () => {
   return run === null ? null : <FanoutProgressDialog run={run} />
 }
 
-/** Split from the mount so the shortcut-shadowing hook — which suspends on the
- *  workspace's UI-state block, and throws this mount away if that read fails —
- *  is only reached while a run is actually up. Nothing else rides on this
- *  mount, so losing it costs the modal and nothing more. */
-const FanoutProgressDialog = ({run}: {run: PropertyDefinitionFanoutSnapshot}) => {
-  // While this is up the surface underneath must stop claiming keys, and
-  // releasing the shadow is this component's job because nothing else knows
-  // the modal went away.
+/** While the modal is up the surface underneath must stop claiming keys, and
+ *  releasing the shadow is this component's job because nothing else knows
+ *  the modal went away.
+ *
+ *  Reached only while a run is up, and under its OWN Suspense boundary: the
+ *  hook suspends on the active workspace's UI-state block, and on a workspace
+ *  the user has not opened here yet, creating that block waits on the very
+ *  writer this fan-out holds. Above the dialog, that wait would take the modal
+ *  down for the rest of the run. A failed read still throws the whole mount
+ *  away; nothing else rides on it, so that costs the modal and nothing more. */
+const ShadowSurfaceShortcuts = (): null => {
   useModalShadowing(true)
+  return null
+}
+
+const FanoutProgressDialog = ({run}: {run: PropertyDefinitionFanoutSnapshot}) => {
   const percent = percentDone(run)
   return (
-    // `open` fixed and `onOpenChange` inert: Escape, outside-click and the
-    // corner button all route through it and none of them may close this.
-    <Dialog open onOpenChange={() => {}}>
-      <DialogContent className="max-w-md" hideClose>
-        <DialogHeader>
-          <DialogTitle>Updating blocks that use “{run.propertyName}”</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 text-sm">
-          <div
-            className="h-2 w-full overflow-hidden rounded-full bg-muted"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={run.total}
-            aria-valuenow={run.done ?? undefined}
-            aria-label={`Blocks updated for ${run.propertyName}`}
-          >
+    <>
+      <Suspense fallback={null}><ShadowSurfaceShortcuts /></Suspense>
+      {/* `open` fixed and `onOpenChange` inert: Escape, outside-click and the
+          corner button all route through it and none of them may close this. */}
+      <Dialog open onOpenChange={() => {}}>
+        <DialogContent className="max-w-md" hideClose>
+          <DialogHeader>
+            <DialogTitle>Updating blocks that use “{run.propertyName}”</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
             <div
-              className={`h-full rounded-full bg-foreground${
-                percent === null ? ' w-1/4 animate-pulse' : ''}`}
-              style={percent === null ? undefined : {width: `${percent}%`}}
-            />
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={run.total}
+              aria-valuenow={run.done ?? undefined}
+              aria-label={`Blocks checked for ${run.propertyName}`}
+            >
+              <div
+                className={`h-full rounded-full bg-foreground${
+                  percent === null ? ' w-1/4 animate-pulse' : ''}`}
+                style={percent === null ? undefined : {width: `${percent}%`}}
+              />
+            </div>
+            <p aria-live="polite">{statusLine(run)}</p>
+            <DialogDescription>
+              This change and every block it touches are saved together, so it
+              stays one step you can undo — and nothing else can be saved until
+              it finishes. Closing this tab before it saves leaves the property
+              as it was.
+            </DialogDescription>
           </div>
-          <p aria-live="polite">{statusLine(run)}</p>
-          <DialogDescription>
-            This change and every block it touches are saved together, so it
-            stays one step you can undo — and nothing else can be saved until
-            it finishes. Closing this tab before it saves leaves the property
-            as it was.
-          </DialogDescription>
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

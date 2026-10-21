@@ -92,6 +92,11 @@ const OVERTAKEN = (name: string): string =>
   `“${name}” changed before this was applied, so nothing was written. `
   + 'The editor is showing where it stands now — make the change again from there.'
 
+const withoutFirst = (names: readonly string[], name: string): readonly string[] => {
+  const at = names.indexOf(name)
+  return at === -1 ? names : [...names.slice(0, at), ...names.slice(at + 1)]
+}
+
 const NOT_OPEN =
   'The property was not changed: its workspace is no longer the one open. '
   + 'Open it again and make the change there.'
@@ -276,22 +281,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // committed name beats letting a stale draft overwrite it on the next
   // blur.
   //
-  // SOMEBODY ELSE'S change, though, and `requestedName` is what tells them
-  // apart. A rename is not instant — it is planned, counted, sometimes
-  // confirmed, then committed — and the field is live throughout below the
-  // threshold, so the user can be typing the next name when the last one
-  // lands. Its own acknowledgement arriving then must not read as a remote
-  // edit and take that typing away. The enum options editor learned the
-  // same thing about its own writes (`pending`, there); both are working
-  // around a seam that tells an editor nothing about its request, which is
-  // what #1117 is for.
+  // SOMEBODY ELSE'S change, though, and `requestedNames` is what tells them
+  // apart: every rename this field has asked for and not yet seen land. A
+  // rename is not instant — it is planned, counted, sometimes confirmed, then
+  // committed — and below the threshold the field stays live throughout, so
+  // the user can blur a second name while the first is still queued and be
+  // typing a third when either lands. None of those acknowledgements may read
+  // as a remote edit and take the typing away. One landing settles every
+  // request queued before it, since the queue runs them in order. The enum
+  // options editor works around the same seam with `pending`; #1117 is where
+  // an editor gets told the outcome instead.
   const [draftName, setDraftName] = useState<string | null>(null)
   const [committedName, setCommittedName] = useState(propertyName)
-  const [requestedName, setRequestedName] = useState<string | null>(null)
+  const [requestedNames, setRequestedNames] = useState<readonly string[]>([])
   if (propertyName !== committedName) {
     setCommittedName(propertyName)
-    if (propertyName !== requestedName) setDraftName(null)
-    setRequestedName(null)
+    const ours = requestedNames.indexOf(propertyName)
+    if (ours === -1) setDraftName(null)
+    else setRequestedNames(requestedNames.slice(ours + 1))
   }
   const shownName = draftName ?? propertyName
 
@@ -314,7 +321,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       setDraftName(null)
       return
     }
-    setRequestedName(next)
+    setRequestedNames(names => [...names, next])
     const wrote = await throughFanoutGate(atStart => {
       // Re-aimed at whatever the definition is called NOW: a rename carries
       // a whole replacement name and means the same thing from any starting
@@ -340,7 +347,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // while it was in flight, and that newer name is not this one's to
     // discard.
     if (!wrote) {
-      setRequestedName(null)
+      setRequestedNames(names => withoutFirst(names, next))
       setDraftName(current => current === next ? null : current)
     }
   }, [block, propertyName, throughFanoutGate])

@@ -42,6 +42,8 @@
  *
  * DECLINED: suppressing the blur's commit with a flag set on pointer-down — a
  * cancelled press never reaches the click that would clear it.
+ * DECLINED: skipping the blur's commit when focus moves to the type picker —
+ * the typed edit is lost whenever the type change then does not happen.
  */
 import {useState} from 'react'
 import {Plus, X} from 'lucide-react'

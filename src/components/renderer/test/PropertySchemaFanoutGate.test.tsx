@@ -19,7 +19,7 @@ vi.mock('@/utils/toast.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/utils/toast.js')>(),
   showError: vi.fn(),
 }))
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope } from '@/data/api'
 import { graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
@@ -296,6 +296,32 @@ describe('renaming a property with many consumers', () => {
 
     await waitFor(async () => { expect(await storedName()).toBe('test:first') })
     expect(nameInput().value).toBe('test:second')
+  })
+
+  it('keeps a name typed while TWO earlier renames were still queued', async () => {
+    // Every outstanding request is the field's own, not just the latest: the
+    // first one landing must not read as a remote edit because a second was
+    // asked for after it.
+    consumersAre(3)
+    renderSchema()
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+    await Promise.resolve()
+
+    fireEvent.change(nameInput(), {target: {value: 'test:first'}})
+    fireEvent.blur(nameInput())
+    fireEvent.change(nameInput(), {target: {value: 'test:second'}})
+    fireEvent.blur(nameInput())
+    fireEvent.change(nameInput(), {target: {value: 'test:third'}})
+    release()
+
+    await waitFor(async () => { expect(await storedName()).toBe('test:second') })
+    // Both acknowledgements have to reach the renderer before the field is
+    // read, or the assertion passes without them.
+    await queueDefinitionChange(async () => {})
+    await act(async () => {})
+    expect(nameInput().value).toBe('test:third')
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('keeps a newer name when the rename before it turned out to be a no-op', async () => {
