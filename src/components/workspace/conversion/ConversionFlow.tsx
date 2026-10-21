@@ -532,10 +532,10 @@ function DoneView({bundleFolder, onClose}: {bundleFolder: string | null; onClose
     <>
       <Explanation>This workspace is end-to-end encrypted.</Explanation>
       <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-        <li>Open each other device one at a time, and paste the key there.</li>
+        <li>Open each other device, and paste the key there.</li>
         <li>
-          Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key: if
-          the key is lost, the workspace is restored from the newest one.
+          Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key. If
+          the key is lost, this bundle is what the workspace can be restored from.
         </li>
       </ul>
       <Actions secondary={{label: 'Close', onClick: onClose}}/>
