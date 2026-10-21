@@ -1,1 +1,0 @@
-import{_C as e,gC as t,vC as n,yC as r}from"../../../chunks/app-BP_pDSZG.js";export{t as OPEN_RECENTS_ACTION_ID,e as openRecentsAction,n as recentsHeaderItem,r as recentsPlugin};
