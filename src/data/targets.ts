@@ -65,7 +65,9 @@ export interface CreateOrRestoreArgs {
  *  wrong: a tombstone can carry a claim some live block took while it was
  *  dead, and re-inserting it trips the alias-uniqueness trigger, rolling
  *  back the CALLER's whole tx. The caller owns the alias write — pass this
- *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx. */
+ *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx.
+ *  To bring back every name nobody took instead, see
+ *  `restorePropertiesYieldingTakenAliases`. */
 export const restorePropertiesStrippingAliases = async (
   tx: Tx,
   id: string,
