@@ -1,0 +1,1 @@
+import{IQ as e,LQ as t}from"../../chunks/app-_1UUw23d.js";export{e as getOrCreateRecentsPage,t as recentsPageBlockId};

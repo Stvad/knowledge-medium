@@ -1,0 +1,1 @@
+import{fZ as e,pZ as t}from"../../../chunks/app-_1UUw23d.js";export{e as emitKernelInvalidations,t as kernelInvalidationRule};

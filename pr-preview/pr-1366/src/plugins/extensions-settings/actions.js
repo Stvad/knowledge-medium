@@ -1,0 +1,1 @@
+import{$O as e,QO as t}from"../../../chunks/app-_1UUw23d.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

@@ -1,0 +1,1 @@
+import{LP as e,RP as t}from"../../chunks/app-_1UUw23d.js";export{e as defineVariant,t as defineVariantFacet};
