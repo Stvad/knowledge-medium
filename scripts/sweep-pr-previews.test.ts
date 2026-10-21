@@ -74,7 +74,9 @@ const sweep = (options: Omit<Parameters<typeof sweepPreviews>[0], 'git' | 'idleB
 describe('previewsToRemove', () => {
   it('names only pr-<n> directories whose PR is closed, named, or idle, and reports the idle ones', () => {
     const names = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'pr-03', 'pr-x', 'shared']
-    const result = previewsToRemove(names, [active(2), idle(3), idle(4)], { idleBefore, alsoRemove: [4] })
+    const result = previewsToRemove(names, [active(2), idle(3), idle(4)], {
+      alsoRemove: [4], isIdle: pr => pr.updatedAt < idleBefore,
+    })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3', 'pr-4'])
     expect(result.expired).toEqual([idle(3)])
@@ -165,6 +167,35 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     expect(publishedFiles()).toEqual([
       '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html', 'pr-preview/pr-4/index.html',
     ])
+    expect(git(origin, 'show', 'gh-pages:index.html')).toBe('production v2')
+  })
+
+  // Its own notice bumps the PR's updated_at, so a retry must not read that as activity.
+  it('keeps the expired verdict when an unrelated deploy rejects the push', () => {
+    const inner = workGit()
+    let open = [active(2), idle(3)]
+    let raced = false
+    const racingGit: Git = (args, opts) => {
+      if (args[0] === 'push' && !raced) {
+        raced = true
+        publish({ 'index.html': 'production v2' })
+      }
+      return inner(args, opts)
+    }
+    const marked: number[] = []
+    const result = sweep({
+      git: racingGit,
+      openPrs: () => open,
+      markExpired: pr => {
+        marked.push(pr.number)
+        open = [active(2), active(3)]
+      },
+    })
+
+    expect(result.removed).toEqual(['pr-1', 'pr-3'])
+    expect(result.expired.map(pr => pr.number)).toEqual([3])
+    expect(marked).toEqual([3])
+    expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
     expect(git(origin, 'show', 'gh-pages:index.html')).toBe('production v2')
   })
 

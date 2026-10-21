@@ -41,12 +41,12 @@ export const gitIn = (cwd: string): Git => (args, opts = {}) =>
 
 /**
  * The pr-<n> directory names to remove: the PR is not open, is named in
- * `alsoRemove`, or was last updated before `idleBefore`. Only that last kind is
- * `expired`, since its PR stays open. Any other name is never touched.
+ * `alsoRemove`, or `isIdle`. Only that last kind is `expired`, since its PR
+ * stays open. Any other name is never touched.
  */
-export function previewsToRemove<P extends OpenPr>(names: string[], open: readonly P[], { idleBefore, alsoRemove }: {
-  idleBefore: Date
+export function previewsToRemove<P extends OpenPr>(names: string[], open: readonly P[], { alsoRemove, isIdle }: {
   alsoRemove: readonly number[]
+  isIdle: (pr: P) => boolean
 }): { removed: string[]; expired: P[] } {
   const byNumber = new Map(open.map(pr => [pr.number, pr]))
   const removed: string[] = []
@@ -58,7 +58,7 @@ export function previewsToRemove<P extends OpenPr>(names: string[], open: readon
     const pr = byNumber.get(number)
     if (pr === undefined || alsoRemove.includes(number)) {
       removed.push(name)
-    } else if (pr.updatedAt < idleBefore) {
+    } else if (isIdle(pr)) {
       removed.push(name)
       expired.push(pr)
     }
@@ -98,9 +98,9 @@ function marked<P extends OpenPr>(markExpired: (pr: P) => void, pr: P): boolean 
  *
  * `markExpired` runs before the push, so a preview whose notice failed stays
  * up (`unmarked`) for a later run to retry, and a failure never leaves a live
- * link pointing at a removed preview. A notice from a rejected attempt can
- * name a PR the retry then keeps; accepted, since a redeploy rewrites the
- * comment once it is published.
+ * link pointing at a removed preview. The notice itself bumps the PR's
+ * `updatedAt`, so a PR marked in a rejected attempt stays expired until its
+ * preview subtree changes, which only a redeploy does.
  */
 export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [], markExpired = () => {} }: {
   git: Git
@@ -109,18 +109,28 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
   alsoRemove?: number[]
   markExpired?: (pr: P) => void
 }): { removed: string[]; expired: P[]; unmarked: P[] } {
+  const markedTrees = new Map<number, string>()
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
     const tip = git(['rev-parse', REMOTE_REF])
     const open = openPrs()
-    const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
-      .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
-    const found = previewsToRemove(names, open, { idleBefore, alsoRemove })
-    const unmarked = found.expired.filter(pr => !marked(markExpired, pr))
+    // `<mode> tree <hash>\t<root>/<name>` per preview directory.
+    const trees = new Map(git(['ls-tree', '-d', tip, `${PREVIEW_ROOT}/`]).split('\n').filter(Boolean).map(line => {
+      const [meta, path] = line.split('\t')
+      return [path.slice(PREVIEW_ROOT.length + 1), meta.split(' ')[2]]
+    }))
+    const treeOf = (pr: P) => trees.get(`pr-${pr.number}`)
+    const markedUnchanged = (pr: P) => markedTrees.has(pr.number) && markedTrees.get(pr.number) === treeOf(pr)
+    const found = previewsToRemove([...trees.keys()], open, {
+      alsoRemove, isIdle: pr => markedUnchanged(pr) || pr.updatedAt < idleBefore,
+    })
+    const unmarked = found.expired.filter(pr => !markedUnchanged(pr) && !marked(markExpired, pr))
+    const expired = found.expired.filter(pr => !unmarked.includes(pr))
+    for (const pr of expired) markedTrees.set(pr.number, treeOf(pr)!)
     const result = {
       removed: found.removed.filter(name => !unmarked.some(pr => name === `pr-${pr.number}`)),
-      expired: found.expired.filter(pr => !unmarked.includes(pr)),
+      expired,
       unmarked,
     }
     if (result.removed.length === 0) return result
