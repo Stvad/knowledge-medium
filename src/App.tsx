@@ -164,7 +164,9 @@ const App = () => {
         canary={initial.canary}
         // The gate drains the now-decryptable staged rows BEFORE this re-resolve,
         // so the bootstrap getOrCreate*s no-op against the synced content rather
-        // than racing it.
+        // than racing it. Re-entry mid-drain (footer, Back) races it instead,
+        // deliberately: those mints are stamp-0 and yield to the server's rows,
+        // as on any fresh device — resolution does not wait for the pass.
         deps={gateDeps}
         onResolved={reResolve}
         footer={<WorkspaceSwitcher gate={{workspaceId: initial.workspaceId, onLeave: resolveDefaultWorkspace}}/>}
