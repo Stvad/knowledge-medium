@@ -1,1 +1,1 @@
-import{GP as e,KP as t}from"../../chunks/app-D0VOr6Tz.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};
+import{GP as e,KP as t}from"../../chunks/app-2fQUNOZ1.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};

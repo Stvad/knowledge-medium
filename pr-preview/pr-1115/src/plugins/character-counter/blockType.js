@@ -1,1 +1,1 @@
-import{$U as e,QU as t}from"../../../chunks/app-D0VOr6Tz.js";export{t as CHAR_COUNTER_TYPE,e as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
+import{$U as e,QU as t}from"../../../chunks/app-2fQUNOZ1.js";export{t as CHAR_COUNTER_TYPE,e as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
