@@ -43,6 +43,7 @@ import { propertyDefinitionClaimantsForName } from './propertyDefinitionRegistry
 import {
   consumingParentIds,
   contestedChanges,
+  fieldIdsWithConsumers,
   type NameClaim,
 } from './internals/propertyDefinitionChangeProcessor'
 import { graphBackfillClaimBlockId } from './internals/graphBackfillClaim'
@@ -413,6 +414,21 @@ describe('consumingParentIds', () => {
     expect(await consumingParentIds(db, WS, ['f1', 'f2'], 1)).toEqual(['shared'])
     expect(calls).toHaveLength(2)
     expect(calls.map(params => params[1])).toEqual(['f1', 'f2'])
+  })
+})
+
+describe('fieldIdsWithConsumers', () => {
+  it('answers per definition, across chunks', async () => {
+    // Chunked like `consumingParentIds`, and unlike it keeps WHICH definition
+    // has consumers — the refusal names that one.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, 'field-unused', 'unused', 'string')
+    await repo.awaitProcessors()
+
+    expect(await fieldIdsWithConsumers(sharedDb.db, WS, ['field-unused', FIELD_ID], 1))
+      .toEqual(new Set([FIELD_ID]))
   })
 })
 

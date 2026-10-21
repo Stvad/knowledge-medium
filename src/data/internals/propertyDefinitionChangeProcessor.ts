@@ -578,6 +578,17 @@ const collectChanges = (
  *  throw would take their entire edit down. */
 export const FIELD_PROBE_CHUNK = 500
 
+/** §9 selection discipline, binding the workspace then `targetCount` field
+ *  ids: field-row discovery keys on the BIT plus the target (an unmarked
+ *  `((fieldId))` link row is not a consumer), and `parent_id IS NOT NULL` — a
+ *  marked workspace-root row is user content, not a field row (§9 root half) —
+ *  never re-key it. */
+const liveFieldRowsWhere = (targetCount: number): string =>
+  `workspace_id = ? AND reference_target_id IN (${
+    Array.from({length: targetCount}, () => '?').join(', ')})
+    AND is_field_form = 1
+    AND deleted = 0 AND parent_id IS NOT NULL`
+
 /** Parents holding a live field row for any of `fieldIds` — and the only gate
  *  this pass has.
  *
@@ -607,20 +618,35 @@ export const consumingParentIds = async (
   const set = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    // §9 selection discipline: field-row discovery keys on the BIT plus the
-    // target (an unmarked `((fieldId))` link row is not a consumer), and
-    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
-    // not a field row (§9 root half) — never re-key it.
     const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
-          AND is_field_form = 1
-          AND deleted = 0 AND parent_id IS NOT NULL`,
+      `SELECT DISTINCT parent_id FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
       [workspaceId, ...chunk],
     )
     for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
   }
   return [...set]
+}
+
+/** Which of `fieldIds` have consumers at all, by the same rows
+ *  {@link consumingParentIds} reads — the per-definition answer it folds away,
+ *  for a caller that must say WHICH definition holds a transaction up. One
+ *  query per chunk, so a scripted edit of a whole registry stays as cheap. */
+export const fieldIdsWithConsumers = async (
+  db: Pick<SameTxCtx['db'], 'getAll'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<Set<string>> => {
+  const consumed = new Set<string>()
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const rows = await db.getAll<{reference_target_id: string}>(
+      `SELECT DISTINCT reference_target_id FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
+      [workspaceId, ...chunk],
+    )
+    for (const row of rows) consumed.add(row.reference_target_id)
+  }
+  return consumed
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -899,12 +925,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       // ahead of it would pass alone, and its way out would not be this
       // edit's. The consumers of a definition it would SHARE a name with are
       // the next check's.
-      for (const held of unfanoutable) {
-        const stranded = await consumingParentIds(ctx.db, event.workspaceId, [held.fieldId])
-        if (stranded.length === 0) continue
-        const {code, message} = refusalFor(held)
+      const consumed = await fieldIdsWithConsumers(
+        ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
+      )
+      const blocking = unfanoutable.find(held => consumed.has(held.fieldId))
+      if (blocking !== undefined) {
+        const {code, message} = refusalFor(blocking)
         throw new ProcessorRejection(
-          message, code, {fieldIds: unfanoutable.map(each => each.fieldId)},
+          message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
       }
     }
