@@ -1,1 +1,1 @@
-import{JP as e}from"../../chunks/app-DRGsvUJW.js";export{e as BlockProperties};
+import{JP as e}from"../../chunks/app-CtsneVqW.js";export{e as BlockProperties};

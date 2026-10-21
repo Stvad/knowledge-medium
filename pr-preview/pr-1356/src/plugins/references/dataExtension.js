@@ -1,1 +1,1 @@
-import{hB as e}from"../../../chunks/app-DRGsvUJW.js";export{e as referencesDataExtension};
+import{gB as e}from"../../../chunks/app-CtsneVqW.js";export{e as referencesDataExtension};

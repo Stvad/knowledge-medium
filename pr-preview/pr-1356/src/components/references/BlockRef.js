@@ -1,1 +1,1 @@
-import{SC as e}from"../../../chunks/app-DRGsvUJW.js";export{e as BlockRef};
+import{bC as e}from"../../../chunks/app-CtsneVqW.js";export{e as BlockRef};

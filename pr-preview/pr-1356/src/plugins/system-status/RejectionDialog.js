@@ -1,1 +1,1 @@
-import{as as e}from"../../../chunks/app-DRGsvUJW.js";export{e as RejectionDialog};
+import{is as e}from"../../../chunks/app-CtsneVqW.js";export{e as RejectionDialog};
