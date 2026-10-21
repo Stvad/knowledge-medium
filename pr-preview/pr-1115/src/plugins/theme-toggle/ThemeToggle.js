@@ -1,1 +1,1 @@
-"use client";import{YS as e}from"../../../chunks/app-e4PaHptj.js";export{e as ThemeToggle};
+"use client";import{XS as e}from"../../../chunks/app-Dnq2hBCV.js";export{e as ThemeToggle};
