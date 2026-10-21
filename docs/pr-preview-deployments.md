@@ -1,6 +1,6 @@
 # PR preview deployments
 
-> **Status:** current — last verified against code 2026-09-22 (`.github/workflows/deploy-pages.yml`, `.github/workflows/pr-preview.yml`, `.github/workflows/approved-pr-preview.yml`, `.github/workflows/remove-approved-pr-preview.yml`, `scripts/ensure-pages-published.sh`).
+> **Status:** current — last verified against code 2026-10-21 (`.github/workflows/deploy-pages.yml`, `.github/workflows/pr-preview.yml`, `.github/workflows/approved-pr-preview.yml`, `.github/workflows/remove-pr-previews.yml`, `scripts/sweep-pr-previews.ts`, `scripts/ensure-pages-published.sh`).
 
 Every same-repository pull request gets its own live, clickable build of the app
 so you can open it and click around before merging:
@@ -10,7 +10,7 @@ https://stvad.github.io/knowledge-medium/pr-preview/pr-<number>/
 ```
 
 `rossjrw/pr-preview-action` posts a sticky comment on the PR with that link on
-each push, and removes the same-repository preview when the PR is merged or
+each push. A separate workflow removes the preview when the PR is merged or
 closed. Fork **preview builds** do not run automatically; a maintainer can
 explicitly approve one current fork head for the same URL. Its sticky comment
 records the approved SHA and deployment run.
@@ -88,6 +88,14 @@ path proves that particular content is live, even while another branch update is
 also publishing. This is also what makes a routine `master` merge reliably go
 live.
 
+Every new Pages build cancels the one in flight, and a build of the whole site
+takes about three minutes. So the retry is skipped while the latest build is
+`queued` or `building`: that build started after the push and includes it. When
+several deploy jobs were waiting at once, their unconditional retries kept
+cancelling the build they were all waiting for. Pushes still cancel in-flight
+builds, so a burst of preview pushes delays every publish until the burst
+ends.
+
 ### Why same-origin matters here
 
 Previews live on `stvad.github.io` (only the path differs), so two referrer /
@@ -161,18 +169,24 @@ PR head. Rerun it after a fork push to approve that new commit.
 
 ### Removal
 
-`.github/workflows/remove-approved-pr-preview.yml` removes a fork preview when
-its PR closes. Its `pull_request_target` trigger is limited to the trusted close
-event, and it never checks out contributor code. It also supports
-`workflow_dispatch` with `pr_number` for manual removal. The deploy and removal
-workflows use the same per-PR concurrency group, so they cannot publish and
-remove one fork preview concurrently. Same-repository automatic previews remain
-managed by `.github/workflows/pr-preview.yml`.
+`.github/workflows/remove-pr-previews.yml` removes previews for fork and
+same-repository PRs alike. It runs `scripts/sweep-pr-previews.ts`, which deletes
+every `pr-preview/pr-<n>/` whose PR is no longer open, in one `gh-pages` commit.
+It never force-pushes: if a deploy lands mid-sweep, the sweep starts again from
+the new tip. It runs:
 
-The automatic workflows acquire their concurrency lock only inside eligible
-jobs, so skipped fork or same-repository events cannot displace real cleanup.
-GitHub retains only the newest pending request in each group. Avoid issuing
-another manual request while one is pending, or it may replace that request.
+- on **PR close**, through `pull_request_target`. A `pull_request` workflow does
+  not run at all while the PR has a merge conflict, which is how abandoned,
+  unmerged PRs used to keep their previews. The trigger is limited to the
+  trusted close event, and the workflow checks out only `master`, never
+  contributor code. A close shares that PR's `pr-preview-<n>` concurrency group,
+  so it waits for an in-flight deploy of the same PR.
+- **daily**, to catch anything a close missed.
+- on **`workflow_dispatch`** from `master`. The optional `pr_number` input also
+  removes that PR's preview while the PR is still open.
+
+GitHub retains only the newest pending request in each concurrency group, so
+avoid issuing another manual request while one is pending.
 
 ## One-time setup (required — the workflows don't work until this is done)
 
@@ -227,10 +241,10 @@ permissions → **Read and write permissions**.
   for anything that writes.
 - **Merge-time branch race (self-limiting).** Merging a PR fires the production
   deploy (push→`master`) and a preview removal (`closed`) concurrently. Preview
-  deploy/removal for a particular PR serialize in their shared group, and
-  `force: false` makes branch updates fetch+rebase+retry, so production never
-  goes dark; the worst case is a removed preview subtree that lingers
-  (re-runnable, or cleared by a later branch squash).
+  deploy/removal for a particular PR serialize in their shared group, and every
+  `gh-pages` writer retries on a rejected push rather than forcing it, so
+  production never goes dark. The worst case is a removed preview subtree that
+  lingers until the next daily sweep.
 - **`gh-pages` history grows** (no `single-commit`, since squashing the branch
   would drop live preview subtrees). Squash the branch manually if it ever gets
   unwieldy.

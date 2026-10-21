@@ -18,7 +18,10 @@
 # our sha there means our content is served. This is precise and immune to
 # concurrent deploys: no build-id/timestamp correlation (the Pages "build"
 # object has no id field, and timestamps race), just "is my content live yet?".
-# On stall it re-requests a build via POST /pages/builds (the "try again later").
+# On stall it re-requests a build via POST /pages/builds (the "try again later"),
+# but only while no build is queued or building: every new build cancels the one
+# in flight, so with several jobs waiting at once their rebuild requests would
+# keep cancelling the build they are all waiting for.
 #
 # Requires: GITHUB_REPOSITORY, APP_BASE_PATH, and a token with `pages: write` in
 # GH_TOKEN. `dist/version.json` (produced by the build) must still be present.
@@ -41,6 +44,14 @@ echo "waiting for ${url} to serve sha=${want}"
 builds="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
+# Prints the latest Pages build's status (queued/building/built/errored), or
+# empty if it can't be read.
+latest_build_status() {
+  curl -fsS "${auth[@]}" "${builds}/latest" 2>/dev/null \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null \
+    || true
+}
+
 # Prints the sha the live site currently serves at our path, or empty (404 /
 # stale-before-publish / transient error all collapse to empty -> keep waiting).
 served() {
@@ -55,10 +66,16 @@ POLLS="${PAGES_PUBLISH_POLLS:-40}"    # status polls per round (~10s each)
 for round in $(seq 1 "$ROUNDS"); do
   # Round 1 rides the auto-build our push already triggered. Later rounds are the
   # actual retry: explicitly request a fresh Pages build of the current branch.
+  # A build that is already in flight started after our push, so it includes it.
   if [ "$round" -gt 1 ]; then
-    echo "== not live yet; requesting a Pages rebuild (round ${round}/${ROUNDS}) =="
-    curl -fsS -X POST "${auth[@]}" "$builds" >/dev/null || true
-    sleep 10
+    status="$(latest_build_status)"
+    if [ "$status" = queued ] || [ "$status" = building ]; then
+      echo "== not live yet; a Pages build is ${status}, waiting on it (round ${round}/${ROUNDS}) =="
+    else
+      echo "== not live yet; requesting a Pages rebuild (round ${round}/${ROUNDS}) =="
+      curl -fsS -X POST "${auth[@]}" "$builds" >/dev/null || true
+      sleep 10
+    fi
   fi
   for _ in $(seq 1 "$POLLS"); do
     got="$(served)"
