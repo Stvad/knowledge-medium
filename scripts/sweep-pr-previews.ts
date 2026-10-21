@@ -106,8 +106,8 @@ export function sweepPreviews({ git, openPrs, idleBefore, alsoRemove = [] }: {
 
 function redeployInstructions({ number, fork, base }: NoticeTarget, repository: string): string[] {
   const push = 'A push brings it back once the PR has no merge conflict.'
-  // The approval flow refuses a PR that does not target master.
-  if (base !== 'master') return [push]
+  // The approval flow refuses a PR that does not target master, and a fork push never deploys.
+  if (base !== 'master') return [fork ? 'A maintainer can approve a reviewed head to bring it back once the PR targets master.' : push]
   const command = (headSha: string) => [
     '```sh',
     `gh workflow run approved-pr-preview.yml --repo ${repository} --ref master -f pr_number=${number} -f head_sha=${headSha}`,
@@ -131,16 +131,20 @@ function expiredPreviewComment(pr: NoticeTarget, repository: string, idleDays: n
 /**
  * Rewrites the PR's preview-link comments in place, skipping any that already
  * say the preview expired, and keeps the marker so the next deploy updates
- * them rather than adding another. There can be several, because marocchino
- * skips a minimized comment and posts a fresh one. Editing notifies nobody,
- * which a new comment on every expired PR would.
+ * them rather than adding another. Editing notifies nobody, which a new
+ * comment on every expired PR would.
+ *
+ * There can be several, because marocchino skips a minimized comment and posts
+ * a fresh one, so every older one is hidden. The newest goes first: the first
+ * edit bumps `updatedAt` and ends the PR's retries, so a failure after it can
+ * only leave a hidden comment stale.
  */
 export function markPreviewExpired(gh: Gh, repository: string, pr: NoticeTarget, idleDays: number): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const stale = pages.flat().filter(c =>
     c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER) && !c.body.startsWith(EXPIRED_HEADING))
-  for (const comment of stale) {
+  for (const comment of stale.reverse()) {
     gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
       '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
   }

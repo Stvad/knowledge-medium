@@ -221,8 +221,9 @@ no merge conflict. To bring one back without a push, approve its head with
 carries that command with the PR number filled in. For a same-repository PR it
 looks up the current head itself, since a push would deploy that head anyway.
 For a fork PR it leaves the SHA for you to fill in with the commit you
-reviewed. A PR stacked on a branch other than `master` comes back only by push,
-because the approval flow requires `master`, and its comment says so.
+reviewed. The approval flow requires `master`, so a same-repository PR stacked
+on another branch comes back only by push, and a fork PR there only once it
+targets `master` again; its comment says which.
 
 This also works while the PR has a merge conflict and `pull_request` workflows
 do not run. It builds the PR **head**, not the merge with `master` that a push

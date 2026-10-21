@@ -217,7 +217,7 @@ describe('markPreviewExpired', () => {
 
   // Every run re-notifies every expired PR, so an edit that already landed must not be repeated.
   // marocchino skips a minimized comment and posts a fresh one, so a PR can carry several.
-  it('rewrites every preview comment that does not already say it expired', () => {
+  it('rewrites every preview comment that does not already say it expired, newest first', () => {
     const expiredBody = () => {
       const probe = fakeGh([{ id: 1, user: bot, body: marker }])
       markPreviewExpired(probe.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
@@ -231,7 +231,7 @@ describe('markPreviewExpired', () => {
 
     expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(true)
     expect(patches.map(args => args.find(arg => arg.includes('/comments/')))).toEqual([
-      'repos/o/r/issues/comments/12', 'repos/o/r/issues/comments/14',
+      'repos/o/r/issues/comments/14', 'repos/o/r/issues/comments/12',
     ])
   })
 
@@ -255,12 +255,17 @@ describe('markPreviewExpired', () => {
     expect(fork.body()).toContain('head_sha=<reviewed head SHA>')
   })
 
-  // The approval flow refuses a PR that does not target master.
-  it('offers only a push to a PR that targets another branch', () => {
+  // The approval flow refuses a PR that does not target master, and a fork push never deploys.
+  it('offers only a push to a same-repo PR that targets another branch, and neither to such a fork', () => {
     const stacked = fakeGh([{ id: 12, user: bot, body: marker }])
+    const stackedFork = fakeGh([{ id: 12, user: bot, body: marker }])
     markPreviewExpired(stacked.gh, 'o/r', { number: 5, fork: false, base: 'feature' }, 30)
+    markPreviewExpired(stackedFork.gh, 'o/r', { number: 5, fork: true, base: 'feature' }, 30)
 
     expect(stacked.body()).toContain('A push brings it back')
     expect(stacked.body()).not.toContain('gh workflow run')
+    expect(stackedFork.body()).not.toContain('A push brings it back')
+    expect(stackedFork.body()).not.toContain('gh workflow run')
+    expect(stackedFork.body()).toContain('once the PR targets master')
   })
 })
