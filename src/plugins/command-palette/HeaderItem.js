@@ -1,1 +1,1 @@
-import{KE as e}from"../../../chunks/app-D7ZQLOSN.js";export{e as CommandPaletteHeaderItem};
+import{KE as e}from"../../../chunks/app-Cc5aaVEC.js";export{e as CommandPaletteHeaderItem};

@@ -1,1 +1,1 @@
-import{ar as e}from"../../../chunks/app-D7ZQLOSN.js";export{e as perfMonitorPlugin};
+import{ar as e}from"../../../chunks/app-Cc5aaVEC.js";export{e as perfMonitorPlugin};
