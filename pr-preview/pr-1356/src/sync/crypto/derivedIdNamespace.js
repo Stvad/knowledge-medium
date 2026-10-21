@@ -1,1 +1,0 @@
-import{A8 as e}from"../../../chunks/app-CtsneVqW.js";export{e as deriveWorkspaceIdNamespace};

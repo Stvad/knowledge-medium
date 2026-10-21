@@ -1,1 +1,0 @@
-import{jU as e}from"../../../chunks/app-CtsneVqW.js";export{e as contributorsDataExtension};

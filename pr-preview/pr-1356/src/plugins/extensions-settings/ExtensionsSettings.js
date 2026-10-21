@@ -1,1 +1,0 @@
-import{er as e}from"../../../chunks/app-CtsneVqW.js";export{e as ExtensionsSettings};

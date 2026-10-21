@@ -1,1 +1,0 @@
-import{QR as e}from"../../chunks/app-CtsneVqW.js";export{e as usePropertySchemas};
