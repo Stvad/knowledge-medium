@@ -19,7 +19,7 @@ import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
 import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
-import { WorkspaceGateActions } from '@/components/workspace/WorkspaceSwitcher.js'
+import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.js'
 import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
 import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
@@ -134,6 +134,11 @@ const App = () => {
   const reResolve = useCallback(() => {
     setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
   }, [])
+  // Re-resolve as if no workspace were named — the remembered one, else the
+  // personal one. For leaving a gated workspace just deleted.
+  const resolveDefaultWorkspace = useCallback(() => {
+    setHashSnapshot(current => ({hash: '', version: current.version + 1}))
+  }, [])
 
   // A workspace the server converts to e2ee while it's open here closes into
   // the gate: until this device's pin is upgraded it can't sync the workspace.
@@ -162,7 +167,7 @@ const App = () => {
         // than racing it.
         deps={gateDeps}
         onResolved={reResolve}
-        footer={<WorkspaceGateActions/>}
+        footer={<WorkspaceSwitcher gate={{workspaceId: initial.workspaceId, onLeave: resolveDefaultWorkspace}}/>}
       />
     )
   }

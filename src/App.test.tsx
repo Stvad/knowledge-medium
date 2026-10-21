@@ -63,10 +63,17 @@ vi.mock('react-use', () => ({
   useSearchParam: () => null,
 }))
 
-// The gate's footer (workspace menu + settings) reads the workspace list and
-// the hash, which this file doesn't mock; it isn't what these tests are about.
+// The gate's footer switcher reads the workspace list, which this file doesn't
+// mock; the stand-in records the `gate` App hands it.
+const switcher = vi.hoisted(() => ({
+  gate: undefined as import('@/components/workspace/WorkspaceSwitcher').SwitcherGate | undefined,
+}))
+
 vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({
-  WorkspaceGateActions: () => null,
+  WorkspaceSwitcher: ({gate}: {gate?: import('@/components/workspace/WorkspaceSwitcher').SwitcherGate}) => {
+    switcher.gate = gate
+    return null
+  },
 }))
 
 // AppRuntimeProvider pulls in the full extension-resolution machinery
@@ -104,7 +111,9 @@ vi.mock('@/components/BlockComponent.tsx', async () => {
 // Imported after the mocks above so it picks up the mocked collaborators.
 import App from './App'
 import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
+import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { setModePin } from '@/sync/keys/modePin.js'
+import { buildAppHash } from '@/utils/routing'
 
 describe('App / LayoutRootContext provision', () => {
   let sharedDb: TestDb
@@ -176,5 +185,28 @@ describe('App / LayoutRootContext provision', () => {
 
     await vi.waitFor(() => expect(screen.queryByTestId('app-block-component')).toBeNull())
     expect(await screen.findByRole('heading', {name: /vault/i})).toBeInTheDocument()
+  })
+
+  it('leaves a gated workspace for the default one, not the workspace the URL names', async () => {
+    window.location.hash = buildAppHash('ws-1')
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({
+      kind: 'locked', reason: 'quarantine', workspaceName: 'Vault', canary: null,
+    })
+    await act(async () => {
+      render(
+        <Suspense fallback={<div>loading</div>}>
+          <App/>
+        </Suspense>,
+      )
+    })
+    expect(await screen.findByRole('heading', {name: /vault/i})).toBeInTheDocument()
+    expect(switcher.gate?.workspaceId).toBe('ws-1')
+    expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBe('ws-1')
+
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
+    await act(async () => switcher.gate!.onLeave())
+
+    expect(await screen.findByTestId('app-block-component')).toBeInTheDocument()
+    expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBeUndefined()
   })
 })

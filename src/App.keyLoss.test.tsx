@@ -58,7 +58,7 @@ vi.mock('@/hooks/useWorkspaces.js', () => ({
 }))
 vi.mock('@/components/Login.js', () => ({useIsLocalOnly: () => true}))
 vi.mock('react-use', () => ({useSearchParam: () => null}))
-vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({WorkspaceGateActions: () => null}))
+vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({WorkspaceSwitcher: () => null}))
 vi.mock('@/extensions/AppRuntimeProvider.js', () => ({
   AppRuntimeProvider: ({children}: {children: React.ReactNode}) => children,
 }))

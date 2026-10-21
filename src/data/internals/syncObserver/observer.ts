@@ -160,7 +160,8 @@ export interface BlocksSyncedObserver {
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
    *  enqueue. `onProgress` hears nothing while the pass waits its turn on the
-   *  chain, then once with `done: 0` and after every committed window. */
+   *  chain, then once with `done: 0` and after every committed window. It runs
+   *  inside the pass, so it must not throw: a throw rejects the pass. */
   drainWorkspace(
     workspaceId: string,
     scope: RematerializeScope,

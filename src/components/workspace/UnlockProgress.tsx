@@ -5,12 +5,10 @@
  * initial sync before its first window.
  */
 
-import { useQuery, useStatus } from '@powersync/react'
+import { useStatus } from '@powersync/react'
 import { Loader2 } from 'lucide-react'
-import {
-  MATERIALIZE_QUEUE_COUNT_SQL,
-  type RematerializeProgress,
-} from '@/data/internals/syncObserver/observer'
+import type { RematerializeProgress } from '@/data/internals/syncObserver/observer'
+import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog'
 
 /** Where a gate's drain is: queued behind this device's other sync work, or
  *  `done` of `total` staged rows in. */
@@ -18,18 +16,13 @@ export type DrainProgress =
   | {readonly kind: 'waiting'}
   | ({readonly kind: 'running'} & RematerializeProgress)
 
-const backlogThrottleMs = 1_000
-
-const percent = (fraction: number): string => `${Math.floor(fraction * 100)}%`
+/** Floored, so a nearly finished download never reads 100%; capped, since
+ *  PowerSync's fraction can pass 1 after a compaction. */
+const percent = (fraction: number): string => `${Math.floor(Math.min(fraction, 1) * 100)}%`
 
 export function UnlockProgress({progress}: {progress: DrainProgress}) {
   const status = useStatus()
-  const backlog = useQuery<{count: number}>(
-    MATERIALIZE_QUEUE_COUNT_SQL,
-    [],
-    {reportFetching: false, throttleMs: backlogThrottleMs},
-  )
-  const applying = Number(backlog.data[0]?.count ?? 0)
+  const applying = useMaterializeBacklog()
   const downloadFraction = status.downloadProgress?.downloadedFraction ?? null
 
   return (
@@ -49,11 +42,11 @@ export function UnlockProgress({progress}: {progress: DrainProgress}) {
         <ProgressRow label="Applying synced changes" detail={`${applying.toLocaleString()} left`}/>
       )}
       {progress.kind === 'waiting' ? (
-        <ProgressRow label="Opening this workspace" detail="Waiting for sync"/>
+        <ProgressRow label="Opening this workspace" detail="Waiting for other sync work"/>
       ) : (
         <ProgressRow
           label="Opening this workspace"
-          detail={`${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} blocks`}
+          detail={`${progress.done.toLocaleString()} of ${progress.total.toLocaleString()}`}
           fraction={progress.total > 0 ? progress.done / progress.total : null}
         />
       )}

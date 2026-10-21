@@ -224,6 +224,52 @@ describe('WorkspaceKeyGate — unlock progress', () => {
     expect(screen.getByText('drain blew up')).toBeInTheDocument()
     expect(screen.queryByRole('status')).toBeNull()
   })
+
+  const renderConfirming = (drained: ReturnType<typeof makeDeferred>, onResolved: () => Promise<void>) => {
+    window.localStorage.clear()
+    const drainWorkspace = vi.fn(async () => {
+      await drained.promise
+      return {deferred: 0}
+    })
+    const view = render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="quarantine"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={onResolved}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: /this workspace is not encrypted/i}))
+    return view
+  }
+
+  it('shows no progress once its drain has settled, whatever the gate does next', async () => {
+    const drained = makeDeferred()
+    const onResolved = vi.fn(() => new Promise<void>(() => {}))
+    renderConfirming(drained, onResolved)
+    expect(await screen.findByRole('status')).toBeInTheDocument()
+
+    await act(async () => drained.resolve())
+    await vi.waitFor(() => expect(onResolved).toHaveBeenCalled())
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('does not re-resolve the host for a gate the user left mid-drain', async () => {
+    const drained = makeDeferred()
+    const onResolved = vi.fn(async () => {})
+    const {unmount} = renderConfirming(drained, onResolved)
+    await screen.findByRole('status')
+
+    unmount()
+    // A macrotask, so every promise job the drain's settling queues has run.
+    await act(async () => {
+      drained.resolve()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(onResolved).not.toHaveBeenCalled()
+  })
 })
 
 describe('WorkspaceKeyGate — footer', () => {
@@ -366,6 +412,14 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
   })
 
+  it('shows the progress of the drain the pin upgrade runs', async () => {
+    deps.drainWorkspace.mockImplementation(() => new Promise(() => {}))
+    renderGate()
+    fireEvent.change(await screen.findByLabelText(/workspace key/i), {target: {value: wkString}})
+    fireEvent.click(screen.getByRole('button', {name: /^unlock$/i}))
+    expect(await screen.findByRole('status')).toHaveTextContent(/waiting/i)
+  })
+
   it('the converting device unlocks with the key it already holds, once past sealing', async () => {
     await storeKey()
     const onResolved = renderGate()
@@ -436,6 +490,24 @@ describe('WorkspaceKeyGate — finishing-upgrade', () => {
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1))
     expect(drainWorkspace).toHaveBeenCalledTimes(1)
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
+  it('shows the progress of the drain it resumes', async () => {
+    window.localStorage.clear()
+    setModePin(USER, WS, 'e2ee')
+    writePinUpgradeMarker(USER, WS)
+    await getWorkspaceKeyStore().put(USER, WS, {wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey})
+    render(
+      <WorkspaceKeyGate
+        userId={USER}
+        workspaceId={WS}
+        reason="finishing-upgrade"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace: () => new Promise(() => {})}}
+        onResolved={async () => {}}
+      />,
+    )
+    expect(await screen.findByRole('status')).toBeInTheDocument()
   })
 
   it('a drain that left rows deferred says so and offers a retry, rather than re-resolving into itself', async () => {
