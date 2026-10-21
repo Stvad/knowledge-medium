@@ -40,17 +40,29 @@ beforeEach(async () => {
 
 const bag = (aliases: readonly string[]) => ({[aliasesProp.name]: aliasesProp.codec.encode([...aliases])})
 
-/** A live block claiming `alias` that `repo.tx` could not have written — the
- *  shape sync-apply leaves, since the uniqueness trigger skips it. A raw insert
- *  still maintains `block_aliases`. */
-const insertSynced = async (id: string, content: string, aliases: readonly string[], createdAt: number) => {
+/** A row written the way sync-apply writes one: raw, so the uniqueness trigger
+ *  skips it — it can co-claim a name, or be a malformed tombstone or a stray
+ *  value child that `repo.tx` would never leave — while `block_aliases` is
+ *  still maintained. */
+const insertRaw = async ({id, content, properties = {}, parentId = null, orderKey = `k-${id}`, createdAt = 1, deleted = false}: {
+  id: string
+  content: string
+  properties?: Record<string, unknown>
+  parentId?: string | null
+  orderKey?: string
+  createdAt?: number
+  deleted?: boolean
+}) => {
   await sharedDb.db.execute(
     `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
       references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-     VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
-    [id, WS, `k-${id}`, content, JSON.stringify(bag(aliases)), createdAt, createdAt, createdAt],
+     VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'sync', 'sync', ?)`,
+    [id, WS, parentId, orderKey, content, JSON.stringify(properties), createdAt, createdAt, createdAt, deleted ? 1 : 0],
   )
 }
+
+const insertSynced = (id: string, content: string, aliases: readonly string[], createdAt: number) =>
+  insertRaw({id, content, properties: bag(aliases), createdAt})
 
 const createPage = (id: string, content: string, aliases: readonly string[], orderKey = 'a0') =>
   repo.tx(
@@ -135,20 +147,12 @@ describe('a revival yields a name taken while the block was dead (#883)', () => 
     {shape: 'an array with a non-string entry', stored: ['Inbox', 7, 'Mine'], restored: ['Mine']},
     {shape: 'an object', stored: {a: 'Inbox', b: 'Mine'}, restored: ['Mine']},
   ])('restores a page whose bag is $shape with a taken name in it', async ({stored: storedBag, restored}) => {
-    await sharedDb.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', 'My Page', ?, '[]', 1, 1, 1, 'u', 'u', 1)`,
-      [PAGE, WS, JSON.stringify({[aliasesProp.name]: storedBag})],
-    )
+    await insertRaw({id: PAGE, content: 'My Page', properties: {[aliasesProp.name]: storedBag}, deleted: true})
     await createPage('q', 'Q', ['Inbox'], 'a1')
 
     await repo.mutate.restore({id: PAGE})
 
-    const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
-      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [PAGE])
-    expect(row.deleted).toBe(0)
-    expect(JSON.parse(row.properties_json)[aliasesProp.name]).toEqual(restored)
+    expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: restored})
     expect(await holders('Inbox')).toEqual(['q'])
   })
 
@@ -278,12 +282,7 @@ describe('a revival yields in a workspace whose properties are child blocks', ()
       'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ?',
       [PAGE, resolution.schema.fieldId],
     )
-    await sharedDb.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES ('peer-member', ?, ?, 'z', 'Peer', '{}', '[]', 1, 1, 1, 'peer', 'peer', 0)`,
-      [WS, field.id],
-    )
+    await insertRaw({id: 'peer-member', content: 'Peer', parentId: field.id, orderKey: 'z'})
     await insertSynced('q', 'Q', ['Inbox'], 5_000)
 
     expect(await repo.undo()).toBe(true)
@@ -292,12 +291,7 @@ describe('a revival yields in a workspace whose properties are child blocks', ()
   })
 
   it('restores a malformed bag with a taken name in it', async () => {
-    await sharedDb.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', 'My Page', ?, '[]', 1, 1, 1, 'u', 'u', 1)`,
-      [PAGE, WS, JSON.stringify({[aliasesProp.name]: ['Inbox', 7, 'Mine']})],
-    )
+    await insertRaw({id: PAGE, content: 'My Page', properties: {[aliasesProp.name]: ['Inbox', 7, 'Mine']}, deleted: true})
     await createPage('q', 'Q', ['Inbox'], 'a1')
 
     await repo.mutate.restore({id: PAGE})

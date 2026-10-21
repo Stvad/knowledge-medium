@@ -7,6 +7,7 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
+import { appendDerivedAliasClaims } from '@/data/aliasClaim'
 import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -387,26 +388,8 @@ export const ensureDailyNoteTarget = async (
     // above proved the ISO is unclaimed here, so re-assert it if missing —
     // append (not replace), since the seat may hold long-form literals
     // claimed via claimLiteralDateAliases.
-    await ensureSeatClaimsIso(tx, result.id, date)
+    await appendDerivedAliasClaims(tx, result.id, [date])
   }
   return result
 }
 
-/** Append `iso` to the seat's alias list if absent. Precondition: the
- *  caller proved `iso` is unclaimed in this tx, so the ISO insert itself
- *  can't collide. A malformed alias property is left untouched —
- *  replacing it would drop entries the block_aliases trigger still
- *  indexes, worse than leaving the ISO unclaimed. */
-const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<void> => {
-  const seat = await tx.get(id)
-  if (seat === null || seat.deleted) return
-  let existing: readonly string[]
-  try {
-    const encoded = seat.properties[aliasesProp.name]
-    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
-  } catch {
-    return
-  }
-  if (existing.includes(iso)) return
-  await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
-}

@@ -102,6 +102,32 @@ const takenAliases = async (
     .map(conflict => conflict.alias))
 }
 
+/** Append `names` to `id`'s alias bag where missing — a derived claim whose
+ *  names the caller proved free in this tx, so the write cannot collide.
+ *  `skipMetadata`, because derived bookkeeping must not make the row look
+ *  freshly user-edited. A malformed bag is left alone: appending means
+ *  replacing the whole list, which could drop a name the trigger still
+ *  indexes — worse than leaving these unclaimed. */
+export const appendDerivedAliasClaims = async (
+  tx: Tx,
+  id: string,
+  names: readonly string[],
+): Promise<void> => {
+  if (names.length === 0) return
+  const row = await tx.get(id)
+  if (row === null || row.deleted) return
+  let existing: readonly string[]
+  try {
+    const encoded = row.properties[aliasesProp.name]
+    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+  } catch {
+    return
+  }
+  const missing = [...new Set(names)].filter(name => !existing.includes(name))
+  if (missing.length === 0) return
+  await tx.setProperty(id, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+}
+
 /** Every name this row actually claims, bag order first.
  *
  *  Read from the index rather than decoded from the property, because only the
