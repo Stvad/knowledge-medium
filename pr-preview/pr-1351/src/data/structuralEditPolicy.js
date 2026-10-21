@@ -1,1 +1,1 @@
-import{OO as e,kO as t}from"../../chunks/app-CAQ6WP6g.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{DO as e,EO as t}from"../../chunks/app-CFQV-KMb.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};
