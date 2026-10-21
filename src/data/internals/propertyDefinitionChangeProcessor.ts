@@ -915,12 +915,12 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     const {changes, unfanoutable, sharedNameClaimants} = collected
-    // ABOVE the refusal below and above the two dormancy returns under it: every
-    // one of those asks about FIELD ROWS, and the hazard here is a consumer that
-    // has none. The runbook flips before
-    // backfilling, so a chunked backfill's un-reached parents hold cells for
-    // this definition and no field row — which makes a definition with NO field
-    // rows the WORST case rather than an exempt one.
+    // ABOVE the refusal below and above the two dormancy returns under it:
+    // every one of those asks about FIELD ROWS, and the hazard here is a
+    // consumer that has none. The runbook flips before backfilling, so a
+    // chunked backfill's un-reached parents hold cells for this definition and
+    // no field row — which makes a definition with NO field rows the WORST
+    // case rather than an exempt one.
     //
     // Permanent rather than late, and NOT because later batches stop resolving
     // the old name — the pass holds ONE resolver for its whole run (see where
@@ -1013,22 +1013,12 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
       )
       done += 1
-      // Unconditional, and a no-op unless a gesture opened a run for this
-      // workspace — the processor does not decide whether anyone is watching.
-      //
-      // Three moments, and each is a state the surface cannot reach without
-      // it. The FIRST turns "Starting…" into a number, which is when the user
-      // is likeliest to think nothing is happening. Every STRIDE moves the
-      // bar. And the LAST says the consumers are done and the commit is what
-      // remains — a total that is not a multiple of the stride would
-      // otherwise sit at the previous one for the whole tail, reading
-      // "1,000 of 1,124" while the transaction commits, and then vanish.
-      // Still not the END of the run: the commit and the post-commit walk
-      // come after it, and the gesture that opened the run is what closes it.
+      // No-op unless a gesture's run is open. The first report replaces
+      // 'Starting…', every stride moves the bar, and the last keeps a total
+      // that is not a multiple of the stride from sitting short while the
+      // transaction commits.
       if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
-        reportPropertyDefinitionFanout(
-          event.workspaceId, changingFieldIds, done, parentIds.length,
-        )
+        reportPropertyDefinitionFanout(changingFieldIds, done, parentIds.length)
       }
     }
     // REFUSE rather than commit a change that takes a value away. Every write

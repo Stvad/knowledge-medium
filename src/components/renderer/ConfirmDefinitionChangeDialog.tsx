@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { MILLISECONDS_PER_CONSUMER } from '@/data/propertyDefinitionFanout.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import { agree } from '@/utils/pluralize'
 
@@ -28,15 +29,6 @@ export interface ConfirmDefinitionChangeDialogProps {
    *  number here is the work that follows. */
   blockCount: number
 }
-
-/** Roughly what one consumer costs the fan-out, end to end — its cell read,
- *  its field rows, the rewrite.
- *
- *  A single number for a spread of machines and graph shapes, which is why
- *  {@link describeFanoutWait} spends it in buckets and the copy says "around".
- *  It exists because the count alone does not answer the question the user is
- *  actually asking, which is whether to start this now. */
-const MILLISECONDS_PER_CONSUMER = 2
 
 const describeFanoutWait = (blockCount: number): string => {
   const seconds = (blockCount * MILLISECONDS_PER_CONSUMER) / 1000
@@ -92,12 +84,7 @@ export const ConfirmDefinitionChangeDialog = ({
       <DialogHeader>
         <DialogTitle>{TITLES[kind](propertyName, nextName)}</DialogTitle>
       </DialogHeader>
-      {/* `DialogDescription`, not a bare div: it is what Radix points
-          `aria-describedby` at, so without it a screen reader announces the
-          title and then the buttons — the count, the freeze and the refusal
-          are exactly what the user is being asked to consent to, and the
-          people who most need them announced were the ones not hearing
-          them. */}
+      {/* `DialogDescription`, so Radix points `aria-describedby` at what is being consented to. */}
       <DialogDescription className="space-y-3 text-sm text-foreground" asChild>
         <div>
         {/* ONE interpolated string rather than a sentence with the count

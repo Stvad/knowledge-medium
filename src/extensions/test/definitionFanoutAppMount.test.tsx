@@ -91,11 +91,11 @@ const renderMount = (): void => {
 /** ASYNC act: mounting the dialog suspends on the shortcut funnel's UI-state
  *  read, and the resolution needs a flush the synchronous form does not give. */
 const openRun = async (
-  workspaceId = WS, total = 4_000, fieldId = FIELD_ID,
+  total = 4_000, fieldId = FIELD_ID,
 ): Promise<PropertyDefinitionFanoutRun> => {
   let run!: PropertyDefinitionFanoutRun
   await act(async () => {
-    run = beginPropertyDefinitionFanout(workspaceId, fieldId, 'status', total)
+    run = beginPropertyDefinitionFanout(fieldId, 'status', total)
   })
   return run
 }
@@ -105,21 +105,21 @@ const openRunNamed = async (
 ): Promise<PropertyDefinitionFanoutRun> => {
   let run!: PropertyDefinitionFanoutRun
   await act(async () => {
-    run = beginPropertyDefinitionFanout(WS, 'field-other', propertyName, total)
+    run = beginPropertyDefinitionFanout('field-other', propertyName, total)
   })
   return run
 }
 
 /** A report is only accepted while the run's own transaction is running, so
  *  every progress test has to say that first — which is the point of it. */
-const transactionStarts = (workspaceId = WS, fieldId = FIELD_ID): void => {
-  act(() => { markPropertyDefinitionFanoutRunning(workspaceId, fieldId) })
+const transactionStarts = (fieldId = FIELD_ID): void => {
+  act(() => { markPropertyDefinitionFanoutRunning(fieldId) })
 }
 
 const report = (
-  done: number, total = 4_000, workspaceId = WS, fieldIds = [FIELD_ID],
+  done: number, total = 4_000, fieldIds = [FIELD_ID],
 ): void => {
-  act(() => { reportPropertyDefinitionFanout(workspaceId, fieldIds, done, total) })
+  act(() => { reportPropertyDefinitionFanout(fieldIds, done, total) })
 }
 
 const bar = () => screen.getByRole('progressbar')
@@ -172,24 +172,11 @@ describe('the fan-out progress surface', () => {
     // filed under the changing workspace would take the only account of that
     // with it.
     renderMount()
-    await openRun('ws-somewhere-else')
+    await openRun()
+    act(() => { repo.setActiveWorkspaceId('ws-somewhere-else') })
 
     expect(await screen.findByRole('dialog')).toBeTruthy()
     expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()
-  })
-
-  it('ignores a report belonging to another workspace\'s change', async () => {
-    // The run is not found BY workspace, so the workspace is what
-    // matches a report to it: a fan-out in another workspace must not move
-    // this one's numbers under this one's title.
-    renderMount()
-    await openRun(WS, 4_000)
-    expect(await screen.findByRole('dialog')).toBeTruthy()
-
-    transactionStarts()
-    report(500, 4_000, 'ws-somewhere-else')
-
-    expect(screen.getByText('Starting…')).toBeTruthy()
   })
 
   it('ignores a report arriving before its own transaction starts', async () => {
@@ -199,7 +186,7 @@ describe('the fan-out progress surface', () => {
     // is exclusive — so a report before this run's transaction is running
     // belongs to whatever else holds it.
     renderMount()
-    await openRun(WS, 4_000)
+    await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
     report(500)
@@ -218,11 +205,11 @@ describe('the fan-out progress surface', () => {
     // counts would otherwise pour into a modal titled for another property,
     // up to declaring it saved before its own transaction had started.
     renderMount()
-    await openRun(WS, 4_000)
+    await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
     transactionStarts()
-    report(500, 4_000, WS, ['field-somebody-elses'])
+    report(500, 4_000, ['field-somebody-elses'])
 
     expect(screen.getByText('Starting…')).toBeTruthy()
   })
@@ -234,7 +221,7 @@ describe('the fan-out progress surface', () => {
     // on the second property's name and the first `end` would take down a
     // surface the second still needs.
     renderMount()
-    const first = await openRun(WS, 4_000)
+    const first = await openRun()
     expect(await screen.findByRole('dialog')).toBeTruthy()
 
     const second = await openRunNamed('otherProperty', 9_000)

@@ -2477,10 +2477,10 @@ describe('reporting fan-out progress', () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p1', 'status', 'done')
-    const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 1)
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 1)
     try {
       expect(propertyDefinitionFanout()?.done).toBeNull()
-      markPropertyDefinitionFanoutRunning(WS, FIELD_ID)
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
 
       await rename(repo, FIELD_ID, 'state')
 
@@ -2499,9 +2499,9 @@ describe('reporting fan-out progress', () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
     for (const id of ['p1', 'p2', 'p3']) await seedProperty(repo, id, 'status', 'done')
-    const run = beginPropertyDefinitionFanout(WS, FIELD_ID, 'status', 3)
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 3)
     try {
-      markPropertyDefinitionFanoutRunning(WS, FIELD_ID)
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
       await rename(repo, FIELD_ID, 'state')
 
       expect(propertyDefinitionFanout()).toMatchObject({done: 3, total: 3})

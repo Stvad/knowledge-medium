@@ -2637,7 +2637,7 @@ export class Repo {
   /** How many blocks a change to the definition at `fieldId` would re-key —
    *  the fan-out `core.migratePropertyDefinition` performs inside whatever
    *  transaction edits that definition row, counted BEFORE the gesture commits
-   *  to it. Workspace defaults to the active one; missing workspace returns 0.
+   *  to it.
    *
    *  Not {@link countBlocksUsingProperty}, which counts cells by NAME. That is
    *  the right question for a delete (the values that stay behind) and the
@@ -2647,11 +2647,9 @@ export class Repo {
    *  is shared with the walk itself. */
   async countPropertyDefinitionConsumers(
     fieldId: string,
-    workspaceId?: string,
+    workspaceId: string,
   ): Promise<number> {
-    const wsId = workspaceId ?? this.activeWorkspaceId
-    if (!wsId) return 0
-    return countConsumingParents(this.db, wsId, fieldId)
+    return countConsumingParents(this.db, workspaceId, fieldId)
   }
 
   /** Read-only handle on the currently-installed FacetRuntime. Used by

@@ -31,25 +31,33 @@
  * vanishes the moment the user navigates to another one — leaving them in a
  * frozen app with no account of why.
  *
- * A report is matched to the run by the DEFINITION it is changing, not by the
- * workspace. Only the gesture is serialised, and headless callers — the agent
- * CLI, an importer — are the ones this module deliberately asks nothing of,
- * so one of them can hold the writer while a confirmation is open; a
- * workspace match would then pour its counts into a modal titled for another
- * property, up to and including declaring it saved before its own
- * transaction had started.
+ * A report is matched to the run by the DEFINITION it is changing, and that
+ * is enough: block ids are unique across workspaces, so the id already says
+ * which workspace. Only the gesture is serialised, and headless callers — the
+ * agent CLI, an importer — are the ones this module deliberately asks nothing
+ * of, so one of them can hold the writer while a confirmation is open; its
+ * counts would otherwise pour into a modal titled for another property, up to
+ * and including declaring it saved before its own transaction had started.
  */
 import { CallbackSet } from '@/utils/callbackSet.js'
+
+/** Roughly what one consumer costs the fan-out, end to end — its cell read,
+ *  its field rows, the rewrite.
+ *
+ *  A single number for a spread of machines and graph shapes, which is why the
+ *  confirmation spends it in buckets and its copy says "around". It exists
+ *  because the count alone does not answer the question the user is actually
+ *  asking, which is whether to start this now. */
+export const MILLISECONDS_PER_CONSUMER = 2
 
 /** Above this many consuming blocks a definition change is worth interrupting
  *  the user for, in both directions — a confirmation before, a progress
  *  surface during.
  *
  *  Chosen as roughly where the freeze stops reading as a slow save and starts
- *  reading as a hang: the fan-out costs a couple of milliseconds per consumer,
- *  so this is the low seconds. Below it the modal pair is the worse experience
- *  — two dialogs flashing past for a change that was over before they
- *  rendered. */
+ *  reading as a hang: at {@link MILLISECONDS_PER_CONSUMER} each, this is the
+ *  low seconds. Below it the modal pair is the worse experience — two dialogs
+ *  flashing past for a change that was over before they rendered. */
 export const LARGE_FANOUT_CONSUMERS = 1_000
 
 /** The one predicate. A gesture asks it once and gets both behaviours, which
@@ -84,8 +92,6 @@ export const queueDefinitionChange = <T>(change: () => Promise<T>): Promise<T> =
 type RunOwner = symbol
 
 export interface PropertyDefinitionFanoutSnapshot {
-  /** The workspace whose definition is changing. */
-  readonly workspaceId: string
   /** The definition block. Carried so a report can be matched to the run it
    *  belongs to, and for nothing else — see the one-slot note above. */
   readonly fieldId: string
@@ -104,10 +110,10 @@ export interface PropertyDefinitionFanoutSnapshot {
    *  A run opens when the user confirms, which is before its transaction has
    *  the writer — and only the gesture is serialised, so a headless caller
    *  can be mid-change over the same definition in that gap. Identity does
-   *  not separate them: same workspace, same definition. What does is that
-   *  the writer is exclusive, so a report arriving while this run's own
-   *  transaction is running can only be its own. The gesture sets this from
-   *  inside that transaction. */
+   *  not separate them: both are about that definition. What does is that the
+   *  writer is exclusive, so a report arriving while this run's own
+   *  transaction is running can only be its own — and a report counts only
+   *  then. The gesture sets this from inside that transaction. */
   readonly transactionRunning: boolean
 }
 
@@ -156,12 +162,12 @@ export interface PropertyDefinitionFanoutRun {
  *  which is a property of the CALLER, and a store that silently let one
  *  caller's run repoint another's is the wrong thing to leave lying around. */
 export const beginPropertyDefinitionFanout = (
-  workspaceId: string, fieldId: string, propertyName: string, total: number,
+  fieldId: string, propertyName: string, total: number,
 ): PropertyDefinitionFanoutRun => {
   const owner: RunOwner = Symbol('property-definition-fanout')
   if (live === null) {
     publish({
-      workspaceId, fieldId, propertyName, total,
+      fieldId, propertyName, total,
       done: null, transactionRunning: false, owner,
     })
   }
@@ -171,45 +177,34 @@ export const beginPropertyDefinitionFanout = (
 }
 
 /** How far the fan-out has got, from a transaction changing `fieldIds`.
- *  Ignored when no run is open, and when the open one is not about any of
- *  them — the transaction holding the writer is not necessarily the one the
- *  user is waiting on.
- *
- *  A report is an UPDATE to a run somebody else opened and never the opening
- *  of one, which is the whole of what keeps a headless rename from putting a
- *  modal in front of the next reader. The rule is pinned where it can be: a
- *  processor that OPENED a run rather than reporting into one fails two named
- *  tests in `propertyDefinitionChange.test.ts`. */
+ *  Ignored unless this run's transaction is running and is changing one of
+ *  them. A report updates a run the gesture opened and never opens one, which
+ *  keeps a headless rename from putting a modal in front of anyone. */
 export const reportPropertyDefinitionFanout = (
-  workspaceId: string, fieldIds: readonly string[], done: number, total: number,
+  fieldIds: readonly string[], done: number, total: number,
 ): void => {
   if (live?.transactionRunning !== true) return
-  amendLiveRun(workspaceId, fieldIds, {done, total})
+  amendLiveRun(fieldIds, {done, total})
 }
 
 /** Said by the GESTURE from inside its own transaction — see
  *  {@link PropertyDefinitionFanoutSnapshot.transactionRunning}. */
-export const markPropertyDefinitionFanoutRunning = (
-  workspaceId: string, fieldId: string,
-): void => {
-  amendLiveRun(workspaceId, [fieldId], {transactionRunning: true})
+export const markPropertyDefinitionFanoutRunning = (fieldId: string): void => {
+  amendLiveRun([fieldId], {transactionRunning: true})
 }
 
 const amendLiveRun = (
-  workspaceId: string,
   fieldIds: readonly string[],
   patch: Partial<PropertyDefinitionFanoutSnapshot>,
 ): void => {
-  if (live === null || live.workspaceId !== workspaceId) return
-  if (!fieldIds.includes(live.fieldId)) return
+  if (live === null || !fieldIds.includes(live.fieldId)) return
   publish({...live, ...patch})
 }
 
 /** Consumers between published progress reports.
  *
  *  The fan-out awaits several queries per consumer, so it does yield to the
- *  main thread often enough to paint — but notifying a React subscriber 40,000
- *  times to move a bar by a pixel is its own tax on the one thread the user is
- *  waiting on. At this stride a minute-long run publishes a couple of hundred
- *  times, which is smooth and costs nothing measurable. */
+ *  main thread often enough to paint — but notifying a subscriber per consumer
+ *  is its own tax on the one thread the user is waiting on. The stride keeps
+ *  the bar smooth without it. */
 export const FANOUT_REPORT_STRIDE = 250

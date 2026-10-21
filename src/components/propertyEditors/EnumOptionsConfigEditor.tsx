@@ -24,13 +24,12 @@
  * this editor when a change is cancelled or refused, which is the only way
  * the outcome reaches here at all — `onChange` returns void.
  *
- * The two: a request's acknowledgement must not wipe a draft — tab out of
- * one field and type in the next, and the first field's write coming back
- * would otherwise
- * replace everything with its own snapshot, erasing what is being typed. And
- * a blur caused by that write must not write again: a structural change big
- * enough to be confirmed mounts a focus trap, which blurs the input this
- * editor had just kept focused, and the commit behind it would queue a
+ * The two: a request's acknowledgement must not wipe a draft — tab out of one
+ * field and type in the next, and the first field's write coming back would
+ * otherwise replace everything with its own snapshot, erasing what is being
+ * typed. And a blur caused by that write must not write again: a structural
+ * change big enough to be confirmed mounts a focus trap, which blurs the input
+ * this editor had just kept focused, and the commit behind it would queue a
  * second change that puts back the choice the first one removed.
  *
  * ADDING OR REMOVING A CHOICE CARRIES THE PENDING EDIT rather than racing it.
@@ -41,10 +40,8 @@
  * decline the focus that would cause the blur at all (`preventDefault` on
  * mousedown, the toolbar-button convention).
  *
- * DECLINED: suppressing the blur's commit with a flag set on pointer-down
- * instead. A press that is dragged away or cancelled never reaches a click
- * to clear such a flag, and the typed edit then sits in a draft no blur
- * will commit. Nothing may be remembered between the press and the click.
+ * DECLINED: suppressing the blur's commit with a flag set on pointer-down — a
+ * cancelled press never reaches the click that would clear it.
  */
 import {useState} from 'react'
 import {Plus, X} from 'lucide-react'

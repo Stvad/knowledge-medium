@@ -26,6 +26,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { decodeRowProperty } from '@/data/rowProperty.js'
+import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -65,18 +66,17 @@ const definitionFacts = (properties: Record<string, unknown> | undefined) => {
 
 type DefinitionFacts = ReturnType<typeof definitionFacts>
 
-/** Preset configs compared as stored text. Both sides come from the same
- *  round trip, so a re-ordering that is only cosmetically different costs a
- *  retry rather than a lost write. */
-const sameConfig = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(a) === JSON.stringify(b)
-
 /** What a gesture turns out to want, decided against the definition as it
  *  stands when the queue admits it. */
 interface PlannedChange {
   change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>
   /** Everything the write REPLACES, still as the planner found it. Checked
-   *  inside the writing transaction, so it covers the confirmation's pause. */
+   *  INSIDE the writing transaction, so it covers the only window left: the
+   *  human pause of the confirmation, in which sync keeps running.
+   *
+   *  Nothing more, so a peer changing the type while this renames is not a
+   *  reason to refuse the rename, and nothing less, so a re-type that also
+   *  resets the config cannot drop a config edit it never looked at. */
   stillCurrent: (now: DefinitionFacts) => boolean
   write: (tx: Tx) => Promise<void>
 }
@@ -106,17 +106,9 @@ const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
-  /** Bumped when a config change did NOT land, which remounts the editor.
-   *
-   *  A config editor holds its own in-progress state and learns nothing from
-   *  `onChange`, which returns void — so a change that is cancelled at the
-   *  confirmation, or refused in its transaction, leaves it showing options
-   *  the definition never got, and a later edit resubmits them. Nothing it
-   *  can do about that by itself: the outcome is the HOST's to know. Saying
-   *  "forget what you thought" is the one instruction that needs no contract
-   *  and reaches every config editor, including ones this repo did not
-   *  write. The cost is the caret, and only on a path where the change did
-   *  not happen. */
+  /** Bumped when a config change did not land. `onChange` returns void, so
+   *  remounting is the one way to make any config editor — including ones
+   *  this repo did not write — drop its optimistic state. */
   generation: number,
 ): React.ReactNode => {
   if (!preset.ConfigEditor) return null
@@ -158,49 +150,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
    *  as long as the user is waiting on it, and write only what the definition
    *  in front of the planner still supports.
    *
-   *  The first two live here rather than in the processor that does the work:
-   *  the count is a query the gesture can afford and the transaction cannot
-   *  (it already holds the writer by then), and the wait the user is owed a
-   *  surface for is the whole `repo.tx`, not the consumer loop inside it — the
-   *  commit and the post-commit walk over every row it touched come after.
-   *  One predicate (`isLargeFanout`) decides both, so a change can never ask
-   *  and then run silently, or run for a minute without having asked.
+   *  The count and the surface live here, not in the processor; see
+   *  `propertyDefinitionFanout.ts` for why.
    *
    *  PLANNED AT START, NOT AT THE GESTURE. Changes are serialised, so one can
    *  wait behind another that rewrites the very row it is about; the planner
    *  therefore runs when the queue admits it, against a freshly read row, and
    *  everything derived from the row's current state — the name in the
    *  dialog, the baseline a peer edit is judged against, whether there is
-   *  anything left to do at all — comes from THAT read. Snapshotting it at
-   *  the gesture instead labelled dialogs with names that had moved, and made
-   *  a change's own predecessor look like somebody else's edit.
-   *
-   *  What a planner may NOT re-aim is a payload it computed FROM the old row.
-   *  A rename and a re-type carry a whole replacement value and mean the same
-   *  thing whatever is there; a config edit is the editor's view of the
-   *  stored object with one part changed, so applying it over a row that has
-   *  moved would put back what the previous change removed. Those abandon
-   *  with a message rather than rebase, and say so in their own words.
-   *
-   *  `stillCurrent` is then checked INSIDE the writing transaction, and
-   *  covers the only window left: the human pause of the confirmation, in
-   *  which sync keeps running. It names everything the write REPLACES —
-   *  nothing more, so a peer changing the type while this renames is not a
-   *  reason to refuse the rename, and nothing less, so a re-type that also
-   *  resets the config cannot drop a config edit it never looked at.
+   *  anything left to do at all — comes from THAT read.
    *
    *  Uniform across both sides of the threshold on purpose. Under it the
    *  window is one await and a refusal is all but unreachable — but two write
    *  paths, one guarded and one not, is how the guarded one stops being the
    *  one that runs.
    *
-   *  The COUNT is deliberately not re-checked in the transaction, unlike the
-   *  row. It would prevent no wrong write — only add a confirmation, which
-   *  nothing can raise from inside a transaction that already holds the
-   *  writer, so closing it means a rejection code, a retry loop and a bypass
-   *  flag at every call site, permanently. DECLINED against the alternative
-   *  of a fan-out that turns out large going unasked, whose outcome is the
-   *  behaviour this gate replaced. */
+   *  DECLINED: re-checking the count inside the transaction — it prevents no
+   *  wrong write, and a transaction holding the writer cannot raise a
+   *  confirmation. */
   const throughFanoutGate = useCallback((
     plan: (atStart: DefinitionFacts) => PlanResult,
   ): Promise<boolean> => queueDefinitionChange(async () => {
@@ -241,7 +208,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         )
         if (confirmed !== true) return false
         if (!isOpen(ws)) return notOpen()
-        run = beginPropertyDefinitionFanout(ws, block.id, change.propertyName, consumers)
+        run = beginPropertyDefinitionFanout(block.id, change.propertyName, consumers)
       }
       let applied = false
       await block.repo.tx(async tx => {
@@ -253,12 +220,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         // a schema block with no name yet is one this editor exists to name.
         if (current === null || current.deleted) return
         if (!stillCurrent(definitionFacts(current.properties))) return
-        // From INSIDE the transaction, which is the only thing that makes a
-        // progress report attributable: a run opens at the confirmation, and
-        // a headless change to the same definition can hold the writer in
-        // that gap. The writer is exclusive, so once this is set, whatever
-        // reports next is this transaction's fan-out.
-        markPropertyDefinitionFanoutRunning(ws, block.id)
+        // Makes this transaction's reports attributable; see
+        // `PropertyDefinitionFanoutSnapshot.transactionRunning`.
+        markPropertyDefinitionFanoutRunning(block.id)
         await write(tx)
         applied = true
       }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
@@ -394,7 +358,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         // config edit that landed since the planner looked is one this would
         // discard without ever having seen it.
         stillCurrent: now => now.presetId === atStart.presetId
-          && sameConfig(now.config, atStart.config),
+          && jsonValuesEqual(now.config, atStart.config),
         write: tx => tx.setProperties(block.id, {
           set: [
             propertyValue(presetIdProp, next),
@@ -429,7 +393,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // produced it is this preset's. Applied over a row that has moved it
       // would put back whatever the change before it removed — so removing
       // two choices in quick succession would silently restore the first.
-      if (atStart.presetId !== presetId || !sameConfig(atStart.config, persistedConfig)) {
+      if (atStart.presetId !== presetId || !jsonValuesEqual(atStart.config, persistedConfig)) {
         return {skip: OVERTAKEN(atStart.name)}
       }
       // Nothing to write, so nothing to ask about. Reachable without any
@@ -437,11 +401,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // already on it is entered again, and counting a whole graph to
       // confirm a write of the same bytes is the confirmation at its least
       // trustworthy.
-      if (sameConfig(atStart.config, encoded)) return {skip: null}
+      if (jsonValuesEqual(atStart.config, encoded)) return {skip: null}
       return {
         change: {kind: 'options', propertyName: atStart.name},
         stillCurrent: now => now.presetId === presetId
-          && sameConfig(now.config, persistedConfig),
+          && jsonValuesEqual(now.config, persistedConfig),
         write: tx => tx.setProperty(block.id, presetConfigProp, encoded),
       }
     })
