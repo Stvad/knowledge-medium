@@ -301,8 +301,9 @@ c. **Fresh statistics.** The operator runs `ANALYZE public.blocks_history;`.
    - Run operator SQL as `postgres` over a direct connection, such as psql. The Dashboard's SQL editor caps queries at 60 s.
 
 d. **Predict the purge.** It deletes the history plus one re-seal row per block. The rehearsal ran at about 9.4 s per 100k of those rows together, and preflight's confirmation shows both counts.
-   - Supabase documents a 60 s cap on client queries. Through the API, the purge has only been seen to pass at 11 s.
-   - If the prediction nears a minute, either probe a long RPC on the hosted project first, or plan on the direct-connection purge in (g).
+   - The limit that matters is the function's own 5 minutes, about 3 million of those rows at that rate.
+   - Past about 125 s the API gateway answers 504, but the delete runs on and commits. The flow's retry then finds the phase moved to `cleaning`, and carries on. *(measured with a probe, below)*
+   - If the prediction nears 5 minutes, raise the function's timeout first, or plan on the direct-connection purge in (g).
 
 e. **Start.** On the profile from step 9: workspace settings → **Encrypt this workspace…**.
    - Note how long preflight takes. Its history scan is the same read the bundle makes after the flip, so it predicts the bundle.
@@ -339,10 +340,7 @@ h. Then the **After** steps, in order.
 - **Where:** the hosted project, on Postgres 17.11 and PostgREST 14.18. Desktop Chrome, on the production build `8858f449`.
 - **Workspace:** a synthetic scratch workspace of 50,281 blocks, 7% of them soft-deleted. It also had 66,415 history rows and 12 attachments totalling 12 MB.
 - **Result:** it passed end to end, and a second browser unlocked the workspace with the key.
-- **Not covered:**
-  - a device whose local copy survived the flip (step 10);
-  - Stop and resume;
-  - the **After** steps.
+- **Not covered here, but in the second rehearsal below:** a device whose local copy survived the flip, and Stop and resume. Neither rehearsal covered the **After** steps.
 
 Times measured, and per 100k rows where that scales:
 
@@ -370,6 +368,34 @@ Times measured, and per 100k rows where that scales:
 - **Re-seal and verify set the run's length:** about 13 minutes per 100k blocks between them. That holds at the rehearsal's ratio of about 1.3 history rows per block; a history much larger than its blocks shifts the weight to the two history reads.
 - **A device whose local copy was gone** showed only "Loading workspace…" for 2.3 minutes while it downloaded 50k sealed rows, then asked for the key. *(measured)*
 
+**Second rehearsal, the same day.**
+
+**Setup.**
+- **Workspace:** a scratch workspace of 10,167 blocks (763 soft-deleted), 13,964 history rows and 4 attachments.
+- **Devices:** it was written from one Chrome profile, which kept its full plaintext copy and was closed for the run. The conversion ran from a second profile, with the checklist's `ANALYZE` just before the flip.
+
+**What it showed:**
+- **Preflight took 7 s,** and its history pages used the `(workspace_id, event_id)` index. This history, too, was newer than the table's last `ANALYZE`, so stale statistics alone don't bring on the first rehearsal's slow plan. What does is still unexplained. *(measured)*
+  - The bundle wrote its history at about 3,000 rows/s, against 360 rows/s on the slow plan.
+- **Stop during the re-seal, then continue.**
+  - Stop took effect at 6,800 of 10,167 rows, with the phase still `sealing`.
+  - The next run reused the recorded bundle and this device's key, skipped the sealed rows, and finished.
+- **The rest of the run.** Verify ran at 330 rows/s. The purge took 2.0 s on the server for 24,131 rows, the pin upgrade 8 s, and the attachments 9 s.
+- **The device with an intact copy, reopened after the finish:**
+  - it went straight to the key prompt, within 3 s of loading;
+  - it showed no old view, and queued no writes;
+  - after the key, it applied the re-sealed rows as version-only updates: its row versions matched the server's, and its local change log grew by its own 11 new writes, not by 10k (#1299). *(measured)*
+- **The bundle folder, checked outside the app:**
+  - every part matches its manifest digest;
+  - `blocks.jsonl` holds 10,167 unique plaintext rows, the soft-deleted ones included, and agrees with `local.db` on every row's content columns and deleted flag;
+  - the history is strictly increasing and ends at `through`;
+  - each attachment hashes to its name;
+  - `local.db` passes `integrity_check`. *(measured)*
+- **The API gateway cuts a request at about 125 s.**
+  - A probe function that sleeps returned normally at 75 s, and answered `504 upstream request timeout` at 125 s for 150 s.
+  - Its statement ran to the end.
+  - A probe that changes its own comment after sleeping 140 s did commit. *(measured; both probes dropped)*
+
 **After:**
 
 10. **PowerSync Defragment, then the other devices.**
@@ -381,7 +407,8 @@ Times measured, and per 100k rows where that scales:
       - Its slot count is no proof on its own: a Defragment that fails also ends with one slot, the old one.
     - Then open the other devices one at a time, and paste the key on each.
       - **A device whose local copy is gone** shows only "Loading workspace…" until it has downloaded everything: about 4.6 minutes per 100k rows in the rehearsal.
-      - **A device whose copy is intact** opens the old view until its download reaches the flip. Writes it makes meanwhile go up as plaintext, and the server refuses them ([§3](#3-the-single-client-contract)). Once it's unlocked, open **Rejected sync changes** and press **Retry** on each. *(from the design; the rehearsal didn't cover it)*
+      - **A device whose copy is intact** goes straight to the key prompt, and applies the re-sealed rows once unlocked (the second rehearsal).
+      - **A device left open during the run** can have writes the server refused ([§3](#3-the-single-client-contract)). Once it's unlocked, open **Rejected sync changes** and press **Retry** on each.
       - Either way, don't clear site data (step 2).
     - Once every device is back, the owner runs **Clean up attachments** ([§3](#3-the-single-client-contract)). Its report must list no object left in place; investigate any it does before going on.
 11. **Operator: `VACUUM FULL`** on five tables: `blocks`, `blocks_history`, `storage.objects` and `workspaces`, then `pg_catalog.pg_statistic`.
