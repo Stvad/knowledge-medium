@@ -1,10 +1,12 @@
 name: Remove PR previews
 
-# Removes pr-preview/pr-<n>/ from gh-pages for every PR that is no longer open
-# (scripts/sweep-pr-previews.ts), for fork and same-repository PRs alike. A close
-# runs through pull_request_target because a `pull_request` workflow does not run
-# at all while the PR has a merge conflict; the daily sweep catches anything a
-# close still misses.
+# Removes pr-preview/pr-<n>/ from gh-pages for every PR that is no longer open,
+# or that is open but has had no activity for PR_PREVIEW_IDLE_DAYS days (a
+# repository variable, 30 when unset), for fork and same-repository PRs alike
+# (scripts/sweep-pr-previews.ts). A close runs through pull_request_target
+# because a `pull_request` workflow does not run at all while the PR has a merge
+# conflict; the daily sweep catches anything a close still misses, and is what
+# expires idle previews.
 
 on:
   pull_request_target:
@@ -54,19 +56,21 @@ jobs:
           node-version: 26
       # No ensure-pages-published.sh here: a removal whose Pages build fails goes
       # live with the next gh-pages push, since every build publishes the whole branch.
-      - name: Remove previews of closed PRs
+      # Also rewrites each expired PR's preview comment to say so, linking the redeploy steps.
+      - name: Remove previews of closed and idle PRs
         env:
           GH_TOKEN: ${{ github.token }}
           # A close names no PR: the open-PR check decides, so a PR reopened since keeps its preview.
           FORCE_PR: ${{ inputs.pr_number }}
+          PR_PREVIEW_IDLE_DAYS: ${{ vars.PR_PREVIEW_IDLE_DAYS }}
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: node scripts/sweep-pr-previews.ts ${FORCE_PR:+"$FORCE_PR"}
-      # Scheduled sweeps leave comments alone: they only catch a failed close run, and
-      # a closed PR's stale link merely 404s. A close drops the link even if the PR was
-      # reopened since; its next deploy posts it again.
+      # A sweep leaves closed PRs' comments alone: it only catches a failed close run,
+      # and a closed PR's stale link merely 404s. A close drops the link even if the PR
+      # was reopened since; its next deploy posts it again.
       - name: Remove the preview link from the PR
         if: env.PR_NUMBER != ''
         uses: marocchino/sticky-pull-request-comment@v2

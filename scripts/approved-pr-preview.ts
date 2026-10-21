@@ -16,12 +16,6 @@ export function parsePrNumber(value: string): number {
   return Number(value)
 }
 
-function assertForkPreview(headRepository: string | undefined, repository: string): void {
-  if (headRepository === repository) {
-    throw new Error('Approved previews are only for forks; same-repository previews are managed by PR Preview')
-  }
-}
-
 export async function approvePreview({ prNumber, headSha, repository, getPull }: {
   prNumber: string
   headSha: string
@@ -39,7 +33,6 @@ export async function approvePreview({ prNumber, headSha, repository, getPull }:
   if (pr.base.ref !== 'master') throw new Error('PR must target master')
   if (pr.head.sha !== headSha) throw new Error('PR head has changed; review and approve the new SHA')
   if (!pr.head.repo) throw new Error('PR head repository is unavailable')
-  assertForkPreview(pr.head.repo.full_name, repository)
   return {
     number,
     sha: headSha,

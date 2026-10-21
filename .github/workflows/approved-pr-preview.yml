@@ -1,11 +1,16 @@
 name: Deploy approved PR preview
 run-name: "Preview PR #${{ inputs.pr_number }} at ${{ inputs.head_sha }}"
 
+# Publishes one reviewed PR head under pr-preview/pr-<n>/: how a fork PR gets a
+# preview at all, and how any PR gets back a preview the idle sweep
+# (remove-pr-previews.yml) expired. PR code builds without write credentials, and
+# only this revision's own code publishes.
+
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Fork PR number to preview (must target master)
+        description: PR number to preview (must target master)
         required: true
         type: string
       head_sha:
@@ -151,6 +156,17 @@ jobs:
               getPull: async number => (await github.rest.pulls.get({ ...context.repo, pull_number: number })).data,
             });
             validatePreviewArtifact(`${process.env.GITHUB_WORKSPACE}/dist`, approved.sha);
+      # Before the deploy lands: the edit bumps the PR's updated_at, and the idle sweep
+      # reads open PRs after fetching gh-pages, so a sweep that sees this deploy also
+      # sees the PR as active.
+      - name: Mark the PR's preview as deploying
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ needs.approve.outputs.number }}
+          header: pr-preview
+          message: |
+            ### Deploying approved PR preview
+            Commit `${{ needs.approve.outputs.sha }}` is being published to https://${{ github.repository_owner }}.github.io${{ needs.approve.outputs.base-path }} by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), requested by @${{ github.actor }}. Until it finishes, that URL serves the previous build, if there is one. If the run fails, run **Deploy approved PR preview** again.
       - name: Deploy approved preview
         id: deploy
         uses: rossjrw/pr-preview-action@v1
@@ -165,6 +181,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ensure-pages-published.sh
+      # After publishing as well, so the live link wins over an expiry notice that a
+      # concurrent sweep wrote meanwhile.
       - name: Record approved commit on the PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -177,4 +195,4 @@ jobs:
             Approved commit: `${{ needs.approve.outputs.sha }}` (PR head, not a merge build).
             [Deployment run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) · requested by @${{ github.actor }}.
 
-            Later pushes do not update this preview. Run **Deploy approved PR preview** again to approve a new head.
+            ${{ needs.approve.outputs.repository == github.repository && 'A push to the PR replaces it with its usual merge build once the PR has no merge conflict.' || 'Later pushes do not update this preview. Run **Deploy approved PR preview** again to approve a new head.' }}

@@ -4,7 +4,8 @@ name: PR Preview
 # change is clickable at:
 #   https://stvad.github.io/knowledge-medium/pr-preview/pr-<n>/
 # rossjrw/pr-preview-action posts/updates a sticky comment with that URL on
-# every push. Removal on close lives in remove-pr-previews.yml.
+# every push. Removal on close, and expiry once the PR idles, live in
+# remove-pr-previews.yml; approved-pr-preview.yml redeploys an expired preview.
 # See docs/pr-preview-deployments.md for the one-time Pages setup.
 
 on:
