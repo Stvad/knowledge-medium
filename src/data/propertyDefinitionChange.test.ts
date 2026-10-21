@@ -41,6 +41,7 @@ import {
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyDefinitionClaimantsForName } from './propertyDefinitionRegistry'
 import {
+  anyBlockHoldsFieldRowFor,
   consumingParentIds,
   contestedChanges,
   type NameClaim,
@@ -2144,9 +2145,9 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
   it('refuses although the definition has NO field row anywhere', async () => {
     // The WORST case, not an exempt one: a definition with no field rows is one
-    // whose every consumer is cell-only. The fan-out is dormant for it —
-    // `consumingParentIds` finds nothing — so a refusal that asked "does this
-    // have consumers" the way the two other refusals do would pass it through.
+    // whose every consumer is cell-only. The fan-out is dormant for it, and the
+    // field-row question the two other refusals ask finds nothing, so a
+    // refusal that asked it too would pass this through.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
@@ -2157,7 +2158,7 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
     })
     // The gate itself, asserted rather than assumed: it is blind to this
     // parent, which is why the refusal must not consult it.
-    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual([])
+    expect(await anyBlockHoldsFieldRowFor(sharedDb.db, WS, [FIELD_ID])).toBe(false)
     expect(await cell('cell-only')).toEqual({status: 'pending'})
   })
 
@@ -2398,6 +2399,50 @@ describe('sizing the fan-out before it starts', () => {
 
     expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(1)
     expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual(['p1'])
+  })
+
+  describe('while a deleted owner still holds the definition for the refusals', () => {
+    // Left out of the count and the walk, but not out of the refusals: its
+    // field rows still bind it to the definition by id, and a restore brings
+    // it back reading whatever that name resolves to then.
+    const FIELD_PEER = 'field-peer-sizing'
+
+    const setupDeletedOnlyConsumer = async (): Promise<Repo> => {
+      await seedWorkspace('children')
+      const repo = makeRepo()
+      await createDefinition(repo, FIELD_PEER, 'count', 'number')
+      await awaitDefinition(repo, 'count', 'number')
+      await createDefinition(repo, FIELD_ID, 'status', 'string')
+      await awaitDefinition(repo, 'status', 'string')
+      await seedProperty(repo, 'gone', 'status', 'done')
+      await repo.tx(tx => tx.delete('gone'), {scope: ChangeScope.BlockDefault})
+      // The precondition both tests are about: nothing LIVE consumes either
+      // definition, so only the deleted owner can make the refusal fire.
+      expect(await liveFieldRow('gone', FIELD_ID)).toBeDefined()
+      expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+      return repo
+    }
+
+    it('refuses an unused definition taking its name', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(rename(repo, FIELD_PEER, 'status')).rejects.toMatchObject({
+        code: 'property.definition-change.shared-name',
+      })
+      expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('count')
+    })
+
+    it('refuses a rename onto a name another definition arrives at', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(repo.tx(async tx => {
+        await tx.setProperty(FIELD_ID, propertyNameProp, 'phase')
+        await tx.setProperty(FIELD_PEER, propertyNameProp, 'phase')
+      }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+        code: 'property.definition-change.contested',
+      })
+      expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    })
   })
 
   it('stops counting a consumer whose field row is gone', async () => {

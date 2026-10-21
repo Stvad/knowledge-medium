@@ -542,8 +542,9 @@ const collectChanges = (
  *  throw would take their entire edit down. */
 export const FIELD_PROBE_CHUNK = 500
 
-/** Parents holding a live field row for any of `fieldIds` — and the only gate
- *  this pass has.
+/** Live parents holding a live field row for any of `fieldIds` — the fan-out's
+ *  gate, and what it walks. The refusals ask the wider
+ *  {@link anyBlockHoldsFieldRowFor}.
  *
  *  Deliberately NOT `isPropertyChildBackedWorkspace`. That flag lives on the
  *  workspace ROW, which syncs like any other, so a device lagging on it reads
@@ -583,9 +584,16 @@ export const consumingParentIds = async (
 /** §9 selection discipline: field-row discovery keys on the BIT plus the
  *  target (an unmarked `((fieldId))` link row is not a consumer), and
  *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
- *  a field row (§9 root half) — never re-key it.
- *
- *  The OWNER must be live too, and that is the half a `deleted = 0` on the
+ *  a field row (§9 root half) — never re-key it. Every field-row question this
+ *  pass asks starts here. */
+const fieldRowsFromSql = (targetCount: number): string =>
+  `blocks field
+    WHERE field.workspace_id = ?
+      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+      AND field.is_field_form = 1
+      AND field.deleted = 0 AND field.parent_id IS NOT NULL`
+
+/** The OWNER must be live too, and that is the half a `deleted = 0` on the
  *  field row does not cover: a soft-deleted block can still own live field
  *  rows. Its bag is history and re-keying it is declined — the live set is
  *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
@@ -601,15 +609,35 @@ export const consumingParentIds = async (
  *  {@link consumingParentIds} then walks it. A drifted copy would show the
  *  user a number that is not the work they consented to. */
 const consumingParentsFromSql = (targetCount: number): string =>
-  `blocks field
-    WHERE field.workspace_id = ?
-      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
-      AND field.is_field_form = 1
-      AND field.deleted = 0 AND field.parent_id IS NOT NULL
+  `${fieldRowsFromSql(targetCount)}
       AND EXISTS (
         SELECT 1 FROM blocks owner
          WHERE owner.id = field.parent_id AND owner.deleted = 0
       )`
+
+/** Whether any block holds a live field row for one of `fieldIds`, a DELETED
+ *  block included — the question the refusals ask, which is wider than the
+ *  fan-out's. Declining to re-key a deleted owner is a cost bound; it does not
+ *  stop the owner depending on the definition. Its field rows still bind it
+ *  by id, and a restore brings it back reading whatever that name resolves to
+ *  by then, so a change that would leave the name contested or the cell
+ *  unconverted is refused over it as over a live one. */
+export const anyBlockHoldsFieldRowFor = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<boolean> => {
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const row = await db.getOptional<{held: number}>(
+      `SELECT 1 AS held FROM ${fieldRowsFromSql(chunk.length)} LIMIT 1`,
+      [workspaceId, ...chunk],
+    )
+    if (row !== null) return true
+  }
+  return false
+}
 
 /** How many parents a change to ONE definition would re-key.
  *
@@ -884,8 +912,8 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     }
     const {changes, unfanoutable, sharedNameClaimants} = collected
     // ABOVE the refusal below and above the two dormancy returns under it: every
-    // one of those consults `consumingParentIds`, which sees FIELD ROWS, and the
-    // hazard here is a consumer that has none. The runbook flips before
+    // one of those asks about FIELD ROWS, and the hazard here is a consumer that
+    // has none. The runbook flips before
     // backfilling, so a chunked backfill's un-reached parents hold cells for
     // this definition and no field row — which makes a definition with NO field
     // rows the WORST case rather than an exempt one.
@@ -938,10 +966,9 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       // unused definition is the user's to make, and telling them to fix
       // something first would be friction for nothing. The consumers of a
       // definition it would SHARE a name with are the next check's.
-      const stranded = await consumingParentIds(
+      if (await anyBlockHoldsFieldRowFor(
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
-      )
-      if (stranded.length > 0) {
+      )) {
         // Named for the first reason held, per `REFUSALS`.
         const {code, message} = REFUSALS[unfanoutable[0]!.reason]
         throw new ProcessorRejection(
@@ -949,9 +976,9 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         )
       }
     }
-    if (sharedNameClaimants.length > 0 && (await consumingParentIds(
+    if (sharedNameClaimants.length > 0 && await anyBlockHoldsFieldRowFor(
       ctx.db, event.workspaceId, sharedNameClaimants,
-    )).length > 0) {
+    )) {
       throw new ProcessorRejection(
         SHARED_NAME_REFUSAL.message, SHARED_NAME_REFUSAL.code,
         {fieldIds: sharedNameClaimants},
