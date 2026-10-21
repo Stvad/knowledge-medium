@@ -51,7 +51,7 @@ import {
   encodedPropertyValueToChildContents,
   getPropertyFieldTargetId,
   propertyCellValueRejection,
-  type PropertyCellValueRejection,
+  propertyFieldContent,
 } from '@/data/propertyChildren'
 import {
   describeCellValueRejection,
@@ -142,18 +142,22 @@ type CellDecision =
   /** The owner already has a field row for this fieldId, LIVE OR TOMBSTONED —
    *  migrated, or deleted through its children (see the module header). */
   | {readonly kind: 'backed'; readonly schema: ResolvedPropertySchema<unknown>}
+  /** Cannot be planned: the codec refuses the value, or the definition's
+   *  fieldId does not render as a field row. */
+  | {readonly kind: 'refused'; readonly schema: ResolvedPropertySchema<unknown>; readonly cause: unknown}
+  /** What the pass materializes, with the value children it implies. */
   | {
-    readonly kind: 'refused'
+    readonly kind: 'pending'
     readonly schema: ResolvedPropertySchema<unknown>
-    readonly rejection: PropertyCellValueRejection
+    readonly contents: readonly string[]
   }
-  /** What the pass materializes. */
-  | {readonly kind: 'pending'; readonly schema: ResolvedPropertySchema<unknown>}
 
 /** The pass's per-cell decision, shared with {@link surveyPropertyCellCoverage}
  *  so the report an operator sizes and closes a repair by cannot disagree with
- *  the writer. */
+ *  the writer. Everything that can refuse a cell before the write is asked
+ *  here, so neither caller needs a second guard. */
 const decideCell = (
+  ownerId: string,
   name: string,
   encoded: unknown,
   resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined,
@@ -163,7 +167,19 @@ const decideCell = (
   if (schema === undefined) return {kind: 'unresolved'}
   if (hasFieldRow(schema.fieldId)) return {kind: 'backed', schema}
   const rejection = propertyCellValueRejection(schema, encoded)
-  return rejection ? {kind: 'refused', schema, rejection} : {kind: 'pending', schema}
+  // The wrapper, not the bare cause: a `CodecError` says "expected string, got
+  // object" and nothing about WHICH key on which block.
+  if (rejection) {
+    return {kind: 'refused', schema, cause: undecodableCellValueError(name, ownerId, schema, rejection)}
+  }
+  try {
+    // A fieldId with whitespace or parentheses does not render back out — a
+    // property of the definition, which the value check cannot see.
+    propertyFieldContent(schema.fieldId)
+    return {kind: 'pending', schema, contents: encodedPropertyValueToChildContents(schema, encoded)}
+  } catch (cause) {
+    return {kind: 'refused', schema, cause}
+  }
 }
 
 /** Owners named per refused key — enough to open one and look at the value.
@@ -444,8 +460,8 @@ export const surveyPropertyCellCoverage = async (
         continue
       }
       for (const [name, encoded] of Object.entries(properties)) {
-        const decision = decideCell(
-          name, encoded, resolveNameSchema, fieldId => anyFieldRow.has(ownerField(row.id, fieldId)))
+        const decision = decideCell(row.id, name, encoded,
+          resolveNameSchema, fieldId => anyFieldRow.has(ownerField(row.id, fieldId)))
         if (decision.kind === 'pending') countCell(missing, name, row.id)
         else if (decision.kind === 'refused') countCell(refused, name, row.id)
         else if (decision.kind === 'backed'
@@ -687,8 +703,8 @@ const sweep = async (
       const planned: {
         owner: BlockData
         fieldRow: NewBlockData
-        /** Encoded INSIDE the per-key guard below, so a value no codec will
-         *  take costs its own key instead of aborting the batch. */
+        /** Encoded by {@link decideCell}, so a value no codec will take costs
+         *  its own key instead of aborting the batch. */
         contents: readonly string[]
       }[] = []
       // Counted into locals and committed to `progress` only once the batch has
@@ -714,9 +730,8 @@ const sweep = async (
         let unresolvedHere = 0
         const taken = takenByOwner.get(owner.id)
         for (const name of Object.keys(owner.properties)) {
-          const encoded = owner.properties[name]
-          const decision = decideCell(
-            name, encoded, ctx.resolveNameSchema, fieldId => taken?.has(fieldId) === true)
+          const decision = decideCell(owner.id, name, owner.properties[name],
+            ctx.resolveNameSchema, fieldId => taken?.has(fieldId) === true)
           // Excluded from the MATERIALIZED counts rather than carried:
           // convergence is "a sweep that materialized nothing", and one such
           // key on one block kept every sweep looking like work.
@@ -731,34 +746,16 @@ const sweep = async (
           // replaced bought by catching around one name. One key that cannot
           // be planned must cost its own key, not every key on the block and
           // not the workspace's whole pass.
-          //
-          // Two ways it fails, and both belong here. The cell VALUE its codec
-          // refuses is the common one — legacy junk from a raw
-          // `tx.update({properties})`. The other is the DEFINITION: a fieldId
-          // that `propertyFieldContent` cannot render back out (whitespace,
-          // parentheses) throws when the field row is built, and that is a
-          // property of the definition rather than of this block's value, so
-          // the value check cannot see it coming.
           if (decision.kind === 'refused') {
-            // The wrapper, not the bare cause: a `CodecError` says "expected
-            // string, got object" and nothing about WHICH key on this block.
-            recordFailure(owner.id,
-              undecodableCellValueError(name, owner.id, decision.schema, decision.rejection))
+            recordFailure(owner.id, decision.cause)
             rejectedHere += 1
             continue
           }
-          const {schema} = decision
-          let fieldRow: NewBlockData
-          let contents: readonly string[]
-          try {
-            fieldRow = plannedFieldRow(tx, owner, schema.fieldId)
-            contents = encodedPropertyValueToChildContents(schema, encoded)
-          } catch (cause) {
-            recordFailure(owner.id, cause)
-            rejectedHere += 1
-            continue
-          }
-          planned.push({owner, fieldRow, contents})
+          planned.push({
+            owner,
+            fieldRow: plannedFieldRow(tx, owner, decision.schema.fieldId),
+            contents: decision.contents,
+          })
           materializedHere += 1
         }
         // "Accepted IN FULL" = every key on this owner either materialized or

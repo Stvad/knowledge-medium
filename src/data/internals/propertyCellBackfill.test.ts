@@ -10,7 +10,7 @@
  * the flip materializes its own children.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -1026,6 +1026,31 @@ describe('the post-flip survey of cells with no property blocks', () => {
     expect(after.missing).toEqual(NONE)
     expect(after.refused).toEqual(before.refused)
     expect(after.deletedThroughChildren).toEqual(before.deletedThroughChildren)
+  })
+
+  it('counts a cell whose definition fieldId will not render as refused, as the pass does', async () => {
+    // The pass fails that key when it builds the field row, so calling it
+    // missing would promise a write no re-run makes — and a zero never reached.
+    await create('b1', {'demo:note': 'fine', 'demo:extra': 'broken definition'})
+    await flip()
+    const resolver = repo.propertySchemaResolverFor(WS)
+    vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue({
+      ...resolver,
+      resolve: ((name: string) => {
+        const resolution = resolver.resolve(name)
+        return name === 'demo:extra' && resolution.status === 'resolved'
+          ? {...resolution, schema: {...resolution.schema, fieldId: 'not a renderable id'}}
+          : resolution
+      }) as typeof resolver.resolve,
+    })
+
+    const coverage = await surveyPropertyCellCoverage(repo, WS)
+    const progress = await runPropertyCellBackfill(ctxWithUnrenderableFieldId('demo:extra'))
+
+    expect(coverage.missing.keys).toEqual([{key: 'demo:note', cells: 1, blockIds: ['b1']}])
+    expect(coverage.refused.keys).toEqual([{key: 'demo:extra', cells: 1, blockIds: ['b1']}])
+    expect(coverage.missing.cells).toBe(progress.valuesMaterializedTotal)
+    expect(coverage.refused.cells).toBe(progress.failureCount)
   })
 
   it('refuses a workspace whose registry is not loaded rather than reporting nothing missing', async () => {
