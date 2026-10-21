@@ -56,7 +56,7 @@ jobs:
           node-version: 26
       # No ensure-pages-published.sh here: a removal whose Pages build fails goes
       # live with the next gh-pages push, since every build publishes the whole branch.
-      # Also rewrites each expired PR's preview comment to say how to redeploy.
+      # Also rewrites each expired PR's preview comment to say so, linking the redeploy steps.
       - name: Remove previews of closed and idle PRs
         env:
           GH_TOKEN: ${{ github.token }}

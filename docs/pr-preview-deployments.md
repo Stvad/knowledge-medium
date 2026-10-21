@@ -201,7 +201,9 @@ meanwhile is kept. It runs:
 A close or a dispatch with `pr_number` also deletes that PR's preview-link
 comment. Once the sweep is done, including its push if it removed anything,
 every run rewrites the preview comments of each idle open PR in place, to say
-the preview expired and how to redeploy it. It re-reads the PR's `updated_at`
+the preview expired and link the redeploy steps below. The steps live here
+rather than in the comment because they depend on the PR's base and head
+repository, which can change after the comment is written. It re-reads the PR's `updated_at`
 just before editing, so a push that redeployed the PR meanwhile keeps its link.
 A comment that already says so is left as it is. That set is every idle open PR, not only those this run removed,
 so an edit that failed is retried by later runs for as long as the PR stays
@@ -216,18 +218,27 @@ avoid issuing another manual request while one is pending.
 
 ### Redeploying an expired preview
 
-A push to a same-repository PR redeploys its preview as usual, once the PR has
-no merge conflict. To bring one back without a push, approve its head with
-**Deploy approved PR preview**, as in the CLI example above. The expired comment
-carries that command with the PR number filled in. For a same-repository PR it
-looks up the current head itself, since a push would deploy that head anyway.
-For a fork PR it leaves the SHA for you to fill in with the commit you
-reviewed. The approval flow requires `master`, so a same-repository PR stacked
-on another branch comes back only by push, and a fork PR there only once it
-targets `master` again; its comment says which.
+An expired PR's comment links here. How to bring its preview back depends on
+the PR:
 
-This also works while the PR has a merge conflict and `pull_request` workflows
-do not run. It builds the PR **head**, not the merge with `master` that a push
+- **Same-repository PR targeting `master`:** push to it once it has no merge
+  conflict, or redeploy its current head without a push. Looking the head up is
+  fine here, since a push would deploy that head anyway:
+
+  ```sh
+  gh workflow run approved-pr-preview.yml --repo Stvad/knowledge-medium --ref master \
+    -f pr_number=<n> -f head_sha="$(gh pr view <n> --repo Stvad/knowledge-medium --json headRefOid --jq .headRefOid)"
+  ```
+- **Fork PR targeting `master`:** approve the head you reviewed with **Deploy
+  approved PR preview**, as in the CLI example above.
+- **PR targeting another branch:** the approval flow requires `master`, so a
+  same-repository PR comes back by push, and a fork PR only once it targets
+  `master` again.
+- **Fork PR whose repository was deleted:** it cannot be redeployed, because the
+  approval flow needs the head repository.
+
+The approval redeploy also works while the PR has a merge conflict and
+`pull_request` workflows do not run. It builds the PR **head**, not the merge with `master` that a push
 builds. It goes through the approval flow rather than through **PR Preview**
 even for a same-repository PR, so the PR's code never runs with write
 credentials, and the publishing step uses `master`'s helper scripts rather than
