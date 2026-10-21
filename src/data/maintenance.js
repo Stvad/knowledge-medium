@@ -1,1 +1,1 @@
-import{CK as e,SK as t,cX as n,lX as r,sX as i}from"../../chunks/app-CJae8UDA.js";export{t as oweAnalyzeInstalledTables,i as runAnalyzeIfStale,e as runAnalyzeInstalledTables,n as runAnalyzeNow,r as runAnalyzeTables};
+import{SK as e,cX as t,oX as n,sX as r,xK as i}from"../../chunks/app-Dky3xId6.js";export{i as oweAnalyzeInstalledTables,n as runAnalyzeIfStale,e as runAnalyzeInstalledTables,r as runAnalyzeNow,t as runAnalyzeTables};
