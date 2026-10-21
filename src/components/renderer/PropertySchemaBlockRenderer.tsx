@@ -197,10 +197,13 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       const {change, stillCurrent, write} = planned
       const consumers = await block.repo.countPropertyDefinitionConsumers(block.id, ws)
       const large = isLargeFanout(consumers)
-      // `repo.tx` admits writes to the workspace open when it starts and no
+      // `repo.tx` admits writes to the workspace open when it STARTS and no
       // other, and the user can switch while this waits. Asked before the
       // confirmation, so nobody is asked about a workspace they left, and
       // again after it, so no run opens for a write that cannot land.
+      // DECLINED: asking again inside the transaction — once `repo.tx` has
+      // admitted the change it lands where the user made it, like any write
+      // begun before a switch.
       if (!isOpen(ws)) return notOpen()
       if (large) {
         const confirmed = await openDialog(
