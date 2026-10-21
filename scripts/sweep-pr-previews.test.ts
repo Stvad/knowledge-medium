@@ -116,6 +116,24 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
   })
 
+  it('marks expired PRs before pushing, and keeps the preview of one whose mark failed for a later run', () => {
+    const before = tip()
+    const tipsWhenMarked: string[] = []
+    const result = sweep({
+      openPrs: () => [idle(1), active(2), idle(3)],
+      markExpired: pr => {
+        tipsWhenMarked.push(tip())
+        if (pr.number === 3) throw new Error('comments API unavailable')
+      },
+    })
+
+    expect(tipsWhenMarked).toEqual([before, before])
+    expect(result).toEqual({ removed: ['pr-1'], expired: [idle(1)], unmarked: [idle(3)] })
+    expect(publishedFiles()).toEqual([
+      '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html', 'pr-preview/pr-3/.nojekyll',
+    ])
+  })
+
   // A PR that becomes active mid-sweep (opened, or pushed to after idling) and
   // deploys: its preview must survive, so open PRs have to be read after the
   // fetch that first sees the deploy.
@@ -153,7 +171,7 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
   it('keeps an idle PR whose redeploy lands mid-sweep, and does not report it expired', () => {
     const result = sweep(deployingMidSweep('push', 3, [active(2), idle(3)]))
 
-    expect(result).toEqual({ removed: ['pr-1'], expired: [] })
+    expect(result).toEqual({ removed: ['pr-1'], expired: [], unmarked: [] })
     expect(git(origin, 'show', 'gh-pages:pr-preview/pr-3/index.html')).toBe('deployed mid-sweep')
   })
 
@@ -190,7 +208,7 @@ describe('markPreviewExpired', () => {
       { id: 12, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(true)
     expect(patches).toHaveLength(1)
     expect(patches[0]).toContain('repos/o/r/issues/comments/12')
     expect(body()).toContain(marker)
@@ -199,19 +217,7 @@ describe('markPreviewExpired', () => {
   it('edits nothing when the PR has no preview comment', () => {
     const { gh, patches } = fakeGh([{ id: 11, user: bot, body: 'another bot comment' }])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
+    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(false)
     expect(patches).toEqual([])
-  })
-
-  // PR Preview refuses forks, so a fork PR is pointed at its approval workflow instead.
-  it('names the redeploy path that accepts the PR', () => {
-    const sameRepo = fakeGh([{ id: 12, user: bot, body: marker }])
-    const fork = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false }, 30)
-    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true }, 30)
-
-    expect(sameRepo.body()).toContain('gh workflow run pr-preview.yml')
-    expect(fork.body()).not.toContain('gh workflow run pr-preview.yml')
-    expect(fork.body()).toContain('Deploy approved PR preview')
   })
 })

@@ -4,44 +4,33 @@ name: PR Preview
 # change is clickable at:
 #   https://stvad.github.io/knowledge-medium/pr-preview/pr-<n>/
 # rossjrw/pr-preview-action posts/updates a sticky comment with that URL on
-# every push. Removal on close, and expiry after the PR idles, live in
-# remove-pr-previews.yml; a dispatch with pr_number redeploys a same-repository
-# PR's current head without a push.
+# every push. Removal on close, and expiry once the PR idles, live in
+# remove-pr-previews.yml; approved-pr-preview.yml redeploys an expired preview.
 # See docs/pr-preview-deployments.md for the one-time Pages setup.
 
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Open same-repository PR whose current head to redeploy
-        required: true
-        type: string
 
 permissions:
   contents: write # push the preview subtree to the gh-pages branch
   pull-requests: write # post/update the sticky preview-URL comment
   pages: write # request a Pages rebuild if the auto-publish flakes (ensure-pages-published.sh)
 
-# A dispatch runs PR code in the dispatching branch's cache scope, which for
-# master is the one production restores from; restoring is harmless, saving is not.
-cache-mode: read
-
 jobs:
   preview:
     # Fork builds need explicit commit approval via approved-pr-preview.yml.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     concurrency:
       # Shared with remove-pr-previews.yml's close handler for this PR.
-      group: pr-preview-${{ github.event.pull_request.number || inputs.pr_number }}
+      group: pr-preview-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     env:
       # Build under the exact subpath the preview is served from, so every
       # asset URL, the service-worker scope, and version.json resolve. This is
       # the whole reason the preview build is separate from production's.
-      APP_BASE_PATH: /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number || inputs.pr_number }}/
+      APP_BASE_PATH: /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number }}/
       VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
       VITE_POWERSYNC_URL: ${{ vars.VITE_POWERSYNC_URL || secrets.VITE_POWERSYNC_URL }}
@@ -49,43 +38,8 @@ jobs:
       # which previews share (they only differ by path), so Maps works here too.
       VITE_GOOGLE_MAPS_API_KEY: ${{ vars.VITE_GOOGLE_MAPS_API_KEY || secrets.VITE_GOOGLE_MAPS_API_KEY }}
     steps:
-      # The job-level `if` cannot see a dispatched PR, so the fork check happens here.
-      - name: Resolve the PR to redeploy
-        id: redeploy
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/github-script@v8
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-        with:
-          script: |
-            // Canonical, so the concurrency group and APP_BASE_PATH above name this PR.
-            if (!/^[1-9][0-9]*$/.test(process.env.PR_NUMBER)) throw new Error('pr_number must be a PR number');
-            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
-            if (pr.state !== 'open') throw new Error(`PR ${pr.number} is not open`);
-            if (pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
-              throw new Error('Fork PRs are previewed through Deploy approved PR preview');
-            }
-            core.setOutput('sha', pr.head.sha);
-
-      # Before the deploy lands: the edit bumps the PR's updated_at, and the idle
-      # sweep (remove-pr-previews.yml) reads open PRs after fetching gh-pages, so
-      # any sweep that sees this deploy also sees the PR as active.
-      - name: Link the preview being redeployed
-        if: github.event_name == 'workflow_dispatch'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          number: ${{ inputs.pr_number }}
-          header: pr-preview
-          message: |
-            :rocket: Preview at https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ inputs.pr_number }}/, redeployed from `${{ steps.redeploy.outputs.sha }}` (the PR head, not a merge build) for @${{ github.actor }}.
-
-            It is live once [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) succeeds. A push to the PR replaces it with a fresh build as usual.
-
-      # A dispatch builds the PR head; a pull_request run builds its merge with the base.
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ steps.redeploy.outputs.sha }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -107,10 +61,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        env:
-          # A dispatch's GITHUB_SHA names the dispatching branch; stamp the PR head instead.
-          REDEPLOY_SHA: ${{ steps.redeploy.outputs.sha }}
-        run: GITHUB_SHA="${REDEPLOY_SHA:-$GITHUB_SHA}" pnpm run build
+        run: pnpm run build
 
       # source-dir must match the build output; umbrella-dir + the pr-<n>/ subdir
       # must match APP_BASE_PATH above.
@@ -118,12 +69,9 @@ jobs:
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./dist/
-          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
           preview-branch: gh-pages
           umbrella-dir: pr-preview
           action: deploy
-          # The action's own comment step finds its PR only in a pull_request event.
-          comment: ${{ github.event_name == 'pull_request' }}
 
       # The push above only updates gh-pages; GitHub's auto-triggered "pages
       # build and deployment" is what actually serves it, and that publisher is

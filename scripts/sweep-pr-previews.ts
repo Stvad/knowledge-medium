@@ -1,6 +1,6 @@
 // Removes, in one commit, every pr-preview/pr-<n>/ on gh-pages whose PR is no
-// longer open or has been idle (no update) for PR_PREVIEW_IDLE_DAYS days, then
-// rewrites each expired PR's preview-link comment to say how to redeploy. Run by
+// longer open or has been idle (no update) for PR_PREVIEW_IDLE_DAYS days, first
+// rewriting each idle PR's preview-link comment to say how to redeploy. Run by
 // .github/workflows/remove-pr-previews.yml on PR close and on a schedule; extra
 // arguments name PRs to remove even while open.
 //
@@ -32,7 +32,6 @@ export type Gh = (args: string[]) => string
 
 /** `updatedAt` is GitHub's: comments, reviews and edits bump it as well as pushes. */
 export type OpenPr = { number: number; updatedAt: Date }
-type OpenPull = OpenPr & { fork: boolean }
 
 export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
@@ -79,19 +78,36 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
   }
 }
 
+function marked<P extends OpenPr>(markExpired: (pr: P) => void, pr: P): boolean {
+  try {
+    markExpired(pr)
+    return true
+  } catch (error) {
+    console.warn(`could not mark PR ${pr.number}'s preview expired; keeping it for a later run:`, error)
+    return false
+  }
+}
+
 /**
  * Never force-pushes: a deploy that lands mid-sweep rejects the push, and the
  * sweep starts over from the new tip so that deploy survives. `openPrs` is read
  * after each fetch, so every preview in the fetched tip was deployed while its
  * PR was open and still counts as open, and as active, unless that read says
  * otherwise.
+ *
+ * `markExpired` runs before the push, so a preview whose notice failed stays
+ * up (`unmarked`) for a later run to retry, and a failure never leaves a live
+ * link pointing at a removed preview. A notice from a rejected attempt can
+ * name a PR the retry then keeps; accepted, since a redeploy rewrites the
+ * comment once it is published.
  */
-export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [] }: {
+export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [], markExpired = () => {} }: {
   git: Git
   openPrs: () => readonly P[]
   idleBefore: Date
   alsoRemove?: number[]
-}): { removed: string[]; expired: P[] } {
+  markExpired?: (pr: P) => void
+}): { removed: string[]; expired: P[]; unmarked: P[] } {
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
@@ -99,7 +115,13 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
     const open = openPrs()
     const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
       .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
-    const result = previewsToRemove(names, open, { idleBefore, alsoRemove })
+    const found = previewsToRemove(names, open, { idleBefore, alsoRemove })
+    const unmarked = found.expired.filter(pr => !marked(markExpired, pr))
+    const result = {
+      removed: found.removed.filter(name => !unmarked.some(pr => name === `pr-${pr.number}`)),
+      expired: found.expired.filter(pr => !unmarked.includes(pr)),
+      unmarked,
+    }
     if (result.removed.length === 0) return result
     const commit = commitWithout(git, tip, result.removed)
     try {
@@ -112,20 +134,17 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
   }
 }
 
-function expiredPreviewComment(pr: Pick<OpenPull, 'number' | 'fork'>, repository: string, idleDays: number): string {
-  const redeploy = pr.fork
-    ? 'A maintainer can run **Deploy approved PR preview** with its current head to bring it back.'
-    : [
-        'Push to the PR to bring it back, or redeploy its current head without a push:',
-        '',
-        '```sh',
-        `gh workflow run pr-preview.yml --repo ${repository} --ref master -f pr_number=${pr.number}`,
-        '```',
-      ].join('\n')
+function expiredPreviewComment(number: number, repository: string, idleDays: number): string {
+  const headSha = `"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`
   return [
     '### PR preview expired',
     `This PR had no activity for ${idleDays} days, so its preview was removed to keep the Pages site small.`,
-    redeploy,
+    'A push to a same-repository PR brings it back. To redeploy the current head without one:',
+    [
+      '```sh',
+      `gh workflow run approved-pr-preview.yml --repo ${repository} --ref master -f pr_number=${number} -f head_sha=${headSha}`,
+      '```',
+    ].join('\n'),
     PREVIEW_COMMENT_MARKER,
   ].join('\n\n')
 }
@@ -135,24 +154,24 @@ function expiredPreviewComment(pr: Pick<OpenPull, 'number' | 'fork'>, repository
  * next deploy updates it rather than adding another. Editing notifies nobody,
  * which a new comment on every expired PR would.
  */
-export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork'>, idleDays: number): boolean {
-  const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
+export function markPreviewExpired(gh: Gh, repository: string, number: number, idleDays: number): boolean {
+  const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const comment = pages.flat().find(c => c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER))
   if (comment === undefined) return false
   gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
-    '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
+    '-f', `body=${expiredPreviewComment(number, repository, idleDays)}`])
   return true
 }
 
 // A PR opening or closing between pages can shift another past the page boundary;
 // accepted while the open PRs fit on one page.
-function openPullRequests(gh: Gh, repository: string): OpenPull[] {
+function openPullRequests(gh: Gh, repository: string): OpenPr[] {
   const out = gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
-    '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // ""] | @tsv'])
+    '--jq', '.[] | [.number, .updated_at] | @tsv'])
   return out.split('\n').filter(Boolean).map(line => {
-    const [number, updatedAt, headRepository] = line.split('\t')
-    return { number: Number(number), updatedAt: new Date(updatedAt), fork: headRepository !== repository }
+    const [number, updatedAt] = line.split('\t')
+    return { number: Number(number), updatedAt: new Date(updatedAt) }
   })
 }
 
@@ -168,18 +187,13 @@ if (isMainModule(import.meta.url)) {
   const idleDays = idleDaysFromEnv()
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const gh: Gh = args => execFileSync('gh', args, { encoding: 'utf8' })
-  const { removed, expired } = sweepPreviews({
+  const { removed, unmarked } = sweepPreviews({
     git: gitIn(process.cwd()), openPrs: () => openPullRequests(gh, repository),
     idleBefore: new Date(Date.now() - idleDays * DAY_MS), alsoRemove,
+    markExpired: pr => {
+      if (!markPreviewExpired(gh, repository, pr.number, idleDays)) console.log(`PR ${pr.number} has no preview comment to update`)
+    },
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
-  // After the push, so no comment claims a removal that did not land.
-  for (const pr of expired) {
-    try {
-      if (!markPreviewExpired(gh, repository, pr, idleDays)) console.log(`PR ${pr.number} has no preview comment to update`)
-    } catch (error) {
-      console.error(`could not mark PR ${pr.number}'s preview expired:`, error)
-      process.exitCode = 1
-    }
-  }
+  if (unmarked.length > 0) process.exitCode = 1
 }
