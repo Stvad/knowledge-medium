@@ -1,0 +1,1 @@
+import{Jn as e,nk as t,rk as n}from"../../../chunks/app-BoIiFl9L.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

@@ -1,0 +1,1 @@
+import{FX as e,IX as t}from"../../chunks/app-BoIiFl9L.js";export{e as Block,t as requireLoadedBlock};

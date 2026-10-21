@@ -1,0 +1,1 @@
+import{X6 as e,Z6 as t}from"../../chunks/app-BoIiFl9L.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};
