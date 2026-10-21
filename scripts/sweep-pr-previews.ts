@@ -79,6 +79,8 @@ export function sweepPreviews({ git, branch, openPrs, alsoRemove = [] }: {
   }
 }
 
+// A PR opening or closing between pages can shift another past the page boundary;
+// accepted while the open PRs fit on one page.
 function openPullRequests(repository: string): Set<number> {
   const out = execFileSync('gh', ['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`, '--jq', '.[].number'], {
     encoding: 'utf8',

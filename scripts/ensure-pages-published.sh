@@ -45,7 +45,8 @@ builds="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
 # Well past a normal build's duration: a build in flight longer than this has stalled.
-STALL_SECS="${PAGES_BUILD_STALL_SECS:-600}"
+# Kept under one round of polls, so the next round can replace a stalled build.
+STALL_SECS="${PAGES_BUILD_STALL_SECS:-360}"
 
 # Prints e.g. "building for 95s" while the latest Pages build is in flight and
 # younger than STALL_SECS. Prints nothing when it finished, stalled, or can't be read.

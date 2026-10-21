@@ -54,14 +54,16 @@ jobs:
       - name: Remove previews of closed PRs
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          # A close names no PR: the open-PR check decides, so a PR reopened since keeps its preview.
+          FORCE_PR: ${{ inputs.pr_number }}
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-        run: node scripts/sweep-pr-previews.ts ${PR_NUMBER:+"$PR_NUMBER"}
+        run: node scripts/sweep-pr-previews.ts ${FORCE_PR:+"$FORCE_PR"}
       # Scheduled sweeps leave comments alone: they only catch a failed close run, and
-      # a closed PR's stale link merely 404s.
+      # a closed PR's stale link merely 404s. A close drops the link even if the PR was
+      # reopened since; its next deploy posts it again.
       - name: Remove the preview link from the PR
         if: github.event.pull_request.number || inputs.pr_number
         uses: marocchino/sticky-pull-request-comment@v2
