@@ -1,1 +1,0 @@
-import{X6 as e,Z6 as t}from"../../chunks/app-Ds6Mui7x.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

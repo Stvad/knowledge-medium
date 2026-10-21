@@ -1,1 +1,0 @@
-import{CF as e}from"../../../chunks/app-Ds6Mui7x.js";export{e as AddPropertyForm};

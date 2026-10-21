@@ -1,1 +1,0 @@
-import{XP as e,ZP as t}from"../../../chunks/app-Ds6Mui7x.js";export{e as MetadataRow,t as PropertySectionLabel};

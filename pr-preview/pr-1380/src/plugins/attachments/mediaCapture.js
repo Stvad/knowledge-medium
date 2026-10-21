@@ -1,1 +1,0 @@
-import{$g as e,Qg as t,Zg as n}from"../../../chunks/app-Ds6Mui7x.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,t as captureMedia,e as mediaBlockId};

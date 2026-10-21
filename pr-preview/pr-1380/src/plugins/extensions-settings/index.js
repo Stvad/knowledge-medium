@@ -1,1 +1,0 @@
-import{Jn as e,nk as t,rk as n}from"../../../chunks/app-Ds6Mui7x.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
