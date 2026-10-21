@@ -1,1 +1,0 @@
-import{Sd as e,bd as t,xd as n,yd as r}from"../../../chunks/app-CppWyYsS.js";export{r as PROVENANCE_BLOCKS_PER_KEY,t as PROVENANCE_KEY_LIMIT,n as auditPropertyRegistration,e as describeUnregisteredProperty};

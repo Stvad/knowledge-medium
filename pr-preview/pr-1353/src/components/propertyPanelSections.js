@@ -1,1 +1,0 @@
-import{vF as e}from"../../chunks/app-CppWyYsS.js";export{e as buildPropertyPanelSections};

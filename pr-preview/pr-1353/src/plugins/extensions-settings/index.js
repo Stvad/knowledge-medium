@@ -1,1 +1,0 @@
-import{Jn as e,ik as t,rk as n}from"../../../chunks/app-CppWyYsS.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

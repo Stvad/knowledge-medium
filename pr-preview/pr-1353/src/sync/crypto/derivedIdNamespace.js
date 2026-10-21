@@ -1,1 +1,0 @@
-import{_8 as e}from"../../../chunks/app-CppWyYsS.js";export{e as deriveWorkspaceIdNamespace};

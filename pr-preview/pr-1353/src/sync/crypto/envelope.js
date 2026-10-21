@@ -1,1 +1,0 @@
-import{B1 as e,G1 as t,H1 as n,K1 as r,U1 as i,V1 as a,W1 as o}from"../../../chunks/app-CppWyYsS.js";export{e as ENVELOPE_PREFIX,a as GCM_TAG_BYTES,n as NONCE_BYTES,i as SCHEMA_VERSION,o as decodeEnvelope,t as encodeEnvelope,r as hasEnvelopePrefix};

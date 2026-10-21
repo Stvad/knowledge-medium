@@ -1,1 +1,0 @@
-import{CF as e,SF as t}from"../../../chunks/app-CppWyYsS.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

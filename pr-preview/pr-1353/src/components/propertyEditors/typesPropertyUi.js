@@ -1,1 +1,0 @@
-import{GD as e,UD as t,WD as n}from"../../../chunks/app-CppWyYsS.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};

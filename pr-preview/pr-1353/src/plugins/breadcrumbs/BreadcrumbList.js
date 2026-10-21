@@ -1,1 +1,0 @@
-import{Kb as e}from"../../../chunks/app-CppWyYsS.js";export{e as BreadcrumbList};

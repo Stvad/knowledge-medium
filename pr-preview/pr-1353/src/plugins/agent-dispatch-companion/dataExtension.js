@@ -1,1 +1,0 @@
-import{MG as e}from"../../../chunks/app-CppWyYsS.js";export{e as agentDispatchCompanionDataExtension};

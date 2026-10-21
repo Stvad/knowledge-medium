@@ -1,1 +1,0 @@
-import{cl as e,dl as t,fl as n,ll as r,ol as i,pl as a,sl as o,ul as s}from"../../../chunks/app-CppWyYsS.js";export{i as blockTaggingPrefsType,o as blockTagsConfigCodec,e as blockTagsConfigPresetCore,r as blockTagsConfigProp,s as isValidTagName,t as normalizeBlockTagsConfig,n as selectableTagNames,a as tagNameIssue};

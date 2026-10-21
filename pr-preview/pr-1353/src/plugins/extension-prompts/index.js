@@ -1,1 +1,0 @@
-import{XO as e,ZO as t}from"../../../chunks/app-CppWyYsS.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

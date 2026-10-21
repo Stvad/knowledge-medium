@@ -1,1 +1,0 @@
-import{dA as e,fA as t,mA as n,pA as r}from"../../chunks/app-CppWyYsS.js";export{e as extensionDisplayName,t as extensionName,r as userExtensionShellToggle,n as userExtensionToggle};

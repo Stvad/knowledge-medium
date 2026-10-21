@@ -1,1 +1,0 @@
-import{_G as e}from"../../../chunks/app-CppWyYsS.js";export{e as aliasDataExtension};

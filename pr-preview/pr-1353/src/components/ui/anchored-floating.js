@@ -1,1 +1,0 @@
-import{$R as e,QR as t}from"../../../chunks/app-CppWyYsS.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

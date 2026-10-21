@@ -1,1 +1,0 @@
-import{aa as e,la as t}from"../../../chunks/app-CppWyYsS.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

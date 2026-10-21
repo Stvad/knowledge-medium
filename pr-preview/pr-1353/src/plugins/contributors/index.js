@@ -1,1 +1,0 @@
-import{ku as e}from"../../../chunks/app-CppWyYsS.js";export{e as contributorsPlugin};

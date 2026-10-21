@@ -1,1 +1,0 @@
-import{nF as e}from"../../../chunks/app-CppWyYsS.js";export{e as PropertyRow};

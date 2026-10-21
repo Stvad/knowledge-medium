@@ -1,1 +1,0 @@
-import{HP as e,VP as t}from"../../chunks/app-CppWyYsS.js";export{t as isFocalRender,e as useIsFocalRender};
