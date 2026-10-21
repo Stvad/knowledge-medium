@@ -1,1 +1,1 @@
-import{Fu as e}from"../../../../chunks/app-C4jM3lhI.js";export{e as inlineBacklinkCountsExtension};
+import{om as e}from"../../../../chunks/app-CFebZztS.js";export{e as inlineBacklinkCountsExtension};
