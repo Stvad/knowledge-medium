@@ -196,6 +196,9 @@ describe('the fan-out progress surface', () => {
     await writerHeld
     try {
       await act(async () => { repo.setActiveWorkspaceId('ws-somewhere-else') })
+      // The app re-renders on a switch; this tree does not, so an update has
+      // to reach the shadowing for it to read the new workspace at all.
+      transactionStarts()
 
       expect(screen.getByRole('dialog')).toBeTruthy()
       expect(screen.getByText(/Updating blocks that use “status”/)).toBeTruthy()

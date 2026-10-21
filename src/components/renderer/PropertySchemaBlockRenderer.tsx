@@ -288,7 +288,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // the user can blur a second name while the first is still queued and be
   // typing a third when either lands. None of those acknowledgements may read
   // as a remote edit and take the typing away. One landing settles every
-  // request queued before it, since the queue runs them in order. The enum
+  // request queued before it, since the queue runs them in order — defence in
+  // depth for two landing inside one render, where the earlier name is never
+  // seen and would otherwise be kept as ours for good. The enum
   // options editor works around the same seam with `pending`; #1117 is where
   // an editor gets told the outcome instead.
   const [draftName, setDraftName] = useState<string | null>(null)
