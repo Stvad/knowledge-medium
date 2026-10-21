@@ -209,6 +209,8 @@ export const contestedChanges = <T extends {
   candidates: readonly T[],
   claimOf: (name: string) => NameClaim | null,
 ): T[] => {
+  // ACCEPTED: a held change is no peer, so one tx swapping names with a
+  // definition whose type does not load is refused here; a third name works.
   const batch = new Set(candidates.map(candidate => candidate.fieldId))
   return candidates.filter(candidate => {
     const destination = claimOf(candidate.newName)
