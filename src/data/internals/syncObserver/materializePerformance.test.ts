@@ -5,7 +5,7 @@ import type {PowerSyncDb} from '@/data/internals/commitPipeline'
 import {MAX_IDS_PER_IN_CLAUSE} from '@/data/internals/sqlBinds'
 import {encodeForWire} from '@/sync/transform'
 import {materializeStagingRows, type MaterializeOutcome} from './materialize'
-import {constMat, noKey, setupObserverTestDb, stagingCiphertextParams} from './test/harness'
+import {constMat, drainStagingWindowOnce, noKey, setupObserverTestDb, stagingCiphertextParams} from './test/harness'
 
 const h = setupObserverTestDb()
 const block = (id: string, overrides: Partial<BlockData> = {}): BlockData => ({
@@ -55,14 +55,44 @@ it('does not retain a key across windows after its store record disappears', asy
   const changed = block('a', {content: 'Must stay staged without the key', updatedAt: 2})
   await stageEncrypted(changed, key)
   available = false
+  await expect(materializeStagingRows(h.env.db, {upserted: ['a'], removed: []}, deps)).rejects.toThrow(/key/)
+  expect((await h.blocks())[0].content).toBe(block('a').content)
+  expect(await h.env.db.get<{needs_apply: number}>('SELECT needs_apply FROM blocks_synced WHERE id = ?', ['a']))
+    .toEqual({needs_apply: 1})
+})
+
+it('leaves the whole delivery queued on a transient key read failure and retries it successfully', async () => {
+  const key = await makeKey()
+  const records = [block('a'), block('b'), block('c')]
+  for (const data of records) await stageEncrypted(data, key)
+  const getCek = vi.fn(async () => key).mockRejectedValueOnce(new Error('transient key store failure'))
+  const deps = {getMaterializability: constMat('decrypt'), getCek}
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
-    const result = await materializeStagingRows(h.env.db, {upserted: ['a'], removed: []}, deps)
-    expect(result.quarantined).toEqual(['a'])
-    expect((await h.blocks())[0].content).toBe(block('a').content)
-    expect(await h.env.db.get<{needs_apply: number}>('SELECT needs_apply FROM blocks_synced WHERE id = ?', ['a']))
-      .toEqual({needs_apply: 1})
+    await expect(drainStagingWindowOnce(h.env.db, deps)).rejects.toThrow('transient key store failure')
+    expect(await h.queueLen()).toBe(records.length)
+    expect(await h.blocks()).toEqual([])
+    const retried = await drainStagingWindowOnce(h.env.db, deps)
+    expect(retried?.applied).toEqual(records.map(b => b.id))
+    expect(retried?.quarantined).toEqual([])
+    expect(await h.queueLen()).toBe(0)
+    expect(await h.blocks()).toEqual(records.map(b => ({id: b.id, content: b.content})))
   } finally { warning.mockRestore() }
+})
+
+it('skips pending local edits before asking for a workspace key', async () => {
+  const key = await makeKey()
+  await stageEncrypted(block('a'), key)
+  const local = block('a', {content: 'Local edit', updatedAt: 2})
+  await h.seedLocalBlock(local)
+  await h.queuePendingUpload('a')
+  const getCek = vi.fn(async () => { throw new Error('Key must not be read') })
+  const result = await materializeStagingRows(h.env.db, {upserted: ['a'], removed: []}, {
+    getMaterializability: constMat('decrypt'), getCek,
+  })
+  expect(getCek).not.toHaveBeenCalled()
+  expect(result.skippedStale).toEqual(['a'])
+  expect(await h.blocks()).toEqual([{id: 'a', content: local.content}])
 })
 
 it('decodes other records while one crypto operation is pending, before opening the write transaction', async () => {

@@ -45,31 +45,32 @@ sequentially on the same machine and summarize medians, retaining raw samples.
 
 Measured 2026-10-21 on the same desktop, sequentially, with one warmup and
 three measured repetitions per case. Before: `be54e8e7de4`; optimized:
-`fc53bd6229c`. Both versions ran the same benchmark code and validation.
+PR #1380, including retryable key-store failure handling. Both versions ran
+the same benchmark code and validation.
 WebKit reported Safari 26.4. These are local test-database results.
 
 | Runtime / case | Records | Before median | After median | Speedup |
 | --- | ---: | ---: | ---: | ---: |
-| WebKit, encrypted initial | 1,000 | 4,128 ms | 221 ms | 18.7x |
-| WebKit, plaintext initial | 1,000 | 694 ms | 186 ms | 3.7x |
-| WebKit, encrypted echo/repass | 1,000 | 4,496 ms | 70 ms | 64.2x |
-| WebKit, plaintext echo/repass | 1,000 | 31 ms | 32 ms | unchanged |
-| Node, encrypted initial | 3,000 | 1,592 ms | 453 ms | 3.5x |
-| Node, plaintext initial | 3,000 | 1,359 ms | 325 ms | 4.2x |
-| Node, encrypted echo/repass | 3,000 | 244 ms | 157 ms | 1.6x |
+| WebKit, encrypted initial | 1,000 | 4,128 ms | 216 ms | 19.1x |
+| WebKit, plaintext initial | 1,000 | 694 ms | 189 ms | 3.7x |
+| WebKit, encrypted echo/repass | 1,000 | 4,496 ms | 71 ms | 63.3x |
+| WebKit, plaintext echo/repass | 1,000 | 31 ms | 31 ms | unchanged |
+| Node, encrypted initial | 3,000 | 1,592 ms | 455 ms | 3.5x |
+| Node, plaintext initial | 3,000 | 1,359 ms | 326 ms | 4.2x |
+| Node, encrypted echo/repass | 3,000 | 244 ms | 156 ms | 1.6x |
 | Node, plaintext echo/repass | 3,000 | 42 ms | 40 ms | similar |
 
 WebKit encrypted-initial samples were 4,128 / 3,529 / 4,892 ms before and
-221 / 217 / 236 ms after. Median key lookup time fell from 3,025 ms for
-1,000 reads to 3 ms for one read. Median phase one fell from 3,225 to 48 ms.
+216 / 216 / 243 ms after. Median key lookup time fell from 3,025 ms for
+1,000 reads to 3 ms for one read. Median phase one fell from 3,225 to 47 ms.
 Total SQLite calls fell from 1,398 to 425: inserts dropped from 1,000 to 27;
 per-row derived-column writes and alias lookups still run. The write transaction
-median fell from 678 to 173 ms.
+median fell from 678 to 171 ms.
 
 Node isolates the database improvement because its key is already in memory.
 Its 3,000-row workload reduced insert calls from 3,000 to 81 and total SQL calls
 from 4,194 to 1,275. The encrypted write transaction median fell from 1,373 to
-318 ms; phase one fell from 219 to 132 ms.
+317 ms; phase one fell from 219 to 139 ms.
 
 The WebKit echo baseline varied from 2,865 to 4,520 ms. Two samples included an
 approximately one-second transaction wait outside individual SQL timings;
@@ -77,3 +78,8 @@ its cause is not established. Treat that case's ratio as noisy. The initial
 materialization improvement also appears in every sample and in the Node run.
 All samples validated the original values, derived targets/field bits, zero
 remaining staging flags, and zero uploads.
+
+Key lookup failures abort the materialization window before its write transaction,
+leaving the delivery queued for retry. Per-row quarantine is reserved for ciphertext
+decode failures. A regression test fails the first key read, verifies that the queue
+and local table are untouched, then retries the same delivery successfully.

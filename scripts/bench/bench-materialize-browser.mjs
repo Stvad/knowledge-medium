@@ -1,14 +1,16 @@
 import {createServer} from 'vite'
 import {webkit} from 'playwright'
-import {resolve, join} from 'node:path'
+import {resolve, join, dirname} from 'node:path'
 import {tmpdir} from 'node:os'
-import {writeFile, mkdtemp, rm} from 'node:fs/promises'
+import {writeFile, mkdtemp, mkdir, rm} from 'node:fs/promises'
 
 const count = Number(process.argv[2] ?? 1000)
 const reps = Number(process.argv[3] ?? 3)
 if (![count, reps].every(n => Number.isInteger(n) && n > 0)) {
   throw new Error('Usage: node scripts/bench/bench-materialize-browser.mjs [positive record count] [positive repetitions] [output.json]')
 }
+const outputPath = process.argv[4] ?? 'tmp/materialize-browser.json'
+await mkdir(dirname(outputPath), {recursive: true})
 const server = await createServer({
   configFile: false, root: process.cwd(), envFile: false,
   resolve: {alias: {
@@ -38,8 +40,8 @@ try {
       timeout = setTimeout(() => reject(new Error('Browser benchmark exceeded five minutes')), 300_000)
     }),
   ])
-  await writeFile(process.argv[4] ?? 'tmp/materialize-browser.json', JSON.stringify(result, null, 2))
-  console.log(JSON.stringify({count: result.count, repetitions: result.repetitions, userAgent: result.userAgent, output: process.argv[4] ?? 'tmp/materialize-browser.json'}))
+  await writeFile(outputPath, JSON.stringify(result, null, 2))
+  console.log(JSON.stringify({count: result.count, repetitions: result.repetitions, userAgent: result.userAgent, output: outputPath}))
 } finally {
   clearTimeout(timeout)
   await browser?.close()

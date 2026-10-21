@@ -55,6 +55,7 @@ import {
 } from './arrivalProcessors.js'
 import {
   decodeFromWire,
+  requireCek,
   type GetCek,
   type GetMaterializability,
   type Materializability,
@@ -404,9 +405,12 @@ export const materializeStagingRows = async (
       return decided('skippedStale', false)
     }
     const mode = materializability === 'decrypt' ? 'e2ee' : 'none'
+    // A key-store failure must leave the window queued for retry, rather than
+    // classifying every record that shares the key as corrupt ciphertext.
+    const key = mode === 'e2ee' ? await requireCek(getWindowCek, row.workspace_id) : null
     let plaintext: BlockRow
     try {
-      plaintext = await decodeFromWire(row, mode, getWindowCek)
+      plaintext = await decodeFromWire(row, mode, async () => key)
     } catch (err) {
       // Undecryptable despite a well-formed `enc:v1:` envelope (the server can
       // only validate envelope SHAPE, so corrupt/tampered bytes or a direct
@@ -432,10 +436,13 @@ export const materializeStagingRows = async (
   const candidates: ApplyCandidate[] = []
   const decidedIds = {deferred, skippedStale, quarantined}
   for (let i = 0; i < stagingRows.length; i += DECODE_CONCURRENCY) {
-    const prepared = await Promise.all(stagingRows.slice(i, i + DECODE_CONCURRENCY).map(prepareRow))
+    // Settle the group before failing so a retry cannot overlap its crypto work.
+    const prepared = await Promise.allSettled(stagingRows.slice(i, i + DECODE_CONCURRENCY).map(prepareRow))
     // Preserve staging order for writes and snapshots, regardless of which
     // WebCrypto operation completed first.
-    for (const result of prepared) {
+    for (const settled of prepared) {
+      if (settled.status === 'rejected') throw settled.reason
+      const result = settled.value
       if (result.kind === 'apply') candidates.push(result.candidate)
       else {
         decidedIds[result.kind].push(result.decision.id)
