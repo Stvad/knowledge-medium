@@ -77,6 +77,8 @@ for round in $(seq 1 "$ROUNDS"); do
   # Round 1 rides the auto-build our push already triggered. Later rounds are the
   # actual retry: explicitly request a fresh Pages build of the current branch.
   # A build that is already in flight started after our push, so it includes it.
+  # If it stalls during the final round it is not replaced, the same as a build that
+  # round requested; the job fails and the next push or retry publishes the tip.
   if [ "$round" -gt 1 ]; then
     in_flight="$(build_in_flight)"
     if [ -n "$in_flight" ]; then

@@ -60,6 +60,8 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: node scripts/sweep-pr-previews.ts ${PR_NUMBER:+"$PR_NUMBER"}
+      # Scheduled sweeps leave comments alone: they only catch a failed close run, and
+      # a closed PR's stale link merely 404s.
       - name: Remove the preview link from the PR
         if: github.event.pull_request.number || inputs.pr_number
         uses: marocchino/sticky-pull-request-comment@v2
