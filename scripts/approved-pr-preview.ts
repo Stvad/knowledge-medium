@@ -16,7 +16,7 @@ export function parsePrNumber(value: string): number {
   return Number(value)
 }
 
-export function assertForkPreview(headRepository: string | undefined, repository: string): void {
+function assertForkPreview(headRepository: string | undefined, repository: string): void {
   if (headRepository === repository) {
     throw new Error('Approved previews are only for forks; same-repository previews are managed by PR Preview')
   }

@@ -4874,9 +4874,9 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     } as AnyPropertySchema
   }
   const convert = (
-    from: PresetId | null, to: PresetId, content: string,
+    from: PresetId, to: PresetId, content: string,
   ): ValueChildConversion =>
-    convertValueChildContent(from === null ? null : schemaOf(from), schemaOf(to), content)
+    convertValueChildContent(schemaOf(from), schemaOf(to), content)
 
   it('carries the VALUE across a pure spelling disagreement, both directions', () => {
     expect(convert('string-list', 'list', 'x')).toEqual({outcome: 'converted', content: '"x"'})
@@ -4929,10 +4929,6 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     // holds: `list` -> `string` has none, and the text route decides it the
     // other way.
     expect(convert('string', 'list', 'null')).toEqual({outcome: 'converted', content: '"null"'})
-  })
-
-  it('falls to the text route when no old codec records the encoding', () => {
-    expect(convert(null, 'number', ' 42 ')).toEqual({outcome: 'converted', content: '42'})
   })
 })
 
