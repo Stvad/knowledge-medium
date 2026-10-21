@@ -1,0 +1,1 @@
+import{DI as e,EI as t}from"../../../chunks/app-Bhg-gPTt.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

@@ -1,0 +1,1 @@
+import{bf as e,yf as t}from"../../../chunks/app-Bhg-gPTt.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

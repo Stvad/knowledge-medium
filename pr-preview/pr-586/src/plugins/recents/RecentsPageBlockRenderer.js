@@ -1,0 +1,1 @@
+import{DC as e,EC as t,TC as n}from"../../../chunks/app-Bhg-gPTt.js";export{n as RecentsList,t as RecentsPageBlockRenderer,e as recentsPageRendererRegistration};

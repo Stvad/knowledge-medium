@@ -1,0 +1,1 @@
+import{OP as e,kP as t}from"../../chunks/app-Bhg-gPTt.js";export{e as isFocalRender,t as useIsFocalRender};

@@ -1,0 +1,1 @@
+import{il as e,rl as t}from"../../../chunks/app-Bhg-gPTt.js";export{t as appendTagToBlocks,e as appendTagToContent};

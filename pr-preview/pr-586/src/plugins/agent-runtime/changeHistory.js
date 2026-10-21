@@ -1,0 +1,1 @@
+import{$d as e,Qd as t,Xd as n,Zd as r,ef as i}from"../../../chunks/app-Bhg-gPTt.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,t as MAX_LISTED_CHANGES,e as blockHistory,i as recentChanges};

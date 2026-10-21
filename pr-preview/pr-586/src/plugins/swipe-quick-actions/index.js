@@ -1,0 +1,1 @@
+import{FD as e,LD as t,hD as n,lD as r,mD as i}from"../../../chunks/app-Bhg-gPTt.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_RIGHT_BLOCK_ACTION_ID,i as SwipeActionMenu,t as quickActionItemsFacet,r as swipeQuickActionsPlugin};

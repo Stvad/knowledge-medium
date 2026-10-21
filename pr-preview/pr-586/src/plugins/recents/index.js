@@ -1,0 +1,1 @@
+import{CC as e,SC as t,wC as n,xC as r}from"../../../chunks/app-Bhg-gPTt.js";export{r as OPEN_RECENTS_ACTION_ID,t as openRecentsAction,e as recentsHeaderItem,n as recentsPlugin};

@@ -1,0 +1,1 @@
+import{bh as e,vh as t,yh as n}from"../../chunks/app-Bhg-gPTt.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};

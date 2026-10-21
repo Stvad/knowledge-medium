@@ -1,0 +1,1 @@
+"use client";import{FP as e,NP as t,PP as n}from"../../../chunks/app-Bhg-gPTt.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

@@ -1,0 +1,1 @@
+import{or as e}from"../../../chunks/app-Bhg-gPTt.js";export{e as openExtensionsSettingsAction};

@@ -1,0 +1,1 @@
+import{eA as e,tA as t}from"../../chunks/app-Bhg-gPTt.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};

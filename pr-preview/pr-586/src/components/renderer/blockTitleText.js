@@ -1,0 +1,1 @@
+import{DP as e,EP as t}from"../../../chunks/app-Bhg-gPTt.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

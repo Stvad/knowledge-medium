@@ -1,0 +1,1 @@
+import{RO as e,zO as t}from"../../chunks/app-Bhg-gPTt.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

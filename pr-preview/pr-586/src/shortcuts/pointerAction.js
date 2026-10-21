@@ -1,0 +1,1 @@
+import{FA as e,PA as t}from"../../chunks/app-Bhg-gPTt.js";export{t as dispatchPointerAction,e as setPointerActionDispatcher};

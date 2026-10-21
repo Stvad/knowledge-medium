@@ -1,0 +1,1 @@
+import{Ad as e,Fd as t,Id as n,Ld as r,Md as i,Nd as a,Pd as o,jd as s}from"../../../chunks/app-Bhg-gPTt.js";export{e as PROVE_DISTINCT_VALUE_LIMIT,s as applyPropertyDefinitionSynthesis,i as flipBlockedBySynthesis,a as keyCannotBeDefined,o as planPropertyDefinitionSynthesis,t as provePresetId,n as resolveSynthesisNamespace,r as synthesizedPropertyDefinitionBlockId};

@@ -1,0 +1,1 @@
+import{_S as e,gS as t,hS as n,mS as r,pS as i,vS as a,yS as o}from"../../../chunks/app-Bhg-gPTt.js";export{i as BINARY_ENVELOPE_MAGIC,r as BINARY_ENVELOPE_MIN_BYTES,n as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,e as decodeBinaryEnvelope,a as encodeBinaryEnvelope,o as hasBinaryEnvelopeMagic};

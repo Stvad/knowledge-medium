@@ -1,0 +1,1 @@
+import{dw as e,fw as t,mw as n,pw as r,uw as i}from"../../chunks/app-Bhg-gPTt.js";export{i as CRUMB_ELLIPSIS,e as CRUMB_MAX_CHARS,t as CRUMB_MAX_SEGMENTS,r as collapseCrumbs,n as crumbsFromAncestors};

@@ -1,0 +1,1 @@
+import{bd as e,xd as t}from"../../chunks/app-Bhg-gPTt.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

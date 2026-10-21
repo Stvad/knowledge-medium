@@ -1,0 +1,1 @@
+import{Qv as e,dy as t,fy as n,py as r,uy as i}from"../../../chunks/app-Bhg-gPTt.js";export{t as EXTENSIONS_PAGE_TITLE,n as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,e as onboardingPlugin,i as seedTutorial};

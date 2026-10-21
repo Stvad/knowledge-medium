@@ -1,0 +1,1 @@
+import{MA as e,NA as t}from"../../chunks/app-Bhg-gPTt.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

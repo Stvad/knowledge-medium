@@ -1,0 +1,1 @@
+import{bN as e,yN as t}from"../../chunks/app-Bhg-gPTt.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};

@@ -1,0 +1,1 @@
+import{Mk as e,jk as t}from"../chunks/app-Bhg-gPTt.js";export{t as appUpdate,e as useAppUpdateAvailable};

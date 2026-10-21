@@ -1,0 +1,1 @@
+import{$A as e,ej as t}from"../../chunks/app-Bhg-gPTt.js";export{e as ClientLocalSettings,t as clientLocalSettings};

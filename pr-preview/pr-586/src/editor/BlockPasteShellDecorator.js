@@ -1,0 +1,1 @@
+import{JO as e,YO as t}from"../../chunks/app-Bhg-gPTt.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

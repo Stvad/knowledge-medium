@@ -1,0 +1,1 @@
+import{lF as e,uF as t}from"../../../chunks/app-Bhg-gPTt.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

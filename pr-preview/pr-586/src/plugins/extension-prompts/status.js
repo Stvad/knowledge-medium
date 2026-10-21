@@ -1,0 +1,1 @@
+import{ck as e,lk as t}from"../../../chunks/app-Bhg-gPTt.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
