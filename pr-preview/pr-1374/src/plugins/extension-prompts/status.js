@@ -1,1 +1,1 @@
-import{XO as e,ZO as t}from"../../../chunks/app-AGBCgTQE.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
+import{QO as e,ZO as t}from"../../../chunks/app-BB9c2Qv9.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};

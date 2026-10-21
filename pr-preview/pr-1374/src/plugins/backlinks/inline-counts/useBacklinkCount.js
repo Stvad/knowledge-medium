@@ -1,1 +1,1 @@
-import{dm as e}from"../../../../chunks/app-AGBCgTQE.js";export{e as useBacklinkCount};
+import{fm as e}from"../../../../chunks/app-BB9c2Qv9.js";export{e as useBacklinkCount};

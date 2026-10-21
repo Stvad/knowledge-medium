@@ -1,1 +1,1 @@
-import{hI as e,mI as t}from"../../chunks/app-AGBCgTQE.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};
+import{gI as e,hI as t}from"../../chunks/app-BB9c2Qv9.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};
