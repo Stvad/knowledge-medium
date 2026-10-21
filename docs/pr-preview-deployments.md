@@ -201,8 +201,9 @@ meanwhile is kept. It runs:
 A close or a dispatch with `pr_number` also deletes that PR's preview-link
 comment. Once the sweep is done, including its push if it removed anything,
 every run rewrites the preview comments of each idle open PR in place, to say
-the preview expired and how to redeploy it. A comment that already says so is
-left as it is. That set is every idle open PR, not only those this run removed,
+the preview expired and how to redeploy it. It re-reads the PR's `updated_at`
+just before editing, so a push that redeployed the PR meanwhile keeps its link.
+A comment that already says so is left as it is. That set is every idle open PR, not only those this run removed,
 so an edit that failed is retried by later runs for as long as the PR stays
 idle. A failure only warns, so it never skips the workflow's own comment
 cleanup. The edit waits for the push because it bumps the PR's `updated_at`,

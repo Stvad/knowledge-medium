@@ -182,14 +182,16 @@ describe('markPreviewExpired', () => {
   const marker = '<!-- Sticky Pull Request Commentpr-preview -->'
   const bot = { login: 'github-actions[bot]' }
 
-  function fakeGh(comments: object[]) {
+  const window = { idleDays: 30, idleBefore }
+
+  function fakeGh(comments: object[], prUpdatedAt = '2026-09-01T00:00:00Z') {
     const patches: string[][] = []
     const gh: Gh = args => {
       if (args.includes('PATCH')) {
         patches.push(args)
         return '{}'
       }
-      return JSON.stringify([comments])
+      return args.some(arg => /\/pulls\/\d+$/.test(arg)) ? `${prUpdatedAt}\n` : JSON.stringify([comments])
     }
     const body = () => patches[0]?.find(arg => arg.startsWith('body='))
     return { gh, patches, body }
@@ -202,16 +204,24 @@ describe('markPreviewExpired', () => {
       { id: 12, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)).toBe(true)
     expect(patches).toHaveLength(1)
     expect(patches[0]).toContain('repos/o/r/issues/comments/12')
     expect(body()).toContain(marker)
   })
 
+  // A push since the sweep read the PR may already have redeployed it and relinked this comment.
+  it('edits nothing when the PR has become active since the sweep read it', () => {
+    const { gh, patches } = fakeGh([{ id: 12, user: bot, body: `View preview\n${marker}` }], '2026-10-20T00:00:00Z')
+
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)).toBe(false)
+    expect(patches).toEqual([])
+  })
+
   it('edits nothing when the PR has no preview comment', () => {
     const { gh, patches } = fakeGh([{ id: 11, user: bot, body: 'another bot comment' }])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(false)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)).toBe(false)
     expect(patches).toEqual([])
   })
 
@@ -220,7 +230,7 @@ describe('markPreviewExpired', () => {
   it('rewrites every preview comment that does not already say it expired, newest first', () => {
     const expiredBody = () => {
       const probe = fakeGh([{ id: 1, user: bot, body: marker }])
-      markPreviewExpired(probe.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
+      markPreviewExpired(probe.gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)
       return probe.body()!.slice('body='.length)
     }
     const { gh, patches } = fakeGh([
@@ -229,7 +239,7 @@ describe('markPreviewExpired', () => {
       { id: 14, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)).toBe(true)
     expect(patches.map(args => args.find(arg => arg.includes('/comments/')))).toEqual([
       'repos/o/r/issues/comments/14', 'repos/o/r/issues/comments/12',
     ])
@@ -237,18 +247,18 @@ describe('markPreviewExpired', () => {
 
   it('edits nothing when the comment already says the preview expired', () => {
     const first = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(first.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
+    markPreviewExpired(first.gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)
     const again = fakeGh([{ id: 12, user: bot, body: first.body()!.slice('body='.length) }])
 
-    expect(markPreviewExpired(again.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(false)
+    expect(markPreviewExpired(again.gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)).toBe(false)
     expect(again.patches).toEqual([])
   })
 
   it('leaves the head SHA for a maintainer to fill in on a fork PR', () => {
     const sameRepo = fakeGh([{ id: 12, user: bot, body: marker }])
     const fork = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
-    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true, base: 'master' }, 30)
+    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false, base: 'master' }, window)
+    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true, base: 'master' }, window)
 
     expect(sameRepo.body()).toContain('head_sha="$(gh pr view 5')
     expect(fork.body()).not.toContain('$(')
@@ -259,8 +269,8 @@ describe('markPreviewExpired', () => {
   it('offers only a push to a same-repo PR that targets another branch, and neither to such a fork', () => {
     const stacked = fakeGh([{ id: 12, user: bot, body: marker }])
     const stackedFork = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(stacked.gh, 'o/r', { number: 5, fork: false, base: 'feature' }, 30)
-    markPreviewExpired(stackedFork.gh, 'o/r', { number: 5, fork: true, base: 'feature' }, 30)
+    markPreviewExpired(stacked.gh, 'o/r', { number: 5, fork: false, base: 'feature' }, window)
+    markPreviewExpired(stackedFork.gh, 'o/r', { number: 5, fork: true, base: 'feature' }, window)
 
     expect(stacked.body()).toContain('A push brings it back')
     expect(stacked.body()).not.toContain('gh workflow run')

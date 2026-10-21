@@ -139,16 +139,23 @@ function expiredPreviewComment(pr: NoticeTarget, repository: string, idleDays: n
  * edit bumps `updatedAt` and ends the PR's retries, so a failure after it can
  * only leave a hidden comment stale.
  */
-export function markPreviewExpired(gh: Gh, repository: string, pr: NoticeTarget, idleDays: number): boolean {
+export function markPreviewExpired(gh: Gh, repository: string, pr: NoticeTarget, { idleDays, idleBefore }: {
+  idleDays: number
+  idleBefore: Date
+}): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const stale = pages.flat().filter(c =>
     c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER) && !c.body.startsWith(EXPIRED_HEADING))
+  if (stale.length === 0) return false
+  // A push since the sweep read the PR may already have redeployed it and relinked these comments.
+  const updatedAt = new Date(gh(['api', `repos/${repository}/pulls/${pr.number}`, '--jq', '.updated_at']).trim())
+  if (!(updatedAt < idleBefore)) return false
   for (const comment of stale.reverse()) {
     gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
       '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
   }
-  return stale.length > 0
+  return true
 }
 
 /** One `number, updated_at, head repository, base branch` line per PR; a deleted head repository is empty, so a fork. */
@@ -194,7 +201,7 @@ if (isMainModule(import.meta.url)) {
   // cleanup; the next run retries it for as long as the PR stays idle.
   for (const pr of expired) {
     try {
-      if (markPreviewExpired(gh, repository, pr, idleDays)) console.log(`Marked PR ${pr.number}'s preview expired`)
+      if (markPreviewExpired(gh, repository, pr, { idleDays, idleBefore })) console.log(`Marked PR ${pr.number}'s preview expired`)
     } catch (error) {
       const cause = (error as { stderr?: string }).stderr?.trim() || String(error)
       console.log(`::warning::${workflowCommandData(`Could not mark PR ${pr.number}'s preview expired: ${cause}`)}`)
