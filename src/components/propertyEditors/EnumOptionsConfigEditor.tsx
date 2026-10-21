@@ -22,8 +22,11 @@
  * back, and it settles two things that both read as "my own write is not
  * mine". A request that never lands is not one of them: the host remounts
  * this editor when a change is cancelled or refused, which is the only way
- * the outcome reaches here at all — `onChange` returns void. Its acknowledgement must not wipe a draft: tab out of one field and
- * type in the next, and the first field's write coming back would otherwise
+ * the outcome reaches here at all — `onChange` returns void.
+ *
+ * The two: a request's acknowledgement must not wipe a draft — tab out of
+ * one field and type in the next, and the first field's write coming back
+ * would otherwise
  * replace everything with its own snapshot, erasing what is being typed. And
  * a blur caused by that write must not write again: a structural change big
  * enough to be confirmed mounts a focus trap, which blurs the input this
