@@ -1,1 +1,1 @@
-import{S3 as e,x3 as t}from"../../chunks/app-3Md0nf6R.js";export{t as InvalidBlockIdError,e as assertCanonicalBlockId};
+import{S3 as e,x3 as t}from"../../chunks/app-D957Xrhx.js";export{t as InvalidBlockIdError,e as assertCanonicalBlockId};

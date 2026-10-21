@@ -1,1 +1,1 @@
-import{FA as e,IA as t,PA as n}from"../../chunks/app-3Md0nf6R.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{FA as e,IA as t,PA as n}from"../../chunks/app-D957Xrhx.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
