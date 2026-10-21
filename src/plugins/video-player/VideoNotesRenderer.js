@@ -1,1 +1,1 @@
-import{_v as e,vv as t,yv as n}from"../../../chunks/app-Cc5aaVEC.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};
+import{_v as e,vv as t,yv as n}from"../../../chunks/app-7KlH0q-n.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};
