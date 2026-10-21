@@ -229,6 +229,14 @@ kmagent types --module '@/data/api'
 
 Single-module output is not bundled with its transitive dependencies; use the directory form above for editor/typechecker setup.
 
+## React in extensions
+
+`react` and `react-dom` are **host-provided peer dependencies**: an extension renders into the app's React tree, so it must run on the app's copy of React. A second copy fails with "Invalid hook call" and a context the host's components never see.
+
+- **Imports.** Write `import {useState} from 'react'` and `import {createRoot} from 'react-dom/client'`. The page import map resolves `react`, `react/…`, `react-dom` and `react-dom/…` to the host's modules, so the extension gets the same module instances the app uses; `react`, `react/jsx-runtime`, `react-dom` and `react-dom/client` are integrity-pinned.
+- **JSX.** The app's in-browser compiler uses the automatic JSX runtime: JSX becomes an import from `react/jsx-runtime`, which the import map resolves to the host's. No `import React` is needed, and the app sets no `React` / `ReactDOM` global, so import whatever you use. JSX no longer calls a local `React` binding, and a `/** @jsx */` or `/** @jsxFrag */` pragma fails to compile unless the file also says `/** @jsxRuntime classic */`.
+- **Bundled extensions** (`kmagent new-extension`) keep `react`, `react/*`, `react-dom`, `react-dom/*` and every `@/…` module external, and compile JSX with the automatic runtime (`@vitejs/plugin-react` does by default) so the bundle imports `react/jsx-runtime` instead of carrying a factory of its own. The `react` / `react-dom` entries in the scaffold's `devDependencies` supply types and the test environment only; they are never bundled.
+
 ## Upgrading
 
 The bridge is a background process that keeps running after the CLI that started it is upgraded, and it reports no version, so the CLI cannot tell it is old ([#1247](https://github.com/Stvad/knowledge-medium/issues/1247)). When a release changes the bridge, stop it once; the next `kmagent` command, or the `agent-dispatch` daemon, starts the new one:

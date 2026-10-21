@@ -40,6 +40,10 @@
 // `@/data/api` is the data layer's own stable public barrel (a directory), so
 // extensions must write its explicit `/index.js` form; every other entry here
 // is a single file.
+//
+// `react` / `react-dom` (and their subpaths) are not listed: they are not app
+// modules — the page importmap supplies the host's copies and an extension must
+// never bundle its own (packages/agent-cli/README.md, "React in extensions").
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */
