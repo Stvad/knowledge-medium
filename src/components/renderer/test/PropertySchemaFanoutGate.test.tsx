@@ -541,6 +541,22 @@ describe('a change that cannot go ahead', () => {
     expect(await storedName('unnamed-schema')).toBeUndefined()
   })
 
+  it('writes nothing to an unnamed schema block deleted while it was planned', async () => {
+    // A definition that is deleted changes kind by losing its publication;
+    // a block that was never published only changes kind by being deleted.
+    await createUnnamedSchema()
+    vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockImplementation(async () => {
+      await repo.tx(tx => tx.delete('unnamed-schema'), {scope: ChangeScope.BlockDefault})
+      return 0
+    })
+    renderSchema('unnamed-schema')
+
+    await renameTo('test:named')
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(await storedName('unnamed-schema')).toBeUndefined()
+  })
+
   it('plans nothing for a block that stopped being a schema before its turn', async () => {
     await createUnnamedSchema()
     consumersAre(0)
