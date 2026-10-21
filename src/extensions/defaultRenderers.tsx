@@ -25,12 +25,25 @@ import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
  * 100), so a plugin renderer and a core one are ordered by one number
  * rather than by which layer registered them.
  *
- * An equal precedence is decided by registration order, so two renderers
- * that can claim the SAME block need distinct numbers or the winner is
- * whatever the extension graph happens to visit last. That is why the two
- * type editors differ by one: a block may legally carry both
- * `property-schema` and `block-type`, and the schema editor is the one
- * that has always won it.
+ * An equal precedence is broken by registration order, so when two
+ * renderers can claim ONE block the winner is whatever the extension graph
+ * visits last. That is arbitrary and ACCEPTED, not an omission: the
+ * registry this replaced broke the same tie by insertion order, equally
+ * invisibly, so the only thing that can change is which arbitrary renderer
+ * wins. Giving every theoretically-overlapping pair a distinct number is
+ * O(pairs) of permanent weight that each new plugin has to honour, with
+ * nothing able to enforce it — and the facet cannot detect the collision
+ * for itself, since `combine` is handed values with the precedences already
+ * applied and discarded.
+ *
+ * The two type editors differ by one anyway, because that pair is the one a
+ * block might plausibly BE: both edit definition-shaped blocks, so carrying
+ * `property-schema` and `block-type` at once is a composition someone could
+ * attempt, and the schema editor is the one that always won it. The
+ * marker-type page renderers (recents, SRS deck, Readwise backlog) sit at
+ * 100 together and stay there: each marks a singleton kernel page that
+ * `getOrCreateKernelPage` writes with exactly ONE marker, so no code path
+ * produces a block two of them claim.
  */
 export const coreRendererLadder: readonly (readonly [BlockRendererRegistration, number])[] = [
   [{id: 'default', label: 'Block', render: DefaultBlockRenderer}, 0],
