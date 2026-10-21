@@ -1,1 +1,1 @@
-import{wE as e}from"../../../chunks/app-BLfGv6Ln.js";export{e as useCommandPaletteActions};
+import{wE as e}from"../../../chunks/app-7_5gyzW_.js";export{e as useCommandPaletteActions};

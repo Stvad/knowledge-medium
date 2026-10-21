@@ -1,1 +1,1 @@
-import{G3 as e,K3 as t}from"../../chunks/app-BLfGv6Ln.js";export{e as getOrCreateKernelPage,t as kernelPageBlockId};
+import{G3 as e,K3 as t}from"../../chunks/app-7_5gyzW_.js";export{e as getOrCreateKernelPage,t as kernelPageBlockId};
