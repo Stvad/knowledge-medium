@@ -267,6 +267,30 @@ describe('a revival yields in a workspace whose properties are child blocks', ()
     expect(await aliasChildren(PAGE)).toEqual(['My Page'])
   })
 
+  it('undoes a delete without touching a member the entry never wrote', async () => {
+    await pageWithChildren()
+    await repo.mutate.delete({id: PAGE})
+    // A peer that missed the delete adds a member under the dead page's field
+    // row. The undo's snapshot cell knows nothing of it.
+    const resolution = repo.propertySchemaResolverFor(WS).resolve(aliasesProp.name)
+    if (resolution.status !== 'resolved') throw new Error('alias property does not resolve')
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ?',
+      [PAGE, resolution.schema.fieldId],
+    )
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('peer-member', ?, ?, 'z', 'Peer', '{}', '[]', 1, 1, 1, 'peer', 'peer', 0)`,
+      [WS, field.id],
+    )
+    await insertSynced('q', 'Q', ['Inbox'], 5_000)
+
+    expect(await repo.undo()).toBe(true)
+
+    expect(await aliasChildren(PAGE)).toEqual(['My Page', 'Peer'])
+  })
+
   it('restores a malformed bag with a taken name in it', async () => {
     await sharedDb.db.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,

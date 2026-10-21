@@ -38,6 +38,7 @@ export const aliasClaimConflicts = async (
   workspaceId: string,
   aliases: readonly string[],
 ): Promise<AliasClaimConflict[]> => {
+  if (aliases.length === 0) return []
   const held = new Set(await tx.aliasesOf(blockId))
   const conflicts: AliasClaimConflict[] = []
   for (const alias of new Set(aliases)) {
@@ -83,9 +84,22 @@ export const restorePropertiesYieldingTakenAliases = async (
 ): Promise<Record<string, unknown> | undefined> => {
   const tombstone = await tx.get(id)
   if (tombstone === null) return undefined
-  const taken = await aliasClaimConflicts(tx, id, tombstone.workspaceId, storedAliasNames(tombstone.properties))
-  if (taken.length === 0) return undefined
-  return yieldingAliases(tombstone.properties, new Set(taken.map(conflict => conflict.alias)))
+  const taken = await takenAliases(tx, id, tombstone)
+  return taken.size === 0 ? undefined : yieldingAliases(tombstone.properties, taken)
+}
+
+/** The names in `row`'s stored bag that claiming for `id` would abort on,
+ *  counting only the holders `counts` accepts. */
+const takenAliases = async (
+  tx: Tx,
+  id: string,
+  row: BlockData,
+  counts: (holderId: string, alias: string) => boolean = () => true,
+): Promise<Set<string>> => {
+  const conflicts = await aliasClaimConflicts(tx, id, row.workspaceId, storedAliasNames(row.properties))
+  return new Set(conflicts
+    .filter(conflict => conflict.holders.some(holder => counts(holder.id, conflict.alias)))
+    .map(conflict => conflict.alias))
 }
 
 /** Every name this row actually claims, bag order first.
@@ -149,45 +163,39 @@ export const assertAliasClaimable = async (
   )
 }
 
-/** Undo / redo targets with every name yielded that a holder keeps past the
- *  replay, and the ids whose target changed — or `null` when no stuck row
- *  carries such a name. For a replay pass that made no progress: the worklist
+/** A stuck replay row's target with names yielded, and which names. */
+export interface ReplayYield {
+  target: BlockData
+  taken: ReadonlySet<string>
+}
+
+/** The stuck undo / redo rows that must yield a name, keyed by id — each with
+ *  its target rewritten. For a replay pass that made no progress: the worklist
  *  already reorders a handoff inside the entry, so a holder that matters here
  *  is one that still holds the name when the replay ends — a block outside the
  *  entry, or one inside it whose own target keeps the name. Waiting on it would
  *  fail the undo, and every retry of it, for as long as that holder lives.
  *
- *  Only the cells change: in a child-backed workspace the caller re-derives
- *  each yielding row's alias children once the replay has written them all. */
+ *  Only the cells change: in a child-backed workspace the caller also releases
+ *  the yielded names' value children once the replay has written them all. */
 export const yieldNamesHeldPastReplay = async (
   tx: Tx,
   stuck: ReadonlyArray<readonly [string, BlockData | null]>,
   snapshots: SnapshotsMap,
   direction: 'before' | 'after',
-): Promise<{pending: Array<[string, BlockData | null]>; yielding: string[]} | null> => {
+): Promise<Map<string, ReplayYield>> => {
   const keepsPastReplay = (holderId: string, alias: string): boolean => {
     const entry = snapshots.get(holderId)
     if (entry === undefined) return true
     const target = entry[direction]
     return target !== null && !target.deleted && storedAliasNames(target.properties).includes(alias)
   }
-  const yielding: string[] = []
-  const pending: Array<[string, BlockData | null]> = []
+  const yields = new Map<string, ReplayYield>()
   for (const [id, target] of stuck) {
-    if (target === null || target.deleted) {
-      pending.push([id, target])
-      continue
-    }
-    const conflicts = await aliasClaimConflicts(tx, id, target.workspaceId, storedAliasNames(target.properties))
-    const taken = new Set(conflicts
-      .filter(conflict => conflict.holders.some(holder => keepsPastReplay(holder.id, conflict.alias)))
-      .map(conflict => conflict.alias))
-    if (taken.size === 0) {
-      pending.push([id, target])
-      continue
-    }
-    yielding.push(id)
-    pending.push([id, {...target, properties: yieldingAliases(target.properties, taken)}])
+    if (target === null || target.deleted) continue
+    const taken = await takenAliases(tx, id, target, keepsPastReplay)
+    if (taken.size === 0) continue
+    yields.set(id, {target: {...target, properties: yieldingAliases(target.properties, taken)}, taken})
   }
-  return yielding.length > 0 ? {pending, yielding} : null
+  return yields
 }

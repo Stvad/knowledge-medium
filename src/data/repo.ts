@@ -2448,7 +2448,7 @@ export class Repo {
       // the parent check, follow on the next pass. Nothing left to yield
       // means the entry itself is inconsistent, and we rethrow.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
-      const yielding = new Set<string>()
+      const yielded = new Map<string, Set<string>>()
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
@@ -2468,15 +2468,17 @@ export class Repo {
           pending = deferred
           continue
         }
-        const yielded = await yieldNamesHeldPastReplay(tx, deferred, replaying.snapshots, direction)
-        if (yielded === null) throw lastError
-        for (const id of yielded.yielding) yielding.add(id)
-        pending = yielded.pending
+        const yields = await yieldNamesHeldPastReplay(tx, deferred, replaying.snapshots, direction)
+        if (yields.size === 0) throw lastError
+        for (const [id, {taken}] of yields) {
+          yielded.set(id, new Set([...(yielded.get(id) ?? []), ...taken]))
+        }
+        pending = deferred.map(([id, target]) => [id, yields.get(id)?.target ?? target])
       }
       // The yield rewrote only cells, and the entry revived the alias children
       // verbatim — past the properties flip those children are the truth, so
-      // they must stop carrying a yielded name too.
-      for (const id of yielding) await txImpl.rematerializePropertyChildren(id, [aliasesProp.name])
+      // the yielded names leave them too.
+      for (const [id, names] of yielded) await txImpl.releasePropertyMembers(id, aliasesProp.name, names)
     }, {scope, description: action}, {isReplay: true, lockHooks: {
       beforeCommit: () => {
         // The history was dropped while this replay held the lock — only a
