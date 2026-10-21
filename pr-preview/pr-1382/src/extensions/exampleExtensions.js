@@ -1,1 +1,0 @@
-import{AO as e,jO as t}from"../../chunks/app-i5mMCO1v.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
