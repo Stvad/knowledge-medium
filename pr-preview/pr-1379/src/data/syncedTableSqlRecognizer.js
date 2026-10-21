@@ -1,1 +1,1 @@
-import{JG as e,YG as t,qG as n}from"../../chunks/app-C69NrwUO.js";export{n as SYNCED_TABLES,e as syncedWriteTarget,t as writeTargets};
+import{JG as e,YG as t,qG as n}from"../../chunks/app-CTOU3s52.js";export{n as SYNCED_TABLES,e as syncedWriteTarget,t as writeTargets};

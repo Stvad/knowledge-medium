@@ -1,1 +1,1 @@
-import{Kh as e}from"../../../chunks/app-C69NrwUO.js";export{e as attachmentsPlugin};
+import{Kh as e}from"../../../chunks/app-CTOU3s52.js";export{e as attachmentsPlugin};
