@@ -1,1 +1,1 @@
-import{nk as e,qn as t,tk as n}from"../../../chunks/app-DtuM7MHV.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{nk as e,qn as t,tk as n}from"../../../chunks/app-D7ZQLOSN.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
