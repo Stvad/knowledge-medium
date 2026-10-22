@@ -1,1 +1,0 @@
-import{mk as e}from"../../../chunks/app-DgUghWIa.js";export{e as appUpdatePromptExtension};
