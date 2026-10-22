@@ -7,6 +7,7 @@ import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { spyOnOverfullLog } from '@/data/test/overfullWriteAheadLog'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
@@ -1148,6 +1149,82 @@ describe('workspace backfill runner — operator trigger', () => {
     expect((await repo.runWorkspaceBackfillNow(WS, 'probe-backfill-v1')).outcome).toBe('not-found')
     expect((await repo.runWorkspaceBackfillNow(WS, 'no-such-pass')).outcome).toBe('not-found')
     expect(runs).toEqual([])
+  })
+})
+
+describe('workspace backfill runner — write-ahead log', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('waits for a log a long read kept growing to be checkpointed before EVERY batch', async () => {
+    const events: string[] = []
+    const repo = makeRepo({
+      id: 'operator-chunked-v1',
+      trigger: 'operator',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) await tx(async () => { events.push(`batch ${i}`) }, {})
+      },
+    })
+    await seedTarget(repo)
+    // The RAW database, which `repo.db` meters through a proxy, and restored
+    // after: every test in this file shares it.
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    try {
+      expect((await repo.runWorkspaceBackfillNow(WS, 'operator-chunked-v1')).outcome).toBe('ran')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0', 'checkpoint', 'batch 1'])
+  })
+
+  it('does not wait on the log for a batch whose run the user already left', async () => {
+    // The wait can last as long as any read; a run that is aborting anyway
+    // must not hold the writer for it.
+    const events: string[] = []
+    const repo: Repo = makeRepo({
+      id: 'chunked-left-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) {
+          if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          await tx(async () => { events.push(`batch ${i}`) }, {})
+        }
+      },
+    }, cb => { cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0'])
+  })
+
+  it('asks whether the device is still caught up AFTER that wait, which lasts as long as any read', async () => {
+    const events: string[] = []
+    let caughtUp = true
+    const repo = makeRepo({
+      id: 'chunked-wa-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => { await tx(async () => { events.push('batch') }, {}) },
+    }, cb => { if (caughtUp) cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => {
+      events.push('checkpoint')
+      // A download starts while the writer waits out the read.
+      caughtUp = false
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint'])
   })
 })
 

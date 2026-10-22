@@ -5,6 +5,8 @@ import {
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
   type TypedBlockQueryReferenceFilter,
+  type WhereStorage,
+  type WhereValue,
 } from '@/data/api'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
 
@@ -49,6 +51,16 @@ export const jsonPathForProperty = (name: PropertyName): JsonPath =>
 export const inlineJsonPath = (name: string): string => {
   const path = jsonPathForProperty(name)
   return `'${path.replaceAll("'", "''")}'`
+}
+
+/** `json_each` over the refList cell `name` of `rowAlias`, one row per member
+ *  in `value`. A cell that is not a JSON array names no targets, as in
+ *  `decodeRefListIds` — a `ref` → `refList` re-type leaves plain strings behind
+ *  (an accepted residual of `propertyDefinitionChangeProcessor`), and a bare
+ *  `json_each` over one throws `malformed JSON` for the whole query. */
+export const refListMembersSql = (rowAlias: string, name: string): string => {
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  return `json_each(CASE WHEN json_type(${cell}) = 'array' THEN json_extract(${cell}) END)`
 }
 
 interface CompiledClause {
@@ -121,25 +133,59 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
   return {kind: 'comparator', op: op as 'eq' | 'lt' | 'lte' | 'gt' | 'gte', operand}
 }
 
-const encodeForWhere = (
-  name: string,
-  schema: AnyPropertySchema,
-  value: unknown,
-): string | number => {
-  if (!schema.codec.where) {
+const ISO_DATE_GLOB =
+  "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'"
+
+/** SQL that holds only for a cell of `storage`'s shape, given the cell's
+ *  `properties_json, path` argument pair. A comparator ANDs it onto the
+ *  comparison, which on its own orders a cell of any shape against the
+ *  operand — see `WhereStorage`. */
+const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
+  text: cell => `json_type(${cell}) = 'text'`,
+  number: cell => `json_type(${cell}) IN ('integer', 'real')`,
+  boolean: cell => `json_type(${cell}) IN ('true', 'false')`,
+  // No `json_type` needed: anything but a JSON string extracts as a number or
+  // as JSON text opening with `[` / `{`, and none of those fit the pattern.
+  // The byte length because GLOB stops at an embedded NUL, so
+  // `…000Z\u0000junk` fits on its prefix while `<` / `>` read the bytes past it.
+  'iso-date': cell =>
+    `json_extract(${cell}) GLOB ${ISO_DATE_GLOB} AND length(CAST(json_extract(${cell}) AS BLOB)) = 24`,
+}
+
+interface Comparable {
+  /** {@link STORAGE_TEST} for this cell. */
+  readonly test: string
+  readonly encode: (value: unknown) => WhereValue
+}
+
+const comparableCell = (name: string, schema: AnyPropertySchema, cell: string): Comparable => {
+  const where = schema.codec.where
+  if (!where) {
     throw new Error(
       `[queryBlocks] where.${name} is not where-queryable; ` +
       `codec type ${JSON.stringify(schema.codec.type)} doesn't support comparison predicates ` +
       '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
     )
   }
-  try {
-    return schema.codec.where.encode(value)
-  } catch (err) {
+  // A codec from a DB-stored extension is never type-checked against `WhereStorage`.
+  if (!Object.hasOwn(STORAGE_TEST, where.storage)) {
     throw new Error(
-      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
-      {cause: err},
+      `[queryBlocks] where.${name}: codec type ${JSON.stringify(schema.codec.type)} declares ` +
+      `where.storage ${JSON.stringify(where.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
     )
+  }
+  return {
+    test: STORAGE_TEST[where.storage](cell),
+    encode: value => {
+      try {
+        return where.encode(value)
+      } catch (err) {
+        throw new Error(
+          `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+          {cause: err},
+        )
+      }
+    },
   }
 }
 
@@ -152,7 +198,7 @@ const compileTargetTraversal = (
   name: string,
   inner: Readonly<Record<string, unknown>>,
   schema: AnyPropertySchema,
-  jsonExpr: string,
+  rowAlias: string,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   aliasCounter: AliasCounter,
 ): CompiledClause => {
@@ -165,19 +211,22 @@ const compileTargetTraversal = (
     )
   }
   const alias = `d${aliasCounter.n++}`
-  const refExtract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
   const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
   const innerClauses: string[] = []
   const innerParams: unknown[] = []
   for (const [innerName, innerValue] of innerEntries) {
     const compiled = compileWhereClause(
       innerName, innerValue, propertySchemas.get(innerName),
-      `${alias}.properties_json`, propertySchemas, aliasCounter,
+      alias, propertySchemas, aliasCounter,
     )
     innerClauses.push(compiled.sql)
     innerParams.push(...compiled.params)
   }
   const inWhere = innerClauses.length === 0 ? '' : ` AND ${innerClauses.join(' AND ')}`
+  // A target outside the source row's workspace is not a live target here:
+  // reference resolution is workspace-scoped, and so are the deps that wake a
+  // handle when a target is created or deleted (`typedBlocksStructureKey`).
+  const visible = `${alias}.deleted = 0 AND ${alias}.workspace_id = ${rowAlias}.workspace_id`
   if (isRef) {
     // The source row's `properties_json[name]` holds the target id
     // (string, stored as JSON). `json_extract` unwraps the JSON
@@ -185,17 +234,16 @@ const compileTargetTraversal = (
     return {
       sql:
         `EXISTS (SELECT 1 FROM blocks ${alias} ` +
-        `WHERE ${alias}.id = ${refExtract} ` +
-        `AND ${alias}.deleted = 0${inWhere})`,
+        `WHERE ${alias}.id = json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)}) ` +
+        `AND ${visible}${inWhere})`,
       params: innerParams,
     }
   }
-  // refList: target value is an array of ids — fan out via json_each.
   return {
     sql:
-      `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
+      `EXISTS (SELECT 1 FROM ${refListMembersSql(rowAlias, name)} AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
-      `WHERE ${alias}.deleted = 0${inWhere})`,
+      `WHERE ${visible}${inWhere})`,
     params: innerParams,
   }
 }
@@ -204,7 +252,7 @@ const compileWhereClause = (
   name: string,
   value: unknown,
   schema: AnyPropertySchema | undefined,
-  jsonExpr: string,
+  rowAlias: string,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   aliasCounter: AliasCounter = {n: 0},
 ): CompiledClause => {
@@ -214,7 +262,8 @@ const compileWhereClause = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  const extract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  const extract = `json_extract(${cell})`
   const parsed = parseWhereValue(name, value)
 
   // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
@@ -227,20 +276,20 @@ const compileWhereClause = (
     return {sql: `${extract} IS NOT NULL`, params: []}
   }
   if (parsed.kind === 'target') {
-    return compileTargetTraversal(name, parsed.inner, schema, jsonExpr, propertySchemas, aliasCounter)
+    return compileTargetTraversal(name, parsed.inner, schema, rowAlias, propertySchemas, aliasCounter)
   }
+  // The comparison stays its own AND term, in the indexed `json_extract`
+  // spelling, so an expression index on the property still serves it.
+  const comparable = comparableCell(name, schema, cell)
   if (parsed.kind === 'between') {
-    const lo = encodeForWhere(name, schema, parsed.lo)
-    const hi = encodeForWhere(name, schema, parsed.hi)
     return {
-      sql: `${extract} BETWEEN ? AND ?`,
-      params: [lo, hi],
+      sql: `(${comparable.test} AND ${extract} BETWEEN ? AND ?)`,
+      params: [comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
     }
   }
-  const operand = encodeForWhere(name, schema, parsed.operand)
   return {
-    sql: `${extract} ${COMPARATOR_SQL[parsed.op]} ?`,
-    params: [operand],
+    sql: `(${comparable.test} AND ${extract} ${COMPARATOR_SQL[parsed.op]} ?)`,
+    params: [comparable.encode(parsed.operand)],
   }
 }
 
@@ -270,7 +319,6 @@ const compilePredicateAgainstRow = (
 ): CompiledClause => {
   const clauses: string[] = []
   const params: unknown[] = []
-  const propsExpr = `${rowAlias}.properties_json`
 
   if (predicate.id !== undefined) {
     clauses.push(`${rowAlias}.id = ?`)
@@ -279,7 +327,7 @@ const compilePredicateAgainstRow = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr, propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), rowAlias, propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -327,7 +375,7 @@ const compileScopedPredicate = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json', propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -508,7 +556,7 @@ export const buildCandidatesCte = (
 
   if (normalized.where !== undefined) {
     for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json', propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -525,8 +573,8 @@ export const buildCandidatesCte = (
     const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
     // `IS NOT TRUE` (not bare `NOT`): exclude a row only when the
     // predicate is *definitely* true. A scalar `where` over an unset
-    // property compiles to `json_extract(...) = ?`, which is NULL when
-    // the property is missing; `NOT (NULL)` is NULL — not TRUE — so a
+    // property is NULL, since `json_extract` / `json_type` of a missing
+    // path are; `NOT (NULL)` is NULL — not TRUE — so a
     // bare `NOT` would drop every row that never set the property. The
     // documented contract is NOR ("exclude iff a predicate matches"),
     // and an unknown does not match, so unset rows must survive.

@@ -38,10 +38,10 @@ describe('createTestDb harness', () => {
 
   it('installs the documented set of blocks triggers', async () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES spans triggers on `blocks`, `block_aliases`,
-    // and `blocks_synced` (the Layout B change-capture triggers); see the
-    // analogous test in clientSchema.test.ts.
+    // `blocks_synced` (the Layout B change-capture triggers), and `ps_crud`
+    // (the download hold); see the analogous test in clientSchema.test.ts.
     const names = (await h.db.getAll<{name: string}>(
-      "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced') ORDER BY name",
+      "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced', 'ps_crud') ORDER BY name",
     )).map(r => r.name)
     const expected = [
       ...CLIENT_SCHEMA_TRIGGER_NAMES,
@@ -106,5 +106,36 @@ describe('createTestDb harness', () => {
     ).rejects.toThrow('intentional')
 
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ?', ['t-rollback'])).toBeNull()
+  })
+
+  it('reads the last committed value while a write is pending, then sees its commit', async () => {
+    const id = 't-read-isolation'
+    await h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json, created_at, updated_at, created_by, updated_by, deleted)
+       VALUES (?, 'ws', NULL, 'a0', 'committed', '{}', '[]', 0, 0, 'u', 'u', 0)`,
+      [id],
+    )
+
+    let markUpdated!: () => void
+    const updated = new Promise<void>(resolve => { markUpdated = resolve })
+    let allowCommit!: () => void
+    const commitAllowed = new Promise<void>(resolve => { allowCommit = resolve })
+    const writing = h.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', ['pending', id])
+      markUpdated()
+      await commitAllowed
+    })
+
+    try {
+      await Promise.race([updated, writing])
+      expect(await h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id]))
+        .toEqual({content: 'committed'})
+    } finally {
+      allowCommit()
+      await writing
+    }
+
+    expect(await h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id]))
+      .toEqual({content: 'pending'})
   })
 })

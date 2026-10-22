@@ -333,7 +333,7 @@ describe('materializePropertySeeds', () => {
       parentId: null,
       orderKey: 'a0',
       content: 'foreign live row',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializePropertySeeds(repo, WS, [seed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -354,7 +354,7 @@ describe('materializePropertySeeds', () => {
         content: 'foreign tombstone',
       })
       await tx.delete(id)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializePropertySeeds(repo, WS, [seed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -482,6 +482,7 @@ describe('materializePropertySeeds', () => {
     // AbortController, so a later test's `Repo` cannot reach into and cancel an
     // earlier one's). See the PR description for the reproduction of both.
     const freshWs = 'ws-no-pages-property'
+    repo.setActiveWorkspaceId(freshWs)
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [propertiesPageBlockId(freshWs)])).toBeNull()
 
@@ -766,7 +767,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       parentId: null,
       orderKey: 'a0',
       content: 'foreign occupant',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
     await vi.waitFor(() => {
@@ -1346,7 +1347,7 @@ describe('type definition materialization', () => {
       parentId: null,
       orderKey: 'a0',
       content: 'foreign live row',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializeTypeSeeds(repo, WS, [typeSeed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -1379,6 +1380,7 @@ describe('type definition materialization', () => {
     // ParentNotFound and leave the seed unmaterialized until the next open/change.
     // This workspace never had `ensureSystemPages` run (beforeEach only ensures WS).
     const freshWs = 'ws-no-pages'
+    repo.setActiveWorkspaceId(freshWs)
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typesPageBlockId(freshWs)])).toBeNull()
 
@@ -1402,6 +1404,7 @@ describe('type definition materialization', () => {
     // the recheck at the top of the write tx must commit nothing, even though the
     // page itself gets created (ensureParent ignores the signal).
     const freshWs = 'ws-abort-in-ensure'
+    repo.setActiveWorkspaceId(freshWs)
     const controller = new AbortController()
     const realLoad = repo.load.bind(repo)
     vi.spyOn(repo, 'load').mockImplementation((async (

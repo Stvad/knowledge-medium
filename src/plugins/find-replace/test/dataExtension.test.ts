@@ -67,7 +67,10 @@ const create = async (args: {
       orderKey: `key-${args.id}`,
       content: args.content ?? '',
     })
-  }, {scope: ChangeScope.BlockDefault})
+  }, {
+    scope: ChangeScope.BlockDefault,
+    ...(args.workspaceId !== undefined && args.workspaceId !== WS ? {allowUnloadedWorkspace: true} : {}),
+  })
 }
 
 const load = (id: string): Promise<BlockData | null> =>

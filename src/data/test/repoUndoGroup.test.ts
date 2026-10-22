@@ -237,6 +237,21 @@ describe('grouped.mutate joins the group (invariant 6)', () => {
   })
 })
 
+describe('run with a description', () => {
+  it('describes the mutator\'s tx as the caller says, grouped or not', async () => {
+    const {h, repo} = env
+    await seedRoot(repo, 'r1', 'v0')
+    await repo.run('core.setContent', {id: 'r1', content: 'v1'}, {description: 'caller says so'})
+    await repo.undoGroup(async (grouped) => {
+      await grouped.run('core.setContent', {id: 'r1', content: 'v2'}, {description: 'grouped caller'})
+    })
+    const described = await h.db.getAll<{description: string | null}>(
+      'SELECT description FROM command_events ORDER BY rowid',
+    )
+    expect(described.map(row => row.description).slice(-2)).toEqual(['caller says so', 'grouped caller'])
+  })
+})
+
 describe('ungrouped txs unchanged (invariant 7 — regression)', () => {
   it('two plain txs still record two separate entries', async () => {
     const {repo} = env

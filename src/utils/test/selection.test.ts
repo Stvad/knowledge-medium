@@ -93,6 +93,25 @@ describe('ordered selection ranges', () => {
       selectedBlockIds: ['X', 'B'],
     })).toBe(3)
   })
+
+  it("takes the cursor's copy of the anchor only when the cursor is on the anchor block", () => {
+    // The cursor sits on C, in the same entry as the first X — which says
+    // nothing about which X the selection was anchored on.
+    const entryLocations = [
+      {blockId: 'A', renderScopeId: 'outline'},
+      {blockId: 'X', renderScopeId: 'entry:1'},
+      {blockId: 'C', renderScopeId: 'entry:1'},
+      {blockId: 'X', renderScopeId: 'entry:2'},
+      {blockId: 'B', renderScopeId: 'outline'},
+    ]
+
+    expect(findBestSelectionAnchorIndex(entryLocations, {
+      anchorBlockId: 'X',
+      targetIndex: 4,
+      selectedBlockIds: ['X', 'B'],
+      currentLocation: {blockId: 'C', renderScopeId: 'entry:1'},
+    })).toBe(3)
+  })
 })
 
 describe('blockAfterSubtreeRemoval', () => {

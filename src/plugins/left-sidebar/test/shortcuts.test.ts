@@ -7,7 +7,7 @@ import { getUserBlock } from '@/data/stateBlocks.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { journalBlockId } from '@/plugins/daily-notes'
+import { journalBlockId } from '@/plugins/daily-notes/dailyNotes'
 import {
   getOrCreateShortcutsBlock,
   journalShortcutBlockId,

@@ -32,18 +32,22 @@ export const isResolvedPropertySchema = <T>(
 /** §9 recognition, fieldId half: does this resolution name a definition the
  *  workspace's registry can answer for? Shadowed losers COUNT — their field
  *  rows keep classifying, and are excluded only from the name map and the
- *  projection.
+ *  projection. So does a winner whose codec this device cannot build:
+ *  classification needs the definition, not the plugin that owns its preset.
  *
  *  ONE owner for a rule three sites ask, because each holds a DIFFERENT
  *  resolver — the live one, a tx-start snapshot, a migration batch's captured
  *  one — so what they can share is the predicate, not the checker. Written out
  *  per site, the shadow clause is what drifts, and dropping it detaches every
- *  shadowed definition's field rows from their owners. */
+ *  shadowed definition's field rows from their owners. The outline SQL answers
+ *  the same question from `block_types`, corrected by the registry's
+ *  `unparseableDefinitionIds` (`recognizedFieldRowSql`). */
 export const isResolvableFieldDefinition = (
   resolution: PropertySchemaResolution<unknown>,
 ): boolean =>
   resolution.status === 'resolved'
-  || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
+  || (resolution.status === 'identity-unavailable'
+    && (resolution.reason === 'shadowed' || resolution.reason === 'behavior-unavailable'))
 
 /** A resolver is created for an owning transaction/workspace registry
  * snapshot; callers supply only the definition handle or name, never a
@@ -319,7 +323,7 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
       ? this.snapshot.seedsByKey.get(metadata.seedKey)
       : undefined
     const behavior = declaration ?? this.snapshot.schemasByFieldId.get(fieldId)
-    if (!behavior) return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+    if (!behavior) return {status: 'identity-unavailable', reason: 'behavior-unavailable'}
     return resolved<T>(this.snapshot.workspaceId, fieldId, behavior, metadata)
   }
 
@@ -378,7 +382,7 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
         || (winnerBehavior !== undefined && isPropertyHandle(winnerBehavior))
       if (contested) return {status: 'identity-unavailable', reason: 'shadowed'}
       if (!winnerBehavior) {
-        return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+        return {status: 'identity-unavailable', reason: 'behavior-unavailable'}
       }
       return {status: 'identity-unavailable', reason: 'stale-schema'}
     }
@@ -444,4 +448,26 @@ export const requireWritablePropertySchema = <T>(
     resolution.schema as PropertySchema<unknown>,
   )
   return (strict as PropertySchema<T> | undefined) ?? resolution.schema
+}
+
+export type PropertyWriteTarget<T> =
+  | {readonly storage: 'cell'; readonly schema: PropertySchema<T>}
+  | {readonly storage: 'children'; readonly schema: ResolvedPropertySchema<T>}
+
+/** Readable behavior alone cannot authorize a children-backed write. */
+export const requirePropertyWriteTarget = <T>(
+  schema: PropertySchema<T>,
+  resolver: PropertySchemaResolver,
+  storage: 'cell' | 'children',
+): PropertyWriteTarget<T> => {
+  const writable = requireWritablePropertySchema(schema, resolver)
+  if (storage === 'cell') return {storage, schema: writable}
+  if (!isResolvedPropertySchema(writable)) {
+    const identity = resolver.resolve(schema.name)
+    throw new PropertySchemaIdentityError(
+      schema.name,
+      identity.status === 'identity-unavailable' ? identity.reason : 'definition-unavailable',
+    )
+  }
+  return {storage, schema: writable}
 }

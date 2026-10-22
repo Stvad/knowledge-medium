@@ -43,7 +43,7 @@ afterAll(async () => { await h.cleanup() })
 it('drives the candidates walk from the chain, not from every workspace edge', async () => {
   const plan = await h.db.getAll<{detail: string}>(
     `EXPLAIN QUERY PLAN ${SELECT_GROUPED_BACKLINK_CANDIDATES_SQL}`,
-    [JSON.stringify(['s-1', 's-2', 's-3']), WS, 't-0'],
+    [JSON.stringify(['s-1', 's-2', 's-3']), WS, 't-0', WS],
   )
   const details = plan.map(row => row.detail)
   // An automatic index over the chain is the signature of the inverted order:

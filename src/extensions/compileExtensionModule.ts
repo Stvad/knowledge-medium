@@ -14,7 +14,20 @@ import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.
 // change (which Phase 2 / #67 would treat as needing re-approval).
 // '2': transpile now emits an inline source map + a stable `//# sourceURL`
 // (debuggable extensions). Bumping regenerates older map-less cached output.
-const COMPILER_VERSION = '2'
+// '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
+// map) instead of the `React` global.
+export const COMPILER_VERSION = '3'
+
+/** Babel presets the extension loader transpiles with; tests that mirror the
+ *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
+ *  an extension's JSX on the host's React: it imports its factory from
+ *  `react/jsx-runtime`, which the page import map resolves to the module the
+ *  app itself uses. The classic runtime would emit `React.createElement` and
+ *  depend on whichever `React` global happens to be in scope. */
+export const EXTENSION_BABEL_PRESETS: Array<string | [string, object]> = [
+  ['react', {runtime: 'automatic'}],
+  'typescript',
+]
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -148,7 +161,7 @@ async function defaultTranspileViaBabel(content: string, blockId?: string): Prom
     filename: sourceName,
     sourceFileName: sourceName,
     sourceMaps: 'inline',
-    presets: ['react', 'typescript'],
+    presets: EXTENSION_BABEL_PRESETS,
   }).code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
   return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`

@@ -18,11 +18,17 @@ import type {
   BlockReference,
   Tx,
 } from '@/data/api'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  combineProjectedPropertyDefinitions,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
+import type { BlockSearchFilter } from './searchFilter.ts'
+
+export { isActiveSearchFilter, matchesTypeFilter, type BlockSearchFilter } from './searchFilter.ts'
 import {isPropertySeedDeclaration} from './propertySeeds.ts'
 import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
@@ -39,8 +45,8 @@ export interface LocalSchemaBackfill {
 /** One table a contribution owns that the ANALYZE paths have to reach.
  *
  *  Both pieces, because the two paths need different things and asking for them
- *  separately is what lets them drift apart. The one-shot exact-stats repair
- *  wants a NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  separately is what lets them drift apart. `runAnalyzeInstalledTables` wants a
+ *  NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
  *  be turned into one: measured on the shipped wa-sqlite build against
  *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
  *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
@@ -63,10 +69,9 @@ export interface LocalSchemaContribution {
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
   /** Tables this contribution owns that core's ANALYZE paths must reach, so
-   *  core never has to name a plugin's table. Consumed by
-   *  `resolveAnalyzeArmingProbes` (`src/data/localSchema.ts`), and by the
-   *  one-shot exact-stats repair's table list — deliberately the same set, so
-   *  it is declared once here rather than twice in core. */
+   *  core never has to name a plugin's table. Read through
+   *  `resolveAnalyzeTables` (`src/data/localSchema.ts`): the probes arm the
+   *  staleness check, the names are what `runAnalyzeInstalledTables` analyzes. */
   analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 
@@ -287,12 +292,17 @@ export const definitionSeedsFacet = defineFacet<
   validate: isPropertySeedDeclaration,
 })
 
-/** Block-built property definitions keyed by durable field id. Metadata is
- * always present; locally-buildable behavior is optional. */
-export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedPropertyDefinition>(
-  'data.projected-property-definitions',
-  definition => definition.metadata.fieldId,
-)
+/** Block-built property definitions keyed by durable field id: parsed
+ * metadata with optional locally-buildable behavior, or the marker for a
+ * `property-schema` block whose metadata does not parse. */
+export const projectedPropertyDefinitionsFacet = defineFacet<
+  ProjectedPropertyDefinition,
+  ReadonlyMap<string, ProjectedPropertyDefinition>
+>({
+  id: 'data.projected-property-definitions',
+  combine: combineProjectedPropertyDefinitions,
+  empty: () => new Map(),
+})
 
 /** Block-built type definitions keyed by durable block id — the type-side
  * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`
@@ -512,6 +522,9 @@ export interface SearchSourceArgs {
    *  participates in the cross-source sort at the merge point. */
   readonly limit: number
   readonly recentBlockIds?: ReadonlyArray<string>
+  /** Applied by the source itself when it declares `supportsFilter`;
+   *  otherwise see that flag. */
+  readonly filter?: BlockSearchFilter
 }
 
 /** A pluggable block-search backend. `search` is called alongside every
@@ -534,6 +547,13 @@ export interface SearchSourceArgs {
  *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
+  /** Applies `SearchSourceArgs.filter` in its own query, before its limit.
+   *  For a source without it the merge point drops candidates the filter's
+   *  type clauses exclude, and the source sits out a filter with `underId`.
+   *  Its share of a filtered result is therefore best effort (it limits
+   *  before the filter) — kept over sitting it out, so contributed sources
+   *  still take part in the agent's default, extension-excluding search. */
+  readonly supportsFilter?: boolean
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
 }
 

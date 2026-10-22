@@ -20,6 +20,7 @@
 
 import { getActiveUserId, isRemoteSyncActive, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
@@ -39,7 +40,7 @@ import {
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
 import { recoverFailedUploads } from './uploadRecovery.js'
-import { reconcileUploads } from './uploadReconcile.js'
+import { isAssetBlockPresent, reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
 let blobStoreSingleton: BlobStore | null = null
@@ -56,7 +57,7 @@ const getSupabaseAccessToken = async (): Promise<string | null> =>
  *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
  *  lane is a no-op. Re-checked each call (before the singleton) so the gate
  *  is dynamic across an account/mode switch. */
-const getBlobStore = (): BlobStore | null => {
+export const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
   if (!blobStoreSingleton) {
     const client = supabase
@@ -96,6 +97,7 @@ const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   byteStore: getByteStore(),
   blobStore,
   ...laneKeyDeps(resolver),
+  readLiveWorkspace: (workspaceId: string) => fetchWorkspaceConversionState(workspaceId),
 })
 
 // One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner
@@ -154,7 +156,7 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   if (!getBlobStore()) return
   await reconcileUploads(userId, {
     store: getByteUploadStore(),
-    isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+    isBlockPresent: (_ws, id) => isAssetBlockPresent(repo, id),
   })
   armUploadDrain(userId)
 }

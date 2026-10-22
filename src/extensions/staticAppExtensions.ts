@@ -33,6 +33,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { attachmentsPlugin } from '@/plugins/attachments'
+import { richPastePlugin } from '@/plugins/rich-paste'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
@@ -45,6 +46,7 @@ import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
+import { contributorsPlugin } from '@/plugins/contributors'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -133,6 +135,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,
+  richPastePlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
@@ -172,6 +175,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   blockInfoPlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
+  contributorsPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

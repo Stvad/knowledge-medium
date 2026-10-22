@@ -27,6 +27,7 @@ import {
   asLostWriteAheadSupport,
   markDbOpenFailure,
   prepareLocalDbForVfs,
+  readLocalDbFileSizes,
   resolveLocalDbVfs,
   tagHandoffErrorUserId,
   type LocalDbVfs,
@@ -60,6 +61,7 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
   ensureWorkspacePropertiesMigrationColumn,
+  readWorkspaceEncryptionMode,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
@@ -76,6 +78,11 @@ import {
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
+import {
+  discardDbOpenTimeline,
+  markStartup,
+  recordStartupDbFiles,
+} from '@/utils/startupTimeline.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -129,7 +136,13 @@ const syncResolversByUser = new Map<string, SyncResolver>()
 const resolverForUser = (userId: string): SyncResolver => {
   let resolver = syncResolversByUser.get(userId)
   if (!resolver) {
-    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore(), workspaceId => {
+      // Defence in depth: nothing asks before the database opens. If something
+      // did, the resolver counts the throw as e2ee and fails closed.
+      const db = dbsByUser.get(userId)
+      if (!db) throw new Error(`no local database for ${userId}`)
+      return readWorkspaceEncryptionMode(db, workspaceId)
+    })
     syncResolversByUser.set(userId, resolver)
   }
   return resolver
@@ -304,7 +317,17 @@ export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
 export const ensurePowerSyncReady = async (
   userId: string,
   useRemoteSync: boolean = hasRemoteSyncConfig,
-) => {
+): Promise<void> => {
+  markStartup('dbRequested')
+  try {
+    await openLocalDb(userId, useRemoteSync)
+  } catch (error) {
+    discardDbOpenTimeline()
+    throw error
+  }
+}
+
+const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void> => {
   await assertOpfsAvailable()
 
   const dbFilename = dbFilenameForUser(userId)
@@ -312,6 +335,9 @@ export const ensurePowerSyncReady = async (
   let prepared = preparedDbFiles.get(dbFilename)
   if (!prepared) {
     prepared = (async () => {
+      // Before anything opens the file: an open replays whatever log the last
+      // session left, and its first checkpoint then drains it.
+      recordStartupDbFiles(await readLocalDbFileSizes(dbFilename))
       const target = await resolveLocalDbVfs(dbFilename)
       await prepareLocalDbForVfs(dbFilename, target)
       // Only after the handoff succeeds: `buildPowerSyncDb` reads this, and a
@@ -322,6 +348,7 @@ export const ensurePowerSyncReady = async (
   }
   try {
     await prepared
+    markStartup('dbPrepared')
   } catch (error) {
     // A failed handoff must not latch: the common causes (another tab holding
     // the file, an inconclusive probe) clear on their own, and a cached
@@ -400,12 +427,13 @@ export const ensurePowerSyncReady = async (
       }
       // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this
       // user's mode pins + shared workspace-key store. Plaintext workspaces
-      // resolve mode 'none' (no-op); e2ee workspaces seal content columns. Same
-      // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
+      // resolve mode 'none' (no-op); e2ee workspaces seal content columns; a
+      // workspace the server calls e2ee but this device can't seal yet holds.
+      // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
         encryption: {
-          getWorkspaceMode: resolver.getMode,
+          getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,
         },
       }))
@@ -547,7 +575,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     // reasons that say nothing about whether the VFS could open the file.
     throw markDbOpenFailure(error)
   }
+  markStartup('dbOpened')
   await initializeClientSchema(powerSyncDb)
+  markStartup('clientSchemaApplied')
 
   // One-shot side-index backfills for users upgrading from a
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
@@ -587,6 +617,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlocksFtsIfEmpty(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
+  markStartup('localSchemaApplied')
 
   // ANALYZE off the cold-start path. wa-sqlite never auto-populates
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
@@ -609,11 +640,14 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
       void runAnalyzeIfStale(
         backfillDb,
         installedAnalyzeArmingProbes(),
-      ).then(({proposed}) => {
+      ).then(({proposed, owed}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
         // Otherwise the only symptom of a mis-tuned staleness rule is an
         // unexplained pause.
+        if (owed.length > 0) {
+          console.info(`[Repo] ANALYZE owed by a bulk write (${reason}):`, owed.join(', '))
+        }
         if (proposed && proposed.length > 0) {
           console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
         }

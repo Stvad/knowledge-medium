@@ -16,7 +16,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {deleteBlock} from '@/data/mutators'
-import {hasBlockType} from '@/data/properties'
+import {aliasesProp, hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
@@ -26,7 +26,7 @@ import {
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
-import {loadConfig} from '../../src/km/config'
+import {loadConfig, loadPlanSource, PLAN_ALIAS} from '../../src/km/config'
 import {recordResult, startAssessment} from '../../src/km/assessment'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
@@ -42,7 +42,7 @@ import {
   dateProp,
   layoffFromProp,
   layoffTierProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -135,6 +135,13 @@ describe('discardSession — the one write that destroys', () => {
 })
 
 describe('ensureStrengthHome', () => {
+  const FRESH_WORKSPACE_ID = 'ws-with-nothing-in-it'
+
+  beforeEach(async () => {
+    repo.setActiveWorkspaceId(FRESH_WORKSPACE_ID)
+    await repo.whenPropertyDefinitionsReady(FRESH_WORKSPACE_ID)
+  })
+
   it('creates the settings block alongside the page, not just the page', async () => {
     // What "open the log" now goes through. Creating only the page left a
     // fresh workspace with nowhere to set the plan root, the rollover hour,
@@ -142,12 +149,10 @@ describe('ensureStrengthHome', () => {
     // completion, and the only other callers are recording a layoff and
     // recording an `or`-group choice — so someone who did neither had no
     // settings block and no way to make one.
-    const fresh = 'ws-with-nothing-in-it'
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
 
-    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
-
-    expect(await findStrengthLogPage(repo, fresh)).toBe(pageId)
-    expect(await findSettingsBlock(repo, fresh, pageId)).toBe(settingsBlockId)
+    expect(await findStrengthLogPage(repo, FRESH_WORKSPACE_ID)).toBe(pageId)
+    expect(await findSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)).toBe(settingsBlockId)
   })
 
   it('mints the settings block AT its derived seat, so two devices converge', async () => {
@@ -158,9 +163,7 @@ describe('ensureStrengthHome', () => {
     // different plan roots, rollover hours and `or`-group choices. Asserted on
     // the id directly, because a random-id mint behaves identically on one
     // device and only forks once a peer is involved.
-    const fresh = 'ws-with-nothing-in-it'
-
-    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
 
     expect(settingsBlockId).toBe(derivedBlockId(settingsIdentity(pageId)))
   })
@@ -174,8 +177,7 @@ describe('ensureStrengthHome', () => {
     // every later open minted a BLANK settings block and read the empty one:
     // plan root, rollover hour, cadence and every `or`-group choice child
     // silently abandoned while still sitting in the outline.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     // A setting worth losing, so this cannot pass on the id alone.
     await repo.tx(async tx => {
       await tx.setProperties(settingsBlockId, {set: [propertyValue(rolloverHourProp, 5)]})
@@ -185,7 +187,7 @@ describe('ensureStrengthHome', () => {
     await repo.removeType(settingsBlockId, SETTINGS_TYPE)
     expect(hasBlockType(repo.block(settingsBlockId).peek()!, SETTINGS_TYPE)).toBe(false)
 
-    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+    const again = await getOrCreateSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)
 
     expect(again).toBe(settingsBlockId)
     // …and the adopt repaired the tag rather than leaving it half-typed.
@@ -204,11 +206,10 @@ describe('ensureStrengthHome', () => {
     //
     // Identified by the VALUES it carries rather than by content or position,
     // so what is matched is the thing worth rescuing.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId} = await ensureStrengthHome(repo, fresh)
+    const {pageId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'legacy-settings', workspaceId: fresh, parentId: pageId,
+        id: 'legacy-settings', workspaceId: FRESH_WORKSPACE_ID, parentId: pageId,
         orderKey: 'a1', content: 'Strength settings',
       })
     }, {scope: ChangeScope.BlockDefault, description: 'a settings block from before the seat'})
@@ -220,10 +221,10 @@ describe('ensureStrengthHome', () => {
     await repo.tx(tx => tx.run(deleteBlock, {id: derivedBlockId(settingsIdentity(pageId))}),
       {scope: ChangeScope.BlockDefault, description: 'no seat block'})
 
-    expect(await findSettingsBlock(repo, fresh, pageId)).toBe('legacy-settings')
-    expect((await readProgram(repo, fresh)).config.dayRolloverHour).toBe(5)
+    expect(await findSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)).toBe('legacy-settings')
+    expect((await readProgram(repo, FRESH_WORKSPACE_ID)).config.dayRolloverHour).toBe(5)
     // …and the writer agrees rather than minting beside it, then repairs the tag.
-    expect(await getOrCreateSettingsBlock(repo, fresh, pageId)).toBe('legacy-settings')
+    expect(await getOrCreateSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)).toBe('legacy-settings')
     expect(hasBlockType(repo.block('legacy-settings').peek()!, SETTINGS_TYPE)).toBe(true)
   })
 
@@ -233,11 +234,10 @@ describe('ensureStrengthHome', () => {
     // all — so a pre-seat settings block can carry no settings VALUES while
     // owning the only configuration there is. Rescuing on the knobs alone
     // abandoned exactly that workspace.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId} = await ensureStrengthHome(repo, fresh)
+    const {pageId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'legacy-choices-only', workspaceId: fresh, parentId: pageId,
+        id: 'legacy-choices-only', workspaceId: FRESH_WORKSPACE_ID, parentId: pageId,
         orderKey: 'a1', content: 'Strength settings',
       })
     }, {scope: ChangeScope.BlockDefault, description: 'a settings block from before the seat'})
@@ -248,7 +248,7 @@ describe('ensureStrengthHome', () => {
     await repo.tx(tx => tx.run(deleteBlock, {id: derivedBlockId(settingsIdentity(pageId))}),
       {scope: ChangeScope.BlockDefault, description: 'no seat block'})
 
-    expect(await findSettingsBlock(repo, fresh, pageId)).toBe('legacy-choices-only')
+    expect(await findSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)).toBe('legacy-choices-only')
     expect(await readAltChoices(repo, 'legacy-choices-only')).toEqual({press: 'ohp'})
   })
 
@@ -260,17 +260,16 @@ describe('ensureStrengthHome', () => {
     // built-in program, and stamped a session from it — ignoring the plan
     // root, rollover hour and every recorded `or`-group choice — until the
     // user happened to open the log page.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     await repo.tx(async tx => {
       await tx.setProperties(settingsBlockId, {set: [propertyValue(rolloverHourProp, 5)]})
     }, {scope: ChangeScope.UserPrefs, description: 'a configured rollover hour'})
     await repo.removeType(settingsBlockId, SETTINGS_TYPE)
 
-    expect(await findSettingsBlock(repo, fresh, pageId)).toBe(settingsBlockId)
+    expect(await findSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)).toBe(settingsBlockId)
     // And the config it holds actually reaches the reader, which is the point
     // — the id alone would pass with the settings still unread.
-    expect((await readProgram(repo, fresh)).config.dayRolloverHour).toBe(5)
+    expect((await readProgram(repo, FRESH_WORKSPACE_ID)).config.dayRolloverHour).toBe(5)
     // Still no write: a read that bootstraps is what this path exists to avoid.
     expect(hasBlockType(repo.block(settingsBlockId).peek()!, SETTINGS_TYPE)).toBe(false)
   })
@@ -287,16 +286,15 @@ describe('ensureStrengthHome', () => {
     // merge by hand, rather than a silent split brain. Making the seat AND the
     // reader id-based would fix it properly; this test pins today's rule so
     // that change has to be deliberate.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'elsewhere', workspaceId: fresh, parentId: null, orderKey: 'z0', content: 'Elsewhere',
+        id: 'elsewhere', workspaceId: FRESH_WORKSPACE_ID, parentId: null, orderKey: 'z0', content: 'Elsewhere',
       })
       await tx.move(settingsBlockId, {parentId: 'elsewhere', orderKey: 'a0'})
     }, {scope: ChangeScope.BlockDefault, description: 'drag the settings away'})
 
-    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+    const again = await getOrCreateSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)
 
     expect(again).not.toBe(settingsBlockId)
     expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
@@ -308,13 +306,12 @@ describe('ensureStrengthHome', () => {
     // another. What actually re-finds it here is the pre-transaction query at
     // the top of `getOrCreateSettingsBlock`; the in-transaction re-find behind
     // it is defence in depth (see its comment), and is NOT what this pins.
-    const fresh = 'ws-with-nothing-in-it'
-    const {pageId, settingsBlockId: derived} = await ensureStrengthHome(repo, fresh)
+    const {pageId, settingsBlockId: derived} = await ensureStrengthHome(repo, FRESH_WORKSPACE_ID)
     await repo.tx(async tx => { await tx.run(deleteBlock, {id: derived}) },
       {scope: ChangeScope.BlockDefault, description: 'the settings block is deleted'})
 
-    const minted = await getOrCreateSettingsBlock(repo, fresh, pageId)
-    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+    const minted = await getOrCreateSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)
+    const again = await getOrCreateSettingsBlock(repo, FRESH_WORKSPACE_ID, pageId)
 
     expect(minted).not.toBe(derived)
     expect(again).toBe(minted)
@@ -1276,7 +1273,7 @@ describe('the plan outline', () => {
       await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
       await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
     }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
-    await repo.tx(tx => tx.setProperty(settingsBlockId, planRootProp, 'plan-root'),
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planProp, 'plan-root'),
       {scope: ChangeScope.UserPrefs, description: 'point at the plan'})
     const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.exercises
       .filter(e => e.session === 'B').map(e => e.name)
@@ -1286,6 +1283,25 @@ describe('the plan outline', () => {
       {scope: ChangeScope.BlockDefault, description: 'press first'})
 
     expect(await sessionB()).toEqual(['Overhead press', 'Squat'])
+  })
+
+  it('finds the plan by its alias when the pointer is unset or its block is gone', async () => {
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
+    await repo.tx(async tx => {
+      await tx.create({id: 'aliased', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0', content: 'Plan'})
+      await tx.setProperty('aliased', aliasesProp, [PLAN_ALIAS])
+      await tx.create({id: 'pointed', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b1', content: 'Other plan'})
+    }, {scope: ChangeScope.BlockDefault, description: 'two plans'})
+    const planRoot = async () => (await loadPlanSource(repo, WORKSPACE_ID, settingsBlockId)).planRootId
+    expect(await planRoot()).toBe('aliased')
+
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planProp, 'pointed'),
+      {scope: ChangeScope.UserPrefs, description: 'point elsewhere'})
+    expect(await planRoot()).toBe('pointed')
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: 'pointed'}),
+      {scope: ChangeScope.BlockDefault, description: 'delete it'})
+    expect(await planRoot()).toBe('aliased')
   })
 })
 

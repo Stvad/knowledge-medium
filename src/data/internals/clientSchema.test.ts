@@ -24,12 +24,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   BLOCK_STORAGE_COLUMNS,
+  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
@@ -39,6 +40,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
 } from '@/data/workspaceSchema'
+import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import {
   CREATE_BLOCK_REFERENCES_TABLE_SQL,
   CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
@@ -59,6 +61,8 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
+  runAnalyzeTables,
+  recordAnalyzeOwed,
   CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
   SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
   triggerRecreateStatements,
@@ -144,19 +148,11 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
-  // PowerSync's outgoing queue table. Real schema is
-  // `(id INTEGER PK AUTOINCREMENT, data TEXT, tx_id INTEGER)`; the
-  // upload-routing triggers populate (tx_id, data). PowerSync's
+  // The upload-routing triggers populate ps_crud (tx_id, data). PowerSync's
   // `getNextCrudTransaction()` groups CRUD entries by tx_id, so a
   // multi-row repo.tx must stamp every row with the same non-null
   // tx_id or atomicity intent is lost on the server.
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
+  for (const stmt of POWERSYNC_STUB_TABLES_SQL) db.exec(stmt)
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
@@ -449,6 +445,53 @@ describe('row_events trigger — DELETE', () => {
   })
 })
 
+// A re-sealed workspace drains back into `blocks` with identical content and a
+// new `updated_at` on every row; logging those would store two full snapshots
+// of the whole workspace on every device (#1299).
+describe('row_events trigger — version-only UPDATE', () => {
+  const BUMPED = defaultBlock.updated_at + 1000
+
+  it('writes nothing for a sync-applied update that moves only updated_at', () => {
+    h.insertBlock({id: 'b1', content: 'same'})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('writes nothing for a version bump on a row whose user_updated_at is NULL', () => {
+    // Its snapshot's `userUpdatedAt` falls back to `updated_at`, so it moves
+    // with the bump even though the row's user_updated_at did not.
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('still logs user_updated_at going from NULL to the instant its snapshot already showed', () => {
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {user_updated_at: defaultBlock.updated_at, updated_at: BUMPED})
+    expect(h.rowEvents()).toHaveLength(2)
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['content', {content: 'edited'}],
+    ['properties', {properties_json: '{"status":"done"}'}],
+    ['references', {references_json: '[{"id":"b2","alias":"b2"}]'}],
+    ['parent', {parent_id: 'p1'}],
+    ['order', {order_key: 'a1'}],
+    ['deleted', {deleted: 1}],
+    ['user_updated_at', {user_updated_at: BUMPED}],
+    ['updated_by', {updated_by: 'user-2'}],
+    ['workspace', {workspace_id: 'ws2'}],
+    ['reference target', {reference_target_id: 'b2'}],
+    ['field form', {is_field_form: 1}],
+  ])('still logs a version bump that also changes %s', (_field, set) => {
+    h.insertBlock({id: 'b1'})
+    h.updateBlock('b1', {...set, updated_at: BUMPED})
+    const events = h.rowEvents()
+    expect(events).toHaveLength(2)
+    expect(JSON.parse(events[1].after_json!).updatedAt).toBe(BUMPED)
+  })
+})
+
 describe('upload-routing triggers', () => {
   it("forwards INSERT to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
     h.setTxContext({txId: 'tx-1', txSeq: 4242, userId: 'user-1', scope: 'block-default', source: 'user'})
@@ -613,6 +656,23 @@ describe('upload-routing triggers', () => {
     h.clearTxContext()
     // The DELETE row_event still fires; ps_crud stays empty.
     expect(h.psCrud()).toHaveLength(0)
+  })
+})
+
+describe('upload queue download hold', () => {
+  const localHold = () =>
+    h.db.prepare("SELECT last_op, CAST(target_op AS TEXT) AS target_op FROM ps_buckets WHERE name = '$local'").get()
+  const columns = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+
+  // Released: the last upload's write checkpoint has arrived.
+  beforeEach(() => { h.db.exec("INSERT INTO ps_buckets(name, last_op, target_op) VALUES ('$local', 5, 5)") })
+
+  it.each(['OR IGNORE', 'OR ABORT'])('raises it under a write carrying %s', clause => {
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.db.prepare(`INSERT ${clause} INTO blocks (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
+      .run(...blockValues(defaultBlock))
+    h.clearTxContext()
+    expect(localHold()).toEqual({last_op: 0, target_op: '9223372036854775807'})
   })
 })
 
@@ -1069,6 +1129,15 @@ const buildRecordingDb = ({
   return {db, executed, ranAnalyze: () => executed.some(s => /^ANALYZE\b/.test(s))}
 }
 
+/** The bootstrap-db shape over a node:sqlite connection, returning rows the way
+ *  PowerSync's `execute` does. */
+const sqliteAdapter = (db: DatabaseSync) => ({
+  execute: async (sql: string, params: unknown[] = []) =>
+    ({rows: {_array: db.prepare(sql).all(...(params as SQLInputValue[]))}}),
+  getOptional: async <T,>(sql: string, params: unknown[] = []) =>
+    (db.prepare(sql).get(...(params as SQLInputValue[])) ?? null) as T | null,
+})
+
 const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
   const present = db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`,
@@ -1216,10 +1285,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     rmSync(dir, {recursive: true, force: true})
   })
 
-  const adapter = () => ({
-    execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
-    getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
-  })
+  const adapter = () => sqliteAdapter(db)
 
   it('repairs degenerate "0 0" stats', async () => {
     expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).toBe('0 0')
@@ -1284,7 +1350,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
 })
 
 describe('ANALYZE serialization', () => {
-  // Four schedulers point at these two functions and each statement is
+  // Several schedulers point at these functions and each statement is
   // separately awaited, so overlapping callers interleave. Two concurrent
   // passes are two multi-second parks of this tab's SQLite connection to reach
   // one settled sqlite_stat1.
@@ -1345,6 +1411,121 @@ describe('runAnalyzeNow', () => {
   })
 
 
+})
+
+describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
+  // The shape the properties-as-blocks migration leaves: the field-form index
+  // was EMPTY when `blocks` was last analyzed, then the table roughly tripled
+  // with rows that all land in it.
+  let db: DatabaseSync
+  const insertRows = (prefix: string, n: number, fieldForm: 0 | 1) => {
+    const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+    const ins = db.prepare(
+      `INSERT INTO blocks (${cols.join(',')}, is_field_form) ` +
+      `VALUES (${cols.map(() => '?').join(',')}, ${fieldForm})`,
+    )
+    db.exec('BEGIN')
+    for (let i = 0; i < n; i++) {
+      // Ten owners, so the field rows' `parent_id` has a real distribution.
+      ins.run(...blockValues({
+        ...defaultBlock, id: `${prefix}-${i}`, order_key: `a${i}`,
+        parent_id: fieldForm ? `b-${i % 10}` : null,
+      }))
+    }
+    db.exec('COMMIT')
+  }
+  const rowsPerStat = (idx: string) => statRows(db, 'blocks')[idx]?.split(' ').map(Number)
+
+  beforeEach(() => {
+    db = new DatabaseSync(':memory:')
+    db.exec(CREATE_BLOCKS_TABLE_SQL)
+    db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+    db.exec(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+    db.exec(CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL)
+    // Above SQLite's own 2000-row optimize limit, as in the arming suite.
+    insertRows('b', 2500, 0)
+    db.exec('ANALYZE')
+    insertRows('f', 5000, 1)
+  })
+  afterEach(() => { db.close() })
+
+  it('re-records the grown table and the index that was empty, exactly', async () => {
+    // The premise, asserted so a SQLite that starts catching this shows up
+    // here rather than as a pass nobody needs.
+    await runAnalyzeIfStale(sqliteAdapter(db))
+    expect(rowsPerStat('idx_blocks_field_form')?.[0]).toBe(0)
+
+    // Left standing on the connection, as the agent bridge can.
+    db.exec('PRAGMA analysis_limit=400')
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
+
+    expect(rowsPerStat('idx_blocks_field_form')).toEqual([5000, 5000, 500, 500])
+    expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
+  })
+
+  it('stays unbounded when a limit lands between two statements of one pass', async () => {
+    // The bridge runs SQL on this connection outside the ANALYZE chain, so a
+    // limit can arrive mid-pass; one reset at the top of the pass would let the
+    // second statement sample.
+    const inner = sqliteAdapter(db)
+    const interleaving = {
+      ...inner,
+      execute: async (sql: string) => {
+        const result = await inner.execute(sql)
+        if (sql.startsWith('ANALYZE')) db.exec('PRAGMA analysis_limit=400')
+        return result
+      },
+    }
+    await runAnalyzeTables(interleaving, ['blocks', 'blocks'])
+
+    expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
+  })
+
+  const owedTables = () => (db.prepare(
+    `SELECT key FROM client_schema_state WHERE key LIKE 'analyze%' ORDER BY key`,
+  ).all() as Array<{key: string}>).map(row => row.key)
+
+  it('repays a refresh a bulk writer owed at the next boot check', async () => {
+    // What the boot check does when the writer's own refresh never ran: a
+    // reload, a tab that died, or a refresh that failed.
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks'])
+
+    const {owed} = await runAnalyzeIfStale(sqliteAdapter(db))
+
+    expect(owed).toEqual(['blocks'])
+    expect(rowsPerStat('idx_blocks_field_form')).toEqual([5000, 5000, 500, 500])
+    expect(owedTables()).toEqual([])
+  })
+
+  it('keeps the refresh owed when it fails', async () => {
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks'])
+    const failing = {
+      ...sqliteAdapter(db),
+      execute: async (sql: string, params?: unknown[]) => {
+        if (sql.startsWith('ANALYZE')) throw new Error('database is locked')
+        return sqliteAdapter(db).execute(sql, params)
+      },
+    }
+
+    await expect(runAnalyzeTables(failing, ['blocks'])).rejects.toThrow('database is locked')
+
+    expect(owedTables()).toHaveLength(1)
+  })
+
+  it('settles what it analyzed, and only that', async () => {
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks', 'block_references'])
+
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
+
+    expect(owedTables()).toEqual(['analyze_owed:block_references'])
+  })
+
+  it('moves the schema cookie, so already-open readers re-plan', async () => {
+    const cookie = () => (db.prepare('PRAGMA schema_version').get() as {schema_version: number}).schema_version
+    const before = cookie()
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
+    expect(cookie()).toBeGreaterThan(before)
+  })
 })
 
 // The block_types side-index backs byType / typedBlocks — among the most
@@ -1561,7 +1742,7 @@ describe('ensureUndoGroupIdColumns — local migration (issue #306)', () => {
     // The rest of the schema the statements/triggers need.
     old.exec(CREATE_BLOCKS_TABLE_SQL)
     old.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-    old.exec('CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL, tx_id INTEGER)')
+    for (const stmt of POWERSYNC_STUB_TABLES_SQL) old.exec(stmt)
     old.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
 
     // App startup on the upgraded build: ensure columns FIRST (the

@@ -14,7 +14,9 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  defaultProfileName,
   isErrnoException,
+  normalizeProfileName,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
 import {
@@ -22,13 +24,15 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  isReadOnlyAgentCommand,
+  namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
+  neutralizeDisplayText,
 } from './protocol.js'
 
 export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
-
-export const defaultProfileName = 'default'
+export { defaultProfileName, normalizeProfileName } from './config.js'
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -167,15 +171,6 @@ export interface TokenRecord {
 
 export interface TokenStore {
   profiles: Record<string, TokenRecord>
-}
-
-export const normalizeProfileName = (value = ''): string => {
-  const name = value.trim()
-  if (!name) return defaultProfileName
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
-  }
-  return name
 }
 
 const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
@@ -370,6 +365,13 @@ export interface BridgeClientOptions {
   timeoutMs?: number
   /** Poll cadence while waiting for a command result. */
   pollIntervalMs?: number
+  /** Workspace to name on every command that names none. Unpinned, such a
+   *  command acts on whichever workspace the user's most recently focused app
+   *  tab has open, which moves as they navigate; an unattended consumer pins
+   *  to stay put. Defaults to AGENT_RUNTIME_WORKSPACE. */
+  workspaceId?: string
+  /** Attribution for writes made by this client; null explicitly opts out. */
+  contributorId?: string | null
 }
 
 export interface BridgeClient {
@@ -389,11 +391,32 @@ export interface BridgeClient {
   resolveToken: () => Promise<string | null>
 }
 
+/** Bind default contributor attribution without discarding prototype methods
+ * on caller-provided clients. An explicit command value, including null,
+ * remains authoritative; read commands are sent untouched. */
+export const withContributorId = (
+  client: BridgeClient,
+  contributorId: string | null | undefined,
+): BridgeClient => contributorId === undefined ? client : ({
+  bridgeUrl: client.bridgeUrl,
+  runCommand: (command, commandOptions) => client.runCommand(
+    !isReadOnlyAgentCommand(command) && command.contributorId === undefined
+      ? {...command, contributorId}
+      : command,
+    commandOptions,
+  ),
+  nextEvents: eventOptions => client.nextEvents(eventOptions),
+  whoami: () => client.whoami(),
+  health: () => client.health(),
+  resolveToken: () => client.resolveToken(),
+})
+
 export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeClient => {
   const bridgeUrl = (options.bridgeUrl ?? resolveBridgeUrl()).replace(/\/+$/, '')
   // AGENT_RUNTIME_PROFILE is the documented shell default; non-CLI
   // consumers (daemon, MCP server) must honor it too, not just cli.ts.
   const profileName = normalizeProfileName(options.profile ?? process.env.AGENT_RUNTIME_PROFILE ?? '')
+  const pinnedWorkspaceId = (options.workspaceId ?? process.env.AGENT_RUNTIME_WORKSPACE ?? '').trim() || undefined
   const defaultTimeoutMs = options.timeoutMs ?? 30_000
   const pollIntervalMs = options.pollIntervalMs ?? 100
 
@@ -440,9 +463,12 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
+      ? {...command, workspaceId: pinnedWorkspaceId}
+      : command
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
       method: 'POST',
-      body: JSON.stringify(command),
+      body: JSON.stringify(pinned),
     })
 
     return response.id
@@ -461,7 +487,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
       }
       if (command.status === 'failed') {
         const error = command.result?.error
-        throw new Error(error?.message ?? `Runtime command ${id} failed`)
+        throw new Error(neutralizeDisplayText(error?.message ?? `Runtime command ${id} failed`))
       }
 
       await sleep(pollIntervalMs)
@@ -479,7 +505,9 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      throw new Error(error?.message ?? 'Runtime command failed')
+      // App error text can echo stored ids and names: neutralize it here, the
+      // one place a bridge error becomes a CLI / MCP message.
+      throw new Error(neutralizeDisplayText(error?.message ?? 'Runtime command failed'))
     }
 
     return result.value
@@ -512,7 +540,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     }
   }
 
-  return {
+  const client: BridgeClient = {
     bridgeUrl,
     runCommand,
     nextEvents,
@@ -520,4 +548,5 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     health,
     resolveToken: clientResolveToken,
   }
+  return withContributorId(client, options.contributorId)
 }

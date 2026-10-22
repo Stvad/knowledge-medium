@@ -183,13 +183,13 @@ export const getOrCreateKernelPage = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
-      const claimable = await partitionClaimableAliases(tx, id, aliases, workspaceId)
-      const merged = mergeStrings([...claimable, ...txAliases])
-      // Compare rather than write unconditionally: while an alias stays
-      // contested `needsRepair` is true on every call, and an unguarded
-      // setProperty would then write the same value on every navigation.
-      if (!includesAll(txAliases, merged)) {
-        await tx.setProperty(id, aliasesProp, merged)
+      const candidates = mergeStrings([...aliases, ...txAliases])
+      const claimable = await partitionClaimableAliases(tx, id, candidates, workspaceId)
+      // Compare both ways: contested stored aliases must be removed as well
+      // as missing canonical aliases added, while an unchanged set must not
+      // write on every navigation.
+      if (!includesAll(txAliases, claimable) || !includesAll(claimable, txAliases)) {
+        await tx.setProperty(id, aliasesProp, claimable)
       }
       await tagTypes(tx, typeSnapshot, claimable)
     }, {scope: ChangeScope.BlockDefault, skipUndo})

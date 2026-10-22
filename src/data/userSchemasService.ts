@@ -24,7 +24,11 @@ import {
   parsePropertyDefinitionMetadata,
   type PropertyDefinitionMetadata,
 } from '@/data/propertyDefinitionMetadata'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  isParsedPropertyDefinition,
+  projectedPropertyDefinitionFieldId,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {peekRowProperty} from '@/data/rowProperty'
 import {
@@ -131,6 +135,55 @@ const decodeStoredDefault = (
   }
 }
 
+/** Why a definition row builds no codec on this device. */
+export type UnbuildableCause =
+  /** The row names no preset at all. */
+  | 'no-preset'
+  /** No plugin (or app build) on this device registers the preset. */
+  | 'preset-not-loaded'
+  /** The preset is registered and cannot decode the row's stored config. */
+  | 'config-unreadable'
+  /** The preset is registered, reads its config, and `build` throws. */
+  | 'build-failed'
+
+type SchemaSteps =
+  | {readonly schema: AnyPropertySchema}
+  | {
+      readonly schema: null
+      readonly cause: Exclude<UnbuildableCause, 'build-failed'>
+      readonly presetId: string
+      readonly error?: Error
+    }
+
+/** The one walk from a definition row to its codec. Unlogged, and it does
+ *  not catch `preset.build` (or the default's normalization) throwing — each
+ *  caller has its own answer for extension code failing. */
+const buildSchemaSteps = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
+): SchemaSteps => {
+  const presetId = peekRowProperty(row, presetIdProp) ?? ''
+  if (!presetId) return {schema: null, cause: 'no-preset', presetId}
+  const preset = presets.get(presetId)
+  if (!preset) return {schema: null, cause: 'preset-not-loaded', presetId}
+  let config: unknown
+  try {
+    config = decodePresetConfig(preset, peekRowProperty(row, presetConfigProp))
+  } catch (err) {
+    return {schema: null, cause: 'config-unreadable', presetId, error: err as Error}
+  }
+  const codec = preset.build(config as never)
+  return {
+    schema: {
+      name: metadata.name,
+      codec,
+      defaultValue: decodeStoredDefault(row, preset, codec, metadata.name),
+      changeScope: metadata.changeScope,
+    },
+  }
+}
+
 /** Builds optional local behavior for already-validated definition metadata.
  *  Missing presets and invalid configs return null with a diagnostic.
  *
@@ -146,36 +199,52 @@ export const tryBuildSchema = (
   presets: ReadonlyMap<string, AnyValuePresetCore>,
   metadata: PropertyDefinitionMetadata,
 ): AnyPropertySchema | null => {
-  const presetId = peekRowProperty(row, presetIdProp) ?? ''
-  if (!presetId) {
-    console.warn(`[UserSchemasService] schema block ${row.id} has no presetId`)
-    return null
+  const built = buildSchemaSteps(row, presets, metadata)
+  if (built.schema !== null) return built.schema
+  switch (built.cause) {
+    case 'no-preset':
+      console.warn(`[UserSchemasService] schema block ${row.id} has no presetId`)
+      break
+    case 'preset-not-loaded':
+      console.warn(
+        `[UserSchemasService] schema block ${row.id} references unknown preset ${JSON.stringify(built.presetId)}; ` +
+        `preset's plugin may not be loaded`,
+      )
+      break
+    case 'config-unreadable':
+      console.warn(
+        `[UserSchemasService] schema "${metadata.name}" has invalid config: ${built.error?.message}; skipping until fixed`,
+      )
+      break
   }
-  const preset = presets.get(presetId)
-  if (!preset) {
-    console.warn(
-      `[UserSchemasService] schema block ${row.id} references unknown preset ${JSON.stringify(presetId)}; ` +
-      `preset's plugin may not be loaded`,
-    )
-    return null
-  }
-  let config: unknown
+  return null
+}
+
+/** The schema a definition row builds on this device, or why it builds none —
+ *  the one answer to "can this device read a definition's values". The
+ *  definition-change processor refuses every change to a definition whose
+ *  CURRENT row builds nothing here, and the schema editor locks its type and
+ *  config controls on the same answer. Never throws: `preset.build` is
+ *  extension code, and a throwing one is the same answer as a missing preset.
+ *  Not logged: the projector warns for the same row on its own rebuild. */
+export const definitionSchema = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
+): {readonly schema: AnyPropertySchema} | {readonly schema: null; readonly cause: UnbuildableCause} => {
   try {
-    config = decodePresetConfig(preset, peekRowProperty(row, presetConfigProp))
-  } catch (err) {
-    console.warn(
-      `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
-    )
-    return null
-  }
-  const codec = preset.build(config as never)
-  return {
-    name: metadata.name,
-    codec,
-    defaultValue: decodeStoredDefault(row, preset, codec, metadata.name),
-    changeScope: metadata.changeScope,
+    return buildSchemaSteps(row, presets, metadata)
+  } catch {
+    return {schema: null, cause: 'build-failed'}
   }
 }
+
+/** {@link definitionSchema}'s schema alone. */
+export const buildSchemaOrNull = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
+): AnyPropertySchema | null => definitionSchema(row, presets, metadata).schema
 
 /** Descriptor wiring the schema bridge into the shared projector
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
@@ -189,10 +258,12 @@ export const userSchemasProjector: DefinitionBlockProjector<
   metaType: PROPERTY_SCHEMA_TYPE,
   targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
-  keyOf: definition => definition.metadata.fieldId,
+  keyOf: projectedPropertyDefinitionFieldId,
   project: (row, ctx) => {
     const metadata = parsePropertyDefinitionMetadata(row)
-    if (!metadata) return null
+    if (!metadata) {
+      return {unparseable: {fieldId: row.id, workspaceId: row.workspaceId}}
+    }
     let schema: AnyPropertySchema | null = null
     try {
       schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
@@ -219,13 +290,19 @@ export interface AddSchemaArgs {
 
 /** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
  * contribution state, and indexes live in the `ProjectorHandle`, reached
- * through `repo.projectors`; this facade owns only in-flight name reservations
- * that serialize same-Repo creation attempts. Singleton on `Repo` so
- * imperative callers share both the projector generation and reservations. */
+ * through `repo.projectors`; service views share the in-flight name
+ * reservations that serialize same-Repo creation attempts. */
 export class UserSchemasService {
-  private readonly pendingCreations = new Set<string>()
+  constructor(
+    private readonly repo: Repo,
+    private readonly pendingCreations = new Set<string>(),
+  ) {}
 
-  constructor(private readonly repo: Repo) {}
+  /** Bind imperative writes to another Repo host while sharing the name
+   * reservations owned by the original Repo service. */
+  withRepo(repo: Repo): UserSchemasService {
+    return new UserSchemasService(repo, this.pendingCreations)
+  }
 
   private get handle() {
     return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)
@@ -243,7 +320,7 @@ export class UserSchemasService {
    * invalid, and shadowed rows return undefined. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
     const definition = this.handle?.contributionForBlockId(blockId)
-    if (!definition) return undefined
+    if (!definition || !isParsedPropertyDefinition(definition)) return undefined
     return resolveSelectedPropertyDefinition(
       definition.metadata,
       this.repo.propertySchemaResolverFor(definition.metadata.workspaceId),

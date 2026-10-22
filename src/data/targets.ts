@@ -17,6 +17,7 @@ import {
   type TypeRegistrySnapshot,
 } from '@/data/api'
 import { derivedBlockId } from '@/data/derivedIds'
+import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
@@ -74,22 +75,10 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** The canonical aliases `id` may claim right now: any alias a DIFFERENT live
- *  block already holds is dropped.
- *
- *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`, and
- *  that rejection rolls back the CALLER's whole transaction. For a
- *  get-or-create that is fatal rather than partial: the page is minted in the
- *  same tx, so it dies with the rollback and the next call repeats it — the
- *  page becomes permanently uncreatable (issue #378). Yielding the contested
- *  alias instead keeps the page reachable; resolving the duplicate name is a
- *  separate, user-driven merge.
- *
- *  Call inside the writing transaction, so the answer reflects writes this tx
- *  has already made. That is necessary but NOT sufficient on its own: a
- *  sync-applied row can co-own an alias (the uniqueness trigger deliberately
- *  skips sync-apply), and re-writing a row's own alias bag re-inserts every
- *  entry, so a pre-existing duplicate can still abort the write. */
+/** Return aliases with no other live claimant, including sync co-claims that
+ * a single oldest-row lookup would hide. Call inside the writing transaction:
+ * rewriting an alias bag reinserts every claim, and one competing claim would
+ * abort the caller's whole transaction. Yielding it keeps the page reachable. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
@@ -98,8 +87,8 @@ export const partitionClaimableAliases = async (
 ): Promise<string[]> => {
   const claimable: string[] = []
   for (const alias of aliases) {
-    const owner = await tx.aliasLookup(alias, workspaceId)
-    if (owner === null || owner.id === id) claimable.push(alias)
+    const owners = await tx.aliasClaimants(alias, workspaceId)
+    if (owners.every(owner => owner.id === id)) claimable.push(alias)
   }
   return claimable
 }
@@ -143,14 +132,7 @@ export const createOrRestoreTargetBlock = async (
   }
 }
 
-// ──── Deterministic-id namespaces (UUIDv5) ────
-
-/** Namespace for alias-seat ids. The probe input is
- *  `${workspaceId}:${alias}:${index}`; two workspaces typing the same
- *  alias get distinct seats, and within a workspace the index lets
- *  parallel probes resolve to additional slots when slot 0 was claimed
- *  by a previous alias that has since been renamed. */
-const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
+// ──── Deterministic seat ids (UUIDv5) ────
 
 /** Probe cap. The expected indexed depth is 0–2 in realistic
  *  workloads (one rename per alias is rare; multiple is rarer). A cap
@@ -159,16 +141,28 @@ const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
  *  hang. */
 export const ALIAS_SEAT_PROBE_SLOTS = 64
 
+/** The probe input is `${workspaceId}:${alias}:${index}`: two workspaces
+ *  typing the same alias get distinct seats, and within a workspace the
+ *  index lets parallel probes resolve to additional slots when slot 0 was
+ *  claimed by a previous alias that has since been renamed. */
+const seatSlotId = (namespace: string, alias: string, workspaceId: string, index: number): string =>
+  derivedBlockId({namespace, key: `${workspaceId}:${alias}:${index}`})
+
 /** Deterministic id for the `index`-th alias-seat slot. Slot 0 is the
  *  happy-path id; higher slots are claimed by probes that skipped a
  *  live row claiming a different alias (post-rename) or a tombstoned
  *  prior occupant. Two clients in the same world-state hit the same
- *  index for a given `(alias, workspaceId)`. */
+ *  index for a given `(alias, workspaceId)`.
+ *
+ *  `seats` is NOT defaulted: the public namespace is the wrong answer for
+ *  an encrypted workspace, and a default is how a caller gets it without
+ *  asking (`@/data/aliasSeatNamespace`). */
 export const computeAliasSeatId = (
+  seats: AliasSeatNamespaces,
   alias: string,
   workspaceId: string,
   index: number = 0,
-): string => derivedBlockId({namespace: ALIAS_NS, key: `${workspaceId}:${alias}:${index}`})
+): string => seatSlotId(seats.mint, alias, workspaceId, index)
 
 /** Single source of truth for the freshly-materialised alias-seat
  *  shape. `ensureAliasTarget` writes a row whose `(content, properties)`
@@ -360,26 +354,30 @@ const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boole
   && matchesAliasSeatSeed(row)
 
 /** Is `id` one of the deterministic seat-slot ids for `(alias,
- *  workspaceId)`? Pure compute over the same slot window the probe
- *  walks. The reference-drop orphan reaper (issue #402) uses this as
+ *  workspaceId)`, under any namespace in `seats.recognized`? Pure compute
+ *  over the same slot window the probe walks. The reference-drop orphan
+ *  reaper (issue #402) uses this as
  *  its machine-mint discriminator: a user-created page can share the
  *  seat SEED SHAPE exactly (quick-find's create-page writes content +
  *  alias + PAGE_TYPE), but it gets a random uuid — only
  *  `ensureAliasTarget` mints rows at these ids, so shape + slot-id
  *  together mean "ours to reap". */
 export const isAliasSeatSlotId = (
+  seats: AliasSeatNamespaces,
   id: string,
   alias: string,
   workspaceId: string,
 ): boolean => {
-  for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    if (computeAliasSeatId(alias, workspaceId, index) === id) return true
+  for (const namespace of seats.recognized) {
+    for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
+      if (seatSlotId(namespace, alias, workspaceId, index) === id) return true
+    }
   }
   return false
 }
 
-/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`
- *  until one of:
+/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`,
+ *  under `seats.mint` only, until one of:
  *   - empty slot → return that id (caller will insert),
  *   - live row claiming `alias` → return that id (reuse / convergence),
  *   - pristine transient tombstone for `alias` → return that id (caller
@@ -391,6 +389,11 @@ export const isAliasSeatSlotId = (
  *  user-added props, live children — i.e. anything that wasn't a
  *  pristine cleanup target).
  *
+ *  A pristine tombstone under another recognized namespace stays dead and
+ *  the probe mints afresh: restoring it would write at an id that names the
+ *  alias, and by the predicate it holds nothing to keep. Restoring that
+ *  tombstone later by other means meets the fresh seat holding its alias.
+ *
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
  *  guarantee. The restorable predicate is a pure function of the row,
@@ -400,12 +403,13 @@ export const isAliasSeatSlotId = (
  *  by alias text, so a second parseReferences pass on either client
  *  resolves through the lookup rather than the probe. */
 export const resolveAliasSeatId = async (
+  seats: AliasSeatNamespaces,
   read: AliasSeatReader,
   alias: string,
   workspaceId: string,
 ): Promise<string> => {
   for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    const id = computeAliasSeatId(alias, workspaceId, index)
+    const id = computeAliasSeatId(seats, alias, workspaceId, index)
     const row = await read(id)
     if (row === null) return id
     if (row.deleted) {
@@ -441,6 +445,7 @@ export const ensureAliasTarget = async (
   alias: string,
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
+  options: {systemMint?: boolean} = {},
 ): Promise<{ id: string; inserted: boolean }> => {
   // Lookup-first INSIDE the tx, not just at the caller's read phase:
   // the read-phase lookup can go stale between plan build and apply —
@@ -456,7 +461,8 @@ export const ensureAliasTarget = async (
   // unrelated id.
   const claimant = await tx.aliasLookup(alias, workspaceId)
   if (claimant !== null) return {id: claimant.id, inserted: false}
-  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
+  const seats = await aliasSeatNamespacesInTx(tx, repo, workspaceId)
+  const id = await resolveAliasSeatId(seats, aliasSeatReaderFromTx(tx), alias, workspaceId)
   const seed = aliasSeatSeed(alias)
   return createOrRestoreTargetBlock(tx, {
     id,
@@ -465,9 +471,8 @@ export const ensureAliasTarget = async (
     orderKey: keyAtEnd(),
     freshContent: seed.content,
     stripAliasesOnRestore: true,
-    // A freshly-probed alias seat is a speculative default: if the server
-    // already has a real page for this alias, the local seat must yield.
-    systemMint: true,
+    // Reference stubs yield to an authoritative server page; explicit page creators opt out.
+    systemMint: options.systemMint ?? true,
     // The setProperty + addTypeInTx pair below must produce exactly
     // `seed.properties` on disk; the `ensureAliasTarget writes the seed
     // shape` test in targets.test.ts asserts this and is the contract

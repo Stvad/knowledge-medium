@@ -9,19 +9,23 @@
  * back down the sync stream and re-stages, carrying the stamp it was written
  * with (measured on a live client: identical `updated_at`).
  *
- * The agreement is `decideStagingRow`'s invariant I1 (`reconcile.ts`): equal
- * nonzero stamps ⟺ identical content, because the server strictly advances the
- * stamp on any content change. Those rows resolve `skip-stale` and change
- * nothing. I2's `0` sentinel is the documented exception — a 0-stamped local
- * row always yields — so it stays a gap.
+ * The drain's no-op test compares the whole decoded row; SQL cannot open a
+ * sealed column, so the probe asks `blocksAlreadyReflects` instead: every clear
+ * column equal, and a nonzero stamp vouching for the sealed ones.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import {
+  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_SYNCED_RAW_TABLE,
+  blockToSyncedRowParams,
+  parseBlockRow,
+  type BlockRow,
+} from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
-  decideStagingRow,
+  blocksAlreadyReflects,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_IDS_SQL,
   WORKSPACE_UNAPPLIED_SQL,
@@ -65,10 +69,27 @@ const seedLocal = (id: string, updatedAt: number, deleted = false) =>
       [id, WS, updatedAt, updatedAt, deleted ? 1 : 0])
   })
 
+/** A local `blocks` row holding exactly `d`'s synced columns. */
+const seedLocalFrom = (d: BlockData) =>
+  sharedDb.db.execute(
+    `INSERT INTO blocks (${BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')})
+     VALUES (${BLOCK_STORAGE_COLUMNS.map(() => '?').join(', ')})`,
+    blockToSyncedRowParams(d))
+
 const localStamp = async (id: string): Promise<number> =>
   (await sharedDb.db.getOptional<{updated_at: number}>(
     'SELECT updated_at FROM blocks WHERE id = ?', [id],
   ))!.updated_at
+
+/** Deliver the row this device just wrote, exactly as it wrote it — the echo of
+ *  an uncontended upload. */
+const deliverOwnEcho = async (id: string) =>
+  deliver(parseBlockRow((await sharedDb.db.getOptional<BlockRow>(
+    'SELECT * FROM blocks WHERE id = ?', [id],
+  ))!))
+
+const rowFrom = (table: 'blocks' | 'blocks_synced', id: string) =>
+  sharedDb.db.getOptional<BlockRow>(`SELECT * FROM ${table} WHERE id = ?`, [id])
 
 /** `n` benign staged rows: `blocks` and `blocks_synced` agree at the same
  *  nonzero stamp, so every one of them is an echo the drain would discard.
@@ -87,26 +108,30 @@ const seedBenignBacklog = async (n: number) => {
     `${gen} INSERT INTO blocks_synced_changes (id, op) SELECT 'bulk' || i, 'upsert' FROM seq`)
 }
 
-describe('agreement with the drain (invariant I1)', () => {
-  // The SQL restates a rule `decideStagingRow` owns. This is the coupling: if
-  // I1 moves and the SQL does not, the gate starts reporting "nothing to do"
-  // while the drain is about to rewrite `blocks` — the stale-view write the
-  // whole gate exists to prevent. The clauses with no `decideStagingRow`
-  // input (a staged delete, a missing synced row) stay hand-written above.
+describe('agreement with blocksAlreadyReflects', () => {
+  // The SQL restates a rule `blocksAlreadyReflects` owns. This is the coupling:
+  // if the rule moves and the SQL does not, the gate starts reporting "nothing
+  // to do" while the drain is about to rewrite `blocks` — the stale-view write
+  // the whole gate exists to prevent. The clauses with no counterpart there (a
+  // staged delete, a missing synced row) stay hand-written below.
+  const base = syncedRow({id: 'oracle', updatedAt: 5, userUpdatedAt: 5})
   it.each([
-    {local: 5, synced: 5},
-    {local: 5, synced: 6},
-    {local: 6, synced: 5},
-    {local: 0, synced: 0},
-  ])('matches skip-stale for local=$local synced=$synced', async ({local, synced}) => {
+    {name: 'identical at a nonzero stamp', local: base, staged: base},
+    {name: 'staged newer', local: base, staged: {...base, updatedAt: 6}},
+    {name: 'local newer', local: {...base, updatedAt: 6}, staged: base},
+    {name: 'identical at stamp 0', local: {...base, updatedAt: 0}, staged: {...base, updatedAt: 0}},
+    {name: 'stamp 0, differing content', local: {...base, updatedAt: 0}, staged: {...base, updatedAt: 0, content: 'theirs'}},
+    {name: 'equal stamp, differing clear column (#1162)', local: base, staged: {...base, userUpdatedAt: 4}},
+    {name: 'equal stamp, differing sealed column only', local: base, staged: {...base, content: 'theirs'}},
+  ])('$name', async ({local, staged}) => {
     const repo = makeRepo()
-    await seedLocal('oracle', local)
-    await deliver(syncedRow({id: 'oracle', updatedAt: synced}))
+    await seedLocalFrom(local)
+    await deliver(staged)
 
-    const drainSkips = decideStagingRow('copy', synced, {
-      localUpdatedAt: local, hasPendingUpload: false,
-    }).kind === 'skip-stale'
-    expect(await repo.syncViewGap() === null).toBe(drainSkips)
+    const reflected = blocksAlreadyReflects(
+      (await rowFrom('blocks_synced', 'oracle'))!, (await rowFrom('blocks', 'oracle'))!,
+    )
+    expect(await repo.syncViewGap() === null).toBe(reflected)
   })
 })
 
@@ -120,7 +145,7 @@ describe('Repo.syncViewGap', () => {
     }, {scope: ChangeScope.BlockDefault})
     const [{id}] = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks LIMIT 1')
 
-    await deliver(syncedRow({id, content: 'mine', updatedAt: await localStamp(id)}))
+    await deliverOwnEcho(id)
 
     expect(await sharedDb.db.getAll('SELECT seq FROM blocks_synced_changes')).toHaveLength(1)
     expect(await repo.syncViewGap()).toBeNull()
@@ -144,9 +169,10 @@ describe('Repo.syncViewGap', () => {
     expect(await repo.syncViewGap()).toMatch(/draining/)
   })
 
-  it('reports a gap when the local row is 0-stamped, which always yields (I2)', async () => {
-    // A speculative deterministic-id mint. Equal stamps do NOT mean identical
-    // content here, so the drain applies and the view really is incomplete.
+  it('reports a gap when a 0-stamped local row differs from its staged row', async () => {
+    // A speculative deterministic-id mint. Stamp 0 is shared by construction,
+    // so it vouches for nothing; the drain applies and the view really is
+    // incomplete.
     const repo = makeRepo()
     await seedLocal('minted', 0)
     await deliver(syncedRow({id: 'minted', updatedAt: 0}))
@@ -189,11 +215,12 @@ describe('Repo.syncViewGap', () => {
 
   it('reports a gap for a staged delete whose row still matches stamp-for-stamp', async () => {
     // Isolates the `c.op = 'delete'` clause: synced row present, local row
-    // present, stamps equal — I1 would call this identical content and skip.
-    // A delete is not a content change, so the stamp cannot speak for it.
+    // present and identical, so the row would read as reflected. A delete is
+    // not a column change, so the row cannot speak for it.
     const repo = makeRepo()
-    await deliver(syncedRow({id: 'doomed', updatedAt: 9}))
-    await seedLocal('doomed', 9)
+    const doomed = syncedRow({id: 'doomed', updatedAt: 9, userUpdatedAt: 9})
+    await deliver(doomed)
+    await seedLocalFrom(doomed)
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
     await sharedDb.db.execute(
       "INSERT INTO blocks_synced_changes (id, op) VALUES ('doomed', 'delete')",
@@ -247,7 +274,7 @@ describe('Repo.workspaceViewGap', () => {
       await tx.create({workspaceId: WS, parentId: null, orderKey: 'a0', content: 'mine'})
     }, {scope: ChangeScope.BlockDefault})
     const [{id}] = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks LIMIT 1')
-    await deliver(syncedRow({id, content: 'mine', updatedAt: await localStamp(id)}))
+    await deliverOwnEcho(id)
 
     expect(await sharedDb.db.getAll('SELECT seq FROM blocks_synced_changes')).toHaveLength(1)
     expect(await repo.workspaceViewGap(WS)).toBeNull()

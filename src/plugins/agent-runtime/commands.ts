@@ -21,13 +21,21 @@ import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
-import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { getLocalWorkspace } from '@/data/workspaces.js'
+import { dataModelGuide } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
+import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
+import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
+import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
+import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import type { ParsedBlock } from '@/utils/markdownParser.js'
+import { createChild, deleteBlock, move, restoreBlock } from '@/data/mutators.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -55,6 +63,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import {
   definitionSeedsFacet,
+  sameTxProcessorsFacet,
   projectedTypeDefinitionsFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
@@ -76,7 +85,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -88,6 +97,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {isReadOnlyAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {assertContributor, createContributor, listContributors} from '@/plugins/contributors/profiles'
+import {contributorAttributionProcessor} from '@/plugins/contributors/processor'
+import {viewWorkspace} from './agentViews/shared'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   takeLastPropertyCellBackfillRun,
@@ -168,6 +181,14 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   return value
 }
 
+/** The verb's target block id as it acts on it (see `blockIdField`). */
+const commandBlockId = (
+  repo: Repo,
+  command: {blockId?: unknown; id?: unknown; exactIds?: unknown},
+  verb: string,
+): Promise<string> =>
+  blockIdField(repo, requireString(command.blockId ?? command.id, 'blockId'), verb, command.exactIds === true)
+
 const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
   if (!isRecord(value)) {
     throw new Error('position must be an object with kind first|last|before|after')
@@ -220,12 +241,13 @@ const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): 
       'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
       'server or other clients) and skips the kernel derivations (block_types, ' +
       'reference normalization, property projection), desyncing derived state. Use ' +
-      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'create-block / update-block (which go through repo.tx) for a normal ' +
       'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
       '(or {allowSyncedWrite: true} on the command body) to override this check.',
   )
 }
 
+// Deliberate raw maintenance bypasses Repo processors, including contributor selection and attribution.
 const runSql = async (
   repo: Repo,
   sql: string,
@@ -536,8 +558,8 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
-    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
-    return prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+    // A copy: with nothing stored this is the schema's shared default.
+    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }
@@ -589,8 +611,7 @@ const resolveInstallLiveness = async (
   // override.
   if (existing === null) {
     // Read only for `--verify`, whose isolated resolution needs the real
-    // toggles: `getPluginPrefsBlock` CREATES the prefs subtree when absent, and
-    // a plain install has no use for the answer.
+    // toggles; a plain install has no use for the answer.
     return {
       kind: 'dormant',
       overrides: verify ? await readExtensionOverrides(repo, workspaceId) ?? new Map() : new Map(),
@@ -874,75 +895,17 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
-/** Refuse a bridge mutation aimed at a workspace this client does not have open.
- *
- *  Field-row recognition resolves the definition through
- *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
- *  retained previous one and fails CLOSED for any other — so a mutation run
- *  against a background workspace runs with recognition off, and a delete
- *  there rewrites `::((fieldId))` field rows to prose instead of leaving the
- *  dangling ref intact (#790).
- *
- *  Not in the kernel: `repo.tx` is workspace-agnostic on purpose — sync
- *  arrival writes background rows through a path that needs no recognition,
- *  and tests seed unopened workspaces directly — so a throw there would refuse
- *  both. The bridge is where a block ID can name a row outside the workspace
- *  its client is paired to. `eval` and raw `sql execute` reach `repo` directly
- *  and stay unguardable. */
-const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
+/** Install scans must stay on the workspace whose definitions and runtime
+ *  were captured together; otherwise the preset comparison can pin a source
+ *  against a different workspace's registry. */
+const assertInstallScanWorkspace = (repo: Repo, workspaceId: string): void => {
   if (workspaceId === repo.activeWorkspaceId) return
   throw new Error(
-    `${verb}: target is in workspace ${workspaceId}, which is not the active one `
-    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
-    + "workspace's property and alias registries, which resolve nothing for another "
-    + 'workspace — open that workspace and re-run.',
+    `install-extension: scan workspace ${workspaceId} is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). The preset scan needs that workspace's runtime. `
+    + 'Open the target workspace and retry the install.',
   )
 }
-
-/** `assertActiveWorkspace` for every existing block a verb is about to touch.
- *
- *  Contract for callers:
- *    - MISSING blocks PASS, so each verb still reports its own not-found error.
- *    - The read is raw, not `repo.load`, so it sees tombstones —
- *      `restore-block`'s target always is one.
- *    - Pass the whole id set; it is deduplicated into one query.
- *    - ISSUE THE WRITE on the synchronous path immediately after this
- *      resolves. The lookup is async and the active workspace can move during
- *      it, so the pin re-check at the end is the last word — an await between
- *      it and the write reopens the window it closes.
- *
- *  Two residuals are accepted, both needing the check inside the writing
- *  transaction: an id absent here that sync delivers before the mutator's
- *  transaction opens, and a switch during a `run-action` handler. See the
- *  kernel-side follow-up issue. */
-const assertActiveWorkspaceBlocks = async (
-  repo: Repo,
-  verb: string,
-  blockIds: readonly (string | undefined)[],
-): Promise<void> => {
-  const unique = [...new Set(blockIds.filter((id): id is string => id !== undefined && id !== ''))]
-  if (unique.length === 0) return
-  const pinned = repo.activeWorkspaceId
-  const rows = await repo.db.getAll<{workspace_id: string}>(
-    'SELECT workspace_id FROM blocks WHERE id IN (SELECT value FROM json_each(?))',
-    [JSON.stringify(unique)],
-  )
-  for (const row of rows) assertActiveWorkspace(repo, verb, row.workspace_id)
-  if (repo.activeWorkspaceId !== pinned) {
-    throw new Error(
-      `${verb}: the active workspace changed from ${pinned ?? 'none'} to `
-      + `${repo.activeWorkspaceId ?? 'none'} while checking this command's targets. `
-      + 'Refusing rather than writing against a registry they were not checked '
-      + 'for — re-run against the workspace you want.',
-    )
-  }
-}
-
-const assertActiveWorkspaceBlock = (
-  repo: Repo,
-  verb: string,
-  blockId: string,
-): Promise<void> => assertActiveWorkspaceBlocks(repo, verb, [blockId])
 
 const createRuntimeBlock = async (
   repo: Repo,
@@ -962,18 +925,28 @@ const createRuntimeBlock = async (
   // write, instead of surfacing a `tx.create:` rejection from three layers
   // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
+  // Before the parent: a [[page]] parent is created when missing, and would
+  // stay behind if the create then failed on a taken id. `tx.create` still
+  // refuses it, should one be taken meanwhile.
+  if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
+    throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
+  }
   const references = input.data?.references as BlockReference[] | undefined
 
-  if (input.parentId) {
-    await assertActiveWorkspaceBlock(repo, 'create-block', input.parentId)
-    const id = await repo.mutate.createChild({
-      parentId: input.parentId,
-      content,
-      properties,
-      references,
-      position: mapPosition(input.position),
-      id: explicitId,
-    }) as string
+  if (input.parentId !== undefined) {
+    const parentRef = input.parentId
+    // A [[page]] / date parent is created when missing; one undo entry for both.
+    const id = await repo.undoGroup(async repo => {
+      const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
+      return runAgentMutator(repo, 'create-block', createChild, {
+        parentId: parent.id,
+        content,
+        properties,
+        references,
+        position: mapPosition(input.position),
+        id: explicitId,
+      })
+    })
     return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
@@ -981,8 +954,6 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
-  assertActiveWorkspace(repo, 'create-block', workspaceId)
-
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
     await tx.create({
@@ -994,7 +965,7 @@ const createRuntimeBlock = async (
       properties,
       references,
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
+  }, agentTxOptions('create-block'))
   return withGrainWarnings(repo, await repo.load(id), properties)
 }
 
@@ -1033,18 +1004,6 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
-  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
-  // request should not pay the parser first. The in-tx assertion below stays —
-  // this one is the cheap refusal, that one is the atomic decision.
-  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
-  // shape 'block' → the whole markdown is ONE root block (newlines kept);
-  // 'outline' (default) → split along the markdown outline.
-  const parsed: ParsedBlock[] = shape === 'block'
-    ? (input.markdown.length === 0
-        ? []
-        : [{id: 'block-root', orderKey: '', content: input.markdown}])
-    : parseMarkdownToBlocks(input.markdown)
-
   const ids: string[] = []
   const rootIds: string[] = []
 
@@ -1052,7 +1011,11 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
-    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
+    tx.assertWritableWorkspace(workspaceId)
+
+    // Parse only after admission so a closed workspace is refused before the
+    // potentially expensive markdown work begins.
+    const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -1194,7 +1157,7 @@ const reconcileMarkdownSubtree = async (
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+  }, agentTxOptions('reconcile-markdown-subtree'))
 
   return {ids, rootIds}
 }
@@ -1215,8 +1178,14 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
-    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
+    if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
+      throw new Error(
+        `update-block: block ${input.id}'s content is not the expectedContent passed — nothing was written. `
+        + `Its current content is: ${contentEcho(before.content)}. `
+        + 'Re-plan against it, or use edit-block to change one passage.',
+      )
+    }
     const nextProperties = input.properties === undefined
       ? undefined
       : input.replaceProperties
@@ -1235,7 +1204,7 @@ const updateRuntimeBlock = async (
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
+  }, agentTxOptions('update-block'))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -1245,8 +1214,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
-  await repo.mutate.move(input)
+  await runAgentMutator(repo, 'move-block', move, input)
   return repo.load(input.id)
 }
 
@@ -1254,9 +1222,9 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
-  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
-  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
-  await repo.mutate.delete(input)
+  // Programmatic delete: the agent bridge is not a UI gesture, so the UI-layer
+  // deletion guards deliberately don't apply.
+  await runAgentMutator(repo, 'delete-block', deleteBlock, input)
   return {id: input.id, deleted: true}
 }
 
@@ -1264,8 +1232,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
-  await repo.mutate.restore(input)
+  await runAgentMutator(repo, 'restore-block', restoreBlock, input)
   return repo.load(input.id)
 }
 
@@ -1411,7 +1378,7 @@ const installRuntimeExtension = async (
       // which skips the conflict. Re-checked in the writing tx too, where the
       // same switch would re-pin this workspace's extension off a scan that
       // never saw it.
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       presetScan = await findPresetIdentityConflicts(
         repo, workspaceId, presetRegistryAfter(context, resolution, targetId, workspaceId))
     }
@@ -1452,7 +1419,7 @@ const installRuntimeExtension = async (
   if (existing) {
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
       const properties = extensionBlockProperties(current.properties, label, description)
@@ -1504,7 +1471,7 @@ const installRuntimeExtension = async (
     // switch can land inside, which would leave `typeSnapshot` read from one
     // workspace while every `tx.create` below writes the extension root,
     // container and block into another. Refuse rather than write that tree.
-    assertActiveWorkspace(repo, 'install-extension', workspaceId)
+    assertInstallScanWorkspace(repo, workspaceId)
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)
@@ -1688,6 +1655,9 @@ const runtimeBlock = (
 const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
   candidates.find((id): id is string => isString(id) && id !== '')
 
+const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
+  context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1713,6 +1683,10 @@ const runRuntimeAction = async (
     )
   }
 
+  if (contributorsEnabled(context)) {
+    throw new Error('run-action is unavailable while Contributors is enabled: UI action handlers can retain an unbound repository. Use graph commands or eval with the supplied repo instead.')
+  }
+
   const selectedBlockIds = Array.isArray(dependencies.selectedBlockIds)
     ? dependencies.selectedBlockIds.filter(isString)
     : []
@@ -1727,17 +1701,6 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
-
-  // `run-action` is the widest route to a kernel mutator: it turns
-  // caller-supplied ids into Block facades and hands them to a handler that
-  // may call `Block.delete()` (the `delete_block` action does). Guarding only
-  // the typed verbs would leave the same background-workspace corruption
-  // reachable through here — so every id that BECOMES a dependency is checked
-  // before dispatch, which is also the last point we can refuse: once
-  // `invokeAction` runs, the writes are inside a handler we don't control.
-  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
-    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
-  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
@@ -1871,9 +1834,14 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  const asserted = assertedWorkspaceOverride(override)
-  if (asserted) return asserted
+  const asserted = await readableWorkspaceOverride(repo, override)
   const data = await repo.load(blockId)
+  if (asserted) {
+    if (data && data.workspaceId !== asserted) {
+      throw new Error(`Block ${blockId} is in workspace ${data.workspaceId}, not ${asserted}.`)
+    }
+    return asserted
+  }
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error(`Cannot resolve a workspace for block ${blockId}; pass workspaceId`)
@@ -1905,7 +1873,7 @@ const runBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<BacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
 
@@ -1954,7 +1922,7 @@ const runGroupedBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<GroupedBacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
   const grouping = await resolveGroupedBacklinksConfig(
@@ -2027,11 +1995,61 @@ const assertedWorkspaceOverride = (override: unknown): string | undefined => {
   return asserted
 }
 
-const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+/** Refuses a named workspace this tab has nothing to read from, instead of
+ *  answering "nothing found" for it (#606). Asks whether its blocks ARE here,
+ *  not whether new synced rows would apply: those differ when a key-store
+ *  read fails or another tab holds a session-only plaintext confirmation.
+ *  A never-opened empty workspace is refused too, and accepted: opening it
+ *  writes its daily note and system pages, so the refusal's advice clears it. */
+const assertReadableWorkspace = async (repo: Repo, workspaceId: string): Promise<void> => {
+  if (!await getLocalWorkspace(repo, workspaceId)) {
+    throw new Error(
+      `Workspace ${workspaceId} is not known on this device: the local workspaces table has `
+      + 'no row for it (`SELECT id, name FROM workspaces` lists the ones it has).',
+    )
+  }
+  const anyBlock = await repo.db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
+  if (!anyBlock) {
+    throw new Error(
+      `Workspace ${workspaceId} has no blocks in this device's local database (one never opened `
+      + 'here has none, nor does an end-to-end encrypted one whose key was not entered here). '
+      + 'Open it in the app, entering its key if asked, then retry.',
+    )
+  }
+}
+
+/** A `workspaceId` override, once it names a workspace readable here; undefined
+ *  when none was given. */
+const readableWorkspaceOverride = async (repo: Repo, override: unknown): Promise<string | undefined> => {
   const asserted = assertedWorkspaceOverride(override)
+  if (asserted) await assertReadableWorkspace(repo, asserted)
+  return asserted
+}
+
+const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string> => {
+  const asserted = await readableWorkspaceOverride(repo, override)
   if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
+}
+
+/** A raw command's block id, accepting every form an agent view prints or
+ *  takes (unique id prefix, page name, date). An unmatched ref passes through
+ *  unchanged, so the command's own not-found answer is unchanged too. */
+const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const resolution = await resolveBlockRef(repo, ref, {
+    workspaceId: assertedWorkspaceOverride(override) ?? repo.activeWorkspaceId,
+    onMissing: 'verbatim',
+  })
+  return resolution.id
+}
+
+/** A raw read's target, from a ref; a named workspace must be readable and
+ *  hold the block, as for the raw backlink reads. */
+const resolveRawReadTarget = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const id = await resolveRawBlockRef(repo, ref, override)
+  if (override !== undefined) await resolveBlockWorkspaceId(repo, id, override)
+  return id
 }
 
 interface PageCommandResult {
@@ -2041,13 +2059,17 @@ interface PageCommandResult {
   candidates: Array<{id: string, alias: string, content: string, deepLink: string}>
 }
 
+/** Candidates are a lookup aid, not a listing: a caller picks a count
+ *  inside this bound. */
+const MAX_PAGE_CANDIDATES = 100
+
 const runPageCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<PageCommandResult> => {
   const name = requireString(command.name, 'name')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
-  const limit = typeof command.limit === 'number' ? command.limit : 20
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
+  const limit = Math.min(typeof command.limit === 'number' ? command.limit : 20, MAX_PAGE_CANDIDATES)
 
   const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
   const candidates = await repo.query.aliasMatches({workspaceId, filter: name, limit}).load()
@@ -2081,7 +2103,7 @@ const runDailyNoteCommand = async (
   command: KnownAgentCommand,
 ): Promise<DailyNoteCommandResult> => {
   const input = requireString(command.date, 'date')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const parsed = parseRelativeDate(input)
   if (!parsed) {
     throw new Error(
@@ -2118,7 +2140,7 @@ const runSearchCommand = async (
   command: KnownAgentCommand,
 ): Promise<SearchCommandResult> => {
   const query = requireString(command.query, 'query')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 50
 
   // Shared merge point (searchSourcesFacet), not a direct
@@ -2240,7 +2262,34 @@ export const executeCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
+  const enabled = contributorsEnabled(context)
+  const readOnly = isReadOnlyAgentCommand(command)
+  if (enabled && !readOnly && command.type !== 'create-contributor') {
+    if (command.contributorId !== undefined && command.contributorId !== null) {
+      const id = requireString(command.contributorId, 'contributorId')
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId, {allowHuman: false})
+    }
+    context = createAgentRuntimeContext({
+      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
+      runtime: context.runtime,
+      safeMode: context.safeMode,
+    })
+  }
+  return executeAttributedCommand(command, context)
+}
+
+const executeAttributedCommand = async (
+  command: KnownAgentCommand,
+  context: AgentRuntimeContext,
+) => {
   switch (command.type) {
+    case 'create-contributor':
+      if (!contributorsEnabled(context)) throw new Error('Enable the Contributors plugin to create contributor profiles.')
+      return createContributor(context.repo, viewWorkspace(context.repo, command.workspaceId), command)
+
+    case 'list-contributors':
+      return listContributors(context.repo, viewWorkspace(context.repo, command.workspaceId))
     case 'ping':
       return pingRuntime(context)
 
@@ -2273,18 +2322,40 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
+      const allowSyncedWrite = command.allowSyncedWrite === true
+      if (command.maxRows !== undefined && mode === 'all') {
+        const maxRows = Math.min(command.maxRows, MAX_SQL_ROWS)
+        const limited = limitedSelectSql(sql, maxRows) ?? sql
+        const rows = await context.sql(limited, getParams(command.params), mode, allowSyncedWrite)
+        return boundSqlRows(Array.isArray(rows) ? rows : [], maxRows)
+      }
+      return context.sql(sql, getParams(command.params), mode, allowSyncedWrite)
     }
 
     case 'get-block':
-      return context.getBlock(requireString(command.blockId ?? command.id, 'blockId'))
+      return context.getBlock(await resolveRawReadTarget(
+        context.repo,
+        requireString(command.blockId ?? command.id, 'blockId'),
+        command.workspaceId,
+      ))
 
     case 'get-subtree':
-      return context.getSubtree(requireString(command.rootId, 'rootId'))
+      return context.getSubtree(await resolveRawReadTarget(
+        context.repo,
+        requireString(command.rootId, 'rootId'),
+        command.workspaceId,
+      ))
+
+    case 'view-block':
+    case 'view-outline':
+    case 'view-backlinks':
+    case 'view-grouped-backlinks':
+    case 'view-search':
+      return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
 
     case 'create-block':
       return context.createBlock({
-        parentId: command.parentId === undefined
+        parentId: command.parentId === undefined || command.parentId === null
           ? undefined
           : requireString(command.parentId, 'parentId'),
         position: getPosition(command.position),
@@ -2331,34 +2402,80 @@ export const executeCommand = async (
       }
 
       return context.updateBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'update-block'),
         content: command.content === undefined
           ? undefined
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
+        expectedContent: command.expectedContent === undefined
+          ? undefined
+          : requireString(command.expectedContent, 'expectedContent'),
       })
     }
 
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : requireString(command.parentId, 'parentId')
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds)
       return context.moveBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
-        position: getMoveBlockPosition(command.position),
+        position: await blockPositionField(
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds,
+        ),
       })
     }
 
     case 'delete-block':
       return context.deleteBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'delete-block'),
       })
 
     case 'restore-block':
       return context.restoreBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'restore-block'),
+      })
+
+    case 'append-markdown': {
+      const view = await appendMarkdown(context.repo, {
+        target: requireString(command.target, 'target'),
+        markdown: requireString(command.markdown, 'markdown'),
+        position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        exactIds: command.exactIds,
+      })
+      return command.format === 'json' ? view : renderAppendView(view)
+    }
+
+    case 'edit-block':
+      return editBlock(context.repo, {
+        id: requireString(command.id, 'id'),
+        old: requireString(command.old, 'old'),
+        new: requireString(command.new, 'new'),
+        exactIds: command.exactIds,
+      })
+
+    case 'create-page':
+      return createPage(context.repo, {
+        name: command.name === undefined ? undefined : requireString(command.name, 'name'),
+        date: command.date === undefined ? undefined : requireString(command.date, 'date'),
+      })
+
+    case 'recent-changes':
+      return recentChanges(context.repo, {
+        since: command.since,
+        limit: command.limit,
+        includeUser: command.includeUser === true,
+      })
+
+    case 'resolve-block-id':
+      return {id: await resolveBlockId(context.repo, requireString(command.ref, 'ref'), 'resolve-block-id')}
+
+    case 'block-history':
+      return blockHistory(context.repo, {
+        id: await resolveBlockId(context.repo, requireString(command.id, 'id'), 'block-history'),
+        limit: command.limit,
       })
 
     case 'install-extension':
@@ -2451,7 +2568,7 @@ export const executeCommand = async (
       return runGroupedBacklinksCommand(context.repo, command)
 
     case 'data-model':
-      return DATA_MODEL_GUIDE
+      return dataModelGuide(typeof command.topic === 'string' ? command.topic : undefined)
 
     case 'page':
       return runPageCommand(context.repo, command)

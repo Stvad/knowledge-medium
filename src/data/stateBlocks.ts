@@ -16,6 +16,8 @@ import {resolvedThenable} from '@/utils/resolvedThenable'
 import {
   ChangeScope,
   type PropertySchema,
+  type Tx,
+  type TxWriteOpts,
   type TypeContribution,
   type TypeRegistrySnapshot,
   type User,
@@ -34,6 +36,8 @@ import {
 } from '@/data/properties'
 import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
+import {applyTypeTagInTx} from '@/data/typeTagger'
+import {partitionClaimableAliases, restorePropertiesStrippingAliases} from '@/data/targets'
 
 // ──── Deterministic-id namespaces ────
 
@@ -198,17 +202,9 @@ const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
 
 const dedupe = (values: readonly string[]): string[] => [...new Set(values)]
 
-/** Repair an existing user page to the current shape: the user id as an
- *  alias, the `USER_TYPE` marker, and the `user:id` property. Pages
- *  created before any of these existed (or restored by an older client)
- *  are upgraded in place on first access. Idempotent and additive —
- *  never rewrites the display-name alias or content, so a user who
- *  renamed their own page keeps that. Runs at most once per memoized
- *  (repo, workspace, user) since the caller is itself memoized; the peek
- *  skips the tx entirely once the page is up to date. Best-effort: an
- *  alias-collision rejection (the id already claimed elsewhere — not
- *  expected for opaque ids) is swallowed so it can't break user-page
- *  resolution. */
+/** Repair legacy identity metadata without rewriting content or claiming
+ * aliases owned elsewhere. The preflight avoids a transaction for healthy
+ * pages; failed repair must not prevent user-page resolution. */
 const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promise<void> => {
   const block = repo.block(id)
   const data = block.peek()
@@ -225,18 +221,46 @@ const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promis
     await repo.tx(async tx => {
       const row = await tx.get(id)
       if (!row || row.deleted) return
-      const txAliases = await tx.getProperty(id, aliasesProp)
-      if (!txAliases.includes(userId)) {
-        await tx.setProperty(id, aliasesProp, [...txAliases, userId])
-      }
-      if ((await tx.getProperty(id, userIdProp)) !== userId) {
-        await tx.setProperty(id, userIdProp, userId)
-      }
-      await repo.addTypeInTx(tx, id, USER_TYPE, {}, typeSnapshot)
+      await ensureUserPageInTx(tx, row.workspaceId, {id: userId}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs, description: 'user-page reconcile'})
   } catch (err) {
     console.warn(`[stateBlocks] could not reconcile user page ${id}:`, err)
   }
+}
+
+/** Ensure the current user's page inside an existing transaction, including revival. */
+export const ensureUserPageInTx = async (
+  tx: Tx,
+  workspaceId: string,
+  user: User,
+  snapshot: TypeRegistrySnapshot,
+  opts?: TxWriteOpts,
+): Promise<string> => {
+  const id = userPageBlockId(workspaceId, user.id)
+  const existing = await tx.get(id)
+  if (existing && existing.workspaceId !== workspaceId) {
+    throw new Error('The user page belongs to another workspace.')
+  }
+  const displayName = user.name ?? user.id
+  const aliases = existing ? await tx.getProperty(id, aliasesProp) : [displayName]
+  if (existing?.deleted) {
+    await tx.restore(id, {properties: await restorePropertiesStrippingAliases(tx, id)}, opts)
+  } else if (!existing) {
+    await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: displayName}, {systemMint: true})
+  }
+  const claimable = await partitionClaimableAliases(tx, id, dedupe([...aliases, user.id]), workspaceId)
+  const row = (await tx.get(id))!
+  const aliasSchema = await tx.resolvePropertySchema(id, aliasesProp)
+  const userIdSchema = await tx.resolvePropertySchema(id, userIdProp)
+  // Identity bootstrap also runs in UserPrefs transactions.
+  await tx.update(id, {properties: {
+    ...row.properties,
+    [aliasSchema.name]: aliasSchema.codec.encode(claimable),
+    [userIdSchema.name]: userIdSchema.codec.encode(user.id),
+  }}, opts)
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, writeOpts: opts})
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: USER_TYPE, writeOpts: opts})
+  return id
 }
 
 /** Per-user "user page" block — created (or restored) on first access.
@@ -258,41 +282,9 @@ export const getUserBlock = memoizeAsync(
       return repo.block(id)
     }
 
-    // User.name is optional in the data-layer User shape; fall back
-    // to the id so the user-page block always has *some* content
-    // and an addressable alias.
-    const displayName = user.name ?? user.id
-    // The id rides alongside the display name as an alias so the
-    // user-page is addressable both ways — by name (`[[Alice]]`) and by
-    // the opaque id stored in `created_by`/`updated_by`. Deduped for the
-    // no-name case where displayName === user.id.
-    const aliases = dedupe([displayName, user.id])
     const typeSnapshot = repo.snapshotTypeRegistries()
-
     await repo.tx(async tx => {
-      // Re-read inside the tx with the unfiltered `tx.get` so we see
-      // tombstones. (`repo.load` returned null in that case, so the
-      // outer `live` is no signal here.) Three outcomes:
-      //   1. live row appeared between load and tx open  → no-op
-      //   2. tombstoned row                              → restore
-      //   3. truly missing                               → create
-      const existing = await tx.get(id)
-      if (existing && !existing.deleted) return
-      if (existing && existing.deleted) {
-        await tx.restore(id, {content: displayName})
-        await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-        await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
-        return
-      }
-      await tx.create({
-        id,
-        workspaceId,
-        parentId: null,
-        orderKey: 'a0',
-        content: displayName,
-      }, {systemMint: true})
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
+      await ensureUserPageInTx(tx, workspaceId, user, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)
@@ -337,6 +329,28 @@ export const getPluginPrefsBlock = memoizeAsync(
   (repo, workspaceId, user, type) =>
     instanceKey(repo, workspaceId, user.id, 'plugin-prefs', type.id),
 )
+
+/** Deterministic id of a plugin's prefs block — the uuidv5 chain
+ *  `getPluginPrefsBlock` resolves to (user page → Preferences → `type.id`),
+ *  derived without loading or creating anything, for the reason
+ *  `pluginUIStateBlockId` gives. */
+export const pluginPrefsBlockId = (workspaceId: string, userId: string, typeId: string): string =>
+  stateChildBlockId(stateChildBlockId(userPageBlockId(workspaceId, userId), USER_PREFS_PATH_PART), typeId)
+
+/** One plugin preference, read without creating the prefs subtree: the
+ *  stored value, or the schema's default while the user has none. For read
+ *  paths; a settings surface that writes uses `getPluginPrefsBlock`. */
+export const readPluginPref = async <T>(
+  repo: Repo,
+  workspaceId: string,
+  user: User,
+  type: TypeContribution,
+  schema: PropertySchema<T>,
+): Promise<T> => {
+  const id = pluginPrefsBlockId(workspaceId, user.id, type.id)
+  const stored = (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
+  return stored ?? schema.defaultValue
+}
 
 /** Resolve the UI-state block scoped to the current panel context.
  *  In a panel context (`context.panelId`), returns the panel's own

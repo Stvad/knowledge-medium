@@ -78,11 +78,12 @@
  *    bug this pass exists to fix.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The refusals split on that gate and
+ * `consumingParentIds`, which is its gate. The refusals split on field rows and
  * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
- * a consumer with no field row YET is invisible to it, while the unconvertible
- * refusal is a fact about values this pass actually read and so can only be
- * reached through it.
+ * a consumer with no field row YET is invisible to them, while the
+ * unconvertible refusal is a fact about values this pass actually read and so
+ * can only be reached through the walk. The contested and shared-name refusals
+ * ask the wider `anyBlockHoldsFieldRowFor`.
  */
 
 import {
@@ -101,7 +102,15 @@ import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from './referenceTargetProcessor'
-import { tryBuildSchema } from '@/data/userSchemasService'
+import {
+  buildSchemaOrNull,
+  definitionSchema,
+  type UnbuildableCause,
+} from '@/data/userSchemasService'
+import {
+  FANOUT_REPORT_STRIDE,
+  reportPropertyDefinitionFanout,
+} from '@/data/propertyDefinitionFanout'
 import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
@@ -155,24 +164,6 @@ const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
     peekRowProperty(after, presetConfigProp),
   )
 
-/** `tryBuildSchema` answers `null` for a preset it cannot find or configure, but
- *  `preset.build` is extension code and can THROW. The projector already treats
- *  that as "no behaviour" and publishes metadata only; here an escape would
- *  abort the USER'S transaction — and for a definition whose preset throws, the
- *  transaction it would abort is the one repairing it. Same answer as null. Not
- *  logged: the projector warns for the same row on its own rebuild. */
-const buildSchemaOrNull = (
-  row: BlockData,
-  presets: SameTxCtx['valuePresets'],
-  metadata: NonNullable<ReturnType<typeof parsePropertyDefinitionMetadata>>,
-): AnyPropertySchema | null => {
-  try {
-    return tryBuildSchema(row, presets, metadata)
-  } catch {
-    return null
-  }
-}
-
 /**
  * Changes whose destination, or whose vacated name, is not this definition's to
  * write. The caller REFUSES the transaction over any of them that has consumers
@@ -223,6 +214,8 @@ export const contestedChanges = <T extends {
   candidates: readonly T[],
   claimOf: (name: string) => NameClaim | null,
 ): T[] => {
+  // ACCEPTED: a held change is no peer, so one tx swapping names with a
+  // definition whose type does not load is refused here; a third name works.
   const batch = new Set(candidates.map(candidate => candidate.fieldId))
   return candidates.filter(candidate => {
     const destination = claimOf(candidate.newName)
@@ -244,36 +237,92 @@ export const contestedChanges = <T extends {
   })
 }
 
-/** Why a change's fan-out could not run. Both end in the same refusal, and
- *  differ only in what the user is told to do about it. */
-type RefusalReason = 'unbuildable' | 'contested'
+/** What the user is told when a transaction is refused. */
+interface Refusal {
+  readonly code: string
+  readonly message: string
+}
 
-/** ONE refusal per transaction, whichever cause is found first — the user
- *  fixes one at a time either way, and a combined message would describe a
- *  state that no longer exists after the first fix. The unconvertible-values
- *  refusal in `apply` follows the same rule; its message is not here only
- *  because it is parameterized by a count. */
-const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
-  unbuildable: {
-    code: 'property.definition-change.unbuildable',
-    message:
-      'cannot change a property definition whose value type does not load: the '
-      + 'blocks using it could not be updated to match. Fix the property type '
-      + 'first, then rename or re-type it.',
+/** A change whose fan-out cannot run, held with the refusal it ends in: the
+ *  caller refuses the transaction once any held change has a consumer. */
+interface HeldChange {
+  readonly fieldId: string
+  readonly refusal: Refusal
+}
+
+const UNBUILDABLE_REFUSAL: Refusal = {
+  code: 'property.definition-change.unbuildable',
+  message:
+    'cannot give a property definition a value type that does not load on '
+    + 'this device: the blocks using it could not be updated to match. Choose '
+    + 'a type that loads, or enable the plugin that provides it first.',
+}
+
+const CONTESTED_REFUSAL: Refusal = {
+  code: 'property.definition-change.contested',
+  message:
+    'cannot rename or re-type a property definition while another definition '
+    + 'claims one of the names involved: which of them the property answers '
+    + 'to afterwards is not this edit\'s to decide, so the blocks using it '
+    + 'could not be updated. Resolve the duplicate name first, or make the '
+    + 'changes in separate edits.',
+}
+
+const DELETE_KEEPS_VALUES = 'or delete the property definition; the values blocks '
+  + 'hold under it stay.'
+/** Under version skew a definition that fails here works on a newer device, and
+ *  deleting it deletes it there too — so updating comes first wherever it can
+ *  help. */
+const UPDATE_FIRST = `Update the plugin or the app on this device and try again, ${DELETE_KEEPS_VALUES}`
+
+const CURRENT_TYPE_UNAVAILABLE: Record<UnbuildableCause, {
+  problem: (type: string) => string
+  wayOut: string
+}> = {
+  'no-preset': {
+    problem: () => 'it has no type set',
+    wayOut: `Delete the property definition instead; the values blocks hold under it stay.`,
   },
-  contested: {
-    code: 'property.definition-change.contested',
-    message:
-      'cannot rename or re-type a property definition while another definition '
-      + 'claims one of the names involved: which of them the property answers '
-      + 'to afterwards is not this edit\'s to decide, so the blocks using it '
-      + 'could not be updated. Resolve the duplicate name first, or make the '
-      + 'changes in separate edits.',
+  'preset-not-loaded': {
+    problem: type => `its type ${type}comes from a plugin, or a newer version of the `
+      + 'app, that is not loaded on this device',
+    wayOut: `Enable that plugin or update the app on this device and try again, ${
+      DELETE_KEEPS_VALUES}`,
+  },
+  'config-unreadable': {
+    problem: type => `the stored settings of its type ${type}cannot be read on this device`,
+    wayOut: UPDATE_FIRST,
+  },
+  'build-failed': {
+    problem: type => `its type ${type}fails to build on this device`,
+    wayOut: UPDATE_FIRST,
   },
 }
 
-/** Refusing every definition rename and re-type for as long as the
- *  cell-to-children backfill holds this workspace's claim (#1029).
+/** Only the codec that WROTE a value child can say what it holds — the JSON
+ *  `"x"` and the three-character string `"x"` are the same text (#1055), and
+ *  one member row of a list reads like a scalar's only row (#1090). So the
+ *  message offers making that codec available where that is possible, or
+ *  deleting the definition — never a re-type, which this same refusal would
+ *  stop (#1077). */
+const currentTypeUnavailableRefusal = (
+  name: string,
+  presetId: string,
+  cause: UnbuildableCause,
+): Refusal => {
+  const {problem, wayOut} = CURRENT_TYPE_UNAVAILABLE[cause]
+  return {
+    code: 'property.definition-change.current-type-unavailable',
+    message:
+      `cannot rename or re-type property "${name}": `
+      + `${problem(presetId ? `"${presetId}" ` : '')}, so the blocks using it `
+      + `could not be updated to match. ${wayOut}`,
+  }
+}
+
+/** Refusing every definition rename and re-type, and every rename or revival
+ *  that leaves a name shared, for as long as the cell-to-children backfill
+ *  holds this workspace's claim (#1029).
  *
  *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with the pass's
  *  own report of a claim held elsewhere, so an operator who meets both does not
@@ -294,9 +343,24 @@ const MIGRATION_RUNNING_REFUSAL = {
   code: 'property.definition-change.migration-running',
   message:
     'The properties migration is running on this workspace, so a property '
-    + 'definition cannot be renamed or given a different type yet: blocks it has '
-    + 'not reached still hold this property under its current name, and it would '
-    + `never convert them. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+    + 'definition cannot be renamed, given a different type, or restored under a '
+    + 'name another definition holds yet: blocks it has not reached still hold '
+    + 'this property under its current name, and it would never convert them. '
+    + `Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+} as const
+
+/** Refusing to let a renamed or revived definition answer to a name another
+ *  definition holds while either of them has consumers. Two claimants are a
+ *  state the registry models — it publishes the OLDER one — but entering it
+ *  here would hand the newer definition's consumers to the older: their cells
+ *  read through its codec, and the next write by name grows a field row for
+ *  it beside theirs. Two unused definitions may still share a name. */
+const SHARED_NAME_REFUSAL = {
+  code: 'property.definition-change.shared-name',
+  message:
+    'cannot give a property definition a name another definition already '
+    + 'answers to while blocks use either of them: the blocks would be read '
+    + 'through whichever definition is older. Rename or delete one of them first.',
 } as const
 
 type CollectedChanges =
@@ -308,7 +372,14 @@ type CollectedChanges =
        *  each leaves consumers holding values in an encoding the registry will
        *  not be reading them with, so the caller refuses the transaction once
        *  any of them has a consumer. */
-      readonly unfanoutable: ReadonlyArray<{fieldId: string; reason: RefusalReason}>
+      readonly unfanoutable: readonly HeldChange[]
+      /** Every claimant of a name that an EXISTING definition arrives at — by
+       *  rename or revival — and that more than one definition will hold once
+       *  the tx commits. The registry ranks claimants oldest first, so the
+       *  arrival can become the definition the incumbent's consumers are read
+       *  and written through; the caller refuses once any of them has a
+       *  consumer. */
+      readonly sharedNameClaimants: readonly string[]
     }
 
 interface DefinitionChange {
@@ -323,9 +394,8 @@ interface DefinitionChange {
   /** The codec the definition was PUBLISHING, which is what says what a stored
    *  value child HOLDS — the schema `convertValueChildContent` re-spells FROM,
    *  and what tells a value this edit takes away from one that was already
-   *  unreadable. `null` when the before row's preset does not build, where
-   *  nothing records the stored encoding. */
-  readonly beforeSchema: AnyPropertySchema | null
+   *  unreadable. A change whose before row builds none is held instead. */
+  readonly beforeSchema: AnyPropertySchema
   /** The stored ENCODING may now differ, so value-child content is rewritten.
    *  False for a pure rename, where the encoding is untouched and the stored
    *  text is already what this codec writes. */
@@ -342,9 +412,9 @@ const collectChanges = (
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
 ): CollectedChanges => {
-  // Pass 1: candidate changes (name or codec inputs differ, after row builds).
+  // Pass 1: candidate changes (name or codec inputs differ, both rows build).
   const candidates: DefinitionChange[] = []
-  const unfanoutable: Array<{fieldId: string; reason: RefusalReason}> = []
+  const unfanoutable: HeldChange[] = []
   /** Any name this tx touches — enough to ask whether the WORKSPACE can be
    *  judged at all, which is not a question about the name. */
   let probeName: string | null = null
@@ -373,19 +443,11 @@ const collectChanges = (
     // peer claims the name it vacates, and one re-typing in place is refused
     // because it is not the head claimant of the name it keeps — and asking the
     // resolver "does this fieldId resolve" instead would conflate shadowing
-    // with having no buildable codec, which is the repair case below and must
-    // NOT be skipped.
+    // with having no buildable codec, which is held below with a refusal of
+    // its own.
     // Off the block's own rows, never the registry, whose tx-start snapshot is
     // at-or-older than `before` — a change an earlier tx already fanned out
     // would read as this one's and be re-encoded against the wrong before-state.
-    //
-    // Nothing asks whether the BEFORE row built a codec to DETECT a change,
-    // because detection is a function of the two properties compared here: a
-    // definition whose broken preset has just been fixed already reports its
-    // inputs as changed. The old codec is carried for the CONVERSION, as the
-    // only record of what encoding the stored text is in, and `null` there
-    // costs the value route rather than the change — the text route still
-    // answers.
     //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
@@ -398,37 +460,42 @@ const collectChanges = (
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
     if (!renamed && !encodingChanged) continue
+    probeName ??= afterMeta.name
+    // Above the destination's check: with no codec for what is stored, no
+    // destination would let this change land, so the way out to name is the
+    // one that does.
+    const beforeBuild = definitionSchema(before, ctx.valuePresets, beforeMeta)
+    if (beforeBuild.schema === null) {
+      // The cause decides only the way out offered, never whether to refuse.
+      const presetId = before.properties[presetIdProp.name]
+      unfanoutable.push({
+        fieldId: after.id,
+        refusal: currentTypeUnavailableRefusal(
+          beforeMeta.name, typeof presetId === 'string' ? presetId : '', beforeBuild.cause),
+      })
+      continue
+    }
+    const beforeSchema = beforeBuild.schema
     const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     if (afterSchema === null) {
       // This tx leaves the row naming a codec that does not build, so nothing
       // here can reproject a single cell — and the row is the ONLY durable
-      // record of what encoding its consumers are in. Whether the OLD preset
-      // built is beside the point: the edit overwrites that record either way,
-      // and the destination preset can arrive later with no definition-row
-      // transaction at all — an extension registering, a code fix — at which
-      // point the registry publishes its codec straight over values nothing
-      // re-encoded. Held for the caller, which refuses if it has consumers.
-      //
-      // Repairing a broken definition is unaffected: a preset that BUILDS is
-      // not this branch, and with no old codec to read the value with,
-      // re-encoding falls to the child's TEXT. What is refused is trading one
-      // unavailable preset for another.
-      unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
-      probeName ??= afterMeta.name
+      // record of what encoding its consumers are in. The destination preset
+      // can arrive later with no definition-row transaction at all — an
+      // extension registering, a code fix — at which point the registry
+      // publishes its codec straight over values nothing re-encoded. Held for
+      // the caller, which refuses if it has consumers.
+      unfanoutable.push({fieldId: after.id, refusal: UNBUILDABLE_REFUSAL})
       continue
     }
-    probeName ??= afterMeta.name
     candidates.push({
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
       schema: afterSchema,
-      beforeSchema: buildSchemaOrNull(before, ctx.valuePresets, beforeMeta),
+      beforeSchema,
       encodingChanged,
     })
-  }
-  if (candidates.length === 0 && unfanoutable.length === 0) {
-    return {changes: [], unfanoutable}
   }
   // ONE derivation of what this tx does to names, read off the ROWS: every
   // definition it touches either keeps the name the tx-start registry files it
@@ -441,6 +508,13 @@ const collectChanges = (
   // which is the state the refusal has to be judged against.
   const released = new Set<string>()
   const arrivingByName = new Map<string, string[]>()
+  /** Names an EXISTING user definition arrives at. A CREATED row is its
+   *  writer's to police: `addSchema` refuses a claimed name, and seed
+   *  materialization arrives where its own seed already claims. A seed row is
+   *  skipped for that reason too — its declaration claims the name while the
+   *  row is down, so a revival joins nobody. Defence in depth: no local edit
+   *  puts a user definition on a seed's name. */
+  const reclaimedNames = new Set<string>()
   for (const {before, after} of changedRows) {
     const beforeMeta = before !== null && !before.deleted
       ? parsePropertyDefinitionMetadata(before)
@@ -457,14 +531,17 @@ const collectChanges = (
       const arriving = arrivingByName.get(afterMeta.name) ?? []
       arriving.push(after!.id)
       arrivingByName.set(afterMeta.name, arriving)
+      if (before !== null && afterMeta.seedKey === undefined) reclaimedNames.add(afterMeta.name)
     }
   }
-  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
+  // An arrival is judged against names too, so a revival needs the registry
+  // as much as a change does.
+  for (const name of reclaimedNames) probeName ??= name
+  if (probeName === null) return {changes: [], unfanoutable, sharedNameClaimants: []}
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName) === null) {
     return 'unjudgeable'
   }
-  // Pass 2: hold every change whose destination or vacated name another
-  // definition also claims — see `contestedChanges` for the two halves.
-  const contested = contestedChanges(candidates, (name) => {
+  const claimOf = (name: string): NameClaim | null => {
     const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
     return atTxStart === null
       ? null
@@ -472,9 +549,22 @@ const collectChanges = (
         holding: atTxStart.filter(fieldId => !released.has(fieldId)),
         arriving: arrivingByName.get(name) ?? [],
       }
-  })
+  }
+  const sharedNameClaimants = new Set<string>()
+  for (const name of reclaimedNames) {
+    // Past the probe: the registry is per workspace, so every name has a claim.
+    const claim = claimOf(name)!
+    const claimants = new Set([...claim.holding, ...claim.arriving])
+    if (claimants.size > 1) for (const fieldId of claimants) sharedNameClaimants.add(fieldId)
+  }
+  if (candidates.length === 0 && unfanoutable.length === 0) {
+    return {changes: [], unfanoutable, sharedNameClaimants: [...sharedNameClaimants]}
+  }
+  // Pass 2: hold every change whose destination or vacated name another
+  // definition also claims — see `contestedChanges` for the two halves.
+  const contested = contestedChanges(candidates, claimOf)
   for (const candidate of contested) {
-    unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
+    unfanoutable.push({fieldId: candidate.fieldId, refusal: CONTESTED_REFUSAL})
   }
   // Defence in depth, and unpinnable through the public path: a contested
   // change either has a consumer, and then the caller refuses the whole tx, or
@@ -485,6 +575,7 @@ const collectChanges = (
   return {
     changes: candidates.filter(candidate => !refused.has(candidate.fieldId)),
     unfanoutable,
+    sharedNameClaimants: [...sharedNameClaimants],
   }
 }
 
@@ -494,8 +585,9 @@ const collectChanges = (
  *  throw would take their entire edit down. */
 export const FIELD_PROBE_CHUNK = 500
 
-/** Parents holding a live field row for any of `fieldIds` — and the only gate
- *  this pass has.
+/** Live parents holding a live field row for any of `fieldIds` — the fan-out's
+ *  gate, and what it walks. The refusals ask the wider
+ *  {@link anyBlockHoldsFieldRowFor}.
  *
  *  Deliberately NOT `isPropertyChildBackedWorkspace`. That flag lives on the
  *  workspace ROW, which syncs like any other, so a device lagging on it reads
@@ -523,20 +615,115 @@ export const consumingParentIds = async (
   const set = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    // §9 selection discipline: field-row discovery keys on the BIT plus the
-    // target (an unmarked `((fieldId))` link row is not a consumer), and
-    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
-    // not a field row (§9 root half) — never re-key it.
     const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
-          AND is_field_form = 1
-          AND deleted = 0 AND parent_id IS NOT NULL`,
+      `SELECT DISTINCT field.parent_id FROM ${consumingParentsFromSql(chunk.length)}`,
       [workspaceId, ...chunk],
     )
     for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
   }
   return [...set]
+}
+
+/** §9 selection discipline: field-row discovery keys on the BIT plus the
+ *  target (an unmarked `((fieldId))` link row is not a consumer), and
+ *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
+ *  a field row (§9 root half) — never re-key it. Every field-row question this
+ *  pass asks starts here. */
+const fieldRowsFromSql = (targetCount: number): string =>
+  `blocks field
+    WHERE field.workspace_id = ?
+      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+      AND field.is_field_form = 1
+      AND field.deleted = 0 AND field.parent_id IS NOT NULL`
+
+/** The OWNER must be live too, and that is the half a `deleted = 0` on the
+ *  field row does not cover: a soft-deleted block can still own live field
+ *  rows. Its bag is history and re-keying it is declined — the live set is
+ *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
+ *  usage, so re-keying it would put an unbounded write in the user's own
+ *  transaction, and #1023 fixes the restore case where it belongs, at
+ *  restore. Asked HERE rather than skipped during the walk, so that the
+ *  COUNT excludes them as well: on a graph with a long delete history that
+ *  number is what decides whether the user is asked at all, and it must not
+ *  promise blocks the change will pass over.
+ *
+ *  Spelled once because two callers ask the same question for one gesture:
+ *  {@link countConsumingParents} sizes the fan-out for the confirmation, and
+ *  {@link consumingParentIds} then walks it. A drifted copy would show the
+ *  user a number that is not the work they consented to. */
+const consumingParentsFromSql = (targetCount: number): string =>
+  `${fieldRowsFromSql(targetCount)}
+      AND EXISTS (
+        SELECT 1 FROM blocks owner
+         WHERE owner.id = field.parent_id AND owner.deleted = 0
+      )`
+
+/** Whether any block holds a live field row for one of `fieldIds`, a DELETED
+ *  owner included — the question the contested and shared-name refusals ask,
+ *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
+ *  cost bound, not independence from the definition: while its field rows are
+ *  live they still bind it by id, and a restore brings it back reading
+ *  whatever the name resolves to then.
+ *
+ *  Only that shape: a subtree delete tombstones the field rows with the owner,
+ *  so a block deleted through the UI is not counted here, and a later restore
+ *  of it is #1023's to reconcile. */
+export const anyBlockHoldsFieldRowFor = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<boolean> => {
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const row = await db.getOptional<{held: number}>(
+      `SELECT 1 AS held FROM ${fieldRowsFromSql(chunk.length)} LIMIT 1`,
+      [workspaceId, ...chunk],
+    )
+    if (row !== null) return true
+  }
+  return false
+}
+
+/** Which of `fieldIds` any block holds a live field row for — the same rows,
+ *  deleted owners included, that {@link anyBlockHoldsFieldRowFor} asks about,
+ *  answered per definition for a caller that must say WHICH one holds a
+ *  transaction up. */
+export const fieldIdsHeldByAnyBlock = async (
+  db: Pick<SameTxCtx['db'], 'getAll'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<Set<string>> => {
+  const held = new Set<string>()
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const rows = await db.getAll<{reference_target_id: string}>(
+      `SELECT DISTINCT field.reference_target_id FROM ${fieldRowsFromSql(chunk.length)}`,
+      [workspaceId, ...chunk],
+    )
+    for (const row of rows) held.add(row.reference_target_id)
+  }
+  return held
+}
+
+/** How many parents a change to ONE definition would re-key.
+ *
+ *  Single definition rather than the set {@link consumingParentIds} takes: a
+ *  count across several needs that function's cross-chunk `Set` to avoid
+ *  double-counting a parent consuming two of them, and no caller has that
+ *  question — a gesture edits one definition row. */
+export const countConsumingParents = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldId: string,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(
+    `SELECT COUNT(DISTINCT field.parent_id) AS count
+       FROM ${consumingParentsFromSql(1)}`,
+    [workspaceId, fieldId],
+  )
+  return row?.count ?? 0
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -551,13 +738,9 @@ export const consumingParentIds = async (
  *
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
- *  projection drops the difference whether or not this edit happens. The one
- *  exception is a definition whose previous preset does not BUILD, where
- *  nothing can read the children at all; {@link heldValueCount} owns what is
- *  countable there and why it is deliberately weak. */
+ *  projection drops the difference whether or not this edit happens. */
 const valuesLostBy = (
   change: DefinitionChange,
-  parent: BlockData,
   perFieldRow: readonly (readonly BlockData[])[],
   projected: unknown,
 ): number => {
@@ -566,47 +749,12 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  const after = projectedValueCount(change.schema, projected)
-  return Math.max(0, heldValueCount(change, parent, perFieldRow, after) - after)
-}
-
-/** How many values the property held BEFORE this change, at the same grain
- *  {@link projectedValueCount} answers in — or, where nothing can read the
- *  children, the most this can claim it held without inventing a loss. */
-const heldValueCount = (
-  change: DefinitionChange,
-  parent: BlockData,
-  perFieldRow: readonly (readonly BlockData[])[],
-  after: number,
-): number => {
-  if (change.beforeSchema !== null) {
-    return projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
-      change.beforeSchema,
-      unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
-        .map(value => value.content),
-    ))
-  }
-  // No old codec, so this number has to be a LOWER bound on what was held or
-  // its slack becomes a phantom loss, and nothing available here measures one
-  // tightly. The cell's LENGTH is an upper bound, because the cell cannot say
-  // arity — an array is N members of a list, or ONE value of a scalar holding
-  // an array. The ROW COUNT is another, because a peer or a duplicate field
-  // row was never in the cell while a row this device has not received is
-  // missing from it. Combining two upper bounds does not make a lower one.
-  //
-  // `null` is likewise unreadable at this grain: the cleared sentinel and a
-  // real JSON null are the same bytes, and only the codec that wrote them
-  // could say which. Counted as a value, because over-refusing costs a
-  // repair while under-counting deletes one.
-  //
-  // So the claim is the weakest sound one: a loss only where the projection
-  // comes out EMPTY over a cell that held anything. It misses a narrowing
-  // that keeps one member (#1090) and it refuses a repair over a genuinely
-  // cleared value (#1077), and both are the same gap — counting this needs
-  // the children rebuilt FROM the cell rather than guessed at.
-  const held = parent.properties[change.oldName]
-  if (held === undefined) return 0
-  return after > 0 ? 0 : 1
+  const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
+    change.beforeSchema,
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
+      .map(value => value.content),
+  ))
+  return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
 
 /** Apply every change that owns a field row under ONE parent, in one cell write.
@@ -630,14 +778,10 @@ const applyToParent = async (
   lostParents: Set<string>,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
-  // A soft-deleted parent can still own live field rows, so the query that
-  // found it does return one. Skipped by choice, not by necessity — `tx.update`
-  // accepts a tombstone: a deleted block's bag is history, and the live set is
-  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
-  // usage, so re-keying it would put an unbounded write in the user's own
-  // transaction. The cost is that restoring such a block revives it under the
-  // old key; #1023 fixes that where it belongs, at restore.
-  if (parent === null || parent.deleted) return
+  // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
+  // one place that decides what a consumer is — so this is only the row
+  // vanishing between the probe and here.
+  if (parent === null) return
   const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
   // Collected across EVERY change, then applied in two phases below — see the
@@ -726,7 +870,7 @@ const applyToParent = async (
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
       .map(value => value.content)
     const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
-    const lost = valuesLostBy(change, parent, perFieldRow, projected)
+    const lost = valuesLostBy(change, perFieldRow, projected)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
       lostParents.add(parentId)
@@ -795,13 +939,13 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         {workspaceId: event.workspaceId},
       )
     }
-    const {changes, unfanoutable} = collected
-    // ABOVE the refusal below and above the two dormancy returns under it: every
-    // one of those consults `consumingParentIds`, which sees FIELD ROWS, and the
-    // hazard here is a consumer that has none. The runbook flips before
-    // backfilling, so a chunked backfill's un-reached parents hold cells for
-    // this definition and no field row — which makes a definition with NO field
-    // rows the WORST case rather than an exempt one.
+    const {changes, unfanoutable, sharedNameClaimants} = collected
+    // ABOVE the refusal below and above the two dormancy returns under it:
+    // every one of those asks about FIELD ROWS, and the hazard here is a
+    // consumer that has none. The runbook flips before backfilling, so a
+    // chunked backfill's un-reached parents hold cells for this definition and
+    // no field row — which makes a definition with NO field rows the WORST
+    // case rather than an exempt one.
     //
     // Permanent rather than late, and NOT because later batches stop resolving
     // the old name — the pass holds ONE resolver for its whole run (see where
@@ -813,20 +957,28 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // `json_each` scan over the workspace's bags inside the user's own editing
     // transaction (#1029).
     //
-    // These two lists PARTITION the renames and re-types this tx makes — every
-    // candidate ends in exactly one of them — so together they answer "does
-    // this transaction change a definition at all", which is the question here.
-    // Reading them is sound only while that holds: a change dropped into
-    // NEITHER would commit its new name with its consumers unreached and this
-    // gate would not even look. #1028 made the contested ones held rather than
-    // dropped, which closed the last such path.
+    // The first two lists PARTITION the renames and re-types this tx makes —
+    // every candidate ends in exactly one of them — and the third is non-empty
+    // exactly when an arrival leaves a name with a second claimant, which is
+    // the shared-name refusal's question and needs field rows as much. So
+    // together they answer "does this transaction change what a name resolves
+    // to", which is the question here. Reading them is sound only while that
+    // holds: a change dropped into NONE would commit with its consumers
+    // unreached and this gate would not even look. #1028 made the contested
+    // ones held rather than dropped, which closed the last such path.
     //
-    // What the gate keeps out is the writes that are not a rename or a re-type
-    // at all — a CREATE has no before row, and neither an unrelated bag edit
-    // nor the materializer's own field-row bookkeeping survives
-    // `collectChanges`. That is what lets the migration gesture mint its orphan
-    // definitions while holding its own claim.
-    if (changes.length > 0 || unfanoutable.length > 0) {
+    // What the gate keeps out is the writes that change no name's meaning — a
+    // CREATE has no before row, a revival onto a free name hands its consumers
+    // to nobody else, and neither an unrelated bag edit nor the materializer's
+    // own field-row bookkeeping survives `collectChanges`. That is what lets
+    // the migration gesture mint its orphan definitions while holding its own
+    // claim.
+    const touched = [
+      ...changes.map(change => change.fieldId),
+      ...unfanoutable.map(held => held.fieldId),
+      ...sharedNameClaimants,
+    ]
+    if (touched.length > 0) {
       // The TRANSACTION's own view, like every other read here. The claim is
       // synced data, so a peer device holding the row refuses too.
       if (await isGraphBackfillClaimActive(
@@ -834,39 +986,51 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )) {
         throw new ProcessorRejection(
           MIGRATION_RUNNING_REFUSAL.message, MIGRATION_RUNNING_REFUSAL.code,
-          {
-            workspaceId: event.workspaceId,
-            fieldIds: [...changes.map(change => change.fieldId),
-                       ...unfanoutable.map(held => held.fieldId)],
-          },
+          {workspaceId: event.workspaceId, fieldIds: touched},
         )
       }
     }
     if (unfanoutable.length > 0) {
-      // Only a change with CONSUMERS strands anything; one on an unused
-      // definition is the user's to make, and telling them to fix something
-      // first would be friction for nothing.
-      const stranded = await consumingParentIds(
+      // Only a change with CONSUMERS strands anything of its own; one on an
+      // unused definition is the user's to make, and telling them to fix
+      // something first would be friction for nothing. Asked as widely as the
+      // other refusals — a deleted owner still binds the definition by its
+      // field rows — and per definition, so the refusal is named for the first
+      // held change that has consumers: an unused one ahead of it would pass
+      // alone, and its way out would not be this edit's. The consumers of a
+      // definition it would SHARE a name with are the next check's.
+      const consumed = await fieldIdsHeldByAnyBlock(
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
-      if (stranded.length > 0) {
-        // Named for the first reason held, per `REFUSALS`.
-        const {code, message} = REFUSALS[unfanoutable[0]!.reason]
+      const blocking = unfanoutable.find(held => consumed.has(held.fieldId))
+      if (blocking !== undefined) {
+        // ONE refusal per transaction, whichever is found first — the user
+        // fixes one at a time either way, and a combined message would
+        // describe a state that no longer exists after the first fix.
+        const {code, message} = blocking.refusal
         throw new ProcessorRejection(
           message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
       }
+    }
+    if (sharedNameClaimants.length > 0 && await anyBlockHoldsFieldRowFor(
+      ctx.db, event.workspaceId, sharedNameClaimants,
+    )) {
+      throw new ProcessorRejection(
+        SHARED_NAME_REFUSAL.message, SHARED_NAME_REFUSAL.code,
+        {fieldIds: sharedNameClaimants},
+      )
     }
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(
       ctx.db, event.workspaceId, changes.map(c => c.fieldId),
     )
     if (parentIds.length === 0) return
-    // This tx PARSED each changing definition's row, so its field rows are
-    // recognized without asking the resolver — which would answer
-    // `definition-unavailable` for exactly the one being repaired, and its
-    // consumers are the ones the repair exists to reach. Every OTHER fieldId
-    // encountered walking a parent's children is the resolver's to classify.
+    // This tx PARSED and BUILT each changing definition's row, so its field
+    // rows are recognized without asking the resolver — whose tx-start registry
+    // can still answer `definition-unavailable` for it while the projector has
+    // not yet rebuilt after its preset loaded. Every OTHER fieldId encountered
+    // walking a parent's children is the resolver's to classify.
     const changing = new Set(changes.map(change => change.fieldId))
     const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
       changing.has(fieldId)
@@ -875,10 +1039,20 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     const lostByField = new Map<string, number>()
     const lostParents = new Set<string>()
+    const changingFieldIds = changes.map(change => change.fieldId)
+    let done = 0
     for (const parentId of parentIds) {
       await applyToParent(
         ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
       )
+      done += 1
+      // No-op unless a gesture's run is open. The first report replaces
+      // 'Starting…', every stride moves the bar, and the last keeps a total
+      // that is not a multiple of the stride from sitting short while the
+      // transaction commits.
+      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
+        reportPropertyDefinitionFanout(changingFieldIds, done, parentIds.length)
+      }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
     // above rolls back with the definition row, so the graph is left exactly as
@@ -891,7 +1065,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // projected until something reprojects it, and then the value is gone with
     // no record of what it was, which is #1024.
     //
-    // One refusal per transaction, per `REFUSALS`. The property is named by the
+    // One refusal per transaction, as for the held changes. The property is named by the
     // name it STILL ANSWERS TO after the rollback, never the one this tx tried
     // to give it, and the blocks ride on `meta` so a surface can offer them:
     // "fix those values" is not actionable without them.

@@ -6,8 +6,8 @@ import {
   parseRoamImportReferences,
   planImport,
 } from '../plan'
-import { roamBlockId } from '../ids'
-import { dailyNoteBlockId } from '@/plugins/daily-notes'
+import { roamBlockId } from '../blockIds'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
