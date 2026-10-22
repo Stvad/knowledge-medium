@@ -7,6 +7,7 @@ export declare const BUILD_ARGS: readonly string[]
 export interface DistPackage {
   dir: string
   buildInfo: string
+  extraOutputs?: readonly string[]
 }
 export declare const DIST_PACKAGES: readonly DistPackage[]
 

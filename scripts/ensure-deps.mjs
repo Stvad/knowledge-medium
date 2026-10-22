@@ -40,9 +40,16 @@ export const BUILD_ARGS = ['run', 'compile:packages']
  * tsBuildInfoFile: `tsc -b` rewrites it on every build, including one that
  * only refreshes timestamps, so sources are compared against it — an output
  * keeps its old mtime when a rebuild changes nothing, and would never settle.
+ * `extraOutputs` are outputs the manifest does not name: `compile:post`
+ * deletes the kernel-types tree before rebuilding it and writes `assets.d.ts`
+ * last, so a failed or interrupted run leaves that file absent.
  */
 export const DIST_PACKAGES = [
-  { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
+  {
+    dir: 'packages/agent-cli',
+    buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo',
+    extraOutputs: ['dist/kernel-types/assets.d.ts'],
+  },
   { dir: 'packages/agent-dispatch', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
 ]
 
@@ -67,14 +74,15 @@ export const readDepsState = root => {
 
 const stringLeaves = value => (typeof value === 'string' ? [value] : Object.values(value ?? {}).flatMap(stringLeaves))
 
-/** Whether any file the package's manifest promises — a bin or an export — is absent. */
-const outputsMissing = pkgDir => {
+/** Whether any output is absent: a bin or export the manifest promises, or one of `extraOutputs`. */
+const outputsMissing = (pkgDir, extraOutputs = []) => {
   const { bin, exports } = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
-  return [...stringLeaves(bin), ...stringLeaves(exports)].some(output => !existsSync(join(pkgDir, output)))
+  return [...stringLeaves(bin), ...stringLeaves(exports), ...extraOutputs].some(output => !existsSync(join(pkgDir, output)))
 }
 
 const newestInput = pkgDir => {
-  let newest = mtimeOf(join(pkgDir, 'tsconfig.json')) ?? 0
+  // Under NodeNext the manifest's `type` decides the emitted module format.
+  let newest = Math.max(...['tsconfig.json', 'package.json'].map(file => mtimeOf(join(pkgDir, file)) ?? 0))
   for (const entry of readdirSync(join(pkgDir, 'src'), { recursive: true, withFileTypes: true })) {
     if (entry.isFile()) newest = Math.max(newest, mtimeOf(join(entry.parentPath, entry.name)) ?? 0)
   }
@@ -91,7 +99,7 @@ export const staleDist = root =>
   DIST_PACKAGES.flatMap(pkg => {
     const dir = join(root, pkg.dir)
     if (!existsSync(join(dir, 'src'))) return []
-    if (outputsMissing(dir)) return [{ dir: pkg.dir, reason: 'missing' }]
+    if (outputsMissing(dir, pkg.extraOutputs)) return [{ dir: pkg.dir, reason: 'missing' }]
     return newestInput(dir) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
       ? [{ dir: pkg.dir, reason: 'outdated' }]
       : []

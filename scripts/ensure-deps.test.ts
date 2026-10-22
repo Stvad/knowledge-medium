@@ -71,7 +71,7 @@ const writeFreshDist = (root: string) => {
     write(join(root, pkg.dir, 'package.json'), JSON.stringify(MANIFEST), T0)
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
     write(join(root, pkg.dir, 'src', 'index.ts'), 'export {}\n', T0)
-    for (const out of OUTPUTS) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
+    for (const out of [...OUTPUTS, ...(pkg.extraOutputs ?? [])]) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
 }
@@ -128,7 +128,7 @@ if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
     const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
       .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
     if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
-    for (const out of [...${JSON.stringify(OUTPUTS)}, pkg.buildInfo]) {
+    for (const out of [...${JSON.stringify(OUTPUTS)}, ...(pkg.extraOutputs ?? []), pkg.buildInfo]) {
       fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
       fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
     }
@@ -193,9 +193,20 @@ describe('staleDist', () => {
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
   })
 
-  it.each(['src/nested/deep.ts', 'tsconfig.json'])('reports a dist older than its input %s', input => {
+  it('reports a dist missing an output its build writes beyond the manifest', () => {
     const root = makeCheckout()
-    write(join(root, pkg.dir, input), 'changed\n', T0 + 20)
+    const [withExtra] = DIST_PACKAGES.filter(p => p.extraOutputs?.length)
+    rmSync(join(root, withExtra.dir, withExtra.extraOutputs![0]))
+    expect(staleDist(root)).toEqual([{ dir: withExtra.dir, reason: 'missing' }])
+  })
+
+  it.each([
+    ['src/nested/deep.ts', 'changed\n'],
+    ['tsconfig.json', '{}\n'],
+    ['package.json', JSON.stringify(MANIFEST)],
+  ])('reports a dist older than its input %s', (input, content) => {
+    const root = makeCheckout()
+    write(join(root, pkg.dir, input), content, T0 + 20)
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'outdated' }])
   })
 
