@@ -18,5 +18,5 @@ export declare const acquireSlot: (options: {
   signal?: AbortSignal
   log?: (line: string) => void
 }) => Promise<Slot | null>
-export declare const failingTestFiles: (output: string) => string[]
+export declare const clearStaleSlot: (path: string, scratch: string) => void
 export declare const loadVerdict: (failed: string[], rerun: { code: number | null; output: string }) => string

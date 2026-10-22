@@ -2,11 +2,12 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { availableParallelism, loadavg } from 'node:os'
 import { basename, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { extractFailingFiles } from './fuzz.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
@@ -48,8 +49,9 @@ const DEFAULT_SLOTS = 2
 // The cap may cost a gate latency, never progress: past this it runs anyway.
 const SLOT_WAIT_MS = 15 * 60_000
 const SLOT_POLL_MS = 2_000
-// Re-running more failing files than this alone costs about what the suite does.
-const RERUN_MAX_FILES = 50
+// Re-running more failing files than this, one at a time, costs about what the
+// suite does.
+const RERUN_MAX_FILES = 25
 
 const running = new Set()
 
@@ -188,16 +190,32 @@ const tryLink = (from, to) => {
   }
 }
 
+// Moves a stale record aside rather than deleting it: by now the waiter that
+// read the dead holder may be looking at a record a faster waiter put there,
+// and that one goes back.
+export const clearStaleSlot = (path, scratch) => {
+  try {
+    renameSync(path, scratch)
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  const moved = readHolder(scratch)
+  if (moved && pidAlive(moved.pid)) tryLink(scratch, path)
+  rmSync(scratch, {force: true})
+}
+
 // A slot is a file naming its holder, published whole by hard-linking a
 // finished record: link refuses an existing name, so two gates cannot both take
-// a free slot and no reader sees a half-written one. Accepted: two waiters that
-// read the same dead holder can both reclaim, putting one gate over the cap; a
-// dead holder whose pid is reused keeps its slot until the wait runs out.
+// a free slot and no reader sees a half-written one. Accepted: a waiter linking
+// between another's move and put-back leaves the moved holder running
+// uncounted, one gate over the cap; a dead holder whose pid is reused keeps its
+// slot until the wait runs out.
 const takeSlot = (path, record) => {
   if (tryLink(record, path)) return {taken: true}
   const holder = readHolder(path)
   if (holder && pidAlive(holder.pid)) return {taken: false, holder}
-  rmSync(path, {force: true})
+  clearStaleSlot(path, `${record}.stale`)
   if (tryLink(record, path)) return {taken: true, reclaimed: holder}
   return {taken: false, holder: readHolder(path)}
 }
@@ -264,9 +282,12 @@ const git = args => execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore
 // Never fails the gate: a cap it cannot set up is a cap it runs without. A
 // gate that dies holding a slot frees it by dying (see takeSlot).
 const takeGateSlot = async signal => {
-  const slots = Number.parseInt(process.env[SLOTS_ENV], 10) || DEFAULT_SLOTS
+  const configured = Number.parseInt(process.env[SLOTS_ENV], 10)
+  const slots = configured > 0 ? configured : DEFAULT_SLOTS
   try {
     // The common dir, not the worktree's own: one cap for every worktree.
+    // Separate clones each get their own; accepted, as sessions here are
+    // worktrees of one clone.
     const dir = process.env.KM_CHECK_SLOT_DIR
       || join(git(['rev-parse', '--path-format=absolute', '--git-common-dir']), 'check-slots')
     const holder = {
@@ -282,16 +303,10 @@ const takeGateSlot = async signal => {
   }
 }
 
-// Vitest's failure summary, in its default and agent reporters alike, opens
-// each failure with ` FAIL  <file> > <test>`, or ` FAIL  <file> [ <file> ]` for
-// a file that failed to load.
-export const failingTestFiles = output =>
-  [...new Set(Array.from(output.matchAll(/^ FAIL {2}(\S+) [>[]/gm), match => match[1]))]
-
 // `rerun` is the failing files' second run, alone. One that fails without
 // naming a file blames all of them: never claim load without a pass to show.
 export const loadVerdict = (failed, rerun) => {
-  const named = failingTestFiles(rerun.output)
+  const named = extractFailingFiles(rerun.output)
   const failedAlone = rerun.code === 0 ? [] : named.length ? named : failed
   const passedAlone = failed.filter(file => !failedAlone.includes(file))
   if (failedAlone.length === 0) return `failed only under load, passed alone: ${passedAlone.join(', ')}`
@@ -302,10 +317,11 @@ export const loadVerdict = (failed, rerun) => {
 const outputText = result => result.output.map(chunk => chunk.text).join('')
 
 // Every file is re-run, not only timed-out ones: a starved `vi.waitFor` fails
-// with its last assertion error, not a timeout. On stdout, beside the last
-// line, for a reader piping through `tail`.
+// with its last assertion error, not a timeout. One file at a time, so a
+// verdict is about that file alone and not the load of the others. On stdout,
+// beside the last line, for a reader piping through `tail`.
 const diagnoseTestFailure = async result => {
-  const failed = failingTestFiles(outputText(result))
+  const failed = extractFailingFiles(outputText(result))
   if (failed.length === 0) {
     console.log('[check] the test task named no failing file; nothing to re-run')
     return
@@ -314,7 +330,7 @@ const diagnoseTestFailure = async result => {
     console.log(`[check] ${failed.length} test files failed; too many to re-run alone`)
     return
   }
-  const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, ...failed]})
+  const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, '--no-file-parallelism', ...failed]})
   if (rerun.canceled) return
   console.log(`[check] verdict: ${loadVerdict(failed, {code: rerun.code, output: outputText(rerun)})}`)
 }

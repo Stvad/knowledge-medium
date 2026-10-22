@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { acquireSlot, failingTestFiles, loadVerdict, type SlotHolder } from './check.mjs'
+import { acquireSlot, clearStaleSlot, loadVerdict, type SlotHolder } from './check.mjs'
 
 // Far past what a pipe holds before the reader takes it: at 200 lines a gate
 // that exits on its own output still delivers all of them, and the test loses
@@ -46,14 +46,15 @@ if (cmd === 'run test' && mode === 'slow') {
   setTimeout(() => appendFileSync(process.env.SHIM_LOG, 'end\\n'), 1500)
 }
 if (cmd === 'run test' && mode === 'mixed') {
-  // The whole suite fails a load-only file and a real one; re-run alone, only
-  // the real one still fails.
-  const failing = files.length ? ['scripts/real.test.ts'] : ['scripts/slow.test.ts', 'scripts/real.test.ts']
+  // The whole suite fails a load-only file and a real one; re-run one file at
+  // a time, only the real one still fails.
+  const alone = files.includes('--no-file-parallelism')
+  const failing = alone ? ['scripts/real.test.ts'] : ['scripts/slow.test.ts', 'scripts/real.test.ts']
   for (const file of failing) process.stdout.write(\` FAIL  \${file} > a test\\nError: boom\\n\`)
   process.exitCode = 1
 }
 if (cmd === 'run test' && mode === 'many' && !files.length) {
-  for (let i = 0; i < 51; i++) process.stdout.write(\` FAIL  scripts/f\${i}.test.ts > a test\\n\`)
+  for (let i = 0; i < 26; i++) process.stdout.write(\` FAIL  scripts/f\${i}.test.ts > a test\\n\`)
   process.exitCode = 1
 }
 if (mode === 'interrupt') {
@@ -159,8 +160,16 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
 
   it('does not re-run more failing files than a suite run would cost', async () => {
     const { out } = await runGate({ SHIM_MODE: 'many' })
-    expect(out).toContain('51 test files failed; too many to re-run alone')
+    expect(out).toContain('26 test files failed; too many to re-run alone')
     expect(out).not.toContain('failing files, alone')
+  }, 30_000)
+
+  it('takes a nonsense slot count as the default', async () => {
+    const dir = tempDir('check-slots-')
+    writeFileSync(slotFile(dir), JSON.stringify(holder()))
+    const { status, out } = await runGate({ KM_CHECK_SLOTS: '-1', KM_CHECK_SLOT_DIR: dir })
+    expect(out).not.toContain('are taken')
+    expect([status, lastLine(out)]).toEqual([0, 'check: PASS'])
   }, 30_000)
 
   it('runs without a slot when it cannot set the cap up', async () => {
@@ -259,6 +268,17 @@ describe('acquireSlot', () => {
     expect(existsSync(slotFile(dir))).toBe(true)
   })
 
+  it('puts back a live holder that a waiter moved aside as stale', () => {
+    writeFileSync(slotFile(dir), JSON.stringify(holder()))
+    clearStaleSlot(slotFile(dir), join(dir, 'scratch'))
+    expect(readdirSync(dir)).toEqual(['slot-0'])
+    expect(JSON.parse(readFileSync(slotFile(dir), 'utf8')).pid).toBe(process.pid)
+  })
+
+  it('leaves a slot another waiter already cleared', () => {
+    expect(() => clearStaleSlot(slotFile(dir), join(dir, 'scratch'))).not.toThrow()
+  })
+
   it('stops waiting when the gate is interrupted', async () => {
     await acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })
     const abort = new AbortController()
@@ -268,10 +288,21 @@ describe('acquireSlot', () => {
   })
 })
 
-describe('failingTestFiles', () => {
-  // Trimmed from a real vitest 4 run: the summary block both its default and
-  // agent reporters print.
-  const output = `
+describe('loadVerdict', () => {
+  const failed = ['a.test.ts', 'b.test.ts']
+
+  it('says the failure was load when every file passes alone', () => {
+    expect(loadVerdict(failed, { code: 0, output: '' })).toBe('failed only under load, passed alone: a.test.ts, b.test.ts')
+  })
+
+  it('names the files that fail alone, and the rest separately', () => {
+    expect(loadVerdict(failed, { code: 1, output: ' FAIL  b.test.ts > it\n' }))
+      .toBe('fails alone too: b.test.ts; passed alone: a.test.ts')
+  })
+
+  // Trimmed from a real vitest 4 run: the summary both its default and agent
+  // reporters print, with a test that failed and a file that failed to load.
+  const summary = `
  ❯ scripts/zz-probe2.test.ts (0 test)
  ❯ scripts/zz-probe.test.ts (3 tests | 2 failed) 108ms
    × times out 105ms
@@ -294,21 +325,9 @@ AssertionError: expected 1 to be 2 // Object.is equality
       Tests  2 failed | 1 passed (3)
 `
 
-  it('names each failing file once, including a suite that failed to load', () => {
-    expect(failingTestFiles(output)).toEqual(['scripts/zz-probe2.test.ts', 'scripts/zz-probe.test.ts'])
-  })
-})
-
-describe('loadVerdict', () => {
-  const failed = ['a.test.ts', 'b.test.ts']
-
-  it('says the failure was load when every file passes alone', () => {
-    expect(loadVerdict(failed, { code: 0, output: '' })).toBe('failed only under load, passed alone: a.test.ts, b.test.ts')
-  })
-
-  it('names the files that fail alone, and the rest separately', () => {
-    expect(loadVerdict(failed, { code: 1, output: ' FAIL  b.test.ts > it\n' }))
-      .toBe('fails alone too: b.test.ts; passed alone: a.test.ts')
+  it('reads the failing files out of a real vitest summary', () => {
+    expect(loadVerdict(['scripts/zz-probe.test.ts', 'scripts/zz-probe2.test.ts', 'a.test.ts'], { code: 1, output: summary }))
+      .toBe('fails alone too: scripts/zz-probe2.test.ts, scripts/zz-probe.test.ts; passed alone: a.test.ts')
   })
 
   it('blames every file when the re-run fails without naming one', () => {
