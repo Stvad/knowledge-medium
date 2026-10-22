@@ -1,1 +1,1 @@
-import{ej as e,tj as t}from"../../chunks/app-DpYsK8s7.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};
+import{ej as e,tj as t}from"../../chunks/app-BiJYchsB.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};
