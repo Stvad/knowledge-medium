@@ -1,1 +1,1 @@
-import{RX as e,zX as t}from"../../chunks/app-B5_fHCP-.js";export{e as Block,t as requireLoadedBlock};
+import{RX as e,zX as t}from"../../chunks/app-CVl7oe7p.js";export{e as Block,t as requireLoadedBlock};
