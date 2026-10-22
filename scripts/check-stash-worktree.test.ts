@@ -16,7 +16,7 @@ import {
   unresolvedTarget,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
+import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -84,6 +84,8 @@ describe('shellSegments', () => {
     expect(shellSegments('git &>> log restore f')).toEqual([['git', 'restore', 'f']])
     expect(shellSegments('echo x >& both.log; ls')).toEqual([['echo', 'x'], ['ls']])
     expect(shellSegments('a > ; b')).toEqual([['a'], ['b']]) // a dangling redirect eats nothing past its segment
+    // as in bash, an unquoted `>` ends the word before it; digits alone are its fd
+    expect(shellSegments('git restore f>/dev/null a2>err 2>x')).toEqual([['git', 'restore', 'f', 'a2']])
   })
 
   it('annotates each segment with its subshell depth', () => {
@@ -98,6 +100,123 @@ describe('shellSegments', () => {
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
+  })
+})
+
+describe('shellCommandsWithDepth', () => {
+  it('keeps a command whole across a substitution, which comes back ahead of it', () => {
+    expect(shellCommandsWithDepth(`git log $(git rev-parse "a)b") --oneline -1`)).toEqual([
+      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1 },
+      { tokens: ['git', 'log', SUBSTITUTED, '--oneline', '-1'], depth: 0 },
+    ])
+    expect(shellCommandsWithDepth('echo "a `date` b" x')).toEqual([
+      { tokens: ['date'], depth: 1 },
+      { tokens: ['echo', `a ${SUBSTITUTED} b`, 'x'], depth: 0 },
+    ])
+    // nested, and one left unclosed
+    expect(shellCommandsWithDepth('echo $(a $(b) c) d').map(s => s.tokens)).toEqual([['b'], ['a', SUBSTITUTED, 'c'], ['echo', SUBSTITUTED, 'd']])
+    expect(shellCommandsWithDepth('echo x $(a').map(s => s.tokens)).toEqual([['a'], ['echo', 'x', SUBSTITUTED]])
+  })
+
+  it("skips a comment and reads $'…' as one span, so an apostrophe opens no quote", () => {
+    expect(shellCommandsWithDepth("# it's done\nls -l # trailing -X GET\necho a#b").map(s => s.tokens)).toEqual([['ls', '-l'], ['echo', 'a#b']])
+    // an escape it does not decode leaves a `$`, marking the word an expansion
+    expect(shellCommandsWithDepth("x=$'don\\'t'; ls").map(s => s.tokens)).toEqual([["x=don$'t"], ['ls']])
+    // shellSegmentsWithDepth reads both as before
+    expect(shellSegments('ls # x')).toEqual([['ls', '#', 'x']])
+  })
+
+  it('cuts out the data of a quoted-delimiter heredoc only', () => {
+    expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
+    expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
+    // a shell reading it runs it, wherever it sits on the line
+    expect(withoutLiteralHeredocs("bash <<'EOF'\nls\nEOF")).toBe("bash <<'EOF'\nls\nEOF")
+    expect(withoutLiteralHeredocs("cat <<'EOF' | sh\nls\nEOF")).toBe("cat <<'EOF' | sh\nls\nEOF")
+    // or a pipe or subshell still open at the newline, whose reader comes after the data
+    for (const cmd of [
+      "cat <<'EOF' |\nls\nEOF\nbash",
+      "cat <<'EOF' | # then a shell\nls\nEOF\nbash",
+      "cat <<'EOF' |&\nls\nEOF\nbash",
+      "true && cat <<'EOF' ||\nls\nEOF\nbash",
+      "(cat <<'EOF'\nls\nEOF\n) | bash",
+    ])
+      expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
+    // a pipe that already has its reader, or a list that ended, leaves nothing pending
+    expect(withoutLiteralHeredocs("printf x | cat <<'EOF'\nx\nEOF")).toBe("printf x | cat <<'EOF'\n")
+    expect(withoutLiteralHeredocs("printf x & cat <<'EOF'\nx\nEOF")).toBe("printf x & cat <<'EOF'\n")
+    // anything not known to only read text keeps it: a quoted or escaped shell,
+    // an expanded command word, a wrapper, a redirection ahead of the command
+    for (const cmd of [
+      "cat <<'EOF' | \"ba\"sh\nls\nEOF",
+      "cat <<'EOF' | \\bash\nls\nEOF",
+      "cat <<'EOF' | $SHELL\nls\nEOF",
+      "env $SH <<'EOF'\nls\nEOF",
+      "> out $SH <<'EOF'\nls\nEOF",
+      "xargs -0 <<'EOF'\nls\nEOF",
+    ])
+      expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
+    // a known text reader, path-qualified, behind assignments or a leading redirection
+    expect(withoutLiteralHeredocs("X=1 /usr/bin/python3 - <<'EOF'\nls\nEOF")).toBe("X=1 /usr/bin/python3 - <<'EOF'\n")
+    expect(withoutLiteralHeredocs("> f cat <<'EOF'\nls\nEOF")).toBe("> f cat <<'EOF'\n")
+    // an earlier line's shell reads nothing here, nor does an expanded argument
+    expect(withoutLiteralHeredocs("bash x.sh\ncat > $OUT <<'EOF'\nls\nEOF")).toBe("bash x.sh\ncat > $OUT <<'EOF'\n")
+  })
+
+  it('gives heredoc data one segment per line, continued lines joined', () => {
+    expect(shellCommandsWithDepth('bash <<EOF\na b \\\nc\nd\nEOF')).toEqual([
+      { tokens: ['bash'], depth: 0 },
+      { tokens: ['a', 'b', 'c'], depth: 0, heredoc: true },
+      { tokens: ['d'], depth: 0, heredoc: true },
+    ])
+    // a line a shell reads is read as the commands it would be; text nothing runs is split into words
+    expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
+    expect(shellCommandsWithDepth("cat <<'EOF'\nx;gh `api` y\nEOF").map(s => s.tokens)).toEqual([['cat'], ['x;gh', '`api`', 'y']])
+    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
+  })
+
+  it('keeps a command whole across a process substitution', () => {
+    expect(shellCommandsWithDepth('diff <(sort a) >(tee b) -u').map(s => s.tokens)).toEqual([
+      ['sort', 'a'],
+      ['tee', 'b'],
+      ['diff', `<${SUBSTITUTED}`, `>${SUBSTITUTED}`, '-u'],
+    ])
+    // in the middle of a word too, as bash reads it (`x/dev/fd/63`)
+    expect(shellCommandsWithDepth('diff x<(sort a) 2>(tee b)').map(s => s.tokens)).toEqual([
+      ['sort', 'a'],
+      ['tee', 'b'],
+      ['diff', `x<${SUBSTITUTED}`, `2>${SUBSTITUTED}`],
+    ])
+    // a subshell is still a scope of its own
+    expect(shellCommandsWithDepth('(cd x && ls) -u').map(s => s.tokens)).toEqual([['cd', 'x'], ['ls'], ['-u']])
+  })
+
+  it('drops a redirection with its target, not a separator', () => {
+    expect(shellCommandsWithDepth('make 2>&1 -j4 &> out >| log -k && ls').map(s => s.tokens)).toEqual([
+      ['make', '-j4', '-k'],
+      ['ls'],
+    ])
+    // an attached target goes with its operator, and a flag-shaped one is no flag
+    expect(shellCommandsWithDepth('a -f body=y> -XGET').map(s => s.tokens)).toEqual([['a', '-f', 'body=y']])
+    // a substitution as the target goes too, and the command around it keeps its words
+    expect(shellCommandsWithDepth('a > $(echo f) -k').map(s => s.tokens)).toEqual([['echo', 'f'], ['a', '-k']])
+    // a quoted digit is no fd, and a quoted operator stays text across a substitution
+    expect(shellCommandsWithDepth(`echo "2">f $'>' k ">"$(date) j`).map(s => s.tokens)).toEqual([
+      ['date'],
+      ['echo', '2', '>', 'k', `>${SUBSTITUTED}`, 'j'],
+    ])
+    // an escaped or quoted `>` is text: what follows it is an operator
+    expect(shellCommandsWithDepth('echo a\\>|wc; echo b\\>&ls; echo ">"&ls').map(s => s.tokens)).toEqual([
+      ['echo', 'a>'],
+      ['wc'],
+      ['echo', 'b>'],
+      ['ls'],
+      ['echo', '>'],
+      ['ls'],
+    ])
+  })
+
+  it('leaves shellSegmentsWithDepth splitting as before', () => {
+    expect(shellSegments('git log $(git rev-parse x) --oneline')).toEqual([['git', 'log'], ['git', 'rev-parse', 'x'], ['--oneline']])
   })
 })
 
