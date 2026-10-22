@@ -1,1 +1,1 @@
-import{MG as e,jG as t}from"../../../chunks/app-CqbnNmLX.js";export{t as attachmentCleanerIOContribution,e as attachmentsDataExtension};
+import{MG as e,jG as t}from"../../../chunks/app-CUxQBDa8.js";export{t as attachmentCleanerIOContribution,e as attachmentsDataExtension};

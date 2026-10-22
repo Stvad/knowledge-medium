@@ -1,1 +1,1 @@
-import{bC as e,xC as t}from"../../../chunks/app-CqbnNmLX.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
+import{bC as e,xC as t}from"../../../chunks/app-CUxQBDa8.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
