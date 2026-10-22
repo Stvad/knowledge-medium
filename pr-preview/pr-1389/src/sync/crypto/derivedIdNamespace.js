@@ -1,0 +1,1 @@
+import{Q8 as e}from"../../../chunks/app-nTRLnIAh.js";export{e as deriveWorkspaceIdNamespace};

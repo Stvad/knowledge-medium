@@ -1,0 +1,1 @@
+import{bd as e,yd as t}from"../../chunks/app-nTRLnIAh.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

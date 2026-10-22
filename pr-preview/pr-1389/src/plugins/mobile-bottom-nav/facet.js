@@ -1,0 +1,1 @@
+import{Vb as e}from"../../../chunks/app-nTRLnIAh.js";export{e as mobileBottomNavItemsFacet};
