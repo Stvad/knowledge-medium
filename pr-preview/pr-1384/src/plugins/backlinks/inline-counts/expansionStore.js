@@ -1,1 +1,1 @@
-import{gm as e,hm as t}from"../../../../chunks/app-B2JGvzlL.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};
+import{gm as e,hm as t}from"../../../../chunks/app-D3LuAmHn.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};

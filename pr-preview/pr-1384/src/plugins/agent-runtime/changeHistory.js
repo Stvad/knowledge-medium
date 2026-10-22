@@ -1,1 +1,1 @@
-import{Jd as e,Qd as t,Xd as n,Yd as r,Zd as i}from"../../../chunks/app-B2JGvzlL.js";export{e as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,n as MAX_LISTED_CHANGES,i as blockHistory,t as recentChanges};
+import{Jd as e,Qd as t,Xd as n,Yd as r,Zd as i}from"../../../chunks/app-D3LuAmHn.js";export{e as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,n as MAX_LISTED_CHANGES,i as blockHistory,t as recentChanges};
