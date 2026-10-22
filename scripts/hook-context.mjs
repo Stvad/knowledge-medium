@@ -1,6 +1,6 @@
 /**
- * Shared plumbing for the fact-printing PreToolUse(Bash) hooks
- * (backup-before-restore, push-scope): reading the payload, running git, and
+ * Shared plumbing for the fact-printing Bash hooks (backup-before-restore
+ * before the command, push-scope after it): reading the payload, running git, and
  * emitting additionalContext. Claude Code inlines one hook command's context
  * only up to ~10K characters and shows a 2K preview past that, so a note lists
  * its lines only while they fit a budget and then says how many it left out.
@@ -54,12 +54,12 @@ export const fitLines = (head, lines, more, budget = NOTE_BUDGET) => {
   return out
 }
 
-export const emitPreToolUseContext = notes => {
+export const emitContext = (hookEventName, notes) => {
   if (!notes.length) return
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
+        hookEventName,
         // Defence in depth: each note already fits NOTE_BUDGET; this binds
         // only when one command yields notes for several repositories.
         additionalContext: notes.join('\n\n').slice(0, CONTEXT_MAX),

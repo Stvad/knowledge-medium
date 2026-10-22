@@ -12,4 +12,4 @@ export declare const fitLines: (
   more: (n: number) => string,
   budget?: number,
 ) => string[]
-export declare const emitPreToolUseContext: (notes: string[]) => void
+export declare const emitContext: (hookEventName: string, notes: string[]) => void

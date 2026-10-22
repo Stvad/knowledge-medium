@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 /**
- * Push-time scope print (PreToolUse(Bash) hook). It never blocks and never
- * fetches: exit 0 always, and its only output is additionalContext.
+ * Push scope print (PostToolUse/PostToolUseFailure(Bash) hook). It never
+ * fetches, exits 0 always, and its only output is additionalContext.
  *
- * On `git push` it prints, for each pushed source (each refspec's <src>, or
- * HEAD when the push names none), the merge-base diff against origin/master as
- * this clone last fetched it: the files by status with deletions first, the
- * shortstat, and the ahead/behind commit counts. A push that names no single
- * source (every branch, tags only, deletions, a refspec that is not literal)
- * says so instead.
+ * After a command that ran `git push`, it prints, for each pushed source (each
+ * refspec's <src>, or HEAD when the push names none), the merge-base diff
+ * against origin/master as this clone last fetched it: the files by status with
+ * deletions first, the shortstat, and the ahead/behind commit counts. A push
+ * that names no single source (every branch, tags only, deletions, a refspec
+ * that is not literal) says so instead.
  *
  * A squash onto a master that moved after the fetch keeps the old tree over the
  * new base and reverts whatever master merged meanwhile, tests included, so the
- * gate stays green. Here that revert is a `D <test file>` line, printed before
- * anything leaves the machine. Facts only: no verdict, no advice.
+ * gate stays green. Here that revert is a `D <test file>` line, printed while
+ * the branch can still be fixed before it merges. It runs after the command,
+ * not before, because the squash and commit usually run in the same command as
+ * the push. Facts only: no verdict, no advice.
  *
  * Kept apart from backup-before-restore.mjs: a different root cause (history
  * rewritten against the wrong base, not uncommitted work lost to a restore).
  */
 
 import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
-import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
+import { emitContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 const BASE = 'origin/master'
@@ -118,7 +120,7 @@ const main = () => {
       if (note) notes.push(note)
     }
   }
-  emitPreToolUseContext(notes)
+  emitContext(hook.payload.hook_event_name ?? 'PostToolUse', notes)
 }
 
 if (isMainModule(import.meta.url)) main()

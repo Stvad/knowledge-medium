@@ -1,4 +1,4 @@
-// Shared fixtures for the PreToolUse hook tests (backup-before-restore,
+// Shared fixtures for the Bash hook tests (backup-before-restore,
 // push-scope). Not a test file itself: vitest collects only *.test.ts.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
@@ -37,10 +37,10 @@ export const tempDirs = () => {
   }
 }
 
-/** A PreToolUse hook's additionalContext; it must never decide permission. */
-export const contextOf = (stdout: string): string => {
+/** A hook's additionalContext for `event`; it must never decide permission. */
+export const contextOf = (stdout: string, event = 'PreToolUse'): string => {
   const out = JSON.parse(stdout)
-  expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse')
+  expect(out.hookSpecificOutput.hookEventName).toBe(event)
   expect(out.hookSpecificOutput).not.toHaveProperty('permissionDecision')
   return out.hookSpecificOutput.additionalContext
 }

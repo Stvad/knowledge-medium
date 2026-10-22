@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { NOTE_BUDGET } from './hook-context.mjs'
-import { contextOf as context, git, tempDirs } from './hook-test-support'
+import { contextOf, git, tempDirs } from './hook-test-support'
 import { pushInvocations, pushSources } from './push-scope.mjs'
 
 describe('pushInvocations', () => {
@@ -52,12 +52,13 @@ describe('pushSources', () => {
 
 describe('hook end-to-end', { timeout: 30_000 }, () => {
   const script = fileURLToPath(new URL('./push-scope.mjs', import.meta.url))
-  const hook = (command: string, cwd: string, input?: string) => {
-    const payload = input ?? JSON.stringify({ tool_name: 'Bash', cwd, tool_input: { command } })
+  const hook = (command: string, cwd: string, input?: string, event = 'PostToolUse') => {
+    const payload = input ?? JSON.stringify({ hook_event_name: event, tool_name: 'Bash', cwd, tool_input: { command } })
     const r = spawnSync('node', [script], { cwd, input: payload, encoding: 'utf8' })
     expect(r.status).toBe(0)
     return r.stdout
   }
+  const context = (stdout: string) => contextOf(stdout, 'PostToolUse')
   const commitFiles = (cwd: string, files: Record<string, string>, msg: string) => {
     for (const [f, body] of Object.entries(files)) writeFileSync(join(cwd, f), body)
     git(cwd, ['add', '.'])
@@ -108,10 +109,11 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     git(squash, ['checkout', '-qb', 'feat', 'HEAD~1']) // branch cut before the merged PR
     commitFiles(squash, { 'mine.ts': 'x\n' }, 'my work')
     git(squash, ['fetch', '-q'])
+    // The hook runs after the whole command, so it sees the squash it pushed.
     git(squash, ['reset', '-q', '--soft', 'origin/master'])
     git(squash, ['commit', '-qm', 'squashed'])
 
-    const ctx = context(hook('git push --force-with-lease', squash))
+    const ctx = context(hook('git reset --soft origin/master && git commit -m squashed && git push --force-with-lease', squash))
     expect(ctx).toContain('D\tmerged.test.ts')
     expect(ctx).toContain('D\tmerged.ts')
     expect(ctx).toContain('A\tmine.ts')
@@ -166,6 +168,11 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   it('says so when the branch has no file differences', () => {
     const same = clone('push-scope-same-')
     expect(context(hook('git push', same))).toContain('no file differences')
+  })
+
+  it('answers a failed command under its own event, since the push may have run', () => {
+    const out = hook('git push && gh pr view', work, undefined, 'PostToolUseFailure')
+    expect(contextOf(out, 'PostToolUseFailure')).toContain('push-scope: feat against origin/master')
   })
 
   it('prints one scope for repeated pushes from the same repository', () => {

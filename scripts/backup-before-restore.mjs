@@ -36,7 +36,7 @@
 import { copyFileSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
-import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
+import { emitContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 const WHOLE_TREE = ':/'
@@ -303,9 +303,9 @@ const main = () => {
   const hook = readHookPayload(/\b(checkout|restore)\b/)
   if (!hook) return
   try {
-    emitPreToolUseContext(backUp({ ...hook, invocations: restoreInvocations(hook.cmd) }))
+    emitContext('PreToolUse', backUp({ ...hook, invocations: restoreInvocations(hook.cmd) }))
   } catch (e) {
-    emitPreToolUseContext([`backup-before-restore: failed before copying everything: ${e?.message ?? e}`])
+    emitContext('PreToolUse', [`backup-before-restore: failed before copying everything: ${e?.message ?? e}`])
   }
 }
 

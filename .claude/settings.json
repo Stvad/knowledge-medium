@@ -27,11 +27,6 @@
             "type": "command"
           },
           {
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
-            "statusMessage": "Listing what this push changes against origin/master…",
-            "type": "command"
-          },
-          {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
             "statusMessage": "Checking for publishable bead ids…",
             "timeout": 180,
@@ -49,6 +44,11 @@
             "statusMessage": "Verifying published references…",
             "timeout": 120,
             "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
+            "statusMessage": "Listing what this push sent against origin/master…",
+            "type": "command"
           }
         ],
         "matcher": "Bash"
@@ -61,6 +61,11 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-publish-verify.mjs\"",
             "statusMessage": "Verifying published references…",
             "timeout": 120,
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
+            "statusMessage": "Listing what this push sent against origin/master…",
             "type": "command"
           }
         ],

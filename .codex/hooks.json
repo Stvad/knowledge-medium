@@ -81,12 +81,6 @@
             "timeout": 30
           },
           {
-            "command": "node \"$(git rev-parse --show-toplevel)/scripts/push-scope.mjs\"",
-            "statusMessage": "Listing what this push changes against origin/master\u2026",
-            "type": "command",
-            "timeout": 30
-          },
-          {
             "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-github-sync.mjs\" --hook-pre-pr",
             "statusMessage": "Checking for publishable bead ids\u2026",
             "timeout": 180,
@@ -103,6 +97,12 @@
             "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-publish-verify.mjs\"",
             "statusMessage": "Verifying published references\u2026",
             "timeout": 120,
+            "type": "command"
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/push-scope.mjs\"",
+            "statusMessage": "Listing what this push sent against origin/master\u2026",
+            "timeout": 30,
             "type": "command"
           }
         ],
