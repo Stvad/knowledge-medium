@@ -1,1 +1,1 @@
-import{MZ as e,jZ as t}from"../../chunks/app-CdJm4qhf.js";export{t as assertAliasClaimable,e as claimedAliases};
+import{MZ as e,jZ as t}from"../../chunks/app-B2JGvzlL.js";export{t as assertAliasClaimable,e as claimedAliases};
