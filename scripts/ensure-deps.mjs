@@ -13,7 +13,7 @@
 // accepted as rare.
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMainModule } from './is-main-module.mjs'
 
@@ -40,9 +40,11 @@ export const BUILD_ARGS = ['run', 'compile:packages']
  * tsBuildInfoFile: `tsc -b` rewrites it on every build, including one that
  * only refreshes timestamps, so sources are compared against it — an output
  * keeps its old mtime when a rebuild changes nothing, and would never settle.
- * `extraOutputs` are outputs the manifest does not name: `compile:post`
- * deletes the kernel-types tree before rebuilding it and writes `assets.d.ts`
- * last, so a failed or interrupted run leaves that file absent.
+ * Both tsconfigs compile `src/**` into `dist` with declarations, so each
+ * source's `.js` and `.d.ts` are its outputs. `extraOutputs` are written by
+ * `compile:post` instead: it deletes the kernel-types tree before rebuilding
+ * it and writes `assets.d.ts` last, so a failed or interrupted run leaves that
+ * file absent.
  */
 export const DIST_PACKAGES = [
   {
@@ -72,21 +74,15 @@ export const readDepsState = root => {
   return installed.equals(wanted) ? 'fresh' : 'mismatch'
 }
 
-const stringLeaves = value => (typeof value === 'string' ? [value] : Object.values(value ?? {}).flatMap(stringLeaves))
+const sourcesOf = pkgDir =>
+  readdirSync(join(pkgDir, 'src'), { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => relative(pkgDir, join(entry.parentPath, entry.name)))
 
-/** Whether any output is absent: a bin or export the manifest promises, or one of `extraOutputs`. */
-const outputsMissing = (pkgDir, extraOutputs = []) => {
-  const { bin, exports } = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
-  return [...stringLeaves(bin), ...stringLeaves(exports), ...extraOutputs].some(output => !existsSync(join(pkgDir, output)))
-}
-
-const newestInput = pkgDir => {
-  // Under NodeNext the manifest's `type` decides the emitted module format.
-  let newest = Math.max(...['tsconfig.json', 'package.json'].map(file => mtimeOf(join(pkgDir, file)) ?? 0))
-  for (const entry of readdirSync(join(pkgDir, 'src'), { recursive: true, withFileTypes: true })) {
-    if (entry.isFile()) newest = Math.max(newest, mtimeOf(join(entry.parentPath, entry.name)) ?? 0)
-  }
-  return newest
+/** What tsc emits for a source; an ambient `.d.ts` compiles to nothing. */
+const emittedFor = source => {
+  const compiled = /^src\/(.+)(?<!\.d)\.ts$/.exec(source)
+  return compiled ? [`dist/${compiled[1]}.js`, `dist/${compiled[1]}.d.ts`] : []
 }
 
 /**
@@ -99,8 +95,12 @@ export const staleDist = root =>
   DIST_PACKAGES.flatMap(pkg => {
     const dir = join(root, pkg.dir)
     if (!existsSync(join(dir, 'src'))) return []
-    if (outputsMissing(dir, pkg.extraOutputs)) return [{ dir: pkg.dir, reason: 'missing' }]
-    return newestInput(dir) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
+    const sources = sourcesOf(dir)
+    const outputs = [...sources.flatMap(emittedFor), ...(pkg.extraOutputs ?? [])]
+    if (outputs.some(output => !existsSync(join(dir, output)))) return [{ dir: pkg.dir, reason: 'missing' }]
+    // Under NodeNext the manifest's `type` decides the emitted module format.
+    const inputs = ['tsconfig.json', 'package.json', ...sources]
+    return Math.max(...inputs.map(input => mtimeOf(join(dir, input)) ?? 0)) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
       ? [{ dir: pkg.dir, reason: 'outdated' }]
       : []
   })

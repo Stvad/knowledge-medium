@@ -57,20 +57,17 @@ const commitLockfile = (root: string, content: string) => {
 const writeInstallRecord = (root: string, content: string, mtimeSec?: number) =>
   write(join(root, 'node_modules', '.pnpm', 'lock.yaml'), content, mtimeSec)
 
-// What each fixture package's manifest promises: a bin, a plain export and a
-// conditional one.
-const MANIFEST = {
-  bin: { fixture: 'dist/main.js' },
-  exports: { '.': './dist/main.js', './extra': { import: './dist/extra.js' } },
-}
-const OUTPUTS = ['dist/main.js', 'dist/extra.js']
+// Each fixture package's sources and what tsc emits for them; an ambient
+// declaration file compiles to nothing.
+const SOURCES = ['src/index.ts', 'src/nested/util.ts', 'src/ambient.d.ts']
+const OUTPUTS = ['dist/index.js', 'dist/index.d.ts', 'dist/nested/util.js', 'dist/nested/util.d.ts']
 
 // Sources at T0, the outputs and build record after them: what a finished `tsc -b` leaves.
 const writeFreshDist = (root: string) => {
   for (const pkg of DIST_PACKAGES) {
-    write(join(root, pkg.dir, 'package.json'), JSON.stringify(MANIFEST), T0)
+    write(join(root, pkg.dir, 'package.json'), '{}\n', T0)
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
-    write(join(root, pkg.dir, 'src', 'index.ts'), 'export {}\n', T0)
+    for (const source of SOURCES) write(join(root, pkg.dir, source), 'export {}\n', T0)
     for (const out of [...OUTPUTS, ...(pkg.extraOutputs ?? [])]) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
@@ -187,13 +184,13 @@ describe('staleDist', () => {
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
   })
 
-  it.each(OUTPUTS)('reports a dist missing %s, which its manifest promises', output => {
+  it.each(OUTPUTS)('reports a dist missing %s, which tsc emits for one of its sources', output => {
     const root = makeCheckout()
     rmSync(join(root, pkg.dir, output))
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
   })
 
-  it('reports a dist missing an output its build writes beyond the manifest', () => {
+  it('reports a dist missing an output its build writes beyond what tsc emits', () => {
     const root = makeCheckout()
     const [withExtra] = DIST_PACKAGES.filter(p => p.extraOutputs?.length)
     rmSync(join(root, withExtra.dir, withExtra.extraOutputs![0]))
@@ -201,9 +198,9 @@ describe('staleDist', () => {
   })
 
   it.each([
-    ['src/nested/deep.ts', 'changed\n'],
+    ['src/nested/util.ts', 'changed\n'],
     ['tsconfig.json', '{}\n'],
-    ['package.json', JSON.stringify(MANIFEST)],
+    ['package.json', '{}\n'],
   ])('reports a dist older than its input %s', (input, content) => {
     const root = makeCheckout()
     write(join(root, pkg.dir, input), content, T0 + 20)
