@@ -214,6 +214,8 @@ export const clearStaleSlot = (path, scratch) => {
 const takeSlot = (path, record) => {
   if (tryLink(record, path)) return {taken: true}
   const holder = readHolder(path)
+  // Here and not left to clearStaleSlot's put-back: moving a live record aside,
+  // however briefly, opens its slot to another waiter.
   if (holder && pidAlive(holder.pid)) return {taken: false, holder}
   clearStaleSlot(path, `${record}.stale`)
   if (tryLink(record, path)) return {taken: true, reclaimed: holder}

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { acquireSlot, clearStaleSlot, loadVerdict, type SlotHolder } from './check.mjs'
@@ -266,6 +266,14 @@ describe('acquireSlot', () => {
     writeFileSync(slotFile(dir), JSON.stringify(holder(process.ppid)))
     slot!.release()
     expect(existsSync(slotFile(dir))).toBe(true)
+  })
+
+  it('leaves a live holder\'s record untouched while it waits', async () => {
+    writeFileSync(slotFile(dir), JSON.stringify(holder()))
+    const before = statSync(slotFile(dir), { bigint: true }).ctimeNs
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).toBeNull()
+    // A rename or link would have touched it.
+    expect(statSync(slotFile(dir), { bigint: true }).ctimeNs).toBe(before)
   })
 
   it('puts back a live holder that a waiter moved aside as stale', () => {
