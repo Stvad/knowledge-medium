@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * beads↔GitHub sync with the documented traps guarded (AGENTS.md beads
- * section; memory reference_bd_github_sync_close_ordering):
+ * beads↔GitHub sync with the documented traps guarded (docs/beads.md;
+ * memory reference_bd_github_sync_close_ordering):
  *
  * 1. A GitHub-side close (hand-close or a merged "Fixes #N") is CLOBBERED by
  *    the next sync — the still-open bead pushes over it and re-opens the
@@ -356,26 +356,15 @@ const API_VALUE_LONG = new Set(['--method', '--header', '--raw-field', '--field'
 // nothing attached, alone or ending a short cluster (`-iF`).
 const waitsForValue = t =>
   t.startsWith('--') ? API_VALUE_LONG.has(t) : /^-[a-zA-Z]+$/.test(t) && API_VALUE_SHORT.has(t.at(-1)) && [...t.slice(1, -1)].every(c => API_BOOLEAN_SHORT.has(c))
-// A redirect and its target are not arguments: `> $OUT` is where output goes.
-// Quotes are gone from these words, so a `">"` argument reads as a redirect
-// too; a flag-shaped word is therefore never taken for its target.
-const REDIRECTION = /^(?:\d*|&)[<>]/
-const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
 /**
  * A gh api call's argv as pflag reads it, so every check below sees one
  * spelling: a short cluster (`-iFbody=x`) and an attached or `=` value
  * (`-F=query=@x`, `--field=body=x`) come apart into a flag and its value. Each
  * word is a flag, a flag's value, the endpoint (the first positional) or an
- * extra positional; a flag this table does not know is kept whole. Null when
- * the words cannot be read as one argv (below).
+ * extra positional; a flag this table does not know is kept whole.
+ * Redirections are already gone: the segmenter drops them with their targets.
  */
-const parseCall = words => {
-  // bash takes redirections and their targets out of argv before gh reads it.
-  // A flag-shaped word after a bare redirection is either its target
-  // (`> -X`) or a flag after a quoted `">"` argument, which these
-  // quote-stripped words cannot tell apart, so the call is unreadable.
-  if (words.some((t, i) => BARE_REDIRECTION.test(t) && words[i + 1]?.startsWith('-'))) return null
-  const args = words.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(words[i - 1] ?? ''))
+const parseCall = args => {
   const call = []
   let endpoint = false
   for (let i = 0; i < args.length; i++) {
@@ -447,7 +436,7 @@ const MUTATION = /\bmutation\b/
  */
 const apiCallPublishes = args => {
   const call = parseCall(args)
-  if (!call || expansionMayAddFlags(call) || call.some(w => braceMakesFlag(w.word))) return true
+  if (expansionMayAddFlags(call) || call.some(w => braceMakesFlag(w.word))) return true
   const flags = new Set(call.filter(w => w.role === 'flag').map(w => w.word))
   if (call.find(w => w.role === 'endpoint')?.word === 'graphql')
     return MUTATION.test(call.map(w => w.word).join(' ')) || flags.has('--input') || call.some(w => w.role === 'value' && UNREAD_QUERY.test(w.word))
@@ -1025,12 +1014,8 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
  * text), read by parseCall; and pr:reply's body file. Stdin is no file.
  */
 const CLI_PAYLOAD_FLAG = /^(?:--(?:body-file|notes-file|template)(?:=|$)|-[a-zA-Z]*?[FT])/
-// Stands for the files of an api call whose argv parseCall cannot read: which
-// those are is unknown, so the stale-file check refuses it.
-const UNREADABLE_ARGV = '\0unreadable argv'
 const apiPayloadFiles = args => {
   const call = parseCall(args)
-  if (!call) return [UNREADABLE_ARGV]
   return call.flatMap(({ word, role }, i) => {
     const flag = role === 'value' ? call[i - 1].word : null
     if (flag === '--input') return [word]
@@ -2564,7 +2549,6 @@ const staleBodyFiles = (cmd, cwd, payload) => {
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
-    if (value === UNREADABLE_ARGV) return ['a gh api call whose arguments this gate cannot read, so which files it publishes is unknown']
     if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
     if (compound && !isAbsolute(value) && !isHomePath(value))
       return [`${value}: relative, in a compound command whose other steps can move or make it before the publish runs`]

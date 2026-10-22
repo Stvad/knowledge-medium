@@ -1,6 +1,6 @@
 /**
  * Split a shell command string into segments of unquoted tokens, for
- * PreToolUse(Bash) hooks that must act on VERB POSITION rather than substring
+ * Bash hooks that must act on VERB POSITION rather than substring
  * matches (a command that merely *mentions* a guarded git command or a uuid
  * inside a quoted -m string must not trip a guard).
  *
@@ -15,6 +15,12 @@
  * Here-docs (<<WORD, <<'WORD', <<-WORD) are handled best-effort: their body
  * lines come back as segments flagged `heredoc: true` — data for scanners,
  * never command positions.
+ *
+ * Redirections (`2>&1`, `> f`, `&> f`, `2>/dev/null`, `<<< w`) are neither
+ * segment boundaries nor arguments: the operator and its target are dropped,
+ * so `git push origin 2>&1 | tail` yields ['git', 'push', 'origin']. As in
+ * bash, an unquoted `<` or `>` ends the word before it (`f>/dev/null` is `f`
+ * and a redirection); a quoted or escaped one is text.
  *
  * Deliberately not a full shell parser: no expansions, and a close-paren
  * inside a double-quoted string nested in a substitution closes early. Guards
@@ -31,10 +37,9 @@ export const SUBSTITUTED = '$(…)'
  * The same segments, read for one command's ARGUMENTS rather than its verb:
  *  - each simple command stays whole. A command or process substitution
  *    (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the word it sits in, and
- *    its own commands come back as segments ahead of that command. The `&` or
- *    `|` of a redirection (`2>&1`, `&>`, `>|`) is part of its word. Under
- *    shellSegmentsWithDepth both end the segment, and the arguments after
- *    them come back as a command of their own;
+ *    its own commands come back as segments ahead of that command. Under
+ *    shellSegmentsWithDepth a substitution ends the segment, and the
+ *    arguments after it come back as a command of their own;
  *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
  *    apostrophe in either cannot open a quote that swallows what follows;
  *  - heredoc data comes back line by line (`\`-continued lines joined), so a
@@ -52,18 +57,18 @@ export const shellCommandsWithDepth = cmd => segment(cmd, true)
  * fed to a shell (`bash <<'EOF'`), which runs it as a script.
  */
 export const withoutLiteralHeredocs = cmd => {
-  const literal = []
-  segment(cmd, true, literal)
+  const spans = []
+  segment(cmd, true, spans)
   let out = ''
   let at = 0
-  for (const [start, end] of literal) {
+  for (const [start, end] of spans) {
     out += cmd.slice(at, start)
     at = end
   }
   return out + cmd.slice(at)
 }
 
-// `literal`, when given, collects the [start, end) of each quoted-delimiter
+// `literalHeredocs`, when given, collects the [start, end) of each quoted-delimiter
 // heredoc's data that nothing on its line can run, its closing delimiter line
 // included. Decided by an ALLOWLIST of commands that never run what they
 // read: a shell, a wrapper, an expanded or unknown command word anywhere on
@@ -72,25 +77,21 @@ export const withoutLiteralHeredocs = cmd => {
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
-// A command's own word: past its leading assignments and redirections, path dropped.
-const commandWord = words => {
-  for (let i = 0; i < words.length; i++) {
-    if (/^[A-Za-z_]\w*=/.test(words[i])) continue
-    if (/^(?:\d*|&)[<>]/.test(words[i])) {
-      if (/^(?:\d*|&)[<>]+[&|]?$/.test(words[i])) i++
-      continue
-    }
-    return words[i].replace(/^.*\//, '')
-  }
-}
-const segment = (cmd, wholeCommands, literal = null) => {
+// A command's own word: past its leading assignments, path dropped.
+const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
+// An unquoted word that is a redirection operator, with its target attached
+// (capture group) or empty when the target is the next word.
+const REDIRECT = /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)(.*)$/s
+
+const segment = (cmd, wholeCommands, literalHeredocs = null) => {
   const segments = []
   let tokens = []
   let cur = ''
   let started = false // distinguishes '' (a real empty token) from no token
+  let literal = false // the current token holds a quoted or escaped character
+  let dropNext = false // the next token is the target of a redirection
   let quote = null // ' or " while inside a quoted span
   let escaped = false
-  let redirectAt = -1 // where the last `<`/`>` the shell reads as an operator sits
   const scopes = [] // open subshell scopes; length IS the current depth
   let lineStart = 0 // index of the first segment of the current line
   let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
@@ -98,11 +99,15 @@ const segment = (cmd, wholeCommands, literal = null) => {
 
   const pushToken = () => {
     if (started) {
-      tokens.push(cur)
       pipeOpen = false
+      const redirect = !literal && cur.match(REDIRECT)
+      if (dropNext) dropNext = false
+      else if (redirect) dropNext = redirect[1] === ''
+      else tokens.push(cur)
     }
     cur = ''
     started = false
+    literal = false
   }
   // Every scope change closes the segment first, so a segment's tokens all
   // live at one depth — scopes.length at push time. A whole command is not
@@ -110,15 +115,18 @@ const segment = (cmd, wholeCommands, literal = null) => {
   // picked up again when that closes.
   const pushSegment = () => {
     pushToken()
+    dropNext = false
     if (tokens.length) segments.push({ tokens, depth: scopes.length })
     tokens = []
   }
   const openSubstitution = kind => {
     if (wholeCommands) {
-      scopes.push({ kind, quote, outer: { tokens, cur } })
+      scopes.push({ kind, quote, outer: { tokens, cur, literal, dropNext } })
       tokens = []
       cur = ''
       started = false
+      literal = false
+      dropNext = false
     } else {
       pushSegment()
       scopes.push({ kind, quote })
@@ -133,6 +141,8 @@ const segment = (cmd, wholeCommands, literal = null) => {
       tokens = outer.tokens
       cur = outer.cur + SUBSTITUTED
       started = true
+      literal = outer.literal
+      dropNext = outer.dropNext
     }
   }
 
@@ -143,6 +153,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
       if (ch === '\n') continue // \<newline> is a continuation — bash drops it
       cur += ch
       started = true
+      literal = true
       continue
     }
     if (quote === "$'") {
@@ -176,6 +187,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
     if (wholeCommands && !quote && ch === '$' && cmd[i + 1] === "'") {
       quote = "$'"
       started = true
+      literal = true
       i++
       continue
     }
@@ -205,9 +217,12 @@ const segment = (cmd, wholeCommands, literal = null) => {
     if (ch === "'" || ch === '"') {
       quote = ch
       started = true
+      literal = true
       continue
     }
     if (ch === '(' && wholeCommands && /[<>]$/.test(cur)) {
+      // a process substitution is a word (a /dev/fd path), not a redirection
+      literal = true
       openSubstitution('subst')
       continue
     }
@@ -266,10 +281,6 @@ const segment = (cmd, wholeCommands, literal = null) => {
         i = j - 1
         continue
       }
-      cur += ch
-      started = true
-      redirectAt = i
-      continue
     }
     if (ch === '\n' && heredocs.length) {
       pushSegment()
@@ -307,17 +318,22 @@ const segment = (cmd, wholeCommands, literal = null) => {
           const words = body.join('\n').split(/\s+/).filter(Boolean)
           if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
         }
-        if (text) literal?.push([dataStart, Math.min(j, cmd.length)])
+        if (text) literalHeredocs?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
       lineStart = segments.length
       continue
     }
-    // bash's redirections spelled with `&` or `|` — `>&`, `<&`, `&>`, `>|` —
-    // joined only to a `<`/`>` the shell reads as an operator: after an
-    // escaped or quoted one, `|` is a pipe.
-    if (wholeCommands && ((ch === '&' && (redirectAt === i - 1 || cmd[i + 1] === '>')) || (ch === '|' && redirectAt === i - 1 && cmd[i - 1] === '>'))) {
+    // `2>&1`, `>&2`, `>|`: the & or | belongs to the redirection before it.
+    if ((ch === '&' || ch === '|') && !literal && /^\d*[<>]$/.test(cur)) {
       cur += ch
+      continue
+    }
+    // `&>` and `&>>` redirect both streams; anywhere in a command, even
+    // between `git` and its verb, they must not end the segment.
+    if (ch === '&' && cmd[i + 1] === '>') {
+      pushToken()
+      cur = ch
       started = true
       continue
     }
@@ -332,9 +348,12 @@ const segment = (cmd, wholeCommands, literal = null) => {
       pushToken()
       continue
     }
+    // bash ends a word at an unquoted `<` or `>`; digits or a `&` before it
+    // are the operator's own (`2>`, `&>`), and `<(` opens a process
+    // substitution, which stays in its word.
+    if ((ch === '<' || ch === '>') && cmd[i + 1] !== '(' && (literal || !/^(?:\d*|&)[<>]*$/.test(cur))) pushToken()
     cur += ch
     started = true
-    if (ch === '<' || ch === '>') redirectAt = i
   }
   // An unclosed substitution still hands back the command it sat in.
   while (wholeCommands && scopes.length) {

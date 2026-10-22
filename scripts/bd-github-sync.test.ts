@@ -400,8 +400,10 @@ describe('gh api reads', () => {
     `cat <<'EOF' |\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF\nbash`,
     // a redirection between a flag and its value is no value
     `gh api graphql -F > /tmp/out query=@doc.gql`,
-    // and a flag-shaped word after one could be its target: unreadable
+    // and its target is no flag, even flag-shaped
     `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
+    // bash ends a word at an unquoted `>`: what follows is where output goes
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=x> -XGET`,
     // a word the shell turns into a flag: an ANSI-C escape, a brace list
     `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
     `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=x}`,
@@ -3820,10 +3822,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // gh api's --template formats its answer; a graphql document from a file is checked like a body
     expect(hook("KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi --template /tmp/claude-501/t").status).toBe(0)
     expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(2)
-    // an api call whose argv cannot be read publishes files nothing here can list
-    const unreadable = hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments ">" -F body=@c.md')
-    expect(unreadable.status).toBe(2)
-    expect(unreadable.stderr).toContain('a gh api call whose arguments this gate cannot read')
+    // a quoted `">"` is an argument, so the field after it is still read
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments ">" -F body=@/tmp/claude-501/c.md').status).toBe(2)
     // a symlink is judged by the file it names
     const shared = mkdtempSync('/tmp/claude-gate-test-')
     writeFileSync(join(shared, 'body.md'), 'another session')
