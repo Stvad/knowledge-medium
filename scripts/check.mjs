@@ -346,15 +346,15 @@ const runGate = async signal => {
   const startedAt = performance.now()
   const loadAtStart = loadavg()[0]
   // The last line, whatever came before: a reader piping through `tail` sees
-  // the verdict even though the pipe hides the exit status. Written once stderr
-  // has drained, since in a `2>&1` pipe a backlog there would land after it.
+  // the verdict even though the pipe hides the exit status. Only once stderr
+  // has drained, since in a `2>&1` pipe a backlog there would land after it;
+  // and decided after that wait, so a signal during it is in the verdict.
   const finish = async (failures = []) => {
-    const passed = failures.length === 0 && !signal.aborted
-    const duration = formatDuration(performance.now() - startedAt)
-    console.log(`[check] load average ${loadAtStart.toFixed(1)} at start, ${loadavg()[0].toFixed(1)} at end, on ${availableParallelism()} cores`)
-    console[passed ? 'log' : 'error'](`[check] ${passed ? 'passed' : 'failed'} in ${duration}`)
     await new Promise(resolve => process.stderr.write('', resolve))
+    const passed = failures.length === 0 && !signal.aborted
     const failed = signal.aborted ? 'interrupted' : failures.map(result => result.task.name).join(', ')
+    console.log(`[check] load average ${loadAtStart.toFixed(1)} at start, ${loadavg()[0].toFixed(1)} at end, on ${availableParallelism()} cores`)
+    console.log(`[check] ${passed ? 'passed' : 'failed'} in ${formatDuration(performance.now() - startedAt)}`)
     console.log(passed ? 'check: PASS' : `check: FAIL (${failed})`)
     return passed ? 0 : failures[0]?.code ?? 1
   }
