@@ -1,1 +1,1 @@
-import{Gt as e,Wt as t}from"../../../chunks/app--KS_4ZsC.js";export{t as notifyWorkspaceUnlocked,e as useOnWorkspaceUnlocked};
+import{Gt as e,Wt as t}from"../../../chunks/app-ByKb7WxT.js";export{t as notifyWorkspaceUnlocked,e as useOnWorkspaceUnlocked};
