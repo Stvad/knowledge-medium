@@ -1,1 +1,1 @@
-import{_8 as e,g8 as t}from"../../chunks/app-D7lkJzMQ.js";export{t as getOrCreateTypesPage,e as typesPageBlockId};
+import{_8 as e,g8 as t}from"../../chunks/app-CqbnNmLX.js";export{t as getOrCreateTypesPage,e as typesPageBlockId};
