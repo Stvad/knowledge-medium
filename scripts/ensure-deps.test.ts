@@ -146,12 +146,14 @@ else {
   return { env, readCalls }
 }
 
+const SCRIPT = fileURLToPath(new URL('./ensure-deps.mjs', import.meta.url))
+
 /** ensureDeps in a process of its own, standing in for the hook the host spawns. */
 const runHookProcess = (root: string, env: NodeJS.ProcessEnv, waitMs: number, { detached = false } = {}) => {
   const launcher = join(tempDir('ensure-deps-hook-'), 'hook.mjs')
   writeFileSync(
     launcher,
-    `import { ensureDeps } from ${JSON.stringify(fileURLToPath(new URL('./ensure-deps.mjs', import.meta.url)))}
+    `import { ensureDeps } from ${JSON.stringify(SCRIPT)}
 process.stdout.write(await ensureDeps({ root: ${JSON.stringify(root)}, waitMs: ${waitMs} }))
 `,
   )
@@ -429,6 +431,19 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     const text = await ensureDeps({ root, env: pnpm.env })
     expect(pnpm.readCalls()).toEqual([])
     expect(text).toContain(`already running (pid ${process.pid})`)
+  })
+
+  it('runs nothing as a job that finds the lock held, and leaves that job its lock and log', () => {
+    const root = makeCheckout()
+    writeInstallRecord(root, 'lock: v0\n')
+    write(lockPath(root), String(process.pid))
+    write(logPath(root), "the running job's log\n")
+    const pnpm = fakePnpm()
+    const job = spawnSync(process.execPath, [SCRIPT, '--job', root, stateDir(root), 'install'], { env: pnpm.env })
+    expect(job.status).not.toBe(0)
+    expect(pnpm.readCalls()).toEqual([])
+    expect(readFileSync(lockPath(root), 'utf8')).toBe(String(process.pid))
+    expect(readFileSync(logPath(root), 'utf8')).toBe("the running job's log\n")
   })
 
   it('takes over the lock of a job that died', async () => {

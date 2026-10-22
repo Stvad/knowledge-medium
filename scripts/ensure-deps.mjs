@@ -11,7 +11,7 @@
 // stale. Work that outlives the wait is left running detached, never killed
 // half-way through an install.
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMainModule } from './is-main-module.mjs'
@@ -150,45 +150,36 @@ const createLock = lockPath => {
 
 const lockHolder = lockPath => Number(readOrNull(lockPath)?.toString())
 
+const liveHolder = lockPath => {
+  const holder = lockHolder(lockPath)
+  return pidAlive(holder) && Date.now() - (mtimeOf(lockPath) ?? 0) < LOCK_MAX_AGE_MS ? holder : null
+}
+
 /**
- * Null once this process holds the lock; otherwise the pid of the live job
- * that does. Two starts reclaiming the same dead lock in one instant can both
- * win; accepted, as it needs a crashed job and simultaneous starts in one checkout.
+ * Whether this process now holds the lock. Two jobs reclaiming the same dead
+ * lock in one instant can both win; accepted, as it needs a crashed job and
+ * simultaneous starts in one checkout.
  */
 const takeLock = lockPath => {
-  if (createLock(lockPath)) return null
-  const holder = lockHolder(lockPath)
-  if (pidAlive(holder) && Date.now() - (mtimeOf(lockPath) ?? 0) < LOCK_MAX_AGE_MS) return holder
+  if (createLock(lockPath)) return true
+  if (liveHolder(lockPath) !== null) return false
   rmSync(lockPath, { force: true })
-  return createLock(lockPath) ? null : lockHolder(lockPath)
+  return createLock(lockPath)
 }
 
-const startJob = ({ root, steps, env }) => {
-  const dir = stateDir(root)
-  mkdirSync(dir, { recursive: true })
-  const lockPath = join(dir, 'lock')
-  const logPath = join(dir, 'log')
-  const holder = takeLock(lockPath)
-  if (holder !== null) return { kind: 'busy', pid: holder, logPath }
+const lockPathIn = dir => join(dir, 'lock')
+const logPathIn = dir => join(dir, 'log')
+// The job's exit code when another job holds the lock.
+const BUSY_EXIT = 75
 
-  // Until the pid below replaces it the lock names this process, so a failed
-  // launch leaves a lock the next session start sees is dead and takes over.
-  const logFd = openSync(logPath, 'w')
-  try {
-    // Detached with file stdio: the host neither waits for the job nor kills
-    // it with this process's group, so an interrupted start leaves no half-done install.
-    const child = spawn(process.execPath, [SCRIPT, '--job', root, lockPath, ...steps], {
-      cwd: root,
-      detached: true,
-      env,
-      stdio: ['ignore', logFd, logFd],
-    })
-    writeFileSync(lockPath, String(child.pid))
-    return { kind: 'started', child, logPath }
-  } finally {
-    closeSync(logFd)
-  }
-}
+/**
+ * The job takes the lock and opens the log itself, so neither ever changes
+ * hands. Detached with none of this process's stdio: the host neither waits
+ * for it nor kills it with this process's group, so an interrupted start
+ * leaves no half-done install.
+ */
+const startJob = ({ root, dir, steps, env }) =>
+  spawn(process.execPath, [SCRIPT, '--job', root, dir, ...steps], { cwd: root, detached: true, env, stdio: 'ignore' })
 
 /** The job's exit code, or null once `ms` passes with it still running. */
 const waitForExit = (child, ms) =>
@@ -217,14 +208,16 @@ const forgetStaleBuildRecords = root => {
   for (const pkg of DIST_PACKAGES) if (stale.has(pkg.dir)) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
 }
 
-const runJob = (root, lockPath, steps) => {
-  const say = line => process.stdout.write(`[ensure-deps] ${line}\n`)
+const runJob = (root, dir, steps) => {
+  if (!takeLock(lockPathIn(dir))) return BUSY_EXIT
+  const logFd = openSync(logPathIn(dir), 'w')
+  const say = line => writeSync(logFd, `[ensure-deps] ${line}\n`)
   try {
     for (const step of steps) {
       const command = `pnpm ${STEP_ARGS[step].join(' ')}`
       if (step === 'build') forgetStaleBuildRecords(root)
       say(`${new Date().toISOString()} ${command}`)
-      const result = spawnSync('pnpm', STEP_ARGS[step], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'] })
+      const result = spawnSync('pnpm', STEP_ARGS[step], { cwd: root, stdio: ['ignore', logFd, logFd] })
       if (result.status !== 0) {
         say(`FAILED: ${command} — ${result.error?.message ?? (result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)}`)
         return 1
@@ -233,7 +226,8 @@ const runJob = (root, lockPath, steps) => {
     say('done')
     return 0
   } finally {
-    rmSync(lockPath, { force: true })
+    closeSync(logFd)
+    rmSync(lockPathIn(dir), { force: true })
   }
 }
 
@@ -246,12 +240,15 @@ const UNRELATED_FAILURES = 'tests, tsc, lint and `pnpm agent` can fail for reaso
 
 const lastLogLine = logPath => readOrNull(logPath)?.toString().trim().split('\n').at(-1) ?? '(empty log)'
 
-const describeOutcome = ({ job, exitCode, commands }) => {
-  const pending = `Until it finishes, ${UNRELATED_FAILURES}. Its log (${job.logPath}) ends with \`[ensure-deps] done\` or an \`[ensure-deps] FAILED\` line.`
-  if (job.kind === 'busy') return `A job started by another session is already running (pid ${job.pid}). ${pending}`
-  if (exitCode === null) return `${commands} is still running in the background (pid ${job.child.pid}). ${pending}`
-  if (exitCode === 0) return `Fixed: ${commands} finished before this session started (log: ${job.logPath}).`
-  return `${commands} FAILED, so ${UNRELATED_FAILURES}. Last log line: ${lastLogLine(job.logPath)} Full log: ${job.logPath}`
+const describeOutcome = ({ dir, child, exitCode, commands }) => {
+  const logPath = logPathIn(dir)
+  const pending = `Until it finishes, ${UNRELATED_FAILURES}. Its log (${logPath}) ends with \`[ensure-deps] done\` or an \`[ensure-deps] FAILED\` line.`
+  if (exitCode === BUSY_EXIT) {
+    return `A job started by another session is already running (pid ${lockHolder(lockPathIn(dir)) || 'unknown'}). ${pending}`
+  }
+  if (exitCode === null) return `${commands} is still running in the background (pid ${child.pid}). ${pending}`
+  if (exitCode === 0) return `Fixed: ${commands} finished before this session started (log: ${logPath}).`
+  return `${commands} FAILED, so ${UNRELATED_FAILURES}. Last log line: ${lastLogLine(logPath)} Full log: ${logPath}`
 }
 
 const BEHIND_BASE_WARNING =
@@ -269,21 +266,23 @@ export const ensureDeps = async ({ root, waitMs = WAIT_MS, env = process.env }) 
   const steps = deps !== 'fresh' ? ['install', 'build'] : dist.length ? ['build'] : []
   if (!steps.length) return ''
 
-  const job = startJob({ root, steps, env })
-  const exitCode = job.kind === 'started' ? await waitForExit(job.child, waitMs) : null
+  const dir = stateDir(root)
+  mkdirSync(dir, { recursive: true })
+  const child = startJob({ root, dir, steps, env })
+  const exitCode = await waitForExit(child, waitMs)
   const stale = [...(deps === 'fresh' ? [] : [DEPS_REASON[deps]]), ...dist.map(d => `${d.dir} dist ${DIST_REASON[d.reason]}`)]
   const commands = steps.map(step => `\`pnpm ${STEP_ARGS[step].join(' ')}\``).join(' then ')
   return [
     `[ensure-deps] ${stale.join('; ')}.`,
-    describeOutcome({ job, exitCode, commands }),
+    describeOutcome({ dir, child, exitCode, commands }),
     ...(steps.includes('install') && lockfileBehindBase(root) ? [BEHIND_BASE_WARNING] : []),
   ].join('\n')
 }
 
 if (isMainModule(import.meta.url)) {
   if (process.argv[2] === '--job') {
-    const [root, lockPath, ...steps] = process.argv.slice(3)
-    process.exitCode = runJob(root, lockPath, steps)
+    const [root, dir, ...steps] = process.argv.slice(3)
+    process.exitCode = runJob(root, dir, steps)
   } else {
     try {
       const text = await ensureDeps({ root: ROOT })
