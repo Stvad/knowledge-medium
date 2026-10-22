@@ -57,9 +57,10 @@ export const parseMemoryKeys = stdout => {
 export const readMemoryIndex = result => {
   // ENOBUFS truncates stdout at the buffer cap — the whole index lost to a cap.
   if (result.error) return { error: result.error.code ?? result.error.message }
-  if (result.status !== 0) return { error: `bd memories exited ${result.status ?? result.signal}` }
+  // bd's own `Error…` line names the cause; a failing exit often carries one.
   const stderrError = /^Error.*$/m.exec(result.stderr ?? '')
   if (stderrError) return { error: firstLine(stderrError[0]) }
+  if (result.status !== 0) return { error: `bd memories exited ${result.status ?? result.signal}` }
   return parseMemoryKeys(result.stdout)
 }
 

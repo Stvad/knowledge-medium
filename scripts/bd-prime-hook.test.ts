@@ -96,6 +96,11 @@ describe('readMemoryIndex', () => {
             error: 'Error: memory table read failed',
         })
     })
+
+    it("names bd's own Error line over a bare exit code", () => {
+        const stderr = "Error: no beads database found\nHint: run 'bd where' to inspect the resolved workspace\n"
+        expect(readMemoryIndex({ ...ok, status: 1, stdout: '', stderr })).toEqual({ error: 'Error: no beads database found' })
+    })
 })
 
 describe('buildAdditionalContext', () => {
@@ -156,6 +161,15 @@ describe('buildAdditionalContext', () => {
         expect(back.keys).toContain(keys[0])
     })
 
+    // A one-key group's "+1 more" marker can be longer than its key, so an
+    // index that fits whole is tried before concluding no group line fits.
+    it('shows many small groups whole when they fit, even where their markers would not', () => {
+        const keys = Array.from({ length: 700 }, (_, i) => `g${i}_k`)
+        const out = buildAdditionalContext({ keys })
+        expect(out.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        expect(readBack(out).keys.sort()).toEqual([...keys].sort())
+    })
+
     it('when not even one line per group fits, still says how many keys it left out', () => {
         const keys = Array.from({ length: 2000 }, (_, i) => `prefix${i}_name`)
         const out = buildAdditionalContext({ keys })
@@ -169,6 +183,7 @@ describe('buildAdditionalContext', () => {
         const out = buildAdditionalContext({ error: 'ENOBUFS' }, notice)
         expect(out).toContain('index unavailable (ENOBUFS)')
         expect(out).toContain('`bd memories` lists every key')
+        expect(out).toContain(notice)
         expect(out.indexOf(notice)).toBeLessThan(out.indexOf('index unavailable'))
         expect(buildAdditionalContext({ error: 'x'.repeat(20_000) }).length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
     })
