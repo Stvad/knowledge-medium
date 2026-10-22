@@ -1,1 +1,1 @@
-import{Bi as e,Li as t,Ri as n,zi as r}from"../../../chunks/app-B4JtmO3_.js";export{t as appendClientRecord,n as clientGroupId,r as clientSeriesQuery,e as updateClientRecord};
+import{Bi as e,Li as t,Ri as n,zi as r}from"../../../chunks/app-D_VI55ha.js";export{t as appendClientRecord,n as clientGroupId,r as clientSeriesQuery,e as updateClientRecord};
