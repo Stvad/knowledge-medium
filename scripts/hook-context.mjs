@@ -29,6 +29,9 @@ export const readHookPayload = prefilter => {
   return prefilter.test(cmd) ? { payload, cmd, cwd: payload.cwd || process.cwd() } : null
 }
 
+// Accepted: this runs in the repository the command names, before any permission
+// prompt, so that repository's config (fsmonitor, filter drivers) runs here as the
+// command itself would run it. The hooks serve the agent's own checkouts.
 export const git = (cwd, cArgs, args, input) =>
   execFileSync('git', [...cArgs, ...args], {
     cwd,
