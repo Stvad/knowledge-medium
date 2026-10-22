@@ -25,7 +25,8 @@
  * when).
  *
  * Not covered, and accepted: a restore inside a script file, `bash -c` or a
- * heredoc; staged content that differs from the working tree when the
+ * heredoc; bytes an earlier part of the same command writes (the copy is the
+ * tree before the command, the one a mutate-then-restore loop needs); staged content that differs from the working tree when the
  * command also rewrites the index (it survives as an unreachable blob until
  * gc); edits `git diff` does not report, under assume-unchanged or
  * skip-worktree bits or inside submodules (this repository uses neither); and
@@ -53,7 +54,10 @@ const parseCheckout = rest => {
   let fromFile = false
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i]
-    if (t === '--') return { pathspecs: rest.slice(i + 1), fromFile }
+    if (t === '--') {
+      if (force && i === rest.length - 1) break // `checkout -f <branch> --` names no path
+      return { pathspecs: rest.slice(i + 1), fromFile }
+    }
     if (t.startsWith('--')) {
       const name = t.split('=')[0]
       if (CHECKOUT_BRANCH_OPS.has(name)) branchOp = true

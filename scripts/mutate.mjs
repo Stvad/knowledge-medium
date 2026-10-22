@@ -140,7 +140,7 @@ export const statePaths = (root, target) => {
     report: join(dir, 'report.json'),
     journal: `${base}.journal.json`,
     snapshot: `${base}.orig`,
-    duringRun: `${base}.during-run`,
+    duringRun: `${base}.${process.pid}.during-run`,
   }
 }
 

@@ -152,6 +152,7 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
   const lastLine = (s: string) => s.trim().split('\n').at(-1)
   const mod = (dir: string) => readFileSync(join(dir, 'mod.mjs'), 'utf8')
   const paths = (dir: string) => statePaths(dir, join(dir, 'mod.mjs'))
+  const savedAt = (out: string) => /saved at (\S+)/.exec(out)![1]
 
   it('reports PINNED with the failing test, restores the exact bytes, and never calls git', () => {
     const dir = fixture()
@@ -262,8 +263,10 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(r.status, r.stdout).toBe(3)
     expect(lastLine(r.stdout)).toMatch(/^CHANGED DURING RUN: mod\.mjs/)
     expect(mod(dir)).toBe(MOD)
-    expect(readFileSync(paths(dir).duringRun, 'utf8')).toMatch(/\/\/ during run\n$/)
-
+    expect(readFileSync(savedAt(r.stdout), 'utf8')).toMatch(/\/\/ during run\n$/)
+    const again = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
+    expect(savedAt(again.stdout)).not.toBe(savedAt(r.stdout))
+    expect(readFileSync(savedAt(r.stdout), 'utf8')).toMatch(/\/\/ during run\n$/)
   })
 
   it('reports a target deleted during the run, and restores it', () => {
@@ -296,7 +299,7 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(r.status, r.stdout).toBe(3)
     expect(lastLine(r.stdout)).toMatch(/^CHANGED DURING RUN/)
     expect(r.stdout).not.toContain('edit:')
-    expect(readFileSync(paths(dir).duringRun, 'utf8')).toMatch(/\/\/ during baseline\n$/)
+    expect(readFileSync(savedAt(r.stdout), 'utf8')).toMatch(/\/\/ during baseline\n$/)
     expect(mod(dir)).toBe(MOD)
   })
 

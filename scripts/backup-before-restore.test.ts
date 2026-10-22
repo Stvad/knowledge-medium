@@ -59,6 +59,7 @@ describe('restoreInvocations', () => {
     expect(specs('git checkout --force some-branch')).toEqual([[':/']])
     expect(specs('git checkout -fq some-branch')).toEqual([[':/']])
     expect(specs('git checkout -f -- f.ts')).toEqual([['f.ts']])
+    expect(specs('git checkout -f other --')).toEqual([[':/']])
   })
 
   it('reads restore pathspecs past its value-taking options', () => {

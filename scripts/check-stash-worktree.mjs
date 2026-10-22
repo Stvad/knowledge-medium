@@ -34,7 +34,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
@@ -444,7 +444,7 @@ export const effectiveCwd = (payloadCwd, cdPath) => {
   const cwd = resolve(payloadCwd, cdPath)
   // A cd that cannot enter its target leaves the shell where it was:
   // `cd /x || git …` runs here, and `cd /x && git …` never runs at all.
-  return { cwd: existsSync(cwd) ? cwd : payloadCwd, exact: true }
+  return { cwd: statSync(cwd, { throwIfNoEntry: false })?.isDirectory() ? cwd : payloadCwd, exact: true }
 }
 
 /** The cd or -C/--git-dir/--work-tree value holding an unexpanded variable, or null. */

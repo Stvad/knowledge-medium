@@ -155,9 +155,10 @@ describe('stashInvocations', () => {
     expect(cdPath('pushd /wt && popd')).toBe('$DIRSTACK')
   })
 
-  it('keeps the starting directory when a cd target does not exist', () => {
+  it('keeps the starting directory when a cd target does not exist or is a file', () => {
     const start = realpathSync(tmpdir())
     expect(effectiveCwd(start, '/no/such/dir/anywhere')).toEqual({ cwd: start, exact: true })
+    expect(effectiveCwd(start, fileURLToPath(import.meta.url))).toEqual({ cwd: start, exact: true })
     expect(effectiveCwd('/', start)).toEqual({ cwd: start, exact: true })
   })
 
