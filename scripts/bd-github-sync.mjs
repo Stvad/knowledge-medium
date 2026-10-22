@@ -399,11 +399,15 @@ const parseCall = args => {
 // (`comments/$id`).
 const expansionMayAddFlags = call =>
   call.some(({ word, role }) => word.includes('$') && !(role === 'value' || (role === 'endpoint' && !word.startsWith('$'))))
-// Brace expansion makes words of its own, so a list in a word that starts
-// with `-` (`-{F,i}body=x`), or with an alternative that does (`{-i,-Fx}`),
-// adds flags wherever it stands; a jq object (`{number,title}`) does neither.
-const BRACE_LIST = /\{[^{}]*(?:,|\.\.)[^{}]*\}/g
-const braceMakesFlag = word => (word.match(BRACE_LIST) ?? []).some(list => word.startsWith('-') || /[{,]-/.test(list))
+// Brace expansion makes words of its own, each beginning with the text ahead
+// of the first brace. So a word with a list adds flags wherever it stands
+// when it holds a `-` and starts with one (`-{F,i}body=x`), with a brace
+// (`{,}-i`, `{{,}-F,z}`), or with an expansion that can be empty
+// (`${x}{,-XPOST}`); a jq filter (`.[] | {id, path}`) starts with text of its
+// own. A `$` counts as a `-`: it is where the reader left an expansion or an
+// escape it does not decode (`$'\x2d'` is `-`).
+const BRACE_EXPANSION = /\{.*(?:,|\.\.).*\}/s
+const braceMakesFlag = word => BRACE_EXPANSION.test(word) && /^[-{$]/.test(word) && /[-$]/.test(word)
 // gh keeps the LAST -X/--method — measured against the installed gh: `-X POST
 // -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST.
 // Another flag's value (`--template --method=GET`) is text. An explicit GET
@@ -2515,10 +2519,8 @@ const sessionStartedMs = ({ transcript_path: p }) => {
 // outside this session's own scratchpad can hold another session's text; and
 // a file older than this session was written by none of its calls. Either way
 // it is what a retry of a blocked compound ships: the compound that would have
-// rewritten it never ran. One this command rewrites first is refused all the
-// same: a new file is the shape that passes, and telling a write that runs
-// before the publish from one that runs after would be shell parsing. A
-// payload naming no session is held to any session's scratchpad.
+// rewritten it never ran. A payload naming no session is held to any
+// session's scratchpad.
 const SHARED_TMP = /^\/(?:private\/)?tmp\/claude-[^/]+\//
 const sessionScratchpad = sessionId =>
   new RegExp(String.raw`^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/${isPlainId(sessionId) ? sessionId : '[^/]+'}\/scratchpad\/`)
@@ -2526,11 +2528,21 @@ const sessionScratchpad = sessionId =>
 // and `~/` (`~+`, `~-`, `~user`): the file it names is decided by the shell
 // after this gate has run, so it is refused, never passed.
 const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}|^~(?!\/|$)/
-// In a compound command, something before the publish can move to another
-// directory, or make, move or relink the body file (`cd`, `ln`, a write), so
-// there one must already exist and be named absolutely. The leading
-// `cd <dir> &&` is the one change this gate places.
+// In a compound command another step can move to another directory, or make,
+// relink or rewrite the body file (`cd`, `ln`, a write) before the publish
+// reads it, and telling the steps that run first from the rest would be shell
+// parsing. So a file-fed publish passes only as a command of its own; the
+// leading `cd <dir> &&` is the one step this gate places.
 const isCompound = cmd => shellCommandsWithDepth(withoutCdPrefix(cmd)).filter(s => !s.heredoc).length > 1
+// The word a command without chained steps runs, past the leading `cd` and
+// its assignments. gh reads a relative name from the directory the command
+// runs in, and pr:reply from the one pnpm was started in; behind anything
+// else (`env -C dir`, `sudo -D dir`) that directory is the wrapper's to set.
+const commandWordOf = cmd =>
+  shellCommandsWithDepth(withoutCdPrefix(cmd))
+    .find(s => !s.heredoc)
+    ?.tokens.find(t => !/^[A-Za-z_]\w*=/.test(t))
+const runsInPlace = word => [GH_COMMAND, PACKAGE_MANAGER, SCRIPT_RUNNER, REPLY_FILE].some(re => re.test(word ?? ''))
 // The path a body file really names: a symlink's target, so the shared-tmp
 // rule judges what gh will read. As written when nothing is there yet.
 const realPath = path => {
@@ -2546,14 +2558,15 @@ const staleBodyFiles = (cmd, cwd, payload) => {
   const dir = cdPrefixDir(cmd)
   const base = dir === undefined ? cwd : resolveBodyPath(dir, cwd, homedir())
   const compound = isCompound(cmd)
+  const word = commandWordOf(cmd)
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
     if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
-    if (compound && !isAbsolute(value) && !isHomePath(value))
-      return [`${value}: relative, in a compound command whose other steps can move or make it before the publish runs`]
+    if (compound) return [`${value}: read by a publish with other commands chained to it, which can make, move or rewrite it first`]
+    if (!runsInPlace(word) && !isAbsolute(value) && !isHomePath(value))
+      return [`${value}: relative, behind \`${word}\`, which can run the publish in another directory`]
     const path = realPath(resolveBodyPath(value, base, homedir()))
-    if (compound && !existsSync(path)) return [`${path}: not there yet, in a compound command whose other steps would make it`]
     if (SHARED_TMP.test(path) && !scratchpad.test(path))
       return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]
     if (startedMs === undefined) return []
@@ -2582,7 +2595,7 @@ const COVERED_RECIPE = [
 ].join('\n')
 const BOTH_ESCAPES = 'after checking every #N and bead id in the text yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.'
 const STALE_ADVICE =
-  'Write the text afresh to a new file in your session scratchpad (the directory your system prompt names), in a call of its own — with the Write tool, or a plain `cp` (not `cp -p`) of a file you have checked — and publish that file.'
+  'Write the text afresh to a new file in your session scratchpad (the directory your system prompt names), in a call of its own — with the Write tool, or a plain `cp` (not `cp -p`) of a file you have checked — and publish that file in a command of its own.'
 // `uncovered` is read only when `outside` names text the gate cannot see. The
 // escapes never lift a stale file, so with one they come with a new file.
 const blockedPublishMessage = ({ stale, uncovered, outside }) => {

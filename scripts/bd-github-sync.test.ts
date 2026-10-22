@@ -408,6 +408,10 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
     `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=x}`,
     `gh api repos/${REPO}/issues/1/comments -{F,i}body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {,}-XPOST -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {{,}-XPOST,} -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f \${x}{,body=x,-XPOST}`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f body=x --jq $'\\x2d'{,XPOST}`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
@@ -3887,20 +3891,34 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(expanded.status, cmd).toBe(2)
       expect(expanded.stderr, cmd).toContain('a name the shell expands')
     }
-    // in a compound command its other steps can move to another directory, or
-    // make or relink the file, so a body file there must exist and be absolute
+    // in a compound command another step can move to another directory, or
+    // make, relink or rewrite the file first, so a file-fed publish passes
+    // only as a command of its own
     mkdirSync(join(repo, 'sub'))
-    for (const [cmd, fact] of [
-      ['cd -- sub && gh pr create --title t --body-file new-body.md', 'relative, in a compound command'],
-      ['builtin cd sub; gh pr create --title t --body-file new-body.md', 'relative, in a compound command'],
-      ['ln -s /x linked.md && gh pr create --title t --body-file linked.md', 'relative, in a compound command'],
-      [`ln -s /x ${join(repo, 'linked.md')} && gh pr create --title t --body-file ${join(repo, 'linked.md')}`, 'not there yet'],
+    for (const cmd of [
+      'cd -- sub && gh pr create --title t --body-file new-body.md',
+      'builtin cd sub; gh pr create --title t --body-file new-body.md',
+      'ln -s /x linked.md && gh pr create --title t --body-file linked.md',
+      `cp /x ${join(repo, 'new-body.md')} && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`,
+      `gh pr create --title t --body-file ${join(repo, 'new-body.md')} | tail`,
     ]) {
-      const moved = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 ${cmd}`, session)
-      expect(moved.status, cmd).toBe(2)
-      expect(moved.stderr, cmd).toContain(fact)
+      const chained = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 ${cmd}`, session)
+      expect(chained.status, cmd).toBe(2)
+      expect(chained.stderr, cmd).toContain('other commands chained to it')
     }
-    expect(hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 echo ready && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    expect(hook(`gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    // behind a wrapper the directory is the wrapper's, so a name there must be absolute
+    const wrapped = hook('env -C sub gh pr create --title t --body-file old-body.md', session)
+    expect(wrapped.status).toBe(2)
+    expect(wrapped.stderr).toContain('relative, behind `env`')
+    expect(hook(`env -C sub gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    // a publisher run directly reads the name where the command runs
+    for (const cmd of [
+      'KM_ISSUE_REFS_OK=1 gh pr create --title t --body-file new-body.md',
+      'node scripts/pr-reply.mjs 1385 1 new-body.md',
+      'scripts/pr-reply.mjs 1385 1 new-body.md',
+    ])
+      expect(hook(cmd, session).status, cmd).toBe(0)
     // the leading cd is placed, so a relative name after it is still read
     expect(hook('cd sub && gh pr create --title t --body-file ../new-body.md', session).status).toBe(0)
     // no transcript, no session start: nothing to compare
