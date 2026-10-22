@@ -38,6 +38,17 @@
           }
         ],
         "matcher": "startup|resume|clear"
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml",
+            "type": "command",
+            "timeout": 300
+          }
+        ],
+        "matcher": "startup|resume"
       }
     ],
     "UserPromptSubmit": [
