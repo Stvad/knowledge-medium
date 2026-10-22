@@ -410,10 +410,11 @@ const parseCall = words => {
 // (`comments/$id`).
 const expansionMayAddFlags = call =>
   call.some(({ word, role }) => word.includes('$') && !(role === 'value' || (role === 'endpoint' && !word.startsWith('$'))))
-// Brace expansion makes words of its own, so one with an alternative that is a
-// flag (`{-i,-Fbody=x}`) adds flags wherever it stands; a jq object
-// (`{number,title}`) has no such alternative.
-const braceMakesFlag = word => [...word.matchAll(/\{[^{}]*\}/g)].some(([list]) => list.includes(',') && /[{,]-/.test(list))
+// Brace expansion makes words of its own, so a list in a word that starts
+// with `-` (`-{F,i}body=x`), or with an alternative that does (`{-i,-Fx}`),
+// adds flags wherever it stands; a jq object (`{number,title}`) does neither.
+const BRACE_LIST = /\{[^{}]*(?:,|\.\.)[^{}]*\}/g
+const braceMakesFlag = word => (word.match(BRACE_LIST) ?? []).some(list => word.startsWith('-') || /[{,]-/.test(list))
 // gh keeps the LAST -X/--method — measured against the installed gh: `-X POST
 // -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST.
 // Another flag's value (`--template --method=GET`) is text. An explicit GET
@@ -2540,12 +2541,11 @@ const sessionScratchpad = sessionId =>
 // and `~/` (`~+`, `~-`, `~user`): the file it names is decided by the shell
 // after this gate has run, so it is refused, never passed.
 const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}|^~(?!\/|$)/
-// Directory changes a relative body path could have been made from. Only the
-// leading `cd <dir> &&` is placed; any other leaves the path's base unknown.
-const DIRECTORY_CHANGE = new Set(['cd', 'pushd', 'popd'])
-const unplacedDirectoryChange = cmd =>
-  shellCommandsWithDepth(cmd).filter(s => !s.heredoc && DIRECTORY_CHANGE.has(s.tokens.find(t => !/^[A-Za-z_]\w*=/.test(t)))).length >
-  (cdPrefixDir(cmd) === undefined ? 0 : 1)
+// In a compound command, something before the publish can move to another
+// directory, or make, move or relink the body file (`cd`, `ln`, a write), so
+// there one must already exist and be named absolutely. The leading
+// `cd <dir> &&` is the one change this gate places.
+const isCompound = cmd => shellCommandsWithDepth(withoutCdPrefix(cmd)).filter(s => !s.heredoc).length > 1
 // The path a body file really names: a symlink's target, so the shared-tmp
 // rule judges what gh will read. As written when nothing is there yet.
 const realPath = path => {
@@ -2560,15 +2560,16 @@ const staleBodyFiles = (cmd, cwd, payload) => {
   if (!values.length) return []
   const dir = cdPrefixDir(cmd)
   const base = dir === undefined ? cwd : resolveBodyPath(dir, cwd, homedir())
-  const baseUnknown = unplacedDirectoryChange(cmd)
+  const compound = isCompound(cmd)
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
     if (value === UNREADABLE_ARGV) return ['a gh api call whose arguments this gate cannot read, so which files it publishes is unknown']
     if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
-    if (baseUnknown && !isAbsolute(value) && !isHomePath(value))
-      return [`${value}: relative to a directory a \`cd\` in this command changes, which this gate cannot place`]
+    if (compound && !isAbsolute(value) && !isHomePath(value))
+      return [`${value}: relative, in a compound command whose other steps can move or make it before the publish runs`]
     const path = realPath(resolveBodyPath(value, base, homedir()))
+    if (compound && !existsSync(path)) return [`${path}: not there yet, in a compound command whose other steps would make it`]
     if (SHARED_TMP.test(path) && !scratchpad.test(path))
       return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]
     if (startedMs === undefined) return []

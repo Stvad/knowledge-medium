@@ -404,7 +404,8 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
     // a word the shell turns into a flag: an ANSI-C escape, a brace list
     `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
-    `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=#123}`,
+    `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=x}`,
+    `gh api repos/${REPO}/issues/1/comments -{F,i}body=x`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
@@ -3886,17 +3887,22 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(expanded.status, cmd).toBe(2)
       expect(expanded.stderr, cmd).toContain('a name the shell expands')
     }
-    // a relative name after a `cd` this gate cannot place could be any file
+    // in a compound command its other steps can move to another directory, or
+    // make or relink the file, so a body file there must exist and be absolute
     mkdirSync(join(repo, 'sub'))
-    for (const cmd of [
-      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cd -- sub && gh pr create --title t --body-file new-body.md',
-      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cd sub; gh pr create --title t --body-file new-body.md',
+    for (const [cmd, fact] of [
+      ['cd -- sub && gh pr create --title t --body-file new-body.md', 'relative, in a compound command'],
+      ['builtin cd sub; gh pr create --title t --body-file new-body.md', 'relative, in a compound command'],
+      ['ln -s /x linked.md && gh pr create --title t --body-file linked.md', 'relative, in a compound command'],
+      [`ln -s /x ${join(repo, 'linked.md')} && gh pr create --title t --body-file ${join(repo, 'linked.md')}`, 'not there yet'],
     ]) {
-      const moved = hook(cmd, session)
+      const moved = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 ${cmd}`, session)
       expect(moved.status, cmd).toBe(2)
-      expect(moved.stderr, cmd).toContain('relative to a directory a `cd` in this command changes')
+      expect(moved.stderr, cmd).toContain(fact)
     }
-    expect(hook(`cd sub && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    expect(hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 echo ready && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    // the leading cd is placed, so a relative name after it is still read
+    expect(hook('cd sub && gh pr create --title t --body-file ../new-body.md', session).status).toBe(0)
     // no transcript, no session start: nothing to compare
     expect(hook('gh pr create --title t --body-file old-body.md').status).toBe(0)
   })
