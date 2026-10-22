@@ -299,6 +299,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     expect(calls).toEqual([INSTALL])
     expect(text).toContain(`\`pnpm ${INSTALL}\` FAILED`)
     expect(text).toContain('fake pnpm failure: the real error')
+    expect(text).toContain('at frame29')
   })
 
   it('explains a reinstall that will repeat because the lockfile is not in the form pnpm writes', () => {
