@@ -1,1 +1,1 @@
-import{fs as e}from"../../../chunks/app-TfXdZHJx.js";export{e as getSyncIndicatorView};
+import{fs as e}from"../../../chunks/app-DgUghWIa.js";export{e as getSyncIndicatorView};

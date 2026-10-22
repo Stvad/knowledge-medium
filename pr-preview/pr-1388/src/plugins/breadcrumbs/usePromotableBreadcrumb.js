@@ -1,1 +1,1 @@
-import{Kb as e}from"../../../chunks/app-TfXdZHJx.js";export{e as usePromotableBreadcrumb};
+import{Kb as e}from"../../../chunks/app-DgUghWIa.js";export{e as usePromotableBreadcrumb};
