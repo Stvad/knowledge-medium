@@ -60,4 +60,4 @@ Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, s
 bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
 ```
 
-and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push`, which rules adoption out even at a prompt. On a missing registry it prints `No remote is configured — skipping` and exits 0, so read the output, not the exit code. (AGENTS.md carries the short form of this rule; it applies to any new machine, not just cloud.)
+and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push`, which rules adoption out even at a prompt. On a missing registry it prints `No remote is configured — skipping` and exits 0, so read the output, not the exit code. (`docs/beads.md` carries the same rule; it applies to any new machine, not just cloud.)
