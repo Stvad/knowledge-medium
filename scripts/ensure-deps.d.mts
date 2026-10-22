@@ -7,7 +7,6 @@ export declare const WAIT_MS: number
 
 export interface DistPackage {
   dir: string
-  entry: string
   buildInfo: string
 }
 export declare const DIST_PACKAGES: readonly DistPackage[]

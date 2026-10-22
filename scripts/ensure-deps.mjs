@@ -41,13 +41,16 @@ export const WAIT_MS = 20_000
 /**
  * The packages `compile:packages` builds. `buildInfo` is each tsconfig's
  * tsBuildInfoFile: `tsc -b` rewrites it on every build, including one that
- * only refreshes timestamps, so sources are compared against it — the entry
+ * only refreshes timestamps, so sources are compared against it — an output
  * keeps its old mtime when a rebuild changes nothing, and would never settle.
  */
 export const DIST_PACKAGES = [
-  { dir: 'packages/agent-cli', entry: 'dist/cli.js', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
-  { dir: 'packages/agent-dispatch', entry: 'dist/daemon.js', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
+  { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
+  { dir: 'packages/agent-dispatch', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
 ]
+
+// No install or build runs this long, so an older lock's pid is presumed reused.
+const LOCK_MAX_AGE_MS = 30 * 60_000
 
 const readOrNull = path => {
   try {
@@ -68,6 +71,14 @@ export const readDepsState = root => {
   return installed.equals(wanted) ? 'fresh' : 'mismatch'
 }
 
+const stringLeaves = value => (typeof value === 'string' ? [value] : Object.values(value ?? {}).flatMap(stringLeaves))
+
+/** Whether any file the package's manifest promises — a bin or an export — is absent. */
+const outputsMissing = pkgDir => {
+  const { bin, exports } = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
+  return [...stringLeaves(bin), ...stringLeaves(exports)].some(output => !existsSync(join(pkgDir, output)))
+}
+
 const newestInput = pkgDir => {
   let newest = mtimeOf(join(pkgDir, 'tsconfig.json')) ?? 0
   for (const entry of readdirSync(join(pkgDir, 'src'), { recursive: true, withFileTypes: true })) {
@@ -86,7 +97,7 @@ export const staleDist = root =>
   DIST_PACKAGES.flatMap(pkg => {
     const dir = join(root, pkg.dir)
     if (!existsSync(join(dir, 'src'))) return []
-    if (!existsSync(join(dir, pkg.entry))) return [{ dir: pkg.dir, reason: 'missing' }]
+    if (outputsMissing(dir)) return [{ dir: pkg.dir, reason: 'missing' }]
     return newestInput(dir) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
       ? [{ dir: pkg.dir, reason: 'outdated' }]
       : []
@@ -139,11 +150,15 @@ const createLock = lockPath => {
 
 const lockHolder = lockPath => Number(readOrNull(lockPath)?.toString())
 
-/** Null once this process holds the lock; otherwise the pid of the live job that does. */
+/**
+ * Null once this process holds the lock; otherwise the pid of the live job
+ * that does. Two starts reclaiming the same dead lock in one instant can both
+ * win; accepted, as it needs a crashed job and simultaneous starts in one checkout.
+ */
 const takeLock = lockPath => {
   if (createLock(lockPath)) return null
   const holder = lockHolder(lockPath)
-  if (pidAlive(holder)) return holder
+  if (pidAlive(holder) && Date.now() - (mtimeOf(lockPath) ?? 0) < LOCK_MAX_AGE_MS) return holder
   rmSync(lockPath, { force: true })
   return createLock(lockPath) ? null : lockHolder(lockPath)
 }
@@ -194,12 +209,12 @@ const waitForExit = (child, ms) =>
 
 /**
  * `tsc -b` trusts a build record newer than its inputs over the outputs it
- * describes, so a record whose entry is gone must go too or nothing is re-emitted.
+ * describes, so a stale package's record goes before the build, or an output
+ * someone deleted is never re-emitted.
  */
-const forgetOrphanedBuildRecords = root => {
-  for (const pkg of DIST_PACKAGES) {
-    if (!existsSync(join(root, pkg.dir, pkg.entry))) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
-  }
+const forgetStaleBuildRecords = root => {
+  const stale = new Set(staleDist(root).map(({ dir }) => dir))
+  for (const pkg of DIST_PACKAGES) if (stale.has(pkg.dir)) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
 }
 
 const runJob = (root, lockPath, steps) => {
@@ -207,7 +222,7 @@ const runJob = (root, lockPath, steps) => {
   try {
     for (const step of steps) {
       const command = `pnpm ${STEP_ARGS[step].join(' ')}`
-      if (step === 'build') forgetOrphanedBuildRecords(root)
+      if (step === 'build') forgetStaleBuildRecords(root)
       say(`${new Date().toISOString()} ${command}`)
       const result = spawnSync('pnpm', STEP_ARGS[step], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'] })
       if (result.status !== 0) {
@@ -249,7 +264,9 @@ export const ensureDeps = async ({ root, waitMs = WAIT_MS, env = process.env }) 
   const deps = readDepsState(root)
   if (deps === 'no-lockfile') return ''
   const dist = staleDist(root)
-  const steps = [...(deps === 'fresh' ? [] : ['install']), ...(dist.length ? ['build'] : [])]
+  // A new dependency set can change the toolchain or purge the build records,
+  // so the packages are rebuilt against every install.
+  const steps = deps !== 'fresh' ? ['install', 'build'] : dist.length ? ['build'] : []
   if (!steps.length) return ''
 
   const job = startJob({ root, steps, env })

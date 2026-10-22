@@ -59,12 +59,21 @@ const commitLockfile = (root: string, content: string) => {
 const writeInstallRecord = (root: string, content: string, mtimeSec?: number) =>
   write(join(root, 'node_modules', '.pnpm', 'lock.yaml'), content, mtimeSec)
 
-// Sources at T0, the build record after them: what a finished `tsc -b` leaves.
+// What each fixture package's manifest promises: a bin, a plain export and a
+// conditional one.
+const MANIFEST = {
+  bin: { fixture: 'dist/main.js' },
+  exports: { '.': './dist/main.js', './extra': { import: './dist/extra.js' } },
+}
+const OUTPUTS = ['dist/main.js', 'dist/extra.js']
+
+// Sources at T0, the outputs and build record after them: what a finished `tsc -b` leaves.
 const writeFreshDist = (root: string) => {
   for (const pkg of DIST_PACKAGES) {
+    write(join(root, pkg.dir, 'package.json'), JSON.stringify(MANIFEST), T0)
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
     write(join(root, pkg.dir, 'src', 'index.ts'), 'export {}\n', T0)
-    write(join(root, pkg.dir, pkg.entry), 'fixture build\n', T0 + 10)
+    for (const out of OUTPUTS) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
 }
@@ -115,7 +124,7 @@ const finish = () => {
       const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
         .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
       if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
-      for (const out of [pkg.entry, pkg.buildInfo]) {
+      for (const out of [...${JSON.stringify(OUTPUTS)}, pkg.buildInfo]) {
         fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
         fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
       }
@@ -203,6 +212,12 @@ describe('staleDist', () => {
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
   })
 
+  it.each(OUTPUTS)('reports a dist missing %s, which its manifest promises', output => {
+    const root = makeCheckout()
+    rmSync(join(root, pkg.dir, output))
+    expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
+  })
+
   it.each(['src/nested/deep.ts', 'tsconfig.json'])('reports a dist older than its input %s', input => {
     const root = makeCheckout()
     write(join(root, pkg.dir, input), 'changed\n', T0 + 20)
@@ -263,12 +278,12 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     expect(existsSync(stateDir(root))).toBe(false)
   })
 
-  it('reinstalls a mismatched node_modules and says so', async () => {
+  it('reinstalls a mismatched node_modules, rebuilds against it, and says so', async () => {
     const root = makeCheckout()
     writeInstallRecord(root, 'lock: v0\n')
     const pnpm = fakePnpm()
     const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
     expect(readDepsState(root)).toBe('fresh')
     expect(text).toContain('installed from a different pnpm-lock.yaml')
     expect(text).toContain(`\`pnpm ${INSTALL}\``)
@@ -281,7 +296,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     rmSync(join(root, 'node_modules'), { recursive: true })
     const pnpm = fakePnpm()
     const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
     expect(text).toContain('no install record')
   })
 
@@ -294,7 +309,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     expect(staleDist(root)).toEqual([])
     expect(text).toContain(`${DIST_PACKAGES[0].dir} dist was missing`)
     // The healthy package kept its build record, so tsc -b left it alone.
-    expect(readFileSync(join(root, DIST_PACKAGES[1].dir, DIST_PACKAGES[1].entry), 'utf8')).toBe('fixture build\n')
+    expect(readFileSync(join(root, DIST_PACKAGES[1].dir, OUTPUTS[0]), 'utf8')).toBe('fixture build\n')
   })
 
   it('installs before it builds when both are stale', async () => {
@@ -393,7 +408,17 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     write(lockPath(root), '')
     const pnpm = fakePnpm()
     await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
+  })
+
+  it('takes over a lock older than any job runs, whatever now holds its pid', async () => {
+    const root = makeCheckout()
+    writeInstallRecord(root, 'lock: v0\n')
+    // A live pid, as when the OS hands a crashed job's pid to something else.
+    write(lockPath(root), String(process.pid), Date.now() / 1000 - 2 * 60 * 60)
+    const pnpm = fakePnpm()
+    await ensureDeps({ root, env: pnpm.env })
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
   })
 
   it('does not start a second job while one is running', async () => {
@@ -413,7 +438,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     write(lockPath(root), String(dead))
     const pnpm = fakePnpm()
     await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
   })
 
   it('warns that a reinstall cannot fix a branch whose lockfile is behind master', async () => {
@@ -425,7 +450,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     git(root, 'checkout', '-q', fork)
     const pnpm = fakePnpm()
     const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
     expect(text).toContain('behind origin/master')
     expect(text).toContain('rebase')
   })
