@@ -37,9 +37,11 @@ export const SUBSTITUTED = '$(…)'
  *    them come back as a command of their own;
  *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
  *    apostrophe in either cannot open a quote that swallows what follows;
- *  - heredoc data comes back line by line (`\`-continued lines joined), each
- *    line read as the commands it would be should a shell read it
- *    (`bash <<'EOF'` does), so a call in it ends with its line.
+ *  - heredoc data comes back line by line (`\`-continued lines joined), so a
+ *    call in it ends with its line. A line is read as the commands it would
+ *    be when a shell reads it (`bash <<'EOF'`) or its substitutions run (an
+ *    unquoted delimiter); the text of a quoted heredoc nothing runs is only
+ *    split into words.
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
@@ -236,7 +238,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
         j++
       }
       if (delim) {
-        heredocs.push({ delim, dash, quoted: quoted && !tokens.some(t => SHELL_READER.test(t)) })
+        heredocs.push({ delim, dash, text: quoted && !tokens.some(t => SHELL_READER.test(t)) })
         i = j - 1
         continue
       }
@@ -249,7 +251,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
       pushSegment()
       let j = i + 1
       while (heredocs.length) {
-        const { delim, dash, quoted } = heredocs.shift()
+        const { delim, dash, text } = heredocs.shift()
         const dataStart = j
         const body = []
         while (j <= cmd.length) {
@@ -262,14 +264,17 @@ const segment = (cmd, wholeCommands, literal = null) => {
           if (eol === -1) break
         }
         if (wholeCommands) {
-          // each line read as the commands it would be, should a shell read it
-          for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n'))
-            for (const s of segment(line, true)) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
+          // a line a shell reads, or whose substitutions run, is read as the
+          // commands it would be; text nothing runs is only split into words
+          for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n')) {
+            if (!text) for (const s of segment(line, true)) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
+            else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true })
+          }
         } else {
           const words = body.join('\n').split(/\s+/).filter(Boolean)
           if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
         }
-        if (quoted) literal?.push([dataStart, Math.min(j, cmd.length)])
+        if (text) literal?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
       continue

@@ -118,8 +118,10 @@ describe('shellCommandsWithDepth', () => {
       { tokens: ['a', 'b', 'c'], depth: 0, heredoc: true },
       { tokens: ['d'], depth: 0, heredoc: true },
     ])
-    // a line is read as the commands it would be
+    // a line a shell reads is read as the commands it would be; text nothing runs is split into words
     expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
+    expect(shellCommandsWithDepth("cat <<'EOF'\nx;gh `api` y\nEOF").map(s => s.tokens)).toEqual([['cat'], ['x;gh', '`api`', 'y']])
+    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
   })
 
   it('keeps a command whole across a process substitution', () => {

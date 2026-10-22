@@ -349,6 +349,8 @@ describe('gh api reads', () => {
     "python3 - <<'EOF'\nrep(\"use `gh api` with a `-f` field here\")\nEOF",
     // even after an apostrophe, which a line read as shell would open a quote on
     "cat > notes.md <<'EOF'\nDon't use `gh api` with a `-f` field\nEOF",
+    // nor are a quoted heredoc's template literals, in source code that mentions a call
+    "python3 - <<'EOF'\nconsole.log(`gh api graphql: ${verb}`)\nEOF",
   ])('is not a publish: %s', cmd => {
     expect(matchesAnyPublish(cmd)).toBe(false)
   })
