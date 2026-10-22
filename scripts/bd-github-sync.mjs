@@ -98,8 +98,9 @@
  *       create/edit/comment/review/merge, gh issue create/edit/comment/close,
  *       gh release create/edit, gh api mutations, and `pnpm pr:reply`, this
  *       repo's review-reply command — matched only outside quoted text, so a
- *       commit message MENTIONING these does not trip it). A graphql call with
- *       no `mutation` in it publishes nothing (graphqlShape). Published text is read back after publication by
+ *       commit message MENTIONING these does not trip it). A read publishes
+ *       nothing, in a loop, a pipe or a substitution alike: each gh api call
+ *       is judged by its own flags (apiCallPublishes). Published text is read back after publication by
  *       bd-publish-verify.mjs (PostToolUse), which echoes the real title of
  *       every #N it published — so this gate scans the raw command string
  *       and deliberately does NOT chase stdin/expansion/--recover bodies;
@@ -111,9 +112,10 @@
  *       about to be blocked and never runs. The block names `pnpm bd:sync`
  *       for an id with no issue yet. The #N echo-gate stays
  *       pre-publish for publishes the read-back does NOT cover, decided by
- *       a WHITELIST: one gh command with no shell operator in its skeleton,
- *       aimed at this repo, whose verb and flags leave a fetchable URL in
- *       the output. Everything else is uncovered — so a spelling this gate
+ *       a WHITELIST: one gh command with no shell operator in its skeleton
+ *       (past a leading `cd <dir> &&`), aimed at this repo, whose verb and
+ *       flags leave a fetchable URL in the output. Everything else is
+ *       uncovered — so a spelling this gate
  *       fails to recognize costs an attested re-run instead of a silent
  *       gap, which is the whole reason for the direction. Uncovered
  *       publishes take ONE coarse rule (#683: B): readable command text
@@ -754,10 +756,11 @@ export const carriesPublishableText = cmd => {
  * to be COMPLETE over shell syntax to be correct, and cannot be.
  *
  * Two layers, different in kind on purpose:
- *  - SHELL: the skeleton must hold no operator at all, and the raw text no
- *    expansion.
+ *  - SHELL: past a leading `cd <dir> &&`, the skeleton must hold no
+ *    operator at all, and the raw text no expansion.
  *  - GH: a closed, documented vocabulary — the verbs whose output names no
- *    URL, foreign targets, graphql, response-hiding flags. A gap here is
+ *    URL, foreign targets (naming this repository is none), graphql,
+ *    response-hiding flags. A gap here is
  *    bounded by one tool's manual rather than by the shell's grammar, and
  *    bd-publish-verify reports a coverage claim it could not honour, so a
  *    gap surfaces instead of passing silently.
