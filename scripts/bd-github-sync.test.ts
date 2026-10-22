@@ -378,6 +378,10 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
     `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
     `gh api repos/${REPO}/issues/1/comments >| out -f body=y`,
+    // an escaped `>` is text, and the `|` after it a pipe into the call
+    `echo \\>|gh api repos/${REPO}/issues/1/comments -f body=y`,
+    // a quoted ">" argument is no redirect, so the flag after it still counts
+    `gh api repos/${REPO}/issues/1/comments ">" -f body=y`,
     // a method-like word another flag takes as its value is text
     `gh api -X POST repos/${REPO}/issues/1/comments -f body=y --template --method=GET`,
     // heredoc data that bash runs is a call

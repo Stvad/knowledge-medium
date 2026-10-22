@@ -45,6 +45,7 @@ const segment = (cmd, wholeCommands) => {
   let started = false // distinguishes '' (a real empty token) from no token
   let quote = null // ' or " while inside a quoted span
   let escaped = false
+  let redirectAt = -1 // where the last `<`/`>` the shell reads as an operator sits
   const scopes = [] // open subshell scopes; length IS the current depth
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
@@ -195,6 +196,7 @@ const segment = (cmd, wholeCommands) => {
       }
       cur += ch
       started = true
+      redirectAt = i
       continue
     }
     if (ch === '\n' && heredocs.length) {
@@ -218,8 +220,10 @@ const segment = (cmd, wholeCommands) => {
       i = Math.min(j, cmd.length + 1) - 1
       continue
     }
-    // bash's redirections spelled with `&` or `|`: `>&`, `<&`, `&>` and `>|`
-    if (wholeCommands && ((ch === '&' && (cmd[i - 1] === '>' || cmd[i - 1] === '<' || cmd[i + 1] === '>')) || (ch === '|' && cmd[i - 1] === '>'))) {
+    // bash's redirections spelled with `&` or `|` — `>&`, `<&`, `&>`, `>|` —
+    // joined only to a `<`/`>` the shell reads as an operator: after an
+    // escaped or quoted one, `|` is a pipe.
+    if (wholeCommands && ((ch === '&' && (redirectAt === i - 1 || cmd[i + 1] === '>')) || (ch === '|' && redirectAt === i - 1 && cmd[i - 1] === '>'))) {
       cur += ch
       started = true
       continue
@@ -234,6 +238,7 @@ const segment = (cmd, wholeCommands) => {
     }
     cur += ch
     started = true
+    if (ch === '<' || ch === '>') redirectAt = i
   }
   // An unclosed substitution still hands back the command it sat in.
   while (wholeCommands && scopes.length) {

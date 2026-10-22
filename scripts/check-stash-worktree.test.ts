@@ -113,6 +113,15 @@ describe('shellCommandsWithDepth', () => {
       ['make', '2>&1', '-j4', '&>', 'out', '>|', 'log', '-k'],
       ['ls'],
     ])
+    // an escaped or quoted `>` is text: what follows it is an operator
+    expect(shellCommandsWithDepth('echo a\\>|wc; echo b\\>&ls; echo ">"&ls').map(s => s.tokens)).toEqual([
+      ['echo', 'a>'],
+      ['wc'],
+      ['echo', 'b>'],
+      ['ls'],
+      ['echo', '>'],
+      ['ls'],
+    ])
   })
 
   it('leaves shellSegmentsWithDepth splitting as before', () => {

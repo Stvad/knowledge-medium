@@ -331,9 +331,11 @@ const ghApiCalls = lastCall(cmd =>
   shellCommandsWithDepth(cmd).flatMap(({ tokens }) => tokens.flatMap((_, i) => (opensApiCall(tokens, i) ? [tokens.slice(i + 2)] : []))),
 )
 // A redirect and its target are not arguments: `> $OUT` is where output goes.
+// Quotes are gone from these words, so a `">"` argument reads as a redirect
+// too; a flag-shaped word is therefore never taken for its target.
 const REDIRECTION = /^(?:\d*|&)[<>]/
 const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
-const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(args[i - 1] ?? ''))
+const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && (t.startsWith('-') || !BARE_REDIRECTION.test(args[i - 1] ?? '')))
 const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '-q', '--jq', '-t', '--template', '--input', '-p', '--preview', '--hostname', '--cache'])
 // What each word of a call is: a flag, a flag's value word, the endpoint (the
 // first positional), or an extra positional.
