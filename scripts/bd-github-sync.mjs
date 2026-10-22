@@ -160,6 +160,8 @@ import { isMainModule } from './is-main-module.mjs'
 import { shellCommandsWithDepth, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const REPO_PATTERN = escapeRegExp(REPO)
 
 // ---------------------------------------------------------------------------
 // Pure logic (unit-tested in bd-github-sync.test.ts)
@@ -382,8 +384,11 @@ const expansionMayAddFlags = words => {
       !(role[i] === 'value' || (role[i] === 'endpoint' && !t.startsWith('$')) || (role[i] === 'flag' && /^-[^$]*=/.test(t))),
   )
 }
-// gh keeps the LAST -X/--method (see METHOD_FLAG below), read off the words
-// that are flags: another flag's value (`--template --method=GET`) is text.
+// gh keeps the LAST -X/--method — measured against the installed gh: `-X POST
+// -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST —
+// read off the words that are flags: another flag's value
+// (`--template --method=GET`) is text. An explicit GET sends its fields as
+// query parameters and publishes nothing.
 const methodOf = words => {
   const role = roles(words)
   let method
@@ -398,6 +403,14 @@ const BODY_FLAG = /^(?:-[fF]|--(?:raw-)?field(?:=|$)|--input(?:=|$))/
 // A document the gate cannot read: from a file or stdin (`@…`), --input, or
 // an expansion.
 const UNREAD_DOCUMENT = /^(?:-[fF]|--(?:raw-)?field=)?query=[@$]|^--input(?:=|$)/
+// The operation keyword is looked for in the call's argv words as the shell
+// builds them — quotes removed, escapes and line continuations applied — so no
+// shell spelling that splits it (`'mut''ation'`, `mu\tation`, a
+// backslash-newline) reads as a read. Any occurrence counts, a `$mutation`
+// variable or a search string included: misreading a read as a write costs one
+// attested re-run, and telling the keyword's position apart after shell
+// unquoting is parsing this avoids.
+const MUTATION = /\bmutation\b/
 /**
  * Whether one gh api call can publish text: when an expansion can add flags
  * to it; else, for graphql, through a `mutation` in a document the gate can
@@ -412,19 +425,6 @@ const apiCallPublishes = args => {
   if (method === 'GET' || method === 'HEAD') return false
   return ['POST', 'PATCH', 'PUT'].includes(method) || Boolean(method?.includes('$')) || words.some(t => BODY_FLAG.test(t))
 }
-// An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
-// query parameters and publishes nothing, so the text it carries is never
-// text it PUBLISHED. Read off the skeleton alone, unlike the membership words
-// of isPostVerifiable: this SUPPRESSES a warning, so it must under-match.
-//
-// The EFFECTIVE method decides it, not any read token present. gh keeps the
-// LAST -X/--method — measured against the installed gh: `-X POST -X GET
-// /rate_limit` answers as a GET, and the reverse order 404s as a POST — so
-// suppressing on the first `GET` seen would silence the warning for a
-// mutation that merely mentions one earlier in its argv.
-const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
-const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
-const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
 
 // The detectors' skeleton sees every `gh … api` there is, comments and quotes
 // handled in one pass; the call reader can still misread a quoting it does
@@ -598,7 +598,7 @@ const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo|--hostname)|\bGH_(?:REPO|HOST)=/
 // nothing foreign, so it is removed before FOREIGN_TARGET looks. A misread
 // can only claim coverage for a publish that went elsewhere, and the
 // read-back reports a claim it could not keep.
-const SAME_REPO = String.raw`(?:(?:https?:\/\/)?github\.com\/)?${REPO.replace('/', '\\/')}`
+const SAME_REPO = String.raw`(?:(?:https?:\/\/)?github\.com\/)?${REPO_PATTERN}`
 const THIS_REPO_TARGET = new RegExp(
   String.raw`(?:(?<![\w-])(?:-R|--repo)(?:=|\s+)?|\bGH_REPO=)(?:'${SAME_REPO}'|"${SAME_REPO}"|${SAME_REPO})(?=$|[\s;&|<>()])`,
   'gi',
@@ -631,11 +631,12 @@ const GRAPHQL = /\bgraphql\b/
 const OUTSIDE_TEXT = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/
 
 // A graphql call keeps its document, and so everything it can publish, in the
-// command. graphqlShape recognizes a WHOLE invocation whose graphql calls are
-// its only gh commands and in which nothing else carries text from outside
-// the command, so a document the gate can read speaks for all of it. It is an
-// ALLOW: it recognizes a shape positively and anything else falls back to the
-// coarse rule.
+// command. graphqlResidue takes a WHOLE invocation whose graphql calls are its
+// only gh commands and removes the parts of them that carry nothing from
+// outside the command; when nothing outside is left in what remains, a
+// document the gate can read speaks for all of it. It is an ALLOW: it
+// recognizes a shape positively, and anything else falls back to the coarse
+// rule on the whole command.
 //
 // Every `gh` word in the raw text must open a recognized graphql call. Counted
 // broadly — quoted, continued or unusually spaced spellings the publish
@@ -686,9 +687,8 @@ const nonTextVariables = words => {
 // The two places an expansion can sit and publish nothing, both matched on
 // the raw command (a match inside single quotes removes only literal text):
 //  - a whole double-quoted field value (`-f t="$t"`), one argv word that
-//    becomes one variable — harmless when the variable is a non-text scalar,
-//    or when nothing in the invocation is a mutation. Never the `query` field,
-//    which is the document itself.
+//    becomes one variable — harmless when the variable is a non-text scalar.
+//    Never the `query` field, which is the document itself.
 //  - inside a double-quoted document, a whole string literal given to an id
 //    argument (`threadId:\"$t\"`). GitHub names node references `id` or
 //    `…Id`; the few `…Id` arguments that take a free string
@@ -703,41 +703,29 @@ const WHOLE_EXPANSION = String.raw`\$(?:\w+|\{\w+\})`
 const VARIABLE_FIELD = new RegExp(FIELD_FLAG + String.raw`(\w+)="${WHOLE_EXPANSION}"`, 'g')
 const DOUBLE_QUOTED_DOCUMENT = new RegExp(FIELD_FLAG + String.raw`query="(?:\\.|[^"\\])*"`, 'g')
 const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\"${WHOLE_EXPANSION}\\"`, 'g')
-// The operation keyword is looked for in the argv words the shell builds —
-// quotes removed, escapes and line continuations applied, heredoc data
-// included — so no shell spelling that splits it (`'mut''ation'`,
-// `mu\tation`, a backslash-newline) reads as a read.
-// Any occurrence counts, a `$mutation` variable or a search string included:
-// misreading a read as a write costs one attested re-run, and telling the
-// keyword's position apart after shell unquoting is parsing this avoids.
-const MUTATION = /\bmutation\b/
 // A pr:reply beside the graphql calls publishes a file this recognizer never
 // sees, so it is refused here too. Defence in depth: the coarse rule checks
 // for a reply first, so no caller reaches this clause today.
-const graphqlShape = lastCall(cmd => {
+const graphqlResidue = cmd => {
   const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
   if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
-  const words = shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' ')
-  const mutates = MUTATION.test(words)
-  const nonText = nonTextVariables(words)
-  const residue = cmd
+  const nonText = nonTextVariables(shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' '))
+  return cmd
     .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))
-    .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
+    .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && nonText.has(name) ? '' : m))
     .replace(INLINE_FIELD, '')
     .replace(JQ_FILTER, '')
-  return hasExpansion(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
-})
+}
 
 // Where an uncovered publish's text comes from when this gate cannot read it
 // in the command, named — or null when it can. A pr:reply always takes its
-// text from a file. A graphql invocation graphqlShape recognizes has none
-// outside the command by construction.
+// text from a file. A graphql-only invocation is judged on its residue.
 const textOutsideCommand = cmd => {
   if (matchesReplyCommand(cmd)) return 'the pr:reply body file'
-  if (graphqlShape(cmd)) return null
-  const flag = cmd.match(OUTSIDE_TEXT)?.[0]
+  const text = graphqlResidue(cmd) ?? cmd
+  const flag = text.match(OUTSIDE_TEXT)?.[0]
   if (flag) return flag === '@' ? 'an `@` file reference' : `\`${flag}\``
-  return hasExpansion(cmd) ? 'shell expansion' : null
+  return hasExpansion(text) ? 'shell expansion' : null
 }
 
 // Modes that print or hand off instead of creating anything: --dry-run shows
@@ -794,7 +782,6 @@ const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment|c
 export const carriesPublishableText = cmd => {
   if (matchesReplyCommand(cmd)) return true
   const sk = commandSkeleton(cmd)
-  if (isExplicitRead(sk)) return false
   if (GH_CREATE.test(sk) || TEXT_FLAG.test(sk)) return true
   // Field names come off the raw command as well as the skeleton: `-f
   // 'commit_title=…'` quotes the WHOLE argument, which the skeleton blanks,
@@ -891,8 +878,8 @@ const ISSUE_MENTION = /(?<![&\w#])#(\d{1,5})(?!\w)/g
 // refs into foreign repos stay out (they cannot be verified in our issue
 // space and our close keywords cannot act on them from here anyway).
 const QUALIFIED_REF = new RegExp(
-  String.raw`(?:https?:\/\/)?github\.com\/${REPO.replace('/', '\\/')}\/(?:issues|pull)\/(\d{1,5})\b|` +
-    String.raw`(?<![\w\/])${REPO.replace('/', '\\/')}#(\d{1,5})(?!\w)`,
+  String.raw`(?:https?:\/\/)?github\.com\/${REPO_PATTERN}\/(?:issues|pull)\/(\d{1,5})\b|` +
+    String.raw`(?<![\w\/])${REPO_PATTERN}#(\d{1,5})(?!\w)`,
   'gi',
 )
 const normalizeQualifiedRefs = text => text.replace(QUALIFIED_REF, (_, a, b) => `#${a ?? b}`)
@@ -1008,7 +995,7 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
  * file.
  */
 const PAYLOAD_FLAG = /^(?:--body-file|--notes-file|--input|--field|--template|-F|-T)/
-export const publishPayloadFiles = cmd =>
+const publishPayloadFiles = cmd =>
   shellCommandsWithDepth(cmd)
     .filter(s => !s.heredoc)
     .flatMap(({ tokens }) => {
@@ -2462,7 +2449,6 @@ const unreadableFact = p => {
 // The report prints what the hook found at each path and whether the
 // command's own text redirects into it (a file it writes after this hook
 // ran) — never a cause, which is the reader's to draw.
-const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const commandWrites = (cmd, value) =>
   new RegExp(String.raw`(?:>|\btee(?:\s+-\S+)*\s+)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
 const unreadableMessageFilesReport = (files, cmd, cwd) =>
@@ -2514,11 +2500,14 @@ const sessionStartedMs = ({ transcript_path: p }) => {
 const SHARED_TMP = /^\/(?:private\/)?tmp\/claude-[^/]+\//
 const sessionScratchpad = sessionId =>
   new RegExp(String.raw`^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/${isPlainId(sessionId) ? sessionId : '[^/]+'}\/scratchpad\/`)
-const staleBodyFiles = (cmd, cwd, { startedMs, sessionId }) => {
+const staleBodyFiles = (cmd, cwd, payload) => {
+  const values = publishPayloadFiles(cmd)
+  if (!values.length) return []
   const dir = cdPrefixDir(cmd)
   const base = dir === undefined ? cwd : resolveBodyPath(dir, cwd, homedir())
-  const scratchpad = sessionScratchpad(sessionId)
-  return publishPayloadFiles(cmd).flatMap(value => {
+  const scratchpad = sessionScratchpad(payload.session_id)
+  const startedMs = sessionStartedMs(payload)
+  return values.flatMap(value => {
     const path = resolveBodyPath(value, base, homedir())
     if (SHARED_TMP.test(path) && !scratchpad.test(path))
       return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]
@@ -2777,7 +2766,7 @@ const hookPrePr = () => {
   // text gets the refs/ids tables below. The merge COMMIT of a merged PR is
   // read back post-merge by bd-publish-verify regardless, and that hook
   // reports any coverage claim it cannot honour.
-  const stale = publishes ? staleBodyFiles(cmd, cwd, { startedMs: sessionStartedMs(payload ?? {}), sessionId: payload?.session_id }) : []
+  const stale = staleBodyFiles(cmd, cwd, payload ?? {})
   const outside = blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd)) ? textOutsideCommand(cmd) : null
   if (stale.length || outside) {
     console.error(blockedPublishMessage({ stale, uncovered: outside ? uncoveredBy(cmd) : null, outside }))

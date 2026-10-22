@@ -288,15 +288,6 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh release create v1')).toBe(true)
     // an EDIT really can carry no text, so it keeps the flag list
     expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
-    // gh keeps the LAST -X/--method (measured: -X POST -X GET answers as a
-    // GET, the reverse 404s as a POST), so a read token earlier in the argv
-    // must not suppress the warning for what is actually a mutation
-    expect(
-      carriesPublishableText(`gh api -X GET -X PUT repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(true)
-    expect(
-      carriesPublishableText(`gh api -X PUT -X GET repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(false)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
@@ -350,6 +341,8 @@ describe('gh api reads', () => {
     `gh api -XGET repos/${REPO}/issues -fstate=$S`,
     `gh api repos/${REPO}/issues/1 >| $OUT`,
     `gh -X GET api rate_limit --jq .rate.limit`,
+    // gh keeps the LAST method: a later GET makes the call a read
+    `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
     // a quoted heredoc's markdown backticks are text, not substitutions
@@ -389,6 +382,8 @@ describe('gh api reads', () => {
     // gh takes api's own flags ahead of the word api
     `gh -X POST -f body='see #653' api repos/${REPO}/issues/1/comments`,
     `gh -f body=x api repos/${REPO}/issues/1/comments`,
+    // and a read token earlier in the argv does not make a mutation one
+    `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
     `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
     // an unquoted heredoc's backticks run

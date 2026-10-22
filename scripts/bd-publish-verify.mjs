@@ -435,8 +435,8 @@ const hookPostPublish = () => {
   if (!all.length && !mergedPrs.length) {
     if (!isPostVerifiable(cmd)) return
     // Nothing to check means nothing to warn about: a command that publishes
-    // no TEXT has no reference the read-back could have verified. That covers
-    // the explicit GET too — a read dressed as a mutation by its field flags.
+    // no TEXT has no reference the read-back could have verified. (An explicit
+    // GET never gets here: it is no publish at all.)
     if (!carriesPublishableText(cmd)) return
     // A command the tool reports as FAILED published nothing, so there is no
     // unkept promise to report. This is read from the payload rather than
