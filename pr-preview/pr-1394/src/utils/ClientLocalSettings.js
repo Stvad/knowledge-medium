@@ -1,0 +1,1 @@
+import{Gk as e,Kk as t}from"../../chunks/app-Dppa31Ih.js";export{e as ClientLocalSettings,t as clientLocalSettings};

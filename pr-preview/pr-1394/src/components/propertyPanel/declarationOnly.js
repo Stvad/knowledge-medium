@@ -1,0 +1,1 @@
+import{EF as e,TF as t}from"../../../chunks/app-Dppa31Ih.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

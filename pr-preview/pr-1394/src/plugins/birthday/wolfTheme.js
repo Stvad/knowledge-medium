@@ -1,0 +1,1 @@
+import{_n as e,gn as t,vn as n}from"../../../chunks/app-Dppa31Ih.js";export{t as WOLF_THEME_ID,e as applyWolfTheme,n as syncWolfTheme};

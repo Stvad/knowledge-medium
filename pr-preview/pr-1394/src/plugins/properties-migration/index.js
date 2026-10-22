@@ -1,0 +1,1 @@
+import{oa as e,ua as t}from"../../../chunks/app-Dppa31Ih.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

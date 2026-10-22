@@ -1,0 +1,1 @@
+import{nz as e,tz as t}from"../../../chunks/app-Dppa31Ih.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

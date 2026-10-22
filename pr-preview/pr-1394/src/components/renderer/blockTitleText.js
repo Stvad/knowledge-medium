@@ -1,0 +1,1 @@
+import{hP as e,mP as t}from"../../../chunks/app-Dppa31Ih.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

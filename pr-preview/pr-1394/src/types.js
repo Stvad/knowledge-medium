@@ -1,0 +1,1 @@
+import{w5 as e}from"../chunks/app-Dppa31Ih.js";export{e as isChildBackedPropertiesWorkspace};

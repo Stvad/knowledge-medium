@@ -1,0 +1,1 @@
+import{Yk as e}from"../../chunks/app-Dppa31Ih.js";export{e as dynamicExtensionsExtension};
