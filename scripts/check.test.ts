@@ -310,8 +310,8 @@ describe('loadVerdict', () => {
       .toBe('fails alone too: b.test.ts; passed alone: a.test.ts')
   })
 
-  // Trimmed from a real vitest 4 run: the summary both its default and agent
-  // reporters print, with a test that failed and a file that failed to load.
+  // Vitest's summary as both its default and agent reporters print it, with a
+  // test that failed and a file that failed to load.
   const summary = `
  ❯ scripts/zz-probe2.test.ts (0 test)
  ❯ scripts/zz-probe.test.ts (3 tests | 2 failed) 108ms
@@ -338,6 +338,11 @@ AssertionError: expected 1 to be 2 // Object.is equality
   it('reads the failing files out of a real vitest summary', () => {
     expect(loadVerdict(['scripts/zz-probe.test.ts', 'scripts/zz-probe2.test.ts', 'a.test.ts'], { code: 1, output: summary }))
       .toBe('fails alone too: scripts/zz-probe2.test.ts, scripts/zz-probe.test.ts; passed alone: a.test.ts')
+  })
+
+  it('reads .spec files, which the vitest config also runs', () => {
+    expect(loadVerdict(['a.spec.ts', 'b.spec.tsx'], { code: 1, output: ' FAIL  b.spec.tsx > it\n' }))
+      .toBe('fails alone too: b.spec.tsx; passed alone: a.spec.ts')
   })
 
   it('blames every file when the re-run fails without naming one', () => {
