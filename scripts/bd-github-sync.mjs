@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * beads↔GitHub sync with the documented traps guarded (AGENTS.md beads
- * section; memory reference_bd_github_sync_close_ordering):
+ * beads↔GitHub sync with the documented traps guarded (docs/beads.md;
+ * memory reference_bd_github_sync_close_ordering):
  *
  * 1. A GitHub-side close (hand-close or a merged "Fixes #N") is CLOBBERED by
  *    the next sync — the still-open bead pushes over it and re-opens the

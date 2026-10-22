@@ -9,8 +9,8 @@
 // capped by the `prime.max-memory-chars` config and reports the cap only in
 // a banner. Keys that still do not fit are counted in the output, and an
 // index that cannot be read says why; none is dropped silently. bd prime's
-// close protocol and command reference are not carried — AGENTS.md's managed
-// Beads block already injects them.
+// close protocol and command reference are not carried: AGENTS.md's beads
+// section carries the commands and this repo's own close policy instead.
 //
 // Contract: never break session start. Any failure — bd missing, DB absent,
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
