@@ -142,7 +142,8 @@ const lockHolder = lockPath => Number(readOrNull(lockPath)?.toString())
 /** Null once this process holds the lock; otherwise the pid of the live job that does. */
 const takeLock = lockPath => {
   if (createLock(lockPath)) return null
-  if (pidAlive(lockHolder(lockPath))) return lockHolder(lockPath)
+  const holder = lockHolder(lockPath)
+  if (pidAlive(holder)) return holder
   rmSync(lockPath, { force: true })
   return createLock(lockPath) ? null : lockHolder(lockPath)
 }
@@ -155,9 +156,12 @@ const startJob = ({ root, steps, env }) => {
   const holder = takeLock(lockPath)
   if (holder !== null) return { kind: 'busy', pid: holder, logPath }
 
-  let logFd
+  // Until the pid below replaces it the lock names this process, so a failed
+  // launch leaves a lock the next session start sees is dead and takes over.
+  const logFd = openSync(logPath, 'w')
   try {
-    logFd = openSync(logPath, 'w')
+    // Detached with file stdio: the host neither waits for the job nor kills
+    // it with this process's group, so an interrupted start leaves no half-done install.
     const child = spawn(process.execPath, [SCRIPT, '--job', root, lockPath, ...steps], {
       cwd: root,
       detached: true,
@@ -166,11 +170,8 @@ const startJob = ({ root, steps, env }) => {
     })
     writeFileSync(lockPath, String(child.pid))
     return { kind: 'started', child, logPath }
-  } catch (error) {
-    rmSync(lockPath, { force: true })
-    throw error
   } finally {
-    if (logFd !== undefined) closeSync(logFd)
+    closeSync(logFd)
   }
 }
 
@@ -186,6 +187,8 @@ const waitForExit = (child, ms) =>
       resolve(code)
     }
     child.once('exit', code => settle(code ?? 1))
+    // Defence in depth: a failed launch of node itself, which would otherwise
+    // crash the hook with an unhandled 'error'.
     child.once('error', () => settle(1))
   })
 
