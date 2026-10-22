@@ -20,7 +20,24 @@
  * inside a double-quoted string nested in a substitution closes early. Guards
  * built on this defend against accidents, not adversaries.
  */
-export const shellSegmentsWithDepth = cmd => {
+export const shellSegmentsWithDepth = cmd => segment(cmd, false)
+
+export const shellSegments = cmd => shellSegmentsWithDepth(cmd).map(s => s.tokens)
+
+/** The word a substitution leaves in its command under shellCommandsWithDepth. */
+export const SUBSTITUTED = '$(…)'
+
+/**
+ * The same segments, except that each simple command stays WHOLE: a command
+ * substitution leaves SUBSTITUTED in the word it sits in (its own commands
+ * come back as segments ahead of that command), and the `&` of an fd redirect
+ * (`2>&1`, `&>`) is part of its word. Under shellSegmentsWithDepth both end the
+ * segment, so the arguments after them come back as a command of their own —
+ * fine for finding a verb, wrong for a caller reading one command's flags.
+ */
+export const shellCommandsWithDepth = cmd => segment(cmd, true)
+
+const segment = (cmd, wholeCommands) => {
   const segments = []
   let tokens = []
   let cur = ''
@@ -36,11 +53,35 @@ export const shellSegmentsWithDepth = cmd => {
     started = false
   }
   // Every scope change closes the segment first, so a segment's tokens all
-  // live at one depth — scopes.length at push time.
+  // live at one depth — scopes.length at push time. A whole command is not
+  // closed by a substitution: it is set aside on the substitution's scope and
+  // picked up again when that closes.
   const pushSegment = () => {
     pushToken()
     if (tokens.length) segments.push({ tokens, depth: scopes.length })
     tokens = []
+  }
+  const openSubstitution = kind => {
+    if (wholeCommands) {
+      scopes.push({ kind, quote, outer: { tokens, cur } })
+      tokens = []
+      cur = ''
+      started = false
+    } else {
+      pushSegment()
+      scopes.push({ kind, quote })
+    }
+    quote = null
+  }
+  const closeSubstitution = () => {
+    pushSegment()
+    const { quote: outerQuote, outer } = scopes.pop()
+    quote = outerQuote
+    if (outer) {
+      tokens = outer.tokens
+      cur = outer.cur + SUBSTITUTED
+      started = true
+    }
   }
 
   for (let i = 0; i < cmd.length; i++) {
@@ -73,19 +114,13 @@ export const shellSegmentsWithDepth = cmd => {
       continue
     }
     if (ch === '$' && cmd[i + 1] === '(') {
-      pushSegment()
-      scopes.push({ kind: 'subst', quote })
-      quote = null
+      openSubstitution('subst')
       i++
       continue
     }
     if (ch === '`') {
-      pushSegment()
-      if (scopes.at(-1)?.kind === 'backtick') quote = scopes.pop().quote
-      else {
-        scopes.push({ kind: 'backtick', quote })
-        quote = null
-      }
+      if (scopes.at(-1)?.kind === 'backtick') closeSubstitution()
+      else openSubstitution('backtick')
       continue
     }
     if (quote === '"') {
@@ -107,10 +142,12 @@ export const shellSegmentsWithDepth = cmd => {
       continue
     }
     if (ch === ')') {
-      pushSegment()
       const top = scopes.at(-1)
-      if (top?.kind === 'subst') quote = scopes.pop().quote
-      else if (top?.kind === 'paren') scopes.pop()
+      if (top?.kind === 'subst') closeSubstitution()
+      else {
+        pushSegment()
+        if (top?.kind === 'paren') scopes.pop()
+      }
       continue
     }
     if (ch === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<') {
@@ -176,6 +213,11 @@ export const shellSegmentsWithDepth = cmd => {
       i = Math.min(j, cmd.length + 1) - 1
       continue
     }
+    if (wholeCommands && ch === '&' && (cmd[i - 1] === '>' || cmd[i - 1] === '<' || cmd[i + 1] === '>')) {
+      cur += ch
+      started = true
+      continue
+    }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
       continue
@@ -187,8 +229,14 @@ export const shellSegmentsWithDepth = cmd => {
     cur += ch
     started = true
   }
+  // An unclosed substitution still hands back the command it sat in.
+  while (wholeCommands && scopes.length) {
+    if (scopes.at(-1).outer) closeSubstitution()
+    else {
+      pushSegment()
+      scopes.pop()
+    }
+  }
   pushSegment()
   return segments
 }
-
-export const shellSegments = cmd => shellSegmentsWithDepth(cmd).map(s => s.tokens)

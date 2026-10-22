@@ -7,3 +7,5 @@ export interface ShellSegment {
 }
 export declare const shellSegmentsWithDepth: (cmd: string) => ShellSegment[]
 export declare const shellSegments: (cmd: string) => string[][]
+export declare const SUBSTITUTED: string
+export declare const shellCommandsWithDepth: (cmd: string) => ShellSegment[]

@@ -323,6 +323,51 @@ describe('graphql calls', () => {
   })
 })
 
+// A read publishes nothing wherever it sits: in a loop, a pipe, a
+// substitution, beside a redirect. Each gh api call is judged by its own argv
+// words, so an expansion that only continues a word, or one in another
+// command, does not make it a publish. Shapes from blocked agent commands.
+describe('gh api reads', () => {
+  it.each([
+    `for n in 449 466; do gh api -X GET "repos/${REPO}/issues/$n/timeline?per_page=100" --jq '.[] | .event' | tail -4; done`,
+    `for id in 41 42; do gh api repos/${REPO}/pulls/comments/$id --jq '"\\(.path)\\n\\(.body)"' | head -20; done`,
+    `gh api 'repos/${REPO}/contents/pr-preview?ref=gh-pages' --jq '.[].name' > $SP/dirs.txt; wc -l < $SP/dirs.txt`,
+    `gh pr view 1347 --json state --jq .state; gh api repos/${REPO}/commits/$(gh pr view 1347 --json mergeCommit --jq .mergeCommit.oid) --jq '.parents | length'`,
+    `r=$(gh api repos/${REPO}/pulls/1307/merge-async/abc --jq '.status'); echo "$r"`,
+    `for t in $(gh api graphql -f query='{repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:1115){reviewThreads(first:60){nodes{id isResolved}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | .id'); do echo "$t"; done`,
+    `for n in 1320 1325; do gh api graphql -f query="query { repository(owner:\\"Stvad\\", name:\\"knowledge-medium\\") { pullRequest(number:$n) { reviews(last: 3) { nodes { submittedAt } } } } }" --jq '.data'; done`,
+    `gh pr checks 1332; gh pr diff 1332 | head; gh issue list --limit 5; gh api -X GET repos/${REPO}/pulls/1332/reviews -f per_page=100 | jq length`,
+    `gh api repos/${REPO}/issues/1 2>&1 | tail -3`,
+    // a heredoc that only mentions a call reads as one, and one that reads
+    `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
+  ])('is not a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(false)
+  })
+
+  it.each([
+    `for n in 1 2; do gh api repos/${REPO}/issues/$n/comments -f body="see #653"; done`,
+    // a read beside a write does not vouch for the write
+    `gh api repos/${REPO}/pulls/1/reviews --jq length; gh api repos/${REPO}/issues/1/comments -f body=hi`,
+    `gh api -X GET repos/${REPO}/issues/1 && gh api -X POST repos/${REPO}/issues/1/comments`,
+    // a word that STARTS with an expansion can be any flags at all
+    `for u in a; do gh api $u; done`,
+    `gh api "\${ARGS[@]}"`,
+    `gh api repos/${REPO}/issues/1/comments $(printf -- '-f body=x')`,
+    `gh api -X "$M" repos/${REPO}/issues/1`,
+    // a graphql document the gate cannot read could be a mutation
+    `for q in a; do gh api graphql -f query="$Q"; done`,
+    `gh api graphql -F query=@q.graphql | jq .`,
+    `gh api graphql --input q.json | jq .`,
+    // flags after a substitution or an fd redirect still belong to the call
+    `gh api repos/${REPO}/issues/$(echo 1)/comments -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
+    // heredoc data that bash runs is a call
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+  ])('is still a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(true)
+  })
+})
+
 // The repo's own review-reply command: one invocation whose output is the
 // reply's URL, so the read-back covers it like a single gh publish.
 describe('the pr:reply command', () => {
@@ -3549,6 +3594,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `for n in 1 2; do gh api graphql -f query='query($p:Int!){repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:$p){id}}}' -F p="$n"; done`,
       // in a read even a String variable writes nothing
       `for o in Stvad; do gh api graphql -f query='query($o:String!){repositoryOwner(login:$o){id}}' -f o="$o"; done`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  // A read never reaches a lookup or a block, however it is wrapped.
+  it('passes looped, piped and substituted REST reads untouched', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      `for n in 449 466; do gh api -X GET "repos/Stvad/knowledge-medium/issues/$n/timeline" --jq '.[] | .event' | tail -4; done`,
+      `gh api repos/Stvad/knowledge-medium/commits/$(gh pr view 1347 --json mergeCommit --jq .mergeCommit.oid) --jq '.parents | length'`,
     ])
       expect(hook(cmd).status, cmd).toBe(0)
     expect(shimCalls()).toBe('')

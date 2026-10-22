@@ -14,7 +14,7 @@ import {
   stashInvocations,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
+import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -80,6 +80,33 @@ describe('shellSegments', () => {
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
+  })
+})
+
+describe('shellCommandsWithDepth', () => {
+  it('keeps a command whole across a substitution, which comes back ahead of it', () => {
+    expect(shellCommandsWithDepth(`git log $(git rev-parse "a)b") --oneline -1`)).toEqual([
+      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1 },
+      { tokens: ['git', 'log', SUBSTITUTED, '--oneline', '-1'], depth: 0 },
+    ])
+    expect(shellCommandsWithDepth('echo "a `date` b" x')).toEqual([
+      { tokens: ['date'], depth: 1 },
+      { tokens: ['echo', `a ${SUBSTITUTED} b`, 'x'], depth: 0 },
+    ])
+    // nested, and one left unclosed
+    expect(shellCommandsWithDepth('echo $(a $(b) c) d').map(s => s.tokens)).toEqual([['b'], ['a', SUBSTITUTED, 'c'], ['echo', SUBSTITUTED, 'd']])
+    expect(shellCommandsWithDepth('echo x $(a').map(s => s.tokens)).toEqual([['a'], ['echo', 'x', SUBSTITUTED]])
+  })
+
+  it('reads an fd redirect as part of its word, not a separator', () => {
+    expect(shellCommandsWithDepth('make 2>&1 -j4 &> out && ls').map(s => s.tokens)).toEqual([
+      ['make', '2>&1', '-j4', '&>', 'out'],
+      ['ls'],
+    ])
+  })
+
+  it('leaves shellSegmentsWithDepth splitting as before', () => {
+    expect(shellSegments('git log $(git rev-parse x) --oneline')).toEqual([['git', 'log'], ['git', 'rev-parse', 'x'], ['--oneline']])
   })
 })
 

@@ -151,7 +151,7 @@ import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileS
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
-import { shellSegmentsWithDepth } from './shell-segments.mjs'
+import { shellCommandsWithDepth, shellSegmentsWithDepth } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
 
@@ -304,10 +304,65 @@ export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCom
 // flags, which make gh default to POST) — the channel review replies actually
 // go out through, which the publish matcher above cannot see. No endpoint
 // filter: the post-publish verifier's URL extraction is the real filter, and
-// a mutation aimed at a text-free endpoint just yields no target. Plain GETs
-// stay out so the verifier does not fetch-and-echo after every read.
-const GH_API = new RegExp(GH + String.raw`api\s`, 'm')
-const isGhApiCall = cmd => GH_API.test(commandSkeleton(cmd))
+// a mutation aimed at a text-free endpoint just yields no target. Reads stay
+// out so the verifier does not fetch-and-echo after every read.
+//
+// Each call is judged by its OWN argv words (shellCommandsWithDepth keeps a
+// call whole across a substitution), so a read stays a read in a loop, a pipe
+// or a substitution, beside a redirect, and beside another call's flags.
+// Heredoc data is read as calls too: `bash <<EOF` runs it.
+const GH_COMMAND = /(?:^|\/)gh$/
+const GH_FLAG_WITH_VALUE = new Set(['-R', '--repo', '--hostname'])
+const ghApiCalls = lastCall(cmd =>
+  shellCommandsWithDepth(cmd).flatMap(({ tokens }) =>
+    tokens.flatMap((t, i) => {
+      if (!GH_COMMAND.test(t)) return []
+      let j = i + 1
+      while (tokens[j]?.startsWith('-')) j += GH_FLAG_WITH_VALUE.has(tokens[j]) ? 2 : 1
+      return tokens[j] === 'api' ? [tokens.slice(j + 1)] : []
+    }),
+  ),
+)
+// A redirect and its target are not arguments: `> $OUT` is where output goes.
+const REDIRECTION = /^(?:\d*|&)[<>]/
+const BARE_REDIRECTION = /^(?:\d*|&)[<>]+&?$/
+const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(args[i - 1] ?? ''))
+const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '-q', '--jq', '-t', '--template', '--input', '-p', '--preview', '--hostname', '--cache'])
+const endpointOf = words => {
+  for (let i = 0; i < words.length; i++) {
+    if (API_FLAG_WITH_VALUE.has(words[i])) i++
+    else if (!words[i].startsWith('-')) return words[i]
+  }
+}
+// gh keeps the LAST -X/--method (see METHOD_FLAG below).
+const methodOf = words => {
+  let method
+  words.forEach((t, i) => {
+    const m = /^(?:-X|--method)=?(.*)$/.exec(t)
+    if (m) method = (m[1] || words[i + 1] || '').toUpperCase()
+  })
+  return method
+}
+// A field or --input makes gh send a body, and default to POST to do it.
+const BODY_FLAG = /^(?:-[fF]|--(?:raw-)?field(?:=|$)|--input(?:=|$))/
+// A document the gate cannot read: from a file or stdin (`@…`), --input, or
+// an expansion.
+const UNREAD_DOCUMENT = /^(?:-[fF]|--(?:raw-)?field=)?query=[@$]|^--input(?:=|$)/
+/**
+ * Whether one gh api call can publish text. A word that STARTS with an
+ * expansion can expand to any flags at all, so its call can; one that only
+ * continues a word (`issues/$n`) cannot start a flag. Past that, graphql
+ * publishes through a `mutation` in a document the gate can read, and REST
+ * through a writing method or, absent one, a body.
+ */
+const apiCallPublishes = args => {
+  const words = argumentWords(args)
+  if (words.some(t => t.startsWith('$'))) return true
+  if (endpointOf(words) === 'graphql') return MUTATION.test(words.join(' ')) || words.some(t => UNREAD_DOCUMENT.test(t))
+  const method = methodOf(words)
+  if (method === 'GET' || method === 'HEAD') return false
+  return ['POST', 'PATCH', 'PUT'].includes(method) || words.some(t => BODY_FLAG.test(t))
+}
 // An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
 // query parameters and publishes nothing, so the text it carries is never
 // text it PUBLISHED. Read off the skeleton alone, unlike the membership words
@@ -321,27 +376,8 @@ const isGhApiCall = cmd => GH_API.test(commandSkeleton(cmd))
 const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
 const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
 const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
-// A LONE explicit read publishes nothing: gh sends its fields as a query
-// string, so the object its response names was READ, and reporting that as
-// published sends the agent to edit text it never wrote. Restricted to a
-// single segment because the effective method is resolved across the whole
-// skeleton — in a mutate-then-read compound this would otherwise exempt the
-// mutation too. Multi-segment keeps the old behaviour, so the compound needs
-// no vocabulary of its own.
-const isSoleExplicitRead = (cmd, sk) =>
-  isExplicitRead(sk) && shellSegmentsWithDepth(cmd).filter(s => !s.heredoc).length === 1
 
-export const matchesApiPublish = cmd => {
-  if (!isGhApiCall(cmd)) return false
-  const sk = commandSkeleton(cmd)
-  if (isSoleExplicitRead(cmd, sk) || isGraphqlRead(cmd)) return false
-  return (
-    /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
-    /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
-    // field short flags accept ATTACHED key=value forms: -fbody=…, -Fbody=…
-    /(?<![\w-])-[fF](?:=|\s|[A-Za-z_])/.test(sk)
-  )
-}
+export const matchesApiPublish = cmd => ghApiCalls(cmd).some(apiCallPublishes)
 
 /**
  * Which target kinds this command's CLI publish verbs can have produced.
@@ -591,15 +627,7 @@ const graphqlShape = lastCall(cmd => {
     .replace(JQ_FILTER, '')
   return hasExpansion(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
 })
-// No `mutation` operation anywhere means nothing is written: the keyword is
-// the only way to open one.
-const isGraphqlRead = cmd => graphqlShape(cmd)?.mutates === false
 
-/**
- * Any command that may publish text on GitHub — including one whose mutation
- * flags arrive by expansion, where no literal flag is left to match and a
- * narrower test would leave the command inspected by NEITHER hook.
- */
 // Modes that print or hand off instead of creating anything: --dry-run shows
 // what would be sent, --web opens the browser. They make a command UNCOVERED
 // rather than not-a-publish, and the difference is the whole point. Exempting
@@ -612,8 +640,8 @@ const isGraphqlRead = cmd => graphqlShape(cmd)?.mutates === false
 // Scoping the token to its own segment instead would be shell parsing.
 const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
-export const matchesAnyPublish = cmd =>
-  matchesCliPublish(cmd) || matchesApiPublish(cmd) || (isGhApiCall(cmd) && hasExpansion(cmd) && !isGraphqlRead(cmd))
+/** Any command that may publish text on GitHub. */
+export const matchesAnyPublish = cmd => matchesCliPublish(cmd) || matchesApiPublish(cmd)
 
 // Text-bearing flags and api fields. A publish with none of them — a label
 // change, a reaction, a comment DELETION, a merge-method call — has no
