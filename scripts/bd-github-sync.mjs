@@ -336,7 +336,7 @@ const GH_COMMAND = /(?:^|\/)gh$/
 const apiArgsAt = (tokens, i) => {
   if (!GH_COMMAND.test(tokens[i])) return null
   let j = i + 1
-  while (tokens[j]?.startsWith('-')) j += API_FLAG_WITH_VALUE.has(tokens[j]) ? 2 : 1
+  while (tokens[j]?.startsWith('-')) j += waitsForValue(tokens[j]) ? 2 : 1
   return tokens[j] === 'api' ? [...tokens.slice(i + 1, j), ...tokens.slice(j + 1)] : null
 }
 const ghApiCalls = lastCall(cmd =>
@@ -347,62 +347,82 @@ const ghApiCalls = lastCall(cmd =>
     }),
   ),
 )
+// gh api's flags (its --help is the table): `-i` the one boolean shorthand,
+// the rest taking a value.
+const API_BOOLEAN_SHORT = new Set(['i'])
+const API_VALUE_SHORT = new Set(['X', 'H', 'f', 'F', 'q', 't', 'p'])
+const API_VALUE_LONG = new Set(['--method', '--header', '--raw-field', '--field', '--jq', '--template', '--input', '--preview', '--hostname', '--cache'])
+// Whether pflag takes the NEXT word as this one's value: a value flag with
+// nothing attached, alone or ending a short cluster (`-iF`).
+const waitsForValue = t =>
+  t.startsWith('--') ? API_VALUE_LONG.has(t) : /^-[a-zA-Z]+$/.test(t) && API_VALUE_SHORT.has(t.at(-1)) && [...t.slice(1, -1)].every(c => API_BOOLEAN_SHORT.has(c))
 // A redirect and its target are not arguments: `> $OUT` is where output goes.
 // Quotes are gone from these words, so a `">"` argument reads as a redirect
 // too; a flag-shaped word is therefore never taken for its target.
 const REDIRECTION = /^(?:\d*|&)[<>]/
 const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
-const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && (t.startsWith('-') || !BARE_REDIRECTION.test(args[i - 1] ?? '')))
-const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '-q', '--jq', '-t', '--template', '--input', '-p', '--preview', '--hostname', '--cache'])
-// What each word of a call is: a flag, a flag's value word, the endpoint (the
-// first positional), or an extra positional.
-const roles = words => {
-  const out = []
+/**
+ * A gh api call's argv as pflag reads it, so every check below sees one
+ * spelling: a short cluster (`-iFbody=x`) and an attached or `=` value
+ * (`-F=query=@x`, `--field=body=x`) come apart into a flag and its value. Each
+ * word is a flag, a flag's value, the endpoint (the first positional) or an
+ * extra positional; a flag this table does not know is kept whole.
+ */
+const parseCall = args => {
+  const call = []
   let endpoint = false
-  for (let i = 0; i < words.length; i++) {
-    if (API_FLAG_WITH_VALUE.has(words[i])) out.push('flag', 'value'), i++
-    else if (words[i].startsWith('-')) out.push('flag')
-    else {
-      out.push(endpoint ? 'extra' : 'endpoint')
-      endpoint = true
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i]
+    if (REDIRECTION.test(t)) {
+      if (BARE_REDIRECTION.test(t) && !args[i + 1]?.startsWith('-')) i++
+      continue
     }
+    if (!t.startsWith('-') || t === '-') {
+      call.push({ word: t, role: endpoint ? 'extra' : 'endpoint' })
+      endpoint = true
+      continue
+    }
+    const eq = t.indexOf('=')
+    const long = t.startsWith('--') && API_VALUE_LONG.has(eq === -1 ? t : t.slice(0, eq))
+    let k = 1
+    while (!long && API_BOOLEAN_SHORT.has(t[k])) call.push({ word: `-${t[k++]}`, role: 'flag' })
+    if (!long && k === t.length) continue
+    if (!long && !API_VALUE_SHORT.has(t[k])) {
+      call.push({ word: k === 1 ? t : `-${t.slice(k)}`, role: 'flag' })
+      continue
+    }
+    const flag = long ? (eq === -1 ? t : t.slice(0, eq)) : `-${t[k]}`
+    const attached = long ? (eq === -1 ? '' : t.slice(eq + 1)) : t.slice(k + 1).replace(/^=/, '')
+    call.push({ word: flag, role: 'flag' })
+    if (attached) call.push({ word: attached, role: 'value' })
+    else if (i + 1 < args.length) call.push({ word: args[++i], role: 'value' })
   }
-  return out
+  return call
 }
-const endpointOf = words => words[roles(words).indexOf('endpoint')]
-// An expansion may fill a VALUE — a flag's value word, a value attached after
-// `=` (`-fbody=$x`), the endpoint past its first character (`issues/$n`) — and
-// nothing else: in a word of its own, or one it starts or completes
-// (`-"$flag"`), it can expand to flags. Unquoted, a value's expansion could
-// still word-split into flags. Accepted: that takes a variable holding flag
-// text, and requiring quotes would gate the loop reads (`comments/$id`).
-const expansionMayAddFlags = words => {
-  const role = roles(words)
-  return words.some(
-    (t, i) =>
-      t.includes('$') &&
-      !(role[i] === 'value' || (role[i] === 'endpoint' && !t.startsWith('$')) || (role[i] === 'flag' && /^-[^$]*=/.test(t))),
-  )
-}
+// An expansion may fill a VALUE — a flag's value, the endpoint past its first
+// character (`issues/$n`) — and nothing else: in a word of its own, or one it
+// starts or completes (`-"$flag"`), it can expand to flags. Unquoted, a
+// value's expansion could still word-split into flags. Accepted: that takes a
+// variable holding flag text, and requiring quotes would gate the loop reads
+// (`comments/$id`).
+const expansionMayAddFlags = call =>
+  call.some(({ word, role }) => word.includes('$') && !(role === 'value' || (role === 'endpoint' && !word.startsWith('$'))))
 // gh keeps the LAST -X/--method — measured against the installed gh: `-X POST
-// -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST —
-// read off the words that are flags: another flag's value
-// (`--template --method=GET`) is text. An explicit GET sends its fields as
-// query parameters and publishes nothing.
-const methodOf = words => {
-  const role = roles(words)
+// -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST.
+// Another flag's value (`--template --method=GET`) is text. An explicit GET
+// sends its fields as query parameters and publishes nothing.
+const methodOf = call => {
   let method
-  words.forEach((t, i) => {
-    const m = role[i] === 'flag' && /^(?:-X|--method)=?(.*)$/.exec(t)
-    if (m) method = (m[1] || words[i + 1] || '').toUpperCase()
+  call.forEach(({ word, role }, i) => {
+    if (role === 'flag' && (word === '-X' || word === '--method')) method = (call[i + 1]?.role === 'value' ? call[i + 1].word : '').toUpperCase()
   })
   return method
 }
 // A field or --input makes gh send a body, and default to POST to do it.
-const BODY_FLAG = /^(?:-[fF]|--(?:raw-)?field(?:=|$)|--input(?:=|$))/
-// A document the gate cannot read: from a file or stdin (`@…`), --input, or
-// an expansion.
-const UNREAD_DOCUMENT = /^(?:-[fF]|--(?:raw-)?field=)?query=[@$]|^--input(?:=|$)/
+const BODY_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input']
+// A graphql document the gate cannot read: from a file or stdin (`@…`), or an
+// expansion — and any document --input sends.
+const UNREAD_QUERY = /^query=[@$]/
 // The operation keyword is looked for in the call's argv words as the shell
 // builds them — quotes removed, escapes and line continuations applied — so no
 // shell spelling that splits it (`'mut''ation'`, `mu\tation`, a
@@ -418,12 +438,14 @@ const MUTATION = /\bmutation\b/
  * or, absent one, a body.
  */
 const apiCallPublishes = args => {
-  const words = argumentWords(args)
-  if (expansionMayAddFlags(words)) return true
-  if (endpointOf(words) === 'graphql') return MUTATION.test(words.join(' ')) || words.some(t => UNREAD_DOCUMENT.test(t))
-  const method = methodOf(words)
+  const call = parseCall(args)
+  if (expansionMayAddFlags(call)) return true
+  const flags = new Set(call.filter(w => w.role === 'flag').map(w => w.word))
+  if (call.find(w => w.role === 'endpoint')?.word === 'graphql')
+    return MUTATION.test(call.map(w => w.word).join(' ')) || flags.has('--input') || call.some(w => w.role === 'value' && UNREAD_QUERY.test(w.word))
+  const method = methodOf(call)
   if (method === 'GET' || method === 'HEAD') return false
-  return ['POST', 'PATCH', 'PUT'].includes(method) || Boolean(method?.includes('$')) || words.some(t => BODY_FLAG.test(t))
+  return ['POST', 'PATCH', 'PUT'].includes(method) || Boolean(method?.includes('$')) || BODY_FLAGS.some(f => flags.has(f))
 }
 
 // The detectors' skeleton sees every `gh … api` there is, comments and quotes
@@ -989,33 +1011,34 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
 
 /**
  * The files a publish takes its text from, as the command names them: a CLI
- * verb's --body-file, --notes-file, -F, or --template/-T (the starting body);
- * an api call's --input and its `name=@file` fields; and pr:reply's body
- * file. A name holding an expansion cannot be resolved here, and stdin is no
- * file.
+ * verb's --body-file, --notes-file, -F, or --template/-T (the starting body),
+ * alone or ending a short cluster (`-dF`); an api call's --input and its
+ * `name=@file` fields, a graphql document's included (a mutation's can carry
+ * text), read by parseCall; and pr:reply's body file. Stdin is no file.
  */
-const PAYLOAD_FLAG = /^(?:--body-file|--notes-file|--input|--field|--template|-F|-T)/
+const CLI_PAYLOAD_FLAG = /^(?:--(?:body-file|notes-file|template)(?:=|$)|-[a-zA-Z]*?[FT])/
+const apiPayloadFiles = args =>
+  parseCall(args).flatMap(({ word, role }, i, call) => {
+    const flag = role === 'value' ? call[i - 1].word : null
+    if (flag === '--input') return [word]
+    return flag === '-F' || flag === '--field' ? (/^[^=]*=@(.*)$/s.exec(word)?.slice(1) ?? []) : []
+  })
 const publishPayloadFiles = cmd =>
   shellCommandsWithDepth(cmd)
     .filter(s => !s.heredoc)
     .flatMap(({ tokens }) => {
       const reply = replyArgsAt(tokens)
       if (reply !== -1) return [tokens.slice(reply).filter(t => !t.startsWith('--'))[2]]
+      const calls = tokens.flatMap((_, i) => [apiArgsAt(tokens, i)].filter(Boolean))
+      if (calls.length) return calls.flatMap(apiPayloadFiles)
       if (!tokens.some(t => GH_COMMAND.test(t))) return []
-      const api = tokens.some((_, i) => apiArgsAt(tokens, i))
       return tokens.flatMap((t, i) => {
-        const flag = t.match(PAYLOAD_FLAG)?.[0]
-        // on gh api, --template formats the response
-        if (!flag || (api && flag === '--template')) return []
-        const value = t.length > flag.length ? t.slice(flag.length).replace(/^=/, '') : tokens[i + 1]
-        // an api field names a file only after `=@`; on a CLI verb -F's value is the path, `=` and all
-        if (!api || !['-F', '--field'].includes(flag)) return [value]
-        // a graphql document from a file counts too: a mutation's can carry text
-        const field = value?.match(/^[^=]*=(.*)$/s)
-        return [field?.[1].startsWith('@') ? field[1].slice(1) : undefined]
+        const flag = t.match(CLI_PAYLOAD_FLAG)?.[0]
+        // on a CLI verb the value is the path, `=` and all
+        return flag ? [t.slice(flag.length).replace(/^=/, '') || tokens[i + 1]] : []
       })
     })
-    .filter(p => p !== undefined && !STDIN_PATH.test(p) && !/[$`]/.test(p))
+    .filter(p => p !== undefined && !STDIN_PATH.test(p))
 
 /**
  * Priority 0–4 from GitHub label names. The machine label (`priority::high`,
@@ -2500,6 +2523,9 @@ const sessionStartedMs = ({ transcript_path: p }) => {
 const SHARED_TMP = /^\/(?:private\/)?tmp\/claude-[^/]+\//
 const sessionScratchpad = sessionId =>
   new RegExp(String.raw`^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/${isPlainId(sessionId) ? sessionId : '[^/]+'}\/scratchpad\/`)
+// A variable, a substitution, a glob or a brace list: the file it names is
+// decided by the shell after this gate has run, so it is refused, never passed.
+const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}/
 const staleBodyFiles = (cmd, cwd, payload) => {
   const values = publishPayloadFiles(cmd)
   if (!values.length) return []
@@ -2508,6 +2534,7 @@ const staleBodyFiles = (cmd, cwd, payload) => {
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
+    if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
     const path = resolveBodyPath(value, base, homedir())
     if (SHARED_TMP.test(path) && !scratchpad.test(path))
       return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]

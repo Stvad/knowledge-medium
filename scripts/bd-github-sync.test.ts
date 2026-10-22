@@ -341,6 +341,7 @@ describe('gh api reads', () => {
     `gh api -XGET repos/${REPO}/issues -fstate=$S`,
     `gh api repos/${REPO}/issues/1 >| $OUT`,
     `gh -X GET api rate_limit --jq .rate.limit`,
+    `gh api -iXGET repos/${REPO}/issues -fstate=open`,
     // gh keeps the LAST method: a later GET makes the call a read
     `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // a heredoc that only mentions a call reads as one, and one that reads
@@ -386,6 +387,13 @@ describe('gh api reads', () => {
     // gh takes api's own flags ahead of the word api
     `gh -X POST -f body='see #653' api repos/${REPO}/issues/1/comments`,
     `gh -f body=x api repos/${REPO}/issues/1/comments`,
+    // every spelling pflag reads: an `=` after a short flag, a short cluster
+    `gh api graphql -F=query=@body.gql`,
+    `gh api repos/${REPO}/issues/1/comments -iFbody='#123'`,
+    `gh api repos/${REPO}/issues/1/comments -iF body=x`,
+    `gh -iF body=x api repos/${REPO}/issues/1/comments`,
+    // a shell reading a quoted heredoc anywhere on its line runs the data
+    `cat <<'EOF' | bash\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
@@ -3773,6 +3781,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       'gh pr comment 1 --body-file /tmp/claude-501/dir=x/body.md',
       'gh pr comment 1 -F /tmp/claude-501/old=body.md',
       'gh api repos/Stvad/knowledge-medium/issues/1/comments --input /tmp/claude-501/payload.json',
+      // short clusters spell the same flags
+      'gh pr create --title t -dF /tmp/claude-501/pr-body.md',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments -iFbody=@/tmp/claude-501/c.md',
       'gh issue create --title t --template=/tmp/claude-501/stale.md',
       'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 1 -F /tmp/claude-501/m.txt',
     ]) {
@@ -3841,6 +3852,15 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(repo, 'sess', 'subagents', 'agent-1.jsonl'), `{"timestamp":"${new Date().toISOString()}"}\n`)
     const sub = { session_id: 'sess', agent_id: 'a1', transcript_path: join(repo, 'sess', 'subagents', 'agent-1.jsonl') }
     expect(hook('gh pr create --title t --body-file new-body.md', sub).status).toBe(0)
+    // a name the shell expands could be any file, so it is refused, never passed
+    for (const cmd of [
+      'gh pr create --title t --body-file old-*.md',
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr create --title t --body-file "$S/pr-body.md"',
+    ]) {
+      const expanded = hook(cmd, session)
+      expect(expanded.status, cmd).toBe(2)
+      expect(expanded.stderr, cmd).toContain('a name the shell expands')
+    }
     // no transcript, no session start: nothing to compare
     expect(hook('gh pr create --title t --body-file old-body.md').status).toBe(0)
   })

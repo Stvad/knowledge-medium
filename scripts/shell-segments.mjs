@@ -64,8 +64,22 @@ export const withoutLiteralHeredocs = cmd => {
 }
 
 // `literal`, when given, collects the [start, end) of each quoted-delimiter
-// heredoc's data that no shell reads, its closing delimiter line included.
-const SHELL_READER = /(?:^|\/)(?:ba|z|da|k|c|tc|fi)?sh$|^(?:source|\.|eval)$/
+// heredoc's data that nothing on its line can run, its closing delimiter line
+// included. Decided by an ALLOWLIST of commands that never run what they
+// read: a shell, a wrapper, an expanded or unknown command word anywhere on
+// the line keeps the data runnable, so a reader this list misses fails closed.
+const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
+// A command's own word: past its leading assignments and redirections, path dropped.
+const commandWord = words => {
+  for (let i = 0; i < words.length; i++) {
+    if (/^[A-Za-z_]\w*=/.test(words[i])) continue
+    if (/^(?:\d*|&)[<>]/.test(words[i])) {
+      if (/^(?:\d*|&)[<>]+[&|]?$/.test(words[i])) i++
+      continue
+    }
+    return words[i].replace(/^.*\//, '')
+  }
+}
 const segment = (cmd, wholeCommands, literal = null) => {
   const segments = []
   let tokens = []
@@ -75,6 +89,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
   let escaped = false
   let redirectAt = -1 // where the last `<`/`>` the shell reads as an operator sits
   const scopes = [] // open subshell scopes; length IS the current depth
+  let lineStart = 0 // index of the first segment of the current line
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
@@ -238,7 +253,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
         j++
       }
       if (delim) {
-        heredocs.push({ delim, dash, text: quoted && !tokens.some(t => SHELL_READER.test(t)) })
+        heredocs.push({ delim, dash, quoted })
         i = j - 1
         continue
       }
@@ -249,9 +264,15 @@ const segment = (cmd, wholeCommands, literal = null) => {
     }
     if (ch === '\n' && heredocs.length) {
       pushSegment()
+      // what reads the data is anywhere on the line (`cat <<'EOF' | bash` runs
+      // it), read in its words as the shell builds them, a command held open
+      // around a substitution included
+      const lineCommands = [...segments.slice(lineStart).map(s => s.tokens), ...scopes.flatMap(s => (s.outer ? [s.outer.tokens] : []))]
+      const onlyTextReaders = lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
       let j = i + 1
       while (heredocs.length) {
-        const { delim, dash, text } = heredocs.shift()
+        const { delim, dash, quoted } = heredocs.shift()
+        const text = quoted && onlyTextReaders
         const dataStart = j
         const body = []
         while (j <= cmd.length) {
@@ -277,6 +298,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
         if (text) literal?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
+      lineStart = segments.length
       continue
     }
     // bash's redirections spelled with `&` or `|` — `>&`, `<&`, `&>`, `>|` —
@@ -289,6 +311,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
     }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
+      if (ch === '\n') lineStart = segments.length
       continue
     }
     if (/\s/.test(ch)) {

@@ -108,8 +108,25 @@ describe('shellCommandsWithDepth', () => {
   it('cuts out the data of a quoted-delimiter heredoc only', () => {
     expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
     expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
-    // a shell reading it runs it
+    // a shell reading it runs it, wherever it sits on the line
     expect(withoutLiteralHeredocs("bash <<'EOF'\nls\nEOF")).toBe("bash <<'EOF'\nls\nEOF")
+    expect(withoutLiteralHeredocs("cat <<'EOF' | sh\nls\nEOF")).toBe("cat <<'EOF' | sh\nls\nEOF")
+    // anything not known to only read text keeps it: a quoted or escaped shell,
+    // an expanded command word, a wrapper, a redirection ahead of the command
+    for (const cmd of [
+      "cat <<'EOF' | \"ba\"sh\nls\nEOF",
+      "cat <<'EOF' | \\bash\nls\nEOF",
+      "cat <<'EOF' | $SHELL\nls\nEOF",
+      "env $SH <<'EOF'\nls\nEOF",
+      "> out $SH <<'EOF'\nls\nEOF",
+      "xargs -0 <<'EOF'\nls\nEOF",
+    ])
+      expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
+    // a known text reader, path-qualified, behind assignments or a leading redirection
+    expect(withoutLiteralHeredocs("X=1 /usr/bin/python3 - <<'EOF'\nls\nEOF")).toBe("X=1 /usr/bin/python3 - <<'EOF'\n")
+    expect(withoutLiteralHeredocs("> f cat <<'EOF'\nls\nEOF")).toBe("> f cat <<'EOF'\n")
+    // an earlier line's shell reads nothing here, nor does an expanded argument
+    expect(withoutLiteralHeredocs("bash x.sh\ncat > $OUT <<'EOF'\nls\nEOF")).toBe("bash x.sh\ncat > $OUT <<'EOF'\n")
   })
 
   it('gives heredoc data one segment per line, continued lines joined', () => {
