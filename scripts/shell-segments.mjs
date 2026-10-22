@@ -29,8 +29,9 @@ export const SUBSTITUTED = '$(…)'
 
 /**
  * The same segments, except that each simple command stays WHOLE: a command
- * substitution leaves SUBSTITUTED in the word it sits in (its own commands
- * come back as segments ahead of that command), and the `&` of an fd redirect
+ * or process substitution (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the
+ * word it sits in (its own commands come back as segments ahead of that
+ * command), and the `&` of an fd redirect
  * (`2>&1`, `&>`) is part of its word. Under shellSegmentsWithDepth both end the
  * segment, so the arguments after them come back as a command of their own —
  * fine for finding a verb, wrong for a caller reading one command's flags.
@@ -134,6 +135,10 @@ const segment = (cmd, wholeCommands) => {
     if (ch === "'" || ch === '"') {
       quote = ch
       started = true
+      continue
+    }
+    if (ch === '(' && wholeCommands && /[<>]$/.test(cur)) {
+      openSubstitution('subst')
       continue
     }
     if (ch === '(') {

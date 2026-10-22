@@ -98,6 +98,16 @@ describe('shellCommandsWithDepth', () => {
     expect(shellCommandsWithDepth('echo x $(a').map(s => s.tokens)).toEqual([['a'], ['echo', 'x', SUBSTITUTED]])
   })
 
+  it('keeps a command whole across a process substitution', () => {
+    expect(shellCommandsWithDepth('diff <(sort a) >(tee b) -u').map(s => s.tokens)).toEqual([
+      ['sort', 'a'],
+      ['tee', 'b'],
+      ['diff', `<${SUBSTITUTED}`, `>${SUBSTITUTED}`, '-u'],
+    ])
+    // a subshell is still a scope of its own
+    expect(shellCommandsWithDepth('(cd x && ls) -u').map(s => s.tokens)).toEqual([['cd', 'x'], ['ls'], ['-u']])
+  })
+
   it('reads an fd redirect as part of its word, not a separator', () => {
     expect(shellCommandsWithDepth('make 2>&1 -j4 &> out && ls').map(s => s.tokens)).toEqual([
       ['make', '2>&1', '-j4', '&>', 'out'],

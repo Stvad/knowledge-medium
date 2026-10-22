@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -124,6 +124,7 @@ describe('extractBeadIds', () => {
 
   it('takes a child id whole', () => {
     expect(extractBeadIds('see km-abcd.14, under km-abcd.')).toEqual(['km-abcd.14', 'km-abcd'])
+    expect(extractBeadIds('and km-1786746045106-1-1eb9b300.2')).toEqual(['km-1786746045106-1-1eb9b300.2'])
     expect(extractBeadIds('km-abcd.14-notes.md')).toEqual([])
   })
 
@@ -344,6 +345,9 @@ describe('gh api reads', () => {
     `for n in 1320 1325; do gh api graphql -f query="query { repository(owner:\\"Stvad\\", name:\\"knowledge-medium\\") { pullRequest(number:$n) { reviews(last: 3) { nodes { submittedAt } } } } }" --jq '.data'; done`,
     `gh pr checks 1332; gh pr diff 1332 | head; gh issue list --limit 5; gh api -X GET repos/${REPO}/pulls/1332/reviews -f per_page=100 | jq length`,
     `gh api repos/${REPO}/issues/1 2>&1 | tail -3`,
+    // an expansion filling a value adds no flag
+    `for c in 1 2; do gh api repos/${REPO}/pulls/comments/$c -H "Authorization: $T" --jq ".id == $c" -F per_page=$n -X GET; done`,
+    `gh api -XGET repos/${REPO}/issues -fstate=$S`,
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
   ])('is not a publish: %s', cmd => {
@@ -360,6 +364,10 @@ describe('gh api reads', () => {
     `gh api "\${ARGS[@]}"`,
     `gh api repos/${REPO}/issues/1/comments $(printf -- '-f body=x')`,
     `gh api -X "$M" repos/${REPO}/issues/1`,
+    // an expansion that completes a flag, or sits outside a value
+    `flag=f; gh api repos/${REPO}/issues/1/comments -"$flag" body='see #653'`,
+    `gh api repos/${REPO}/issues/1/comments --$kind body=x`,
+    `gh api repos/${REPO}/issues/1/comments "$EXTRA"`,
     // a graphql document the gate cannot read could be a mutation
     `for q in a; do gh api graphql -f query="$Q"; done`,
     `gh api graphql -F query=@q.graphql | jq .`,
@@ -367,6 +375,7 @@ describe('gh api reads', () => {
     // flags after a substitution or an fd redirect still belong to the call
     `gh api repos/${REPO}/issues/$(echo 1)/comments -f body=y`,
     `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
     // heredoc data that bash runs is a call
     `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
   ])('is still a publish: %s', cmd => {
@@ -437,6 +446,10 @@ describe('this repository and a leading cd', () => {
     "gh pr comment 12 -R 'Stvad/knowledge-medium'x --body-file b.md",
     'gh pr comment 12 --repo Stvad/knowledge-medium --repo other/x --body-file b.md',
     'GH_REPO=other/x gh pr comment 12 --repo Stvad/knowledge-medium --body-file b.md',
+    // another host: the read-back looks on github.com only
+    'GH_HOST=ghe.example gh pr comment 12 -R Stvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 -R ghe.example/Stvad/knowledge-medium --body-file b.md',
+    'gh api --hostname ghe.example repos/Stvad/knowledge-medium/issues/1/comments -f body=x',
     'cd "$WT" && gh pr create --title t --body-file b.md',
     // a cd that fails still runs the publish after `;`, from somewhere else
     'cd x; gh pr create --title t --body-file b.md',
@@ -3720,12 +3733,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       'gh issue comment 1 -F/tmp/claude-501/c.md',
       'pnpm pr:reply 1048 4040271733 /tmp/claude-501/reply.md --resolve',
       'gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=@/tmp/claude-501/c.md',
+      'gh pr create --title t -T /tmp/claude-501/stale.md',
+      'gh issue create --title t --template=/tmp/claude-501/stale.md',
       'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 1 -F /tmp/claude-501/m.txt',
     ]) {
       const r = hook(cmd)
       expect(r.status, cmd).toBe(2)
       expect(r.stderr, cmd).toContain('nothing in this command ran')
-      expect(r.stderr, cmd).toContain("outside any session's scratchpad")
+      expect(r.stderr, cmd).toContain("outside this session's scratchpad")
     }
     // resolved against the directory the command runs in
     const relative = hook('gh pr create --title t --body-file pr-body.md', { cwd: '/tmp/claude-501' })
@@ -3733,6 +3748,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('cd /tmp/claude-501 && gh pr create --title t --body-file pr-body.md').status).toBe(2)
     // a session's own scratchpad is its own
     expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/0b3c9d2e/scratchpad/pr-body.md').status).toBe(0)
+    // and another running session's is not
+    const own = { session_id: 'sess-a' }
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/pr-body.md', own).status).toBe(0)
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-b/scratchpad/pr-body.md', own).status).toBe(2)
     // a read is not a publish
     expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
     expect(shimCalls()).toBe('')
@@ -3750,13 +3769,18 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const session = { session_id: 'sess', transcript_path: transcript }
     const r = hook('gh pr create --title t --body-file old-body.md', session)
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain(`${join(repo, 'old-body.md')}: last written ${hourAgo.toISOString()}, before this session started`)
+    // as stored: a file system may round the time it was given
+    const stored = new Date(statSync(join(repo, 'old-body.md')).mtimeMs).toISOString()
+    expect(r.stderr).toContain(`${join(repo, 'old-body.md')}: last written ${stored}, before this session started`)
     writeFileSync(join(repo, 'new-body.md'), 'written in this session')
     expect(hook('gh pr create --title t --body-file new-body.md', session).status).toBe(0)
-    // a file the command itself rewrites is new by the time it is published
-    expect(
-      hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cat > old-body.md <<'EOF'\nx\nEOF\ngh pr create --title t --body-file old-body.md`, session).status,
-    ).toBe(0)
+    // even one the command rewrites: whether the write runs first is the
+    // command's order, which this gate does not read
+    for (const cmd of [
+      `KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cat > old-body.md <<'EOF'\nx\nEOF\ngh pr create --title t --body-file old-body.md`,
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr create --title t --body-file old-body.md && printf fresh > old-body.md',
+    ])
+      expect(hook(cmd, session).status, cmd).toBe(2)
     // a subagent's session began with the main transcript, not its own
     const beforeSubagent = new Date(started + 60_000)
     utimesSync(join(repo, 'new-body.md'), beforeSubagent, beforeSubagent)

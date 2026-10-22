@@ -170,7 +170,7 @@ export const REPO = 'Stvad/knowledge-medium'
 // is a file or bin name. A plain word bd could mint as a hash (`km-vendor`)
 // still matches. Only a branch under an agent prefix (`claude/km-…`,
 // `codex/km-…`) is excluded: it names the branch, not a bead.
-export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8}(?:\.\d+)*)(?!\w|-\w|\.\d)/g
+export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8})(?:\.\d+)*(?!\w|-\w|\.\d)/g
 
 /** Unique bead ids referenced in a blob of text, in first-seen order. */
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
@@ -336,11 +336,28 @@ const REDIRECTION = /^(?:\d*|&)[<>]/
 const BARE_REDIRECTION = /^(?:\d*|&)[<>]+&?$/
 const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(args[i - 1] ?? ''))
 const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '-q', '--jq', '-t', '--template', '--input', '-p', '--preview', '--hostname', '--cache'])
-const endpointOf = words => {
+// What each word of a call is: a flag, a flag's value word, the endpoint (the
+// first positional), or an extra positional.
+const roles = words => {
+  const out = []
   for (let i = 0; i < words.length; i++) {
-    if (API_FLAG_WITH_VALUE.has(words[i])) i++
-    else if (!words[i].startsWith('-')) return words[i]
+    if (API_FLAG_WITH_VALUE.has(words[i])) out.push('flag', 'value'), i++
+    else out.push(words[i].startsWith('-') ? 'flag' : out.includes('endpoint') ? 'extra' : 'endpoint')
   }
+  return out
+}
+const endpointOf = words => words[roles(words).indexOf('endpoint')]
+// An expansion may fill a VALUE — a flag's value word, a value attached after
+// `=` (`-fbody=$x`), the endpoint past its first character (`issues/$n`) — and
+// nothing else: in a word of its own, or one it starts or completes
+// (`-"$flag"`), it can expand to flags.
+const expansionMayAddFlags = words => {
+  const role = roles(words)
+  return words.some(
+    (t, i) =>
+      t.includes('$') &&
+      !(role[i] === 'value' || (role[i] === 'endpoint' && !t.startsWith('$')) || (role[i] === 'flag' && /^-[^$]*=/.test(t))),
+  )
 }
 // gh keeps the LAST -X/--method (see METHOD_FLAG below).
 const methodOf = words => {
@@ -357,19 +374,18 @@ const BODY_FLAG = /^(?:-[fF]|--(?:raw-)?field(?:=|$)|--input(?:=|$))/
 // an expansion.
 const UNREAD_DOCUMENT = /^(?:-[fF]|--(?:raw-)?field=)?query=[@$]|^--input(?:=|$)/
 /**
- * Whether one gh api call can publish text. A word that STARTS with an
- * expansion can expand to any flags at all, so its call can; one that only
- * continues a word (`issues/$n`) cannot start a flag. Past that, graphql
- * publishes through a `mutation` in a document the gate can read, and REST
- * through a writing method or, absent one, a body.
+ * Whether one gh api call can publish text: when an expansion can add flags
+ * to it; else, for graphql, through a `mutation` in a document the gate can
+ * read; and for REST through a writing method — an expanded one included —
+ * or, absent one, a body.
  */
 const apiCallPublishes = args => {
   const words = argumentWords(args)
-  if (words.some(t => t.startsWith('$'))) return true
+  if (expansionMayAddFlags(words)) return true
   if (endpointOf(words) === 'graphql') return MUTATION.test(words.join(' ')) || words.some(t => UNREAD_DOCUMENT.test(t))
   const method = methodOf(words)
   if (method === 'GET' || method === 'HEAD') return false
-  return ['POST', 'PATCH', 'PUT'].includes(method) || words.some(t => BODY_FLAG.test(t))
+  return ['POST', 'PATCH', 'PUT'].includes(method) || Boolean(method?.includes('$')) || words.some(t => BODY_FLAG.test(t))
 }
 // An explicit read verb: `gh api -X GET … -f key=value` sends its fields as
 // query parameters and publishes nothing, so the text it carries is never
@@ -531,10 +547,11 @@ const shellSyntaxIn = cmd => {
   if (!tokens.some(t => /^[$`]/.test(t)) && hasExpansion(cmd)) tokens.push(expandable(cmd).match(/\$\(|\$\{[^}]*\}|\$\w+|[$`]/)[0])
   return tokens.map(operatorName)
 }
-// Repository selection away from this one, by flag or by environment. The
-// read-back's URL pattern is pinned to this repo, so a foreign publish has
-// no post-check at all. No separator required: gh takes -Rowner/repo.
-const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo)|\bGH_REPO=/
+// Repository or host selection away from this one, by flag or by
+// environment. The read-back's URL pattern is pinned to this repo on
+// github.com, so a foreign publish has no post-check at all. No separator
+// required: gh takes -Rowner/repo.
+const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo|--hostname)|\bGH_(?:REPO|HOST)=/
 // This repository named explicitly, in any spelling gh accepts, selects
 // nothing foreign, so it is removed before FOREIGN_TARGET looks. A misread
 // can only claim coverage for a publish that went elsewhere, and the
@@ -788,7 +805,7 @@ const uncoveredBy = cmd => {
   const mode = found(NON_PUBLISHING_MODE)
   if (mode) return { shell: false, why: `\`${mode}\`, which creates nothing for the read-back to find` }
   if (FOREIGN_TARGET.test(body.replace(THIS_REPO_TARGET, '')))
-    return { shell: false, why: 'a repository other than this one (`-R`, `--repo` or `GH_REPO`), which the read-back does not look in' }
+    return { shell: false, why: 'a repository or host other than this one (`-R`, `--repo`, `GH_REPO`, `GH_HOST`, `--hostname`), which the read-back does not look in' }
   if (matchesApiPublish(cmd)) {
     if (found(GRAPHQL)) return { shell: false, why: 'the `graphql` endpoint, whose answer names no object to read back' }
     const opaque = found(OPAQUE_OUTPUT)
@@ -943,11 +960,12 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
 
 /**
  * The files a publish takes its text from, as the command names them: a CLI
- * verb's --body-file, --notes-file or -F; an api call's --input and its
- * `name=@file` fields; and pr:reply's body file. A name holding an expansion
- * cannot be resolved here, and stdin is no file.
+ * verb's --body-file, --notes-file, -F, or --template/-T (the starting body);
+ * an api call's --input and its `name=@file` fields; and pr:reply's body
+ * file. A name holding an expansion cannot be resolved here, and stdin is no
+ * file.
  */
-const PAYLOAD_FLAG = /^(?:--body-file|--notes-file|--input|--field|-F)/
+const PAYLOAD_FLAG = /^(?:--body-file|--notes-file|--input|--field|--template|-F|-T)/
 export const publishPayloadFiles = cmd =>
   shellCommandsWithDepth(cmd)
     .filter(s => !s.heredoc)
@@ -2438,20 +2456,25 @@ const sessionStartedMs = ({ transcript_path: p }) => {
 
 // A body file another session could have written, as the fact found at its
 // path. Every session writes to the shared /tmp/claude-<uid>/, so a name there
-// outside a session's own scratchpad can hold another session's text; and a
-// file older than this session was written by none of its calls. Either way
-// it is what a retry of a blocked compound ships: the compound that would
-// have rewritten it never ran. A file this command itself writes is new.
+// outside this session's own scratchpad can hold another session's text; and
+// a file older than this session was written by none of its calls. Either way
+// it is what a retry of a blocked compound ships: the compound that would have
+// rewritten it never ran. One this command rewrites first is refused all the
+// same: a new file is the shape that passes, and telling a write that runs
+// before the publish from one that runs after would be shell parsing. A
+// payload naming no session is held to any session's scratchpad.
 const SHARED_TMP = /^\/(?:private\/)?tmp\/claude-[^/]+\//
-const SESSION_SCRATCHPAD = /^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/[^/]+\/scratchpad\//
-const staleBodyFiles = (cmd, cwd, startedMs) => {
+const sessionScratchpad = sessionId =>
+  new RegExp(String.raw`^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/${isPlainId(sessionId) ? sessionId : '[^/]+'}\/scratchpad\/`)
+const staleBodyFiles = (cmd, cwd, { startedMs, sessionId }) => {
   const dir = cdPrefixDir(cmd)
   const base = dir === undefined ? cwd : resolveBodyPath(dir, cwd, homedir())
+  const scratchpad = sessionScratchpad(sessionId)
   return publishPayloadFiles(cmd).flatMap(value => {
     const path = resolveBodyPath(value, base, homedir())
-    if (SHARED_TMP.test(path) && !SESSION_SCRATCHPAD.test(path))
-      return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside any session's scratchpad`]
-    if (startedMs === undefined || commandWrites(cmd, value)) return []
+    if (SHARED_TMP.test(path) && !scratchpad.test(path))
+      return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]
+    if (startedMs === undefined) return []
     let mtimeMs
     try {
       mtimeMs = statSync(path).mtimeMs
@@ -2707,7 +2730,7 @@ const hookPrePr = () => {
   // text gets the refs/ids tables below. The merge COMMIT of a merged PR is
   // read back post-merge by bd-publish-verify regardless, and that hook
   // reports any coverage claim it cannot honour.
-  const stale = publishes ? staleBodyFiles(cmd, cwd, sessionStartedMs(payload ?? {})) : []
+  const stale = publishes ? staleBodyFiles(cmd, cwd, { startedMs: sessionStartedMs(payload ?? {}), sessionId: payload?.session_id }) : []
   const outside = blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd)) ? textOutsideCommand(cmd) : null
   if (stale.length || outside) {
     console.error(blockedPublishMessage({ stale, uncovered: outside && uncoveredBy(cmd), outside }))
