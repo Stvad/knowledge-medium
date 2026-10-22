@@ -188,6 +188,21 @@ describe('buildAdditionalContext', () => {
         // every listed key is real, and each trimmed group shows its head
         for (const key of back.keys) expect(keys).toContain(key)
         expect(back.keys).toContain(keys[0])
+        // one more name in each of the three trimmed groups would overflow, so the budget is used
+        expect(out.length).toBeGreaterThan(MAX_CONTEXT_CHARS - 300)
+    })
+
+    // Completing a group drops its "+N more" marker, so a larger cap can fit
+    // where a smaller one did not: here caps 7–9 overflow and cap 10 fits.
+    it('finds the cap that completes many small groups past caps that overflow', () => {
+        const small = Array.from({ length: 274 }, (_, g) => Array.from({ length: 10 }, (_, i) => `g${g}_${i}`)).flat()
+        const keys = [...small, ...Array.from({ length: 100 }, (_, i) => `big_${String(i).padStart(6, '0')}`)]
+        const out = buildAdditionalContext({ keys })
+        expect(out.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        const back = readBack(out)
+        for (const key of small) expect(back.keys).toContain(key)
+        expect(Object.keys(back.hidden)).toEqual(['big'])
+        expect(back.keys.length + back.hidden['big']).toBe(keys.length)
     })
 
     // A one-key group's "+1 more" marker can be longer than its key, so an

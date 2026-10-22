@@ -23,7 +23,10 @@ import { isMainModule } from './is-main-module.mjs'
 // Just under the measured 10,000-char inline limit; the margin absorbs a
 // wrapper-side format tweak without re-measuring the host.
 export const MAX_CONTEXT_CHARS = 9_800
-const MAX_BD_OUTPUT_BYTES = 16 * 1024 * 1024
+// `bd memories --json` carries every memory's full text (bd has no keys-only
+// listing), so this holds about 4,000 memories at bd's 65,535-byte cap; past
+// it the index reports ENOBUFS.
+const MAX_BD_OUTPUT_BYTES = 256 * 1024 * 1024
 // Bounds that keep the index header inside the budget whatever the alarm or
 // a failure reason says.
 const MAX_NOTICE_CHARS = 1_500
@@ -141,18 +144,25 @@ export const buildAdditionalContext = (index, notice = '') => {
   const render = cap => renderIndex(head, groups, cap)
   const fits = cap => render(cap).length <= MAX_CONTEXT_CHARS
   if (fits(Infinity)) return render(Infinity)
-  // Cap 0 is the bare header, which the bounds above always fit. The largest
-  // groups give up their tails first, so a small group stays whole. The search
-  // ends on a cap whose successor overflows; a larger one can still fit (a
-  // "+N more" marker can outweigh the names it replaces), and is not sought.
-  let lo = 0
-  let hi = Math.max(...groups.map(g => g.names.length))
-  while (hi - lo > 1) {
-    const mid = Math.floor((lo + hi) / 2)
-    if (fits(mid)) lo = mid
-    else hi = mid
+  // The largest cap that fits, so the largest groups give up their tails first
+  // and a small group stays whole. Between two group sizes the output grows
+  // with the cap; reaching a size completes that group and drops its
+  // "+N more" marker, so a larger cap can fit where a smaller one did not.
+  // Hence: the highest interval whose first cap fits, then the largest cap
+  // inside it. Cap 0 is the bare header, which the bounds above always fit.
+  const starts = [...new Set([0, ...groups.map(g => g.names.length)])].sort((a, b) => a - b)
+  for (let i = starts.length - 1; i >= 0; i--) {
+    let lo = starts[i]
+    if (!fits(lo)) continue
+    // The top start renders every key, which failed above, so a fitting start always has a next one.
+    let hi = starts[i + 1]
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (fits(mid)) lo = mid
+      else hi = mid
+    }
+    return render(lo)
   }
-  return render(lo)
 }
 
 /**
