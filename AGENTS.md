@@ -18,7 +18,7 @@ verification and the inner loop (this repo is built primarily by agents — keep
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
 
 shell (zsh on macOS):
-- `$VAR` is not word-split (use an array or `xargs`); an unquoted glob that matches nothing is an error, so quote `--include='*.ts'`; `status` and `path` are reserved variables; `echo ===` fails; there is no `timeout` binary; `sed -i` is BSD's.
+- `$VAR` is not word-split (use an array or `xargs`); an unquoted glob that matches nothing is an error, so quote `--include='*.ts'`; `status` and `path` are reserved variables; `$VAR:x` applies a zsh modifier, so write `${VAR}:x`; `echo ===` fails; there is no `timeout` binary; `sed -i` is BSD's.
 - temp files go in your own session directory (Claude Code: the scratchpad your system prompt names; Codex: `mktemp -d`), never a fixed path like `/tmp/pr-body.md` or the shared `/tmp/claude-<uid>/` root, which other sessions write to.
 
 data model (read BEFORE designing what an extension or plugin stores):
