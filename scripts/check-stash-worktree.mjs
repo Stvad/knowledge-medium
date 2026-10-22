@@ -55,7 +55,8 @@ const DIR_CHANGES = new Set(['cd', 'pushd', 'popd'])
 /**
  * The directory after a cd, pushd or popd. Only a named path is followed; the
  * forms that move to a directory a static reading cannot know come back as the
- * shell variable holding it, which callers treat as unresolved.
+ * shell variable holding it, which callers treat as unresolved. Accepted: forms
+ * agents do not write, such as `cd --` and a cd that `false &&` skips.
  */
 const moveDir = (cdPath, verb, args) => {
   const [raw] = args.filter(a => !/^-[LPe@]+$/.test(a)) // cd -P / -L options

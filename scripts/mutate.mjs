@@ -24,8 +24,9 @@
  * original. An UNPINNED result is re-checked with the file made to throw on
  * load: a test that still passes never loaded it (it imports a built copy, or
  * another checkout's), which is no verdict. Not restored: other files an --edit
- * command writes. Accepted: bytes another process writes to the file while the
- * --edit command itself runs read as part of the edit and are not saved aside.
+ * command writes, and the file's mode (`sed -i` and `perl -i` keep it).
+ * Accepted: bytes another process writes to the file while the --edit command
+ * itself runs read as part of the edit and are not saved aside.
  */
 
 import { spawn } from 'node:child_process'
