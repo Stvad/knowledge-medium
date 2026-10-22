@@ -42,7 +42,26 @@ export const SUBSTITUTED = '$(…)'
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
-const segment = (cmd, wholeCommands) => {
+/**
+ * The command with each quoted-delimiter heredoc's data (`<<'EOF'`) cut out:
+ * text the shell neither runs nor expands. An unquoted heredoc's data stays,
+ * since its `$(…)` and backticks run.
+ */
+export const withoutLiteralHeredocs = cmd => {
+  const literal = []
+  segment(cmd, true, literal)
+  let out = ''
+  let at = 0
+  for (const [start, end] of literal) {
+    out += cmd.slice(at, start)
+    at = end
+  }
+  return out + cmd.slice(at)
+}
+
+// `literal`, when given, collects the [start, end) of each quoted-delimiter
+// heredoc's data, its closing delimiter line included.
+const segment = (cmd, wholeCommands, literal = null) => {
   const segments = []
   let tokens = []
   let cur = ''
@@ -188,6 +207,7 @@ const segment = (cmd, wholeCommands) => {
       while (j < cmd.length && (cmd[j] === ' ' || cmd[j] === '\t')) j++
       let delim = ''
       let dq = null
+      let quoted = false // any quoting in the delimiter turns expansion off in the data
       while (j < cmd.length) {
         const c = cmd[j]
         if (dq) {
@@ -198,12 +218,14 @@ const segment = (cmd, wholeCommands) => {
         }
         if (c === "'" || c === '"') {
           dq = c
+          quoted = true
           j++
           continue
         }
         if (/[\s;&|()<>`]/.test(c)) break
         if (c === '\\' && j + 1 < cmd.length) {
           delim += cmd[j + 1]
+          quoted = true
           j += 2
           continue
         }
@@ -211,7 +233,7 @@ const segment = (cmd, wholeCommands) => {
         j++
       }
       if (delim) {
-        heredocs.push({ delim, dash })
+        heredocs.push({ delim, dash, quoted })
         i = j - 1
         continue
       }
@@ -224,7 +246,8 @@ const segment = (cmd, wholeCommands) => {
       pushSegment()
       let j = i + 1
       while (heredocs.length) {
-        const { delim, dash } = heredocs.shift()
+        const { delim, dash, quoted } = heredocs.shift()
+        const dataStart = j
         const body = []
         while (j <= cmd.length) {
           const eol = cmd.indexOf('\n', j)
@@ -240,6 +263,7 @@ const segment = (cmd, wholeCommands) => {
           const words = line.split(/\s+/).filter(Boolean)
           if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
         }
+        if (quoted) literal?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
       continue

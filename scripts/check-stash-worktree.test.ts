@@ -14,7 +14,7 @@ import {
   stashInvocations,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
+import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -103,6 +103,11 @@ describe('shellCommandsWithDepth', () => {
     expect(shellCommandsWithDepth("x=$'don\\'t'; ls").map(s => s.tokens)).toEqual([["x=don't"], ['ls']])
     // shellSegmentsWithDepth reads both as before
     expect(shellSegments('ls # x')).toEqual([['ls', '#', 'x']])
+  })
+
+  it('cuts out the data of a quoted-delimiter heredoc only', () => {
+    expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
+    expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
   })
 
   it('gives heredoc data one segment per line, continued lines joined', () => {

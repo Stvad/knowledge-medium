@@ -157,7 +157,7 @@ import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
-import { shellCommandsWithDepth, shellSegmentsWithDepth } from './shell-segments.mjs'
+import { shellCommandsWithDepth, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
 
@@ -434,11 +434,13 @@ const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk
 // comments, `$'…'`); this catches the next one. Totals, not positions: a call
 // only the reader sees (a quoted `"gh"` word) could mask a swallowed one,
 // which takes two misreadings in one command; strict matching would block
-// heredoc notes whose quoted prose mentions a call.
+// heredoc notes whose quoted prose mentions a call. A quoted-delimiter
+// heredoc's data is left out of the count: the shell never runs it, and the
+// skeleton would read its markdown backticks as substitutions.
 const GH_API_CALL = new RegExp(GH + String.raw`api\s`, 'gm')
 export const matchesApiPublish = cmd => {
   const calls = ghApiCalls(cmd)
-  return calls.length < (commandSkeleton(cmd).match(GH_API_CALL)?.length ?? 0) || calls.some(apiCallPublishes)
+  return calls.length < (commandSkeleton(withoutLiteralHeredocs(cmd)).match(GH_API_CALL)?.length ?? 0) || calls.some(apiCallPublishes)
 }
 
 /**

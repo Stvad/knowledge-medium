@@ -352,6 +352,8 @@ describe('gh api reads', () => {
     `gh -X GET api rate_limit --jq .rate.limit`,
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
+    // a quoted heredoc's markdown backticks are text, not substitutions
+    "python3 - <<'EOF'\nrep('use `gh api` with a `-f` field here')\nEOF",
   ])('is not a publish: %s', cmd => {
     expect(matchesAnyPublish(cmd)).toBe(false)
   })
@@ -389,6 +391,8 @@ describe('gh api reads', () => {
     `gh -f body=x api repos/${REPO}/issues/1/comments`,
     // heredoc data is one call per line: a later GET line does not make the post a read
     `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
+    // an unquoted heredoc's backticks run
+    "cat <<EOF\nposted: `gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=y`\nEOF",
     // a call the reader swallows (here: an unterminated quote) still counts
     `echo \\#'\ngh api repos/${REPO}/issues/1/comments -f body=y`,
     // an escaped `>` is text, and the `|` after it a pipe into the call
