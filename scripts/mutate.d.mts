@@ -20,4 +20,4 @@ export declare const verdictOf: (report: unknown, testFile: string) => Verdict
 export declare const statePaths: (
   root: string,
   target: string,
-) => { dir: string; lock: string; report: string; journal: string; snapshot: string; duringRun: string }
+) => { dir: string; lock: string; report: string; journal: string; snapshot: string }

@@ -3,7 +3,7 @@
  * Push scope print (PostToolUse/PostToolUseFailure(Bash) hook). It never
  * fetches, exits 0 always, and its only output is additionalContext.
  *
- * After a command that ran `git push`, it prints, for each pushed source (each
+ * After a command containing `git push`, it prints, for each pushed source (each
  * refspec's <src>, or HEAD when the push names none), the merge-base diff
  * against origin/master as this clone last fetched it: the files by status with
  * deletions first, the shortstat, and the ahead/behind commit counts. A push

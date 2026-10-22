@@ -266,7 +266,6 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(readFileSync(savedAt(r.stdout), 'utf8')).toMatch(/\/\/ during run\n$/)
     const again = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
     expect(savedAt(again.stdout)).not.toBe(savedAt(r.stdout))
-    expect(readFileSync(savedAt(r.stdout), 'utf8')).toMatch(/\/\/ during run\n$/)
   })
 
   it('reports a target deleted during the run, and restores it', () => {

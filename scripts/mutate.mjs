@@ -6,6 +6,8 @@
  *   pnpm mutate --file <path> (--delete <literal> | --edit <shell command>)
  *               --test <vitest file> [-t <name pattern>] [--no-baseline] [--timeout <s>]
  *
+ * --edit runs its command with $MUTATE_FILE set to the file's absolute path.
+ *
  * It never calls git: `git checkout -- <file>` restores HEAD, not the
  * pre-mutation bytes, and drops every uncommitted edit in the file.
  *

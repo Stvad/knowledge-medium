@@ -1,6 +1,6 @@
 /**
  * Split a shell command string into segments of unquoted tokens, for
- * PreToolUse(Bash) hooks that must act on VERB POSITION rather than substring
+ * Bash hooks that must act on VERB POSITION rather than substring
  * matches (a command that merely *mentions* a guarded git command or a uuid
  * inside a quoted -m string must not trip a guard).
  *

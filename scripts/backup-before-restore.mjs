@@ -26,9 +26,9 @@
  *
  * Not covered, and accepted: a restore inside a script file, `bash -c` or a
  * heredoc; bytes an earlier part of the same command writes (the copy is the
- * tree before the command, the one a mutate-then-restore loop needs); staged content that differs from the working tree when the
- * command also rewrites the index (it survives as an unreachable blob until
- * gc); edits `git diff` does not report, under assume-unchanged or
+ * tree before the command, the one a mutate-then-restore loop needs); staged
+ * content that differs from the working tree when the command also rewrites
+ * the index (it survives as an unreachable blob until gc); edits `git diff` does not report, under assume-unchanged or
  * skip-worktree bits or inside submodules (this repository uses neither); and
  * other commands that discard work: reset --hard, switch -f or
  * --discard-changes, checkout-index -f, clean.

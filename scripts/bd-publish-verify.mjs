@@ -196,9 +196,9 @@ export const apiPathFor = t =>
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
             : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
-// additionalContext shares the host's ~10K inline budget with every other
-// hook on the event (measured for SessionStart in issue #643; assume the
-// same order here). The trailing surrogate strip keeps a clipped emoji from
+// Claude Code inlines each hook command's additionalContext up to ~10K
+// characters, even when other hooks run on the event (issue #643), and shows
+// a 2K preview past that. The trailing surrogate strip keeps a clipped emoji from
 // mojibaking the tail.
 export const clipContext = (s, max = 9_000) =>
   s.length <= max

@@ -101,7 +101,7 @@
           },
           {
             "command": "node \"$(git rev-parse --show-toplevel)/scripts/push-scope.mjs\"",
-            "statusMessage": "Listing what this push sent against origin/master\u2026",
+            "statusMessage": "Scoping any git push against origin/master\u2026",
             "timeout": 30,
             "type": "command"
           }

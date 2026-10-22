@@ -47,7 +47,7 @@
           },
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
-            "statusMessage": "Listing what this push sent against origin/master…",
+            "statusMessage": "Scoping any git push against origin/master…",
             "type": "command"
           }
         ],
@@ -65,7 +65,7 @@
           },
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
-            "statusMessage": "Listing what this push sent against origin/master…",
+            "statusMessage": "Scoping any git push against origin/master…",
             "type": "command"
           }
         ],
