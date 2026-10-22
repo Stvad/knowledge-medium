@@ -111,6 +111,8 @@ describe('shellCommandsWithDepth', () => {
     // a shell reading it runs it, wherever it sits on the line
     expect(withoutLiteralHeredocs("bash <<'EOF'\nls\nEOF")).toBe("bash <<'EOF'\nls\nEOF")
     expect(withoutLiteralHeredocs("cat <<'EOF' | sh\nls\nEOF")).toBe("cat <<'EOF' | sh\nls\nEOF")
+    // or a pipe or subshell still open at the newline, whose reader comes after the data
+    for (const cmd of ["cat <<'EOF' |\nls\nEOF\nbash", "(cat <<'EOF'\nls\nEOF\n) | bash"]) expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
     // anything not known to only read text keeps it: a quoted or escaped shell,
     // an expanded command word, a wrapper, a redirection ahead of the command
     for (const cmd of [

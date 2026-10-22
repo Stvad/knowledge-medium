@@ -68,6 +68,9 @@ export const withoutLiteralHeredocs = cmd => {
 // included. Decided by an ALLOWLIST of commands that never run what they
 // read: a shell, a wrapper, an expanded or unknown command word anywhere on
 // the line keeps the data runnable, so a reader this list misses fails closed.
+// python and node run their stdin as their own language; a gh call from that
+// code sits in quoted strings no reader here sees, counted or not, so listing
+// them only keeps their heredocs that mention a call from blocking.
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
 // A command's own word: past its leading assignments and redirections, path dropped.
 const commandWord = words => {
@@ -268,7 +271,10 @@ const segment = (cmd, wholeCommands, literal = null) => {
       // it), read in its words as the shell builds them, a command held open
       // around a substitution included
       const lineCommands = [...segments.slice(lineStart).map(s => s.tokens), ...scopes.flatMap(s => (s.outer ? [s.outer.tokens] : []))]
-      const onlyTextReaders = lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
+      // a pipe or list left open at the newline, or a subshell, goes on past
+      // the data to a reader not read yet
+      const readerPending = scopes.some(s => s.kind === 'paren') || /(?:\||&&)\s*$/.test(cmd.slice(cmd.lastIndexOf('\n', i - 1) + 1, i))
+      const onlyTextReaders = !readerPending && lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
       let j = i + 1
       while (heredocs.length) {
         const { delim, dash, quoted } = heredocs.shift()

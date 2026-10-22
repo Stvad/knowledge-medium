@@ -368,15 +368,14 @@ const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
  * word is a flag, a flag's value, the endpoint (the first positional) or an
  * extra positional; a flag this table does not know is kept whole.
  */
-const parseCall = args => {
+const parseCall = words => {
+  // bash takes redirections out of argv before gh reads it, so a flag's value
+  // is the next word that is no redirection
+  const args = words.filter((t, i) => !REDIRECTION.test(t) && (t.startsWith('-') || !BARE_REDIRECTION.test(words[i - 1] ?? '')))
   const call = []
   let endpoint = false
   for (let i = 0; i < args.length; i++) {
     const t = args[i]
-    if (REDIRECTION.test(t)) {
-      if (BARE_REDIRECTION.test(t) && !args[i + 1]?.startsWith('-')) i++
-      continue
-    }
     if (!t.startsWith('-') || t === '-') {
       call.push({ word: t, role: endpoint ? 'extra' : 'endpoint' })
       endpoint = true

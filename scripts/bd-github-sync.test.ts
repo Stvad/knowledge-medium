@@ -342,6 +342,7 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/1 >| $OUT`,
     `gh -X GET api rate_limit --jq .rate.limit`,
     `gh api -iXGET repos/${REPO}/issues -fstate=open`,
+    `gh -iX GET api rate_limit --jq .rate.limit`,
     // gh keeps the LAST method: a later GET makes the call a read
     `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // a heredoc that only mentions a call reads as one, and one that reads
@@ -394,6 +395,10 @@ describe('gh api reads', () => {
     `gh -iF body=x api repos/${REPO}/issues/1/comments`,
     // a shell reading a quoted heredoc anywhere on its line runs the data
     `cat <<'EOF' | bash\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // or one the line leaves open, to come after the data
+    `cat <<'EOF' |\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF\nbash`,
+    // a redirection between a flag and its value is no value
+    `gh api graphql -F > /tmp/out query=@doc.gql`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
