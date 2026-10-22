@@ -1,1 +1,0 @@
-import{oa as e,ua as t}from"../../../chunks/app-z-8wLk4q.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
