@@ -350,7 +350,9 @@ const endpointOf = words => words[roles(words).indexOf('endpoint')]
 // An expansion may fill a VALUE — a flag's value word, a value attached after
 // `=` (`-fbody=$x`), the endpoint past its first character (`issues/$n`) — and
 // nothing else: in a word of its own, or one it starts or completes
-// (`-"$flag"`), it can expand to flags.
+// (`-"$flag"`), it can expand to flags. Unquoted, a value's expansion could
+// still word-split into flags. Accepted: that takes a variable holding flag
+// text, and requiring quotes would gate the loop reads (`comments/$id`).
 const expansionMayAddFlags = words => {
   const role = roles(words)
   return words.some(
