@@ -160,13 +160,15 @@ export const REPO = 'Stvad/knowledge-medium'
 // ---------------------------------------------------------------------------
 
 // A DETECTOR shared by the gate, the verifier and the comment mirror, so a
-// shape it misses is published unchecked by all three: it over-matches. It
-// takes the shapes bd mints — the long form a GitHub import creates, and a
-// hash sized to the tracker (4 up to 8 characters, growing with it) with an
-// optional wisp/mol/proto kind — and stops at the hash, so an id with a
-// hyphenated suffix still yields the id. Only a branch under an agent prefix
-// (`claude/km-…`, `codex/km-…`) is excluded: it names the branch, not a bead.
-export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8})(?!\w)/g
+// shape it misses is published unchecked by all three. It takes the shapes bd
+// mints — the long form a GitHub import creates, a hash sized to the tracker
+// (4 up to 8 characters, growing with it) with an optional wisp/mol/proto
+// kind, and a child's `.N` suffixes — whole, and nothing a hyphen continues:
+// no id has a hyphenated suffix, so `km-<id>-body.md` or `km-agent-dispatch`
+// is a file or bin name. A plain word bd could mint as a hash (`km-vendor`)
+// still matches. Only a branch under an agent prefix (`claude/km-…`,
+// `codex/km-…`) is excluded: it names the branch, not a bead.
+export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8}(?:\.\d+)*)(?!\w|-\w|\.\d)/g
 
 /** Unique bead ids referenced in a blob of text, in first-seen order. */
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]

@@ -113,12 +113,18 @@ describe('extractBeadIds', () => {
     expect(extractBeadIds('km-abc km-db km-7f3a86abc')).toEqual([])
   })
 
-  // Over-matching is the cheap direction: a hyphenated suffix, or ids joined
-  // by a slash, still yield every id.
-  it('stops at the hash, so an id followed by a suffix or a slash still counts', () => {
-    expect(extractBeadIds('km-abcd-era and km-avrg-retain-measure')).toEqual(['km-abcd', 'km-avrg'])
+  // No bd id continues with a hyphenated suffix, so a name built that way is
+  // a file or a bin, not an id. Ids joined by a slash are still ids.
+  it('does not read a word a hyphen continues as an id', () => {
+    expect(extractBeadIds('--body-file tmp/km-a1b2-body.md; bin km-agent-dispatch; km-abcd-era')).toEqual([])
     expect(extractBeadIds('tracks km-abcd/km-efgh')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('fixed km-abcd - and km-efgh.')).toEqual(['km-abcd', 'km-efgh'])
     expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual(['km-merge'])
+  })
+
+  it('takes a child id whole', () => {
+    expect(extractBeadIds('see km-abcd.14, under km-abcd.')).toEqual(['km-abcd.14', 'km-abcd'])
+    expect(extractBeadIds('km-abcd.14-notes.md')).toEqual([])
   })
 
   // A branch under an agent prefix names the branch, not a bead.
