@@ -40,12 +40,14 @@ export const BUILD_ARGS = ['run', 'compile:packages']
  * only refreshes timestamps, so sources are compared against it — an output
  * keeps its old mtime when a rebuild changes nothing, and would never settle.
  * Both tsconfigs compile `src/**` into `dist` with declarations, so each
- * source's `.js` and `.d.ts` are its outputs. agent-cli's kernel types are not
- * checked: their build fails on any app type error, so requiring them would
- * rerun it at every session start; `kmagent types` owns that (#1386).
+ * source's `.js` and `.d.ts` are its outputs and every other output is
+ * orphaned, except under `generated`: agent-cli's kernel types, which
+ * `compile:post` builds from the app. They are not checked: their build fails
+ * on any app type error, so requiring them would rerun it at every session
+ * start; `kmagent types` owns that (#1386).
  */
 export const DIST_PACKAGES = [
-  { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
+  { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo', generated: ['dist/kernel-types'] },
   { dir: 'packages/agent-dispatch', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
 ]
 
@@ -68,15 +70,29 @@ export const readDepsState = root => {
   return installed.equals(wanted) ? 'fresh' : 'mismatch'
 }
 
-const sourcesOf = pkgDir =>
-  readdirSync(join(pkgDir, 'src'), { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => relative(pkgDir, join(entry.parentPath, entry.name)))
+const filesUnder = (pkgDir, sub) =>
+  existsSync(join(pkgDir, sub))
+    ? readdirSync(join(pkgDir, sub), { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile())
+        .map(entry => relative(pkgDir, join(entry.parentPath, entry.name)))
+    : []
 
-/** What tsc emits for a source; an ambient `.d.ts` compiles to nothing. */
+/** The path a compiled source shares with its outputs (`src/a.ts`, `dist/a.js`: `a`); an ambient `.d.ts` compiles to nothing. */
+const compiledBase = source => /^src\/(.+)(?<!\.d)\.ts$/.exec(source)?.[1]
+
 const emittedFor = source => {
-  const compiled = /^src\/(.+)(?<!\.d)\.ts$/.exec(source)
-  return compiled ? [`dist/${compiled[1]}.js`, `dist/${compiled[1]}.d.ts`] : []
+  const base = compiledBase(source)
+  return base ? [`dist/${base}.js`, `dist/${base}.d.ts`] : []
+}
+
+/** Outputs, with their source maps, of a source that is gone: tsc never deletes them, so the module stays importable. */
+const orphanedOutputs = (pkgDir, sources, generated = []) => {
+  const compiled = new Set(sources.map(compiledBase).filter(Boolean))
+  return filesUnder(pkgDir, 'dist').filter(output => {
+    if (generated.some(tree => output.startsWith(`${tree}/`))) return false
+    const base = /^dist\/(.+?)(?:\.d\.ts|\.js)(?:\.map)?$/.exec(output)?.[1]
+    return base !== undefined && !compiled.has(base)
+  })
 }
 
 /**
@@ -89,8 +105,9 @@ export const staleDist = root =>
   DIST_PACKAGES.flatMap(pkg => {
     const dir = join(root, pkg.dir)
     if (!existsSync(join(dir, 'src'))) return []
-    const sources = sourcesOf(dir)
+    const sources = filesUnder(dir, 'src')
     if (sources.flatMap(emittedFor).some(output => !existsSync(join(dir, output)))) return [{ dir: pkg.dir, reason: 'missing' }]
+    if (orphanedOutputs(dir, sources, pkg.generated).length) return [{ dir: pkg.dir, reason: 'orphaned' }]
     // Under NodeNext the manifest's `type` decides the emitted module format.
     const inputs = ['tsconfig.json', 'package.json', ...sources]
     return Math.max(...inputs.map(input => mtimeOf(join(dir, input)) ?? 0)) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
@@ -99,13 +116,19 @@ export const staleDist = root =>
   })
 
 /**
- * `tsc -b` trusts a build record newer than its inputs over the outputs it
- * describes, so a stale package's record goes before the build, or an output
- * someone deleted is never re-emitted.
+ * Clears what `tsc -b` would leave wrong in a stale package. It trusts a build
+ * record newer than its inputs over the outputs it describes, so the record
+ * goes or an output someone deleted is never re-emitted; and it never deletes
+ * the outputs of a deleted source, so those go too.
  */
-const forgetStaleBuildRecords = root => {
+const clearStaleBuilds = root => {
   const stale = new Set(staleDist(root).map(({ dir }) => dir))
-  for (const pkg of DIST_PACKAGES) if (stale.has(pkg.dir)) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
+  for (const pkg of DIST_PACKAGES) {
+    if (!stale.has(pkg.dir)) continue
+    const dir = join(root, pkg.dir)
+    rmSync(join(dir, pkg.buildInfo), { force: true })
+    for (const output of orphanedOutputs(dir, filesUnder(dir, 'src'), pkg.generated)) rmSync(join(dir, output))
+  }
 }
 
 const tailOf = output => (output ?? '').trim().split('\n').slice(-FAILURE_TAIL_LINES).join('\n')
@@ -126,7 +149,11 @@ const DEPS_REASON = {
   missing: 'node_modules has no install record (node_modules/.pnpm/lock.yaml)',
   mismatch: "node_modules was installed from a different pnpm-lock.yaml than this checkout's",
 }
-const DIST_REASON = { missing: 'was missing build outputs', outdated: 'was older than its sources' }
+const DIST_REASON = {
+  missing: 'was missing build outputs',
+  orphaned: 'had outputs of deleted sources',
+  outdated: 'was older than its sources',
+}
 
 const UNFORMATTED_LOCKFILE_NOTE =
   `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
@@ -145,7 +172,7 @@ export const ensureDeps = ({ root, env = process.env }) => {
   const stale = [...(deps === 'fresh' ? [] : [DEPS_REASON[deps]]), ...dist.map(d => `${d.dir} dist ${DIST_REASON[d.reason]}`)]
   const lines = [`[ensure-deps] ${stale.join('; ')}.`]
   for (const args of steps) {
-    if (args === BUILD_ARGS) forgetStaleBuildRecords(root)
+    if (args === BUILD_ARGS) clearStaleBuilds(root)
     const failure = runPnpm(root, args, env)
     if (failure) {
       lines.push(`\`pnpm ${args.join(' ')}\` FAILED; until it succeeds, tests, tsc, lint and \`pnpm agent\` may not match this checkout: ${failure}`)

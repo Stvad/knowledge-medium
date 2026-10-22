@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, normalize } from 'node:path'
+import { delimiter, dirname, join, normalize, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -52,6 +52,9 @@ const writeFreshDist = (root: string) => {
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
     for (const source of SOURCES) write(join(root, pkg.dir, source), 'export {}\n', T0)
     for (const out of OUTPUTS) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
+    for (const dir of pkg.generated ?? []) write(join(root, pkg.dir, dir, 'types.d.ts'), 'generated\n', T0 + 10)
+    // A file in dist that no compiler emits is not an output of any source.
+    write(join(root, pkg.dir, 'dist', 'notes.txt'), 'not emitted\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
 }
@@ -130,6 +133,12 @@ describe('DIST_PACKAGES', () => {
     expect(normalize(compilerOptions.tsBuildInfoFile)).toBe(pkg.buildInfo)
     expect(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts['compile:packages']).toContain(pkg.dir)
   })
+
+  it('marks exactly the kernel-types tree as generated rather than compiled from package sources', () => {
+    const { compilerOptions } = JSON.parse(readFileSync(join(repoRoot, 'tsconfig.kernel-types.json'), 'utf8'))
+    const cli = DIST_PACKAGES.find(p => p.dir === 'packages/agent-cli')!
+    expect(cli.generated).toEqual([relative(cli.dir, normalize(compilerOptions.outDir))])
+  })
 })
 
 describe('readDepsState', () => {
@@ -184,6 +193,12 @@ describe('staleDist', () => {
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'outdated' }])
   })
 
+  it('reports a dist holding outputs of a source the checkout deleted', () => {
+    const root = makeCheckout()
+    for (const out of ['dist/gone.js', 'dist/gone.d.ts', 'dist/gone.js.map']) write(join(root, pkg.dir, out), 'old\n', T0 + 10)
+    expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'orphaned' }])
+  })
+
   it('reports a dist whose build record a reinstall purged', () => {
     const root = makeCheckout()
     rmSync(join(root, pkg.dir, pkg.buildInfo))
@@ -234,6 +249,18 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     expect(text).toContain(`${DIST_PACKAGES[0].dir} dist was missing`)
     // The healthy package kept its build record, so tsc -b left it alone.
     expect(readFileSync(join(root, DIST_PACKAGES[1].dir, OUTPUTS[0]), 'utf8')).toBe('fixture build\n')
+  })
+
+  it('deletes the outputs of a deleted source when it rebuilds', () => {
+    const root = makeCheckout()
+    const [, pkg] = DIST_PACKAGES
+    const orphans = ['dist/gone.js', 'dist/gone.d.ts', 'dist/gone.js.map'].map(out => join(root, pkg.dir, out))
+    for (const orphan of orphans) write(orphan, 'old\n', T0 + 10)
+    const { text, calls } = run(root)
+    expect(calls).toEqual([BUILD])
+    expect(orphans.filter(existsSync)).toEqual([])
+    expect(staleDist(root)).toEqual([])
+    expect(text).toContain(`${pkg.dir} dist had outputs of deleted sources`)
   })
 
   it('skips the build and reports the failure with pnpm\'s output when the install fails', () => {

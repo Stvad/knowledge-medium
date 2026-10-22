@@ -7,6 +7,7 @@ export declare const BUILD_ARGS: readonly string[]
 export interface DistPackage {
   dir: string
   buildInfo: string
+  generated?: readonly string[]
 }
 export declare const DIST_PACKAGES: readonly DistPackage[]
 
@@ -15,7 +16,7 @@ export declare const readDepsState: (root: string) => DepsState
 
 export interface StaleDist {
   dir: string
-  reason: 'missing' | 'outdated'
+  reason: 'missing' | 'orphaned' | 'outdated'
 }
 export declare const staleDist: (root: string) => StaleDist[]
 
