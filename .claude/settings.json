@@ -79,6 +79,17 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml…",
+            "timeout": 300,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
       }
     ]
   },
