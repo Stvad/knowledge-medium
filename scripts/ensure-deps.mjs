@@ -241,7 +241,7 @@ const DEPS_REASON = {
   missing: 'node_modules has no install record (node_modules/.pnpm/lock.yaml)',
   mismatch: "node_modules was installed from a different pnpm-lock.yaml than this checkout's",
 }
-const DIST_REASON = { missing: 'was missing', outdated: 'was older than its sources' }
+const DIST_REASON = { missing: 'was missing files its package.json names', outdated: 'was older than its sources' }
 const UNRELATED_FAILURES = 'tests, tsc, lint and `pnpm agent` can fail for reasons unrelated to your work'
 
 const lastLogLine = logPath => readOrNull(logPath)?.toString().trim().split('\n').at(-1) ?? '(empty log)'
