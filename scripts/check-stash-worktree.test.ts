@@ -112,7 +112,17 @@ describe('shellCommandsWithDepth', () => {
     expect(withoutLiteralHeredocs("bash <<'EOF'\nls\nEOF")).toBe("bash <<'EOF'\nls\nEOF")
     expect(withoutLiteralHeredocs("cat <<'EOF' | sh\nls\nEOF")).toBe("cat <<'EOF' | sh\nls\nEOF")
     // or a pipe or subshell still open at the newline, whose reader comes after the data
-    for (const cmd of ["cat <<'EOF' |\nls\nEOF\nbash", "(cat <<'EOF'\nls\nEOF\n) | bash"]) expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
+    for (const cmd of [
+      "cat <<'EOF' |\nls\nEOF\nbash",
+      "cat <<'EOF' | # then a shell\nls\nEOF\nbash",
+      "cat <<'EOF' |&\nls\nEOF\nbash",
+      "true && cat <<'EOF' ||\nls\nEOF\nbash",
+      "(cat <<'EOF'\nls\nEOF\n) | bash",
+    ])
+      expect(withoutLiteralHeredocs(cmd), cmd).toBe(cmd)
+    // a pipe that already has its reader, or a list that ended, leaves nothing pending
+    expect(withoutLiteralHeredocs("printf x | cat <<'EOF'\nx\nEOF")).toBe("printf x | cat <<'EOF'\n")
+    expect(withoutLiteralHeredocs("printf x & cat <<'EOF'\nx\nEOF")).toBe("printf x & cat <<'EOF'\n")
     // anything not known to only read text keeps it: a quoted or escaped shell,
     // an expanded command word, a wrapper, a redirection ahead of the command
     for (const cmd of [

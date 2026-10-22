@@ -93,10 +93,14 @@ const segment = (cmd, wholeCommands, literal = null) => {
   let redirectAt = -1 // where the last `<`/`>` the shell reads as an operator sits
   const scopes = [] // open subshell scopes; length IS the current depth
   let lineStart = 0 // index of the first segment of the current line
+  let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
-    if (started) tokens.push(cur)
+    if (started) {
+      tokens.push(cur)
+      pipeOpen = false
+    }
     cur = ''
     started = false
   }
@@ -273,7 +277,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
       const lineCommands = [...segments.slice(lineStart).map(s => s.tokens), ...scopes.flatMap(s => (s.outer ? [s.outer.tokens] : []))]
       // a pipe or list left open at the newline, or a subshell, goes on past
       // the data to a reader not read yet
-      const readerPending = scopes.some(s => s.kind === 'paren') || /(?:\||&&)\s*$/.test(cmd.slice(cmd.lastIndexOf('\n', i - 1) + 1, i))
+      const readerPending = scopes.some(s => s.kind === 'paren') || pipeOpen
       const onlyTextReaders = !readerPending && lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
       let j = i + 1
       while (heredocs.length) {
@@ -317,6 +321,8 @@ const segment = (cmd, wholeCommands, literal = null) => {
     }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
+      // the next command word closes it, so a newline or a comment in between does not
+      if (ch === '|' || (ch === '&' && (cmd[i - 1] === '&' || cmd[i - 1] === '|' || cmd[i + 1] === '&'))) pipeOpen = true
       if (ch === '\n') lineStart = segments.length
       continue
     }
