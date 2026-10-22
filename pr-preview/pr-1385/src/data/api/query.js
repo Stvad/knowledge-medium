@@ -1,1 +1,1 @@
-import{pet as e}from"../../../chunks/app-BC3qQLc2.js";export{e as defineQuery};
+import{pet as e}from"../../../chunks/app-Dk0UUbGj.js";export{e as defineQuery};
