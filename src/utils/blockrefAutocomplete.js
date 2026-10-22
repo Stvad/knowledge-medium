@@ -1,1 +1,1 @@
-import{hh as e}from"../../chunks/app-CpauTEkw.js";export{e as blockrefCompletionSource};
+import{hh as e}from"../../chunks/app-CaKX4ojv.js";export{e as blockrefCompletionSource};

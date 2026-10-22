@@ -1,1 +1,1 @@
-import{aB as e}from"../../chunks/app-CpauTEkw.js";export{e as staticDataExtensions};
+import{aB as e}from"../../chunks/app-CaKX4ojv.js";export{e as staticDataExtensions};

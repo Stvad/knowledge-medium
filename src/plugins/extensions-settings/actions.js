@@ -1,1 +1,1 @@
-import{or as e}from"../../../chunks/app-CpauTEkw.js";export{e as openExtensionsSettingsAction};
+import{or as e}from"../../../chunks/app-CaKX4ojv.js";export{e as openExtensionsSettingsAction};
