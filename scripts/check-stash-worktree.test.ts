@@ -108,6 +108,8 @@ describe('shellCommandsWithDepth', () => {
   it('cuts out the data of a quoted-delimiter heredoc only', () => {
     expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
     expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
+    // a shell reading it runs it
+    expect(withoutLiteralHeredocs("bash <<'EOF'\nls\nEOF")).toBe("bash <<'EOF'\nls\nEOF")
   })
 
   it('gives heredoc data one segment per line, continued lines joined', () => {
@@ -116,6 +118,8 @@ describe('shellCommandsWithDepth', () => {
       { tokens: ['a', 'b', 'c'], depth: 0, heredoc: true },
       { tokens: ['d'], depth: 0, heredoc: true },
     ])
+    // a line is read as the commands it would be
+    expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
   })
 
   it('keeps a command whole across a process substitution', () => {

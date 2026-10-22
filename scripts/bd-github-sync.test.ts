@@ -346,7 +346,9 @@ describe('gh api reads', () => {
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
     // a quoted heredoc's markdown backticks are text, not substitutions
-    "python3 - <<'EOF'\nrep('use `gh api` with a `-f` field here')\nEOF",
+    "python3 - <<'EOF'\nrep(\"use `gh api` with a `-f` field here\")\nEOF",
+    // even after an apostrophe, which a line read as shell would open a quote on
+    "cat > notes.md <<'EOF'\nDon't use `gh api` with a `-f` field\nEOF",
   ])('is not a publish: %s', cmd => {
     expect(matchesAnyPublish(cmd)).toBe(false)
   })
@@ -386,6 +388,10 @@ describe('gh api reads', () => {
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
     `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
+    // a quoted heredoc's data is not expanded, but a shell reading it runs it
+    `bash <<'EOF'\nx;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // and a script's string spanning lines is its own, not a quote that hides the call
+    `bash <<'EOF'\necho 'a\nb'; gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
     // an unquoted heredoc's backticks run
     "cat <<EOF\nposted: `gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=y`\nEOF",
     // a call the reader swallows (here: an unterminated quote) still counts

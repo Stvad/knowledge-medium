@@ -37,15 +37,17 @@ export const SUBSTITUTED = '$(…)'
  *    them come back as a command of their own;
  *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
  *    apostrophe in either cannot open a quote that swallows what follows;
- *  - heredoc data comes back one segment per line (`\`-continued lines
- *    joined), so a call in it ends with its line.
+ *  - heredoc data comes back line by line (`\`-continued lines joined), each
+ *    line read as the commands it would be should a shell read it
+ *    (`bash <<'EOF'` does), so a call in it ends with its line.
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
 /**
- * The command with each quoted-delimiter heredoc's data (`<<'EOF'`) cut out:
- * text the shell neither runs nor expands. An unquoted heredoc's data stays,
- * since its `$(…)` and backticks run.
+ * The command with each quoted-delimiter heredoc's data (`<<'EOF'`) cut out,
+ * when what reads it is no shell: text nothing runs or expands. An unquoted
+ * heredoc's data stays, since its `$(…)` and backticks run, and so does data
+ * fed to a shell (`bash <<'EOF'`), which runs it as a script.
  */
 export const withoutLiteralHeredocs = cmd => {
   const literal = []
@@ -60,7 +62,8 @@ export const withoutLiteralHeredocs = cmd => {
 }
 
 // `literal`, when given, collects the [start, end) of each quoted-delimiter
-// heredoc's data, its closing delimiter line included.
+// heredoc's data that no shell reads, its closing delimiter line included.
+const SHELL_READER = /(?:^|\/)(?:ba|z|da|k|c|tc|fi)?sh$|^(?:source|\.|eval)$/
 const segment = (cmd, wholeCommands, literal = null) => {
   const segments = []
   let tokens = []
@@ -233,7 +236,7 @@ const segment = (cmd, wholeCommands, literal = null) => {
         j++
       }
       if (delim) {
-        heredocs.push({ delim, dash, quoted })
+        heredocs.push({ delim, dash, quoted: quoted && !tokens.some(t => SHELL_READER.test(t)) })
         i = j - 1
         continue
       }
@@ -258,9 +261,12 @@ const segment = (cmd, wholeCommands, literal = null) => {
           body.push(line)
           if (eol === -1) break
         }
-        const lines = wholeCommands ? body.join('\n').replace(/\\\n/g, ' ').split('\n') : [body.join('\n')]
-        for (const line of lines) {
-          const words = line.split(/\s+/).filter(Boolean)
+        if (wholeCommands) {
+          // each line read as the commands it would be, should a shell read it
+          for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n'))
+            for (const s of segment(line, true)) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
+        } else {
+          const words = body.join('\n').split(/\s+/).filter(Boolean)
           if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
         }
         if (quoted) literal?.push([dataStart, Math.min(j, cmd.length)])
