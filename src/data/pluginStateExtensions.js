@@ -1,1 +1,1 @@
-import{MW as e,NW as t}from"../../chunks/app-CPIX_uv7.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{MW as e,NW as t}from"../../chunks/app-CpauTEkw.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

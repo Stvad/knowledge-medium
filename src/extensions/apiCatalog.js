@@ -1,1 +1,1 @@
-import{bd as e,yd as t}from"../../chunks/app-CPIX_uv7.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{bd as e,yd as t}from"../../chunks/app-CpauTEkw.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

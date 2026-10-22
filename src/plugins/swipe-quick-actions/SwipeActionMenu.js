@@ -1,1 +1,1 @@
-import{cD as e}from"../../../chunks/app-CPIX_uv7.js";export{e as SwipeActionMenu};
+import{cD as e}from"../../../chunks/app-CpauTEkw.js";export{e as SwipeActionMenu};

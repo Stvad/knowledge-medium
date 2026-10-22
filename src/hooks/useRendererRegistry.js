@@ -1,1 +1,1 @@
-import{FA as e,IA as t,PA as n}from"../../chunks/app-CPIX_uv7.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{FA as e,IA as t,PA as n}from"../../chunks/app-CpauTEkw.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};

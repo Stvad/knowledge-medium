@@ -1,1 +1,1 @@
-import{nz as e,tz as t}from"../../../chunks/app-CPIX_uv7.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};
+import{nz as e,tz as t}from"../../../chunks/app-CpauTEkw.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

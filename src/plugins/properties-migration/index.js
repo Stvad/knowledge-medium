@@ -1,1 +1,1 @@
-import{oa as e,ua as t}from"../../../chunks/app-CPIX_uv7.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
+import{oa as e,ua as t}from"../../../chunks/app-CpauTEkw.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

@@ -1,1 +1,1 @@
-import{nV as e}from"../../../chunks/app-CPIX_uv7.js";export{e as preferredSpanReplacement};
+import{nV as e}from"../../../chunks/app-CpauTEkw.js";export{e as preferredSpanReplacement};

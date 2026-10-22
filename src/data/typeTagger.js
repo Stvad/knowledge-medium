@@ -1,1 +1,1 @@
-import{cJ as e,sJ as t}from"../../chunks/app-CPIX_uv7.js";export{t as TypeTagger,e as applyTypeTagInTx};
+import{cJ as e,sJ as t}from"../../chunks/app-CpauTEkw.js";export{t as TypeTagger,e as applyTypeTagInTx};

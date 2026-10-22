@@ -1,1 +1,1 @@
-import{QA as e,ZA as t}from"../../../chunks/app-CPIX_uv7.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{QA as e,ZA as t}from"../../../chunks/app-CpauTEkw.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};

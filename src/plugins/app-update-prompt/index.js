@@ -1,1 +1,1 @@
-import{mk as e}from"../../../chunks/app-CPIX_uv7.js";export{e as appUpdatePromptExtension};
+import{mk as e}from"../../../chunks/app-CpauTEkw.js";export{e as appUpdatePromptExtension};
