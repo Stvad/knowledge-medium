@@ -23,7 +23,6 @@ const LOCKFILE = 'pnpm-lock.yaml'
 // to it after a successful install. Compared by content: a checkout rewrites
 // the lockfile's mtime without changing what it says.
 const INSTALL_RECORD = join('node_modules', '.pnpm', 'lock.yaml')
-const BASE_REF = 'origin/master'
 const FAILURE_TAIL_LINES = 10
 
 /**
@@ -99,24 +98,6 @@ export const staleDist = root =>
       : []
   })
 
-const git = (root, args) => {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-  return result.status === 0 ? result.stdout.trim() : null
-}
-
-/**
- * Whether the base changed the lockfile after this branch forked while the
- * branch left it alone: then a frozen install matches the branch's older set,
- * and only a rebase brings the newer one.
- */
-export const lockfileBehindBase = (root, baseRef = BASE_REF) => {
-  const fork = git(root, ['merge-base', 'HEAD', baseRef])
-  const blobs = fork && git(root, ['rev-parse', `${fork}:${LOCKFILE}`, `${baseRef}:${LOCKFILE}`])
-  if (!blobs) return false
-  const [atFork, atBase] = blobs.split('\n')
-  return atFork !== atBase && git(root, ['hash-object', LOCKFILE]) === atFork
-}
-
 /**
  * `tsc -b` trusts a build record newer than its inputs over the outputs it
  * describes, so a stale package's record goes before the build, or an output
@@ -151,11 +132,6 @@ const UNFORMATTED_LOCKFILE_NOTE =
   `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
   `so this reinstall repeats at every session start. \`cp ${INSTALL_RECORD} ${LOCKFILE}\` and commit it to stop that.`
 
-const BEHIND_BASE_WARNING =
-  `This branch's ${LOCKFILE} is behind ${BASE_REF} (changed there after this branch forked, not here), ` +
-  "so the install matches the branch's older dependency set and downgrades whatever a newer checkout left installed. " +
-  `A failure caused by an outdated dependency is fixed by a rebase onto ${BASE_REF}, not a reinstall.`
-
 /** Reconciles `root`; returns the context for the session, '' when nothing was stale. */
 export const ensureDeps = ({ root, env = process.env }) => {
   const deps = readDepsState(root)
@@ -178,7 +154,6 @@ export const ensureDeps = ({ root, env = process.env }) => {
     lines.push(`Ran \`pnpm ${args.join(' ')}\`.`)
     if (args === FROZEN_INSTALL_ARGS && readDepsState(root) !== 'fresh') lines.push(UNFORMATTED_LOCKFILE_NOTE)
   }
-  if (deps !== 'fresh' && lockfileBehindBase(root)) lines.push(BEHIND_BASE_WARNING)
   return lines.join('\n')
 }
 

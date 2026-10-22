@@ -19,6 +19,4 @@ export interface StaleDist {
 }
 export declare const staleDist: (root: string) => StaleDist[]
 
-export declare const lockfileBehindBase: (root: string, baseRef?: string) => boolean
-
 export declare const ensureDeps: (options: { root: string; env?: NodeJS.ProcessEnv }) => string

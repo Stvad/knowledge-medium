@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, normalize } from 'node:path'
@@ -9,7 +8,6 @@ import {
   DIST_PACKAGES,
   FROZEN_INSTALL_ARGS,
   ensureDeps,
-  lockfileBehindBase,
   readDepsState,
   staleDist,
 } from './ensure-deps.mjs'
@@ -39,22 +37,6 @@ const write = (path: string, content: string, mtimeSec?: number) => {
 
 const T0 = 1_700_000_000
 
-const git = (cwd: string, ...args: string[]) => {
-  const r = spawnSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args], {
-    cwd,
-    encoding: 'utf8',
-  })
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`)
-  return r.stdout.trim()
-}
-
-const commitLockfile = (root: string, content: string) => {
-  write(join(root, 'pnpm-lock.yaml'), content)
-  git(root, 'add', 'pnpm-lock.yaml')
-  git(root, 'commit', '-qm', `lockfile ${content.trim()}`)
-  return git(root, 'rev-parse', 'HEAD')
-}
-
 const writeInstallRecord = (root: string, content: string, mtimeSec?: number) =>
   write(join(root, 'node_modules', '.pnpm', 'lock.yaml'), content, mtimeSec)
 
@@ -80,23 +62,6 @@ const makeCheckout = (lockfile = 'lock: v1\n') => {
   write(join(root, 'pnpm-lock.yaml'), lockfile)
   writeInstallRecord(root, lockfile)
   writeFreshDist(root)
-  return root
-}
-
-/** The same, as a git repo with its lockfile committed. */
-const makeRepo = (lockfile = 'lock: v1\n') => {
-  const root = makeCheckout(lockfile)
-  git(root, 'init', '-q', '-b', 'work')
-  commitLockfile(root, lockfile)
-  return root
-}
-
-/** A branch forked before origin/master moved the lockfile on. */
-const forkBehindMaster = () => {
-  const root = makeRepo('lock: v1\n')
-  const fork = git(root, 'rev-parse', 'HEAD')
-  git(root, 'update-ref', 'refs/remotes/origin/master', commitLockfile(root, 'lock: v2\n'))
-  git(root, 'checkout', '-q', fork)
   return root
 }
 
@@ -232,28 +197,6 @@ describe('staleDist', () => {
   })
 })
 
-describe('lockfileBehindBase', () => {
-  it('is true when master changed the lockfile since the fork and the branch did not', () => {
-    expect(lockfileBehindBase(forkBehindMaster())).toBe(true)
-  })
-
-  it('is false when the branch changed its own lockfile', () => {
-    const root = forkBehindMaster()
-    write(join(root, 'pnpm-lock.yaml'), 'lock: v3\n')
-    expect(lockfileBehindBase(root)).toBe(false)
-  })
-
-  it('is false when the branch has master\'s lockfile', () => {
-    const root = makeRepo()
-    git(root, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
-    expect(lockfileBehindBase(root)).toBe(false)
-  })
-
-  it('is false when there is no base ref to compare with', () => {
-    expect(lockfileBehindBase(makeRepo())).toBe(false)
-  })
-})
-
 describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   const run = (root: string, extraEnv: Record<string, string> = {}) => {
     const pnpm = fakePnpm(extraEnv)
@@ -309,34 +252,6 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     const { text, calls } = run(root, { FAKE_PNPM_REFORMAT: '1' })
     expect(calls).toEqual([INSTALL, BUILD])
     expect(text).toContain('cp node_modules/.pnpm/lock.yaml pnpm-lock.yaml')
-  })
-
-  it('warns that a reinstall cannot fix a branch whose lockfile is behind master', () => {
-    const root = forkBehindMaster()
-    // The directory last installed master's dependency set; this branch is older.
-    writeInstallRecord(root, 'lock: v2\n')
-    const { text, calls } = run(root)
-    expect(calls).toEqual([INSTALL, BUILD])
-    expect(text).toContain('behind origin/master')
-    expect(text).toContain('rebase')
-  })
-
-  it('does not warn about the base when only a dist was rebuilt', () => {
-    const root = forkBehindMaster()
-    rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
-    expect(lockfileBehindBase(root)).toBe(true)
-    const { text } = run(root)
-    expect(text).toContain(`Ran \`pnpm ${BUILD}\`.`)
-    expect(text).not.toContain('behind origin/master')
-  })
-
-  it('does not warn about the base when the branch is level with it', () => {
-    const root = makeRepo()
-    git(root, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
-    writeInstallRecord(root, 'lock: v0\n')
-    const { text } = run(root)
-    expect(text).toContain(`Ran \`pnpm ${INSTALL}\`.`)
-    expect(text).not.toContain('behind origin/master')
   })
 
   it('leaves a checkout without pnpm-lock.yaml alone', () => {
