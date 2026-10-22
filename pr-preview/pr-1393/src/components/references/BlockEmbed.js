@@ -1,1 +1,0 @@
-import{UD as e}from"../../../chunks/app-njyA7NiD.js";export{e as BlockEmbed};
