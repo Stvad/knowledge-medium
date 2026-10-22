@@ -1,1 +1,1 @@
-import{dr as e,fr as t,mr as n,pr as r}from"../../../chunks/app-CUxQBDa8.js";export{e as nextAnalysisDelayMs,t as perfAnalysisEffect,r as perfAnalysisEffectContribution,n as runPerfAnalysisNow};
+import{dr as e,fr as t,mr as n,pr as r}from"../../../chunks/app-idjldXex.js";export{e as nextAnalysisDelayMs,t as perfAnalysisEffect,r as perfAnalysisEffectContribution,n as runPerfAnalysisNow};

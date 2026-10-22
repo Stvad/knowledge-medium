@@ -1,1 +1,1 @@
-import{bd as e,yd as t}from"../../chunks/app-CUxQBDa8.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{bd as e,yd as t}from"../../chunks/app-idjldXex.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
