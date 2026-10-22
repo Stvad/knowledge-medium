@@ -1,1 +1,1 @@
-import{GP as e,WP as t}from"../../chunks/app-nTRLnIAh.js";export{t as isFocalRender,e as useIsFocalRender};
+import{GP as e,WP as t}from"../../chunks/app-DpYsK8s7.js";export{t as isFocalRender,e as useIsFocalRender};
