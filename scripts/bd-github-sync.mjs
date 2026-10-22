@@ -326,14 +326,13 @@ export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCom
 // No flag can sit between `gh` and `api`: gh rejects one there (`gh -R x api`
 // fails with an unknown-flag error), so a call spelled that way never runs.
 const GH_COMMAND = /(?:^|\/)gh$/
+const opensApiCall = (tokens, i) => GH_COMMAND.test(tokens[i]) && tokens[i + 1] === 'api'
 const ghApiCalls = lastCall(cmd =>
-  shellCommandsWithDepth(cmd).flatMap(({ tokens }) =>
-    tokens.flatMap((t, i) => (GH_COMMAND.test(t) && tokens[i + 1] === 'api' ? [tokens.slice(i + 2)] : [])),
-  ),
+  shellCommandsWithDepth(cmd).flatMap(({ tokens }) => tokens.flatMap((_, i) => (opensApiCall(tokens, i) ? [tokens.slice(i + 2)] : []))),
 )
 // A redirect and its target are not arguments: `> $OUT` is where output goes.
 const REDIRECTION = /^(?:\d*|&)[<>]/
-const BARE_REDIRECTION = /^(?:\d*|&)[<>]+&?$/
+const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
 const argumentWords = args => args.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(args[i - 1] ?? ''))
 const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '-q', '--jq', '-t', '--template', '--input', '-p', '--preview', '--hostname', '--cache'])
 // What each word of a call is: a flag, a flag's value word, the endpoint (the
@@ -361,11 +360,13 @@ const expansionMayAddFlags = words => {
       !(role[i] === 'value' || (role[i] === 'endpoint' && !t.startsWith('$')) || (role[i] === 'flag' && /^-[^$]*=/.test(t))),
   )
 }
-// gh keeps the LAST -X/--method (see METHOD_FLAG below).
+// gh keeps the LAST -X/--method (see METHOD_FLAG below), read off the words
+// that are flags: another flag's value (`--template --method=GET`) is text.
 const methodOf = words => {
+  const role = roles(words)
   let method
   words.forEach((t, i) => {
-    const m = /^(?:-X|--method)=?(.*)$/.exec(t)
+    const m = role[i] === 'flag' && /^(?:-X|--method)=?(.*)$/.exec(t)
     if (m) method = (m[1] || words[i + 1] || '').toUpperCase()
   })
   return method
@@ -975,13 +976,15 @@ export const publishPayloadFiles = cmd =>
       const reply = replyArgsAt(tokens)
       if (reply !== -1) return [tokens.slice(reply).filter(t => !t.startsWith('--'))[2]]
       if (!tokens.some(t => GH_COMMAND.test(t))) return []
+      const api = tokens.some((_, i) => opensApiCall(tokens, i))
       return tokens.flatMap((t, i) => {
         const flag = t.match(PAYLOAD_FLAG)?.[0]
         if (!flag) return []
         const value = t.length > flag.length ? t.slice(flag.length).replace(/^=/, '') : tokens[i + 1]
-        // a typed api field names a file only after `=@`; a bare -F value is a CLI body file
+        // an api field names a file only after `=@`; on a CLI verb -F's value is the path, `=` and all
+        if (!api || !['-F', '--field'].includes(flag)) return [value]
         const field = value?.match(/^[^=]*=(.*)$/s)
-        return [field ? (field[1].startsWith('@') ? field[1].slice(1) : undefined) : value]
+        return [field?.[1].startsWith('@') ? field[1].slice(1) : undefined]
       })
     })
     .filter(p => p !== undefined && !STDIN_PATH.test(p) && !/[$`]/.test(p))

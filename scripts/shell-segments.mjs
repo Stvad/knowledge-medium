@@ -31,7 +31,7 @@ export const SUBSTITUTED = '$(…)'
  * The same segments, except that each simple command stays WHOLE: a command
  * or process substitution (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the
  * word it sits in (its own commands come back as segments ahead of that
- * command), and the `&` of an fd redirect
+ * command), and the `&` or `|` of a redirection
  * (`2>&1`, `&>`) is part of its word. Under shellSegmentsWithDepth both end the
  * segment, so the arguments after them come back as a command of their own —
  * fine for finding a verb, wrong for a caller reading one command's flags.
@@ -218,7 +218,8 @@ const segment = (cmd, wholeCommands) => {
       i = Math.min(j, cmd.length + 1) - 1
       continue
     }
-    if (wholeCommands && ch === '&' && (cmd[i - 1] === '>' || cmd[i - 1] === '<' || cmd[i + 1] === '>')) {
+    // bash's redirections spelled with `&` or `|`: `>&`, `<&`, `&>` and `>|`
+    if (wholeCommands && ((ch === '&' && (cmd[i - 1] === '>' || cmd[i - 1] === '<' || cmd[i + 1] === '>')) || (ch === '|' && cmd[i - 1] === '>'))) {
       cur += ch
       started = true
       continue

@@ -109,8 +109,8 @@ describe('shellCommandsWithDepth', () => {
   })
 
   it('reads an fd redirect as part of its word, not a separator', () => {
-    expect(shellCommandsWithDepth('make 2>&1 -j4 &> out && ls').map(s => s.tokens)).toEqual([
-      ['make', '2>&1', '-j4', '&>', 'out'],
+    expect(shellCommandsWithDepth('make 2>&1 -j4 &> out >| log -k && ls').map(s => s.tokens)).toEqual([
+      ['make', '2>&1', '-j4', '&>', 'out', '>|', 'log', '-k'],
       ['ls'],
     ])
   })

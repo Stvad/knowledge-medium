@@ -348,6 +348,7 @@ describe('gh api reads', () => {
     // an expansion filling a value adds no flag
     `for c in 1 2; do gh api repos/${REPO}/pulls/comments/$c -H "Authorization: $T" --jq ".id == $c" -F per_page=$n -X GET; done`,
     `gh api -XGET repos/${REPO}/issues -fstate=$S`,
+    `gh api repos/${REPO}/issues/1 >| $OUT`,
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
   ])('is not a publish: %s', cmd => {
@@ -376,6 +377,9 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/$(echo 1)/comments -f body=y`,
     `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
     `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments >| out -f body=y`,
+    // a method-like word another flag takes as its value is text
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=y --template --method=GET`,
     // heredoc data that bash runs is a call
     `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
   ])('is still a publish: %s', cmd => {
@@ -3734,6 +3738,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       'pnpm pr:reply 1048 4040271733 /tmp/claude-501/reply.md --resolve',
       'gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=@/tmp/claude-501/c.md',
       'gh pr create --title t -T /tmp/claude-501/stale.md',
+      // on a CLI verb a body path keeps its `=`
+      'gh pr comment 1 --body-file /tmp/claude-501/dir=x/body.md',
+      'gh pr comment 1 -F /tmp/claude-501/old=body.md',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments --input /tmp/claude-501/payload.json',
       'gh issue create --title t --template=/tmp/claude-501/stale.md',
       'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 1 -F /tmp/claude-501/m.txt',
     ]) {
