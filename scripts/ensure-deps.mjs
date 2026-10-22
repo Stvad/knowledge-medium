@@ -192,11 +192,22 @@ const waitForExit = (child, ms) =>
     child.once('error', () => settle(1))
   })
 
+/**
+ * `tsc -b` trusts a build record newer than its inputs over the outputs it
+ * describes, so a record whose entry is gone must go too or nothing is re-emitted.
+ */
+const forgetOrphanedBuildRecords = root => {
+  for (const pkg of DIST_PACKAGES) {
+    if (!existsSync(join(root, pkg.dir, pkg.entry))) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
+  }
+}
+
 const runJob = (root, lockPath, steps) => {
   const say = line => process.stdout.write(`[ensure-deps] ${line}\n`)
   try {
     for (const step of steps) {
       const command = `pnpm ${STEP_ARGS[step].join(' ')}`
+      if (step === 'build') forgetOrphanedBuildRecords(root)
       say(`${new Date().toISOString()} ${command}`)
       const result = spawnSync('pnpm', STEP_ARGS[step], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'] })
       if (result.status !== 0) {
@@ -225,7 +236,7 @@ const describeOutcome = ({ job, exitCode, commands }) => {
   if (job.kind === 'busy') return `A job started by another session is already running (pid ${job.pid}). ${pending}`
   if (exitCode === null) return `${commands} is still running in the background (pid ${job.child.pid}). ${pending}`
   if (exitCode === 0) return `Fixed: ${commands} finished before this session started (log: ${job.logPath}).`
-  return `${commands} FAILED, so node_modules may be stale or half-installed and ${UNRELATED_FAILURES}. Last log line: ${lastLogLine(job.logPath)} Full log: ${job.logPath}`
+  return `${commands} FAILED, so ${UNRELATED_FAILURES}. Last log line: ${lastLogLine(job.logPath)} Full log: ${job.logPath}`
 }
 
 const BEHIND_BASE_WARNING =

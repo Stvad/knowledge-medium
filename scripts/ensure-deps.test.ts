@@ -64,7 +64,7 @@ const writeFreshDist = (root: string) => {
   for (const pkg of DIST_PACKAGES) {
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
     write(join(root, pkg.dir, 'src', 'index.ts'), 'export {}\n', T0)
-    write(join(root, pkg.dir, pkg.entry), 'built\n', T0 + 10)
+    write(join(root, pkg.dir, pkg.entry), 'fixture build\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
 }
@@ -107,7 +107,14 @@ const finish = () => {
     fs.copyFileSync('pnpm-lock.yaml', 'node_modules/.pnpm/lock.yaml')
   }
   if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
+    const mtime = p => fs.statSync(p).mtimeMs
     for (const pkg of ${JSON.stringify(DIST_PACKAGES)}) {
+      // Like tsc -b: a build record newer than every input means nothing to
+      // emit, whether or not the outputs it describes still exist.
+      const info = path.join(pkg.dir, pkg.buildInfo)
+      const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
+        .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
+      if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
       for (const out of [pkg.entry, pkg.buildInfo]) {
         fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
         fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
@@ -286,6 +293,8 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     expect(pnpm.readCalls()).toEqual([BUILD])
     expect(staleDist(root)).toEqual([])
     expect(text).toContain(`${DIST_PACKAGES[0].dir} dist was missing`)
+    // The healthy package kept its build record, so tsc -b left it alone.
+    expect(readFileSync(join(root, DIST_PACKAGES[1].dir, DIST_PACKAGES[1].entry), 'utf8')).toBe('fixture build\n')
   })
 
   it('installs before it builds when both are stale', async () => {
