@@ -80,7 +80,7 @@
           {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-deps.mjs\"",
             "statusMessage": "Checking node_modules against pnpm-lock.yaml…",
-            "timeout": 30,
+            "timeout": 300,
             "type": "command"
           }
         ],

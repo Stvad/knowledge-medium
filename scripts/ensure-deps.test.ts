@@ -1,9 +1,8 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   BUILD_ARGS,
   DIST_PACKAGES,
@@ -12,11 +11,10 @@ import {
   lockfileBehindBase,
   readDepsState,
   staleDist,
-  stateDir,
 } from './ensure-deps.mjs'
 
-// Every ensureDeps case spawns the detached job plus a PATH-fronted pnpm: two
-// node startups, ~150ms alone and several times that under the gate's load.
+// Every ensureDeps case spawns a PATH-fronted pnpm per step, ~50ms each alone
+// and several times that under the gate's load.
 const SPAWNING_TEST_TIMEOUT = 20_000
 
 const created = new Set<string>()
@@ -88,12 +86,20 @@ const makeCheckout = (lockfile = 'lock: v1\n') => {
   return root
 }
 
+/** A branch forked before origin/master moved the lockfile on. */
+const forkBehindMaster = () => {
+  const root = makeCheckout('lock: v1\n')
+  const fork = git(root, 'rev-parse', 'HEAD')
+  git(root, 'update-ref', 'refs/remotes/origin/master', commitLockfile(root, 'lock: v2\n'))
+  git(root, 'checkout', '-q', fork)
+  return root
+}
+
 /**
  * A PATH-fronted `pnpm` that does what the real one leaves behind: `install`
- * writes the install record from the lockfile, the build writes every dist
- * entry and build record. Each call is appended to `calls`. FAKE_PNPM_FAIL
- * names a command prefix to fail with exit 3; FAKE_PNPM_RELEASE holds the
- * command until that file exists.
+ * writes the install record from the lockfile, the build writes every output
+ * and build record the way `tsc -b` would. Each call is appended to `calls`.
+ * FAKE_PNPM_FAIL names a command prefix to fail with exit 3.
  */
 const fakePnpm = (extraEnv: Record<string, string> = {}) => {
   const bin = tempDir('ensure-deps-bin-')
@@ -105,38 +111,28 @@ const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2).join(' ')
 fs.appendFileSync(${JSON.stringify(calls)}, args + '\\n')
-const finish = () => {
-  if (process.env.FAKE_PNPM_FAIL && args.startsWith(process.env.FAKE_PNPM_FAIL)) {
-    process.stderr.write('fake pnpm failure\\n')
-    process.exitCode = 3
-    return
-  }
-  if (args.startsWith('install')) {
-    fs.mkdirSync('node_modules/.pnpm', { recursive: true })
-    fs.copyFileSync('pnpm-lock.yaml', 'node_modules/.pnpm/lock.yaml')
-  }
-  if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
-    const mtime = p => fs.statSync(p).mtimeMs
-    for (const pkg of ${JSON.stringify(DIST_PACKAGES)}) {
-      // Like tsc -b: a build record newer than every input means nothing to
-      // emit, whether or not the outputs it describes still exist.
-      const info = path.join(pkg.dir, pkg.buildInfo)
-      const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
-        .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
-      if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
-      for (const out of [...${JSON.stringify(OUTPUTS)}, pkg.buildInfo]) {
-        fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
-        fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
-      }
+if (process.env.FAKE_PNPM_FAIL && args.startsWith(process.env.FAKE_PNPM_FAIL)) {
+  process.stderr.write('fake pnpm failure\\n')
+  process.exit(3)
+}
+if (args.startsWith('install')) {
+  fs.mkdirSync('node_modules/.pnpm', { recursive: true })
+  fs.copyFileSync('pnpm-lock.yaml', 'node_modules/.pnpm/lock.yaml')
+}
+if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
+  const mtime = p => fs.statSync(p).mtimeMs
+  for (const pkg of ${JSON.stringify(DIST_PACKAGES)}) {
+    // Like tsc -b: a build record newer than every input means nothing to
+    // emit, whether or not the outputs it describes still exist.
+    const info = path.join(pkg.dir, pkg.buildInfo)
+    const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
+      .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
+    if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
+    for (const out of [...${JSON.stringify(OUTPUTS)}, pkg.buildInfo]) {
+      fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
+      fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
     }
   }
-  process.stdout.write('fake pnpm ' + args + ' ok\\n')
-}
-const release = process.env.FAKE_PNPM_RELEASE
-if (!release) finish()
-else {
-  const poll = setInterval(() => { if (fs.existsSync(release)) { clearInterval(poll); finish() } }, 10)
-  setTimeout(() => process.exit(1), 60_000).unref()
 }
 `,
   )
@@ -146,31 +142,8 @@ else {
   return { env, readCalls }
 }
 
-const SCRIPT = fileURLToPath(new URL('./ensure-deps.mjs', import.meta.url))
-
-/** ensureDeps in a process of its own, standing in for the hook the host spawns. */
-const runHookProcess = (root: string, env: NodeJS.ProcessEnv, waitMs: number, { detached = false } = {}) => {
-  const launcher = join(tempDir('ensure-deps-hook-'), 'hook.mjs')
-  writeFileSync(
-    launcher,
-    `import { ensureDeps } from ${JSON.stringify(SCRIPT)}
-process.stdout.write(await ensureDeps({ root: ${JSON.stringify(root)}, waitMs: ${waitMs} }))
-`,
-  )
-  let status: number | null | undefined
-  let stdout = ''
-  const child = spawn(process.execPath, [launcher], { env, detached, stdio: ['ignore', 'pipe', 'inherit'] })
-  child.stdout.on('data', chunk => { stdout += String(chunk) })
-  child.once('close', code => { status = code })
-  return { pid: child.pid!, status: () => status, stdout: () => stdout }
-}
-
-const lastLine = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').at(-1) : undefined)
-
 const INSTALL = FROZEN_INSTALL_ARGS.join(' ')
 const BUILD = BUILD_ARGS.join(' ')
-const lockPath = (root: string) => join(stateDir(root), 'lock')
-const logPath = (root: string) => join(stateDir(root), 'log')
 
 describe('readDepsState', () => {
   it('is fresh when the install record matches the lockfile by content, however much newer the lockfile is', () => {
@@ -240,16 +213,6 @@ describe('staleDist', () => {
 })
 
 describe('lockfileBehindBase', () => {
-  // origin/master moved the lockfile on from where this branch forked.
-  const forkBehindMaster = () => {
-    const root = makeCheckout('lock: v1\n')
-    const fork = git(root, 'rev-parse', 'HEAD')
-    const master = commitLockfile(root, 'lock: v2\n')
-    git(root, 'update-ref', 'refs/remotes/origin/master', master)
-    git(root, 'checkout', '-q', fork)
-    return root
-  }
-
   it('is true when master changed the lockfile since the fork and the branch did not', () => {
     expect(lockfileBehindBase(forkBehindMaster())).toBe(true)
   })
@@ -272,232 +235,85 @@ describe('lockfileBehindBase', () => {
 })
 
 describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
-  it('prints nothing and runs nothing when nothing is stale', async () => {
-    const root = makeCheckout()
-    const pnpm = fakePnpm()
-    expect(await ensureDeps({ root, env: pnpm.env })).toBe('')
-    expect(pnpm.readCalls()).toEqual([])
-    expect(existsSync(stateDir(root))).toBe(false)
+  const run = (root: string, extraEnv: Record<string, string> = {}) => {
+    const pnpm = fakePnpm(extraEnv)
+    return { text: ensureDeps({ root, env: pnpm.env }), calls: pnpm.readCalls() }
+  }
+
+  it('prints nothing and runs nothing when nothing is stale', () => {
+    expect(run(makeCheckout())).toEqual({ text: '', calls: [] })
   })
 
-  it('reinstalls a mismatched node_modules, rebuilds against it, and says so', async () => {
+  it('reinstalls a mismatched node_modules, rebuilds against it, and says so', () => {
     const root = makeCheckout()
     writeInstallRecord(root, 'lock: v0\n')
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
+    const { text, calls } = run(root)
+    expect(calls).toEqual([INSTALL, BUILD])
     expect(readDepsState(root)).toBe('fresh')
     expect(text).toContain('installed from a different pnpm-lock.yaml')
-    expect(text).toContain(`\`pnpm ${INSTALL}\``)
-    expect(text).toContain('finished before this session started')
-    expect(existsSync(lockPath(root))).toBe(false)
+    expect(text).toContain(`Ran \`pnpm ${INSTALL}\`.`)
   })
 
-  it('installs into a checkout with no node_modules', async () => {
+  it('installs into a checkout with no node_modules', () => {
     const root = makeCheckout()
     rmSync(join(root, 'node_modules'), { recursive: true })
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
+    const { text, calls } = run(root)
+    expect(calls).toEqual([INSTALL, BUILD])
     expect(text).toContain('no install record')
   })
 
-  it('rebuilds a stale dist without reinstalling', async () => {
+  it('rebuilds a stale dist without reinstalling', () => {
     const root = makeCheckout()
     rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([BUILD])
+    const { text, calls } = run(root)
+    expect(calls).toEqual([BUILD])
     expect(staleDist(root)).toEqual([])
     expect(text).toContain(`${DIST_PACKAGES[0].dir} dist was missing`)
     // The healthy package kept its build record, so tsc -b left it alone.
     expect(readFileSync(join(root, DIST_PACKAGES[1].dir, OUTPUTS[0]), 'utf8')).toBe('fixture build\n')
   })
 
-  it('installs before it builds when both are stale', async () => {
+  it('skips the build and reports the failure with pnpm\'s output when the install fails', () => {
     const root = makeCheckout()
     writeInstallRecord(root, 'lock: v0\n')
-    write(join(root, DIST_PACKAGES[0].dir, 'src', 'index.ts'), 'changed\n', T0 + 20)
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
-    expect(text).toContain(`${DIST_PACKAGES[0].dir} dist was older than its sources`)
+    const { text, calls } = run(root, { FAKE_PNPM_FAIL: 'install' })
+    expect(calls).toEqual([INSTALL])
+    expect(text).toContain(`\`pnpm ${INSTALL}\` FAILED`)
+    expect(text).toContain('fake pnpm failure')
   })
 
-  it('skips the build and reports the failure when the install fails', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
-    const pnpm = fakePnpm({ FAKE_PNPM_FAIL: 'install' })
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL])
-    expect(text).toContain('FAILED')
-    expect(text).toContain(logPath(root))
-    expect(readFileSync(logPath(root), 'utf8')).toContain('fake pnpm failure')
-    expect(existsSync(lockPath(root))).toBe(false)
-  })
-
-  it('leaves a slow install running in the background and says where its log is', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    const release = join(tempDir('ensure-deps-release-'), 'release')
-    const pnpm = fakePnpm({ FAKE_PNPM_RELEASE: release })
-    try {
-      const text = await ensureDeps({ root, env: pnpm.env, waitMs: 100 })
-      expect(text).toContain('still running in the background')
-      expect(text).toContain(logPath(root))
-      expect(existsSync(lockPath(root))).toBe(true)
-    } finally {
-      writeFileSync(release, 'go\n')
-    }
-    await vi.waitFor(() => expect(existsSync(lockPath(root))).toBe(false), { timeout: 10_000, interval: 20 })
-    expect(readDepsState(root)).toBe('fresh')
-    expect(readFileSync(logPath(root), 'utf8').trim().split('\n').at(-1)).toBe('[ensure-deps] done')
-  })
-
-  it('records the job, not the hook, as the lock holder', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    const release = join(tempDir('ensure-deps-release-'), 'release')
-    try {
-      const text = await ensureDeps({ root, env: fakePnpm({ FAKE_PNPM_RELEASE: release }).env, waitMs: 100 })
-      const holder = readFileSync(lockPath(root), 'utf8')
-      expect(holder).not.toBe(String(process.pid))
-      expect(text).toContain(`(pid ${holder})`)
-    } finally {
-      writeFileSync(release, 'go\n')
-    }
-    await vi.waitFor(() => expect(existsSync(lockPath(root))).toBe(false), { timeout: 10_000, interval: 20 })
-  })
-
-  it('lets the hook process exit while the job keeps running', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    const release = join(tempDir('ensure-deps-release-'), 'release')
-    const hook = runHookProcess(root, fakePnpm({ FAKE_PNPM_RELEASE: release }).env, 100)
-    try {
-      await vi.waitFor(() => expect(hook.status()).toBe(0), { timeout: 10_000, interval: 20 })
-      expect(hook.stdout()).toContain('still running in the background')
-      expect(existsSync(lockPath(root))).toBe(true)
-    } finally {
-      writeFileSync(release, 'go\n')
-    }
-    await vi.waitFor(() => expect(lastLine(logPath(root))).toBe('[ensure-deps] done'), { timeout: 10_000, interval: 20 })
-  })
-
-  it('finishes the job when the hook is killed along with its process group', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    const release = join(tempDir('ensure-deps-release-'), 'release')
-    const hook = runHookProcess(root, fakePnpm({ FAKE_PNPM_RELEASE: release }).env, 10_000, { detached: true })
-    try {
-      // The job is up once the lock names it instead of the hook.
-      await vi.waitFor(() => {
-        expect(existsSync(lockPath(root))).toBe(true)
-        expect(readFileSync(lockPath(root), 'utf8')).not.toBe(String(hook.pid))
-      }, { timeout: 10_000, interval: 20 })
-      process.kill(-hook.pid, 'SIGKILL')
-      await vi.waitFor(() => expect(hook.status()).not.toBe(undefined), { timeout: 10_000, interval: 20 })
-    } finally {
-      writeFileSync(release, 'go\n')
-    }
-    await vi.waitFor(() => expect(lastLine(logPath(root))).toBe('[ensure-deps] done'), { timeout: 10_000, interval: 20 })
-  })
-
-  it('takes over an empty lock file', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    write(lockPath(root), '')
-    const pnpm = fakePnpm()
-    await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
-  })
-
-  it('takes over a lock older than any job runs, whatever now holds its pid', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    // A live pid, as when the OS hands a crashed job's pid to something else.
-    write(lockPath(root), String(process.pid), Date.now() / 1000 - 2 * 60 * 60)
-    const pnpm = fakePnpm()
-    await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
-  })
-
-  it('does not start a second job while one is running', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    write(lockPath(root), String(process.pid))
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([])
-    expect(text).toContain(`already running (pid ${process.pid})`)
-  })
-
-  it('runs nothing as a job that finds the lock held, and leaves that job its lock and log', () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    write(lockPath(root), String(process.pid))
-    write(logPath(root), "the running job's log\n")
-    const pnpm = fakePnpm()
-    const job = spawnSync(process.execPath, [SCRIPT, '--job', root, stateDir(root), 'install'], { env: pnpm.env })
-    expect(job.status).not.toBe(0)
-    expect(pnpm.readCalls()).toEqual([])
-    expect(readFileSync(lockPath(root), 'utf8')).toBe(String(process.pid))
-    expect(readFileSync(logPath(root), 'utf8')).toBe("the running job's log\n")
-  })
-
-  it('takes over the lock of a job that died', async () => {
-    const root = makeCheckout()
-    writeInstallRecord(root, 'lock: v0\n')
-    const dead = spawnSync(process.execPath, ['-e', '0']).pid!
-    write(lockPath(root), String(dead))
-    const pnpm = fakePnpm()
-    await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
-  })
-
-  it('warns that a reinstall cannot fix a branch whose lockfile is behind master', async () => {
-    const root = makeCheckout('lock: v1\n')
-    const fork = git(root, 'rev-parse', 'HEAD')
-    git(root, 'update-ref', 'refs/remotes/origin/master', commitLockfile(root, 'lock: v2\n'))
+  it('warns that a reinstall cannot fix a branch whose lockfile is behind master', () => {
+    const root = forkBehindMaster()
     // The directory last installed master's dependency set; this branch is older.
     writeInstallRecord(root, 'lock: v2\n')
-    git(root, 'checkout', '-q', fork)
-    const pnpm = fakePnpm()
-    const text = await ensureDeps({ root, env: pnpm.env })
-    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
+    const { text, calls } = run(root)
+    expect(calls).toEqual([INSTALL, BUILD])
     expect(text).toContain('behind origin/master')
     expect(text).toContain('rebase')
   })
 
-  it('does not warn about the base when only a dist was rebuilt', async () => {
-    const root = makeCheckout('lock: v1\n')
-    const fork = git(root, 'rev-parse', 'HEAD')
-    git(root, 'update-ref', 'refs/remotes/origin/master', commitLockfile(root, 'lock: v2\n'))
-    git(root, 'checkout', '-q', fork)
-    writeInstallRecord(root, 'lock: v1\n')
+  it('does not warn about the base when only a dist was rebuilt', () => {
+    const root = forkBehindMaster()
     rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
     expect(lockfileBehindBase(root)).toBe(true)
-    const text = await ensureDeps({ root, env: fakePnpm().env })
-    expect(text).toContain('finished before this session started')
+    const { text } = run(root)
+    expect(text).toContain(`Ran \`pnpm ${BUILD}\`.`)
     expect(text).not.toContain('behind origin/master')
   })
 
-  it('leaves a checkout without pnpm-lock.yaml alone', async () => {
-    const root = makeCheckout()
-    rmSync(join(root, 'pnpm-lock.yaml'))
-    rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
-    const pnpm = fakePnpm()
-    expect(await ensureDeps({ root, env: pnpm.env })).toBe('')
-    expect(pnpm.readCalls()).toEqual([])
-  })
-
-  it('does not warn about the base when the branch is level with it', async () => {
+  it('does not warn about the base when the branch is level with it', () => {
     const root = makeCheckout()
     git(root, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
     writeInstallRecord(root, 'lock: v0\n')
-    const text = await ensureDeps({ root, env: fakePnpm().env })
-    expect(text).toContain('finished before this session started')
+    const { text } = run(root)
+    expect(text).toContain(`Ran \`pnpm ${INSTALL}\`.`)
     expect(text).not.toContain('behind origin/master')
+  })
+
+  it('leaves a checkout without pnpm-lock.yaml alone', () => {
+    const root = makeCheckout()
+    rmSync(join(root, 'pnpm-lock.yaml'))
+    rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
+    expect(run(root)).toEqual({ text: '', calls: [] })
   })
 })

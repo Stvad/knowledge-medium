@@ -3,7 +3,6 @@
 
 export declare const FROZEN_INSTALL_ARGS: readonly string[]
 export declare const BUILD_ARGS: readonly string[]
-export declare const WAIT_MS: number
 
 export interface DistPackage {
   dir: string
@@ -22,10 +21,4 @@ export declare const staleDist: (root: string) => StaleDist[]
 
 export declare const lockfileBehindBase: (root: string, baseRef?: string) => boolean
 
-export declare const stateDir: (root: string) => string
-
-export declare const ensureDeps: (options: {
-  root: string
-  waitMs?: number
-  env?: NodeJS.ProcessEnv
-}) => Promise<string>
+export declare const ensureDeps: (options: { root: string; env?: NodeJS.ProcessEnv }) => string

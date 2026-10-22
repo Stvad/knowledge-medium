@@ -1,29 +1,30 @@
 #!/usr/bin/env node
-// SessionStart hook: bring this checkout's node_modules and built agent
-// packages up to date before the session's first command reads them.
+// SessionStart hook: reinstall node_modules and rebuild the agent packages
+// when they no longer match this checkout.
 //
-// Agent worktree directories are recycled across sessions. Git refreshes the
-// tracked files, but the untracked node_modules and packages/*/dist keep what
-// the directory's last install or build produced, and the drift presents as
-// the session's own type errors or as flaky tests.
+// Agent worktree directories are reused: a new session checks its branch out
+// in a directory an earlier session used, git rewrites the tracked files, and
+// the untracked node_modules and packages/*/dist keep what the last install or
+// build there produced. The drift presents as the session's own type errors or
+// as flaky tests.
 //
-// Contract: never break session start, and print nothing when nothing is
-// stale. Work that outlives the wait is left running detached, never killed
-// half-way through an install.
-import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+// Prints nothing when nothing is stale, and never fails session start. Two
+// sessions starting in one checkout at the same moment can both install;
+// accepted as rare.
+import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMainModule } from './is-main-module.mjs'
 
-const SCRIPT = fileURLToPath(import.meta.url)
-const ROOT = dirname(dirname(SCRIPT))
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LOCKFILE = 'pnpm-lock.yaml'
 // pnpm's record of the lockfile node_modules was installed from, byte-identical
 // to it after a successful install. Compared by content: a checkout rewrites
 // the lockfile's mtime without changing what it says.
 const INSTALL_RECORD = join('node_modules', '.pnpm', 'lock.yaml')
 const BASE_REF = 'origin/master'
+const FAILURE_TAIL_LINES = 15
 
 /**
  * The one non-interactive install, shared with the gate. `--frozen-lockfile`
@@ -33,10 +34,6 @@ const BASE_REF = 'origin/master'
  */
 export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile', '--config.confirmModulesPurge=false']
 export const BUILD_ARGS = ['run', 'compile:packages']
-const STEP_ARGS = { install: FROZEN_INSTALL_ARGS, build: BUILD_ARGS }
-
-// Below the 30s timeout .claude/settings.json and .codex/hooks.json give this hook.
-export const WAIT_MS = 20_000
 
 /**
  * The packages `compile:packages` builds. `buildInfo` is each tsconfig's
@@ -48,9 +45,6 @@ export const DIST_PACKAGES = [
   { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
   { dir: 'packages/agent-dispatch', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
 ]
-
-// No install or build runs this long, so an older lock's pid is presumed reused.
-const LOCK_MAX_AGE_MS = 30 * 60_000
 
 const readOrNull = path => {
   try {
@@ -121,83 +115,6 @@ export const lockfileBehindBase = (root, baseRef = BASE_REF) => {
   return atFork !== atBase && git(root, ['hash-object', LOCKFILE]) === atFork
 }
 
-/** Per-checkout state (lock, log) in the git dir, which no reinstall purges and git never tracks. */
-export const stateDir = root => {
-  const dir = git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'ensure-deps'])
-  if (!dir) throw new Error(`could not resolve the git dir of ${root}`)
-  return dir
-}
-
-const pidAlive = pid => {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error?.code === 'EPERM'
-  }
-}
-
-const createLock = lockPath => {
-  try {
-    writeFileSync(lockPath, String(process.pid), { flag: 'wx' })
-    return true
-  } catch (error) {
-    if (error?.code === 'EEXIST') return false
-    throw error
-  }
-}
-
-const lockHolder = lockPath => Number(readOrNull(lockPath)?.toString())
-
-const liveHolder = lockPath => {
-  const holder = lockHolder(lockPath)
-  return pidAlive(holder) && Date.now() - (mtimeOf(lockPath) ?? 0) < LOCK_MAX_AGE_MS ? holder : null
-}
-
-/**
- * Whether this process now holds the lock. Two jobs reclaiming the same dead
- * lock in one instant can both win; accepted, as it needs a crashed job and
- * simultaneous starts in one checkout.
- */
-const takeLock = lockPath => {
-  if (createLock(lockPath)) return true
-  if (liveHolder(lockPath) !== null) return false
-  rmSync(lockPath, { force: true })
-  return createLock(lockPath)
-}
-
-const lockPathIn = dir => join(dir, 'lock')
-const logPathIn = dir => join(dir, 'log')
-// The job's exit code when another job holds the lock.
-const BUSY_EXIT = 75
-
-/**
- * The job takes the lock and opens the log itself, so neither ever changes
- * hands. Detached with none of this process's stdio: the host neither waits
- * for it nor kills it with this process's group, so an interrupted start
- * leaves no half-done install.
- */
-const startJob = ({ root, dir, steps, env }) =>
-  spawn(process.execPath, [SCRIPT, '--job', root, dir, ...steps], { cwd: root, detached: true, env, stdio: 'ignore' })
-
-/** The job's exit code, or null once `ms` passes with it still running. */
-const waitForExit = (child, ms) =>
-  new Promise(resolve => {
-    const timer = setTimeout(() => {
-      child.unref()
-      resolve(null)
-    }, ms)
-    const settle = code => {
-      clearTimeout(timer)
-      resolve(code)
-    }
-    child.once('exit', code => settle(code ?? 1))
-    // Defence in depth: a failed launch of node itself, which would otherwise
-    // crash the hook with an unhandled 'error'.
-    child.once('error', () => settle(1))
-  })
-
 /**
  * `tsc -b` trusts a build record newer than its inputs over the outputs it
  * describes, so a stale package's record goes before the build, or an output
@@ -208,27 +125,12 @@ const forgetStaleBuildRecords = root => {
   for (const pkg of DIST_PACKAGES) if (stale.has(pkg.dir)) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
 }
 
-const runJob = (root, dir, steps) => {
-  if (!takeLock(lockPathIn(dir))) return BUSY_EXIT
-  const logFd = openSync(logPathIn(dir), 'w')
-  const say = line => writeSync(logFd, `[ensure-deps] ${line}\n`)
-  try {
-    for (const step of steps) {
-      const command = `pnpm ${STEP_ARGS[step].join(' ')}`
-      if (step === 'build') forgetStaleBuildRecords(root)
-      say(`${new Date().toISOString()} ${command}`)
-      const result = spawnSync('pnpm', STEP_ARGS[step], { cwd: root, stdio: ['ignore', logFd, logFd] })
-      if (result.status !== 0) {
-        say(`FAILED: ${command} — ${result.error?.message ?? (result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)}`)
-        return 1
-      }
-    }
-    say('done')
-    return 0
-  } finally {
-    closeSync(logFd)
-    rmSync(lockPathIn(dir), { force: true })
-  }
+/** Null on success; otherwise why the command failed, with the end of its output. */
+const runPnpm = (root, args, env) => {
+  const result = spawnSync('pnpm', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+  if (result.status === 0) return null
+  const tail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim().split('\n').slice(-FAILURE_TAIL_LINES).join('\n')
+  return `${result.error?.message ?? (result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)}\n${tail}`
 }
 
 const DEPS_REASON = {
@@ -236,61 +138,42 @@ const DEPS_REASON = {
   mismatch: "node_modules was installed from a different pnpm-lock.yaml than this checkout's",
 }
 const DIST_REASON = { missing: 'was missing files its package.json names', outdated: 'was older than its sources' }
-const UNRELATED_FAILURES = 'tests, tsc, lint and `pnpm agent` can fail for reasons unrelated to your work'
-
-const lastLogLine = logPath => readOrNull(logPath)?.toString().trim().split('\n').at(-1) ?? '(empty log)'
-
-const describeOutcome = ({ dir, child, exitCode, commands }) => {
-  const logPath = logPathIn(dir)
-  const pending = `Until it finishes, ${UNRELATED_FAILURES}. Its log (${logPath}) ends with \`[ensure-deps] done\` or an \`[ensure-deps] FAILED\` line.`
-  if (exitCode === BUSY_EXIT) {
-    return `A job started by another session is already running (pid ${lockHolder(lockPathIn(dir)) || 'unknown'}). ${pending}`
-  }
-  if (exitCode === null) return `${commands} is still running in the background (pid ${child.pid}). ${pending}`
-  if (exitCode === 0) return `Fixed: ${commands} finished before this session started (log: ${logPath}).`
-  return `${commands} FAILED, so ${UNRELATED_FAILURES}. Last log line: ${lastLogLine(logPath)} Full log: ${logPath}`
-}
 
 const BEHIND_BASE_WARNING =
   `This branch's ${LOCKFILE} is behind ${BASE_REF} (changed there after this branch forked, not here), ` +
   "so the install matches the branch's older dependency set and downgrades whatever a newer checkout left installed. " +
   `A failure caused by an outdated dependency is fixed by a rebase onto ${BASE_REF}, not a reinstall.`
 
-/** Reconciles `root`; resolves to the context for the session, '' when nothing was stale. */
-export const ensureDeps = async ({ root, waitMs = WAIT_MS, env = process.env }) => {
+/** Reconciles `root`; returns the context for the session, '' when nothing was stale. */
+export const ensureDeps = ({ root, env = process.env }) => {
   const deps = readDepsState(root)
   if (deps === 'no-lockfile') return ''
   const dist = staleDist(root)
   // A new dependency set can change the toolchain or purge the build records,
   // so the packages are rebuilt against every install.
-  const steps = deps !== 'fresh' ? ['install', 'build'] : dist.length ? ['build'] : []
+  const steps = deps !== 'fresh' ? [FROZEN_INSTALL_ARGS, BUILD_ARGS] : dist.length ? [BUILD_ARGS] : []
   if (!steps.length) return ''
 
-  const dir = stateDir(root)
-  mkdirSync(dir, { recursive: true })
-  const child = startJob({ root, dir, steps, env })
-  const exitCode = await waitForExit(child, waitMs)
   const stale = [...(deps === 'fresh' ? [] : [DEPS_REASON[deps]]), ...dist.map(d => `${d.dir} dist ${DIST_REASON[d.reason]}`)]
-  const commands = steps.map(step => `\`pnpm ${STEP_ARGS[step].join(' ')}\``).join(' then ')
-  return [
-    `[ensure-deps] ${stale.join('; ')}.`,
-    describeOutcome({ dir, child, exitCode, commands }),
-    ...(steps.includes('install') && lockfileBehindBase(root) ? [BEHIND_BASE_WARNING] : []),
-  ].join('\n')
+  const lines = [`[ensure-deps] ${stale.join('; ')}.`]
+  for (const args of steps) {
+    if (args === BUILD_ARGS) forgetStaleBuildRecords(root)
+    const failure = runPnpm(root, args, env)
+    if (failure) {
+      lines.push(`\`pnpm ${args.join(' ')}\` FAILED, so tests, tsc, lint and \`pnpm agent\` can fail for reasons unrelated to your work: ${failure}`)
+      break
+    }
+    lines.push(`Ran \`pnpm ${args.join(' ')}\`.`)
+  }
+  if (deps !== 'fresh' && lockfileBehindBase(root)) lines.push(BEHIND_BASE_WARNING)
+  return lines.join('\n')
 }
 
 if (isMainModule(import.meta.url)) {
-  if (process.argv[2] === '--job') {
-    const [root, dir, ...steps] = process.argv.slice(3)
-    process.exitCode = runJob(root, dir, steps)
-  } else {
-    try {
-      const text = await ensureDeps({ root: ROOT })
-      if (text) {
-        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
-      }
-    } catch (error) {
-      console.error(`[ensure-deps] ${error?.message ?? error}`)
-    }
+  try {
+    const text = ensureDeps({ root: ROOT })
+    if (text) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
+  } catch (error) {
+    console.error(`[ensure-deps] ${error?.message ?? error}`)
   }
 }
