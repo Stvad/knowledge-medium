@@ -1,1 +1,1 @@
-import{tr as e}from"../../../chunks/app-Dppa31Ih.js";export{e as ExtensionsSettings};
+import{tr as e}from"../../../chunks/app-_LX39fZZ.js";export{e as ExtensionsSettings};
