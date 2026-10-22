@@ -145,7 +145,7 @@ const DEPS_REASON = {
   missing: 'node_modules has no install record (node_modules/.pnpm/lock.yaml)',
   mismatch: "node_modules was installed from a different pnpm-lock.yaml than this checkout's",
 }
-const DIST_REASON = { missing: 'was missing files its package.json names', outdated: 'was older than its sources' }
+const DIST_REASON = { missing: 'was missing build outputs', outdated: 'was older than its sources' }
 
 const BEHIND_BASE_WARNING =
   `This branch's ${LOCKFILE} is behind ${BASE_REF} (changed there after this branch forked, not here), ` +
