@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// SessionStart hook: `bd prime --hook-json --mcp`, re-rendered to FIT the host.
+// SessionStart hook: the beads memory index, rendered to FIT the host.
 //
 // Claude Code inlines a hook's additionalContext only up to 10,000 chars
 // (measured 2026-08-19, CC 2.1.226: 9,999 inline, 10,500 persisted); anything
-// larger is written to a file and the model sees a 2KB preview — about ten
-// memory keys of the index. bd prime's --mcp output is ~27K and grows with
-// every memory, so raw it NEVER arrives (issue #643). This wrapper keeps the
-// memory index (every key, previews clipped just enough to fit) and drops the
-// close-protocol/commands boilerplate, which AGENTS.md already injects into
-// every session via the managed Beads block.
+// larger is written to a file and the model sees a 2KB preview (issue #643).
+// So the index is keys only, grouped by prefix so each prefix is written once.
+// Keys come from `bd memories --json`, not `bd prime`: prime's listing is
+// capped by the `prime.max-memory-chars` config and reports the cap only in
+// a banner. Keys that still do not fit are counted in the output; none is
+// dropped silently. bd prime's close protocol and command reference are not
+// carried — AGENTS.md's managed Beads block already injects them.
 //
 // Contract: never break session start. Any failure — bd missing, DB absent,
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
@@ -23,25 +24,10 @@ import { isMainModule } from './is-main-module.mjs'
 export const MAX_CONTEXT_CHARS = 9_800
 const MAX_BD_OUTPUT_BYTES = 16 * 1024 * 1024
 
-const PREVIEW_LADDER = [150, 120, 100, 80, 60, 50, 40, 30, 25, 20, 15, 10]
-
-const BULLET = /^- \*\*([\w][\w.-]*)\*\*: ?(.*)$/
-
-export const parsePrimeContext = ctx => {
-  const memories = []
-  let inSection = false
-  for (const line of String(ctx ?? '').split('\n')) {
-    if (/^#{1,6} /.test(line)) {
-      inSection = /^## Memories\b/.test(line)
-      continue
-    }
-    if (!inSection) continue
-    const m = BULLET.exec(line)
-    if (m) memories.push({ key: m[1], preview: m[2] })
-    else if (line.trim() && memories.length) memories[memories.length - 1].preview += ` ${line.trim()}`
-  }
-  return { memories, parseOk: memories.length > 0 }
-}
+const TITLE = '# Beads Issue Tracker Active'
+const FULL_INDEX_HINT = '`bd memories` lists every key'
+const KEY_SEPARATOR = ', '
+const UNPREFIXED_LABEL = 'unprefixed (full keys):'
 
 const clip = (s, n) => {
   if (s.length <= n) return s
@@ -51,64 +37,96 @@ const clip = (s, n) => {
   return `${cut}…`
 }
 
+const firstLine = s => clip(String(s ?? '').trim().split('\n')[0], 160)
+
+/** `bd memories --json` stdout → `{ keys }`, or `{ error }` saying why there are none. */
+export const parseMemoryKeys = stdout => {
+  let parsed
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    // bd reports some failures as `Error…` on stdout, with exit 0.
+    return { error: firstLine(stdout) || 'empty output' }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'output is not a JSON object' }
+  // A memory's value is its text; bd puts a numeric `schema_version` in the same object.
+  return { keys: Object.keys(parsed).filter(key => typeof parsed[key] === 'string') }
+}
+
+/** A `bd memories --json` spawnSync result → the index, or why it could not be read. */
+export const readMemoryIndex = result => {
+  // ENOBUFS truncates stdout at the buffer cap — the whole index lost to a cap.
+  if (result.error) return { error: result.error.code ?? result.error.message }
+  if (result.status !== 0) return { error: `bd memories exited ${result.status ?? result.signal}` }
+  const stderrError = /^Error.*$/m.exec(result.stderr ?? '')
+  if (stderrError) return { error: firstLine(stderrError[0]) }
+  return parseMemoryKeys(result.stdout)
+}
+
+// A key is `<prefix>_<name>`, split at its first underscore. One that does
+// not split into two non-empty parts is listed whole.
+const groupKeys = keys => {
+  const byPrefix = new Map()
+  const whole = []
+  for (const key of [...keys].sort()) {
+    const at = key.indexOf('_')
+    if (at <= 0 || at === key.length - 1) {
+      whole.push(key)
+      continue
+    }
+    const prefix = key.slice(0, at)
+    if (!byPrefix.has(prefix)) byPrefix.set(prefix, [])
+    byPrefix.get(prefix).push(key.slice(at + 1))
+  }
+  const groups = [...byPrefix].map(([prefix, names]) => ({ label: `${prefix}:`, names }))
+  return whole.length ? [...groups, { label: UNPREFIXED_LABEL, names: whole }] : groups
+}
+
+const groupLine = ({ label, names }, cap) => {
+  const hidden = names.length - Math.min(names.length, cap)
+  const items = names.slice(0, cap)
+  return `${label} ${(hidden ? [...items, `…(+${hidden} more)`] : items).join(KEY_SEPARATOR)}`
+}
+
+// `cap` is how many names each group shows; null shows no group lines at all.
 // `notice` is a one-line alarm (a failing or slowing sync, readSyncAlarm)
 // that must reach the session whatever the index costs, so it sits above it
 // and inside the same fit.
-const render = (memories, previewLen, droppedNote = '', notice = '') => {
-  const clipNote = previewLen > 0 && memories.some(m => m.preview.length > previewLen)
-    ? ` · previews clipped to ${previewLen} chars`
-    : previewLen === 0
-      ? ' · previews omitted to fit'
-      : ''
-  const lines = [
-    '# Beads Issue Tracker Active',
+const renderIndex = (groups, cap, notice) => {
+  const total = groups.reduce((n, g) => n + g.names.length, 0)
+  const shown = cap === null ? 0 : groups.reduce((n, g) => n + Math.min(g.names.length, cap), 0)
+  const hidden = total - shown
+  return [
+    TITLE,
     '',
     ...(notice ? [notice, ''] : []),
-    `## Memories (${memories.length}) — full text: \`bd recall <key>\` · search: \`bd memories <keyword>\`${clipNote}`,
-    ...memories.map(m => (previewLen > 0 ? `- **${m.key}**: ${clip(m.preview, previewLen)}` : `- **${m.key}**`)),
-  ]
-  if (droppedNote) lines.push(droppedNote)
-  return lines.join('\n')
+    `## Memories (${total}) — \`<prefix>: <name>\` is the key \`<prefix>_<name>\` · full text: \`bd recall <key>\` · search: \`bd memories <keyword>\``,
+    ...(hidden ? [`${hidden} of ${total} keys not shown (see "+N more" per group) — ${FULL_INDEX_HINT}`] : []),
+    '',
+    ...(cap === null ? [] : groups.map(g => groupLine(g, cap))),
+  ].join('\n')
 }
 
-export const buildAdditionalContext = (ctx, notice = '') => {
-  const { memories, parseOk } = parsePrimeContext(ctx)
-  if (!parseOk) {
-    const head = `${notice ? `${notice}\n\n` : ''}[bd-prime-hook] could not parse \`bd prime\` output; raw output clipped to fit the host inline limit:\n\n`
-    return head + clip(String(ctx ?? ''), MAX_CONTEXT_CHARS - head.length)
+/** `index` is readMemoryIndex's result. */
+export const buildAdditionalContext = (index, notice = '') => {
+  if (index.error) {
+    const lines = [TITLE, '', ...(notice ? [notice, ''] : []), `## Memories — index unavailable (${index.error}); ${FULL_INDEX_HINT}`]
+    return clip(lines.join('\n'), MAX_CONTEXT_CHARS)
   }
-  for (const n of PREVIEW_LADDER) {
-    const text = render(memories, n, '', notice)
-    if (text.length <= MAX_CONTEXT_CHARS) return text
+  const groups = groupKeys(index.keys)
+  const fits = cap => renderIndex(groups, cap, notice).length <= MAX_CONTEXT_CHARS
+  if (fits(Infinity)) return renderIndex(groups, Infinity, notice)
+  if (!fits(0)) return renderIndex(groups, null, notice)
+  // The largest per-group cap that fits, so the largest groups give up their
+  // tails first and a small group stays whole. `lo` always fits.
+  let lo = 0
+  let hi = Math.max(...groups.map(g => g.names.length))
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (fits(mid)) lo = mid
+    else hi = mid
   }
-  const keysOnly = render(memories, 0, '', notice)
-  if (keysOnly.length <= MAX_CONTEXT_CHARS) return keysOnly
-  // Last resort: keep a contiguous prefix of bd's ordering and say what fell off.
-  for (let keep = memories.length - 1; keep > 0; keep--) {
-    const kept = memories.slice(0, keep)
-    const note = `…and ${memories.length - keep} more — run \`bd memories\` for the full index`
-    const text = render(kept, 0, note, notice)
-    if (text.length <= MAX_CONTEXT_CHARS) return text
-  }
-  return render([], 0, `…and ${memories.length} more — run \`bd memories\` for the full index`, notice)
-}
-
-export const transformHookStdout = (raw, notice = '') => {
-  if (!raw) return null
-  // Defence in depth: bd's `Error…`-with-exit-0 stdout is not valid JSON, so
-  // the parse below already rejects it; this names the failure instead of
-  // relying on that. The load-bearing Error check is main()'s stderr one.
-  if (/^Error/m.test(raw)) return null
-  let ctx
-  try {
-    ctx = JSON.parse(raw)?.hookSpecificOutput?.additionalContext
-  } catch {
-    return null
-  }
-  if (typeof ctx !== 'string' || !ctx.trim()) return null
-  return JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildAdditionalContext(ctx, notice) },
-  })
+  return renderIndex(groups, lo, notice)
 }
 
 const parseHookEnvelope = raw => {
@@ -122,15 +140,11 @@ const parseHookEnvelope = raw => {
   }
 }
 
-/** Compact a native lifecycle envelope without changing its event or other fields. */
-export const transformCodexHookStdout = (raw, primeRaw, notice = '') => {
+/** Replace a native lifecycle envelope's context without changing its event or other fields. */
+export const transformCodexHookStdout = (raw, context) => {
   const native = parseHookEnvelope(raw)
   if (!native) return raw
-  const context = parseHookEnvelope(primeRaw)?.context ?? native.context
-  native.envelope.hookSpecificOutput = {
-    ...native.envelope.hookSpecificOutput,
-    additionalContext: buildAdditionalContext(context, notice),
-  }
+  native.envelope.hookSpecificOutput = { ...native.envelope.hookSpecificOutput, additionalContext: context }
   return JSON.stringify(native.envelope)
 }
 
@@ -171,10 +185,11 @@ const runBd = (args, input = undefined) => spawnSync('bd', args, {
   stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
 })
 
-const runClaudeSessionStart = notice => {
-  const r = runBd(['prime', '--hook-json', '--mcp'])
-  return r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout, notice) : null
-}
+const indexContext = notice => buildAdditionalContext(readMemoryIndex(runBd(['memories', '--json'])), notice)
+
+const runClaudeSessionStart = notice => JSON.stringify({
+  hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: indexContext(notice) },
+})
 
 const runCodexHook = (event, notice) => {
   let input = ''
@@ -183,22 +198,10 @@ const runCodexHook = (event, notice) => {
   } catch {
     // Hooks should remain best-effort when their host closes stdin early.
   }
-
-  const native = runBd(['codex-hook', event], input)
-  const nativeRaw = native.stdout ?? ''
+  const nativeRaw = runBd(['codex-hook', event], input).stdout ?? ''
+  // A lifecycle result with no context gets none added.
   if (!parseHookEnvelope(nativeRaw)) return nativeRaw
-
-  // Native SessionStart currently includes the full prime output. Read a
-  // fresh prime so the existing compact renderer remains the one source of
-  // context formatting, regardless of the lifecycle event being handled.
-  const prime = native.status === 0 && !/^Error/m.test(native.stderr ?? '')
-    ? runBd(['prime', '--hook-json', '--mcp'])
-    : null
-  return transformCodexHookStdout(
-    nativeRaw,
-    prime?.status === 0 && !/^Error/m.test(prime.stderr ?? '') ? prime.stdout : null,
-    notice,
-  )
+  return transformCodexHookStdout(nativeRaw, indexContext(notice))
 }
 
 if (isMainModule(import.meta.url)) {
