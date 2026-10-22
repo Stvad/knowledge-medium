@@ -284,8 +284,8 @@ const git = args => execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore
 // Never fails the gate: a cap it cannot set up is a cap it runs without. A
 // gate that dies holding a slot frees it by dying (see takeSlot).
 const takeGateSlot = async signal => {
-  const configured = Number.parseInt(process.env[SLOTS_ENV], 10)
-  const slots = configured > 0 ? configured : DEFAULT_SLOTS
+  const configured = Number(process.env[SLOTS_ENV])
+  const slots = Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_SLOTS
   try {
     // The common dir, not the worktree's own: one cap for every worktree.
     // Separate clones each get their own; accepted, as sessions here are

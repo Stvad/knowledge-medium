@@ -164,10 +164,10 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     expect(out).not.toContain('failing files, alone')
   }, 30_000)
 
-  it('takes a nonsense slot count as the default', async () => {
+  it.each(['-1', '0.5', '1.5', '1oops'])('takes the nonsense slot count %s as the default', async (slots) => {
     const dir = tempDir('check-slots-')
     writeFileSync(slotFile(dir), JSON.stringify(holder()))
-    const { status, out } = await runGate({ KM_CHECK_SLOTS: '-1', KM_CHECK_SLOT_DIR: dir })
+    const { status, out } = await runGate({ KM_CHECK_SLOTS: slots, KM_CHECK_SLOT_DIR: dir })
     expect(out).not.toContain('are taken')
     expect([status, lastLine(out)]).toEqual([0, 'check: PASS'])
   }, 30_000)
