@@ -1,1 +1,0 @@
-import{HO as e,UO as t}from"../../chunks/app-p8WYqtZa.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
