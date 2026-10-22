@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -378,7 +378,7 @@ describe('the pr:reply command', () => {
       expect(carriesPublishableText(cmd), cmd).toBe(true)
       expect([...publishableKinds(cmd)], cmd).toEqual(['review-comment'])
     }
-    expect(isPostVerifiable('cd x && pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+    expect(isPostVerifiable('cd x; pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
   })
 
   // Its gh call runs where no hook sees it, so every spelling of the
@@ -403,6 +403,39 @@ describe('the pr:reply command', () => {
     // a heredoc line is data, even one spelled like the invocation
     expect(matchesAnyPublish('cat > notes.md <<EOF\npnpm pr:reply 1 2 body.md\nEOF')).toBe(false)
     expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
+  })
+})
+
+// Naming THIS repository, or moving into a directory first, changes nothing
+// the read-back depends on: it still finds the object in this repo's URLs.
+describe('this repository and a leading cd', () => {
+  it.each([
+    'gh pr create --repo Stvad/knowledge-medium --base master --title t --body-file b.md',
+    'gh pr edit 1368 --repo Stvad/knowledge-medium --body-file b.md',
+    'gh -R Stvad/knowledge-medium pr comment 12 --body-file b.md',
+    'gh pr comment 12 -RStvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 --repo=stvad/Knowledge-Medium --body-file b.md',
+    'gh pr comment 12 --repo "Stvad/knowledge-medium" --body-file b.md',
+    'gh pr comment 12 -R https://github.com/Stvad/knowledge-medium --body-file b.md',
+    'GH_REPO=Stvad/knowledge-medium gh pr comment 12 --body-file b.md',
+    'cd /Users/x/wt && gh pr create --title t --body-file b.md',
+    "cd '/Users/x/my wt' && pnpm pr:reply 1048 4040271733 body.md --resolve",
+  ])('is covered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(true)
+  })
+
+  it.each([
+    'gh pr comment 12 --repo Stvad/knowledge-medium-beads --body-file b.md',
+    'gh pr comment 12 --repo Stvad/knowledge-medium --repo other/x --body-file b.md',
+    'GH_REPO=other/x gh pr comment 12 --repo Stvad/knowledge-medium --body-file b.md',
+    'cd "$WT" && gh pr create --title t --body-file b.md',
+    // a cd that fails still runs the publish after `;`, from somewhere else
+    'cd x; gh pr create --title t --body-file b.md',
+    'cd x && cd y && gh pr create --title t --body-file b.md',
+    'cd x && gh pr create --title t --body-file b.md && echo done',
+    'echo x && gh pr create --title t --body-file b.md',
+  ])('stays uncovered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(false)
   })
 })
 
@@ -3230,7 +3263,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     for (const cmd of [
       'gh pr comment 1 --body "$(cat body.md)"',
       'cat body.md | gh pr comment 12 -F -',
-      'cd subdir && gh pr create --body-file missing-body.md --title t',
+      'cd subdir; gh pr create --body-file missing-body.md --title t',
     ])
       expect(hook(cmd).status, cmd).toBe(2)
   })
@@ -3633,11 +3666,98 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('pnpm pr:reply 1048 4040271733 missing-body.md').status).toBe(0)
     expect(shimCalls()).toBe('')
     // its text is always in a file, so uncovered it is text outside the command
-    const r = hook('cd sub && pnpm pr:reply 1048 4040271733 missing-body.md')
+    const r = hook('cd sub; pnpm pr:reply 1048 4040271733 missing-body.md')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('post-publication read-back covers')
+    // a leading cd only picks where it runs
+    expect(hook('cd sub && pnpm pr:reply 1048 4040271733 missing-body.md --resolve').status).toBe(0)
     // beside a graphql read it is still a publish in its own right
     expect(hook(`gh api graphql -f query='query{viewer{login}}' && pnpm pr:reply 1 2 b.md`).status).toBe(2)
+  })
+
+  // A refused compound runs NONE of its steps, so the message says so, names
+  // what made it uncovered, and gives the shape that passes — the retry that
+  // follows must not publish a body file the refused call never wrote.
+  it('says nothing ran, names the token, and gives the one-shape recipe', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook(`cat > pr-body.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file pr-body.md`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('nothing in this command ran')
+    expect(r.stderr).toContain('the redirect `>`')
+    expect(r.stderr).toContain('the heredoc `<<`')
+    expect(r.stderr).toContain('Its text comes from `--body-file`')
+    expect(r.stderr).toContain('with the Write tool to a NEW file in your session scratchpad')
+    expect(r.stderr).toContain('--body-file <scratchpad>/pr-body.md')
+    const piped = hook('gh pr create --title t --body-file b.md 2>&1 | tail -3')
+    expect(piped.stderr).toContain('the redirect `2>&1`')
+    expect(piped.stderr).toContain('the pipe `|`')
+    expect(hook('pnpm pr:reply 1 2 "$F"').stderr).toContain('the expansion `$F`')
+    expect(hook('gh pr comment 1 --body "$(cat notes.md)"').stderr).toContain('the expansion `$(…)`')
+    // a verb no spelling makes covered gets the inline advice instead
+    const merge = hook('gh pr merge 12 -F msg.txt')
+    expect(merge.stderr).toContain('because of `gh pr merge`')
+    expect(merge.stderr).toContain('put the text inline')
+    expect(merge.stderr).not.toContain('Write tool')
+  })
+
+  // Every session writes to /tmp/claude-<uid>/, so a body file there outside a
+  // session's own scratchpad can be another session's — the measured way a
+  // stale body with a foreign close keyword got published. No escape lifts it.
+  it("refuses a body file in the shared tmp outside a session's scratchpad", () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      'gh pr create --title t --body-file /tmp/claude-501/pr-body.md',
+      'gh pr edit 1 --body-file=/private/tmp/claude-501/km-1024-scratch/msg2.txt',
+      'gh issue comment 1 -F/tmp/claude-501/c.md',
+      'pnpm pr:reply 1048 4040271733 /tmp/claude-501/reply.md --resolve',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=@/tmp/claude-501/c.md',
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 1 -F /tmp/claude-501/m.txt',
+    ]) {
+      const r = hook(cmd)
+      expect(r.status, cmd).toBe(2)
+      expect(r.stderr, cmd).toContain('nothing in this command ran')
+      expect(r.stderr, cmd).toContain("outside any session's scratchpad")
+    }
+    // resolved against the directory the command runs in
+    const relative = hook('gh pr create --title t --body-file pr-body.md', { cwd: '/tmp/claude-501' })
+    expect(relative.stderr).toContain('/tmp/claude-501/pr-body.md: in /tmp/claude-501/')
+    expect(hook('cd /tmp/claude-501 && gh pr create --title t --body-file pr-body.md').status).toBe(2)
+    // a session's own scratchpad is its own
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/0b3c9d2e/scratchpad/pr-body.md').status).toBe(0)
+    // a read is not a publish
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  it('refuses a body file written before the session started', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    const hourAgo = new Date(Date.now() - 3_600_000)
+    writeFileSync(join(repo, 'old-body.md'), 'from an earlier session')
+    utimesSync(join(repo, 'old-body.md'), hourAgo, hourAgo)
+    const transcript = join(repo, 'sess.jsonl')
+    writeFileSync(transcript, '{}\n')
+    // the session start is read from this; without it the check is vacuous
+    expect(statSync(transcript).birthtimeMs).toBeGreaterThan(hourAgo.getTime())
+    const session = { session_id: 'sess', transcript_path: transcript }
+    const r = hook('gh pr create --title t --body-file old-body.md', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain(`${join(repo, 'old-body.md')}: last written ${hourAgo.toISOString()}, before this session started`)
+    writeFileSync(join(repo, 'new-body.md'), 'written in this session')
+    expect(hook('gh pr create --title t --body-file new-body.md', session).status).toBe(0)
+    // a file the command itself rewrites is new by the time it is published
+    expect(
+      hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cat > old-body.md <<'EOF'\nx\nEOF\ngh pr create --title t --body-file old-body.md`, session).status,
+    ).toBe(0)
+    // a subagent's session began with the main transcript, not its own
+    const born = statSync(transcript).birthtimeMs
+    utimesSync(join(repo, 'new-body.md'), new Date(born + 5), new Date(born + 5))
+    while (Date.now() < born + 50);
+    mkdirSync(join(repo, 'sess', 'subagents'), { recursive: true })
+    writeFileSync(join(repo, 'sess', 'subagents', 'agent-1.jsonl'), '{}\n')
+    const sub = { session_id: 'sess', agent_id: 'a1', transcript_path: join(repo, 'sess', 'subagents', 'agent-1.jsonl') }
+    expect(hook('gh pr create --title t --body-file new-body.md', sub).status).toBe(0)
+    // no transcript, no session start: nothing to compare
+    expect(hook('gh pr create --title t --body-file old-body.md').status).toBe(0)
   })
 
   // An attestation is the agent's word that it read the number. Review loops
