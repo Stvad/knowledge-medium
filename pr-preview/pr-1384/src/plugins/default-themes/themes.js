@@ -1,1 +1,1 @@
-import{QS as e,mC as t,pC as n}from"../../../chunks/app-CDlXY-xk.js";export{n as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions};
+import{QS as e,mC as t,pC as n}from"../../../chunks/app-Cot_kGX6.js";export{n as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions};

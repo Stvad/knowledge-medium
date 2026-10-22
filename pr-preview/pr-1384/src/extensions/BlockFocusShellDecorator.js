@@ -1,1 +1,1 @@
-import{GO as e,KO as t,WO as n}from"../../chunks/app-CDlXY-xk.js";export{n as BlockFocusShellDecorator,e as blockFocusShellDecorator,t as shouldScrollFocusedBlockIntoView};
+import{GO as e,KO as t,WO as n}from"../../chunks/app-Cot_kGX6.js";export{n as BlockFocusShellDecorator,e as blockFocusShellDecorator,t as shouldScrollFocusedBlockIntoView};
