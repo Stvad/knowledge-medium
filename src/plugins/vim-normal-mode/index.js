@@ -1,1 +1,1 @@
-import{dy as e,fy as t}from"../../../chunks/app-CIavbVef.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};
+import{dy as e,fy as t}from"../../../chunks/app-CthMz8Rv.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};
