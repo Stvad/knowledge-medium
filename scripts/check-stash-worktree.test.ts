@@ -155,10 +155,13 @@ describe('stashInvocations', () => {
     expect(cdPath('pushd /wt && popd')).toBe('$DIRSTACK')
   })
 
-  it('keeps the starting directory when a cd target does not exist or is a file', () => {
+  it('keeps the starting directory when a cd target cannot be entered', () => {
     const start = realpathSync(tmpdir())
     expect(effectiveCwd(start, '/no/such/dir/anywhere')).toEqual({ cwd: start, exact: true })
     expect(effectiveCwd(start, fileURLToPath(import.meta.url))).toEqual({ cwd: start, exact: true })
+    const loop = join(mkdtempSync(join(tmpdir(), 'cd-loop-')), 'loop')
+    symlinkSync(loop, loop) // statSync throws ELOOP rather than reporting it missing
+    expect(effectiveCwd(start, loop)).toEqual({ cwd: start, exact: true })
     expect(effectiveCwd('/', start)).toEqual({ cwd: start, exact: true })
   })
 

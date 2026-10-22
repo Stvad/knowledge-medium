@@ -17,6 +17,11 @@
  * not before, because the squash and commit usually run in the same command as
  * the push. Facts only: no verdict, no advice.
  *
+ * Accepted: the scope is the state the command left, so it differs from what
+ * was pushed when HEAD moves after the push, when the push is to master itself
+ * (which moves origin/master), and for a command run in the background (this
+ * hook fires at its launch). The first line names the branch it read.
+ *
  * Kept apart from backup-before-restore.mjs: a different root cause (history
  * rewritten against the wrong base, not uncommitted work lost to a restore).
  */
@@ -107,6 +112,12 @@ const main = () => {
     const unresolved = unresolvedTarget(inv)
     if (unresolved) {
       notes.push(`push-scope: no scope for this push: its target \`${unresolved}\` is not a literal path.`)
+      continue
+    }
+    // The payload cwd is where the command left the shell, which a relative
+    // cd before the push has already moved; it cannot be traced back.
+    if (inv.cdPath && !inv.cdPath.startsWith('/')) {
+      notes.push(`push-scope: no scope for this push: it runs after a relative cd (\`${inv.cdPath}\`), and this hook reads the directory the command ended in.`)
       continue
     }
     const { cwd } = effectiveCwd(hook.cwd, inv.cdPath)

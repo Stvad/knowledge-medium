@@ -433,6 +433,16 @@ const amendState = (cwd, cArgs, all) => {
   }
 }
 
+// Whether a cd into p succeeds. statSync still throws for an unreadable path
+// or a symlink loop, and the guards calling this must not crash on either.
+const isDir = p => {
+  try {
+    return statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /**
  * Directory a git invocation runs in: the payload cwd, moved by an in-command
  * `cd`. exact=false when the cd target holds an unexpanded variable, in which
@@ -444,7 +454,7 @@ export const effectiveCwd = (payloadCwd, cdPath) => {
   const cwd = resolve(payloadCwd, cdPath)
   // A cd that cannot enter its target leaves the shell where it was:
   // `cd /x || git …` runs here, and `cd /x && git …` never runs at all.
-  return { cwd: statSync(cwd, { throwIfNoEntry: false })?.isDirectory() ? cwd : payloadCwd, exact: true }
+  return { cwd: isDir(cwd) ? cwd : payloadCwd, exact: true }
 }
 
 /** The cd or -C/--git-dir/--work-tree value holding an unexpanded variable, or null. */

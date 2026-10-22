@@ -150,6 +150,13 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(context(hook(`cd ${work} && git push`, elsewhere))).toContain('D\tz.test.ts')
   })
 
+  it('declines a push after a relative cd, whose start directory the payload no longer shows', () => {
+    // After `cd .. && git push` from work/sub, Claude Code reports the cwd as work.
+    const ctx = context(hook('cd .. && git push', work))
+    expect(ctx).toContain('no scope for this push: it runs after a relative cd (`..`)')
+    expect(ctx).not.toContain('files changed')
+  })
+
   it('reports a missing origin/master instead of a scope', () => {
     const lone = tmp('push-scope-lone-')
     git(lone, ['init', '-q', '-b', 'main'])
