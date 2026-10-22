@@ -366,12 +366,16 @@ const BARE_REDIRECTION = /^(?:\d*|&)[<>]+[&|]?$/
  * spelling: a short cluster (`-iFbody=x`) and an attached or `=` value
  * (`-F=query=@x`, `--field=body=x`) come apart into a flag and its value. Each
  * word is a flag, a flag's value, the endpoint (the first positional) or an
- * extra positional; a flag this table does not know is kept whole.
+ * extra positional; a flag this table does not know is kept whole. Null when
+ * the words cannot be read as one argv (below).
  */
 const parseCall = words => {
-  // bash takes redirections out of argv before gh reads it, so a flag's value
-  // is the next word that is no redirection
-  const args = words.filter((t, i) => !REDIRECTION.test(t) && (t.startsWith('-') || !BARE_REDIRECTION.test(words[i - 1] ?? '')))
+  // bash takes redirections and their targets out of argv before gh reads it.
+  // A flag-shaped word after a bare redirection is either its target
+  // (`> -X`) or a flag after a quoted `">"` argument, which these
+  // quote-stripped words cannot tell apart, so the call is unreadable.
+  if (words.some((t, i) => BARE_REDIRECTION.test(t) && words[i + 1]?.startsWith('-'))) return null
+  const args = words.filter((t, i) => !REDIRECTION.test(t) && !BARE_REDIRECTION.test(words[i - 1] ?? ''))
   const call = []
   let endpoint = false
   for (let i = 0; i < args.length; i++) {
@@ -438,7 +442,7 @@ const MUTATION = /\bmutation\b/
  */
 const apiCallPublishes = args => {
   const call = parseCall(args)
-  if (expansionMayAddFlags(call)) return true
+  if (!call || expansionMayAddFlags(call)) return true
   const flags = new Set(call.filter(w => w.role === 'flag').map(w => w.word))
   if (call.find(w => w.role === 'endpoint')?.word === 'graphql')
     return MUTATION.test(call.map(w => w.word).join(' ')) || flags.has('--input') || call.some(w => w.role === 'value' && UNREAD_QUERY.test(w.word))
@@ -1017,7 +1021,7 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
  */
 const CLI_PAYLOAD_FLAG = /^(?:--(?:body-file|notes-file|template)(?:=|$)|-[a-zA-Z]*?[FT])/
 const apiPayloadFiles = args =>
-  parseCall(args).flatMap(({ word, role }, i, call) => {
+  (parseCall(args) ?? []).flatMap(({ word, role }, i, call) => {
     const flag = role === 'value' ? call[i - 1].word : null
     if (flag === '--input') return [word]
     return flag === '-F' || flag === '--field' ? (/^[^=]*=@(.*)$/s.exec(word)?.slice(1) ?? []) : []
@@ -2522,9 +2526,10 @@ const sessionStartedMs = ({ transcript_path: p }) => {
 const SHARED_TMP = /^\/(?:private\/)?tmp\/claude-[^/]+\//
 const sessionScratchpad = sessionId =>
   new RegExp(String.raw`^\/(?:private\/)?tmp\/claude-[^/]+\/[^/]+\/${isPlainId(sessionId) ? sessionId : '[^/]+'}\/scratchpad\/`)
-// A variable, a substitution, a glob or a brace list: the file it names is
-// decided by the shell after this gate has run, so it is refused, never passed.
-const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}/
+// A variable, a substitution, a glob, a brace list, or a tilde form past `~`
+// and `~/` (`~+`, `~-`, `~user`): the file it names is decided by the shell
+// after this gate has run, so it is refused, never passed.
+const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}|^~(?!\/|$)/
 const staleBodyFiles = (cmd, cwd, payload) => {
   const values = publishPayloadFiles(cmd)
   if (!values.length) return []

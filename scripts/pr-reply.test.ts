@@ -16,8 +16,13 @@ describe('signedBody', () => {
 describe('pr-reply process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./pr-reply.mjs', import.meta.url))
 
-  // One review thread as the GraphQL thread query returns it: id, state, and the databaseId of its top-level comment.
-  const thread = (id: string, rootCommentId: number, isResolved = false) => ({ id, isResolved, comments: { nodes: [{ databaseId: rootCommentId }] } })
+  // One review thread as the GraphQL thread query returns it: id, state, and the
+  // fullDatabaseId of its top-level comment, a BigInt GitHub sends as a decimal string.
+  const thread = (id: string, rootCommentId: number, isResolved = false) => ({
+    id,
+    isResolved,
+    comments: { nodes: [{ fullDatabaseId: String(rootCommentId) }] },
+  })
 
   const setup = (
     opts: {
@@ -270,6 +275,16 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       const mutations = mutationCalls(ghCalls())
       expect(mutations).toHaveLength(1)
       expect(mutations[0]).toMatch(/ -f id=T_target$/)
+    })
+
+    // review comment ids are past 2^31 now
+    it('finds the thread of a comment whose id needs more than 32 bits', () => {
+      const { dir, run, ghCalls } = setup({ threads: [[thread('T_big', 4352048164)]] })
+      writeFileSync(join(dir, 'body.md'), 'text')
+      const r = run('652', '4352048164', 'body.md', '--resolve')
+      expect(r.status).toBe(0)
+      expect(r.stdout).toContain('resolved review thread T_big')
+      expect(mutationCalls(ghCalls())[0]).toMatch(/ -f id=T_big$/)
     })
 
     it('pages through the threads until it finds the one it wants', () => {

@@ -65,7 +65,7 @@ const RESOLVE_BUDGET_MS = (() => {
 })()
 
 const THREADS_QUERY =
-  'query($owner:String!,$name:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'
+  'query($owner:String!,$name:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved comments(first:1){nodes{fullDatabaseId}}}}}}}'
 const RESOLVE_MUTATION = 'mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}'
 
 // Every value travels as a gh variable (-f string, -F typed), never as text of
@@ -93,7 +93,9 @@ const findThread = (pr, rootId, deadline) => {
       ...(after ? ['-f', `after=${after}`] : []),
     )?.data?.repository?.pullRequest?.reviewThreads
     if (!Array.isArray(page?.nodes)) throw new Error('unexpected answer to the thread query')
-    const thread = page.nodes.find(t => t.comments?.nodes?.[0]?.databaseId === rootId)
+    // fullDatabaseId is a BigInt, sent as a decimal string: a review comment's
+    // id outgrew databaseId's 32 bits
+    const thread = page.nodes.find(t => String(t.comments?.nodes?.[0]?.fullDatabaseId) === String(rootId))
     if (thread) return thread
     after = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null
   } while (after)

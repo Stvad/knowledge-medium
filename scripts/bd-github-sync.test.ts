@@ -399,6 +399,8 @@ describe('gh api reads', () => {
     `cat <<'EOF' |\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF\nbash`,
     // a redirection between a flag and its value is no value
     `gh api graphql -F > /tmp/out query=@doc.gql`,
+    // and a flag-shaped word after one could be its target: unreadable
+    `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
@@ -3860,6 +3862,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // a name the shell expands could be any file, so it is refused, never passed
     for (const cmd of [
       'gh pr create --title t --body-file old-*.md',
+      'gh pr create --title t --body-file ~+/old-body.md',
+      'gh pr create --title t --body-file ~someone/old-body.md',
       'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr create --title t --body-file "$S/pr-body.md"',
     ]) {
       const expanded = hook(cmd, session)
