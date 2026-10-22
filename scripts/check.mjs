@@ -6,11 +6,9 @@ import { FROZEN_INSTALL_ARGS } from './ensure-deps.mjs'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
-// First: every task below reads node_modules. A worktree DIRECTORY outlives the
-// branch checked out in it, so a clean tree at current master can sit over a
-// weeks-old install — git refreshes package.json and the lockfile, nothing
-// re-runs install. The session-start hook repairs the same drift; the gate
-// re-checks because a branch switch mid-session brings it back.
+// First: every task below reads node_modules. ensure-deps.mjs repairs a reused
+// checkout's drifted install at session start; the gate re-checks because a
+// branch switch mid-session brings the drift back.
 const installTask = {
   name: 'install',
   args: FROZEN_INSTALL_ARGS,

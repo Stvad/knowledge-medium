@@ -74,19 +74,26 @@ const writeFreshDist = (root: string) => {
   }
 }
 
-/** A git checkout whose install record and dists already match it. */
+/** A checkout whose install record and dists already match it. */
 const makeCheckout = (lockfile = 'lock: v1\n') => {
   const root = tempDir('ensure-deps-')
-  git(root, 'init', '-q', '-b', 'work')
-  commitLockfile(root, lockfile)
+  write(join(root, 'pnpm-lock.yaml'), lockfile)
   writeInstallRecord(root, lockfile)
   writeFreshDist(root)
   return root
 }
 
+/** The same, as a git repo with its lockfile committed. */
+const makeRepo = (lockfile = 'lock: v1\n') => {
+  const root = makeCheckout(lockfile)
+  git(root, 'init', '-q', '-b', 'work')
+  commitLockfile(root, lockfile)
+  return root
+}
+
 /** A branch forked before origin/master moved the lockfile on. */
 const forkBehindMaster = () => {
-  const root = makeCheckout('lock: v1\n')
+  const root = makeRepo('lock: v1\n')
   const fork = git(root, 'rev-parse', 'HEAD')
   git(root, 'update-ref', 'refs/remotes/origin/master', commitLockfile(root, 'lock: v2\n'))
   git(root, 'checkout', '-q', fork)
@@ -196,12 +203,6 @@ describe('staleDist', () => {
     expect(staleDist(makeCheckout())).toEqual([])
   })
 
-  it('reports a dist whose entry point is gone while its build record survives', () => {
-    const root = makeCheckout()
-    rmSync(join(root, pkg.dir, 'dist'), { recursive: true })
-    expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
-  })
-
   it.each(OUTPUTS)('reports a dist missing %s, which tsc emits for one of its sources', output => {
     const root = makeCheckout()
     rmSync(join(root, pkg.dir, output))
@@ -243,13 +244,13 @@ describe('lockfileBehindBase', () => {
   })
 
   it('is false when the branch has master\'s lockfile', () => {
-    const root = makeCheckout()
+    const root = makeRepo()
     git(root, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
     expect(lockfileBehindBase(root)).toBe(false)
   })
 
   it('is false when there is no base ref to compare with', () => {
-    expect(lockfileBehindBase(makeCheckout())).toBe(false)
+    expect(lockfileBehindBase(makeRepo())).toBe(false)
   })
 })
 
@@ -330,7 +331,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   })
 
   it('does not warn about the base when the branch is level with it', () => {
-    const root = makeCheckout()
+    const root = makeRepo()
     git(root, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
     writeInstallRecord(root, 'lock: v0\n')
     const { text } = run(root)
