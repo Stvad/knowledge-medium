@@ -1,0 +1,1 @@
+import{SG as e}from"../../../chunks/app-Bx5TwOUV.js";export{e as aliasDataExtension};

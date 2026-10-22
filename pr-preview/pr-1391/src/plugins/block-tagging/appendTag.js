@@ -1,0 +1,1 @@
+import{nl as e,rl as t}from"../../../chunks/app-Bx5TwOUV.js";export{e as appendTagToBlocks,t as appendTagToContent};
