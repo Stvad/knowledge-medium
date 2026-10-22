@@ -1020,12 +1020,18 @@ export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.s
  * text), read by parseCall; and pr:reply's body file. Stdin is no file.
  */
 const CLI_PAYLOAD_FLAG = /^(?:--(?:body-file|notes-file|template)(?:=|$)|-[a-zA-Z]*?[FT])/
-const apiPayloadFiles = args =>
-  (parseCall(args) ?? []).flatMap(({ word, role }, i, call) => {
+// Stands for the files of an api call whose argv parseCall cannot read: which
+// those are is unknown, so the stale-file check refuses it.
+const UNREADABLE_ARGV = '\0unreadable argv'
+const apiPayloadFiles = args => {
+  const call = parseCall(args)
+  if (!call) return [UNREADABLE_ARGV]
+  return call.flatMap(({ word, role }, i) => {
     const flag = role === 'value' ? call[i - 1].word : null
     if (flag === '--input') return [word]
     return flag === '-F' || flag === '--field' ? (/^[^=]*=@(.*)$/s.exec(word)?.slice(1) ?? []) : []
   })
+}
 const publishPayloadFiles = cmd =>
   shellCommandsWithDepth(cmd)
     .filter(s => !s.heredoc)
@@ -2538,6 +2544,7 @@ const staleBodyFiles = (cmd, cwd, payload) => {
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
+    if (value === UNREADABLE_ARGV) return ['a gh api call whose arguments this gate cannot read, so which files it publishes is unknown']
     if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
     const path = resolveBodyPath(value, base, homedir())
     if (SHARED_TMP.test(path) && !scratchpad.test(path))

@@ -3815,6 +3815,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // gh api's --template formats its answer; a graphql document from a file is checked like a body
     expect(hook("KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi --template /tmp/claude-501/t").status).toBe(0)
     expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(2)
+    // an api call whose argv cannot be read publishes files nothing here can list
+    const unreadable = hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments ">" -F body=@c.md')
+    expect(unreadable.status).toBe(2)
+    expect(unreadable.stderr).toContain('a gh api call whose arguments this gate cannot read')
     // a read is not a publish
     expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
     expect(shimCalls()).toBe('')
