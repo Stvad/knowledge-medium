@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -426,6 +426,9 @@ describe('this repository and a leading cd', () => {
 
   it.each([
     'gh pr comment 12 --repo Stvad/knowledge-medium-beads --body-file b.md',
+    // the shell joins a quoted value to what follows it
+    'gh pr comment 12 --repo "Stvad/knowledge-medium"-beads --body-file b.md',
+    "gh pr comment 12 -R 'Stvad/knowledge-medium'x --body-file b.md",
     'gh pr comment 12 --repo Stvad/knowledge-medium --repo other/x --body-file b.md',
     'GH_REPO=other/x gh pr comment 12 --repo Stvad/knowledge-medium --body-file b.md',
     'cd "$WT" && gh pr create --title t --body-file b.md',
@@ -3734,10 +3737,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const hourAgo = new Date(Date.now() - 3_600_000)
     writeFileSync(join(repo, 'old-body.md'), 'from an earlier session')
     utimesSync(join(repo, 'old-body.md'), hourAgo, hourAgo)
+    // the session began ten minutes ago, by the first timestamp its transcript records
+    const started = Date.now() - 600_000
     const transcript = join(repo, 'sess.jsonl')
-    writeFileSync(transcript, '{}\n')
-    // the session start is read from this; without it the check is vacuous
-    expect(statSync(transcript).birthtimeMs).toBeGreaterThan(hourAgo.getTime())
+    writeFileSync(transcript, `{"type":"bridge-session"}\n{"type":"user","timestamp":"${new Date(started).toISOString()}"}\n{"timestamp":"${new Date().toISOString()}"}\n`)
     const session = { session_id: 'sess', transcript_path: transcript }
     const r = hook('gh pr create --title t --body-file old-body.md', session)
     expect(r.status).toBe(2)
@@ -3749,11 +3752,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cat > old-body.md <<'EOF'\nx\nEOF\ngh pr create --title t --body-file old-body.md`, session).status,
     ).toBe(0)
     // a subagent's session began with the main transcript, not its own
-    const born = statSync(transcript).birthtimeMs
-    utimesSync(join(repo, 'new-body.md'), new Date(born + 5), new Date(born + 5))
-    while (Date.now() < born + 50);
+    const beforeSubagent = new Date(started + 60_000)
+    utimesSync(join(repo, 'new-body.md'), beforeSubagent, beforeSubagent)
     mkdirSync(join(repo, 'sess', 'subagents'), { recursive: true })
-    writeFileSync(join(repo, 'sess', 'subagents', 'agent-1.jsonl'), '{}\n')
+    writeFileSync(join(repo, 'sess', 'subagents', 'agent-1.jsonl'), `{"timestamp":"${new Date().toISOString()}"}\n`)
     const sub = { session_id: 'sess', agent_id: 'a1', transcript_path: join(repo, 'sess', 'subagents', 'agent-1.jsonl') }
     expect(hook('gh pr create --title t --body-file new-body.md', sub).status).toBe(0)
     // no transcript, no session start: nothing to compare

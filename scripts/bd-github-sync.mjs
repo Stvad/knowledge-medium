@@ -147,7 +147,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
@@ -319,6 +319,8 @@ export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCom
 // call whole across a substitution), so a read stays a read in a loop, a pipe
 // or a substitution, beside a redirect, and beside another call's flags.
 // Heredoc data is read as calls too: `bash <<EOF` runs it.
+// No flag can sit between `gh` and `api`: gh rejects one there (`gh -R x api`
+// fails with an unknown-flag error), so a call spelled that way never runs.
 const GH_COMMAND = /(?:^|\/)gh$/
 const ghApiCalls = lastCall(cmd =>
   shellCommandsWithDepth(cmd).flatMap(({ tokens }) =>
@@ -535,12 +537,15 @@ const FOREIGN_TARGET = /(?<![\w-])(?:-R|--repo)|\bGH_REPO=/
 // read-back reports a claim it could not keep.
 const SAME_REPO = String.raw`(?:(?:https?:\/\/)?github\.com\/)?${REPO.replace('/', '\\/')}`
 const THIS_REPO_TARGET = new RegExp(
-  String.raw`(?:(?<![\w-])(?:-R|--repo)(?:=|\s+)?|\bGH_REPO=)(?:'${SAME_REPO}'|"${SAME_REPO}"|${SAME_REPO}(?![\w./-]))`,
+  String.raw`(?:(?<![\w-])(?:-R|--repo)(?:=|\s+)?|\bGH_REPO=)(?:'${SAME_REPO}'|"${SAME_REPO}"|${SAME_REPO})(?=$|[\s;&|<>()])`,
   'gi',
 )
 // A leading `cd <dir> &&` only moves where the command runs: a cd that fails
 // runs nothing after it, and a cd prints nothing. The directory must be
-// literal; an expanded one is text this gate cannot see.
+// literal; an expanded one is text this gate cannot see. A cd into another
+// repository's checkout publishes there, like a session already sitting in
+// one: accepted, since the read-back finds no URL of this repo and reports
+// the claim it could not keep.
 const CD_PREFIX = /^\s*cd\s+('[^']*'|"[^"$`\\]*"|[^\s'"$`\\;&|<>()!#]+)\s*&&\s*/
 const withoutCdPrefix = cmd => cmd.replace(CD_PREFIX, '')
 const cdPrefixDir = cmd => CD_PREFIX.exec(cmd)?.[1].replace(/^(['"])(.*)\1$/s, '$2')
@@ -2401,19 +2406,29 @@ const unreadableMessageFilesReport = (files, cmd, cwd) =>
     'A KM_ISSUE_REFS_OK=1 prefix attests the references and skips this read.',
   ].join('\n')
 
-// When this session began: its transcript's birth time. A subagent's
-// transcript sits in <session>/subagents/, and its session began with the
-// main transcript beside that directory. Unknown without a transcript path, or
-// on a file system that keeps no birth time.
+// When this session began: the first timestamp its transcript records. Not
+// the file's birth time, which Linux can report as its ctime — for a
+// transcript, the last append. A subagent's transcript sits in
+// <session>/subagents/, and its session began with the main transcript beside
+// that directory. Unknown without a readable transcript.
+const TRANSCRIPT_HEAD_BYTES = 1024 * 1024
 const sessionStartedMs = ({ transcript_path: p }) => {
   if (typeof p !== 'string' || !p) return undefined
   const main = basename(dirname(p)) === 'subagents' ? `${dirname(dirname(p))}.jsonl` : p
+  let head
   try {
-    const born = statSync(main).birthtimeMs
-    return born > 0 ? born : undefined
+    const fd = openSync(main, 'r')
+    try {
+      const buf = Buffer.alloc(TRANSCRIPT_HEAD_BYTES)
+      head = buf.toString('utf8', 0, readSync(fd, buf, 0, buf.length, 0))
+    } finally {
+      closeSync(fd)
+    }
   } catch {
     return undefined
   }
+  const at = Date.parse(head.match(/"timestamp":"([^"]+)"/)?.[1] ?? '')
+  return Number.isNaN(at) ? undefined : at
 }
 
 // A body file another session could have written, as the fact found at its
