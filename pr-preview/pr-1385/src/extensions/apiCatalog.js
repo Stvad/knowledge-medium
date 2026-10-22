@@ -1,0 +1,1 @@
+import{bd as e,yd as t}from"../../chunks/app-B4JtmO3_.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

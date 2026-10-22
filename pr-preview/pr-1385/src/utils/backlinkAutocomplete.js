@@ -1,0 +1,1 @@
+import{_h as e,gh as t,vh as n}from"../../chunks/app-B4JtmO3_.js";export{t as backlinkCompletionSource,e as createBacklinkAutocomplete,n as isInsideBacklinkBrackets};

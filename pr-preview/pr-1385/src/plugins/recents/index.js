@@ -1,0 +1,1 @@
+import{_C as e,gC as t,vC as n,yC as r}from"../../../chunks/app-B4JtmO3_.js";export{t as OPEN_RECENTS_ACTION_ID,e as openRecentsAction,n as recentsHeaderItem,r as recentsPlugin};
