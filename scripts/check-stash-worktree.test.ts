@@ -100,7 +100,8 @@ describe('shellCommandsWithDepth', () => {
 
   it("skips a comment and reads $'…' as one span, so an apostrophe opens no quote", () => {
     expect(shellCommandsWithDepth("# it's done\nls -l # trailing -X GET\necho a#b").map(s => s.tokens)).toEqual([['ls', '-l'], ['echo', 'a#b']])
-    expect(shellCommandsWithDepth("x=$'don\\'t'; ls").map(s => s.tokens)).toEqual([["x=don't"], ['ls']])
+    // an escape it does not decode leaves a `$`, marking the word an expansion
+    expect(shellCommandsWithDepth("x=$'don\\'t'; ls").map(s => s.tokens)).toEqual([["x=don$'t"], ['ls']])
     // shellSegmentsWithDepth reads both as before
     expect(shellSegments('ls # x')).toEqual([['ls', '#', 'x']])
   })

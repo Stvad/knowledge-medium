@@ -146,7 +146,9 @@ const segment = (cmd, wholeCommands, literal = null) => {
       continue
     }
     if (quote === "$'") {
-      if (ch === '\\') cur += cmd[++i] ?? ''
+      // an escape decodes to a character this reader does not reproduce
+      // (`\x2d` is `-`), so it leaves a `$`: the word reads as an expansion
+      if (ch === '\\') cur += `$${cmd[++i] ?? ''}`
       else if (ch === "'") quote = null
       else cur += ch
       continue

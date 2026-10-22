@@ -153,7 +153,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
@@ -410,6 +410,10 @@ const parseCall = words => {
 // (`comments/$id`).
 const expansionMayAddFlags = call =>
   call.some(({ word, role }) => word.includes('$') && !(role === 'value' || (role === 'endpoint' && !word.startsWith('$'))))
+// Brace expansion makes words of its own, so one with an alternative that is a
+// flag (`{-i,-Fbody=x}`) adds flags wherever it stands; a jq object
+// (`{number,title}`) has no such alternative.
+const braceMakesFlag = word => [...word.matchAll(/\{[^{}]*\}/g)].some(([list]) => list.includes(',') && /[{,]-/.test(list))
 // gh keeps the LAST -X/--method — measured against the installed gh: `-X POST
 // -X GET /rate_limit` answers as a GET, and the reverse order 404s as a POST.
 // Another flag's value (`--template --method=GET`) is text. An explicit GET
@@ -442,7 +446,7 @@ const MUTATION = /\bmutation\b/
  */
 const apiCallPublishes = args => {
   const call = parseCall(args)
-  if (!call || expansionMayAddFlags(call)) return true
+  if (!call || expansionMayAddFlags(call) || call.some(w => braceMakesFlag(w.word))) return true
   const flags = new Set(call.filter(w => w.role === 'flag').map(w => w.word))
   if (call.find(w => w.role === 'endpoint')?.word === 'graphql')
     return MUTATION.test(call.map(w => w.word).join(' ')) || flags.has('--input') || call.some(w => w.role === 'value' && UNREAD_QUERY.test(w.word))
@@ -2536,17 +2540,35 @@ const sessionScratchpad = sessionId =>
 // and `~/` (`~+`, `~-`, `~user`): the file it names is decided by the shell
 // after this gate has run, so it is refused, never passed.
 const SHELL_EXPANDED = /[$`*?[]|\{[^}]*(?:,|\.\.)[^}]*\}|^~(?!\/|$)/
+// Directory changes a relative body path could have been made from. Only the
+// leading `cd <dir> &&` is placed; any other leaves the path's base unknown.
+const DIRECTORY_CHANGE = new Set(['cd', 'pushd', 'popd'])
+const unplacedDirectoryChange = cmd =>
+  shellCommandsWithDepth(cmd).filter(s => !s.heredoc && DIRECTORY_CHANGE.has(s.tokens.find(t => !/^[A-Za-z_]\w*=/.test(t)))).length >
+  (cdPrefixDir(cmd) === undefined ? 0 : 1)
+// The path a body file really names: a symlink's target, so the shared-tmp
+// rule judges what gh will read. As written when nothing is there yet.
+const realPath = path => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
 const staleBodyFiles = (cmd, cwd, payload) => {
   const values = publishPayloadFiles(cmd)
   if (!values.length) return []
   const dir = cdPrefixDir(cmd)
   const base = dir === undefined ? cwd : resolveBodyPath(dir, cwd, homedir())
+  const baseUnknown = unplacedDirectoryChange(cmd)
   const scratchpad = sessionScratchpad(payload.session_id)
   const startedMs = sessionStartedMs(payload)
   return values.flatMap(value => {
     if (value === UNREADABLE_ARGV) return ['a gh api call whose arguments this gate cannot read, so which files it publishes is unknown']
     if (SHELL_EXPANDED.test(value)) return [`${value}: a name the shell expands, so this gate cannot tell which file it names`]
-    const path = resolveBodyPath(value, base, homedir())
+    if (baseUnknown && !isAbsolute(value) && !isHomePath(value))
+      return [`${value}: relative to a directory a \`cd\` in this command changes, which this gate cannot place`]
+    const path = realPath(resolveBodyPath(value, base, homedir()))
     if (SHARED_TMP.test(path) && !scratchpad.test(path))
       return [`${path}: in ${path.match(SHARED_TMP)[0]}, which every session shares, and outside this session's scratchpad`]
     if (startedMs === undefined) return []

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -343,6 +343,7 @@ describe('gh api reads', () => {
     `gh -X GET api rate_limit --jq .rate.limit`,
     `gh api -iXGET repos/${REPO}/issues -fstate=open`,
     `gh -iX GET api rate_limit --jq .rate.limit`,
+    `gh api repos/${REPO}/pulls/1 --jq '{number,title}'`,
     // gh keeps the LAST method: a later GET makes the call a read
     `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // a heredoc that only mentions a call reads as one, and one that reads
@@ -401,6 +402,9 @@ describe('gh api reads', () => {
     `gh api graphql -F > /tmp/out query=@doc.gql`,
     // and a flag-shaped word after one could be its target: unreadable
     `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
+    // a word the shell turns into a flag: an ANSI-C escape, a brace list
+    `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
+    `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=#123}`,
     // and a read token earlier in the argv does not make a mutation one
     `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
     // heredoc data is one call per line: a later GET line does not make the post a read
@@ -3776,7 +3780,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // session's own scratchpad can be another session's — the measured way a
   // stale body with a foreign close keyword got published. No escape lifts it.
   it("refuses a body file in the shared tmp outside a session's scratchpad", () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const { hook, repo, shimCalls } = makeRepo({ dbReady: true })
     for (const cmd of [
       'gh pr create --title t --body-file /tmp/claude-501/pr-body.md',
       'gh pr edit 1 --body-file=/private/tmp/claude-501/km-1024-scratch/msg2.txt',
@@ -3819,6 +3823,14 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const unreadable = hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments ">" -F body=@c.md')
     expect(unreadable.status).toBe(2)
     expect(unreadable.stderr).toContain('a gh api call whose arguments this gate cannot read')
+    // a symlink is judged by the file it names
+    const shared = mkdtempSync('/tmp/claude-gate-test-')
+    writeFileSync(join(shared, 'body.md'), 'another session')
+    symlinkSync(join(shared, 'body.md'), join(repo, 'link.md'))
+    const linked = hook('gh pr create --title t --body-file link.md')
+    expect(linked.status).toBe(2)
+    expect(linked.stderr).toContain("which every session shares, and outside this session's scratchpad")
+    rmSync(shared, { recursive: true, force: true })
     // a read is not a publish
     expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
     expect(shimCalls()).toBe('')
@@ -3874,6 +3886,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       expect(expanded.status, cmd).toBe(2)
       expect(expanded.stderr, cmd).toContain('a name the shell expands')
     }
+    // a relative name after a `cd` this gate cannot place could be any file
+    mkdirSync(join(repo, 'sub'))
+    for (const cmd of [
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cd -- sub && gh pr create --title t --body-file new-body.md',
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cd sub; gh pr create --title t --body-file new-body.md',
+    ]) {
+      const moved = hook(cmd, session)
+      expect(moved.status, cmd).toBe(2)
+      expect(moved.stderr, cmd).toContain('relative to a directory a `cd` in this command changes')
+    }
+    expect(hook(`cd sub && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
     // no transcript, no session start: nothing to compare
     expect(hook('gh pr create --title t --body-file old-body.md').status).toBe(0)
   })
