@@ -349,6 +349,7 @@ describe('gh api reads', () => {
     `for c in 1 2; do gh api repos/${REPO}/pulls/comments/$c -H "Authorization: $T" --jq ".id == $c" -F per_page=$n -X GET; done`,
     `gh api -XGET repos/${REPO}/issues -fstate=$S`,
     `gh api repos/${REPO}/issues/1 >| $OUT`,
+    `gh -X GET api rate_limit --jq .rate.limit`,
     // a heredoc that only mentions a call reads as one, and one that reads
     `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
   ])('is not a publish: %s', cmd => {
@@ -378,6 +379,18 @@ describe('gh api reads', () => {
     `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
     `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
     `gh api repos/${REPO}/issues/1/comments >| out -f body=y`,
+    // an apostrophe in a comment or a $'…' string opens no quote
+    `# Reply to the reviewer (it's fixed)\ngh api repos/${REPO}/pulls/1385/comments/123/replies -f body="tracked in km-abcd"`,
+    `MSG=$'Don\\'t merge'\ngh api repos/${REPO}/issues/1/comments -f body="$MSG"`,
+    // a comment's words are no flags of the call
+    `gh api repos/${REPO}/issues/1/comments -f body=x # check after with -X GET`,
+    // gh takes api's own flags ahead of the word api
+    `gh -X POST -f body='see #653' api repos/${REPO}/issues/1/comments`,
+    `gh -f body=x api repos/${REPO}/issues/1/comments`,
+    // heredoc data is one call per line: a later GET line does not make the post a read
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
+    // a call the reader swallows (here: an unterminated quote) still counts
+    `echo \\#'\ngh api repos/${REPO}/issues/1/comments -f body=y`,
     // an escaped `>` is text, and the `|` after it a pipe into the call
     `echo \\>|gh api repos/${REPO}/issues/1/comments -f body=y`,
     // a quoted ">" argument is no redirect, so the flag after it still counts
@@ -402,6 +415,7 @@ describe('the pr:reply command', () => {
       expect([...publishableKinds(cmd)], cmd).toEqual(['review-comment'])
     }
     expect(isPostVerifiable('cd x; pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+    expect(matchesAnyPublish("# it's posted below\npnpm pr:reply 1048 4040271733 body.md")).toBe(true)
   })
 
   // Its gh call runs where no hook sees it, so every spelling of the
@@ -458,6 +472,8 @@ describe('this repository and a leading cd', () => {
     'GH_HOST=ghe.example gh pr comment 12 -R Stvad/knowledge-medium --body-file b.md',
     'gh pr comment 12 -R ghe.example/Stvad/knowledge-medium --body-file b.md',
     'gh api --hostname ghe.example repos/Stvad/knowledge-medium/issues/1/comments -f body=x',
+    // -q is --jq, which hides the object the read-back reads
+    'gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=x -q .html_url',
     'cd "$WT" && gh pr create --title t --body-file b.md',
     // a cd that fails still runs the publish after `;`, from somewhere else
     'cd x; gh pr create --title t --body-file b.md',
@@ -3728,6 +3744,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(merge.stderr).toContain('because of `gh pr merge`')
     expect(merge.stderr).toContain('put the text inline')
     expect(merge.stderr).not.toContain('Write tool')
+    // with a stale file too, the escapes come with a new file, never alone
+    const staleMerge = hook('gh pr merge 12 -F /tmp/claude-501/m.txt')
+    expect(staleMerge.stderr).toContain('Write the text afresh')
+    expect(staleMerge.stderr).toContain('or, with the text in a new file, after checking every #N')
   })
 
   // Every session writes to /tmp/claude-<uid>/, so a body file there outside a
@@ -3764,6 +3784,12 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const own = { session_id: 'sess-a' }
     expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/pr-body.md', own).status).toBe(0)
     expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-b/scratchpad/pr-body.md', own).status).toBe(2)
+    // a path is judged once `..` is resolved
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/x/../scratchpad/b.md', own).status).toBe(0)
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/../../sess-b/b.md', own).status).toBe(2)
+    // a graphql document is the call's code, and gh api's --template formats its answer
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(0)
+    expect(hook("KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi --template /tmp/claude-501/t").status).toBe(0)
     // a read is not a publish
     expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
     expect(shimCalls()).toBe('')
@@ -3777,8 +3803,16 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // the session began ten minutes ago, by the first timestamp its transcript records
     const started = Date.now() - 600_000
     const transcript = join(repo, 'sess.jsonl')
-    writeFileSync(transcript, `{"type":"bridge-session"}\n{"type":"user","timestamp":"${new Date(started).toISOString()}"}\n{"timestamp":"${new Date().toISOString()}"}\n`)
+    // a resumed transcript can open with a later queue entry ahead of the history it copies
+    writeFileSync(
+      transcript,
+      `{"type":"bridge-session"}\n{"type":"queue-operation","timestamp":"${new Date().toISOString()}"}\n{"type":"user","timestamp":"${new Date(started).toISOString()}"}\n`,
+    )
     const session = { session_id: 'sess', transcript_path: transcript }
+    const early = new Date(started + 30_000)
+    writeFileSync(join(repo, 'early-body.md'), 'written early in this session')
+    utimesSync(join(repo, 'early-body.md'), early, early)
+    expect(hook('gh pr create --title t --body-file early-body.md', session).status).toBe(0)
     const r = hook('gh pr create --title t --body-file old-body.md', session)
     expect(r.status).toBe(2)
     // as stored: a file system may round the time it was given

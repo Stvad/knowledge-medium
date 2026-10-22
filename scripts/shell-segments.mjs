@@ -28,13 +28,17 @@ export const shellSegments = cmd => shellSegmentsWithDepth(cmd).map(s => s.token
 export const SUBSTITUTED = '$(…)'
 
 /**
- * The same segments, except that each simple command stays WHOLE: a command
- * or process substitution (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the
- * word it sits in (its own commands come back as segments ahead of that
- * command), and the `&` or `|` of a redirection
- * (`2>&1`, `&>`) is part of its word. Under shellSegmentsWithDepth both end the
- * segment, so the arguments after them come back as a command of their own —
- * fine for finding a verb, wrong for a caller reading one command's flags.
+ * The same segments, read for one command's ARGUMENTS rather than its verb:
+ *  - each simple command stays whole. A command or process substitution
+ *    (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the word it sits in, and
+ *    its own commands come back as segments ahead of that command. The `&` or
+ *    `|` of a redirection (`2>&1`, `&>`, `>|`) is part of its word. Under
+ *    shellSegmentsWithDepth both end the segment, and the arguments after
+ *    them come back as a command of their own;
+ *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
+ *    apostrophe in either cannot open a quote that swallows what follows;
+ *  - heredoc data comes back one segment per line (`\`-continued lines
+ *    joined), so a call in it ends with its line.
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
@@ -95,6 +99,12 @@ const segment = (cmd, wholeCommands) => {
       started = true
       continue
     }
+    if (quote === "$'") {
+      if (ch === '\\') cur += cmd[++i] ?? ''
+      else if (ch === "'") quote = null
+      else cur += ch
+      continue
+    }
     if (quote === "'") {
       if (ch === "'") quote = null
       else {
@@ -115,6 +125,12 @@ const segment = (cmd, wholeCommands) => {
       escaped = true
       continue
     }
+    if (wholeCommands && !quote && ch === '$' && cmd[i + 1] === "'") {
+      quote = "$'"
+      started = true
+      i++
+      continue
+    }
     if (ch === '$' && cmd[i + 1] === '(') {
       openSubstitution('subst')
       i++
@@ -131,6 +147,11 @@ const segment = (cmd, wholeCommands) => {
         cur += ch
         started = true
       }
+      continue
+    }
+    if (wholeCommands && ch === '#' && !started) {
+      const eol = cmd.indexOf('\n', i)
+      i = (eol === -1 ? cmd.length : eol) - 1
       continue
     }
     if (ch === "'" || ch === '"') {
@@ -214,8 +235,11 @@ const segment = (cmd, wholeCommands) => {
           body.push(line)
           if (eol === -1) break
         }
-        const words = body.join('\n').split(/\s+/).filter(Boolean)
-        if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
+        const lines = wholeCommands ? body.join('\n').replace(/\\\n/g, ' ').split('\n') : [body.join('\n')]
+        for (const line of lines) {
+          const words = line.split(/\s+/).filter(Boolean)
+          if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
+        }
       }
       i = Math.min(j, cmd.length + 1) - 1
       continue

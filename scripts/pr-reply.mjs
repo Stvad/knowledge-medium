@@ -36,8 +36,9 @@ export const signedBody = text => {
 
 const USAGE = 'usage: pnpm pr:reply <pr> <comment-id> <body-file> [--resolve]'
 
-// The time the reference echo may take after the post, well inside the Bash
-// tool's own timeout; refsCap turns it into how many lookups fit.
+// The time the reference echo may take after the post; with --resolve's own
+// budget ahead of it, still inside the Bash tool's timeout. refsCap turns it
+// into how many lookups fit.
 const ECHO_BUDGET_MS = (() => {
   const v = Number(process.env.KM_PR_REPLY_ECHO_BUDGET_MS)
   return Number.isFinite(v) && v >= 0 ? v : 60_000
@@ -55,31 +56,36 @@ const readBody = file => {
   return text.trim() ? { text } : { error: `${file}: is empty` }
 }
 
-// Each gh call of the --resolve step; the reply is already posted by then, so
-// a hung call must not stop the echo that follows.
-const RESOLVE_TIMEOUT_MS = 15_000
+// The whole --resolve step, every page and the mutation together; the reply is
+// already posted by then, so a hung or long-paging call must not stop the echo
+// that follows.
+const RESOLVE_BUDGET_MS = (() => {
+  const v = Number(process.env.KM_PR_REPLY_RESOLVE_BUDGET_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 30_000
+})()
 
 const THREADS_QUERY =
   'query($owner:String!,$name:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'
 const RESOLVE_MUTATION = 'mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}'
 
 // Every value travels as a gh variable (-f string, -F typed), never as text of
-// the document. Throws on a gh failure or an answer that is not JSON.
-const graphql = (query, ...variables) => {
-  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=${query}`, ...variables], {
-    encoding: 'utf8',
-    timeout: RESOLVE_TIMEOUT_MS,
-  })
+// the document. Throws on a gh failure, an answer that is not JSON, or a
+// deadline already past.
+const graphql = (deadline, query, ...variables) => {
+  const timeout = deadline - Date.now()
+  if (timeout <= 0) throw new Error(`out of time (${RESOLVE_BUDGET_MS / 1000}s)`)
+  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=${query}`, ...variables], { encoding: 'utf8', timeout })
   if (r.status !== 0) throw new Error(r.stderr || r.stdout || r.error?.message || `gh exited ${r.status}`)
   return JSON.parse(r.stdout)
 }
 
 // The thread whose top-level comment is rootId, paging until found or out of pages.
-const findThread = (pr, rootId) => {
+const findThread = (pr, rootId, deadline) => {
   const [owner, name] = REPO.split('/')
   let after = null
   do {
     const page = graphql(
+      deadline,
       THREADS_QUERY,
       '-f', `owner=${owner}`,
       '-f', `name=${name}`,
@@ -99,10 +105,11 @@ const findThread = (pr, rootId) => {
 // must not decide the exit code.
 const resolveThread = (pr, rootId) => {
   try {
-    const thread = findThread(pr, rootId)
+    const deadline = Date.now() + RESOLVE_BUDGET_MS
+    const thread = findThread(pr, rootId, deadline)
     if (!thread) throw new Error(`no review thread starts with comment ${rootId}`)
     if (thread.isResolved) return { message: `review thread ${thread.id} was already resolved` }
-    const resolved = graphql(RESOLVE_MUTATION, '-f', `id=${thread.id}`)?.data?.resolveReviewThread?.thread
+    const resolved = graphql(deadline, RESOLVE_MUTATION, '-f', `id=${thread.id}`)?.data?.resolveReviewThread?.thread
     if (resolved?.isResolved !== true) throw new Error(`GitHub left review thread ${thread.id} unresolved`)
     return { message: `resolved review thread ${thread.id}` }
   } catch (err) {

@@ -323,6 +323,17 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       expect(mutationCalls(ghCalls())).toHaveLength(0)
     })
 
+    // a GitHub that pages forever, or hangs, cannot hold the echo behind it
+    it('gives up on the resolve when its time budget is spent, and still exits 0', () => {
+      const { dir, runWith, ghCalls } = setup({ threads: [[thread('T_target', 41)]] })
+      writeFileSync(join(dir, 'body.md'), 'text')
+      const r = runWith({ KM_PR_REPLY_RESOLVE_BUDGET_MS: '0' }, '652', '41', 'body.md', '--resolve')
+      expect(r.status).toBe(0)
+      expect(r.stdout.trim()).toBe(replyUrl)
+      expect(r.stderr).toContain('--resolve: could not resolve the review thread: out of time')
+      expect(queryCalls(ghCalls())).toHaveLength(0)
+    })
+
     it('reports a gh failure and a mutation that left the thread unresolved the same way', () => {
       const broken = setup()
       writeFileSync(join(broken.dir, 'body.md'), 'text')

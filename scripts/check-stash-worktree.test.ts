@@ -98,6 +98,21 @@ describe('shellCommandsWithDepth', () => {
     expect(shellCommandsWithDepth('echo x $(a').map(s => s.tokens)).toEqual([['a'], ['echo', 'x', SUBSTITUTED]])
   })
 
+  it("skips a comment and reads $'…' as one span, so an apostrophe opens no quote", () => {
+    expect(shellCommandsWithDepth("# it's done\nls -l # trailing -X GET\necho a#b").map(s => s.tokens)).toEqual([['ls', '-l'], ['echo', 'a#b']])
+    expect(shellCommandsWithDepth("x=$'don\\'t'; ls").map(s => s.tokens)).toEqual([["x=don't"], ['ls']])
+    // shellSegmentsWithDepth reads both as before
+    expect(shellSegments('ls # x')).toEqual([['ls', '#', 'x']])
+  })
+
+  it('gives heredoc data one segment per line, continued lines joined', () => {
+    expect(shellCommandsWithDepth('bash <<EOF\na b \\\nc\nd\nEOF')).toEqual([
+      { tokens: ['bash'], depth: 0 },
+      { tokens: ['a', 'b', 'c'], depth: 0, heredoc: true },
+      { tokens: ['d'], depth: 0, heredoc: true },
+    ])
+  })
+
   it('keeps a command whole across a process substitution', () => {
     expect(shellCommandsWithDepth('diff <(sort a) >(tee b) -u').map(s => s.tokens)).toEqual([
       ['sort', 'a'],

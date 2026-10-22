@@ -104,8 +104,8 @@
  *       bd-publish-verify.mjs (PostToolUse), which echoes the real title of
  *       every #N it published — so this gate scans the raw command string
  *       and deliberately does NOT chase stdin/expansion/--recover bodies;
- *       its parsing surface is FROZEN (#672 — decline coverage findings
- *       here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
+ *       that body-reading surface is FROZEN (#672 — decline coverage
+ *       findings here). Bead ids (km-…) BLOCK (exit 2) with the km→#N substitution
  *       table, looked up but never MINTED — the detectors deliberately
  *       over-match, so a verb sitting in ordinary argv reads as a publish,
  *       and a mint there would create a public issue for a command that is
@@ -121,8 +121,12 @@
  *       publishes take ONE coarse rule (#683: B): readable command text
  *       gets the tables; text living OUTSIDE the command (file/payload
  *       flags, api @-references, expansion) blocks outright and the escapes
- *       attest — no file reading, no per-channel detection (which does not
- *       converge; decision record: #683). Plus git commit close keywords
+ *       attest — no body-file reading, no per-channel detection (which does
+ *       not converge; decision record: #683). A body file another session
+ *       could have written — in the shared /tmp/claude-<uid>/ outside this
+ *       session's scratchpad, or older than the session — is refused
+ *       whatever the command's shape, by its path and age alone, and no
+ *       escape lifts that (staleBodyFiles). Plus git commit close keywords
  *       (commit text never becomes a GitHub object; the commit leg runs
  *       INDEPENDENTLY of the publish legs), and the merge COMMIT of a
  *       merged PR, read back post-merge by bd-publish-verify.
@@ -308,7 +312,7 @@ const replyArgsAt = tokens => {
   return -1
 }
 const invokesReply = tokens => replyArgsAt(tokens) !== -1
-const matchesReplyCommand = cmd => shellSegmentsWithDepth(cmd).some(s => !s.heredoc && invokesReply(s.tokens))
+const matchesReplyCommand = cmd => shellCommandsWithDepth(cmd).some(s => !s.heredoc && invokesReply(s.tokens))
 // Publishers other than `gh api`, whose output names the object they made.
 export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCommand(cmd)
 
@@ -323,12 +327,23 @@ export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCom
 // call whole across a substitution), so a read stays a read in a loop, a pipe
 // or a substitution, beside a redirect, and beside another call's flags.
 // Heredoc data is read as calls too: `bash <<EOF` runs it.
-// No flag can sit between `gh` and `api`: gh rejects one there (`gh -R x api`
-// fails with an unknown-flag error), so a call spelled that way never runs.
 const GH_COMMAND = /(?:^|\/)gh$/
-const opensApiCall = (tokens, i) => GH_COMMAND.test(tokens[i]) && tokens[i + 1] === 'api'
+// The argv of the api call `gh` opens at tokens[i], or null. gh takes `api`'s
+// own flags ahead of the word `api` as well (`gh -X POST -f body=… api …`), so
+// they are the call's too, in argv order.
+const apiArgsAt = (tokens, i) => {
+  if (!GH_COMMAND.test(tokens[i])) return null
+  let j = i + 1
+  while (tokens[j]?.startsWith('-')) j += API_FLAG_WITH_VALUE.has(tokens[j]) ? 2 : 1
+  return tokens[j] === 'api' ? [...tokens.slice(i + 1, j), ...tokens.slice(j + 1)] : null
+}
 const ghApiCalls = lastCall(cmd =>
-  shellCommandsWithDepth(cmd).flatMap(({ tokens }) => tokens.flatMap((_, i) => (opensApiCall(tokens, i) ? [tokens.slice(i + 2)] : []))),
+  shellCommandsWithDepth(cmd).flatMap(({ tokens }) =>
+    tokens.flatMap((_, i) => {
+      const args = apiArgsAt(tokens, i)
+      return args ? [args] : []
+    }),
+  ),
 )
 // A redirect and its target are not arguments: `> $OUT` is where output goes.
 // Quotes are gone from these words, so a `">"` argument reads as a redirect
@@ -341,9 +356,14 @@ const API_FLAG_WITH_VALUE = new Set(['-X', '--method', '-H', '--header', '-f', '
 // first positional), or an extra positional.
 const roles = words => {
   const out = []
+  let endpoint = false
   for (let i = 0; i < words.length; i++) {
     if (API_FLAG_WITH_VALUE.has(words[i])) out.push('flag', 'value'), i++
-    else out.push(words[i].startsWith('-') ? 'flag' : out.includes('endpoint') ? 'extra' : 'endpoint')
+    else if (words[i].startsWith('-')) out.push('flag')
+    else {
+      out.push(endpoint ? 'extra' : 'endpoint')
+      endpoint = true
+    }
   }
   return out
 }
@@ -406,7 +426,17 @@ const METHOD_FLAG = /(?<![\w-])(?:-X|--method)(?:=|\s+)?([A-Za-z]+)/g
 const effectiveMethod = sk => [...sk.matchAll(METHOD_FLAG)].pop()?.[1]?.toUpperCase()
 const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk) === 'HEAD'
 
-export const matchesApiPublish = cmd => ghApiCalls(cmd).some(apiCallPublishes)
+// The detectors' skeleton sees every `gh … api` there is, comments and quotes
+// handled in one pass; the call reader can still misread a quoting it does
+// not know and swallow a call whole. A call the skeleton sees that no examined
+// call accounts for is unread, so the command counts as a publish. Defence in
+// depth: the reader handles the quotings it is known to have missed (`#`
+// comments, `$'…'`); this catches the next one.
+const GH_API_CALL = new RegExp(GH + String.raw`api\s`, 'gm')
+export const matchesApiPublish = cmd => {
+  const calls = ghApiCalls(cmd)
+  return calls.length < (commandSkeleton(cmd).match(GH_API_CALL)?.length ?? 0) || calls.some(apiCallPublishes)
+}
 
 /**
  * Which target kinds this command's CLI publish verbs can have produced.
@@ -494,7 +524,9 @@ export const commitsInCommandPosition = cmd =>
 // A publish aimed at another repo simply runs the gate against this repo's
 // issue space — its refs come back not-found and the escape hatch covers the
 // (essentially unused) case. A never-exercised convenience is not worth a
-// recurring bypass surface.
+// recurring bypass surface. THIS_REPO_TARGET (below) parses a target the other
+// way round: naming this repository decides only coverage, so a misread there
+// costs a reported unkept claim, never a gate switched off.
 
 // The verbs whose output names no URL the read-back could fetch: `gh pr
 // merge` text lands in the merge commit, and review/close/reopen print
@@ -537,7 +569,7 @@ const hasExpansion = cmd => EXPANSION.test(expandable(cmd))
 // which is the one thing the read-back reasons from that it cannot check.
 // Tested on the skeleton, so an exclamation mark in a quoted body is blanked
 // and costs nothing.
-const SHELL_OPERATOR = /\$\(\)|``|\$\{[^}]*\}|\$\w+|<<-?|\d*>>?(?:&\d*-?)?|&>>?|\|\||&&|[|;&<>$`\n!]/g
+const SHELL_OPERATOR = /\$\(\)|``|\$\{[^}$]*\}|\$\w+|<<-?|(?<!\d)\d*>>?(?:&\d*-?)?|&>>?|\|\||&&|[|;&<>$`\n!]/g
 const operatorName = t => {
   if (t === '\n') return 'a second command line'
   const kind = /^[$`]/.test(t) ? 'expansion' : t.startsWith('<<') ? 'heredoc' : /[<>]/.test(t) ? 'redirect' : t === '|' ? 'pipe' : t === '!' ? 'negation' : 'separator'
@@ -578,7 +610,7 @@ const cdPrefixDir = cmd => CD_PREFIX.exec(cmd)?.[1].replace(/^(['"])(.*)\1$/s, '
 // Flags that leave no fetchable object in the output. `-t` is --template's
 // short form; consulted only for `gh api`, where it formats the response,
 // never for `gh pr create -t <title>`.
-const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
+const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-[tq])/
 // The api's graphql endpoint answers with no object URL to read back.
 const GRAPHQL = /\bgraphql\b/
 
@@ -961,7 +993,7 @@ export const hasStdinBody = cmd => messageFileValues(cmd).some(p => STDIN_PATH.t
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
 const isHomePath = p => p === '~' || p.startsWith('~/')
-export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.slice(1)) : isAbsolute(p) ? p : resolve(cwd, p))
+export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.slice(1)) : resolve(cwd, p))
 
 /**
  * The files a publish takes its text from, as the command names them: a CLI
@@ -978,15 +1010,17 @@ export const publishPayloadFiles = cmd =>
       const reply = replyArgsAt(tokens)
       if (reply !== -1) return [tokens.slice(reply).filter(t => !t.startsWith('--'))[2]]
       if (!tokens.some(t => GH_COMMAND.test(t))) return []
-      const api = tokens.some((_, i) => opensApiCall(tokens, i))
+      const api = tokens.some((_, i) => apiArgsAt(tokens, i))
       return tokens.flatMap((t, i) => {
         const flag = t.match(PAYLOAD_FLAG)?.[0]
-        if (!flag) return []
+        // on gh api, --template formats the response
+        if (!flag || (api && flag === '--template')) return []
         const value = t.length > flag.length ? t.slice(flag.length).replace(/^=/, '') : tokens[i + 1]
         // an api field names a file only after `=@`; on a CLI verb -F's value is the path, `=` and all
         if (!api || !['-F', '--field'].includes(flag)) return [value]
-        const field = value?.match(/^[^=]*=(.*)$/s)
-        return [field?.[1].startsWith('@') ? field[1].slice(1) : undefined]
+        const field = value?.match(/^([^=]*)=(.*)$/s)
+        // a graphql document is the call's code, which UNREAD_DOCUMENT rules on, not its text
+        return [field && field[1] !== 'query' && field[2].startsWith('@') ? field[2].slice(1) : undefined]
       })
     })
     .filter(p => p !== undefined && !STDIN_PATH.test(p) && !/[$`]/.test(p))
@@ -2436,8 +2470,10 @@ const unreadableMessageFilesReport = (files, cmd, cwd) =>
     'A KM_ISSUE_REFS_OK=1 prefix attests the references and skips this read.',
   ].join('\n')
 
-// When this session began: the first timestamp its transcript records. Not
-// the file's birth time, which Linux can report as its ctime — for a
+// When this session began: the earliest timestamp in its transcript's head —
+// not the first, since a resumed transcript of some versions opens with a
+// queue entry stamped at resume, ahead of the history it copies. Not the
+// file's birth time either, which Linux can report as its ctime: for a
 // transcript, the last append. A subagent's transcript sits in
 // <session>/subagents/, and its session began with the main transcript beside
 // that directory. Unknown without a readable transcript.
@@ -2457,8 +2493,8 @@ const sessionStartedMs = ({ transcript_path: p }) => {
   } catch {
     return undefined
   }
-  const at = Date.parse(head.match(/"timestamp":"([^"]+)"/)?.[1] ?? '')
-  return Number.isNaN(at) ? undefined : at
+  const stamps = [...head.matchAll(/"timestamp":"([^"]+)"/g)].map(m => Date.parse(m[1])).filter(Number.isFinite)
+  return stamps.length ? Math.min(...stamps) : undefined
 }
 
 // A body file another session could have written, as the fact found at its
@@ -2497,7 +2533,7 @@ const NOTHING_RAN =
 // The one shape a file-fed publish passes in, as separate calls.
 const COVERED_RECIPE = [
   'Do it as separate tool calls instead:',
-  '  1. Write the body with the Write tool to a NEW file in your session scratchpad (the directory your system prompt names). Do not reuse a file an earlier attempt meant to write: that call never ran.',
+  '  1. Write the body with the Write tool to a NEW file in your session scratchpad (the directory your system prompt names; outside Claude Code, any new file only this session writes). Do not reuse a file an earlier attempt meant to write: that call never ran.',
   '  2. Run any other step (git add, commit, push, an edit to the body) as a Bash call of its own.',
   '  3. Publish with ONE bare command and nothing chained to it, for example:',
   '       gh pr create --title "…" --body-file <scratchpad>/pr-body.md',
@@ -2506,29 +2542,28 @@ const COVERED_RECIPE = [
   '     A leading `cd <dir> &&` is fine; a trailing `2>&1 | tail` is not.',
 ].join('\n')
 const BOTH_ESCAPES = 'after checking every #N and bead id in the text yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.'
-const blockedPublishMessage = ({ stale, uncovered, outside }) =>
-  [
+const STALE_ADVICE =
+  'Write the text afresh to a new file in your session scratchpad (the directory your system prompt names), in a call of its own — with the Write tool, or a plain `cp` (not `cp -p`) of a file you have checked — and publish that file.'
+// `uncovered` is read only when `outside` names text the gate cannot see. The
+// escapes never lift a stale file, so with one they come with a new file.
+const blockedPublishMessage = ({ stale, uncovered, outside }) => {
+  const recipe = Boolean(outside) && uncovered.shell
+  const escapes = stale.length ? `with the text in a new file, ${BOTH_ESCAPES}` : BOTH_ESCAPES
+  return [
     NOTHING_RAN,
     ...(stale.length
-      ? [
-          [
-            'Its text would come from a file this session may not have written:',
-            ...stale.map(fact => `  ${fact}`),
-            ...(uncovered?.shell
-              ? []
-              : ['Write the text afresh with the Write tool to a new file in your session scratchpad (the directory your system prompt names), in a call of its own, and publish that file.']),
-          ].join('\n'),
-        ]
+      ? [['Its text would come from a file this session may not have written:', ...stale.map(fact => `  ${fact}`), ...(recipe ? [] : [STALE_ADVICE])].join('\n')]
       : []),
     ...(outside
       ? [
           `This publish is not one the post-publication read-back covers, because of ${uncovered.why}. Its text comes from ${outside}, which this gate cannot read from the command either.`,
-          uncovered.shell
-            ? `${COVERED_RECIPE}\nOr, ${BOTH_ESCAPES}`
-            : `No spelling of that is covered, so put the text inline (\`--body "…"\`, \`-f body=…\`) where this gate can read it, or, ${BOTH_ESCAPES}`,
+          recipe
+            ? `${COVERED_RECIPE}\nOr, ${escapes}`
+            : `No spelling of that is covered, so put the text inline (\`--body "…"\`, \`-f body=…\`) where this gate can read it, or, ${escapes}`,
         ]
       : []),
   ].join('\n\n')
+}
 
 /**
  * One issue/PR's ground truth, memoized per process — tolerant, and
@@ -2740,7 +2775,7 @@ const hookPrePr = () => {
   const stale = publishes ? staleBodyFiles(cmd, cwd, { startedMs: sessionStartedMs(payload ?? {}), sessionId: payload?.session_id }) : []
   const outside = blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd)) ? textOutsideCommand(cmd) : null
   if (stale.length || outside) {
-    console.error(blockedPublishMessage({ stale, uncovered: outside && uncoveredBy(cmd), outside }))
+    console.error(blockedPublishMessage({ stale, uncovered: outside ? uncoveredBy(cmd) : null, outside }))
     process.exit(2)
   }
 
