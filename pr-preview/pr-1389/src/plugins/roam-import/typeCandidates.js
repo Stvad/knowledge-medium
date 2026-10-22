@@ -1,1 +1,0 @@
-import{Tl as e,wl as t}from"../../../chunks/app-BWApxTTi.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};

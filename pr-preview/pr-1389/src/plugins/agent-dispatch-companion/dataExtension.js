@@ -1,1 +1,0 @@
-import{LG as e}from"../../../chunks/app-BWApxTTi.js";export{e as agentDispatchCompanionDataExtension};

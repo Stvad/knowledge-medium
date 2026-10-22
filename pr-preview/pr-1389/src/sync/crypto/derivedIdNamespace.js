@@ -1,1 +1,0 @@
-import{Q8 as e}from"../../../chunks/app-BWApxTTi.js";export{e as deriveWorkspaceIdNamespace};
