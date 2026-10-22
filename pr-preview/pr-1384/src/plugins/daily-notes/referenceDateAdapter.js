@@ -1,1 +1,1 @@
-import{CT as e,ST as t,TT as n,wT as r}from"../../../chunks/app-y98tWB3q.js";export{t as createEditorReferenceDateAdapter,e as referenceDateAdapter,r as replaceSingleDateReferenceContent,n as singleDateReferenceMatch};
+import{CT as e,ST as t,TT as n,wT as r}from"../../../chunks/app-CDlXY-xk.js";export{t as createEditorReferenceDateAdapter,e as referenceDateAdapter,r as replaceSingleDateReferenceContent,n as singleDateReferenceMatch};
