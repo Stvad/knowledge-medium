@@ -35,6 +35,12 @@
             "type": "command",
             "timeout": 30,
             "additionalContextLimit": 0
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml",
+            "type": "command",
+            "timeout": 30
           }
         ],
         "matcher": "startup|resume|clear"

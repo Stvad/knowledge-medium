@@ -76,6 +76,12 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-prime-hook.mjs\"",
             "statusMessage": "Loading beads memory index…",
             "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml…",
+            "timeout": 30,
+            "type": "command"
           }
         ],
         "matcher": ""

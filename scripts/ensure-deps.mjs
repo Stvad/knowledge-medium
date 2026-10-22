@@ -35,7 +35,7 @@ export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile', '--config.co
 export const BUILD_ARGS = ['run', 'compile:packages']
 const STEP_ARGS = { install: FROZEN_INSTALL_ARGS, build: BUILD_ARGS }
 
-// Below the 30s SessionStart timeout in .codex/hooks.json.
+// Below the 30s timeout .claude/settings.json and .codex/hooks.json give this hook.
 export const WAIT_MS = 20_000
 
 /**
