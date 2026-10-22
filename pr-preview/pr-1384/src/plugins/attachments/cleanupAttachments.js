@@ -1,1 +1,1 @@
-import{$h as e,eg as t,tg as n}from"../../../chunks/app-Cot_kGX6.js";export{e as CLEANUP_ATTACHMENTS_ACTION_ID,t as cleanupAttachmentsAction,n as prepareCleanup};
+import{$h as e,eg as t,tg as n}from"../../../chunks/app-C4hCYI-s.js";export{e as CLEANUP_ATTACHMENTS_ACTION_ID,t as cleanupAttachmentsAction,n as prepareCleanup};
