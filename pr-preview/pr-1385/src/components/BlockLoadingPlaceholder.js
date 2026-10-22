@@ -1,1 +1,1 @@
-import{NA as e}from"../../chunks/app-Dk0UUbGj.js";export{e as BlockLoadingPlaceholder};
+import{NA as e}from"../../chunks/app-XXPAFgiL.js";export{e as BlockLoadingPlaceholder};

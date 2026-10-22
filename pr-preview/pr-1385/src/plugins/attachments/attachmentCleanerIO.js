@@ -1,1 +1,1 @@
-import{ag as e,ig as t,og as n}from"../../../chunks/app-Dk0UUbGj.js";export{t as createAttachmentCleanerIO,e as listMediaBlocks,n as listWorkspaceObjects};
+import{ag as e,ig as t,og as n}from"../../../chunks/app-XXPAFgiL.js";export{t as createAttachmentCleanerIO,e as listMediaBlocks,n as listWorkspaceObjects};
