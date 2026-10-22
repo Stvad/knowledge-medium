@@ -431,7 +431,10 @@ const isExplicitRead = sk => effectiveMethod(sk) === 'GET' || effectiveMethod(sk
 // not know and swallow a call whole. A call the skeleton sees that no examined
 // call accounts for is unread, so the command counts as a publish. Defence in
 // depth: the reader handles the quotings it is known to have missed (`#`
-// comments, `$'…'`); this catches the next one.
+// comments, `$'…'`); this catches the next one. Totals, not positions: a call
+// only the reader sees (a quoted `"gh"` word) could mask a swallowed one,
+// which takes two misreadings in one command; strict matching would block
+// heredoc notes whose quoted prose mentions a call.
 const GH_API_CALL = new RegExp(GH + String.raw`api\s`, 'gm')
 export const matchesApiPublish = cmd => {
   const calls = ghApiCalls(cmd)
@@ -1018,9 +1021,9 @@ export const publishPayloadFiles = cmd =>
         const value = t.length > flag.length ? t.slice(flag.length).replace(/^=/, '') : tokens[i + 1]
         // an api field names a file only after `=@`; on a CLI verb -F's value is the path, `=` and all
         if (!api || !['-F', '--field'].includes(flag)) return [value]
-        const field = value?.match(/^([^=]*)=(.*)$/s)
-        // a graphql document is the call's code, which UNREAD_DOCUMENT rules on, not its text
-        return [field && field[1] !== 'query' && field[2].startsWith('@') ? field[2].slice(1) : undefined]
+        // a graphql document from a file counts too: a mutation's can carry text
+        const field = value?.match(/^[^=]*=(.*)$/s)
+        return [field?.[1].startsWith('@') ? field[1].slice(1) : undefined]
       })
     })
     .filter(p => p !== undefined && !STDIN_PATH.test(p) && !/[$`]/.test(p))

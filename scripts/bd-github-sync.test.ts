@@ -3787,9 +3787,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // a path is judged once `..` is resolved
     expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/x/../scratchpad/b.md', own).status).toBe(0)
     expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/../../sess-b/b.md', own).status).toBe(2)
-    // a graphql document is the call's code, and gh api's --template formats its answer
-    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(0)
+    // gh api's --template formats its answer; a graphql document from a file is checked like a body
     expect(hook("KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi --template /tmp/claude-501/t").status).toBe(0)
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(2)
     // a read is not a publish
     expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
     expect(shimCalls()).toBe('')
