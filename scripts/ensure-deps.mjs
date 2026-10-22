@@ -24,7 +24,7 @@ const LOCKFILE = 'pnpm-lock.yaml'
 // the lockfile's mtime without changing what it says.
 const INSTALL_RECORD = join('node_modules', '.pnpm', 'lock.yaml')
 const BASE_REF = 'origin/master'
-const FAILURE_TAIL_LINES = 15
+const FAILURE_TAIL_LINES = 10
 
 /**
  * The one non-interactive install, shared with the gate. `--frozen-lockfile`
@@ -41,17 +41,12 @@ export const BUILD_ARGS = ['run', 'compile:packages']
  * only refreshes timestamps, so sources are compared against it — an output
  * keeps its old mtime when a rebuild changes nothing, and would never settle.
  * Both tsconfigs compile `src/**` into `dist` with declarations, so each
- * source's `.js` and `.d.ts` are its outputs. `extraOutputs` are written by
- * `compile:post` instead: it deletes the kernel-types tree before rebuilding
- * it and writes `assets.d.ts` last, so a failed or interrupted run leaves that
- * file absent.
+ * source's `.js` and `.d.ts` are its outputs. agent-cli's kernel types are not
+ * checked: their build fails on any app type error, so requiring them would
+ * rerun it at every session start; `kmagent types` owns that (#1386).
  */
 export const DIST_PACKAGES = [
-  {
-    dir: 'packages/agent-cli',
-    buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo',
-    extraOutputs: ['dist/kernel-types/assets.d.ts'],
-  },
+  { dir: 'packages/agent-cli', buildInfo: 'node_modules/.tmp/agent-cli.tsbuildinfo' },
   { dir: 'packages/agent-dispatch', buildInfo: 'node_modules/.tmp/agent-dispatch.tsbuildinfo' },
 ]
 
@@ -96,8 +91,7 @@ export const staleDist = root =>
     const dir = join(root, pkg.dir)
     if (!existsSync(join(dir, 'src'))) return []
     const sources = sourcesOf(dir)
-    const outputs = [...sources.flatMap(emittedFor), ...(pkg.extraOutputs ?? [])]
-    if (outputs.some(output => !existsSync(join(dir, output)))) return [{ dir: pkg.dir, reason: 'missing' }]
+    if (sources.flatMap(emittedFor).some(output => !existsSync(join(dir, output)))) return [{ dir: pkg.dir, reason: 'missing' }]
     // Under NodeNext the manifest's `type` decides the emitted module format.
     const inputs = ['tsconfig.json', 'package.json', ...sources]
     return Math.max(...inputs.map(input => mtimeOf(join(dir, input)) ?? 0)) > (mtimeOf(join(dir, pkg.buildInfo)) ?? -Infinity)
@@ -133,12 +127,18 @@ const forgetStaleBuildRecords = root => {
   for (const pkg of DIST_PACKAGES) if (stale.has(pkg.dir)) rmSync(join(root, pkg.dir, pkg.buildInfo), { force: true })
 }
 
-/** Null on success; otherwise why the command failed, with the end of its output. */
+const tailOf = output => (output ?? '').trim().split('\n').slice(-FAILURE_TAIL_LINES).join('\n')
+
+/**
+ * Null on success; otherwise why the command failed, with the end of each
+ * stream on its own, so a stack trace on stderr cannot push the compiler's
+ * errors on stdout out of the tail.
+ */
 const runPnpm = (root, args, env) => {
   const result = spawnSync('pnpm', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
   if (result.status === 0) return null
-  const tail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim().split('\n').slice(-FAILURE_TAIL_LINES).join('\n')
-  return `${result.error?.message ?? (result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)}\n${tail}`
+  const why = result.error?.message ?? (result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)
+  return [why, ...[result.stdout, result.stderr].map(tailOf).filter(Boolean)].join('\n')
 }
 
 const DEPS_REASON = {
@@ -146,6 +146,10 @@ const DEPS_REASON = {
   mismatch: "node_modules was installed from a different pnpm-lock.yaml than this checkout's",
 }
 const DIST_REASON = { missing: 'was missing build outputs', outdated: 'was older than its sources' }
+
+const UNFORMATTED_LOCKFILE_NOTE =
+  `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
+  `so this reinstall repeats at every session start. \`cp ${INSTALL_RECORD} ${LOCKFILE}\` and commit it to stop that.`
 
 const BEHIND_BASE_WARNING =
   `This branch's ${LOCKFILE} is behind ${BASE_REF} (changed there after this branch forked, not here), ` +
@@ -168,10 +172,11 @@ export const ensureDeps = ({ root, env = process.env }) => {
     if (args === BUILD_ARGS) forgetStaleBuildRecords(root)
     const failure = runPnpm(root, args, env)
     if (failure) {
-      lines.push(`\`pnpm ${args.join(' ')}\` FAILED, so tests, tsc, lint and \`pnpm agent\` can fail for reasons unrelated to your work: ${failure}`)
+      lines.push(`\`pnpm ${args.join(' ')}\` FAILED; until it succeeds, tests, tsc, lint and \`pnpm agent\` may not match this checkout: ${failure}`)
       break
     }
     lines.push(`Ran \`pnpm ${args.join(' ')}\`.`)
+    if (args === FROZEN_INSTALL_ARGS && readDepsState(root) !== 'fresh') lines.push(UNFORMATTED_LOCKFILE_NOTE)
   }
   if (deps !== 'fresh' && lockfileBehindBase(root)) lines.push(BEHIND_BASE_WARNING)
   return lines.join('\n')

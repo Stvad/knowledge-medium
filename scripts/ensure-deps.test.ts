@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, normalize } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   BUILD_ARGS,
@@ -68,7 +69,7 @@ const writeFreshDist = (root: string) => {
     write(join(root, pkg.dir, 'package.json'), '{}\n', T0)
     write(join(root, pkg.dir, 'tsconfig.json'), '{}\n', T0)
     for (const source of SOURCES) write(join(root, pkg.dir, source), 'export {}\n', T0)
-    for (const out of [...OUTPUTS, ...(pkg.extraOutputs ?? [])]) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
+    for (const out of OUTPUTS) write(join(root, pkg.dir, out), 'fixture build\n', T0 + 10)
     write(join(root, pkg.dir, pkg.buildInfo), '{}\n', T0 + 10)
   }
 }
@@ -96,7 +97,10 @@ const forkBehindMaster = () => {
  * A PATH-fronted `pnpm` that does what the real one leaves behind: `install`
  * writes the install record from the lockfile, the build writes every output
  * and build record the way `tsc -b` would. Each call is appended to `calls`.
- * FAKE_PNPM_FAIL names a command prefix to fail with exit 3.
+ * FAKE_PNPM_FAIL names a command prefix to fail with exit 3, printing its
+ * errors to stdout and a stack trace to stderr the way a failed build does.
+ * FAKE_PNPM_REFORMAT makes `install` write the record in a different form
+ * from the committed lockfile, as pnpm does for one it did not write.
  */
 const fakePnpm = (extraEnv: Record<string, string> = {}) => {
   const bin = tempDir('ensure-deps-bin-')
@@ -109,12 +113,14 @@ const path = require('node:path')
 const args = process.argv.slice(2).join(' ')
 fs.appendFileSync(${JSON.stringify(calls)}, args + '\\n')
 if (process.env.FAKE_PNPM_FAIL && args.startsWith(process.env.FAKE_PNPM_FAIL)) {
-  process.stderr.write('fake pnpm failure\\n')
+  process.stdout.write('fake pnpm failure: the real error\\n')
+  for (let i = 0; i < 30; i++) process.stderr.write('    at frame' + i + ' (/somewhere/file.js:1:1)\\n')
   process.exit(3)
 }
 if (args.startsWith('install')) {
   fs.mkdirSync('node_modules/.pnpm', { recursive: true })
-  fs.copyFileSync('pnpm-lock.yaml', 'node_modules/.pnpm/lock.yaml')
+  const lockfile = fs.readFileSync('pnpm-lock.yaml', 'utf8')
+  fs.writeFileSync('node_modules/.pnpm/lock.yaml', process.env.FAKE_PNPM_REFORMAT ? lockfile + '\\n' : lockfile)
 }
 if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
   const mtime = p => fs.statSync(p).mtimeMs
@@ -125,7 +131,7 @@ if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
     const inputs = fs.readdirSync(path.join(pkg.dir, 'src'), { recursive: true, withFileTypes: true })
       .filter(e => e.isFile()).map(e => path.join(e.parentPath, e.name))
     if (fs.existsSync(info) && inputs.every(p => mtime(p) < mtime(info))) continue
-    for (const out of [...${JSON.stringify(OUTPUTS)}, ...(pkg.extraOutputs ?? []), pkg.buildInfo]) {
+    for (const out of [...${JSON.stringify(OUTPUTS)}, pkg.buildInfo]) {
       fs.mkdirSync(path.dirname(path.join(pkg.dir, out)), { recursive: true })
       fs.writeFileSync(path.join(pkg.dir, out), 'built\\n')
     }
@@ -141,6 +147,18 @@ if (args === ${JSON.stringify(BUILD_ARGS.join(' '))}) {
 
 const INSTALL = FROZEN_INSTALL_ARGS.join(' ')
 const BUILD = BUILD_ARGS.join(' ')
+
+describe('DIST_PACKAGES', () => {
+  // The dist check assumes this layout; a moved build record or output dir
+  // would otherwise read as stale on every session start.
+  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+  it.each(DIST_PACKAGES)('matches the real build of $dir', pkg => {
+    const { compilerOptions } = JSON.parse(readFileSync(join(repoRoot, pkg.dir, 'tsconfig.json'), 'utf8'))
+    expect(compilerOptions).toMatchObject({ rootDir: 'src', outDir: 'dist', declaration: true })
+    expect(normalize(compilerOptions.tsBuildInfoFile)).toBe(pkg.buildInfo)
+    expect(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts['compile:packages']).toContain(pkg.dir)
+  })
+})
 
 describe('readDepsState', () => {
   it('is fresh when the install record matches the lockfile by content, however much newer the lockfile is', () => {
@@ -188,13 +206,6 @@ describe('staleDist', () => {
     const root = makeCheckout()
     rmSync(join(root, pkg.dir, output))
     expect(staleDist(root)).toEqual([{ dir: pkg.dir, reason: 'missing' }])
-  })
-
-  it('reports a dist missing an output its build writes beyond what tsc emits', () => {
-    const root = makeCheckout()
-    const [withExtra] = DIST_PACKAGES.filter(p => p.extraOutputs?.length)
-    rmSync(join(root, withExtra.dir, withExtra.extraOutputs![0]))
-    expect(staleDist(root)).toEqual([{ dir: withExtra.dir, reason: 'missing' }])
   })
 
   it.each([
@@ -287,7 +298,15 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     const { text, calls } = run(root, { FAKE_PNPM_FAIL: 'install' })
     expect(calls).toEqual([INSTALL])
     expect(text).toContain(`\`pnpm ${INSTALL}\` FAILED`)
-    expect(text).toContain('fake pnpm failure')
+    expect(text).toContain('fake pnpm failure: the real error')
+  })
+
+  it('explains a reinstall that will repeat because the lockfile is not in the form pnpm writes', () => {
+    const root = makeCheckout()
+    writeInstallRecord(root, 'lock: v0\n')
+    const { text, calls } = run(root, { FAKE_PNPM_REFORMAT: '1' })
+    expect(calls).toEqual([INSTALL, BUILD])
+    expect(text).toContain('cp node_modules/.pnpm/lock.yaml pnpm-lock.yaml')
   })
 
   it('warns that a reinstall cannot fix a branch whose lockfile is behind master', () => {
