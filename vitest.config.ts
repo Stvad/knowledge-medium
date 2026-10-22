@@ -53,7 +53,7 @@ export default defineConfig({
     // That makes this a compile/import contract on the flat extensions against
     // `src`; it is NOT the installed extension's importmap resolution, and a
     // green run doesn't mean the copy installed in the user's DB was updated
-    // (see AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
+    // (see agent-extensions/AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
     // next to an extension — gitignored, and skipped here so a leftover one
     // can't redden an unrelated run.
     // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`

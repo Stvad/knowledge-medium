@@ -7,8 +7,8 @@
 // memory keys of the index. bd prime's --mcp output is ~27K and grows with
 // every memory, so raw it NEVER arrives (issue #643). This wrapper keeps the
 // memory index (every key, previews clipped just enough to fit) and drops the
-// close-protocol/commands boilerplate, which AGENTS.md already injects into
-// every session via the managed Beads block.
+// close-protocol/commands boilerplate: AGENTS.md's beads section carries the
+// commands and this repo's own close policy instead.
 //
 // Contract: never break session start. Any failure — bd missing, DB absent,
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
