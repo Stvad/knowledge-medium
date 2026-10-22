@@ -1,1 +1,1 @@
-import{Jx as e,Yx as t}from"../../../../chunks/app-C4sCKpm6.js";export{e as importPastedWorkspaceKey,t as openCanaryWithPastedKey};
+import{Jx as e,Yx as t}from"../../../../chunks/app-CdJm4qhf.js";export{e as importPastedWorkspaceKey,t as openCanaryWithPastedKey};
