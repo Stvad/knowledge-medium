@@ -11,5 +11,5 @@ export declare const readMemoryIndex: (result: {
   stderr?: string | null
 }) => MemoryIndex
 export declare const buildAdditionalContext: (index: MemoryIndex, notice?: string) => string
-export declare const withNotice: (raw: string | null | undefined, notice: string) => string | null | undefined
-export declare const transformCodexHookStdout: (raw: string, context: string) => string
+export declare const sessionStartOutput: (nativeRaw: string | null | undefined, context: string) => string
+export declare const transformCodexHookStdout: (raw: string, readContext: () => string) => string

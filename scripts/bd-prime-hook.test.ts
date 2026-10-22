@@ -9,8 +9,8 @@ import {
     buildAdditionalContext,
     parseMemoryKeys,
     readMemoryIndex,
+    sessionStartOutput,
     transformCodexHookStdout,
-    withNotice,
 } from './bd-prime-hook.mjs'
 import { SYNC_RUN_LOG } from './bd-github-sync.mjs'
 
@@ -61,10 +61,34 @@ describe('parseMemoryKeys', () => {
         expect(parseMemoryKeys('{"schema_version":1}')).toEqual({ keys: [] })
     })
 
+    // BD_JSON_ENVELOPE=1 today, bd's default from v2.
+    it('reads the same map from under `data` in bd\'s envelope format', () => {
+        const envelope = JSON.stringify({ schema_version: 1, data: { feedback_alpha: 'text', data_beta: 'text' } })
+        expect(parseMemoryKeys(envelope)).toEqual({ keys: ['feedback_alpha', 'data_beta'] })
+        // a lone memory keyed `data` is still a memory
+        expect(parseMemoryKeys('{"data":"text","schema_version":1}')).toEqual({ keys: ['data'] })
+    })
+
+    // A moved format must say so: dropping what it cannot read would show an empty index.
+    it('refuses a format it does not recognise rather than reading fewer keys', () => {
+        expect(parseMemoryKeys('{"feedback_alpha":"x","schema_version":2}')).toEqual({
+            error: 'unrecognized bd memories schema_version 2',
+        })
+        expect(parseMemoryKeys('{"feedback_alpha":"x"}')).toEqual({ error: 'unrecognized bd memories schema_version undefined' })
+        for (const shape of [
+            { schema_version: 1, feedback_alpha: { content: 'x' }, project_beta: { content: 'y' } },
+            { schema_version: 1, feedback_alpha: null },
+            { schema_version: 1, data: { feedback_alpha: 'x' }, pagination: { truncated: true } },
+            { schema_version: 1, memories: { feedback_alpha: 'x' } },
+        ])
+            expect(parseMemoryKeys(JSON.stringify(shape))).toMatchObject({ error: expect.stringContaining('unrecognized bd memories format') })
+    })
+
     it('names the failure when the output is not a JSON object', () => {
         expect(parseMemoryKeys('Error: workspace database locked\nretry later')).toEqual({
             error: 'Error: workspace database locked',
         })
+        expect(parseMemoryKeys('{\n  "feedback_alpha": "trunc')).toEqual({ error: 'output is not JSON' })
         expect(parseMemoryKeys('')).toEqual({ error: 'empty output' })
         expect(parseMemoryKeys('["feedback_alpha"]')).toEqual({ error: 'output is not a JSON object' })
         expect(parseMemoryKeys('null')).toEqual({ error: 'output is not a JSON object' })
@@ -95,6 +119,11 @@ describe('readMemoryIndex', () => {
         expect(readMemoryIndex({ ...ok, stderr: 'warning: slow\nError: memory table read failed\n' })).toEqual({
             error: 'Error: memory table read failed',
         })
+    })
+
+    it('names the error bd reports on stdout in --json mode', () => {
+        const stdout = '{\n  "error": "listing memories: table locked",\n  "schema_version": 1\n}\n'
+        expect(readMemoryIndex({ ...ok, status: 1, stdout })).toEqual({ error: 'listing memories: table locked' })
     })
 
     it("names bd's own Error line over a bare exit code", () => {
@@ -140,8 +169,8 @@ describe('buildAdditionalContext', () => {
         expect(out).toContain('bd memories <keyword>')
     })
 
-    // Trimming the largest groups first keeps a small group whole: the cap
-    // this replaced hid every `testing_*` key because it cut the alphabetical tail.
+    // Cutting the alphabetical tail would drop a late-sorting group whole;
+    // trimming the largest groups first keeps a small one complete.
     it('when keys cannot fit, trims the largest groups and counts every key it left out', () => {
         const counts = { feedback: 300, project: 200, reference: 400, testing: 20, user: 2 }
         const keys = syntheticKeys(counts)
@@ -178,6 +207,45 @@ describe('buildAdditionalContext', () => {
         expect(out).toContain('`bd memories` lists every key')
     })
 
+    it('shows what fits beside many one-key groups whose markers alone would not', () => {
+        const keys = [...Array.from({ length: 700 }, (_, i) => `q${i}_ab`), ...Array.from({ length: 1200 }, (_, i) => `zz_${i}`)]
+        const out = buildAdditionalContext({ keys })
+        expect(out.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        const back = readBack(out)
+        expect(back.keys.length).toBeGreaterThan(1000)
+        expect(back.keys.length + back.hidden['zz']).toBe(keys.length)
+        expect(out).toContain(`${back.hidden['zz']} of ${keys.length} keys not shown`)
+    })
+
+    it('counts the notice inside the fit when keys overflow', () => {
+        const notice = `⚠ bd-github-sync is over its 20s budget: ${'detail '.repeat(150)}`
+        const keys = syntheticKeys({ feedback: 300, project: 200, reference: 400, testing: 20, user: 2 })
+        const out = buildAdditionalContext({ keys }, notice)
+        expect(out.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        expect(out).toContain(notice)
+        const back = readBack(out)
+        expect(back.keys.length + Object.values(back.hidden).reduce((a, b) => a + b, 0)).toBe(keys.length)
+    })
+
+    // However long the alarm or the reason, the index line still states what it is missing.
+    it('keeps the index line inside the budget under an oversized notice or reason', () => {
+        const notice = `⚠ ${'x'.repeat(20_000)}`
+        const many = buildAdditionalContext({ keys: Array.from({ length: 2000 }, (_, i) => `p${i}_name`) }, notice)
+        expect(many.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        expect(many).toContain('2000 of 2000 keys not shown')
+        const failed = buildAdditionalContext({ error: `Error: ${'y'.repeat(20_000)}` }, notice)
+        expect(failed.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        expect(failed).toContain('`bd memories` lists every key')
+    })
+
+    it('never cuts a clipped reason mid-surrogate-pair', () => {
+        for (const pad of ['', 'x']) {
+            const out = buildAdditionalContext({ error: pad + '🚨'.repeat(6000) })
+            // a lone surrogate does not survive a UTF-8 round-trip (it becomes U+FFFD)
+            expect(Buffer.from(out, 'utf8').toString('utf8')).toBe(out)
+        }
+    })
+
     it('says the index is unavailable, and why, when it could not be read', () => {
         const notice = '⚠ bd-github-sync failed its last two runs'
         const out = buildAdditionalContext({ error: 'ENOBUFS' }, notice)
@@ -189,42 +257,28 @@ describe('buildAdditionalContext', () => {
     })
 })
 
-// The alarm does not come from the index, so whatever the index path produced
-// — nothing, a malformed envelope, one without context — still carries it.
-describe('withNotice', () => {
-    const notice = '⚠ bd-github-sync is over its 15s budget'
-    const context = (raw: string | null) => JSON.parse(withNotice(raw, notice) ?? 'null').hookSpecificOutput
+describe('sessionStartOutput', () => {
+    const hookOutput = (raw: string | null) => JSON.parse(sessionStartOutput(raw, 'the index')).hookSpecificOutput
 
-    it('builds a SessionStart envelope when the index path produced nothing usable', () => {
-        for (const raw of [null, '', 'null', '[]'])
-            expect(context(raw)).toEqual({ hookEventName: 'SessionStart', additionalContext: notice })
+    it('builds a SessionStart envelope when bd produced nothing usable', () => {
+        for (const raw of [null, '', 'not json', 'null', '[]', '{"hookSpecificOutput":"text"}', '{"hookSpecificOutput":["x"]}'])
+            expect(hookOutput(raw)).toEqual({ hookEventName: 'SessionStart', additionalContext: 'the index' })
     })
 
-    it('keeps plain-text output as context, after the notice', () => {
-        expect(context('# Beads\nplain-text index')).toEqual({
-            hookEventName: 'SessionStart',
-            additionalContext: `${notice}\n\n# Beads\nplain-text index`,
+    it("replaces bd's context and keeps the envelope's other fields", () => {
+        const native = JSON.stringify({
+            continue: true,
+            hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: '## Memories (showing 1 of 2)', metadata: { source: 'bd' } },
+        })
+        expect(JSON.parse(sessionStartOutput(native, 'the index'))).toEqual({
+            continue: true,
+            hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'the index', metadata: { source: 'bd' } },
         })
     })
 
-    it('adds the notice to an envelope that has no context, keeping its other fields', () => {
-        const out = JSON.parse(withNotice('{"continue":true,"hookSpecificOutput":{"hookEventName":"SessionStart"}}', notice) ?? '')
-        expect(out).toEqual({ continue: true, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice } })
-    })
-
-    // The notice goes out only at session start; an envelope naming another
-    // event, malformed or foreign, must not carry it anywhere else.
     it('names the session-start event whatever the envelope said', () => {
-        const foreign = (ctx: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreCompact', additionalContext: ctx } })
-        expect(context(foreign('index'))).toEqual({ hookEventName: 'SessionStart', additionalContext: `${notice}\n\nindex` })
-        expect(context(foreign(`${notice}\n\nindex`)).hookEventName).toBe('SessionStart')
-    })
-
-    it('leaves output that already carries it, and output with no notice to add, untouched', () => {
-        const carried = wrap(`# Beads\n\n${notice}\n\n## Memories`)
-        expect(withNotice(carried, notice)).toBe(carried)
-        expect(withNotice('{"continue":true}', '')).toBe('{"continue":true}')
-        expect(withNotice(null, '')).toBeNull()
+        const foreign = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreCompact', additionalContext: 'x' } })
+        expect(hookOutput(foreign).hookEventName).toBe('SessionStart')
     })
 })
 
@@ -239,17 +293,21 @@ describe('transformCodexHookStdout', () => {
                 metadata: { source: 'bd' },
             },
         })
-        expect(JSON.parse(transformCodexHookStdout(native, 'the index'))).toEqual({
+        expect(JSON.parse(transformCodexHookStdout(native, () => 'the index'))).toEqual({
             continue: true,
             systemMessage: 'lifecycle state updated',
             hookSpecificOutput: { hookEventName: 'PreCompact', additionalContext: 'the index', metadata: { source: 'bd' } },
         })
     })
 
-    it('passes native output without context through unchanged', () => {
+    it('passes native output without context through unchanged, without reading the index', () => {
+        const readContext = () => {
+            throw new Error('read the index')
+        }
         const native = '{"hookSpecificOutput":{"hookEventName":"PostCompact"}}\n'
-        expect(transformCodexHookStdout(native, 'the index')).toBe(native)
-        expect(transformCodexHookStdout('not json', 'the index')).toBe('not json')
+        expect(transformCodexHookStdout(native, readContext)).toBe(native)
+        expect(transformCodexHookStdout('not json', readContext)).toBe('not json')
+        expect(transformCodexHookStdout('', readContext)).toBe('')
     })
 })
 
@@ -398,11 +456,20 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         expect(contextOf(r.stdout)).toContain('bd-github-sync is over its 20s budget')
     })
 
-    it('still raises the sync alarm when the Codex session-start hook returns nothing', () => {
-        const { run } = makeRepo({ dbReady: true, syncRuns: [slowRun, slowRun], codexStdout: '' })
+    // bd's native session start prints nothing when its own prime fails.
+    it('carries the index and the alarm when the Codex session-start hook returns nothing', () => {
+        const { run, shimCalls } = makeRepo({
+            dbReady: true,
+            syncRuns: [slowRun, slowRun],
+            codexStdout: '',
+            memoriesStdout: memoriesJson(['feedback_alpha']),
+        })
         const r = run(['--codex', 'SessionStart'], '{}')
         expect(r.status).toBe(0)
-        expect(contextOf(r.stdout)).toContain('bd-github-sync is over its 20s budget')
+        const context = contextOf(r.stdout)
+        expect(context).toContain('bd-github-sync is over its 20s budget')
+        expect(context).toContain('feedback: alpha')
+        expect(shimCalls()).toContain('bd codex-hook SessionStart')
     })
 
     // bd itself can be what broke; the alarm reads only the log, so it still
@@ -412,12 +479,22 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const { run, shimCalls } = makeRepo({ dbReady: true, bdBroken: true, syncRuns: [failed, failed] })
         const r = run()
         expect(r.status).toBe(0)
-        expect(contextOf(r.stdout)).toContain('failed its last two runs')
+        const context = contextOf(r.stdout)
+        expect(context).toContain('failed its last two runs')
+        expect(context).toContain('index unavailable (bd is not runnable)')
         expect(shimCalls()).not.toContain('bd memories')
     })
 
     // bd's native context is `bd prime`: a capped listing plus the close
     // protocol, which AGENTS.md's managed Beads block already injects.
+    it('adds nothing to a mid-session Codex event when bd cannot run', () => {
+        const { run, shimCalls } = makeRepo({ dbReady: true, bdBroken: true, syncRuns: [slowRun, slowRun] })
+        const r = run(['--codex', 'UserPromptSubmit'], '{}')
+        expect(r.status).toBe(0)
+        expect(r.stdout).toBe('')
+        expect(shimCalls()).not.toContain('bd codex-hook')
+    })
+
     it('forwards the Codex event and stdin, then replaces native context with the index', () => {
         const native = JSON.stringify({
             continue: true,

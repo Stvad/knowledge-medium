@@ -7,9 +7,10 @@
 // So the index is keys only, grouped by prefix so each prefix is written once.
 // Keys come from `bd memories --json`, not `bd prime`: prime's listing is
 // capped by the `prime.max-memory-chars` config and reports the cap only in
-// a banner. Keys that still do not fit are counted in the output; none is
-// dropped silently. bd prime's close protocol and command reference are not
-// carried — AGENTS.md's managed Beads block already injects them.
+// a banner. Keys that still do not fit are counted in the output, and an
+// index that cannot be read says why; none is dropped silently. bd prime's
+// close protocol and command reference are not carried — AGENTS.md's managed
+// Beads block already injects them.
 //
 // Contract: never break session start. Any failure — bd missing, DB absent,
 // unparseable output — exits 0; a DB-less clone must not spawn bd at all
@@ -23,6 +24,11 @@ import { isMainModule } from './is-main-module.mjs'
 // wrapper-side format tweak without re-measuring the host.
 export const MAX_CONTEXT_CHARS = 9_800
 const MAX_BD_OUTPUT_BYTES = 16 * 1024 * 1024
+// Bounds that keep the index header inside the budget whatever the alarm or
+// a failure reason says.
+const MAX_NOTICE_CHARS = 1_500
+const MAX_REASON_CHARS = 300
+const BD_JSON_SCHEMA_VERSION = 1
 
 const TITLE = '# Beads Issue Tracker Active'
 const FULL_INDEX_HINT = '`bd memories` lists every key'
@@ -37,20 +43,34 @@ const clip = (s, n) => {
   return `${cut}…`
 }
 
-const firstLine = s => clip(String(s ?? '').trim().split('\n')[0], 160)
+const tryJson = s => {
+  try {
+    return JSON.parse(s)
+  } catch {
+    return undefined
+  }
+}
+
+const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+const errorLine = s => /^Error.*$/m.exec(s ?? '')?.[0]
 
 /** `bd memories --json` stdout → `{ keys }`, or `{ error }` saying why there are none. */
 export const parseMemoryKeys = stdout => {
-  let parsed
-  try {
-    parsed = JSON.parse(stdout)
-  } catch {
+  const parsed = tryJson(stdout)
+  if (parsed === undefined) {
     // bd reports some failures as `Error…` on stdout, with exit 0.
-    return { error: firstLine(stdout) || 'empty output' }
+    return { error: errorLine(stdout) ?? (String(stdout ?? '').trim() ? 'output is not JSON' : 'empty output') }
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'output is not a JSON object' }
-  // A memory's value is its text; bd puts a numeric `schema_version` in the same object.
-  return { keys: Object.keys(parsed).filter(key => typeof parsed[key] === 'string') }
+  if (!isPlainObject(parsed)) return { error: 'output is not a JSON object' }
+  const { schema_version: version, ...rest } = parsed
+  if (version !== BD_JSON_SCHEMA_VERSION) return { error: `unrecognized bd memories schema_version ${JSON.stringify(version)}` }
+  // bd's v2 format (opt-in today via BD_JSON_ENVELOPE=1) moves the same map under `data`.
+  const entries = Object.keys(rest).length === 1 && isPlainObject(rest.data) ? rest.data : rest
+  // A value that is not a memory's text means the format moved; reading past it would hide keys.
+  const odd = Object.keys(entries).filter(key => typeof entries[key] !== 'string')
+  if (odd.length) return { error: `unrecognized bd memories format: ${odd.length} entries are not memory text` }
+  return { keys: Object.keys(entries) }
 }
 
 /** A `bd memories --json` spawnSync result → the index, or why it could not be read. */
@@ -58,14 +78,19 @@ export const readMemoryIndex = result => {
   // ENOBUFS truncates stdout at the buffer cap — the whole index lost to a cap.
   if (result.error) return { error: result.error.code ?? result.error.message }
   // bd's own `Error…` line names the cause; a failing exit often carries one.
-  const stderrError = /^Error.*$/m.exec(result.stderr ?? '')
-  if (stderrError) return { error: firstLine(stderrError[0]) }
-  if (result.status !== 0) return { error: `bd memories exited ${result.status ?? result.signal}` }
+  const reported = errorLine(result.stderr)
+  if (reported) return { error: reported }
+  if (result.status !== 0) {
+    // In --json mode bd reports a command's failure as `{"error": …}` on stdout instead.
+    const jsonError = tryJson(result.stdout)?.error
+    return { error: typeof jsonError === 'string' ? jsonError : `bd memories exited ${result.status ?? result.signal}` }
+  }
   return parseMemoryKeys(result.stdout)
 }
 
 // A key is `<prefix>_<name>`, split at its first underscore. One that does
-// not split into two non-empty parts is listed whole.
+// not split into two non-empty parts is listed whole. Keys are taken to be
+// slugs: one holding `, ` or a newline renders ambiguously, which is accepted.
 const groupKeys = keys => {
   const byPrefix = new Map()
   const whole = []
@@ -84,42 +109,42 @@ const groupKeys = keys => {
 }
 
 const groupLine = ({ label, names }, cap) => {
-  const hidden = names.length - Math.min(names.length, cap)
   const items = names.slice(0, cap)
+  const hidden = names.length - items.length
   return `${label} ${(hidden ? [...items, `…(+${hidden} more)`] : items).join(KEY_SEPARATOR)}`
 }
 
-// `cap` is how many names each group shows; null shows no group lines at all.
-// `notice` is a one-line alarm (a failing or slowing sync, readSyncAlarm)
-// that must reach the session whatever the index costs, so it sits above it
-// and inside the same fit.
-const renderIndex = (groups, cap, notice) => {
+// `cap` is how many names each group shows; at 0 no group has a line.
+const renderIndex = (head, groups, cap) => {
   const total = groups.reduce((n, g) => n + g.names.length, 0)
-  const shown = cap === null ? 0 : groups.reduce((n, g) => n + Math.min(g.names.length, cap), 0)
-  const hidden = total - shown
+  const hidden = total - groups.reduce((n, g) => n + Math.min(g.names.length, cap), 0)
   return [
-    TITLE,
-    '',
-    ...(notice ? [notice, ''] : []),
+    ...head,
     `## Memories (${total}) — \`<prefix>: <name>\` is the key \`<prefix>_<name>\` · full text: \`bd recall <key>\` · search: \`bd memories <keyword>\``,
-    ...(hidden ? [`${hidden} of ${total} keys not shown (see "+N more" per group) — ${FULL_INDEX_HINT}`] : []),
+    ...(hidden ? [`${hidden} of ${total} keys not shown — ${FULL_INDEX_HINT}`] : []),
     '',
-    ...(cap === null ? [] : groups.map(g => groupLine(g, cap))),
+    ...(cap > 0 ? groups.map(g => groupLine(g, cap)) : []),
   ].join('\n')
 }
 
-/** `index` is readMemoryIndex's result. */
+/**
+ * `index` is readMemoryIndex's result. `notice` is a one-line alarm (a failing
+ * or slowing sync, readSyncAlarm) that opens the session above the index and
+ * inside the same fit.
+ */
 export const buildAdditionalContext = (index, notice = '') => {
+  const head = [TITLE, '', ...(notice ? [clip(notice, MAX_NOTICE_CHARS), ''] : [])]
   if (index.error) {
-    const lines = [TITLE, '', ...(notice ? [notice, ''] : []), `## Memories — index unavailable (${index.error}); ${FULL_INDEX_HINT}`]
-    return clip(lines.join('\n'), MAX_CONTEXT_CHARS)
+    return [...head, `## Memories — index unavailable (${clip(index.error, MAX_REASON_CHARS)}); ${FULL_INDEX_HINT}`].join('\n')
   }
   const groups = groupKeys(index.keys)
-  const fits = cap => renderIndex(groups, cap, notice).length <= MAX_CONTEXT_CHARS
-  if (fits(Infinity)) return renderIndex(groups, Infinity, notice)
-  if (!fits(0)) return renderIndex(groups, null, notice)
-  // The largest per-group cap that fits, so the largest groups give up their
-  // tails first and a small group stays whole. `lo` always fits.
+  const render = cap => renderIndex(head, groups, cap)
+  const fits = cap => render(cap).length <= MAX_CONTEXT_CHARS
+  if (fits(Infinity)) return render(Infinity)
+  // Cap 0 is the bare header, which the bounds above always fit. The largest
+  // groups give up their tails first, so a small group stays whole. The search
+  // ends on a cap whose successor overflows; a larger one can still fit (a
+  // "+N more" marker can outweigh the names it replaces), and is not sought.
   let lo = 0
   let hi = Math.max(...groups.map(g => g.names.length))
   while (hi - lo > 1) {
@@ -127,55 +152,33 @@ export const buildAdditionalContext = (index, notice = '') => {
     if (fits(mid)) lo = mid
     else hi = mid
   }
-  return renderIndex(groups, lo, notice)
-}
-
-const parseHookEnvelope = raw => {
-  if (!raw) return null
-  try {
-    const envelope = JSON.parse(raw)
-    const context = envelope?.hookSpecificOutput?.additionalContext
-    return typeof context === 'string' && context.trim() ? { envelope, context } : null
-  } catch {
-    return null
-  }
-}
-
-/** Replace a native lifecycle envelope's context without changing its event or other fields. */
-export const transformCodexHookStdout = (raw, context) => {
-  const native = parseHookEnvelope(raw)
-  if (!native) return raw
-  native.envelope.hookSpecificOutput = { ...native.envelope.hookSpecificOutput, additionalContext: context }
-  return JSON.stringify(native.envelope)
+  return render(lo)
 }
 
 /**
- * The hook's output, guaranteed to carry the sync alarm. The alarm does not
- * come from the index, so nothing the index path produced — no output, a
- * malformed or foreign envelope, one without context — may drop it. The
- * renderers above already put it inside the fit; this is the one place that
- * covers every path they do not reach.
+ * A session start's output: `context` in bd's native envelope when there is
+ * one, keeping its other fields. The event is forced, so a malformed or
+ * foreign envelope cannot route the index anywhere else.
  */
-export const withNotice = (raw, notice) => {
-  if (!notice) return raw
-  let envelope = null
-  // Output that is not JSON is plain-text context in its own right, and kept.
-  let text = ''
-  try {
-    envelope = JSON.parse(raw)
-  } catch {
-    text = raw ?? ''
-  }
-  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {}
-  const hookOutput = envelope.hookSpecificOutput ?? {}
-  const context = typeof hookOutput.additionalContext === 'string' ? hookOutput.additionalContext : text
-  // The notice goes out only at session start, so the event is forced after
-  // the envelope's own fields: a foreign or malformed one cannot misroute it.
-  envelope.hookSpecificOutput = {
-    ...hookOutput,
-    hookEventName: 'SessionStart',
-    additionalContext: context.includes(notice) ? context : clip(context ? `${notice}\n\n${context}` : notice, MAX_CONTEXT_CHARS),
-  }
+export const sessionStartOutput = (nativeRaw, context) => {
+  const native = tryJson(nativeRaw)
+  const envelope = isPlainObject(native) ? native : {}
+  const hookOutput = isPlainObject(envelope.hookSpecificOutput) ? envelope.hookSpecificOutput : {}
+  envelope.hookSpecificOutput = { ...hookOutput, hookEventName: 'SessionStart', additionalContext: context }
+  return JSON.stringify(envelope)
+}
+
+const parseHookEnvelope = raw => {
+  const envelope = tryJson(raw)
+  const context = envelope?.hookSpecificOutput?.additionalContext
+  return typeof context === 'string' && context.trim() ? envelope : null
+}
+
+/** A mid-session lifecycle result: its context, where bd's own result carries one, becomes the index. */
+export const transformCodexHookStdout = (raw, readContext) => {
+  const envelope = parseHookEnvelope(raw)
+  if (!envelope) return raw
+  envelope.hookSpecificOutput = { ...envelope.hookSpecificOutput, additionalContext: readContext() }
   return JSON.stringify(envelope)
 }
 
@@ -188,10 +191,6 @@ const runBd = (args, input = undefined) => spawnSync('bd', args, {
 
 const indexContext = notice => buildAdditionalContext(readMemoryIndex(runBd(['memories', '--json'])), notice)
 
-const runClaudeSessionStart = notice => JSON.stringify({
-  hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: indexContext(notice) },
-})
-
 const runCodexHook = (event, notice) => {
   let input = ''
   try {
@@ -200,9 +199,11 @@ const runCodexHook = (event, notice) => {
     // Hooks should remain best-effort when their host closes stdin early.
   }
   const nativeRaw = runBd(['codex-hook', event], input).stdout ?? ''
-  // A lifecycle result with no context gets none added.
-  if (!parseHookEnvelope(nativeRaw)) return nativeRaw
-  return transformCodexHookStdout(nativeRaw, indexContext(notice))
+  // bd decides when a mid-session event injects context. A session start always
+  // carries the index: bd's native one prints nothing when its own prime fails.
+  return event === 'SessionStart'
+    ? sessionStartOutput(nativeRaw, indexContext(notice))
+    : transformCodexHookStdout(nativeRaw, () => indexContext(notice))
 }
 
 if (isMainModule(import.meta.url)) {
@@ -210,13 +211,17 @@ if (isMainModule(import.meta.url)) {
     const root = beadsDbRoot()
     if (root) {
       const codexEvent = process.argv[2] === '--codex' ? (process.argv[3] ?? '') : null
+      const sessionStart = codexEvent === null || codexEvent === 'SessionStart'
       // The alarm opens a session. The other lifecycle events re-inject context
       // mid-session (UserPromptSubmit, compaction), where it would repeat.
-      const notice = codexEvent === null || codexEvent === 'SessionStart' ? readSyncAlarm(root) : ''
-      // The alarm reads only the log, so it still goes out when bd itself is
-      // what is broken.
-      const index = !bdRunnable() ? null : codexEvent === null ? runClaudeSessionStart(notice) : runCodexHook(codexEvent, notice)
-      const out = withNotice(index, notice)
+      const notice = sessionStart ? readSyncAlarm(root) : ''
+      let out = ''
+      if (!bdRunnable()) {
+        // The alarm reads only the log, so it still goes out when bd itself is what is broken.
+        if (sessionStart) out = sessionStartOutput('', buildAdditionalContext({ error: 'bd is not runnable' }, notice))
+      } else {
+        out = codexEvent === null ? sessionStartOutput('', indexContext(notice)) : runCodexHook(codexEvent, notice)
+      }
       if (out) process.stdout.write(out)
     }
   } catch (e) {
