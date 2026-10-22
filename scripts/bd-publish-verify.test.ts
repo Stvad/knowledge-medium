@@ -24,11 +24,10 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  // A LONE explicit read publishes nothing — gh sends its fields as a query
+  // An explicit read publishes nothing — gh sends its fields as a query
   // string — so its response object was READ, and calling that "published"
-  // sends the agent to edit text it never wrote. A COMPOUND still matches:
-  // the effective method is resolved across the whole skeleton, so exempting
-  // one there would exempt the mutation beside it.
+  // sends the agent to edit text it never wrote. A mutation beside it is still
+  // one: each call's method is its own.
   it('exempts a lone explicit read, but not one compounded with a mutation', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
     expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
@@ -658,8 +657,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   // thing this report has.
   it('stays silent for an explicit GET carrying field flags', () => {
     const { hook } = makeRepo({ fixtures: {} })
-    // a text-ish field name, so the check above passes it and the GET test is
-    // the thing actually doing the work
+    // a text-ish field name: the explicit GET alone makes it no publish
     const r = hook('gh api --method GET repos/Stvad/knowledge-medium/actions/artifacts -f name=foo', '[]')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
