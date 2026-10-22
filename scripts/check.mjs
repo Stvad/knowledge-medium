@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { availableParallelism, loadavg } from 'node:os'
+import { basename, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { isMainModule } from './is-main-module.mjs'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
@@ -23,14 +29,27 @@ const compileTask = {
   args: ['run', 'compile'],
 }
 
+const testTask = {name: 'test', args: ['run', 'test']}
+
 const parallelTasks = [
   {name: 'lint', args: ['run', 'lint']},
-  {name: 'test', args: ['run', 'test']},
+  testTask,
   {name: 'check:sync-config', args: ['run', 'check:sync-config']},
   {name: 'check:ambient-accessors', args: ['run', 'check:ambient-accessors']},
   {name: 'check:rpc-projections', args: ['run', 'check:rpc-projections']},
   {name: 'check:no-service-role', args: ['run', 'check:no-service-role']},
 ]
+
+// Gates on one machine share its cores, and each one's vitest already asks for
+// all of them (`maxWorkers: '100%'`), so past this many at once the parallel
+// phase only gets slower for everyone.
+const SLOTS_ENV = 'KM_CHECK_SLOTS'
+const DEFAULT_SLOTS = 2
+// The cap may cost a gate latency, never progress: past this it runs anyway.
+const SLOT_WAIT_MS = 15 * 60_000
+const SLOT_POLL_MS = 2_000
+// Re-running more failing files than this alone costs about what the suite does.
+const RERUN_MAX_FILES = 50
 
 const running = new Set()
 
@@ -125,56 +144,234 @@ const runTask = async task => {
   return result
 }
 
+const isFailure = result => !result.canceled && result.code !== 0
+
 const runParallel = async tasks => {
-  let firstFailure = null
+  let failed = false
   const states = tasks.map(startTask)
-  await Promise.all(states.map(async state => {
+  return Promise.all(states.map(async state => {
     const result = await state.promise
     printResult(result)
-    if (!firstFailure && !result.canceled && result.code !== 0) {
-      firstFailure = result
+    if (!failed && isFailure(result)) {
+      failed = true
       stopAll(state)
     }
     return result
   }))
-  return {firstFailure}
 }
 
-const abortFromSignal = signal => {
-  stopAll(null)
-  process.exitCode = signal === 'SIGINT' ? 130 : 143
+const pidAlive = pid => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
-process.once('SIGINT', () => abortFromSignal('SIGINT'))
-process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
+const readHolder = path => {
+  try {
+    const holder = JSON.parse(readFileSync(path, 'utf8'))
+    return Number.isInteger(holder?.pid) ? holder : null
+  } catch {
+    return null
+  }
+}
+
+const tryLink = (from, to) => {
+  try {
+    linkSync(from, to)
+    return true
+  } catch (error) {
+    if (error.code === 'EEXIST') return false
+    throw error
+  }
+}
+
+// A slot is a file naming its holder, published whole by hard-linking a
+// finished record: link refuses an existing name, so two gates cannot both take
+// a free slot and no reader sees a half-written one. Accepted: two waiters that
+// read the same dead holder can both reclaim, putting one gate over the cap; a
+// dead holder whose pid is reused keeps its slot until the wait runs out.
+const takeSlot = (path, record) => {
+  if (tryLink(record, path)) return {taken: true}
+  const holder = readHolder(path)
+  if (holder && pidAlive(holder.pid)) return {taken: false, holder}
+  rmSync(path, {force: true})
+  if (tryLink(record, path)) return {taken: true, reclaimed: holder}
+  return {taken: false, holder: readHolder(path)}
+}
+
+const describeHolder = holder => holder
+  ? `${holder.worktree} (${holder.branch}, pid ${holder.pid}, started ${formatDuration(Date.now() - holder.startedAt)} ago)`
+  : 'an unreadable holder'
+
+export const acquireSlot = async ({
+  dir,
+  slots,
+  holder,
+  maxWaitMs = SLOT_WAIT_MS,
+  pollMs = SLOT_POLL_MS,
+  signal,
+  log = console.log,
+}) => {
+  mkdirSync(dir, {recursive: true})
+  const record = join(dir, `.${randomUUID()}.tmp`)
+  writeFileSync(record, JSON.stringify(holder))
+  const startedAt = Date.now()
+  let reported = null
+  try {
+    for (;;) {
+      const holders = []
+      for (let i = 0; i < slots; i++) {
+        const path = join(dir, `slot-${i}`)
+        const result = takeSlot(path, record)
+        if (result.taken) {
+          if (result.reclaimed) log(`[check] reclaimed a gate slot from ${describeHolder(result.reclaimed)}, which is no longer running`)
+          if (reported !== null) log(`[check] got a gate slot after waiting ${formatDuration(Date.now() - startedAt)}`)
+          return {
+            // Only our own record: in the accepted race above, another gate
+            // may hold this slot now.
+            release: () => {
+              if (readHolder(path)?.pid === holder.pid) rmSync(path, {force: true})
+            },
+          }
+        }
+        holders.push(result.holder)
+      }
+      if (Date.now() - startedAt >= maxWaitMs) {
+        log(`[check] waited ${formatDuration(Date.now() - startedAt)} for a gate slot; running anyway`)
+        return null
+      }
+      const key = holders.map(h => h?.pid).join()
+      if (key !== reported) {
+        log(`[check] all ${slots} gate slot(s) are taken, waiting up to ${formatDuration(maxWaitMs)} (${SLOTS_ENV} sets the cap):`)
+        for (const h of holders) log(`[check]   ${describeHolder(h)}`)
+        reported = key
+      }
+      await sleep(pollMs, undefined, {signal})
+    }
+  } catch (error) {
+    if (signal?.aborted) return null
+    throw error
+  } finally {
+    rmSync(record, {force: true})
+  }
+}
+
+const git = args => execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim()
+
+// Never fails the gate: a cap it cannot set up is a cap it runs without. A
+// gate that dies holding a slot frees it by dying (see takeSlot).
+const takeGateSlot = async signal => {
+  const slots = Number.parseInt(process.env[SLOTS_ENV], 10) || DEFAULT_SLOTS
+  try {
+    // The common dir, not the worktree's own: one cap for every worktree.
+    const dir = process.env.KM_CHECK_SLOT_DIR
+      || join(git(['rev-parse', '--path-format=absolute', '--git-common-dir']), 'check-slots')
+    const holder = {
+      pid: process.pid,
+      worktree: basename(process.cwd()),
+      branch: git(['branch', '--show-current']) || 'detached HEAD',
+      startedAt: Date.now(),
+    }
+    return await acquireSlot({dir, slots, holder, signal})
+  } catch (error) {
+    console.log(`[check] running without a gate slot: ${error.message}`)
+    return null
+  }
+}
+
+// Vitest's failure summary, in its default and agent reporters alike, opens
+// each failure with ` FAIL  <file> > <test>`, or ` FAIL  <file> [ <file> ]` for
+// a file that failed to load.
+export const failingTestFiles = output =>
+  [...new Set(Array.from(output.matchAll(/^ FAIL {2}(\S+) [>[]/gm), match => match[1]))]
+
+// `rerun` is the failing files' second run, alone. One that fails without
+// naming a file blames all of them: never claim load without a pass to show.
+export const loadVerdict = (failed, rerun) => {
+  const named = failingTestFiles(rerun.output)
+  const failedAlone = rerun.code === 0 ? [] : named.length ? named : failed
+  const passedAlone = failed.filter(file => !failedAlone.includes(file))
+  if (failedAlone.length === 0) return `failed only under load, passed alone: ${passedAlone.join(', ')}`
+  const rest = passedAlone.length ? `; passed alone: ${passedAlone.join(', ')}` : ''
+  return `fails alone too: ${failedAlone.join(', ')}${rest}`
+}
+
+const outputText = result => result.output.map(chunk => chunk.text).join('')
+
+// Every file is re-run, not only timed-out ones: a starved `vi.waitFor` fails
+// with its last assertion error, not a timeout. On stdout, beside the last
+// line, for a reader piping through `tail`.
+const diagnoseTestFailure = async result => {
+  const failed = failingTestFiles(outputText(result))
+  if (failed.length === 0) {
+    console.log('[check] the test task named no failing file; nothing to re-run')
+    return
+  }
+  if (failed.length > RERUN_MAX_FILES) {
+    console.log(`[check] ${failed.length} test files failed; too many to re-run alone`)
+    return
+  }
+  const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, ...failed]})
+  if (rerun.canceled) return
+  console.log(`[check] verdict: ${loadVerdict(failed, {code: rerun.code, output: outputText(rerun)})}`)
+}
 
 // Returns the exit code rather than taking it: every failure path here has
 // just relayed a failing task's entire output, and `process.exit()` drops what
 // is still queued on a piped stdout once the writes outrun the reader, which a
 // failing task's output does comfortably. Nothing is still running when any of
 // these returns, so the loop drains and ends.
-const runGate = async () => {
+const runGate = async signal => {
   const startedAt = performance.now()
-  const installResult = await runTask(installTask)
-  if (installResult.code !== 0) return installResult.code ?? 1
-
-  const compileResult = await runTask(compileTask)
-  if (compileResult.code !== 0) return compileResult.code ?? 1
-
-  console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
-  const {firstFailure} = await runParallel(parallelTasks)
-  const duration = formatDuration(performance.now() - startedAt)
-
-  if (firstFailure) {
-    console.error(`[check] failed in ${duration}`)
-    return firstFailure.code ?? 1
+  const loadAtStart = loadavg()[0]
+  // The last line, whatever came before: a reader piping through `tail` sees
+  // the verdict even though the pipe hides the exit status. Written once stderr
+  // has drained, since in a `2>&1` pipe a backlog there would land after it.
+  const finish = async (failures = []) => {
+    const passed = failures.length === 0 && !signal.aborted
+    const duration = formatDuration(performance.now() - startedAt)
+    console.log(`[check] load average ${loadAtStart.toFixed(1)} at start, ${loadavg()[0].toFixed(1)} at end, on ${availableParallelism()} cores`)
+    console[passed ? 'log' : 'error'](`[check] ${passed ? 'passed' : 'failed'} in ${duration}`)
+    await new Promise(resolve => process.stderr.write('', resolve))
+    const failed = signal.aborted ? 'interrupted' : failures.map(result => result.task.name).join(', ')
+    console.log(passed ? 'check: PASS' : `check: FAIL (${failed})`)
+    return passed ? 0 : failures[0]?.code ?? 1
   }
 
-  console.log(`[check] passed in ${duration}`)
-  return 0
+  for (const task of [installTask, compileTask]) {
+    const result = await runTask(task)
+    if (result.code !== 0) return finish([result])
+  }
+
+  const slot = await takeGateSlot(signal)
+  if (signal.aborted) return finish()
+
+  console.log(`[check] running ${parallelTasks.map(task => task.name).join(', ')} in parallel`)
+  const results = await runParallel(parallelTasks)
+  const failures = results.filter(isFailure)
+  const testResult = failures.find(result => result.task === testTask)
+  // Aborted while the other tasks wound down: the re-run would start anyway.
+  if (testResult && !signal.aborted) await diagnoseTestFailure(testResult)
+  slot?.release()
+  return finish(failures)
 }
 
-const code = await runGate()
-// Assigned only on failure: a signal leaves through abortFromSignal, which
-// already set 130/143, and cancels every task so no firstFailure is reported.
-if (code !== 0) process.exitCode = code
+const main = async () => {
+  const abort = new AbortController()
+  const abortFromSignal = signal => {
+    abort.abort()
+    stopAll(null)
+    process.exitCode = signal === 'SIGINT' ? 130 : 143
+  }
+  process.once('SIGINT', () => abortFromSignal('SIGINT'))
+  process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
+
+  const code = await runGate(abort.signal)
+  // A signal already set 130/143 in abortFromSignal; keep it.
+  if (code !== 0 && !abort.signal.aborted) process.exitCode = code
+}
+
+if (isMainModule(import.meta.url)) await main()
