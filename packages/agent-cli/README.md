@@ -237,6 +237,25 @@ Single-module output is not bundled with its transitive dependencies; use the di
 - **JSX.** The app's in-browser compiler uses the automatic JSX runtime: JSX becomes an import from `react/jsx-runtime`, which the import map resolves to the host's. No `import React` is needed, and the app sets no `React` / `ReactDOM` global, so import whatever you use. JSX no longer calls a local `React` binding, and a `/** @jsx */` or `/** @jsxFrag */` pragma fails to compile unless the file also says `/** @jsxRuntime classic */`.
 - **Bundled extensions** (`kmagent new-extension`) keep `react`, `react/*`, `react-dom`, `react-dom/*` and every `@/…` module external, and compile JSX with the automatic runtime (`@vitejs/plugin-react` does by default) so the bundle imports `react/jsx-runtime` instead of carrying a factory of its own. The `react` / `react-dom` entries in the scaffold's `devDependencies` supply types and the test environment only; they are never bundled.
 
+## Preset-change refusals on install
+
+`kmagent install-extension` REFUSES when it changes which codec a value preset id resolves to on that device. That happens in two ways:
+
+- a core the extension registers builds a different codec than the one live under that id (its own previous version, another plugin's core, or a kernel one);
+- the update DROPS an id it currently registers, which falls the id back to whatever was underneath, or to nothing.
+
+Either way every value stored under the preset is re-typed with no definition row edited, so nothing migrates it. The refusal names what moved and the definitions and cell counts at stake.
+
+- **Fix:** give the new codec a NEW preset id and repoint the definitions (an edit per definition row, which `core.migratePropertyDefinition` fans out), or pass `--allow-preset-change` if the values are disposable.
+- **Only while live:** the check sees the change only while the core it replaces is LIVE on this device.
+- **Only when the install makes source live:** it looks only when the block passes BOTH loader gates here, approved AND enabled. Looking means EXECUTING the source, which an install deliberately does not do for source nothing will run (#67).
+  - Pass `--verify` to check a block that does not pass both gates.
+  - The enable that later makes it run is not covered (#1046).
+- **Unreadable gates refuse:** both gates are stores that can fail to READ, and a failed read is not a "no". When the block IS approved here (or under `--verify`), an install that cannot read the approval record or the override map REFUSES rather than skipping the check, because skipping it would also re-pin the source it skipped. Retry, or pass the flag.
+- **Re-pinning:** an install re-pins this device's approval ONLY on the path that ran the check. An install onto a block that is disabled here, or one made in SAFE MODE (where no extension contributes anything and there is no live core to compare), stores the source without pinning it and reports `running: false`.
+- **`enable-extension` is the uncovered path:** it re-approves unconditionally, so install-then-enable still ships an update. That enable is now the only way unchecked source goes live.
+- **Type-string changes:** a codec that changes what it PARSES under an unchanged `type` string is invisible to this check, exactly as it is to the seed ledger. Bump the type string when the encoding moves.
+
 ## Upgrading
 
 The bridge is a background process that keeps running after the CLI that started it is upgraded, and it reports no version, so the CLI cannot tell it is old ([#1247](https://github.com/Stvad/knowledge-medium/issues/1247)). When a release changes the bridge, stop it once; the next `kmagent` command, or the `agent-dispatch` daemon, starts the new one:
