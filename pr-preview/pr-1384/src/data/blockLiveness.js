@@ -1,0 +1,1 @@
+import{MI as e,NI as t}from"../../chunks/app-C4sCKpm6.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};

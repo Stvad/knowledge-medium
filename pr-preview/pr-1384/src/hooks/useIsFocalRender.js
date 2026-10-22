@@ -1,0 +1,1 @@
+import{GP as e,WP as t}from"../../chunks/app-C4sCKpm6.js";export{t as isFocalRender,e as useIsFocalRender};

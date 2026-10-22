@@ -1,0 +1,1 @@
+import{Gk as e,Kk as t}from"../../chunks/app-C4sCKpm6.js";export{e as ClientLocalSettings,t as clientLocalSettings};

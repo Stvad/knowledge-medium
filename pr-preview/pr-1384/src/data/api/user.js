@@ -1,0 +1,1 @@
+import{cet as e,let as t,set as n}from"../../../chunks/app-C4sCKpm6.js";export{n as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,t as systemAuthor};

@@ -1,0 +1,1 @@
+import{CB as e,SB as t}from"../../../chunks/app-C4sCKpm6.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

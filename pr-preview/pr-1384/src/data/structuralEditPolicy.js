@@ -1,0 +1,1 @@
+import{MO as e,NO as t}from"../../chunks/app-C4sCKpm6.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

@@ -1,0 +1,1 @@
+import{ek as e,tk as t}from"../../../chunks/app-C4sCKpm6.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

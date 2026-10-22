@@ -1,0 +1,1 @@
+import{Q8 as e}from"../../../chunks/app-C4sCKpm6.js";export{e as deriveWorkspaceIdNamespace};
