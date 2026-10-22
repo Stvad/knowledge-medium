@@ -1,1 +1,0 @@
-import{v8 as e,y8 as t}from"../../chunks/app-XXPAFgiL.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
