@@ -16,7 +16,20 @@ describe('signedBody', () => {
 describe('pr-reply process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./pr-reply.mjs', import.meta.url))
 
-  const setup = (opts: { ghFails?: boolean; ghAnswer?: string; issues?: Record<number, object>; lookupSleep?: number } = {}) => {
+  // One review thread as the GraphQL thread query returns it: id, state, and the databaseId of its top-level comment.
+  const thread = (id: string, rootCommentId: number, isResolved = false) => ({ id, isResolved, comments: { nodes: [{ databaseId: rootCommentId }] } })
+
+  const setup = (
+    opts: {
+      ghFails?: boolean
+      ghAnswer?: string
+      issues?: Record<number, object>
+      lookupSleep?: number
+      // pages of the thread query, in order; with none the shim fails every graphql call
+      threads?: object[][]
+      mutation?: object
+    } = {},
+  ) => {
     const dir = mkdtempSync(join(tmpdir(), 'pr-reply-'))
     const shimDir = join(dir, 'shim')
     mkdirSync(shimDir)
@@ -33,6 +46,14 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
         opts.ghFails
           ? `    echo 'HTTP 404: Not Found' >&2; exit 1;;`
           : `    echo '${opts.ghAnswer ?? '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'}';;`,
+        '  graphql)',
+        '    case "$*" in',
+        `      *resolveReviewThread*) f="${dir}/mutation.json";;`,
+        `      *after=*) f="${dir}/threads-2.json";;`,
+        `      *) f="${dir}/threads-1.json";;`,
+        '    esac',
+        '    if [ -f "$f" ]; then cat "$f"; exit 0; fi',
+        `    echo 'HTTP 502: Bad Gateway' >&2; exit 1;;`,
         '  */issues/*)',
         ...(opts.lookupSleep ? [`    sleep ${opts.lookupSleep}`] : []),
         '    n=$(basename "$2")',
@@ -43,6 +64,13 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     )
     chmodSync(join(shimDir, 'gh'), 0o755)
     for (const [n, issue] of Object.entries(opts.issues ?? {})) writeFileSync(join(dir, `issue-${n}.json`), JSON.stringify(issue))
+    opts.threads?.forEach((nodes, i, pages) => {
+      const pageInfo = { hasNextPage: i < pages.length - 1, endCursor: `cursor-${i + 1}` }
+      const reviewThreads = { pageInfo, nodes }
+      writeFileSync(join(dir, `threads-${i + 1}.json`), JSON.stringify({ data: { repository: { pullRequest: { reviewThreads } } } }))
+    })
+    const resolved = { data: { resolveReviewThread: { thread: { id: 'resolved-thread', isResolved: true } } } }
+    writeFileSync(join(dir, 'mutation.json'), JSON.stringify(opts.mutation ?? resolved))
     // GH_TOKEN/GH_HOST: a broken shim must not fall through to the real gh.
     // INIT_CWD is dropped: a test run under `pnpm run` inherits pnpm's own.
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, GH_TOKEN: '', GH_HOST: '127.0.0.1' }
@@ -67,6 +95,7 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout.split('\n')[0]).toBe('https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42')
     expect(ghCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/652/comments/41/replies --method POST --input -')
+    expect(ghCalls()).not.toContain('graphql')
     expect(sent()).toEqual({ body: `Real — fixed in \`abc123\`; see #77.\n\n${SIGNATURE}` })
   })
 
@@ -190,6 +219,8 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(dir, 'body.md'), 'text')
     writeFileSync(join(dir, 'empty.md'), '  \n')
     mkdirSync(join(dir, 'a-dir'))
+    // a file that exists: only the flag check keeps it from being posted
+    writeFileSync(join(dir, '--force'), 'text')
     for (const args of [
       ['652', '41'],
       ['652', '41', 'body.md', 'extra'],
@@ -199,6 +230,11 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       ['652', '41', 'a-dir'],
       ['652', '41', 'missing.md'],
       ['652', '41', 'empty.md'],
+      ['652', '41', '--force'],
+      ['652', '--force', '41', 'body.md'],
+      ['652', '41', 'body.md', '--resolv'],
+      ['652', '41', '--resolve'],
+      ['652', '41', 'body.md', '--resolve', 'extra'],
     ]) {
       const r = run(...args)
       expect(r.status, args.join(' ')).toBe(1)
@@ -207,6 +243,103 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     expect(ghCalls()).toBe('')
     // a directory is refused by what it is, not by a read crashing on it
     expect(run('652', '41', 'a-dir').stderr).toContain('a-dir: is not a regular file')
+    expect(run('652', '41', '--force').stderr).toContain('usage: pnpm pr:reply <pr> <comment-id> <body-file> [--resolve]')
+  })
+
+  describe('--resolve', () => {
+    const replyUrl = 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42'
+    const answer = (extra: object = {}) => JSON.stringify({ id: 42, html_url: replyUrl, body: 'x', ...extra })
+    const mutationCalls = (calls: string) => calls.split('\n').filter(line => line.includes('resolveReviewThread'))
+    const queryCalls = (calls: string) => calls.split('\n').filter(line => line.includes('gh api graphql') && line.includes('reviewThreads'))
+
+    it('resolves the thread whose first comment matches, after the URL and before the reference echo', () => {
+      const { dir, run, ghCalls } = setup({
+        ghAnswer: answer({ body: 'see #77' }),
+        issues: { 77: { title: 'Referenced', state: 'open' } },
+        threads: [[thread('T_other', 5), thread('T_target', 41)]],
+      })
+      writeFileSync(join(dir, 'body.md'), 'see #77')
+      const r = run('652', '--resolve', '41', 'body.md')
+      expect(r.status).toBe(0)
+      expect(r.stdout.split('\n')[0]).toBe(replyUrl)
+      expect(r.stdout).toContain('resolved review thread T_target')
+      expect(r.stdout.indexOf('resolved review thread')).toBeLessThan(r.stdout.indexOf('#77 →'))
+      expect(r.stderr).toBe('')
+      expect(queryCalls(ghCalls())).toHaveLength(1)
+      expect(queryCalls(ghCalls())[0]).toContain('-f owner=Stvad -f name=knowledge-medium -F pr=652')
+      const mutations = mutationCalls(ghCalls())
+      expect(mutations).toHaveLength(1)
+      expect(mutations[0]).toMatch(/ -f id=T_target$/)
+    })
+
+    it('pages through the threads until it finds the one it wants', () => {
+      const { dir, run, ghCalls } = setup({ threads: [[thread('T_first_page', 5)], [thread('T_second_page', 41)]] })
+      writeFileSync(join(dir, 'body.md'), 'text')
+      const r = run('652', '41', 'body.md', '--resolve')
+      expect(r.status).toBe(0)
+      expect(r.stdout).toContain('resolved review thread T_second_page')
+      const queries = queryCalls(ghCalls())
+      expect(queries).toHaveLength(2)
+      expect(queries[0]).not.toContain('after=')
+      expect(queries[1]).toContain('-f after=cursor-1')
+      expect(mutationCalls(ghCalls())[0]).toMatch(/ -f id=T_second_page$/)
+    })
+
+    // A reply to a non-root comment lands in the root's thread; the thread is found by its root.
+    it('takes the thread root from the reply GitHub answered with, not from the argument', () => {
+      const { dir, run, ghCalls } = setup({
+        ghAnswer: answer({ in_reply_to_id: 7 }),
+        threads: [[thread('T_by_argument', 41), thread('T_by_root', 7)]],
+      })
+      writeFileSync(join(dir, 'body.md'), 'text')
+      expect(run('652', '41', 'body.md', '--resolve').status).toBe(0)
+      expect(mutationCalls(ghCalls())).toHaveLength(1)
+      expect(mutationCalls(ghCalls())[0]).toMatch(/ -f id=T_by_root$/)
+    })
+
+    it('says so and sends no mutation when the thread is already resolved', () => {
+      const { dir, run, ghCalls } = setup({ threads: [[thread('T_done', 41, true)]] })
+      writeFileSync(join(dir, 'body.md'), 'text')
+      const r = run('652', '41', 'body.md', '--resolve')
+      expect(r.status).toBe(0)
+      expect(r.stdout).toContain('review thread T_done was already resolved')
+      expect(mutationCalls(ghCalls())).toHaveLength(0)
+    })
+
+    // The reply exists once gh answered; a failed exit would tell the read-back it does not.
+    it('reports a failure on one stderr line, exits 0, and still echoes the references', () => {
+      const { dir, run, ghCalls } = setup({
+        ghAnswer: answer({ body: 'see #77' }),
+        issues: { 77: { title: 'Referenced', state: 'open' } },
+        threads: [[thread('T_elsewhere', 5)]],
+      })
+      writeFileSync(join(dir, 'body.md'), 'see #77')
+      const r = run('652', '41', 'body.md', '--resolve')
+      expect(r.status).toBe(0)
+      expect(r.stdout.split('\n')[0]).toBe(replyUrl)
+      expect(r.stdout).toContain('#77 → "Referenced" (issue, open)')
+      expect(r.stderr.trim().split('\n')).toHaveLength(1)
+      expect(r.stderr).toContain('--resolve: could not resolve the review thread')
+      expect(mutationCalls(ghCalls())).toHaveLength(0)
+    })
+
+    it('reports a gh failure and a mutation that left the thread unresolved the same way', () => {
+      const broken = setup()
+      writeFileSync(join(broken.dir, 'body.md'), 'text')
+      const failed = broken.run('652', '41', 'body.md', '--resolve')
+      expect(failed.status).toBe(0)
+      expect(failed.stdout.trim()).toBe(replyUrl)
+      expect(failed.stderr).toContain('--resolve: could not resolve the review thread: HTTP 502: Bad Gateway')
+      const stuck = setup({
+        threads: [[thread('T_target', 41)]],
+        mutation: { data: { resolveReviewThread: { thread: { id: 'T_target', isResolved: false } } } },
+      })
+      writeFileSync(join(stuck.dir, 'body.md'), 'text')
+      const left = stuck.run('652', '41', 'body.md', '--resolve')
+      expect(left.status).toBe(0)
+      expect(left.stdout).not.toContain('resolved review thread')
+      expect(left.stderr).toContain('--resolve: could not resolve the review thread')
+    })
   })
 
   it('exits non-zero with gh’s own error and prints no URL when the post fails', () => {
