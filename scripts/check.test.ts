@@ -134,7 +134,9 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
 
   it('ends with its verdict line even when stderr shares the pipe', async () => {
     const { out } = await runGate({ SHIM_MODE: 'flood-stderr' }, { onStdout: slowly, mergeStderr: true })
-    expect(out.split('\n').filter((l) => l.startsWith('line ')).length).toBe(RELAYED_LINES)
+    // Bytes, not lines: in one shared pipe the two streams' partial writes
+    // interleave mid-line under backpressure.
+    expect(out.length).toBeGreaterThan(RELAYED_LINES * 60)
     expect(lastLine(out)).toBe('check: FAIL (test)')
   }, 30_000)
 
