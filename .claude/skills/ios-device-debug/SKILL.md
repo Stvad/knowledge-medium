@@ -39,9 +39,9 @@ Then in the Tailscale **admin console** (login.tailscale.com/admin/dns) enable *
 **1. Secure-context tunnel.** The app needs WebCrypto + service worker + OPFS → a **secure context**. `https://` and `http://localhost` qualify; `http://<LAN-IP>` does **not** (the app boots then breaks). A real device can't use `localhost`, so tunnel HTTPS in:
 
 ```bash
-tailscale serve --bg http://localhost:5173
+tailscale serve --bg http://localhost:<port>   # the port `pnpm dev` printed
 ```
-- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:5173` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
+- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:<port>` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
 - Run the dev server with **`VITE_TUNNEL=1 pnpm dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `pnpm dev` is unaffected.
 - Sanity-check from the Mac (Homebrew `tailscaled` doesn't wire MagicDNS into the macOS resolver, so force-resolve):
   ```bash
@@ -140,7 +140,7 @@ Real iOS WebKit with a working soft keyboard / `visualViewport`, served over sec
 ```bash
 xcodebuild -downloadPlatform iOS            # one-time, ~7 GB; needs free disk
 xcrun simctl boot 'iPhone 16'; open -a Simulator
-xcrun simctl openurl booted http://localhost:5173      # localhost = secure context, works
+xcrun simctl openurl booted http://localhost:<port>    # localhost = secure context, works
 xcrun simctl io booted screenshot /tmp/sim.png         # readable screenshot
 ```
 - **Software keyboard:** Simulator menu **I/O → Keyboard → Connect Hardware Keyboard OFF** (⇧⌘K) so it auto-appears on focus; ⌘K toggles it. A field must be focused.
