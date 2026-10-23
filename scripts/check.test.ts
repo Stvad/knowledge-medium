@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { acquireSlot, loadVerdict, placeOrder, type SlotHolder } from './check.mjs'
@@ -299,6 +299,13 @@ describe('acquireSlot', () => {
   it('ignores the number-taking marker of a gate that is no longer running', async () => {
     writeFileSync(join(dir, `${deadPid()}-${randomUUID()}.choosing`), '')
     expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
+    expect(readdirSync(dir).filter((name) => name.endsWith('.choosing'))).toEqual([])
+  })
+
+  it('leaves no marker behind when taking a number throws', async () => {
+    // A directory where a ticket should be: the dead-ticket cleanup throws on it.
+    mkdirSync(join(dir, `1-${randomUUID()}.ticket`))
+    await expect(acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })).rejects.toThrow()
     expect(readdirSync(dir).filter((name) => name.endsWith('.choosing'))).toEqual([])
   })
 
