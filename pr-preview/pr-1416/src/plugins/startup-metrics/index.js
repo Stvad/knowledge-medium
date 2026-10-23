@@ -1,0 +1,1 @@
+import{Ei as e}from"../../../chunks/app-BCfjsDII.js";export{e as startupMetricsPlugin};

@@ -1,0 +1,1 @@
+import{Rz as e}from"../../../chunks/app-BCfjsDII.js";export{e as SuspenseFallback};

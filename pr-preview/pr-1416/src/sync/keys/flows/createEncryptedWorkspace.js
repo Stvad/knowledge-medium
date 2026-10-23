@@ -1,0 +1,1 @@
+import{Gx as e}from"../../../../chunks/app-BCfjsDII.js";export{e as createEncryptedWorkspace};

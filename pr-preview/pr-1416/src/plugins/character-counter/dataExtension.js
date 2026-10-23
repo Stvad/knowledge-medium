@@ -1,0 +1,1 @@
+import{QU as e}from"../../../chunks/app-BCfjsDII.js";export{e as characterCounterDataExtension};

@@ -1,0 +1,1 @@
+import{_v as e}from"../../../chunks/app-BCfjsDII.js";export{e as videoPlayerPlugin};

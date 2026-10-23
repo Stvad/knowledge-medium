@@ -1,0 +1,1 @@
+import{Bb as e}from"../../../chunks/app-BCfjsDII.js";export{e as MobileBottomNavButton};

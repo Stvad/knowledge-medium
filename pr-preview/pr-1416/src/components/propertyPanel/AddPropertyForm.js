@@ -1,0 +1,1 @@
+import{DF as e}from"../../../chunks/app-BCfjsDII.js";export{e as AddPropertyForm};

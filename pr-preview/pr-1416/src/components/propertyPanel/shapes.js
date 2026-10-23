@@ -1,0 +1,1 @@
+import{sz as e}from"../../../chunks/app-BCfjsDII.js";export{e as propertyShapeLabel};

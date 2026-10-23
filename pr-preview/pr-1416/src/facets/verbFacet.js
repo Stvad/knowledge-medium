@@ -1,0 +1,1 @@
+import{PG as e}from"../../chunks/app-BCfjsDII.js";export{e as defineVerbFacet};
