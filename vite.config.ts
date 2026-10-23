@@ -9,8 +9,6 @@ import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {resolveAppVersion} from './scripts/app-version'
 import {globSync} from 'node:fs'
-// import noBundlePlugin from 'vite-plugin-no-bundle';
-
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
  *  them at its stable `@/` path and get its full export surface. The boot

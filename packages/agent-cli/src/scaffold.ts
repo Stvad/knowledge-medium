@@ -56,14 +56,14 @@ const packageJson = (slug: string): string => `${JSON.stringify({
   },
   devDependencies: {
     '@types/node': '^25.0.0',
-    '@types/react': '^19.2.15',
-    '@types/react-dom': '^19.2.3',
-    '@vitejs/plugin-react': '^6.0.1',
-    react: '^19.2.6',
-    'react-dom': '^19.2.6',
+    '@types/react': '^19.3.0',
+    '@types/react-dom': '^19.3.0',
+    '@vitejs/plugin-react': '^6.1.2',
+    react: '^19.3.1',
+    'react-dom': '^19.3.1',
     typescript: '^6.0.3',
-    vite: '^8.0.10',
-    vitest: '^4.1.5',
+    vite: '^8.3.4',
+    vitest: '^4.1.12',
   },
 }, null, 2)}\n`
 
