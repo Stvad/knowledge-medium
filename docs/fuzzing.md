@@ -501,9 +501,10 @@ outside any fuzzer's reach (fixed + pinned): the new literal claim
 re-inserts ALL of the target's aliases through the uniqueness trigger,
 so a LATENT cross-client duplicate on a pre-existing alias (sync-apply
 skips the trigger; V1 leaves those merges latent) aborted the WHOLE
-parse batch, permanently — `claimLiteralDateAliases` now swallows
-exactly the typed alias-collision abort and degrades to the pre-claim
-first-writer behavior for that target.
+parse batch, permanently — `claimLiteralDateAliases` then swallowed
+exactly the typed alias-collision abort and degraded to the pre-claim
+first-writer behavior for that target. (Superseded by #1366: the trigger
+no longer re-inserts a name the row already holds, so the swallow is gone.)
 
 Round 2 (roadmap #430, sub-issues #431–#435 + #378) picked its targets
 by mining the repo's OWN history — past fixes, incident postmortems and

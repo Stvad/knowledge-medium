@@ -65,7 +65,6 @@ import {
 } from './referenceParser.ts'
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
-import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { readHasLiveReferrer } from '@/data/internals/kernelQueries.js'
 import {
   aliasSeatReaderFromDb,
@@ -84,7 +83,8 @@ import {
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { typesProp } from '@/data/properties'
+import { appendDerivedAliasClaims } from '@/data/aliasClaim'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -397,54 +397,12 @@ const buildSourcePlan = async (
  *    (the pre-claim state). Nothing re-fires the claim — same blind spot
  *    this docblock's first paragraph describes. Small-fleet-rare;
  *    accepted. */
-const claimLiteralDateAliases = async (
+const claimLiteralDateAliases = (
   tx: Tx,
   targetId: string,
   iso: string,
   aliases: readonly string[],
-): Promise<void> => {
-  const literals = [...new Set(aliases.filter(alias => alias !== iso))]
-  if (literals.length === 0) return
-  const target = await tx.get(targetId)
-  if (target === null || target.deleted) return
-  let existing: readonly string[]
-  try {
-    const encoded = target.properties[aliasesProp.name]
-    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
-  } catch {
-    // Malformed alias property (e.g. legacy `["2026-01-05", 1]`): the
-    // append below would REPLACE the whole list, dropping entries the
-    // block_aliases trigger still indexes — parsing a long-form date
-    // must never un-claim the target's ISO. Losing a live binding is
-    // worse than leaving the literal unclaimed, so skip the claim for
-    // this target; it degrades to the pre-claim first-writer behavior.
-    return
-  }
-  const missing = literals.filter(literal => !existing.includes(literal))
-  if (missing.length === 0) return
-  // skipMetadata: derived bookkeeping, same as the source-references
-  // write in applySourcePlan — advances updatedAt for sync but must not
-  // stamp userUpdatedAt/updatedBy, or a background re-parse of some
-  // unrelated source makes the target look freshly user-edited.
-  try {
-    await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
-  } catch (err) {
-    // Swallow ONLY alias-collision aborts. The alias-update trigger
-    // deletes and re-inserts ALL of the target's aliases, re-checking
-    // each against the uniqueness trigger — so a LATENT duplicate on a
-    // pre-existing alias (cross-client dupes sync in trigger-free; V1
-    // leaves their merge latent, see clientSchema.ts) would abort here
-    // even though the newly claimed literals are fine. Letting that
-    // propagate would roll back the WHOLE parse batch — references for
-    // every other changed row — and recur on every re-edit: a silent,
-    // permanent recompute outage keyed to someone else's dupe. RAISE
-    // (ABORT) backs out only this statement (tx stays open) and
-    // setProperty records bookkeeping only after a successful execute,
-    // so skipping is clean: the claim degrades to the pre-claim
-    // first-writer behavior for this target only.
-    if (parseAliasCollisionError(err) === null) throw err
-  }
-}
+): Promise<void> => appendDerivedAliasClaims(tx, targetId, aliases.filter(alias => alias !== iso))
 
 /** Write phase: apply one source's plan inside the active tx. Returns
  *  the list of alias-target ids this tx actually inserted (for

@@ -103,11 +103,6 @@ const assertWritableTypeName = (name: string): void =>
  *  any other block taking it, and permanently: the next rename computes what to
  *  retire from the content it finds then, which no longer spells this one.
  *
- *  One write rather than append-then-retire: the intermediate bag goes through
- *  the maintenance trigger too, so it would re-insert the name being given up,
- *  and renaming AWAY from a name some sync-applied row co-claims would abort on
- *  the name being retired.
- *
  *  Accepted: a claim moved on a RERUN lands after `references.renameBacklinks`,
  *  so the old name's inbound spans are left alone — #991, not this write. */
 const moveTypeClaim = async (

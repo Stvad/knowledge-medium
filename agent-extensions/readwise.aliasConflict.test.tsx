@@ -181,14 +181,15 @@ describe('readwise library root', () => {
     expect(await claimantIdsOf('Readwise Library')).toEqual(['rival'])
   })
 
-  it('survives an alias write the uniqueness trigger refuses', async () => {
+  it('reclaims its name beside one a sync-applied row co-holds', async () => {
     await createRivalPage('rival', 'Readwise Library')
     const rootId = await ensureRoot(repo, WS)
 
     // A name on the root that a sync-applied row also holds. The reclaim below
-    // rewrites the WHOLE bag, so this entry goes back in under the trigger and
-    // is refused — and `ensureRoot` runs ahead of the per-book isolation, so an
-    // escaping throw would cost every book in the export.
+    // rewrites the whole bag; keeping a name the root already holds is not a
+    // new claim, so the write commits — and `ensureRoot` runs ahead of the
+    // per-book isolation, so an escaping throw would cost every book in the
+    // export.
     await repo.tx(
       tx => tx.setProperty(rootId, aliasesProp, ['My Library']),
       {scope: ChangeScope.BlockDefault},
@@ -200,7 +201,7 @@ describe('readwise library root', () => {
     )
 
     await expect(ensureRoot(repo, WS)).resolves.toBe(rootId)
-    expect(aliasesOf(await repo.load(rootId))).toEqual(['My Library'])
+    expect(aliasesOf(await repo.load(rootId))).toEqual(['My Library', 'Readwise Library'])
   })
 
   it('restores a deleted root whose name was taken meanwhile', async () => {
