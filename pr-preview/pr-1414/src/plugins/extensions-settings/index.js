@@ -1,0 +1,1 @@
+import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-BeX4R1O5.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

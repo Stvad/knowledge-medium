@@ -1,0 +1,1 @@
+import{bd as e,yd as t}from"../../chunks/app-BeX4R1O5.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

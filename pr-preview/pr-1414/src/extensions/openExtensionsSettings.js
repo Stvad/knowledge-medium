@@ -1,0 +1,1 @@
+import{ej as e,tj as t}from"../../chunks/app-BeX4R1O5.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};
