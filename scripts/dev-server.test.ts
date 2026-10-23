@@ -125,7 +125,7 @@ describe('output parsers', () => {
   it('reads ps start times, including a space-padded day', () => {
     const processes = parseProcesses([
       '13994 Sun Oct 18 23:48:31 2026     /usr/bin/node /wt/packages/agent-cli/dist/server.js',
-      '  512 Fri Oct  2 06:08:29 2026 node vite.js --port 5173',
+      '  512 Fri Oct  2 06:08:29 2026 node /wt/node_modules/vite/bin/vite.js --port 5173',
     ].join('\n'))
     expect(processes.get(13994)).toEqual({
       startedAt: new Date(2026, 9, 18, 23, 48, 31),
@@ -139,6 +139,11 @@ describe('output parsers', () => {
     expect(serverKind('node /wt/node_modules/vite/bin/vite.js preview --port 4173')).toBe('vite preview')
     expect(serverKind('/usr/bin/node /wt/packages/agent-cli/dist/server.js')).toBe('agent bridge')
     expect(serverKind('/usr/local/bin/python3 -m http.server')).toBe('python3')
+  })
+
+  it('judges the kind by the entry script, not by `vite` elsewhere in a path', () => {
+    expect(serverKind('node /repo/fix-vite/packages/agent-cli/dist/server.js')).toBe('agent bridge')
+    expect(serverKind('python3 -m http.server --directory /repo/vite-docs')).toBe('python3')
   })
 })
 
@@ -248,9 +253,10 @@ it('lists only servers in a checkout of this repository when given no port', asy
     '/elsewhere': '/elsewhere\n/elsewhere/.git\nmain\n',
   })[dir] ?? null
   const ps = (pid: number, command: string) => `${pid} Thu Oct 22 16:58:29 2026 ${command}\n`
+  const vite = 'node /wt/node_modules/vite/bin/vite.js'
   const exec = (command: string, args: string[]) => {
     if (command === 'git') return git(args[1])
-    if (command === 'ps') return ps(1, 'node vite.js') + ps(2, 'node vite.js') + ps(3, 'node vite.js') + ps(4, 'python3 -m http.server') + ps(5, 'node vite.js')
+    if (command === 'ps') return ps(1, vite) + ps(2, vite) + ps(3, vite) + ps(4, 'python3 -m http.server') + ps(5, vite)
     return args.includes('cwd')
       ? 'p1\nfcwd\nn/repo/wt-b\np2\nfcwd\nn/elsewhere\np3\nfcwd\nn/gone/wt-c\np4\nfcwd\nn/gone/other\np5\nfcwd\nn/\n'
       : 'p1\nf3\nn[::1]:5173\np2\nf3\nn[::1]:5174\np3\nf3\nn[::1]:5175\np4\nf3\nn[::1]:5176\np5\nf3\nn[::1]:5177\n'
@@ -268,7 +274,7 @@ describe('formatServer', () => {
     pid: 7,
     ports: [5173],
     startedAt: new Date(0),
-    command: 'node vite.js',
+    command: 'node /wt/node_modules/vite/bin/vite.js',
     kind: 'vite dev server',
     cwd: '/repo/wt-b',
     checkout: { toplevel: '/repo/wt-b', commonDir: '/repo/.git', branch: 'claude/b' },

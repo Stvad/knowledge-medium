@@ -151,10 +151,14 @@ export const parseProcesses = output => {
   return byPid
 }
 
+// vite by its own entry script, however reached: a checkout path can say `vite` anywhere else.
+const VITE_COMMAND = /\bvite\/bin\/vite\.js\b/
+const VITE_PREVIEW_COMMAND = /\bvite\/bin\/vite\.js\s+preview\b/
+
 export const serverKind = command => {
-  if (/\bvite(\.js)?\s.*\bpreview\b/.test(command)) return 'vite preview'
-  if (/\bvite(\.js)?\b/.test(command)) return 'vite dev server'
   if (BRIDGE_COMMAND.test(command)) return 'agent bridge'
+  if (VITE_PREVIEW_COMMAND.test(command)) return 'vite preview'
+  if (VITE_COMMAND.test(command)) return 'vite dev server'
   return basename(command.split(' ')[0]) || '?'
 }
 
@@ -292,6 +296,7 @@ export const startDevServer = async ({
       : `[dev-server] no free port in ${defaultPort}-${defaultPort + SCAN_SPAN}; not starting.`)
     return 1
   }
+  // The loop's origin is localhost; a `--host <address>` is not parsed into it (vite prints what it bound).
   log(`[dev-server] ${mode} for ${here?.toplevel ?? ROOT} on ${here?.branch ?? '?'}: http://localhost:${port}/`)
   const code = await spawnVite([...viteArgs, '--port', String(port), '--strictPort', ...viteArgsWithout(args)])
   // Lost a race for the port between the check and vite's own bind: name who won it.
