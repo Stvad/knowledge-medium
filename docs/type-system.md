@@ -1,6 +1,6 @@
 # Tana-style type system
 
-> **Status:** unverified — a dated snapshot of design intent (last edited 2026-05-20), not re-checked against the code since. CODE + tests are authoritative.
+> **Status:** unverified — a dated snapshot of design intent (last edited 2026-05-20). Last verified against code: not since this banner (2026-10-23). CODE + tests are authoritative.
 
 ## Goal
 
