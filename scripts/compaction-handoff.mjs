@@ -7,7 +7,7 @@
 //
 // Contract: never break session start. Any failure prints nothing and exits 0.
 import { readFileSync, renameSync, statSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { emitContext } from './hook-context.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
@@ -15,14 +15,6 @@ const HANDOFF_FILE = 'handoff.md'
 const CONSUMED_FILE = 'handoff.consumed.md'
 // Below the ~10K chars Claude Code inlines per hook command; past that the model sees a 2K preview.
 export const CONTEXT_BUDGET = 9_000
-
-// Claude Code's layout (2.1.308): <CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<project slug>/<session id>/scratchpad,
-// where the project slug also names the transcript's directory. Its contents are trusted as Claude Code trusts
-// them: it opens claude-<uid> with O_NOFOLLOW, refuses one another uid owns, and keeps it 0700.
-const scratchpadDir = ({ session_id: sessionId, transcript_path: transcriptPath } = {}, env) =>
-  sessionId && transcriptPath
-    ? join(env.CLAUDE_CODE_TMPDIR || '/tmp', `claude-${process.getuid?.() ?? 0}`, basename(dirname(transcriptPath)), sessionId, 'scratchpad')
-    : null
 
 const clipNotice = (shown, total, path) => `…clipped at ${shown} of ${total} chars: read the rest at ${path}`
 
@@ -41,9 +33,14 @@ const render = (text, path, minutes) => {
   return `${head}${shown}\n${clipNotice(shown.length, text.length, path)}`
 }
 
-/** The SessionStart payload → the handoff as context ('' when none was prepared), consuming the file. */
-export const injectHandoff = (payload, env = process.env, now = Date.now()) => {
-  const dir = scratchpadDir(payload, env)
+/**
+ * The SessionStart payload → the handoff as context ('' when none was prepared), consuming the file.
+ * `scratchpad_dir` is the scratchpad the session's system prompt names; Claude Code omits it when the session
+ * has none. Its contents are trusted as Claude Code trusts them: it opens the claude-<uid> root with O_NOFOLLOW,
+ * refuses one another uid owns, and keeps it 0700.
+ */
+export const injectHandoff = (payload, now = Date.now()) => {
+  const dir = payload.scratchpad_dir
   if (!dir) return ''
   const from = join(dir, HANDOFF_FILE)
   let text, mtimeMs
