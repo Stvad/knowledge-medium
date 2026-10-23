@@ -1,0 +1,1 @@
+import{ek as e,tk as t}from"../../../chunks/app-Dps7Kyw9.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

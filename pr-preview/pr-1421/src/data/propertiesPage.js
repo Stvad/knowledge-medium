@@ -1,0 +1,1 @@
+import{b8 as e,y8 as t}from"../../chunks/app-Dps7Kyw9.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
