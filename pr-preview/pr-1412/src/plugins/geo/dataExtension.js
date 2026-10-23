@@ -1,0 +1,1 @@
+import{mH as e}from"../../../chunks/app-COmDhBoz.js";export{e as geoDataExtension};

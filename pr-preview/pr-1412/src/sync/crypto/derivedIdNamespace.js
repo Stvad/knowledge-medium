@@ -1,0 +1,1 @@
+import{$8 as e}from"../../../chunks/app-COmDhBoz.js";export{e as deriveWorkspaceIdNamespace};

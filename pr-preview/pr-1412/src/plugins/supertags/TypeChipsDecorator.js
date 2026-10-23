@@ -1,0 +1,1 @@
+import{Zt as e}from"../../../chunks/app-COmDhBoz.js";export{e as typeChipsDecoratorContribution};

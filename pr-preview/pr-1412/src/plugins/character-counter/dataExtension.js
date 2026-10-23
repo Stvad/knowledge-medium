@@ -1,0 +1,1 @@
+import{QU as e}from"../../../chunks/app-COmDhBoz.js";export{e as characterCounterDataExtension};

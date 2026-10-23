@@ -1,0 +1,1 @@
+import{_T as e}from"../../../chunks/app-COmDhBoz.js";export{e as dailyDateWikilinkDecorator};

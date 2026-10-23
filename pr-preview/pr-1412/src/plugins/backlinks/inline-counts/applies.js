@@ -1,0 +1,1 @@
+import{vm as e}from"../../../../chunks/app-COmDhBoz.js";export{e as inlineBacklinksApplies};
