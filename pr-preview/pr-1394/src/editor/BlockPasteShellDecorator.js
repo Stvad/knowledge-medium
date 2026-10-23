@@ -1,1 +1,0 @@
-import{HO as e,UO as t}from"../../chunks/app-C9LTtQml.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

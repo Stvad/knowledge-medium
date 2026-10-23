@@ -1,1 +1,0 @@
-"use client";import{XP as e,YP as t,ZP as n}from"../../../chunks/app-C9LTtQml.js";export{t as Collapsible,e as CollapsibleContent,n as CollapsibleTrigger};

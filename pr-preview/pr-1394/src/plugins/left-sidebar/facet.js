@@ -1,1 +1,0 @@
-import{Cx as e,Sx as t}from"../../../chunks/app-C9LTtQml.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

@@ -1,1 +1,0 @@
-import{Ek as e,Tk as t}from"../chunks/app-C9LTtQml.js";export{t as appUpdate,e as useAppUpdateAvailable};
