@@ -1,1 +1,1 @@
-import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-DO9tahRL.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-smz__AaS.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

@@ -1,1 +1,1 @@
-import{LG as e}from"../../../chunks/app-DO9tahRL.js";export{e as agentDispatchCompanionDataExtension};
+import{LG as e}from"../../../chunks/app-smz__AaS.js";export{e as agentDispatchCompanionDataExtension};
