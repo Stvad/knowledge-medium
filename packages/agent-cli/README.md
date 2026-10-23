@@ -191,7 +191,7 @@ export AGENT_RUNTIME_PROFILE=chrome-dev
 A local dev server is its own origin, so it needs its own pairing and its own profile — point `AGENT_RUNTIME_APP_URL` at it when connecting:
 
 ```bash
-AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev connect
+AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev-<port> connect
 ```
 
 Only `connect` / `pair-url` read `AGENT_RUNTIME_APP_URL` (it decides which URL is printed); later commands use the saved token. Loopback origins are always accepted by the bridge, so no `AGENT_RUNTIME_ALLOWED_ORIGINS` is needed.
