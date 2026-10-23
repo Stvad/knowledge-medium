@@ -1,1 +1,1 @@
-import{Jk as e,qk as t}from"../../chunks/app-cF-O_dNd.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
+import{Jk as e,qk as t}from"../../chunks/app-CoAnidk0.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

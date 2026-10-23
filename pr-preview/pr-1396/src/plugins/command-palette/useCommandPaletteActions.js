@@ -1,1 +1,1 @@
-import{AE as e}from"../../../chunks/app-cF-O_dNd.js";export{e as useCommandPaletteActions};
+import{AE as e}from"../../../chunks/app-CoAnidk0.js";export{e as useCommandPaletteActions};

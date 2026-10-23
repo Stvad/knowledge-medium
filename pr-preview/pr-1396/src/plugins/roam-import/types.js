@@ -1,1 +1,1 @@
-import{vu as e}from"../../../chunks/app-cF-O_dNd.js";export{e as getExtraRoamProps};
+import{vu as e}from"../../../chunks/app-CoAnidk0.js";export{e as getExtraRoamProps};
