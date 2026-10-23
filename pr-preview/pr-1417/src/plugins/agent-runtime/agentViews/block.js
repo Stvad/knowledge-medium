@@ -1,1 +1,1 @@
-import{Mf as e,Nf as t}from"../../../../chunks/app-BTzlV-fe.js";export{e as buildBlockView,t as renderBlockView};
+import{Mf as e,Nf as t}from"../../../../chunks/app-DDq7Lzcl.js";export{e as buildBlockView,t as renderBlockView};

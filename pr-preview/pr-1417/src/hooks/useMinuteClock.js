@@ -1,1 +1,1 @@
-import{kC as e}from"../../chunks/app-BTzlV-fe.js";export{e as useMinuteClock};
+import{kC as e}from"../../chunks/app-DDq7Lzcl.js";export{e as useMinuteClock};

@@ -1,1 +1,1 @@
-import{VH as e}from"../../chunks/app-BTzlV-fe.js";export{e as matchCharTrigger};
+import{VH as e}from"../../chunks/app-DDq7Lzcl.js";export{e as matchCharTrigger};

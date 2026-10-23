@@ -1,1 +1,1 @@
-import{wy as e}from"../../../chunks/app-BTzlV-fe.js";export{e as PanelCursorFollowsScroll};
+import{wy as e}from"../../../chunks/app-DDq7Lzcl.js";export{e as PanelCursorFollowsScroll};
