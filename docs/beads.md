@@ -37,7 +37,7 @@ A withheld bead is reported, along with any fields that also differ on GitHub. T
 
 - `.claude/settings.json`: SessionEnd runs the full sync; a PreToolUse hook gates publishing commands; a PostToolUse hook verifies what was published (below).
 - Codex wires the same guards and the read-back verifier through `.codex/hooks.json`. Its SessionEnd launcher starts the sync detached, because Codex caps that hook at three seconds; output appends to `.beads/codex-sync.log` in the main checkout. Run `pnpm bd:sync` explicitly when you need it to finish before a handoff.
-- Every real run writes a line to `.beads/github-sync-runs.log` in the main checkout, killed and failed runs included. Two bad runs in a row (failed, or over the time budget) make the SessionStart hook open with a warning naming why. A converged run's exact spawn list is pinned by a test, which is the CI half of the same alarm.
+- Every real run writes a line to `.beads/github-sync-runs.log` in the main checkout, killed and failed runs included. Two bad runs in a row (failed, or over the time budget) make the SessionStart hook open with a warning naming why. The budget counts working time only (waiting on another run's lock and pacing posts are recorded apart), and it grows for each issue the run minted and comment it posted. A converged run's exact spawn list is pinned by a test, which is the CI half of the same alarm.
 
 ## The publish hooks
 
