@@ -289,6 +289,23 @@ describe('commandsInContext', () => {
     expect(read.find(c => c.words[0] === 'ls')?.cdPath).toBe('/tmp/a')
     expect(read.find(c => c.words[0] === 'pwd')?.cdPath).toBe(null)
   })
+
+  it("starts a nested heredoc's second reading where its first began", () => {
+    // the inner data reads differently whole and by line, so it comes back twice
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'OUT'\nbash <<'INNER'\ncd a\n(\nls\n)\nINNER\nOUT"))
+    expect(read.filter(c => c.words[0] === 'ls').map(c => c.cdPath)).not.toContain('a/a')
+  })
+
+  it('reads a second reading with no first reading before it from where it is', () => {
+    const read = commandsInContext([{ tokens: ['ls'], depth: 0, heredoc: true, reread: true }])
+    expect(read.map(c => [c.words[0], c.cdPath])).toEqual([['ls', null]])
+  })
+
+  it('drops a cd in data three heredocs deep when that data ends', () => {
+    // read a line at a time the nesting is not seen, so that reading keeps the cd
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'A'\nbash <<'B'\nbash <<'C'\ncd a\nC\nls\nB\nA"))
+    expect(read.filter(c => c.words[0] === 'ls').map(c => c.cdPath)).toContain(null)
+  })
 })
 
 describe('stashInvocations', () => {

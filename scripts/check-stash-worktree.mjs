@@ -80,35 +80,30 @@ const moveDir = (cdPath, verb, args) => {
  * reading a heredoc (`bash <<'EOF'`) runs it as a child, so every scope its
  * lines open or move is dropped when they end, and again when a second
  * reading of the same data (`reread`) begins; a heredoc nested in that data
- * (`nested`) is scoped the same way inside it. A cd in text nothing runs
- * moves nothing.
+ * is scoped the same way at its own level (`nested`). Data sourced into the
+ * running shell (`. /dev/stdin <<'EOF'`) is scoped as a child too, not told
+ * apart by its reader. A cd in text nothing runs moves nothing.
  */
 export const commandsInContext = segments => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
-  let beforeHeredoc = null // the scope state when the heredoc being read began
-  let beforeNested = null // the same for a heredoc nested in it
+  const before = [] // the scope state when each heredoc being read began, outermost first
   const restore = state => {
     cdPath = state.cdPath
     outerCd.splice(0, outerCd.length, ...state.outerCd)
   }
-  for (const { tokens, depth, heredoc = false, text = false, reread = false, fresh, nested = false } of segments) {
-    if (beforeNested && !nested) {
-      restore(beforeNested)
-      beforeNested = null
-    }
-    if (beforeHeredoc && (!heredoc || reread)) {
-      restore(beforeHeredoc)
-      if (!heredoc) beforeHeredoc = null
-    }
+  for (const { tokens, depth, heredoc = false, text = false, reread = false, fresh, nested = 0 } of segments) {
+    const level = heredoc ? 1 + nested : 0
+    while (before.length > level) restore(before.pop())
+    // defence in depth: a second reading whose first read as nothing has no state to return to
+    if (reread && before.length === level) restore(before[level - 1])
     // a scope opened since the last command is new even at a depth seen before: `(cd a); (ls)`
     if (fresh !== undefined) while (outerCd.length >= fresh) cdPath = outerCd.pop()
     while (outerCd.length < depth) outerCd.push(cdPath)
     while (outerCd.length > depth) cdPath = outerCd.pop()
     // taken at the heredoc's own depth: its line may close a subshell first
-    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, outerCd: [...outerCd] }
-    if (nested && !beforeNested) beforeNested = { cdPath, outerCd: [...outerCd] }
+    while (before.length < level) before.push({ cdPath, outerCd: [...outerCd] })
     let i = 0
     const assigns = []
     while (

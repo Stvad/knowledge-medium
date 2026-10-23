@@ -182,6 +182,8 @@ describe('secretRead', () => {
       `rg --glob '.env*' FOO .`,
       `rg --iglob '.ENV*' FOO .`,
       `rg --glob-case-insensitive -g '.ENV*' FOO .`,
+      // its --no- form may be the value of an option the hook does not model
+      `rg --glob-case-insensitive --context-separator --no-glob-case-insensitive -g '.ENV*' FOO .`,
       `rg -g '{*.ts,.env*}' FOO .`,
       // rg's globs are paths from the search root, where **/ may match no directory
       `rg -g '**/.env*' FOO .`,
@@ -311,7 +313,6 @@ describe('secretRead', () => {
       `rg -uu -g '!.env*' FOO .`,
       `rg -uu -g '*.ts' FOO .`,
       `rg -g 'src/**' FOO .`,
-      `rg --glob-case-insensitive --no-glob-case-insensitive -g '.ENV*' FOO .`,
       // only as an option, not as another option's value
       `rg -e --glob-case-insensitive -g '.ENV*' FOO .`,
       'ag FOO .',

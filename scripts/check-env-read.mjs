@@ -161,7 +161,7 @@ const readerWords = (verb, args) => {
   const filters = []
   const directories = []
   let letters = ''
-  let globCaseless = false // rg's --[no-]glob-case-insensitive, the last one read as an option
+  let globCaseless = false // its --no- form is ignored: it may be an unmodelled option's value
   let patternGiven = false
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -175,7 +175,7 @@ const readerWords = (verb, args) => {
       roots.push(a)
       continue
     }
-    if (a === '--glob-case-insensitive' || a === '--no-glob-case-insensitive') globCaseless = a === '--glob-case-insensitive'
+    if (a === '--glob-case-insensitive') globCaseless = true
     const option = optionOf(a, options)
     letters += option.letters
     if (!option.role) {
