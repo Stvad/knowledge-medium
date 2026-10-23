@@ -1,1 +1,1 @@
-import{IZ as e,LZ as t}from"../../chunks/app-RQ8wUTKU.js";export{e as getOrCreateRecentsPage,t as recentsPageBlockId};
+import{IZ as e,LZ as t}from"../../chunks/app-ogZqKFn4.js";export{e as getOrCreateRecentsPage,t as recentsPageBlockId};
