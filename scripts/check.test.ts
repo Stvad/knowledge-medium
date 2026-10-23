@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { acquireSlot, loadVerdict, placeOrder, unaccounted, type SlotHolder } from './check.mjs'
@@ -33,7 +33,9 @@ const bin = tempDir('check-gate-')
 writeFileSync(
   join(bin, 'pnpm'),
   `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs')
+const { appendFileSync, writeFileSync } = require('node:fs')
+// Tells a test this task can now take a signal its own way.
+const ready = () => process.env.SHIM_READY && writeFileSync(process.env.SHIM_READY, '')
 const [cmd, ...files] = process.argv.slice(2).join(' ').startsWith('run test')
   ? ['run test', ...process.argv.slice(4)]
   : [process.argv.slice(2).join(' ')]
@@ -68,6 +70,7 @@ if (mode === 'interrupt-install' && process.argv[2] === 'install') {
   // Outlives the gate's SIGTERM and exits 0, as pnpm does when its script does.
   const keepAlive = setTimeout(() => {}, 10_000)
   process.on('SIGTERM', () => clearTimeout(keepAlive))
+  ready()
 }
 if (mode === 'interrupt') {
   // The suite fails at once while lint is still winding down; the re-run would
@@ -78,7 +81,10 @@ if (mode === 'interrupt') {
     process.exitCode = 1
   } else if (cmd === 'run lint' || cmd === 'run test') {
     const keepAlive = setTimeout(() => {}, 10_000)
-    if (cmd === 'run lint') process.on('SIGTERM', () => setTimeout(() => clearTimeout(keepAlive), 3_000))
+    if (cmd === 'run lint') {
+      process.on('SIGTERM', () => setTimeout(() => clearTimeout(keepAlive), 3_000))
+      ready()
+    }
   }
 }
 `,
@@ -196,32 +202,46 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     expect([status, lastLine(out)]).toEqual([0, 'check: PASS'])
   }, 30_000)
 
-  // SIGINT once `stream` shows `marker`, and with `againAfterMs` a second copy,
-  // as a shell's Ctrl-C under `pnpm run` delivers.
-  const interruptOn = (stream: 'stdout' | 'stderr', marker: string, againAfterMs?: number) => (gate: Gate) => {
+  // One SIGINT once `stream` shows `marker`.
+  const interruptOn = (stream: 'stdout' | 'stderr', marker: string) => (gate: Gate) => {
     let seen = ''
     const watch = (d: Buffer) => {
       seen += d
       if (!seen.includes(marker)) return
       gate[stream]!.off('data', watch)
       gate.kill('SIGINT')
-      if (againAfterMs !== undefined) setTimeout(() => gate.kill('SIGINT'), againAfterMs)
     }
     gate[stream]!.on('data', watch)
   }
 
+  // SIGINT once the task under test writes its ready file, so the signal lands
+  // in the task's handler rather than before node installed it.
+  const interruptWhenReady = (againAfterMs?: number) => {
+    const file = join(tempDir('check-ready-'), 'ready')
+    const onSpawn = (gate: Gate) => {
+      const poll = setInterval(() => {
+        if (!existsSync(file)) return
+        clearInterval(poll)
+        gate.kill('SIGINT')
+        if (againAfterMs !== undefined) setTimeout(() => gate.kill('SIGINT'), againAfterMs)
+      }, 10)
+      gate.on('close', () => clearInterval(poll))
+    }
+    return { env: { SHIM_READY: file }, onSpawn }
+  }
+
   it('takes a second copy of the interrupt as the same one, and still releases and reports', async () => {
     const dir = tempDir('check-slots-')
-    const { status, out } = await runGate(
-      { SHIM_MODE: 'interrupt', KM_CHECK_SLOT_DIR: dir },
-      { onSpawn: interruptOn('stdout', 'in parallel', 100) },
-    )
+    // Lint lingers 3s after its SIGTERM, so the second copy lands mid-shutdown.
+    const { env, onSpawn } = interruptWhenReady(100)
+    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', KM_CHECK_SLOT_DIR: dir, ...env }, { onSpawn })
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
     expect(readdirSync(dir)).toEqual([])
   }, 30_000)
 
   it('stops at an interrupt even when the task it lands in exits 0', async () => {
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt-install' }, { onSpawn: interruptOn('stdout', 'starting install') })
+    const { env, onSpawn } = interruptWhenReady()
+    const { status, out } = await runGate({ SHIM_MODE: 'interrupt-install', ...env }, { onSpawn })
     expect(out).not.toContain('starting compile')
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
   }, 30_000)
