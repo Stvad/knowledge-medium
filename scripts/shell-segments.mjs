@@ -352,8 +352,9 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           // quote-blind expansion of unquoted data or a reader of another
           // language sees it, so an apostrophe on one line cannot hide the
           // next. Which command reads the data is not settled here, so a
-          // consumer can see a command twice. Text nothing runs is only split
-          // into words.
+          // consumer can see a command twice; the second reading's first
+          // segment is flagged `reread`. Text nothing runs is only split into
+          // words.
           const byLine = body.join('\n').replace(/\\\n/g, ' ').split('\n')
           if (text) {
             for (const line of byLine) if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
@@ -365,7 +366,10 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
             }
             const lines = read(byLine)
             const whole = read([body.join('\n')])
-            for (const view of JSON.stringify(whole.segments) === JSON.stringify(lines.segments) ? [lines] : [whole, lines]) {
+            const views = JSON.stringify(whole.segments) === JSON.stringify(lines.segments) ? [lines] : [whole, lines]
+            for (const [n, view] of views.entries()) {
+              // a second reading starts from the scope the heredoc began in
+              if (n > 0 && view.segments.length) view.segments[0].reread = true
               segments.push(...view.segments)
               sinks.inputRedirects?.push(...view.redirects)
             }

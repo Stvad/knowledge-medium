@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { secretRead } from './check-env-read.mjs'
@@ -204,6 +204,14 @@ describe('secretRead', () => {
     it('checks an explicit search root', () => {
       expect(secretRead(`grep -rn FOO ${withSecret}`, templateOnly)).not.toBeNull()
       expect(secretRead(`git -C ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
+      // each -C is relative to the one before
+      expect(secretRead(`git -C ${dirname(withSecret)} -C ${basename(withSecret)} grep --no-index FOO`, templateOnly)).not.toBeNull()
+    })
+
+    it('restores the scope a heredoc began in, stack entries included', () => {
+      expect(secretRead(`(cd ${withSecret}; bash <<'EOF'\n(ls)\nls\nEOF\ngrep -rn FOO .)`, templateOnly)).not.toBeNull()
+      // a second reading of the same data starts where the first did
+      expect(secretRead("bash <<'EOF'\ncd src\n(\nls\n)\ngrep -rn FOO .\nEOF", withSecret)).toBeNull()
     })
 
     it('follows a leading cd to the directory searched', () => {

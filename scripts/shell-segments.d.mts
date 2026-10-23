@@ -6,6 +6,8 @@ export interface ShellSegment {
   heredoc?: boolean
   /** heredoc data nothing runs, only split into words (shellCommandsWithDepth) */
   text?: boolean
+  /** the first segment of a second reading of the same heredoc data, which starts from the scope the heredoc began in */
+  reread?: boolean
 }
 export declare const shellSegmentsWithDepth: (cmd: string) => ShellSegment[]
 export declare const shellSegments: (cmd: string) => string[][]

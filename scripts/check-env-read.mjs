@@ -272,13 +272,13 @@ const gitReader = words => {
   const git = gitCommand(words)
   if (!git) return null
   const { word, rest, cArgs } = git
-  const c = cArgs.lastIndexOf('-C')
-  const dir = c < 0 ? undefined : cArgs[c + 1]
+  // each -C is relative to the one before
+  const dirs = cArgs.flatMap((a, i) => (a === '-C' ? [cArgs[i + 1]] : []))
   const noIndex = rest.includes('--no-index')
-  if (word === 'diff') return { verb: 'diff', args: rest.filter(a => a !== '--no-index'), dir }
+  if (word === 'diff') return { verb: 'diff', args: rest.filter(a => a !== '--no-index'), dirs }
   const standard = rest.findLast(a => a === '--exclude-standard' || a === '--no-exclude-standard')
   const readsIgnored = noIndex ? standard !== '--exclude-standard' : rest.includes('--untracked') && standard === '--no-exclude-standard'
-  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dir }
+  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dirs }
   return null
 }
 
@@ -308,9 +308,9 @@ export const secretRead = (script, cwd) => {
     const git = verb === 'git' ? gitReader(words) : null
     if (git) {
       ;({ verb, args } = git)
-      if (git.dir) {
+      if (git.dirs.length) {
         const base = at()
-        at = () => resolve(base, git.dir)
+        at = () => resolve(base, ...git.dirs)
       }
     }
     if (!READERS.has(verb)) continue

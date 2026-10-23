@@ -196,7 +196,7 @@ describe('shellCommandsWithDepth', () => {
       { tokens: ['bash'], depth: 0 },
       { tokens: ['cd', 'x'], depth: 1, heredoc: true },
       { tokens: ['ls'], depth: 0, heredoc: true },
-      { tokens: ['cd', 'x'], depth: 0, heredoc: true },
+      { tokens: ['cd', 'x'], depth: 0, heredoc: true, reread: true },
       { tokens: ['ls'], depth: 0, heredoc: true },
     ])
     // only when the heredoc's own command is a shell reading its script from stdin

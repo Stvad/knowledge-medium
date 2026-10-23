@@ -78,23 +78,24 @@ const moveDir = (cdPath, verb, args) => {
  * takes an operand (`sudo -u alice git …`) still hides it — accidents, not
  * adversaries. A cd, pushd or popd moves cdPath and is not returned. A shell
  * reading a heredoc (`bash <<'EOF'`) runs it as a child, so every scope its
- * lines open or move is dropped when they end.
+ * lines open or move is dropped when they end, and again when a second
+ * reading of the same data (`reread`) begins.
  */
 export const commandsInContext = segments => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
   let beforeHeredoc = null // the scope state when the heredoc being read began
-  for (const { tokens, depth, heredoc = false, text = false } of segments) {
-    if (!heredoc && beforeHeredoc) {
+  for (const { tokens, depth, heredoc = false, text = false, reread = false } of segments) {
+    if (beforeHeredoc && (!heredoc || reread)) {
       cdPath = beforeHeredoc.cdPath
-      outerCd.length = beforeHeredoc.depth
-      beforeHeredoc = null
+      outerCd.splice(0, outerCd.length, ...beforeHeredoc.outerCd)
+      if (!heredoc) beforeHeredoc = null
     }
     while (outerCd.length < depth) outerCd.push(cdPath)
     while (outerCd.length > depth) cdPath = outerCd.pop()
     // taken at the heredoc's own depth: its line may close a subshell first
-    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, depth }
+    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, outerCd: [...outerCd] }
     let i = 0
     const assigns = []
     while (
