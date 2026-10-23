@@ -354,6 +354,14 @@ describe('acquireSlot', () => {
     expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 50, pollMs: 10, log: quiet })).toBeNull()
   })
 
+  it('looks again soon once a gate has finished taking its number', async () => {
+    const marker = join(dir, `${process.pid}-${randomUUID()}.choosing`)
+    writeFileSync(marker, '')
+    setTimeout(() => rmSync(marker), 50)
+    // A full poll here would outlast the test.
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), pollMs: 60_000, log: quiet })).not.toBeNull()
+  })
+
   it('ignores the number-taking marker of a gate that is no longer running', async () => {
     writeFileSync(join(dir, `${deadPid()}-${randomUUID()}.choosing`), '')
     expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
