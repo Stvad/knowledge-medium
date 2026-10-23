@@ -1,0 +1,1 @@
+import{wb as e}from"../../../chunks/app-BYEjYXdl.js";export{e as defaultToolbarItems};

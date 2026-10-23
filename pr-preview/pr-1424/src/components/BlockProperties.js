@@ -1,0 +1,1 @@
+import{$P as e}from"../../chunks/app-BYEjYXdl.js";export{e as BlockProperties};

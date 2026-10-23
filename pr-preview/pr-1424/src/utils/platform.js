@@ -1,0 +1,1 @@
+import{GL as e,WL as t}from"../../chunks/app-BYEjYXdl.js";export{t as isIOS,e as isMacPlatform};

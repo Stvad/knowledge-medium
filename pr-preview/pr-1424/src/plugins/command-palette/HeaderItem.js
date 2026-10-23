@@ -1,0 +1,1 @@
+import{QE as e}from"../../../chunks/app-BYEjYXdl.js";export{e as CommandPaletteHeaderItem};

@@ -1,0 +1,1 @@
+import{Yk as e}from"../../chunks/app-BYEjYXdl.js";export{e as dynamicExtensionsExtension};

@@ -1,0 +1,1 @@
+import{cD as e}from"../../../chunks/app-BYEjYXdl.js";export{e as SwipeActionMenu};
