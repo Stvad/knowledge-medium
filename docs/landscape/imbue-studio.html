@@ -560,30 +560,37 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
 
   <div class="group">
     <div class="opt">
-      <h4>1 · Crystallize a run into an extension <span class="cost">cost: medium · fit: high</span></h4>
+      <h4>1 · Crystallize a run into an extension <span class="cost">cost: medium · fit: high · <a href="https://github.com/Stvad/knowledge-medium/issues/1434">#1434</a></span></h4>
       <p>When a <code>[[claude]]</code> run does something you'll want again, an action on its reply turns the run into a durable tool. That might be an extension, a saved query, or an agent-dispatch watcher. A background run writes it as a disabled draft extension block, checks it with <code>--verify</code> and <code>audit-extension</code>, and leaves it for your approval. Knowledge Medium already has the run, the checks and the approval. What's new is the action and the brief it hands the run.</p>
       <p class="example"><b>Example.</b> You ask <code>[[claude]]</code> to pull this week's sleep numbers into a table. It works, so you crystallize it. Next week the table is an extension that renders on its own.</p>
     </div>
 
     <div class="opt">
-      <h4>2 · Fix a failing extension from its error <span class="cost">cost: low to medium · fit: high</span></h4>
+      <h4>2 · Fix a failing extension from its error <span class="cost">cost: low to medium · fit: high · <a href="https://github.com/Stvad/knowledge-medium/issues/1433">#1433</a></span></h4>
       <p>Extension failures already surface through the render error boundary and the load-error toast. Add a "Fix with agent" button there that starts a heal run with the error, the extension's source and a sample of the blocks it was rendering. The patch comes back as a merge proposal. This shares the review flow with upstream updates (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>), so it's worth designing the two together.</p>
     </div>
 
     <div class="opt">
-      <h4>3 · "Change this with an agent" on any block <span class="cost">cost: low after eject · fit: high</span></h4>
+      <h4>3 · "Change this with an agent" on any block <span class="cost">cost: low · fit: high · <a href="https://github.com/Stvad/knowledge-medium/issues/1432">#1432</a></span></h4>
       <p>Imbue's right-click-to-change, applied to blocks. The block's context menu gets an action that starts a run with the block's id, its types, the renderer drawing it, and the extension that renderer came from. Today you'd write a <code>[[claude]]</code> mention and explain all that context by hand.</p>
-      <p>Today that only works where a user extension draws the block, because the run can edit that extension's block. Most blocks are drawn by built-in plugins, and an extension can add to a built-in but can't replace it. Content decorators stack, so a new extension can wrap the todo plugin's checkbox but can't swap it out. Changing a built-in in place means ejecting it into an extension block that replaces the original first. That's stage 1 of the plugin materialization design (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>, for the question in <a href="https://github.com/Stvad/knowledge-medium/issues/481">#481</a>).</p>
-      <p class="example"><b>Example.</b> On a todo block: "show the due date in red when it's overdue". With eject in place, the run ejects the todo plugin as a thin wrapper, changes the decorator, and the original stops running on devices that approve the fork.</p>
+      <p>For a block drawn by a user extension, the run edits that extension's block. For a built-in, it can copy the plugin into an extension, importing the original's parts and changing the piece you asked about, and turn the built-in's toggle off. That works today, with four costs:</p>
+      <ul>
+        <li>A device that hasn't approved the copy runs neither version.</li>
+        <li>The copy loads after first paint and outside the original's place in the order.</li>
+        <li>Nothing records that the copy replaces the built-in.</li>
+        <li>A run that only has the graph tools can't read the built-in's source.</li>
+      </ul>
+      <p>Stage 1 of the plugin materialization design (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>, for the question in <a href="https://github.com/Stvad/knowledge-medium/issues/481">#481</a>) removes all four.</p>
+      <p class="example"><b>Example.</b> On a todo block: "show the due date in red when it's overdue". The run copies the todo plugin as a thin wrapper, swaps in its own decorator and turns the built-in off. Other plugins only import todo's constants, types and action ids, so none of them is left calling the original.</p>
     </div>
 
     <div class="opt">
-      <h4>4 · Extensions describe themselves to agents <span class="cost">cost: low · fit: high</span></h4>
+      <h4>4 · Extensions describe themselves to agents <span class="cost">cost: low · fit: high · <a href="https://github.com/Stvad/knowledge-medium/issues/1431">#1431</a></span></h4>
       <p>Imbue makes each app publish what it does, and fails the app's tests when a route has no summary. Knowledge Medium already requires a <code>description</code> on every action. The same rule could cover each installed extension and everything it contributes (types, queries, mutators), with <code>--verify</code> flagging what's missing. <code>describe-runtime</code> could then list "what this workspace can do" per extension, which is what an agent needs before it changes anything.</p>
     </div>
 
     <div class="opt">
-      <h4>5 · Kits: publish a whole setup <span class="cost">cost: medium to high · fit: medium</span></h4>
+      <h4>5 · Kits: publish a whole setup <span class="cost">cost: medium to high · fit: medium · <a href="https://github.com/Stvad/knowledge-medium/issues/1430">#1430</a></span></h4>
       <p>An Imbue template carries several creations at once. The block version is a kit: a page subtree holding extension blocks, type definitions, views and example pages, shared as one unit and adopted with lineage. This builds on upstream tracking (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>), and once kits pass between people it needs capability scoping (<a href="https://github.com/Stvad/knowledge-medium/issues/1425">#1425</a>). It should come after both.</p>
     </div>
   </div>
@@ -610,12 +617,12 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   <div class="bottom-line">
     <h3 style="margin:0">Suggested order, merged with the Cloudflare OS list</h3>
     <ol>
-      <li><b>Self-describing extensions.</b> Cheap, and it makes every later agent run better informed.</li>
-      <li><b>Upstream tracking</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>) together with <b>Fix with agent</b>, since both end in the same merge proposal.</li>
-      <li><b>Eject built-in plugins</b> (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>), then <b>"change this with an agent"</b> on any block. An ejected plugin is an extension whose upstream is the app bundle, so its "upstream changed since your fork" check is the same mechanism as <a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>. Design the two together.</li>
-      <li><b>Crystallize a run into an extension.</b> Once the proposal flow exists, a crystallized draft is one more kind of proposal.</li>
+      <li><b>Self-describing extensions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1431">#1431</a>) and <b>"change this with an agent"</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1432">#1432</a>). Cheap, and both make every later agent run better informed. Until eject exists, "change this" changes a built-in by copying it.</li>
+      <li><b>Upstream tracking</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>) together with <b>Fix with agent</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1433">#1433</a>), since both end in the same merge proposal.</li>
+      <li><b>Eject built-in plugins</b> (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>), so "change this" can fork a built-in cleanly. An ejected plugin is an extension whose upstream is the app bundle, so its "upstream changed since your fork" check is the same mechanism as <a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>. Design the two together.</li>
+      <li><b>Crystallize a run into an extension</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1434">#1434</a>). Once the proposal flow exists, a crystallized draft is one more kind of proposal.</li>
       <li><b>Staged outward actions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1426">#1426</a>), as soon as runs post or send anything.</li>
-      <li><b>Capability-scoped extensions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1425">#1425</a>), then <b>kits</b>, when extensions start moving between people.</li>
+      <li><b>Capability-scoped extensions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1425">#1425</a>), then <b>kits</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1430">#1430</a>), when extensions start moving between people.</li>
     </ol>
   </div>
 </section>
@@ -635,7 +642,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   </ol>
 </section>
 
-<footer>Facts about Imbue Studio were checked against its launch post and template repository on 23 October 2026. Studio is in waitlist access, and the template repo changes daily, so recheck details before building on them.</footer>
+<footer>The ideas to incorporate are filed as feature requests <a href="https://github.com/Stvad/knowledge-medium/issues/1434">#1434</a>, <a href="https://github.com/Stvad/knowledge-medium/issues/1433">#1433</a>, <a href="https://github.com/Stvad/knowledge-medium/issues/1432">#1432</a>, <a href="https://github.com/Stvad/knowledge-medium/issues/1431">#1431</a> and <a href="https://github.com/Stvad/knowledge-medium/issues/1430">#1430</a>. Facts about Imbue Studio were checked against its launch post and template repository on 23 October 2026. Studio is in waitlist access, and the template repo changes daily, so recheck details before building on them.</footer>
 
 </div>
 </body>
