@@ -79,18 +79,27 @@ const moveDir = (cdPath, verb, args) => {
  * adversaries. A cd, pushd or popd moves cdPath and is not returned. A shell
  * reading a heredoc (`bash <<'EOF'`) runs it as a child, so every scope its
  * lines open or move is dropped when they end, and again when a second
- * reading of the same data (`reread`) begins. A cd in text nothing runs (a
- * quoted heredoc nested in a script) moves nothing.
+ * reading of the same data (`reread`) begins; a heredoc nested in that data
+ * (`nested`) is scoped the same way inside it. A cd in text nothing runs
+ * moves nothing.
  */
 export const commandsInContext = segments => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
   let beforeHeredoc = null // the scope state when the heredoc being read began
-  for (const { tokens, depth, heredoc = false, text = false, reread = false, fresh } of segments) {
+  let beforeNested = null // the same for a heredoc nested in it
+  const restore = state => {
+    cdPath = state.cdPath
+    outerCd.splice(0, outerCd.length, ...state.outerCd)
+  }
+  for (const { tokens, depth, heredoc = false, text = false, reread = false, fresh, nested = false } of segments) {
+    if (beforeNested && !nested) {
+      restore(beforeNested)
+      beforeNested = null
+    }
     if (beforeHeredoc && (!heredoc || reread)) {
-      cdPath = beforeHeredoc.cdPath
-      outerCd.splice(0, outerCd.length, ...beforeHeredoc.outerCd)
+      restore(beforeHeredoc)
       if (!heredoc) beforeHeredoc = null
     }
     // a scope opened since the last command is new even at a depth seen before: `(cd a); (ls)`
@@ -99,6 +108,7 @@ export const commandsInContext = segments => {
     while (outerCd.length > depth) cdPath = outerCd.pop()
     // taken at the heredoc's own depth: its line may close a subshell first
     if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, outerCd: [...outerCd] }
+    if (nested && !beforeNested) beforeNested = { cdPath, outerCd: [...outerCd] }
     let i = 0
     const assigns = []
     while (

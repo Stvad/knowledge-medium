@@ -181,6 +181,7 @@ describe('secretRead', () => {
       `rg -g '*.local' FOO`,
       `rg --glob '.env*' FOO .`,
       `rg --iglob '.ENV*' FOO .`,
+      `rg --glob-case-insensitive -g '.ENV*' FOO .`,
       `rg -g '{*.ts,.env*}' FOO .`,
       // rg's globs are paths from the search root, where **/ may match no directory
       `rg -g '**/.env*' FOO .`,
@@ -229,6 +230,10 @@ describe('secretRead', () => {
 
     it('restores the scope a heredoc began in, stack entries included', () => {
       expect(secretRead(`(cd ${withSecret}; bash <<'EOF'\n(ls)\nls\nEOF\ngrep -rn FOO .)`, templateOnly)).not.toBeNull()
+      // a heredoc nested in a script runs in a child of a child; its cd moves nothing outside
+      expect(secretRead("bash <<'OUT'\nbash <<'INNER'\ncd src\nINNER\ngrep -rn FOO .\nOUT", withSecret)).not.toBeNull()
+      // while inside it, its cd moves its own commands
+      expect(secretRead(`bash <<'OUT'\nbash <<'INNER'\ncd ${withSecret}\ngrep -rn FOO .\nINNER\nOUT`, templateOnly)).not.toBeNull()
       // a quoted heredoc nested in a script is text, so its cd moves nothing
       expect(secretRead("bash <<'OUT'\ncat > /dev/null <<'INNER'\ncd src\nINNER\ngrep -rn FOO .\nOUT", withSecret)).not.toBeNull()
       // a second reading of the same data starts where the first did
@@ -306,6 +311,9 @@ describe('secretRead', () => {
       `rg -uu -g '!.env*' FOO .`,
       `rg -uu -g '*.ts' FOO .`,
       `rg -g 'src/**' FOO .`,
+      `rg --glob-case-insensitive --no-glob-case-insensitive -g '.ENV*' FOO .`,
+      // only as an option, not as another option's value
+      `rg -e --glob-case-insensitive -g '.ENV*' FOO .`,
       'ag FOO .',
       'ag --hidden FOO .',
       'ag -U FOO .',

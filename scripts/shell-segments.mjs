@@ -370,12 +370,15 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
             const read = parts => {
               const redirects = []
               const read = parts.flatMap(part => segment(part, true, { inputRedirects: redirects }))
-              // a heredoc nested in the data keeps its text flag, so its words stay data
+              // a heredoc nested in the data keeps its text flag, so its words
+              // stay data, and is flagged `nested`: it runs, if at all, in a
+              // child of the shell reading this data
               const segments = read.map(s => ({
                 tokens: s.tokens,
                 depth: scopes.length + s.depth,
                 heredoc: true,
                 ...(s.text && { text: true }),
+                ...(s.heredoc && { nested: true }),
                 ...(s.fresh && { fresh: scopes.length + s.fresh }),
               }))
               return { segments, redirects }

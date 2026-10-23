@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   amendInvocations,
+  commandsInContext,
   baseBranch,
   decide,
   effectiveCwd,
@@ -278,6 +279,15 @@ describe('inputRedirectTargets', () => {
     ["cat <$'a'", ['a']],
   ])('%s → %j', (cmd, targets) => {
     expect(inputRedirectTargets(cmd)).toEqual(targets)
+  })
+})
+
+describe('commandsInContext', () => {
+  it('scopes a heredoc nested in a heredoc inside it, in the whole reading on its own', () => {
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'OUT'\nbash <<'INNER'\ncd /tmp/a\nls\nINNER\npwd\nOUT"))
+    // the whole reading comes first; its first ls and pwd are the ones it scoped
+    expect(read.find(c => c.words[0] === 'ls')?.cdPath).toBe('/tmp/a')
+    expect(read.find(c => c.words[0] === 'pwd')?.cdPath).toBe(null)
   })
 })
 

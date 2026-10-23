@@ -161,6 +161,7 @@ const readerWords = (verb, args) => {
   const filters = []
   const directories = []
   let letters = ''
+  let globCaseless = false // rg's --[no-]glob-case-insensitive, the last one read as an option
   let patternGiven = false
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -174,6 +175,7 @@ const readerWords = (verb, args) => {
       roots.push(a)
       continue
     }
+    if (a === '--glob-case-insensitive' || a === '--no-glob-case-insensitive') globCaseless = a === '--glob-case-insensitive'
     const option = optionOf(a, options)
     letters += option.letters
     if (!option.role) {
@@ -190,6 +192,8 @@ const readerWords = (verb, args) => {
       filters.push({ include: !value.startsWith('!'), glob: value.replace(/^!/, ''), dialect: 'rg', caseless: role === 'iglob' })
   }
   if (SEARCH.has(verb) && !patternGiven && roots.length) paths.splice(paths.indexOf(roots.shift()), 1)
+  // rg's --glob-case-insensitive makes every -g an --iglob
+  if (globCaseless) for (const f of filters) if (f.dialect === 'rg') f.caseless = true
   return { paths, roots, letters, filters, directories }
 }
 

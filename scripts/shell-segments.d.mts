@@ -10,6 +10,8 @@ export interface ShellSegment {
   reread?: boolean
   /** the shallowest depth whose scope opened since the previous segment, so a sibling `(…)` or `$(…)` is a new scope */
   fresh?: number
+  /** heredoc data inside heredoc data: it runs, if at all, in a child of the shell reading the outer data */
+  nested?: boolean
 }
 export declare const shellSegmentsWithDepth: (cmd: string) => ShellSegment[]
 export declare const shellSegments: (cmd: string) => string[][]
