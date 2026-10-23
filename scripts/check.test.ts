@@ -11,10 +11,6 @@ import { acquireSlot, loadVerdict, placeOrder, unaccounted, type SlotHolder } fr
 // its teeth without saying so.
 const RELAYED_LINES = 4000
 
-// A PATH-fronted `pnpm`, so the real gate runs its real control flow over
-// tasks whose behaviour each test picks through SHIM_MODE. Every task not
-// named below exits 0. `process.exitCode` in the shim so the shim is not
-// itself the thing that truncates.
 const temps: string[] = []
 const tempDir = (prefix: string) => {
   temps.push(mkdtempSync(join(tmpdir(), prefix)))
@@ -29,6 +25,10 @@ const writeTicket = (dir: string, number: number, record: SlotHolder) =>
   writeFileSync(join(dir, `${number}-${randomUUID()}.ticket`), JSON.stringify(record))
 const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid
 
+// A PATH-fronted `pnpm`, so the real gate runs its real control flow over
+// tasks whose behaviour each test picks through SHIM_MODE. Every task not
+// named below exits 0. `process.exitCode` in the shim so the shim is not
+// itself the thing that truncates.
 const bin = tempDir('check-gate-')
 writeFileSync(
   join(bin, 'pnpm'),
@@ -36,23 +36,21 @@ writeFileSync(
 const { appendFileSync, writeFileSync } = require('node:fs')
 // Tells a test this task can now take a signal its own way.
 const ready = () => process.env.SHIM_READY && writeFileSync(process.env.SHIM_READY, '')
-const [cmd, ...files] = process.argv.slice(2).join(' ').startsWith('run test')
-  ? ['run test', ...process.argv.slice(4)]
-  : [process.argv.slice(2).join(' ')]
+const [, script, ...files] = process.argv.slice(2)
 const mode = process.env.SHIM_MODE
 // The line vitest prints last, once a run finishes.
 const summary = (failed, total) =>
   process.stdout.write(\` Test Files  \${failed} failed\${total > failed ? \` | \${total - failed} passed\` : ''} (\${total})\\n\`)
-if (cmd === 'run test' && mode?.startsWith('flood')) {
+if (script === 'test' && mode?.startsWith('flood')) {
   const out = mode === 'flood-stderr' ? process.stderr : process.stdout
   for (let i = 0; i < ${RELAYED_LINES}; i++) out.write(\`line \${i} \${'x'.repeat(60)}\\n\`)
   process.exitCode = 1
 }
-if (cmd === 'run test' && mode === 'slow') {
+if (script === 'test' && mode === 'slow') {
   appendFileSync(process.env.SHIM_LOG, 'start\\n')
   setTimeout(() => appendFileSync(process.env.SHIM_LOG, 'end\\n'), 1500)
 }
-if (cmd === 'run test' && mode === 'mixed') {
+if (script === 'test' && mode === 'mixed') {
   // The whole suite fails a load-only file and a real one; re-run one file at
   // a time, only the real one still fails.
   const alone = files.includes('--no-file-parallelism')
@@ -61,7 +59,7 @@ if (cmd === 'run test' && mode === 'mixed') {
   summary(failing.length, 2)
   process.exitCode = 1
 }
-if (cmd === 'run test' && mode === 'many' && !files.length) {
+if (script === 'test' && mode === 'many') {
   for (let i = 0; i < 26; i++) process.stdout.write(\` FAIL  scripts/f\${i}.test.ts > a test\\n\`)
   summary(26, 26)
   process.exitCode = 1
@@ -73,16 +71,18 @@ if (mode === 'interrupt-install' && process.argv[2] === 'install') {
   ready()
 }
 if (mode === 'interrupt') {
-  // The suite fails at once while lint is still winding down; the re-run would
-  // take a while.
-  if (cmd === 'run test' && !files.length) {
+  // The suite fails at once, while lint can be made to wind down slowly; the
+  // re-run would take a while.
+  if (script === 'test' && !files.length) {
     process.stdout.write(' FAIL  scripts/slow.test.ts > a test\\n')
     summary(1, 1)
     process.exitCode = 1
-  } else if (cmd === 'run lint' || cmd === 'run test') {
+  } else if (script === 'lint' || script === 'test') {
     const keepAlive = setTimeout(() => {}, 10_000)
-    if (cmd === 'run lint') {
-      process.on('SIGTERM', () => setTimeout(() => clearTimeout(keepAlive), 3_000))
+    if (script === 'lint') {
+      // Only where a test needs the gate still running after its interrupt.
+      const linger = process.env.SHIM_LINGER ? 3_000 : 0
+      process.on('SIGTERM', () => setTimeout(() => clearTimeout(keepAlive), linger))
       ready()
     }
   }
@@ -234,7 +234,7 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     const dir = tempDir('check-slots-')
     // Lint lingers 3s after its SIGTERM, so the second copy lands mid-shutdown.
     const { env, onSpawn } = interruptWhenReady(100)
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', KM_CHECK_SLOT_DIR: dir, ...env }, { onSpawn })
+    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', SHIM_LINGER: '1', KM_CHECK_SLOT_DIR: dir, ...env }, { onSpawn })
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
     expect(readdirSync(dir)).toEqual([])
   }, 30_000)
@@ -247,7 +247,7 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
   }, 30_000)
 
   it('starts no re-run once interrupted', async () => {
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt' }, { onSpawn: interruptOn('stderr', '[check] test failed') })
+    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', SHIM_LINGER: '1' }, { onSpawn: interruptOn('stderr', '[check] test failed') })
     expect(out).not.toContain('failing files, alone')
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
   }, 30_000)

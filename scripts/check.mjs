@@ -261,7 +261,7 @@ export const acquireSlot = async ({
         release()
         return null
       }
-      await sleep(choosing ? Math.min(pollMs, CHOOSING_RECHECK_MS) : pollMs, undefined, {signal})
+      await sleep(choosing ? CHOOSING_RECHECK_MS : pollMs, undefined, {signal})
     }
   } catch (error) {
     release()
