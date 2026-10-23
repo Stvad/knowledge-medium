@@ -1,1 +1,1 @@
-import{_x as e,gx as t,vx as n}from"../../../chunks/app-BvVZKtJh.js";export{t as LeftSidebar,e as LeftSidebarCoreSection,n as LeftSidebarShortcutsSection};
+import{_x as e,gx as t,vx as n}from"../../../chunks/app-FXNGwX8l.js";export{t as LeftSidebar,e as LeftSidebarCoreSection,n as LeftSidebarShortcutsSection};
