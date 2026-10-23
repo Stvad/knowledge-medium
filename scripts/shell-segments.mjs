@@ -51,6 +51,18 @@ export const SUBSTITUTED = '$(…)'
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
 /**
+ * The file each input redirection reads (`< f`, `0<f`, `$(<f)`), read as
+ * shellCommandsWithDepth reads the command, so a heredoc line a shell runs
+ * counts and a quoted `<` does not. A here-string (`<<<`), a here-doc and an
+ * fd dup (`<&3`) read no file and are not listed.
+ */
+export const inputRedirectTargets = cmd => {
+  const targets = []
+  segment(cmd, true, { inputRedirects: targets })
+  return targets
+}
+
+/**
  * The command with each quoted-delimiter heredoc's data (`<<'EOF'`) cut out,
  * when what reads it is no shell: text nothing runs or expands. An unquoted
  * heredoc's data stays, since its `$(…)` and backticks run, and so does data
@@ -58,7 +70,7 @@ export const shellCommandsWithDepth = cmd => segment(cmd, true)
  */
 export const withoutLiteralHeredocs = cmd => {
   const spans = []
-  segment(cmd, true, spans)
+  segment(cmd, true, { literalHeredocs: spans })
   let out = ''
   let at = 0
   for (const [start, end] of spans) {
@@ -68,9 +80,10 @@ export const withoutLiteralHeredocs = cmd => {
   return out + cmd.slice(at)
 }
 
-// `literalHeredocs`, when given, collects the [start, end) of each quoted-delimiter
-// heredoc's data that nothing on its line can run, its closing delimiter line
-// included. Decided by an ALLOWLIST of commands that never run what they
+// `sinks.inputRedirects`, when given, collects each input redirection's
+// target word. `sinks.literalHeredocs`, when given, collects the [start, end)
+// of each quoted-delimiter heredoc's data that nothing on its line can run,
+// its closing delimiter line included. Decided by an ALLOWLIST of commands that never run what they
 // read: a shell, a wrapper, an expanded or unknown command word anywhere on
 // the line keeps the data runnable, so a reader this list misses fails closed.
 // python and node run their stdin as their own language; a gh call from that
@@ -79,17 +92,17 @@ export const withoutLiteralHeredocs = cmd => {
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
 // A command's own word: past its leading assignments, path dropped.
 const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
-// An unquoted word that is a redirection operator, with its target attached
-// (capture group) or empty when the target is the next word.
-const REDIRECT = /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)(.*)$/s
+// An unquoted word that is a redirection operator (first group), with its
+// target attached (second group) or empty when the target is the next word.
+const REDIRECT = /^(?:\d+|&)?(<<<|>>|>\||>&|>|<)(.*)$/s
 
-const segment = (cmd, wholeCommands, literalHeredocs = null) => {
+const segment = (cmd, wholeCommands, sinks = {}) => {
   const segments = []
   let tokens = []
   let cur = ''
   let started = false // distinguishes '' (a real empty token) from no token
   let literal = false // the current token holds a quoted or escaped character
-  let dropNext = false // the next token is the target of a redirection
+  let dropNext = false // the operator whose target is the next token, or false
   let quote = null // ' or " while inside a quoted span
   let escaped = false
   const scopes = [] // open subshell scopes; length IS the current depth
@@ -101,9 +114,14 @@ const segment = (cmd, wholeCommands, literalHeredocs = null) => {
     if (started) {
       pipeOpen = false
       const redirect = !literal && cur.match(REDIRECT)
-      if (dropNext) dropNext = false
-      else if (redirect) dropNext = redirect[1] === ''
-      else tokens.push(cur)
+      if (dropNext) {
+        if (dropNext === '<') sinks.inputRedirects?.push(cur)
+        dropNext = false
+      } else if (redirect) {
+        const [, op, target] = redirect
+        if (target === '') dropNext = op
+        else if (op === '<' && !target.startsWith('&')) sinks.inputRedirects?.push(target)
+      } else tokens.push(cur)
     }
     cur = ''
     started = false
@@ -311,14 +329,14 @@ const segment = (cmd, wholeCommands, literalHeredocs = null) => {
           // a line a shell reads, or whose substitutions run, is read as the
           // commands it would be; text nothing runs is only split into words
           for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n')) {
-            if (!text) for (const s of segment(line, true)) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
+            if (!text) for (const s of segment(line, true, { inputRedirects: sinks.inputRedirects })) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
             else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true })
           }
         } else {
           const words = body.join('\n').split(/\s+/).filter(Boolean)
           if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
         }
-        if (text) literalHeredocs?.push([dataStart, Math.min(j, cmd.length)])
+        if (text) sinks.literalHeredocs?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
       lineStart = segments.length

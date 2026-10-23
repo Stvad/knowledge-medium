@@ -10,3 +10,4 @@ export declare const shellSegments: (cmd: string) => string[][]
 export declare const SUBSTITUTED: string
 export declare const shellCommandsWithDepth: (cmd: string) => ShellSegment[]
 export declare const withoutLiteralHeredocs: (cmd: string) => string
+export declare const inputRedirectTargets: (cmd: string) => string[]
