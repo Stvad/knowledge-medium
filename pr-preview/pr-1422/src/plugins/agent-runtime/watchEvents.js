@@ -1,0 +1,1 @@
+import{_f as e,vf as t}from"../../../chunks/app-BSkZWbr3.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

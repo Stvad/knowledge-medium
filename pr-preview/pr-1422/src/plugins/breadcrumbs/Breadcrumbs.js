@@ -1,0 +1,1 @@
+import{Xb as e}from"../../../chunks/app-BSkZWbr3.js";export{e as Breadcrumbs};
