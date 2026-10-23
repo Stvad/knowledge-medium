@@ -70,8 +70,6 @@ const packageJson = (slug: string): string => `${JSON.stringify({
 const tsconfig = (): string => `${JSON.stringify({
   compilerOptions: {
     allowImportingTsExtensions: true,
-    baseUrl: '.',
-    ignoreDeprecations: '6.0',
     jsx: 'react-jsx',
     lib: ['ES2022', 'DOM', 'DOM.Iterable'],
     module: 'ESNext',
