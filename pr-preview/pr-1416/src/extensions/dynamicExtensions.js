@@ -1,1 +1,0 @@
-import{Yk as e}from"../../chunks/app-BCfjsDII.js";export{e as dynamicExtensionsExtension};

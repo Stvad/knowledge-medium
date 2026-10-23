@@ -1,1 +1,0 @@
-import{vU as e}from"../../../chunks/app-BCfjsDII.js";export{e as dailyNotesLocalSchema};

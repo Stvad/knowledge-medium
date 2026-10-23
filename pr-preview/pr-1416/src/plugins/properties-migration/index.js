@@ -1,1 +1,0 @@
-import{oa as e,ua as t}from"../../../chunks/app-BCfjsDII.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

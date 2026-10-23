@@ -1,1 +1,0 @@
-import{Yp as e}from"../../../chunks/app-BCfjsDII.js";export{e as blockInfoPlugin};
