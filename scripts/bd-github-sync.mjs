@@ -1434,6 +1434,9 @@ const pause = ms => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
   idleMs += ms
 }
+// Issues this run minted plus comments it posted, which widen its budget
+// (BUDGET_PER_MINT_OR_POST_MS).
+let mintsAndPosts = 0
 
 const noteSpawn = (verb, started) => spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
 // The wall time the intervals cover, not their sum: concurrent spawns of one
@@ -1981,6 +1984,7 @@ const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, ski
         break
       }
       posted++
+      mintsAndPosts++
       // The body is on GitHub now, which is the only copy anyone can edit —
       // so this is a report, not a refusal (see rewriteBeadIds).
       if (leftover.length)
@@ -2007,12 +2011,20 @@ const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, ski
 // reads it (syncAlarm). What it cannot see is a sync that never starts — no
 // hook fires, or the script cannot load — which leaves no line at all.
 export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
-// About twice a converged run on the live tracker, leaving room for a run that
-// also pushes. The override is for the process tests.
+// Several times a converged run on the live tracker, leaving room for a run
+// that also pushes, closes and re-reads. The override is for the process tests.
 const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 15_000
-const RUN_LOG_KEEP = 200
+// Added per issue minted and per comment posted: each is a GitHub write, both
+// arrive by the dozen (a filing session, a comment backlog), and each happens
+// once per item, so no step that repeats work every run can hide behind the
+// allowance.
+export const BUDGET_PER_MINT_OR_POST_MS = 1_500
+// About a month of runs: enough to see a step that grows with the tracker,
+// which a few days of runs would not show.
+const RUN_LOG_KEEP = 2_000
 const DID_NOT_FINISH = 'did not finish (killed or crashed)'
 const seconds = ms => `${(ms / 1000).toFixed(1)}s`
+const budgetOf = record => `${Math.round(record.budgetMs / 1000)}s`
 // The one definition, for the line a run prints and for the alarm: what the
 // run spent working, against the budget it ran under.
 const activeMs = record => record.ms - record.idleMs
@@ -2053,7 +2065,8 @@ const openRunRecord = root => {
       id,
       event: 'end',
       at,
-      budgetMs: SLOW_SYNC_MS,
+      budgetMs: SLOW_SYNC_MS + mintsAndPosts * BUDGET_PER_MINT_OR_POST_MS,
+      mintsAndPosts,
       ms: Math.round(performance.now()),
       idleMs: Math.round(idleMs),
       ok: !failure,
@@ -2065,7 +2078,7 @@ const openRunRecord = root => {
     }
     if (!failure && overBudget(record))
       console.log(
-        `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; ` +
+        `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${budgetOf(record)} budget; ` +
           `slowest: ${spawnSummary(record.spawns)}${record.idleMs ? `; plus ${seconds(record.idleMs)} of deliberate waits` : ''}`,
       )
     appendRunLog(root, record)
@@ -2137,18 +2150,21 @@ export const syncAlarm = (logText, isAlive = pidAlive, now = Date.now()) => {
       (previous.failure !== null
         ? `⚠ bd-github-sync has failed its last two runs (latest ${latest.at}): ${latest.failure}.`
         : `⚠ bd-github-sync's latest run failed (${latest.at}): ${latest.failure}, after one that took ` +
-          `${seconds(activeMs(previous))} against its ${Math.round(previous.budgetMs / 1000)}s budget.`) +
+          `${seconds(activeMs(previous))} against its ${budgetOf(previous)} budget.`) +
       ` The beads↔GitHub mirror is not syncing until that is fixed — tell the user.`
     )
   return (
-    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: ` +
+    `⚠ bd-github-sync is over budget: ` +
     (previous.failure === null
-      ? `the last two runs took ${seconds(activeMs(previous))} and ${seconds(activeMs(latest))}`
-      : `the latest run took ${seconds(activeMs(latest))}, after one that failed (${previous.failure})`) +
+      ? `the last two runs took ${seconds(activeMs(previous))} and ${seconds(activeMs(latest))} against budgets of ` +
+        `${budgetOf(previous)} and ${budgetOf(latest)}`
+      : `the latest run took ${seconds(activeMs(latest))} against its ${budgetOf(latest)} budget, after one that failed ` +
+        `(${previous.failure})`) +
     ` (latest ${latest.at}). Slowest spawns in the latest: ${spawnSummary(latest.spawns)}. A converged run is a fixed ` +
     `handful of reads (pinned by "makes only the fixed reads on a converged run" in scripts/bd-github-sync.test.ts), ` +
-    `so some step has started scaling with the tracker — tell the user, and find it before runs start being cut off ` +
-    `by the SessionEnd hook's time limit.`
+    `and a run's budget already grows by ${seconds(BUDGET_PER_MINT_OR_POST_MS)} for each issue it minted and comment ` +
+    `it posted — tell the user, and find where the time went before runs start being cut off by the SessionEnd ` +
+    `hook's time limit.`
   )
 }
 
@@ -2286,6 +2302,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
         throw pushErr ?? e
       }
     const minted = printMinted(freshBeads)
+    mintsAndPosts += minted.length
     if (pushErr) throw pushErr
 
     // 1.55 Which pushes landed, judged by content on a fresh read: bd only

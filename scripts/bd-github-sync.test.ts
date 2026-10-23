@@ -34,6 +34,7 @@ import {
   planClosePushes,
   planCloseReconciliation,
   bdVersion,
+  BUDGET_PER_MINT_OR_POST_MS,
   planLossyReapplies,
   pullWouldWrite,
   planPrePullPush,
@@ -1152,8 +1153,7 @@ describe('syncAlarm', () => {
 
   it('warns when the last two runs both blew the budget, naming the slowest spawns of the latest', () => {
     const notice = syncAlarm([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
-    expect(notice).toContain('last two runs took 35.9s and 37.2s')
-    expect(notice).toContain('20s budget')
+    expect(notice).toContain('last two runs took 35.9s and 37.2s against budgets of 20s and 20s')
     expect(notice).toContain('bd show ×2 20.3s, gh issue list 5.3s')
   })
 
@@ -1186,8 +1186,16 @@ describe('syncAlarm', () => {
     expect(failedAfterSlow).toContain('latest run failed')
     expect(failedAfterSlow).toContain('network, after one that took 35.9s against its 20s budget')
     const slowAfterFailed = syncAlarm([failed('network'), slow(37_200)].join('\n'))
-    expect(slowAfterFailed).toContain('over its 20s budget: the latest run took 37.2s, after one that failed (network)')
+    expect(slowAfterFailed).toContain('over budget: the latest run took 37.2s against its 20s budget, after one that failed (network)')
     expect(syncAlarm([record({}), failed('network')].join('\n'))).toBe('')
+  })
+
+  // A run's budget grows with the issues it minted and the comments it posted,
+  // so each run is judged, and reported, against its own.
+  it('judges each run against the budget it recorded', () => {
+    expect(syncAlarm([slow(35_900), record({ ms: 37_200, budgetMs: 40_000 })].join('\n'))).toBe('')
+    const notice = syncAlarm([slow(35_900), record({ ms: 57_200, budgetMs: 40_000 })].join('\n'))
+    expect(notice).toContain('the last two runs took 35.9s and 57.2s against budgets of 20s and 40s')
   })
 
   // Pacing a comment backlog, or waiting on another run's lock, is not the
@@ -1945,11 +1953,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('trims a log past twice its kept length back to the newest runs', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { repo, run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
-    const old = Array.from({ length: 401 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
+    const old = Array.from({ length: 4_001 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
     writeFileSync(join(repo, SYNC_RUN_LOG), old.join('\n') + '\n')
     expect(run().status).toBe(0)
     const lines = readFileSync(join(repo, SYNC_RUN_LOG), 'utf8').trim().split('\n')
-    expect(lines.length).toBeLessThanOrEqual(202)
+    expect(lines.length).toBeLessThanOrEqual(2_002)
     expect(lines.at(-1)).toContain('"event":"end"')
   })
 
@@ -2495,6 +2503,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const [entry] = runLog()
     expect(entry.idleMs).toBeGreaterThanOrEqual(800)
     expect(entry.idleMs).toBeLessThan(entry.ms)
+  })
+
+  // A filing session's mints and a backlog's posts are work no later run
+  // repeats, so they widen this run's budget instead of reading as the sync
+  // slowing down. A converged run keeps the base budget (pinned above).
+  it('widens the run budget for each issue minted and comment posted', () => {
+    const unminted = syncRow({ id: 'km-nw01', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const { run, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [[unminted, ...commentedRows()], [{ ...unminted, external_ref: ref(9) }, ...commentedRows()]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      env: { KM_BD_SYNC_BUDGET_MS: '1000' },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-nw01 → #9')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
+    expect(runLog()).toMatchObject([{ ok: true, mintsAndPosts: 3, budgetMs: 1000 + 3 * BUDGET_PER_MINT_OR_POST_MS }])
   })
 
   // Position pin for the mirror's slot: after the pre-pull push (a post bumps
