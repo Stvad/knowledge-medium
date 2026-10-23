@@ -9,7 +9,11 @@ import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { AgentTokensDialog } from './AgentTokensDialog.tsx'
-import { agentRuntimeBridgeRestartEvent, startAgentRuntimeBridge } from './bridge.ts'
+import {
+  agentRuntimeBridgeRestartEvent,
+  readConfiguredBridgeUrl,
+  startAgentRuntimeBridge,
+} from './bridge.ts'
 
 export { agentRuntimeBridgeRestartEvent } from './bridge.ts'
 
@@ -35,7 +39,7 @@ export const manageAgentTokensAction: ActionConfig<typeof ActionContextTypes.GLO
   description: 'Manage agent runtime tokens',
   context: ActionContextTypes.GLOBAL,
   handler: () => {
-    void openDialog(AgentTokensDialog)
+    void openDialog(AgentTokensDialog, {getBridgeUrl: readConfiguredBridgeUrl})
   },
 }
 
