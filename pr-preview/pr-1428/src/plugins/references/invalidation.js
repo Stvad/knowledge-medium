@@ -1,1 +1,1 @@
-import{CB as e,SB as t}from"../../../chunks/app-CJ2pg7SW.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{CB as e,SB as t}from"../../../chunks/app-fjwuUhqs.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

@@ -1,1 +1,1 @@
-import{GC as e,KC as t,qC as n}from"../../../chunks/app-CJ2pg7SW.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};
+import{GC as e,KC as t,qC as n}from"../../../chunks/app-fjwuUhqs.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};
