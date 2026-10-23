@@ -1,1 +1,1 @@
-import{Gx as e}from"../../../../chunks/app-3U8gGzvc.js";export{e as createEncryptedWorkspace};
+import{Gx as e}from"../../../../chunks/app-DXZVmwxJ.js";export{e as createEncryptedWorkspace};

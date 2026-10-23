@@ -1,1 +1,1 @@
-import{az as e,oz as t}from"../../../chunks/app-3U8gGzvc.js";export{e as PropertyShapeButton,t as PropertyShapeGlyph};
+import{az as e,oz as t}from"../../../chunks/app-DXZVmwxJ.js";export{e as PropertyShapeButton,t as PropertyShapeGlyph};
