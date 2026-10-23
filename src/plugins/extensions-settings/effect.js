@@ -1,1 +1,1 @@
-import{ar as e,ir as t,nr as n,rr as r}from"../../../chunks/app-C9Cqgk9y.js";export{n as extensionsSyncEffect,r as overridesEqual,t as readOverridesFromBlock,e as reconcileOverrides};
+import{ar as e,ir as t,nr as n,rr as r}from"../../../chunks/app-D2H8ZU97.js";export{n as extensionsSyncEffect,r as overridesEqual,t as readOverridesFromBlock,e as reconcileOverrides};
