@@ -1,1 +1,1 @@
-import{Iy as e}from"../../../chunks/app-DMBjolbs.js";export{e as SpatialNavigationShellDecorator};
+import{Iy as e}from"../../../chunks/app-BdJ5ZS-V.js";export{e as SpatialNavigationShellDecorator};

@@ -1,1 +1,1 @@
-import{OA as e,kA as t}from"../../chunks/app-DMBjolbs.js";export{e as BlockChildren,t as BlockComponent};
+import{OA as e,kA as t}from"../../chunks/app-BdJ5ZS-V.js";export{e as BlockChildren,t as BlockComponent};
