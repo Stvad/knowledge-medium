@@ -20,8 +20,9 @@ import { isMainModule } from './is-main-module.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const BRIDGE_SCRIPT = join('packages', 'agent-cli', 'dist', 'server.js')
-// The bridge's entry on a command line, as an absolute or cwd-relative path.
-const BRIDGE_COMMAND = /(\S*agent-cli\/dist\/server\.js)\b/
+// The bridge's entry on a command line: node's first non-flag argument, as an absolute or
+// cwd-relative path. Everything up to `server.js` belongs to it, spaces in the path included.
+const BRIDGE_COMMAND = /^\S+(?:\s+-\S+)*\s+(.*?agent-cli\/dist\/server\.js)\b/
 
 const MODES = {
   dev: { viteArgs: [], defaultPort: 5173 },
@@ -111,7 +112,8 @@ export const loopbackFree = async port =>
 /** Busy when lsof sees a listener, which covers a wildcard (`0.0.0.0`, `::`) that does not block a
  *  loopback bind on macOS, or when a loopback bind fails, which covers a missing lsof.
  *  Accepted: a server binding a wildcard (`vite --host`) in the instant between another launcher's
- *  check and its bind shares the port with it, since neither bind fails. */
+ *  check and its bind shares the port with it, since neither bind fails. So does a wildcard holder
+ *  lsof cannot list on macOS; lsof ships with macOS, and on Linux the loopback bind itself fails. */
 export const portIsBusy = async (port, listeners) => listeners.has(port) || !(await loopbackFree(port))
 
 /** The first usable port, and the busy ports it found on the way. `port` is null when none is usable. */

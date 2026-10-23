@@ -348,6 +348,10 @@ describe('bridge build', () => {
     expect(bridgeScript('/usr/bin/node /wt/packages/agent-cli/dist/server.js', null)).toBe('/wt/packages/agent-cli/dist/server.js')
     expect(bridgeScript('node packages/agent-cli/dist/server.js', null)).toBeUndefined()
     expect(bridgeScript('node vite.js', '/wt')).toBeUndefined()
+    expect(bridgeScript('/usr/bin/node /repo/My Worktree/packages/agent-cli/dist/server.js', '/elsewhere'))
+      .toBe('/repo/My Worktree/packages/agent-cli/dist/server.js')
+    expect(bridgeScript('node --inspect packages/agent-cli/dist/server.js --exit-on-stdin-close', '/wt'))
+      .toBe('/wt/packages/agent-cli/dist/server.js')
   })
 
   it('judges another worktree\'s bridge by that worktree\'s files', () => {
