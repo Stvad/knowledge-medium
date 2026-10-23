@@ -1,1 +1,0 @@
-import{cl as e,dl as t,fl as n,hl as r,ll as i,ml as a,pl as o,ul as s}from"../../../chunks/app-Cv1poVSz.js";export{e as blockTaggingPrefsType,i as blockTagsConfigCodec,s as blockTagsConfigPresetCore,t as blockTagsConfigProp,n as isValidTagName,o as normalizeBlockTagsConfig,a as selectableTagNames,r as tagNameIssue};

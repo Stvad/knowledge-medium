@@ -1,1 +1,0 @@
-import{EF as e,TF as t}from"../../../chunks/app-Cv1poVSz.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

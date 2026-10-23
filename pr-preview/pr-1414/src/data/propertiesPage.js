@@ -1,1 +1,0 @@
-import{b8 as e,y8 as t}from"../../chunks/app-Cv1poVSz.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

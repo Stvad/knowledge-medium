@@ -1,1 +1,0 @@
-import{Cx as e,Sx as t}from"../../../chunks/app-Cv1poVSz.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
