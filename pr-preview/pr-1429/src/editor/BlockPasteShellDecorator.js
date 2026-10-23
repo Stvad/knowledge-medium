@@ -1,0 +1,1 @@
+import{HO as e,UO as t}from"../../chunks/app-BS6_Irsb.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

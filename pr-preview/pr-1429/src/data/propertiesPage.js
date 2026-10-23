@@ -1,0 +1,1 @@
+import{b8 as e,y8 as t}from"../../chunks/app-BS6_Irsb.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

@@ -1,0 +1,1 @@
+import{Jk as e,qk as t}from"../../chunks/app-BS6_Irsb.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

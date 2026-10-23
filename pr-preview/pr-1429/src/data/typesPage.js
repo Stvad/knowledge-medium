@@ -1,0 +1,1 @@
+import{_8 as e,v8 as t}from"../../chunks/app-BS6_Irsb.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

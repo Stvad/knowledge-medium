@@ -1,0 +1,1 @@
+import{vN as e,yN as t}from"../../chunks/app-BS6_Irsb.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
