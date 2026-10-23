@@ -1,0 +1,1 @@
+import{oa as e,ua as t}from"../../../chunks/app-cF-O_dNd.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

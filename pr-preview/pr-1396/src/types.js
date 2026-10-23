@@ -1,0 +1,1 @@
+import{w5 as e}from"../chunks/app-cF-O_dNd.js";export{e as isChildBackedPropertiesWorkspace};
