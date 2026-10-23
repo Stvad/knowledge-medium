@@ -63,7 +63,7 @@ const packageJson = (slug: string): string => `${JSON.stringify({
     'react-dom': '^19.3.1',
     typescript: '^6.0.3',
     vite: '^8.3.4',
-    vitest: '^4.1.12',
+    vitest: '^5.0.5',
   },
 }, null, 2)}\n`
 
