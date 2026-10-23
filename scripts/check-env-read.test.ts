@@ -226,6 +226,8 @@ describe('secretRead', () => {
       // a subshell inside the heredoc scopes its cd as one outside does
       expect(secretRead("bash <<'EOF'\n(cd src)\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
       expect(secretRead("bash <<'EOF'\ncd src\n(ls)\nEOF\ngrep -rn FOO .", withSecret)).not.toBeNull()
+      // a script a shell reads is parsed whole, so a subshell spanning lines scopes its cd
+      expect(secretRead("bash <<'EOF'\n(\ncd src\n)\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
       // a heredoc whose line closes a subshell: the next subshell starts outside it
       expect(secretRead("(cd src; cat <<EOF)\nx\nEOF\n(grep -rn FOO .)", withSecret)).not.toBeNull()
       // its subshells unwind with it, so leaving an enclosing one after it lands outside

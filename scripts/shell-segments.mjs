@@ -42,11 +42,12 @@ export const SUBSTITUTED = '$(…)'
  *    arguments after it come back as a command of their own;
  *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
  *    apostrophe in either cannot open a quote that swallows what follows;
- *  - heredoc data comes back line by line (`\`-continued lines joined), so a
- *    call in it ends with its line. A line is read as the commands it would
- *    be when a shell reads it (`bash <<'EOF'`) or its substitutions run (an
- *    unquoted delimiter); the text of a quoted heredoc nothing runs is only
- *    split into words, and its segments are flagged `text: true`.
+ *  - heredoc data a shell reads (`bash <<'EOF'`) comes back as the commands
+ *    of the script it is, read whole. Data a text reader takes comes back
+ *    line by line (`\`-continued lines joined), so a call in it ends with its
+ *    line: read as commands when its substitutions run (an unquoted
+ *    delimiter), and otherwise only split into words, with its segments
+ *    flagged `text: true`.
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
@@ -89,6 +90,8 @@ export const withoutLiteralHeredocs = cmd => {
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
+// The shells, whose stdin is a script.
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 // A command's own word: past its leading assignments, path dropped.
 const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
 // Assignments alone, none of them substituting: a value that substitutes can
@@ -345,9 +348,15 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           if (eol === -1) break
         }
         if (wholeCommands) {
-          // a line a shell reads, or whose substitutions run, is read as the
-          // commands it would be; text nothing runs is only split into words
-          for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n')) {
+          // quoted data a shell reads is a script, read whole as that shell
+          // reads it, so a subshell or a quote spans its lines. Other data is
+          // read a line at a time: unquoted data is expanded before any
+          // reader sees it, quote-blind, so an apostrophe on one line cannot
+          // hide the next line's substitution. Text nothing runs is only
+          // split into words.
+          const script = quoted && lineCommands.some(words => SHELLS.has(commandWord(words)))
+          const lines = script ? [body.join('\n')] : body.join('\n').replace(/\\\n/g, ' ').split('\n')
+          for (const line of lines) {
             if (!text) for (const s of segment(line, true, { inputRedirects: sinks.inputRedirects })) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
             else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
           }
