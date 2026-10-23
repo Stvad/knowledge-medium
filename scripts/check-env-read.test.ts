@@ -58,6 +58,10 @@ describe('secretRead', () => {
     `awk -F= '{n=length($2); print $1"="n}' .env.local`,
     `bash -c 'cat .env.local'`,
     `sh -lc "grep KEY .env.local"`,
+    `bash -c -- 'cat .env.local'`,
+    `bash -c -o pipefail 'cat .env.local'`,
+    `bash -c -O extglob 'cat .env.local'`,
+    `bash -eoc pipefail 'cat .env.local'`,
     `eval 'cat .env.local'`,
     'if grep -q KEY .env.local; then echo set; fi',
     'for f in a; do cat .env.local; done',
@@ -204,12 +208,19 @@ describe('secretRead', () => {
     it('checks an explicit search root', () => {
       expect(secretRead(`grep -rn FOO ${withSecret}`, templateOnly)).not.toBeNull()
       expect(secretRead(`git -C ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
+      // an explicit work tree is what git grep searches
+      expect(secretRead(`git --git-dir=${withSecret}/.git --work-tree=${withSecret} grep --untracked --no-exclude-standard FOO`, templateOnly)).not.toBeNull()
+      expect(secretRead(`git --work-tree ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
+      expect(secretRead(`GIT_WORK_TREE=${withSecret} git grep --untracked --no-exclude-standard FOO`, templateOnly)).not.toBeNull()
+      expect(secretRead(`env GIT_WORK_TREE=${withSecret} git grep --no-index FOO`, templateOnly)).not.toBeNull()
       // each -C is relative to the one before
       expect(secretRead(`git -C ${dirname(withSecret)} -C ${basename(withSecret)} grep --no-index FOO`, templateOnly)).not.toBeNull()
     })
 
     it('restores the scope a heredoc began in, stack entries included', () => {
       expect(secretRead(`(cd ${withSecret}; bash <<'EOF'\n(ls)\nls\nEOF\ngrep -rn FOO .)`, templateOnly)).not.toBeNull()
+      // a quoted heredoc nested in a script is text, so its cd moves nothing
+      expect(secretRead("bash <<'OUT'\ncat > /dev/null <<'INNER'\ncd src\nINNER\ngrep -rn FOO .\nOUT", withSecret)).not.toBeNull()
       // a second reading of the same data starts where the first did
       expect(secretRead("bash <<'EOF'\ncd src\n(\nls\n)\ngrep -rn FOO .\nEOF", withSecret)).toBeNull()
     })

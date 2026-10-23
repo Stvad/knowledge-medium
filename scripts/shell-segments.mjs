@@ -362,7 +362,9 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
             const read = parts => {
               const redirects = []
               const read = parts.flatMap(part => segment(part, true, { inputRedirects: redirects }))
-              return { segments: read.map(s => ({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })), redirects }
+              // a heredoc nested in the data keeps its text flag, so its words stay data
+              const segments = read.map(s => ({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true, ...(s.text && { text: true }) }))
+              return { segments, redirects }
             }
             const lines = read(byLine)
             const whole = read([body.join('\n')])

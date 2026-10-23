@@ -267,25 +267,31 @@ const walkedNames = (verb, args, letters, filters) => {
 // --no-index, so every one counts), and a `grep` that reads ignored files
 // (--no-index unless --exclude-standard is the last of that pair, or
 // --untracked when --no-exclude-standard is) searches the directory. `words`
-// start at `git`; an abbreviated long option is not recognised.
-const gitReader = words => {
+// start at `git`; `assigns` are its leading assignments, as GIT_WORK_TREE
+// can name the work tree. An abbreviated long option is not recognised.
+const gitReader = (words, assigns) => {
   const git = gitCommand(words)
   if (!git) return null
   const { word, rest, cArgs } = git
-  // each -C is relative to the one before
+  // each -C is relative to the one before; a grep searches the work tree
   const dirs = cArgs.flatMap((a, i) => (a === '-C' ? [cArgs[i + 1]] : []))
+  const tree =
+    cArgs.flatMap((a, i) => (a === '--work-tree' ? [cArgs[i + 1]] : a.startsWith('--work-tree=') ? [a.slice(12)] : [])).at(-1) ??
+    assigns.findLast(a => a.startsWith('GIT_WORK_TREE='))?.slice('GIT_WORK_TREE='.length)
   const noIndex = rest.includes('--no-index')
   if (word === 'diff') return { verb: 'diff', args: rest.filter(a => a !== '--no-index'), dirs }
   const standard = rest.findLast(a => a === '--exclude-standard' || a === '--no-exclude-standard')
   const readsIgnored = noIndex ? standard !== '--exclude-standard' : rest.includes('--untracked') && standard === '--no-exclude-standard'
-  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dirs }
+  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dirs: tree ? [...dirs, tree] : dirs }
   return null
 }
 
-// The script of `bash -c '…'` (any flag cluster holding c), or undefined.
-const shellScriptOf = args => {
+// The words `bash -c` (any flag cluster holding c) may run as its script:
+// every word after that flag, since which one it is depends on options whose
+// values are not modelled here (`-o pipefail`, `-O extglob`).
+const shellScriptsOf = args => {
   const c = args.findIndex(a => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a))
-  return c < 0 ? undefined : args[c + 1]
+  return c < 0 ? [] : args.slice(c + 1)
 }
 
 /** The secret file `script` reads when run in `cwd`, as `{ file, walked }`, or null. */
@@ -294,18 +300,20 @@ export const secretRead = (script, cwd) => {
     const file = secretPathIn(target)
     if (file) return { file, walked: false }
   }
-  for (const { words, cdPath, text } of commandsInContext(shellCommandsWithDepth(script))) {
+  for (const { words, assigns, cdPath, text } of commandsInContext(shellCommandsWithDepth(script))) {
     if (text) continue // heredoc data nothing runs
     let verb = (words[0] ?? '').replace(/.*\//, '') // basename, strip any path
     let args = words.slice(1)
     let here
     let at = () => (here ??= effectiveCwd(cwd, cdPath).cwd)
 
-    const nested = verb === 'eval' ? args.join(' ') : SHELLS.has(verb) ? shellScriptOf(args) : undefined
-    const inner = nested && secretRead(nested, at())
-    if (inner) return inner
+    const nested = verb === 'eval' ? [args.join(' ')] : SHELLS.has(verb) ? shellScriptsOf(args) : []
+    for (const inner of nested) {
+      const hit = secretRead(inner, at())
+      if (hit) return hit
+    }
 
-    const git = verb === 'git' ? gitReader(words) : null
+    const git = verb === 'git' ? gitReader(words, assigns) : null
     if (git) {
       ;({ verb, args } = git)
       if (git.dirs.length) {

@@ -79,7 +79,8 @@ const moveDir = (cdPath, verb, args) => {
  * adversaries. A cd, pushd or popd moves cdPath and is not returned. A shell
  * reading a heredoc (`bash <<'EOF'`) runs it as a child, so every scope its
  * lines open or move is dropped when they end, and again when a second
- * reading of the same data (`reread`) begins.
+ * reading of the same data (`reread`) begins. A cd in text nothing runs (a
+ * quoted heredoc nested in a script) moves nothing.
  */
 export const commandsInContext = segments => {
   const out = []
@@ -109,7 +110,7 @@ export const commandsInContext = segments => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
-    if (DIR_CHANGES.has(tokens[i])) {
+    if (!text && DIR_CHANGES.has(tokens[i])) {
       // A relative target moves from the previous cd, so `cd a && cd b` lands in a/b.
       cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
