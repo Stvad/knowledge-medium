@@ -1,1 +1,1 @@
-import{QA as e,ZA as t}from"../../../chunks/app-FpeBXaFZ.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{QA as e,ZA as t}from"../../../chunks/app-HVIBenC3.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
