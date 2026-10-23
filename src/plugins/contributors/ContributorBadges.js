@@ -1,1 +1,1 @@
-import{Mu as e}from"../../../chunks/app-BBgPTGLe.js";export{e as contributorBadgesDecoratorContribution};
+import{Mu as e}from"../../../chunks/app-Dxxu2xcm.js";export{e as contributorBadgesDecoratorContribution};
