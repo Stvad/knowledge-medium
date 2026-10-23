@@ -1,0 +1,1 @@
+import{VH as e}from"../../chunks/app-CrjkDson.js";export{e as matchCharTrigger};

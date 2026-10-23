@@ -1,0 +1,1 @@
+import{cS as e,dS as t,fS as n,lS as r,mS as i,pS as a,uS as o}from"../../../chunks/app-CrjkDson.js";export{e as BINARY_ENVELOPE_MAGIC,r as BINARY_ENVELOPE_MIN_BYTES,o as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,n as decodeBinaryEnvelope,a as encodeBinaryEnvelope,i as hasBinaryEnvelopeMagic};

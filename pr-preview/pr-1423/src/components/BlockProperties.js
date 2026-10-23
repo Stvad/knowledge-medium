@@ -1,0 +1,1 @@
+import{$P as e}from"../../chunks/app-CrjkDson.js";export{e as BlockProperties};
