@@ -1,1 +1,1 @@
-import{ng as e}from"../../../chunks/app-Dps7Kyw9.js";export{e as CleanupAttachmentsDialog};
+import{ng as e}from"../../../chunks/app-DKEvDPVW.js";export{e as CleanupAttachmentsDialog};
