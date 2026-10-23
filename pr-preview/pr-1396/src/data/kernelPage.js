@@ -1,1 +1,1 @@
-import{m6 as e,p6 as t}from"../../chunks/app-c-F_f-Qr.js";export{t as getOrCreateKernelPage,e as kernelPageBlockId};
+import{m6 as e,p6 as t}from"../../chunks/app-DPVh5v-x.js";export{t as getOrCreateKernelPage,e as kernelPageBlockId};

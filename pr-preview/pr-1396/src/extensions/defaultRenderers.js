@@ -1,1 +1,1 @@
-import{IA as e,LA as t,RA as n}from"../../chunks/app-c-F_f-Qr.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{IA as e,LA as t,RA as n}from"../../chunks/app-DPVh5v-x.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};

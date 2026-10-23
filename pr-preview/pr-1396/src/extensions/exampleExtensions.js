@@ -1,1 +1,1 @@
-import{AO as e,jO as t}from"../../chunks/app-c-F_f-Qr.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{AO as e,jO as t}from"../../chunks/app-DPVh5v-x.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

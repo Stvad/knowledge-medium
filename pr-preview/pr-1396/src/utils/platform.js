@@ -1,1 +1,1 @@
-import{GL as e,WL as t}from"../../chunks/app-c-F_f-Qr.js";export{t as isIOS,e as isMacPlatform};
+import{GL as e,WL as t}from"../../chunks/app-DPVh5v-x.js";export{t as isIOS,e as isMacPlatform};
