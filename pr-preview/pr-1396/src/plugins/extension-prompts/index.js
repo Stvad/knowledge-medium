@@ -1,1 +1,0 @@
-import{ek as e,tk as t}from"../../../chunks/app-C-3vScMs.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

@@ -1,1 +1,0 @@
-import{eF as e,tF as t}from"../../../chunks/app-C-3vScMs.js";export{e as MetadataRow,t as PropertySectionLabel};

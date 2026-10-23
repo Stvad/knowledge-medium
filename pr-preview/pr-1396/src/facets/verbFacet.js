@@ -1,1 +1,0 @@
-import{PG as e}from"../../chunks/app-C-3vScMs.js";export{e as defineVerbFacet};

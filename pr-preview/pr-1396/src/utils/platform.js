@@ -1,1 +1,0 @@
-import{GL as e,WL as t}from"../../chunks/app-C-3vScMs.js";export{t as isIOS,e as isMacPlatform};

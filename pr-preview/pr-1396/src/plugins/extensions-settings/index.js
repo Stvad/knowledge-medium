@@ -1,1 +1,0 @@
-import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-C-3vScMs.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

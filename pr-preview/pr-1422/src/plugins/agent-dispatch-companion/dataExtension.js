@@ -1,1 +1,0 @@
-import{LG as e}from"../../../chunks/app-BSkZWbr3.js";export{e as agentDispatchCompanionDataExtension};
