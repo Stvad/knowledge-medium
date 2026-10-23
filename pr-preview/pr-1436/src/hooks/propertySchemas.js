@@ -1,1 +1,1 @@
-export{rz as usePropertySchemas}from"../../chunks/app-DcL3WBy3.js";
+export{rz as usePropertySchemas}from"../../chunks/app-ofobE383.js";
