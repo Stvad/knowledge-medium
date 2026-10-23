@@ -1,1 +1,1 @@
-import{AO as e,jO as t}from"../../chunks/app-C_SR-pix.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{AO as e,jO as t}from"../../chunks/app-CFSAQ58N.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
