@@ -93,8 +93,14 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
+/** Kills a daemon that never exits. A run is a cold node start plus a few HTTP
+ *  round trips to the stub bridge in this process: ~130ms alone, but up to
+ *  ~5.5s with three gates on the machine, far past the usual 3-6x. Sized at
+ *  ~3.5x that, and below the describe's budget. */
+const DAEMON_KILL_MS = 20_000
+
 const runDaemon = async () => execFileAsync(process.execPath, [daemonScript, '--config', configPath, '--once'], {
-  timeout: 5_000,
+  timeout: DAEMON_KILL_MS,
   env: {
     ...process.env,
     AGENT_RUNTIME_CONFIG_DIR: tempDir,
@@ -104,7 +110,7 @@ const runDaemon = async () => execFileAsync(process.execPath, [daemonScript, '--
   },
 })
 
-describe('dispatch contributor selection', {timeout: 20_000}, () => {
+describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, () => {
   it('uses the normalized profile for both token lookup and saved contributor selection', async () => {
     vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_DIR', selectionDir)
     await saveContributorSelection('dispatch-test', 'workspace-test', 'contributor-agent')
