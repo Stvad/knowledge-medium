@@ -37,11 +37,12 @@
  * Costs, accepted deliberately (Vlad, #461):
  *   - LATENCY. The cross-source rewrites are now on the user's commit
  *     path, one `tx.get` per source under the write lock, unbounded in
- *     the number of backlinks. Renames are rare and not on the typing
- *     path, so this is paid by a deliberate gesture rather than by
- *     keystrokes. The `sameTxProcessor.ts` header used to name this
- *     processor as the canonical thing same-tx is NOT for; that note is
- *     updated there.
+ *     the number of backlinks. Editing a page's title is the primary
+ *     rename gesture and it is typed, so every debounced commit of the
+ *     title pays this, not only a deliberate rename (#1401 tracks what
+ *     an intermediate spelling does to a source's wikilink). The
+ *     `sameTxProcessor.ts` header used to name this processor as the
+ *     canonical thing same-tx is NOT for; that note is updated there.
  *   - BLAST RADIUS. A throw here rolls back the user's rename, where
  *     post-commit would have failed the rewrite alone and left the
  *     rename committed. That is the same trade `mergeRetargetProcessor`

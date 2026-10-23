@@ -85,9 +85,10 @@ const isReactImportExternal = (id: string): boolean =>
     id.startsWith('react-dom/')
 
 // Root the dev-server fs allow-list at the primary checkout. In a git worktree
-// (.claude/worktrees/<name>) that's three levels up — the worktree has no
-// node_modules of its own, so deps resolve upward to the main checkout; outside
-// a worktree it's just this directory. Used only under VITE_TUNNEL (see below).
+// (.claude/worktrees/<name>) that's three levels up; outside a worktree it's
+// just this directory. A worktree installs its own node_modules
+// (scripts/ensure-deps.mjs), so this is wider than dependency resolution needs.
+// Used only under VITE_TUNNEL (see below).
 const configDir = path.dirname(fileURLToPath(import.meta.url))
 const tunnelFsRoot = configDir.includes(`${path.sep}.claude${path.sep}worktrees${path.sep}`)
     ? path.resolve(configDir, '../../..')
@@ -106,13 +107,12 @@ export default defineConfig(({command}) => {
         // testing — otherwise Vite's DNS-rebinding host check returns "Blocked
         // request". Off by default; the dev server still binds localhost only
         // (tailscaled forwards to it). See .claude/skills/ios-device-debug.
-        // fs.allow widens the file-serving root to the primary checkout so a
-        // worktree dev server can reach main's node_modules (see tunnelFsRoot
-        // above) — otherwise Vite 403s the /@fs requests and the app hangs at
-        // "Loading". We scope to the repo root rather than disabling strict mode
-        // (fs.strict:false), which would serve ANY readable file — SSH keys,
-        // cloud creds — over the tunnel URL. The allow-list keeps serving inside
-        // the repo, and Vite's default deny-list still blocks .env/certs within it.
+        // fs.allow sets the file-serving root to the primary checkout (see
+        // tunnelFsRoot above). We scope to the repo root rather than disabling
+        // strict mode (fs.strict:false), which would serve ANY readable file —
+        // SSH keys, cloud creds — over the tunnel URL. The allow-list keeps
+        // serving inside the repo, and Vite's default deny-list still blocks
+        // .env/certs within it.
         server: process.env.VITE_TUNNEL
             ? {allowedHosts: ['.ts.net'], fs: {allow: [tunnelFsRoot]}}
             : undefined,
