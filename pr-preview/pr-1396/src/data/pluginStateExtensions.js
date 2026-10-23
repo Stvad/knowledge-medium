@@ -1,1 +1,1 @@
-import{MW as e,NW as t}from"../../chunks/app-DXZVmwxJ.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{MW as e,NW as t}from"../../chunks/app-C-3vScMs.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

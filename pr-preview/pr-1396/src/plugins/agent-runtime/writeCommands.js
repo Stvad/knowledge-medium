@@ -1,1 +1,1 @@
-import{$d as e,ef as t,if as n,nf as r,rf as i,tf as a}from"../../../chunks/app-DXZVmwxJ.js";export{e as appendMarkdown,t as contentEcho,a as createPage,r as editBlock,i as parseAgentMarkdown,n as renderAppendView};
+import{$d as e,ef as t,if as n,nf as r,rf as i,tf as a}from"../../../chunks/app-C-3vScMs.js";export{e as appendMarkdown,t as contentEcho,a as createPage,r as editBlock,i as parseAgentMarkdown,n as renderAppendView};

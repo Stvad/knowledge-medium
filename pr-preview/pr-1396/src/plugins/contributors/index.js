@@ -1,1 +1,1 @@
-import{ju as e}from"../../../chunks/app-DXZVmwxJ.js";export{e as contributorsPlugin};
+import{ju as e}from"../../../chunks/app-C-3vScMs.js";export{e as contributorsPlugin};

@@ -1,1 +1,1 @@
-import{Tx as e}from"../../../chunks/app-DXZVmwxJ.js";export{e as WorkspaceSwitcher};
+import{Tx as e}from"../../../chunks/app-C-3vScMs.js";export{e as WorkspaceSwitcher};
