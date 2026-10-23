@@ -1,1 +1,1 @@
-import{Q8 as e}from"../../../chunks/app-BlSsUyKF.js";export{e as deriveWorkspaceIdNamespace};
+import{Q8 as e}from"../../../chunks/app-Br4GiDTh.js";export{e as deriveWorkspaceIdNamespace};
