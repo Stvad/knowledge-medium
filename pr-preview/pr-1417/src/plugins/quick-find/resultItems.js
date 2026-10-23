@@ -1,1 +1,1 @@
-import{GC as e,KC as t,qC as n}from"../../../chunks/app-smz__AaS.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};
+import{GC as e,KC as t,qC as n}from"../../../chunks/app-BYsnvD2A.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};
