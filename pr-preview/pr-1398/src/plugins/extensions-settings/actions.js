@@ -1,1 +1,1 @@
-import{or as e}from"../../../chunks/app-CsubWSze.js";export{e as openExtensionsSettingsAction};
+import{or as e}from"../../../chunks/app-D37NbBBs.js";export{e as openExtensionsSettingsAction};

@@ -1,1 +1,1 @@
-import{bd as e,yd as t}from"../../chunks/app-CsubWSze.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{bd as e,yd as t}from"../../chunks/app-D37NbBBs.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
