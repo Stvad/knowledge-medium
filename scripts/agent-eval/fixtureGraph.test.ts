@@ -84,7 +84,9 @@ const openGraph = async (): Promise<Graph> => {
 let graph: Graph
 let probe: GraphProbe
 
-// Seeding imports ~5.8k blocks: ~5s alone, budgeted for 6x under the gate.
+// Seeding imports ~5.8k blocks in ~5s alone, as sequential round trips to the
+// SQLite worker thread, which machine load stretches far past the usual 3-6x;
+// a timeout here skips every case.
 beforeAll(async () => {
   const seeded = await createTestDb()
   const seeding = await openFixtureTestGraph(seeded.db, {seed: true})
@@ -94,7 +96,7 @@ beforeAll(async () => {
   template = seeded.dir
   graph = await openGraph()
   probe = graph.probe
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await graph?.close()
