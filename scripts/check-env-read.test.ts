@@ -210,9 +210,17 @@ describe('secretRead', () => {
       expect(secretRead(`git -C ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
       // an explicit work tree is what git grep searches
       expect(secretRead(`git --git-dir=${withSecret}/.git --work-tree=${withSecret} grep --untracked --no-exclude-standard FOO`, templateOnly)).not.toBeNull()
-      expect(secretRead(`git --work-tree ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
       expect(secretRead(`GIT_WORK_TREE=${withSecret} git grep --untracked --no-exclude-standard FOO`, templateOnly)).not.toBeNull()
-      expect(secretRead(`env GIT_WORK_TREE=${withSecret} git grep --no-index FOO`, templateOnly)).not.toBeNull()
+      expect(secretRead(`env GIT_WORK_TREE=${withSecret} git grep --untracked --no-exclude-standard FOO`, templateOnly)).not.toBeNull()
+      // --no-index searches the current directory, whatever the work tree
+      expect(secretRead(`git --work-tree ${withSecret} grep --no-index FOO`, templateOnly)).toBeNull()
+      expect(secretRead(`git --work-tree /tmp grep --no-index FOO`, withSecret)).not.toBeNull()
+      vi.stubEnv('HOME', withSecret)
+      onTestFinished(() => {
+        vi.unstubAllEnvs()
+      })
+      expect(secretRead('GIT_WORK_TREE=~ git grep --untracked --no-exclude-standard FOO', templateOnly)).not.toBeNull()
+      expect(secretRead('git --work-tree=~ grep --untracked --no-exclude-standard FOO', templateOnly)).not.toBeNull()
       // each -C is relative to the one before
       expect(secretRead(`git -C ${dirname(withSecret)} -C ${basename(withSecret)} grep --no-index FOO`, templateOnly)).not.toBeNull()
     })

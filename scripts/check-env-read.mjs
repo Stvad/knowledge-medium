@@ -273,7 +273,8 @@ const gitReader = (words, assigns) => {
   const git = gitCommand(words)
   if (!git) return null
   const { word, rest, cArgs } = git
-  // each -C is relative to the one before; a grep searches the work tree
+  // each -C is relative to the one before; a grep of untracked files
+  // searches the work tree, while --no-index searches the current directory
   const dirs = cArgs.flatMap((a, i) => (a === '-C' ? [cArgs[i + 1]] : []))
   const tree =
     cArgs.flatMap((a, i) => (a === '--work-tree' ? [cArgs[i + 1]] : a.startsWith('--work-tree=') ? [a.slice(12)] : [])).at(-1) ??
@@ -282,7 +283,7 @@ const gitReader = (words, assigns) => {
   if (word === 'diff') return { verb: 'diff', args: rest.filter(a => a !== '--no-index'), dirs }
   const standard = rest.findLast(a => a === '--exclude-standard' || a === '--no-exclude-standard')
   const readsIgnored = noIndex ? standard !== '--exclude-standard' : rest.includes('--untracked') && standard === '--no-exclude-standard'
-  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dirs: tree ? [...dirs, tree] : dirs }
+  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dirs: tree && !noIndex ? [...dirs, expandTilde(tree)] : dirs }
   return null
 }
 
