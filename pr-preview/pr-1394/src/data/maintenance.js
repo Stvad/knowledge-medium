@@ -1,1 +1,1 @@
-import{AK as e,_X as t,gX as n,hX as r,kK as i}from"../../chunks/app-Mu-yBKLv.js";export{i as oweAnalyzeInstalledTables,r as runAnalyzeIfStale,e as runAnalyzeInstalledTables,n as runAnalyzeNow,t as runAnalyzeTables};
+import{AK as e,_X as t,gX as n,hX as r,kK as i}from"../../chunks/app-D-3rRFZF.js";export{i as oweAnalyzeInstalledTables,r as runAnalyzeIfStale,e as runAnalyzeInstalledTables,n as runAnalyzeNow,t as runAnalyzeTables};
