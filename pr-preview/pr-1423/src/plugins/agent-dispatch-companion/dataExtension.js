@@ -1,1 +1,0 @@
-import{LG as e}from"../../../chunks/app-CrjkDson.js";export{e as agentDispatchCompanionDataExtension};
