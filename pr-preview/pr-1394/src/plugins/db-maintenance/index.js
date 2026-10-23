@@ -1,1 +1,1 @@
-import{co as e,lo as t}from"../../../chunks/app-C82sK3ge.js";export{e as dbMaintenancePlugin,t as rebuildQueryStatsAction};
+import{co as e,lo as t}from"../../../chunks/app-C9LTtQml.js";export{e as dbMaintenancePlugin,t as rebuildQueryStatsAction};
