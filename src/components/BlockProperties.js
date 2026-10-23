@@ -1,1 +1,1 @@
-import{$P as e}from"../../chunks/app-S2PusxO2.js";export{e as BlockProperties};
+import{$P as e}from"../../chunks/app-BBgPTGLe.js";export{e as BlockProperties};

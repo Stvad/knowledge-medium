@@ -1,1 +1,1 @@
-import{wb as e}from"../../../chunks/app-S2PusxO2.js";export{e as defaultToolbarItems};
+import{wb as e}from"../../../chunks/app-BBgPTGLe.js";export{e as defaultToolbarItems};

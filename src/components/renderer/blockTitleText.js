@@ -1,1 +1,1 @@
-import{hP as e,mP as t}from"../../../chunks/app-S2PusxO2.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
+import{hP as e,mP as t}from"../../../chunks/app-BBgPTGLe.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

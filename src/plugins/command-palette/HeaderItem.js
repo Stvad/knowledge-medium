@@ -1,1 +1,1 @@
-import{QE as e}from"../../../chunks/app-S2PusxO2.js";export{e as CommandPaletteHeaderItem};
+import{QE as e}from"../../../chunks/app-BBgPTGLe.js";export{e as CommandPaletteHeaderItem};
