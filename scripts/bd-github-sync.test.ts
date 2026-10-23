@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +34,7 @@ import {
   planClosePushes,
   planCloseReconciliation,
   bdVersion,
+  BUDGET_PER_MINT_OR_POST_MS,
   planLossyReapplies,
   pullWouldWrite,
   planPrePullPush,
@@ -113,12 +114,19 @@ describe('extractBeadIds', () => {
     expect(extractBeadIds('km-abc km-db km-7f3a86abc')).toEqual([])
   })
 
-  // Over-matching is the cheap direction: a hyphenated suffix, or ids joined
-  // by a slash, still yield every id.
-  it('stops at the hash, so an id followed by a suffix or a slash still counts', () => {
-    expect(extractBeadIds('km-abcd-era and km-avrg-retain-measure')).toEqual(['km-abcd', 'km-avrg'])
+  // No bd id continues with a hyphenated suffix, so a name built that way is
+  // a file or a bin, not an id. Ids joined by a slash are still ids.
+  it('does not read a word a hyphen continues as an id', () => {
+    expect(extractBeadIds('--body-file tmp/km-a1b2-body.md; bin km-agent-dispatch; km-abcd-era')).toEqual([])
     expect(extractBeadIds('tracks km-abcd/km-efgh')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('fixed km-abcd - and km-efgh.')).toEqual(['km-abcd', 'km-efgh'])
     expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual(['km-merge'])
+  })
+
+  it('takes a child id whole', () => {
+    expect(extractBeadIds('see km-abcd.14, under km-abcd.')).toEqual(['km-abcd.14', 'km-abcd'])
+    expect(extractBeadIds('and km-1786746045106-1-1eb9b300.2')).toEqual(['km-1786746045106-1-1eb9b300.2'])
+    expect(extractBeadIds('km-abcd.14-notes.md')).toEqual([])
   })
 
   // A branch under an agent prefix names the branch, not a bead.
@@ -281,15 +289,6 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh release create v1')).toBe(true)
     // an EDIT really can carry no text, so it keeps the flag list
     expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
-    // gh keeps the LAST -X/--method (measured: -X POST -X GET answers as a
-    // GET, the reverse 404s as a POST), so a read token earlier in the argv
-    // must not suppress the warning for what is actually a mutation
-    expect(
-      carriesPublishableText(`gh api -X GET -X PUT repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(true)
-    expect(
-      carriesPublishableText(`gh api -X PUT -X GET repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(false)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
@@ -323,6 +322,122 @@ describe('graphql calls', () => {
   })
 })
 
+// A read publishes nothing wherever it sits: in a loop, a pipe, a
+// substitution, beside a redirect. Each gh api call is judged by its own argv
+// words, so an expansion that only continues a word, or one in another
+// command, does not make it a publish. Shapes from blocked agent commands.
+describe('gh api reads', () => {
+  it.each([
+    `for n in 449 466; do gh api -X GET "repos/${REPO}/issues/$n/timeline?per_page=100" --jq '.[] | .event' | tail -4; done`,
+    `for id in 41 42; do gh api repos/${REPO}/pulls/comments/$id --jq '"\\(.path)\\n\\(.body)"' | head -20; done`,
+    `gh api 'repos/${REPO}/contents/pr-preview?ref=gh-pages' --jq '.[].name' > $SP/dirs.txt; wc -l < $SP/dirs.txt`,
+    `gh pr view 1347 --json state --jq .state; gh api repos/${REPO}/commits/$(gh pr view 1347 --json mergeCommit --jq .mergeCommit.oid) --jq '.parents | length'`,
+    `r=$(gh api repos/${REPO}/pulls/1307/merge-async/abc --jq '.status'); echo "$r"`,
+    `for t in $(gh api graphql -f query='{repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:1115){reviewThreads(first:60){nodes{id isResolved}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | .id'); do echo "$t"; done`,
+    `for n in 1320 1325; do gh api graphql -f query="query { repository(owner:\\"Stvad\\", name:\\"knowledge-medium\\") { pullRequest(number:$n) { reviews(last: 3) { nodes { submittedAt } } } } }" --jq '.data'; done`,
+    `gh pr checks 1332; gh pr diff 1332 | head; gh issue list --limit 5; gh api -X GET repos/${REPO}/pulls/1332/reviews -f per_page=100 | jq length`,
+    `gh api repos/${REPO}/issues/1 2>&1 | tail -3`,
+    // an expansion filling a value adds no flag
+    `for c in 1 2; do gh api repos/${REPO}/pulls/comments/$c -H "Authorization: $T" --jq ".id == $c" -F per_page=$n -X GET; done`,
+    `gh api -XGET repos/${REPO}/issues -fstate=$S`,
+    `gh api repos/${REPO}/issues/1 >| $OUT`,
+    `gh -X GET api rate_limit --jq .rate.limit`,
+    `gh api -iXGET repos/${REPO}/issues -fstate=open`,
+    `gh -iX GET api rate_limit --jq .rate.limit`,
+    `gh api repos/${REPO}/pulls/1 --jq '{number,title}'`,
+    // gh keeps the LAST method: a later GET makes the call a read
+    `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
+    // a heredoc that only mentions a call reads as one, and one that reads
+    `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
+    // a quoted heredoc's markdown backticks are text, not substitutions
+    "python3 - <<'EOF'\nrep(\"use `gh api` with a `-f` field here\")\nEOF",
+    // even after an apostrophe, which a line read as shell would open a quote on
+    "cat > notes.md <<'EOF'\nDon't use `gh api` with a `-f` field\nEOF",
+    // nor are a quoted heredoc's template literals, in source code that mentions a call
+    "python3 - <<'EOF'\nconsole.log(`gh api graphql: ${verb}`)\nEOF",
+  ])('is not a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(false)
+  })
+
+  it.each([
+    `for n in 1 2; do gh api repos/${REPO}/issues/$n/comments -f body="see #653"; done`,
+    // a read beside a write does not vouch for the write
+    `gh api repos/${REPO}/pulls/1/reviews --jq length; gh api repos/${REPO}/issues/1/comments -f body=hi`,
+    `gh api -X GET repos/${REPO}/issues/1 && gh api -X POST repos/${REPO}/issues/1/comments`,
+    // a word that STARTS with an expansion can be any flags at all
+    `for u in a; do gh api $u; done`,
+    `gh api "\${ARGS[@]}"`,
+    `gh api repos/${REPO}/issues/1/comments $(printf -- '-f body=x')`,
+    `gh api -X "$M" repos/${REPO}/issues/1`,
+    // an expansion that completes a flag, or sits outside a value
+    `flag=f; gh api repos/${REPO}/issues/1/comments -"$flag" body='see #653'`,
+    `gh api repos/${REPO}/issues/1/comments --$kind body=x`,
+    `gh api repos/${REPO}/issues/1/comments "$EXTRA"`,
+    // a graphql document the gate cannot read could be a mutation
+    `for q in a; do gh api graphql -f query="$Q"; done`,
+    `gh api graphql -F query=@q.graphql | jq .`,
+    `gh api graphql --input q.json | jq .`,
+    // flags after a substitution or an fd redirect still belong to the call
+    `gh api repos/${REPO}/issues/$(echo 1)/comments -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments >| out -f body=y`,
+    // an apostrophe in a comment or a $'…' string opens no quote
+    `# Reply to the reviewer (it's fixed)\ngh api repos/${REPO}/pulls/1385/comments/123/replies -f body="tracked in km-abcd"`,
+    `MSG=$'Don\\'t merge'\ngh api repos/${REPO}/issues/1/comments -f body="$MSG"`,
+    // a comment's words are no flags of the call
+    `gh api repos/${REPO}/issues/1/comments -f body=x # check after with -X GET`,
+    // gh takes api's own flags ahead of the word api
+    `gh -X POST -f body='see #653' api repos/${REPO}/issues/1/comments`,
+    `gh -f body=x api repos/${REPO}/issues/1/comments`,
+    // every spelling pflag reads: an `=` after a short flag, a short cluster
+    `gh api graphql -F=query=@body.gql`,
+    `gh api repos/${REPO}/issues/1/comments -iFbody='#123'`,
+    `gh api repos/${REPO}/issues/1/comments -iF body=x`,
+    `gh -iF body=x api repos/${REPO}/issues/1/comments`,
+    // a shell reading a quoted heredoc anywhere on its line runs the data
+    `cat <<'EOF' | bash\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // or one the line leaves open, to come after the data
+    `cat <<'EOF' |\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF\nbash`,
+    // a redirection between a flag and its value is no value
+    `gh api graphql -F > /tmp/out query=@doc.gql`,
+    // and its target is no flag, even flag-shaped
+    `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
+    // bash ends a word at an unquoted `>`: what follows is where output goes
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=x> -XGET`,
+    // a word the shell turns into a flag: an ANSI-C escape, a brace list
+    `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
+    `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=x}`,
+    `gh api repos/${REPO}/issues/1/comments -{F,i}body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {,}-XPOST -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {{,}-XPOST,} -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f \${x}{,body=x,-XPOST}`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f body=x --jq $'\\x2d'{,XPOST}`,
+    // and a read token earlier in the argv does not make a mutation one
+    `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
+    // heredoc data is one call per line: a later GET line does not make the post a read
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
+    // a quoted heredoc's data is not expanded, but a shell reading it runs it
+    `bash <<'EOF'\nx;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // and a script's string spanning lines is its own, not a quote that hides the call
+    `bash <<'EOF'\necho 'a\nb'; gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // an unquoted heredoc's backticks run
+    "cat <<EOF\nposted: `gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=y`\nEOF",
+    // a call the reader swallows (here: an unterminated quote) still counts
+    `echo \\#'\ngh api repos/${REPO}/issues/1/comments -f body=y`,
+    // an escaped `>` is text, and the `|` after it a pipe into the call
+    `echo \\>|gh api repos/${REPO}/issues/1/comments -f body=y`,
+    // a quoted ">" argument is no redirect, so the flag after it still counts
+    `gh api repos/${REPO}/issues/1/comments ">" -f body=y`,
+    // a method-like word another flag takes as its value is text
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=y --template --method=GET`,
+    // heredoc data that bash runs is a call
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+  ])('is still a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(true)
+  })
+})
+
 // The repo's own review-reply command: one invocation whose output is the
 // reply's URL, so the read-back covers it like a single gh publish.
 describe('the pr:reply command', () => {
@@ -333,7 +448,8 @@ describe('the pr:reply command', () => {
       expect(carriesPublishableText(cmd), cmd).toBe(true)
       expect([...publishableKinds(cmd)], cmd).toEqual(['review-comment'])
     }
-    expect(isPostVerifiable('cd x && pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+    expect(isPostVerifiable('cd x; pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+    expect(matchesAnyPublish("# it's posted below\npnpm pr:reply 1048 4040271733 body.md")).toBe(true)
   })
 
   // Its gh call runs where no hook sees it, so every spelling of the
@@ -358,6 +474,48 @@ describe('the pr:reply command', () => {
     // a heredoc line is data, even one spelled like the invocation
     expect(matchesAnyPublish('cat > notes.md <<EOF\npnpm pr:reply 1 2 body.md\nEOF')).toBe(false)
     expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
+  })
+})
+
+// Naming THIS repository, or moving into a directory first, changes nothing
+// the read-back depends on: it still finds the object in this repo's URLs.
+describe('this repository and a leading cd', () => {
+  it.each([
+    'gh pr create --repo Stvad/knowledge-medium --base master --title t --body-file b.md',
+    'gh pr edit 1368 --repo Stvad/knowledge-medium --body-file b.md',
+    'gh -R Stvad/knowledge-medium pr comment 12 --body-file b.md',
+    'gh pr comment 12 -RStvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 --repo=stvad/Knowledge-Medium --body-file b.md',
+    'gh pr comment 12 --repo "Stvad/knowledge-medium" --body-file b.md',
+    'gh pr comment 12 -R https://github.com/Stvad/knowledge-medium --body-file b.md',
+    'GH_REPO=Stvad/knowledge-medium gh pr comment 12 --body-file b.md',
+    'cd /Users/x/wt && gh pr create --title t --body-file b.md',
+    "cd '/Users/x/my wt' && pnpm pr:reply 1048 4040271733 body.md --resolve",
+  ])('is covered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(true)
+  })
+
+  it.each([
+    'gh pr comment 12 --repo Stvad/knowledge-medium-beads --body-file b.md',
+    // the shell joins a quoted value to what follows it
+    'gh pr comment 12 --repo "Stvad/knowledge-medium"-beads --body-file b.md',
+    "gh pr comment 12 -R 'Stvad/knowledge-medium'x --body-file b.md",
+    'gh pr comment 12 --repo Stvad/knowledge-medium --repo other/x --body-file b.md',
+    'GH_REPO=other/x gh pr comment 12 --repo Stvad/knowledge-medium --body-file b.md',
+    // another host: the read-back looks on github.com only
+    'GH_HOST=ghe.example gh pr comment 12 -R Stvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 -R ghe.example/Stvad/knowledge-medium --body-file b.md',
+    'gh api --hostname ghe.example repos/Stvad/knowledge-medium/issues/1/comments -f body=x',
+    // -q is --jq, which hides the object the read-back reads
+    'gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=x -q .html_url',
+    'cd "$WT" && gh pr create --title t --body-file b.md',
+    // a cd that fails still runs the publish after `;`, from somewhere else
+    'cd x; gh pr create --title t --body-file b.md',
+    'cd x && cd y && gh pr create --title t --body-file b.md',
+    'cd x && gh pr create --title t --body-file b.md && echo done',
+    'echo x && gh pr create --title t --body-file b.md',
+  ])('stays uncovered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(false)
   })
 })
 
@@ -995,8 +1153,7 @@ describe('syncAlarm', () => {
 
   it('warns when the last two runs both blew the budget, naming the slowest spawns of the latest', () => {
     const notice = syncAlarm([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
-    expect(notice).toContain('last two runs took 35.9s and 37.2s')
-    expect(notice).toContain('20s budget')
+    expect(notice).toContain('last two runs took 35.9s and 37.2s against budgets of 20s and 20s')
     expect(notice).toContain('bd show ×2 20.3s, gh issue list 5.3s')
   })
 
@@ -1029,8 +1186,16 @@ describe('syncAlarm', () => {
     expect(failedAfterSlow).toContain('latest run failed')
     expect(failedAfterSlow).toContain('network, after one that took 35.9s against its 20s budget')
     const slowAfterFailed = syncAlarm([failed('network'), slow(37_200)].join('\n'))
-    expect(slowAfterFailed).toContain('over its 20s budget: the latest run took 37.2s, after one that failed (network)')
+    expect(slowAfterFailed).toContain('over budget: the latest run took 37.2s against its 20s budget, after one that failed (network)')
     expect(syncAlarm([record({}), failed('network')].join('\n'))).toBe('')
+  })
+
+  // A run's budget grows with the issues it minted and the comments it posted,
+  // so each run is judged, and reported, against its own.
+  it('judges each run against the budget it recorded', () => {
+    expect(syncAlarm([slow(35_900), record({ ms: 37_200, budgetMs: 40_000 })].join('\n'))).toBe('')
+    const notice = syncAlarm([slow(35_900), record({ ms: 57_200, budgetMs: 40_000 })].join('\n'))
+    expect(notice).toContain('the last two runs took 35.9s and 57.2s against budgets of 20s and 40s')
   })
 
   // Pacing a comment backlog, or waiting on another run's lock, is not the
@@ -1788,11 +1953,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('trims a log past twice its kept length back to the newest runs', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { repo, run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
-    const old = Array.from({ length: 401 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
+    const old = Array.from({ length: 4_001 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
     writeFileSync(join(repo, SYNC_RUN_LOG), old.join('\n') + '\n')
     expect(run().status).toBe(0)
     const lines = readFileSync(join(repo, SYNC_RUN_LOG), 'utf8').trim().split('\n')
-    expect(lines.length).toBeLessThanOrEqual(202)
+    expect(lines.length).toBeLessThanOrEqual(2_002)
     expect(lines.at(-1)).toContain('"event":"end"')
   })
 
@@ -2338,6 +2503,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const [entry] = runLog()
     expect(entry.idleMs).toBeGreaterThanOrEqual(800)
     expect(entry.idleMs).toBeLessThan(entry.ms)
+  })
+
+  // A filing session's mints and a backlog's posts are work no later run
+  // repeats, so they widen this run's budget instead of reading as the sync
+  // slowing down. A converged run keeps the base budget (pinned above).
+  it('widens the run budget for each issue minted and comment posted', () => {
+    const unminted = syncRow({ id: 'km-nw01', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const { run, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [[unminted, ...commentedRows()], [{ ...unminted, external_ref: ref(9) }, ...commentedRows()]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      env: { KM_BD_SYNC_BUDGET_MS: '1000' },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-nw01 → #9')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
+    expect(runLog()).toMatchObject([{ ok: true, mintsAndPosts: 3, budgetMs: 1000 + 3 * BUDGET_PER_MINT_OR_POST_MS }])
   })
 
   // Position pin for the mirror's slot: after the pre-pull push (a post bumps
@@ -3185,7 +3369,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     for (const cmd of [
       'gh pr comment 1 --body "$(cat body.md)"',
       'cat body.md | gh pr comment 12 -F -',
-      'cd subdir && gh pr create --body-file missing-body.md --title t',
+      'cd subdir; gh pr create --body-file missing-body.md --title t',
     ])
       expect(hook(cmd).status, cmd).toBe(2)
   })
@@ -3554,6 +3738,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
+  // A read never reaches a lookup or a block, however it is wrapped.
+  it('passes looped, piped and substituted REST reads untouched', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      `for n in 449 466; do gh api -X GET "repos/Stvad/knowledge-medium/issues/$n/timeline" --jq '.[] | .event' | tail -4; done`,
+      `gh api repos/Stvad/knowledge-medium/commits/$(gh pr view 1347 --json mergeCommit --jq .mergeCommit.oid) --jq '.parents | length'`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
   it('does not extend the read exemption to anything beside a graphql read', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const read = `gh api graphql -f query='query{viewer{login}}'`
@@ -3577,11 +3772,184 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('pnpm pr:reply 1048 4040271733 missing-body.md').status).toBe(0)
     expect(shimCalls()).toBe('')
     // its text is always in a file, so uncovered it is text outside the command
-    const r = hook('cd sub && pnpm pr:reply 1048 4040271733 missing-body.md')
+    const r = hook('cd sub; pnpm pr:reply 1048 4040271733 missing-body.md')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('post-publication read-back covers')
+    // a leading cd only picks where it runs
+    expect(hook('cd sub && pnpm pr:reply 1048 4040271733 missing-body.md --resolve').status).toBe(0)
     // beside a graphql read it is still a publish in its own right
     expect(hook(`gh api graphql -f query='query{viewer{login}}' && pnpm pr:reply 1 2 b.md`).status).toBe(2)
+  })
+
+  // A refused compound runs NONE of its steps, so the message says so, names
+  // what made it uncovered, and gives the shape that passes — the retry that
+  // follows must not publish a body file the refused call never wrote.
+  it('says nothing ran, names the token, and gives the one-shape recipe', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    const r = hook(`cat > pr-body.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file pr-body.md`)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('nothing in this command ran')
+    expect(r.stderr).toContain('the redirect `>`')
+    expect(r.stderr).toContain('the heredoc `<<`')
+    expect(r.stderr).toContain('Its text comes from `--body-file`')
+    expect(r.stderr).toContain('with the Write tool to a NEW file in your session scratchpad')
+    expect(r.stderr).toContain('--body-file <scratchpad>/pr-body.md')
+    const piped = hook('gh pr create --title t --body-file b.md 2>&1 | tail -3')
+    expect(piped.stderr).toContain('the redirect `2>&1`')
+    expect(piped.stderr).toContain('the pipe `|`')
+    expect(hook('pnpm pr:reply 1 2 "$F"').stderr).toContain('the expansion `$F`')
+    expect(hook('gh pr comment 1 --body "$(cat notes.md)"').stderr).toContain('the expansion `$(…)`')
+    // a verb no spelling makes covered gets the inline advice instead
+    const merge = hook('gh pr merge 12 -F msg.txt')
+    expect(merge.stderr).toContain('because of `gh pr merge`')
+    expect(merge.stderr).toContain('put the text inline')
+    expect(merge.stderr).not.toContain('Write tool')
+    // with a stale file too, the escapes come with a new file, never alone
+    const staleMerge = hook('gh pr merge 12 -F /tmp/claude-501/m.txt')
+    expect(staleMerge.stderr).toContain('Write the text afresh')
+    expect(staleMerge.stderr).toContain('or, with the text in a new file, after checking every #N')
+  })
+
+  // Every session writes to /tmp/claude-<uid>/, so a body file there outside a
+  // session's own scratchpad can be another session's — the measured way a
+  // stale body with a foreign close keyword got published. No escape lifts it.
+  it("refuses a body file in the shared tmp outside a session's scratchpad", () => {
+    const { hook, repo, shimCalls } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      'gh pr create --title t --body-file /tmp/claude-501/pr-body.md',
+      'gh pr edit 1 --body-file=/private/tmp/claude-501/km-1024-scratch/msg2.txt',
+      'gh issue comment 1 -F/tmp/claude-501/c.md',
+      'pnpm pr:reply 1048 4040271733 /tmp/claude-501/reply.md --resolve',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=@/tmp/claude-501/c.md',
+      'gh pr create --title t -T /tmp/claude-501/stale.md',
+      // on a CLI verb a body path keeps its `=`
+      'gh pr comment 1 --body-file /tmp/claude-501/dir=x/body.md',
+      'gh pr comment 1 -F /tmp/claude-501/old=body.md',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments --input /tmp/claude-501/payload.json',
+      // short clusters spell the same flags
+      'gh pr create --title t -dF /tmp/claude-501/pr-body.md',
+      'gh api repos/Stvad/knowledge-medium/issues/1/comments -iFbody=@/tmp/claude-501/c.md',
+      'gh issue create --title t --template=/tmp/claude-501/stale.md',
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 1 -F /tmp/claude-501/m.txt',
+    ]) {
+      const r = hook(cmd)
+      expect(r.status, cmd).toBe(2)
+      expect(r.stderr, cmd).toContain('nothing in this command ran')
+      expect(r.stderr, cmd).toContain("outside this session's scratchpad")
+    }
+    // resolved against the directory the command runs in
+    const relative = hook('gh pr create --title t --body-file pr-body.md', { cwd: '/tmp/claude-501' })
+    expect(relative.stderr).toContain('/tmp/claude-501/pr-body.md: in /tmp/claude-501/')
+    expect(hook('cd /tmp/claude-501 && gh pr create --title t --body-file pr-body.md').status).toBe(2)
+    // a session's own scratchpad is its own
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/0b3c9d2e/scratchpad/pr-body.md').status).toBe(0)
+    // and another running session's is not
+    const own = { session_id: 'sess-a' }
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/pr-body.md', own).status).toBe(0)
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-b/scratchpad/pr-body.md', own).status).toBe(2)
+    // a path is judged once `..` is resolved
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/x/../scratchpad/b.md', own).status).toBe(0)
+    expect(hook('gh pr create --title t --body-file /private/tmp/claude-501/-Users-x-wt/sess-a/scratchpad/../../sess-b/b.md', own).status).toBe(2)
+    // gh api's --template formats its answer; a graphql document from a file is checked like a body
+    expect(hook("KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi --template /tmp/claude-501/t").status).toBe(0)
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api graphql -F query=@/tmp/claude-501/q.graphql').status).toBe(2)
+    // a quoted `">"` is an argument, so the field after it is still read
+    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api repos/Stvad/knowledge-medium/issues/1/comments ">" -F body=@/tmp/claude-501/c.md').status).toBe(2)
+    // a symlink is judged by the file it names
+    const shared = mkdtempSync('/tmp/claude-gate-test-')
+    writeFileSync(join(shared, 'body.md'), 'another session')
+    symlinkSync(join(shared, 'body.md'), join(repo, 'link.md'))
+    const linked = hook('gh pr create --title t --body-file link.md')
+    expect(linked.status).toBe(2)
+    expect(linked.stderr).toContain("which every session shares, and outside this session's scratchpad")
+    rmSync(shared, { recursive: true, force: true })
+    // a read is not a publish
+    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1 > /tmp/claude-501/issue.json').status).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  it('refuses a body file written before the session started', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    const hourAgo = new Date(Date.now() - 3_600_000)
+    writeFileSync(join(repo, 'old-body.md'), 'from an earlier session')
+    utimesSync(join(repo, 'old-body.md'), hourAgo, hourAgo)
+    // the session began ten minutes ago, by the first timestamp its transcript records
+    const started = Date.now() - 600_000
+    const transcript = join(repo, 'sess.jsonl')
+    // a resumed transcript can open with a later queue entry ahead of the history it copies
+    writeFileSync(
+      transcript,
+      `{"type":"bridge-session"}\n{"type":"queue-operation","timestamp":"${new Date().toISOString()}"}\n{"type":"user","timestamp":"${new Date(started).toISOString()}"}\n`,
+    )
+    const session = { session_id: 'sess', transcript_path: transcript }
+    const early = new Date(started + 30_000)
+    writeFileSync(join(repo, 'early-body.md'), 'written early in this session')
+    utimesSync(join(repo, 'early-body.md'), early, early)
+    expect(hook('gh pr create --title t --body-file early-body.md', session).status).toBe(0)
+    const r = hook('gh pr create --title t --body-file old-body.md', session)
+    expect(r.status).toBe(2)
+    // as stored: a file system may round the time it was given
+    const stored = new Date(statSync(join(repo, 'old-body.md')).mtimeMs).toISOString()
+    expect(r.stderr).toContain(`${join(repo, 'old-body.md')}: last written ${stored}, before this session started`)
+    writeFileSync(join(repo, 'new-body.md'), 'written in this session')
+    expect(hook('gh pr create --title t --body-file new-body.md', session).status).toBe(0)
+    // even one the command rewrites: whether the write runs first is the
+    // command's order, which this gate does not read
+    for (const cmd of [
+      `KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 cat > old-body.md <<'EOF'\nx\nEOF\ngh pr create --title t --body-file old-body.md`,
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr create --title t --body-file old-body.md && printf fresh > old-body.md',
+    ])
+      expect(hook(cmd, session).status, cmd).toBe(2)
+    // a subagent's session began with the main transcript, not its own
+    const beforeSubagent = new Date(started + 60_000)
+    utimesSync(join(repo, 'new-body.md'), beforeSubagent, beforeSubagent)
+    mkdirSync(join(repo, 'sess', 'subagents'), { recursive: true })
+    writeFileSync(join(repo, 'sess', 'subagents', 'agent-1.jsonl'), `{"timestamp":"${new Date().toISOString()}"}\n`)
+    const sub = { session_id: 'sess', agent_id: 'a1', transcript_path: join(repo, 'sess', 'subagents', 'agent-1.jsonl') }
+    expect(hook('gh pr create --title t --body-file new-body.md', sub).status).toBe(0)
+    // a name the shell expands could be any file, so it is refused, never passed
+    for (const cmd of [
+      'gh pr create --title t --body-file old-*.md',
+      'gh pr create --title t --body-file ~+/old-body.md',
+      'gh pr create --title t --body-file ~someone/old-body.md',
+      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr create --title t --body-file "$S/pr-body.md"',
+    ]) {
+      const expanded = hook(cmd, session)
+      expect(expanded.status, cmd).toBe(2)
+      expect(expanded.stderr, cmd).toContain('a name the shell expands')
+    }
+    // in a compound command another step can move to another directory, or
+    // make, relink or rewrite the file first, so a file-fed publish passes
+    // only as a command of its own
+    mkdirSync(join(repo, 'sub'))
+    for (const cmd of [
+      'cd -- sub && gh pr create --title t --body-file new-body.md',
+      'builtin cd sub; gh pr create --title t --body-file new-body.md',
+      'ln -s /x linked.md && gh pr create --title t --body-file linked.md',
+      `cp /x ${join(repo, 'new-body.md')} && gh pr create --title t --body-file ${join(repo, 'new-body.md')}`,
+      `gh pr create --title t --body-file ${join(repo, 'new-body.md')} | tail`,
+    ]) {
+      const chained = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 ${cmd}`, session)
+      expect(chained.status, cmd).toBe(2)
+      expect(chained.stderr, cmd).toContain('other commands chained to it')
+    }
+    expect(hook(`gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    // behind a wrapper the directory is the wrapper's, so a name there must be absolute
+    const wrapped = hook('env -C sub gh pr create --title t --body-file old-body.md', session)
+    expect(wrapped.status).toBe(2)
+    expect(wrapped.stderr).toContain('relative, behind `env`')
+    expect(hook(`env -C sub gh pr create --title t --body-file ${join(repo, 'new-body.md')}`, session).status).toBe(0)
+    // a publisher run directly reads the name where the command runs
+    for (const cmd of [
+      'KM_ISSUE_REFS_OK=1 gh pr create --title t --body-file new-body.md',
+      'node scripts/pr-reply.mjs 1385 1 new-body.md',
+      'scripts/pr-reply.mjs 1385 1 new-body.md',
+    ])
+      expect(hook(cmd, session).status, cmd).toBe(0)
+    // the leading cd is placed, so a relative name after it is still read
+    expect(hook('cd sub && gh pr create --title t --body-file ../new-body.md', session).status).toBe(0)
+    // no transcript, no session start: nothing to compare
+    expect(hook('gh pr create --title t --body-file old-body.md').status).toBe(0)
   })
 
   // An attestation is the agent's word that it read the number. Review loops

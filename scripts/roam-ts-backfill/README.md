@@ -1,12 +1,15 @@
 # Roam timestamp backfill
 
 One-time restore of real Roam `create-time`/`edit-time` onto the ~312K
-already-imported blocks (currently all stamped at the 2026-05-13 import time).
+already-imported blocks (then all stamped at the 2026-05-13 import time).
 The importer itself is already fixed going forward (commit `dbfb6849`); this
-fixes the rows imported before that.
+fixed the rows imported before that.
 
-**Status: authored, NOT executed.** Writes to prod Supabase — hold for a
-coordinated drain window + your review.
+**Status: executed against the hosted DB in 2026-06; one-time, not for re-running
+as is.** Kept as the runbook for a backfill of this shape. Its staging and
+backup tables were gone from the hosted DB by 2026-10-23 (measured), so the
+rollback snapshot `backfill.sql` takes is no longer a recovery path. It writes
+to prod Supabase: any re-run needs a coordinated drain window + review.
 
 ## Mapping
 | column | value |
@@ -68,7 +71,7 @@ still preserves.
   where `<profile>` is paired to the client whose `row_events` history is
   being classified (a bare `pnpm agent` targets the `default` profile).
 
-## Run (held)
+## Run (how it was run)
 1. Drain clients (coordinated window). **Drain = each client's upload queue
    flushed to empty (`ps_crud → 0`), not merely disconnected** — a queued-but-
    unsent local edit at execution time would race the `updated_at` bump. The

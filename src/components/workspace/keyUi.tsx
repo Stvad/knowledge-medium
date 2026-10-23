@@ -10,12 +10,23 @@ import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { PastedKeyProblem } from '@/sync/keys/flows/pastedKey'
 
-export function GateCard({title, wide = false, children}: {title: string; wide?: boolean; children: ReactNode}) {
+export function GateCard({
+  title,
+  wide = false,
+  footer,
+  children,
+}: {
+  title: string
+  wide?: boolean
+  footer?: ReactNode
+  children: ReactNode
+}) {
   return (
     <div className="flex min-h-svh items-center justify-center p-6">
       <div className={cn('w-full space-y-5 rounded-lg border bg-background p-6 shadow-sm', wide ? 'max-w-lg' : 'max-w-md')}>
         <h1 className="text-lg font-semibold">{title}</h1>
         {children}
+        {footer && <div className="border-t pt-4">{footer}</div>}
       </div>
     </div>
   )

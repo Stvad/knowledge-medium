@@ -1,7 +1,7 @@
 import type { Repo } from '@/data/repo'
 import type { WorkspaceSyncDivergence } from '@/data/internals/syncObserver/reconcile'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
 import {
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueuePreviewCountSql,
 } from '@/plugins/system-status/queueCounts'
@@ -57,7 +57,7 @@ export const runHealthCommand = async (repo: Repo): Promise<SyncHealthResult> =>
       countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0'),
       countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0'),
       countOf(repo, uploadQueuePreviewCountSql),
-      countOf(repo, materializeQueueCountSql),
+      countOf(repo, MATERIALIZE_QUEUE_COUNT_SQL),
       repo.syncDivergence(),
     ])
   return {

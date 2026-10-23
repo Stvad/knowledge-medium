@@ -49,12 +49,11 @@ import {
   localHoldsStagedRow,
   syncedColumnsEqual,
 } from './reconcile.js'
-import {
-  ARRIVAL_PROCESSORS,
-  runArrivalProcessors,
-} from './arrivalProcessors.js'
+import {deriveReferenceTargetsAtArrival} from './arrivalProcessors.js'
 import {
   decodeFromWire,
+  requireCek,
+  snapshotCekPerCall,
   type GetCek,
   type GetMaterializability,
   type Materializability,
@@ -74,9 +73,10 @@ const UPDATE_ASSIGNMENTS = COLUMN_NAMES
 // reallocate `blocks_fts_rowids`. No WHERE-diff guard — Phase 2 checks
 // `localHoldsStagedRow` against the row it is about to overwrite, so a row that
 // reaches this write always differs from the local row.
-const UPSERT_BLOCK_SQL = `
+const ROWS_PER_UPSERT = Math.floor(MAX_IDS_PER_IN_CLAUSE / COLUMN_NAMES.length)
+const upsertBlocksSql = (count: number): string => `
   INSERT INTO blocks (${COLUMN_NAMES.join(', ')})
-  VALUES (${PLACEHOLDERS})
+  VALUES ${Array.from({length: count}, () => `(${PLACEHOLDERS})`).join(', ')}
   ON CONFLICT(id) DO UPDATE SET ${UPDATE_ASSIGNMENTS}
 `
 
@@ -200,6 +200,13 @@ interface ApplyCandidate {
   readonly staged: BlockRow
   readonly materializability: Exclude<Materializability, 'defer'>
 }
+
+type PreparedStagingRow =
+  | { readonly kind: 'apply'; readonly candidate: ApplyCandidate }
+  | { readonly kind: 'deferred' | 'skippedStale' | 'quarantined'; readonly decision: FlagDecision }
+
+// Bound outstanding crypto work independently of the database window size.
+const DECODE_CONCURRENCY = 16
 
 // Max ids per `WHERE id IN (...)` staging read. A large initial sync or a long
 // observer-down backlog can queue far more changed ids than the shared ceiling.
@@ -349,22 +356,25 @@ export const materializeStagingRows = async (
   )
   const pendingUploadIds = await readPendingUploadIds(db)
 
-  const materializabilityByWs = new Map<string, Materializability>()
+  const materializabilityByWs = new Map<string, Promise<Materializability>>()
   const resolveMaterializability = async (workspaceId: string): Promise<Materializability> => {
     const cached = materializabilityByWs.get(workspaceId)
     if (cached !== undefined) return cached
-    const answer = await getMaterializability(workspaceId)
+    const answer = Promise.resolve(getMaterializability(workspaceId))
     materializabilityByWs.set(workspaceId, answer)
     return answer
   }
 
+  // One key snapshot per workspace in this window (see `snapshotCekPerCall`).
+  const getWindowCek = snapshotCekPerCall(getCek)
+
   // ── Phase 1 (outside the write tx): decide, then decrypt only survivors. ──
-  const candidates: ApplyCandidate[] = []
-  for (const row of stagingRows) {
+  const prepareRow = async (row: BlockRow): Promise<PreparedStagingRow> => {
     const materializability = await resolveMaterializability(row.workspace_id)
     const localRow = localRowById.get(row.id)
-    const decide = (needsApply: boolean) =>
-      decisions.push({id: row.id, staged: row, needsApply})
+    const decided = (
+      kind: 'deferred' | 'skippedStale' | 'quarantined', needsApply: boolean,
+    ): PreparedStagingRow => ({kind, decision: {id: row.id, staged: row, needsApply}})
     // Asked before the branch that depends on materializability, because this
     // does not: `defer` is not only the locked-workspace case — a failed
     // key-store read lands there too — so an unchanged re-delivery arriving in
@@ -372,25 +382,24 @@ export const materializeStagingRows = async (
     // flight, on a device whose one-time reconcile rescan has long since run.
     const alreadyReflected = blocksAlreadyReflects(row, localRow)
     if (materializability === 'defer') {
-      deferred.push(row.id)
-      decide(!alreadyReflected)
-      continue
+      return decided('deferred', !alreadyReflected)
     }
     const action = decideStagingRow(materializability, {
       hasPendingUpload: pendingUploadIds.has(row.id),
     })
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
-      skippedStale.push(row.id)
       // RESOLVED, not a gap: the local row holds an unsent edit, whose echo
       // re-delivers and resets the flag, so nothing is lost by clearing it now.
-      decide(false)
-      continue
+      return decided('skippedStale', false)
     }
     const mode = materializability === 'decrypt' ? 'e2ee' : 'none'
+    // A key-store failure must leave the window queued for retry, rather than
+    // classifying every record that shares the key as corrupt ciphertext.
+    const key = mode === 'e2ee' ? await requireCek(getWindowCek, row.workspace_id) : null
     let plaintext: BlockRow
     try {
-      plaintext = await decodeFromWire(row, mode, getCek)
+      plaintext = await decodeFromWire(row, mode, async () => key)
     } catch (err) {
       // Undecryptable despite a well-formed `enc:v1:` envelope (the server can
       // only validate envelope SHAPE, so corrupt/tampered bytes or a direct
@@ -401,20 +410,34 @@ export const materializeStagingRows = async (
       // re-uploads valid bytes or a drainWorkspace re-pass runs. Plaintext
       // copy-through never reaches here (decodeFromWire is identity for 'none').
       console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
-      quarantined.push(row.id)
       // Same answer as the defer branch: this row could not be opened either.
-      decide(!alreadyReflected)
-      continue
+      return decided('quarantined', !alreadyReflected)
     }
     if (localHoldsStagedRow(localRow, plaintext)) {
       // Nothing to write. A PRE-FILTER only, kept for lock time: Phase 2 asks
       // the same of the row it would overwrite, so deleting this changes no
       // outcome, only how much of an echo-heavy window is read under the lock.
-      skippedStale.push(row.id)
-      decide(false)
-      continue
+      return decided('skippedStale', false)
     }
-    candidates.push({ plaintext, staged: row, materializability })
+    return {kind: 'apply', candidate: {plaintext, staged: row, materializability}}
+  }
+
+  const candidates: ApplyCandidate[] = []
+  const decidedIds = {deferred, skippedStale, quarantined}
+  for (let i = 0; i < stagingRows.length; i += DECODE_CONCURRENCY) {
+    // Settle the group before failing so a retry cannot overlap its crypto work.
+    const prepared = await Promise.allSettled(stagingRows.slice(i, i + DECODE_CONCURRENCY).map(prepareRow))
+    // Preserve staging order for writes and snapshots, regardless of which
+    // WebCrypto operation completed first.
+    for (const settled of prepared) {
+      if (settled.status === 'rejected') throw settled.reason
+      const result = settled.value
+      if (result.kind === 'apply') candidates.push(result.candidate)
+      else {
+        decidedIds[result.kind].push(result.decision.id)
+        decisions.push(result.decision)
+      }
+    }
   }
 
   const snapshots = new Map<string, SyncSnapshot>()
@@ -459,6 +482,7 @@ export const materializeStagingRows = async (
       return now !== undefined && syncedColumnsEqual(now.row, judged)
     }
 
+    const rowsToWrite: BlockRow[] = []
     for (const candidate of candidates) {
       const { plaintext, staged, materializability } = candidate
       if (!stillStaged(plaintext.id, staged)) {
@@ -474,7 +498,7 @@ export const materializeStagingRows = async (
         hasPendingUpload: pendingNow.has(plaintext.id),
       })
       if (action.kind === 'apply' && !localHoldsStagedRow(beforeRow, plaintext)) {
-        await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
+        rowsToWrite.push(plaintext)
         applied.push(plaintext.id)
         const after = parseBlockRow(plaintext)
         if (devAssertionsEnabled()) {
@@ -507,14 +531,15 @@ export const materializeStagingRows = async (
       decisions.push({id: plaintext.id, staged, needsApply: false})
     }
 
-    // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
-    // upsert in the window so a definition/alias target arriving alongside
-    // its referencing rows resolves (the alias index triggers fired on the
-    // upserts above), and INSIDE this write tx — strictly before
-    // `applyOutcome`'s invalidation fan-out, so readers never see a content
-    // change whose derived column lags. `deriveReferenceTargetArrivalProcessor`
-    // is currently the seam's only registered member.
-    await runArrivalProcessors(tx, snapshots, deps, ARRIVAL_PROCESSORS)
+    // Keep per-row triggers, ordering, and the authoritative in-tx gates, but
+    // send several rows per SQLite worker round trip under the bind ceiling.
+    for (let i = 0; i < rowsToWrite.length; i += ROWS_PER_UPSERT) {
+      const rows = rowsToWrite.slice(i, i + ROWS_PER_UPSERT)
+      await tx.execute(upsertBlocksSql(rows.length), rows.flatMap(blockRowParams))
+    }
+
+    // Resolve against this window's complete alias index before invalidation.
+    await deriveReferenceTargetsAtArrival(tx, snapshots, deps)
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
     // A 'delete' whose staging row still exists is an INSERT OR REPLACE

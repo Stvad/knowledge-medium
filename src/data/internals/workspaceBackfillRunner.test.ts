@@ -386,19 +386,24 @@ describe('workspace backfill runner — sync gating', () => {
       },
     })
     await seedTarget(repo)
-    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
-      batches.length === 1
-        ? {reason: 'synced rows are still draining into `blocks`', transient: true}
-        : null
-    ))
+    let gapReported = false
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      if (batches.length !== 1) return null
+      gapReported = true
+      return {reason: 'synced rows are still draining into `blocks`', transient: true}
+    })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
-    await vi.waitFor(() => expect(batches).toEqual([0]))
+    // The runner takes its 30s deadline when it first asks for the gap, after
+    // batch 0 COMMITS. Time advanced before that never reaches the deadline, so
+    // fence on the ask, not on batch 0's body having run.
+    await vi.waitFor(() => expect(gapReported).toBe(true))
     await vi.advanceTimersByTimeAsync(30_000)
     const result = await running
     warn.mockRestore()
 
+    expect(batches).toEqual([0])
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
   })
 

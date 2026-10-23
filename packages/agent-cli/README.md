@@ -68,11 +68,11 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |
 | `kmagent block-history <id>` | One block's recorded changes with prior content (cut past 2,000 chars) — local and synced. |
 | `kmagent new-extension <name> [dir]` | Scaffold a standalone extension project (deps, gate, `@/` declarations included) in the shape the `record-grain` guide describes. |
-| `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
+| `kmagent install-extension <file> [label]` | Install a JS extension; reports its run state — `running` is approved AND enabled on this device, not proof the source loaded. An install that makes the source live also runs it and reports load errors; one onto a block that is not live runs nothing, and `--verify` checks it anyway, reporting what it contributed plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
 | `kmagent audit-properties [--workspace <id>]` | Every property key in the workspace's data the registry does not resolve — the keys property migration skips silently. Per key: exact cell count, why it doesn't resolve, the fix — plus sampled blocks and the types they carry. Past the flip, also `coverage`: registered cells with no property blocks, and what re-running the migration would write. Active workspace only; refuses rather than mis-reporting. |
-| `kmagent rematerialize-workspace [--scope unapplied\|all]` | Re-run the sync drain over rows this device downloaded but never applied — the remedy when a one-way pass refuses with "N synced row(s) … have not reached `blocks` on this device". Local-only and idempotent: uploads nothing, clears no undo history, safe to re-run. |
+| `kmagent rematerialize-workspace [--scope unapplied\|all]` | Re-run the sync drain over rows this device downloaded but never applied — the remedy when a one-way pass refuses with "N synced row(s) … have not reached `blocks` on this device". That gap is durable — the rows were downloaded and their queue entries consumed — so waiting never clears it. Local-only and idempotent: uploads nothing, clears no undo history, safe to re-run. `--scope all` covers every staged row, when the unapplied flag itself is suspect. Rows it leaves unapplied are explained by its `deferred` / `quarantined` counts; re-running alone fixes neither, except a deferral from a transient key-store failure. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
@@ -191,7 +191,7 @@ export AGENT_RUNTIME_PROFILE=chrome-dev
 A local dev server is its own origin, so it needs its own pairing and its own profile — point `AGENT_RUNTIME_APP_URL` at it when connecting:
 
 ```bash
-AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev connect
+AGENT_RUNTIME_APP_URL=http://localhost:<port>/ kmagent --profile localdev-<port> connect
 ```
 
 Only `connect` / `pair-url` read `AGENT_RUNTIME_APP_URL` (it decides which URL is printed); later commands use the saved token. Loopback origins are always accepted by the bridge, so no `AGENT_RUNTIME_ALLOWED_ORIGINS` is needed.
@@ -236,6 +236,25 @@ Single-module output is not bundled with its transitive dependencies; use the di
 - **Imports.** Write `import {useState} from 'react'` and `import {createRoot} from 'react-dom/client'`. The page import map resolves `react`, `react/…`, `react-dom` and `react-dom/…` to the host's modules, so the extension gets the same module instances the app uses; `react`, `react/jsx-runtime`, `react-dom` and `react-dom/client` are integrity-pinned.
 - **JSX.** The app's in-browser compiler uses the automatic JSX runtime: JSX becomes an import from `react/jsx-runtime`, which the import map resolves to the host's. No `import React` is needed, and the app sets no `React` / `ReactDOM` global, so import whatever you use. JSX no longer calls a local `React` binding, and a `/** @jsx */` or `/** @jsxFrag */` pragma fails to compile unless the file also says `/** @jsxRuntime classic */`.
 - **Bundled extensions** (`kmagent new-extension`) keep `react`, `react/*`, `react-dom`, `react-dom/*` and every `@/…` module external, and compile JSX with the automatic runtime (`@vitejs/plugin-react` does by default) so the bundle imports `react/jsx-runtime` instead of carrying a factory of its own. The `react` / `react-dom` entries in the scaffold's `devDependencies` supply types and the test environment only; they are never bundled.
+
+## Preset-change refusals on install
+
+`kmagent install-extension` REFUSES when it changes which codec a value preset id resolves to on that device. That happens in two ways:
+
+- a core the extension registers builds a different codec than the one live under that id (its own previous version, another plugin's core, or a kernel one);
+- the update DROPS an id it currently registers, which falls the id back to whatever was underneath, or to nothing.
+
+Either way every value stored under the preset is re-typed with no definition row edited, so nothing migrates it. The refusal names what moved and the definitions and cell counts at stake.
+
+- **Fix:** give the new codec a NEW preset id and repoint the definitions (an edit per definition row, which `core.migratePropertyDefinition` fans out), or pass `--allow-preset-change` if the values are disposable.
+- **Only while live:** the check sees the change only while the core it replaces is LIVE on this device.
+- **Only when the install makes source live:** it looks only when the block passes BOTH loader gates here, approved AND enabled. Looking means EXECUTING the source, which an install deliberately does not do for source nothing will run (#67).
+  - Pass `--verify` to check a block that does not pass both gates.
+  - The enable that later makes it run is not covered (#1046).
+- **Unreadable gates refuse:** both gates are stores that can fail to READ, and a failed read is not a "no". When the block IS approved here (or under `--verify`), an install that cannot read the approval record or the override map REFUSES rather than skipping the check, because skipping it would also re-pin the source it skipped. Retry, or pass the flag.
+- **Re-pinning:** an install re-pins this device's approval ONLY on the path that ran the check. An install onto a block that is disabled here, or one made in SAFE MODE (where no extension contributes anything and there is no live core to compare), stores the source without pinning it and reports `running: false`.
+- **`enable-extension` is the uncovered path:** it re-approves unconditionally, so install-then-enable still ships an update. That enable is now the only way unchecked source goes live.
+- **Type-string changes:** a codec that changes what it PARSES under an unchanged `type` string is invisible to this check, exactly as it is to the seed ledger. Bump the type string when the encoding moves.
 
 ## Upgrading
 

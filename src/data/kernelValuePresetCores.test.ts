@@ -7,6 +7,7 @@ import {definePresetCore} from './api/valuePresetCore'
 import { defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
+import {selectablePresets} from '@/components/propertyEditors/selectablePresets'
 import {ChangeScope} from './api/changeScope'
 
 describe('kernel value preset split', () => {
@@ -100,6 +101,32 @@ describe('kernel value preset split', () => {
     expect(preset?.Editor).toBeTypeOf('function')
     expect(preset?.ConfigEditor).toBeTypeOf('function')
     expect(preset?.hideFromPicker).toBe(true)
+  })
+
+  it('offers the text list and retires the JSON one from the picker (#1101)', () => {
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const presets = readValuePresets(runtime)
+
+    const offered = selectablePresets(presets).map(preset => preset.id)
+    expect(offered).toContain('string-list')
+    expect(offered).not.toContain('list')
+
+    // A definition already on the JSON list still offers its own entry, so
+    // the two need distinct labels to be pickable apart.
+    expect(selectablePresets(presets, 'list').map(preset => preset.id)).toContain('list')
+    expect(presets.get('list')!.label).not.toBe(presets.get('string-list')!.label)
+
+    // …and the JSON one's label is the one BOTH are displayed under, so it
+    // has to stay true of a text list. Every display resolves a presentation
+    // by codec TYPE against this id-keyed map, and both build a `list`
+    // (`PropertyPicker`, `BlockTypeBlockRenderer`, `resolvePropertyDisplay`),
+    // so a qualifier here would relabel every string-list schema (#1111).
+    const listCodecType = presets.get('string-list')!.build(undefined).type
+    expect(presets.get(listCodecType)).toBe(presets.get('list'))
+    expect(presets.get(listCodecType)!.label).toBe('List')
   })
 
   it('rejects a presentation joined to the wrong core id', () => {

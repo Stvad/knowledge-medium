@@ -8,6 +8,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import type { Repo } from '@/data/repo'
 import { ChangeScope, type User } from '@/data/api'
 import type { BlockRendererProps } from '@/types'
@@ -34,7 +35,10 @@ beforeAll(async () => {
   await repo.load('block-1')
 })
 
-afterAll(async () => { await db.cleanup() })
+afterAll(async () => {
+  await releaseTestRepos([repo])
+  await db.cleanup()
+})
 
 // A probe renderer that opts in purely on the panelViewMode context field —
 // the same shape VideoNotesRenderer uses.

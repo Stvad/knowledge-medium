@@ -92,13 +92,32 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     Editor: asEditor<boolean>(BooleanPropertyEditor),
   }),
   kernelPresetPresentation(listValuePresetCore, {
-    // "List", not "Options": this is a container of values a person types,
-    // and picking FROM a configured set is `enum` below — which read as the
-    // same thing under the old name, two entries apart in the same picker.
+    // Superseded by `string-list` below — the same list, with each member
+    // spelled plainly instead of as JSON. Still registered, so the definitions
+    // already on it keep their editor; out of the picker so no new one joins
+    // them (#1101). Its members are arbitrary JSON, which this editor has
+    // never been able to write.
+    //
+    // This label is read for BOTH presets, so it must stay true of both:
+    // every display resolves a presentation by CODEC TYPE, which is `list`
+    // either way, and the id-keyed map answers with this one (#1111). The two
+    // still need distinct labels, because a definition on this preset offers
+    // this entry beside the other (`selectablePresets`' keepId) — hence the
+    // qualifier sits on the one below, where it is read only in the picker.
     id: 'list',
     label: 'List',
     Glyph: List,
     Editor: asEditor<unknown[]>(ListPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPresentation(stringListValuePresetCore, {
+    // The list a person picks. Member-wise, so post-flip each member is its
+    // own value child holding the text itself — `["a","b"]` in the tree as two
+    // children `a` and `b`, not two children `"a"` and `"b"`.
+    id: 'string-list',
+    label: 'Text list',
+    Glyph: List,
+    Editor: asEditor<readonly string[]>(ListPropertyEditor),
   }),
   kernelPresetPresentation(dateValuePresetCore, {
     id: 'date',
@@ -159,13 +178,6 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     label: 'Optional number',
     Glyph: Hash,
     Editor: asEditor<number | undefined>(NumberPropertyEditor),
-    hideFromPicker: true,
-  }),
-  kernelPresetPresentation(stringListValuePresetCore, {
-    id: 'string-list',
-    label: 'Text list',
-    Glyph: List,
-    Editor: asEditor<readonly string[]>(ListPropertyEditor),
     hideFromPicker: true,
   }),
   kernelPresetPresentation(optionalRefValuePresetCore, {

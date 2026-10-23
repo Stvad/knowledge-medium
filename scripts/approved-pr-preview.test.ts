@@ -71,11 +71,12 @@ describe('commit-pinned preview approval', () => {
     })).rejects.toThrow('head repository')
   })
 
-  it('refuses a same-repository PR head because previews must come from forks', async () => {
+  // Same-repository PRs come here to redeploy a preview the idle sweep expired.
+  it('accepts a same-repository PR head, checked out from this repository', async () => {
     await expect(approve(vi.fn(async () => ({
       ...pull(),
       head: { sha, repo: { full_name: repository } },
-    })))).rejects.toThrow('fork')
+    })))).resolves.toMatchObject({ repository })
   })
 })
 

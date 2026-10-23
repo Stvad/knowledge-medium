@@ -25,7 +25,7 @@
  * every one built in a `beforeEach` or in a helper those call. A Repo built in
  * `beforeAll` or at module scope is deliberately left alone: it exists to be
  * shared across the file, and releasing it after the first test would break
- * that. Such a file releases its own Repo in `afterAll`, before the db closes.
+ * that. Such a file must release its own Repo in `afterAll`, before the db closes.
  *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
