@@ -4,28 +4,28 @@
     {
       "name": "dev",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec pnpm dev"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use >/dev/null && exec pnpm dev"],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "dev-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec pnpm dev"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use >/dev/null && exec pnpm dev"],
       "port": 5188,
       "autoPort": true
     },
     {
       "name": "agent-server",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && AGENT_RUNTIME_PORT=$PORT exec pnpm agent:server"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use >/dev/null && AGENT_RUNTIME_PORT=$PORT exec pnpm agent:server"],
       "port": 8788,
       "autoPort": true
     },
     {
       "name": "prod-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && pnpm build && exec pnpm preview"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use >/dev/null && pnpm build && exec pnpm preview"],
       "port": 4173,
       "autoPort": true
     }
