@@ -84,23 +84,17 @@ export const commandsInContext = segments => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
-  let depth = 0
   let beforeHeredoc = null // the scope state when the heredoc being read began
-  for (const { tokens, depth: d, heredoc = false, text = false } of segments) {
-    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, depth }
+  for (const { tokens, depth, heredoc = false, text = false } of segments) {
     if (!heredoc && beforeHeredoc) {
-      ;({ cdPath, depth } = beforeHeredoc)
-      outerCd.length = depth
+      cdPath = beforeHeredoc.cdPath
+      outerCd.length = beforeHeredoc.depth
       beforeHeredoc = null
     }
-    while (depth < d) {
-      outerCd.push(cdPath)
-      depth++
-    }
-    while (depth > d) {
-      cdPath = outerCd.pop()
-      depth--
-    }
+    while (outerCd.length < depth) outerCd.push(cdPath)
+    while (outerCd.length > depth) cdPath = outerCd.pop()
+    // taken at the heredoc's own depth: its line may close a subshell first
+    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, depth }
     let i = 0
     const assigns = []
     while (
@@ -108,6 +102,7 @@ export const commandsInContext = segments => {
       (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) ||
         WRAPPERS.has(tokens[i]) ||
         RESERVED.has(tokens[i]) ||
+        tokens[i].startsWith('<<<') || // a here-string glued to its quoted word
         (i > 0 && tokens[i].startsWith('-')))
     ) {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
@@ -123,35 +118,45 @@ export const commandsInContext = segments => {
   return out
 }
 
+// git's other global options that take the next word as their value.
+const GLOBAL_VALUES = new Set(['-c', '--namespace', '--config-env', '--attr-source', '--super-prefix'])
+
 /**
- * Each git invocation in a command string, with its shell context: word (the
- * token after git's global flags), rest (tokens after it), cArgs
- * (repo-locating globals to replay on state queries), and cdPath and assigns
- * as commandsInContext reads them.
+ * A git command's subcommand `word`, the words after it as `rest`, and
+ * `cArgs`, the repo-locating globals to replay on state queries; `words`
+ * start at `git`. Null when no subcommand follows the globals.
+ */
+export const gitCommand = words => {
+  let i = 1
+  const cArgs = []
+  while (i < words.length && words[i].startsWith('-')) {
+    const t = words[i]
+    if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && words[i + 1] !== undefined) {
+      cArgs.push(t, expandTilde(words[i + 1]))
+      i += 2
+    } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
+      cArgs.push(t)
+      i++
+    } else if (GLOBAL_VALUES.has(t) && words[i + 1] !== undefined) {
+      i += 2 // a config override, namespace and the like — irrelevant to repo location
+    } else {
+      i++ // other global flag (--no-pager, -P, …)
+    }
+  }
+  return words[i] === undefined ? null : { word: words[i], rest: words.slice(i + 1), cArgs }
+}
+
+/**
+ * Each git invocation in a command string, as gitCommand reads it, with its
+ * cdPath and assigns as commandsInContext reads them.
  */
 export const gitInvocations = cmd => {
   const out = []
   for (const { words, assigns, cdPath, heredoc } of commandsInContext(shellSegmentsWithDepth(cmd))) {
     if (heredoc) continue // heredoc body lines are data, not commands
     if ((words[0] || '').replace(/.*\//, '') !== 'git') continue
-    let i = 1
-    const cArgs = []
-    while (i < words.length && words[i].startsWith('-')) {
-      const t = words[i]
-      if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && words[i + 1] !== undefined) {
-        cArgs.push(t, expandTilde(words[i + 1]))
-        i += 2
-      } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
-        cArgs.push(t)
-        i++
-      } else if (t === '-c' && words[i + 1] !== undefined) {
-        i += 2 // config override — irrelevant to repo location
-      } else {
-        i++ // other global flag (--no-pager, -P, …)
-      }
-    }
-    if (words[i] === undefined) continue
-    out.push({ word: words[i], rest: words.slice(i + 1), cArgs, cdPath, assigns })
+    const git = gitCommand(words)
+    if (git) out.push({ ...git, cdPath, assigns })
   }
   return out
 }

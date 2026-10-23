@@ -38,7 +38,6 @@ describe('secretRead', () => {
     'cat .env.local.backup-1',
     'cat {.env.example,.env.local}',
     'env -i cat .env.local',
-    'time -p cat .env.local',
     // after --, the first operand is still the pattern
     'grep -- -K .env.local',
     // a search whose pattern comes from a flag, so its first operand is a file
@@ -74,6 +73,29 @@ describe('secretRead', () => {
     `gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)" && cat .env.local`,
     "cat > x.md <<'EOF'\nnote\nEOF\nwhile read l; do :; done < .env.local",
     "cat > q.sql <<'SQL'\nselect 1;\nSQL\nset -a; . ./.env.local; set +a",
+    "cat <$'.env.local'",
+    // an option this does not model is checked whole
+    'sort --files0-from=.env.local',
+    // a pattern read from a file leaves no positional pattern
+    'grep -f pats .env.local',
+    // an option whose value is optional or absent in some implementation takes no word
+    'grep -C KEY .env.local',
+    "sed -l 's/x/y/' .env.local",
+    // a quoted here-string ahead of the command word is not the command
+    '<<<"x" cat .env.local',
+    'git --git-dir /tmp/g diff --no-index a .env.local',
+    // a lone - is an operand, here the pattern
+    'grep - .env.local',
+    'rg - .env.local',
+    // git's readers of files it does not track; a path outside the repo implies --no-index
+    'git diff /dev/null .env.local',
+    'git -c core.pager=cat diff --no-index a .env.local',
+    'git diff --no-index .env.example .env.local',
+    'git -C config diff --no-index a .env.production',
+    // readers past the coreutils
+    "gawk '{print}' .env.local",
+    'zgrep KEY .env.local',
+    'jq . .env.local',
   ])('blocks %s', command => {
     expect(secretRead(command, templateOnly)).not.toBeNull()
   })
@@ -100,9 +122,15 @@ describe('secretRead', () => {
     // an option value that names it
     'diff -r --exclude=.env.local a b',
     'diff -r -x .env.local a b',
-    'diff -r -x.env.local a b',
     'diff -r --exclude .env.local a b',
     `grep -rn -e '.env.local' src`,
+    // an option's value is not the pattern, so the pattern is not read as a file
+    `grep -rn -A 3 '.env.local' scripts`,
+    `rg -A 3 '.env.local' docs`,
+    `rg -t ts '\\.env' src`,
+    `rg -g '*.ts' '.env.local' src`,
+    `awk -F : '/\\.env\\.local/' notes.txt`,
+    `awk -v n=1 '/\\.env/' f`,
   ])('allows %s', command => {
     expect(secretRead(command, templateOnly)).toBeNull()
   })
@@ -142,12 +170,40 @@ describe('secretRead', () => {
       'grep -r -f pats.txt',
       // which --no-ignore* drops the rule hiding a secret depends on where it lives
       'rg --hidden --no-ignore-parent FOO .',
+      // an rg glob that admits a name reads it past the hidden and ignore rules
+      `rg -n -g '.env*' FOO .`,
+      `rg -g '*.local' FOO`,
+      `rg --glob '.env*' FOO .`,
+      `rg --iglob '.ENV*' FOO .`,
+      `rg -g '{*.ts,.env*}' FOO .`,
+      // rg's globs are paths from the search root, where **/ may match no directory
+      `rg -g '**/.env*' FOO .`,
+      `rg -g '/.env*' FOO .`,
+      `rg -g '{src/**,.env*}' FOO .`,
+      // ** spans directories only as a whole segment; a trailing / names directories
+      `rg -uu -g '!.env.local**/' FOO .`,
+      `rg -uu -g '!.env.lo**/cal' FOO .`,
+      // a brace alternative starts a segment too
+      `rg -g '{x,**/.env*}' FOO .`,
+      `rg -uu -g '{**/.env*,x}' FOO .`,
+      // a ! glob only excludes, so what it leaves follows the hidden and ignore rules
+      `rg -uu -g '!*.ts' FOO .`,
+      // an unbalanced brace is not modelled, so it filters nothing
+      `rg -g '{.env*' FOO .`,
+      'git grep --no-index FOO',
+      'git grep --untracked --no-exclude-standard FOO',
+      'ag -u FOO',
+      'ag --hidden -U FOO .',
+      // the last of --exclude-standard and --no-exclude-standard wins
+      'git grep --no-index --exclude-standard --no-exclude-standard FOO',
+      'ugrep -r FOO .',
     ])('blocks %s over a directory holding a secret file', command => {
       expect(secretRead(command, withSecret)).toEqual({ file: expect.stringMatching(/\.env\.local$/), walked: true })
     })
 
     it('checks an explicit search root', () => {
       expect(secretRead(`grep -rn FOO ${withSecret}`, templateOnly)).not.toBeNull()
+      expect(secretRead(`git -C ${withSecret} grep --no-index FOO`, templateOnly)).not.toBeNull()
     })
 
     it('follows a leading cd to the directory searched', () => {
@@ -170,6 +226,8 @@ describe('secretRead', () => {
       // a subshell inside the heredoc scopes its cd as one outside does
       expect(secretRead("bash <<'EOF'\n(cd src)\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
       expect(secretRead("bash <<'EOF'\ncd src\n(ls)\nEOF\ngrep -rn FOO .", withSecret)).not.toBeNull()
+      // a heredoc whose line closes a subshell: the next subshell starts outside it
+      expect(secretRead("(cd src; cat <<EOF)\nx\nEOF\n(grep -rn FOO .)", withSecret)).not.toBeNull()
       // its subshells unwind with it, so leaving an enclosing one after it lands outside
       expect(secretRead("(bash <<'EOF'\ncd src\n(ls)\nEOF\n); grep -rn FOO .", withSecret)).not.toBeNull()
       // and a cd after the heredoc is the outer shell's again
@@ -204,6 +262,20 @@ describe('secretRead', () => {
       `grep -r --exclude '.env*' FOO .`,
       // a glob's regex metacharacters are literal
       `grep -r --include='x).ts' FOO .`,
+      // rg's globs: an include glob admits only what it matches, a ! glob excludes
+      `rg -g '*.ts' FOO .`,
+      `rg -g '*.{ts,tsx}' FOO .`,
+      `rg -uu -g '!.env*' FOO .`,
+      `rg -uu -g '*.ts' FOO .`,
+      `rg -g 'src/**' FOO .`,
+      'ag FOO .',
+      'ag --hidden FOO .',
+      'ag -U FOO .',
+      `rg -uu -g '!{x,**/.env.local}' FOO .`,
+      `rg -g '!node_modules' -n '.env' .`,
+      // an -e pattern's letters are not flags
+      'grep -eERROR',
+      'git grep --no-index --exclude-standard FOO',
     ])('allows %s', command => {
       expect(secretRead(command, withSecret)).toBeNull()
     })

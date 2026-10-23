@@ -77,6 +77,10 @@ describe('shellSegments', () => {
     })
   })
 
+  it('keeps a quoted here-string glued to its operator as a word, for the scanners that read words', () => {
+    expect(shellSegments(`git commit -F - <<<"fix x"`).flat().some(t => t.includes('fix x'))).toBe(true)
+  })
+
   it('drops redirections and their targets instead of splitting on them', () => {
     expect(shellSegments('git push origin 2>&1 | tail -5')).toEqual([['git', 'push', 'origin'], ['tail', '-5']])
     expect(shellSegments('git push origin > /tmp/log 2>&1; ls')).toEqual([['git', 'push', 'origin'], ['ls']])
@@ -136,6 +140,11 @@ describe('shellCommandsWithDepth', () => {
   it('cuts out the data of a quoted-delimiter heredoc only', () => {
     // an assignment on the line runs nothing, so it leaves the data literal
     expect(withoutLiteralHeredocs("S=/tmp; cat > $S/f <<'EOF'\nx\nEOF\nls")).toBe("S=/tmp; cat > $S/f <<'EOF'\nls")
+    // unless its value substitutes: the data can land in the variable, and an eval runs it
+    expect(withoutLiteralHeredocs("S=$(cat <<'EOF'\nx\nEOF\n)\neval \"$S\"")).toBe("S=$(cat <<'EOF'\nx\nEOF\n)\neval \"$S\"")
+    expect(withoutLiteralHeredocs("S=$(date); cat > f <<'EOF'\nx\nEOF")).toBe("S=$(date); cat > f <<'EOF'\nx\nEOF")
+    expect(withoutLiteralHeredocs("S=$(cat) <<'EOF'\nx\nEOF")).toBe("S=$(cat) <<'EOF'\nx\nEOF")
+    expect(withoutLiteralHeredocs("A=1 S=$(cat <<'EOF'\nx\nEOF\n)")).toBe("A=1 S=$(cat <<'EOF'\nx\nEOF\n)")
     expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
     expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
     // a shell reading it runs it, wherever it sits on the line
@@ -284,6 +293,16 @@ describe('stashInvocations', () => {
     expect(stashInvocations('cd a && cd ~/b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd ~ && cd b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd a && (cd b && true); git stash pop')[0].cdPath).toBe('a')
+    expect(stashInvocations('exec git stash pop')).toHaveLength(1)
+    expect(stashInvocations('<<<"x" git stash pop')).toHaveLength(1)
+    expect(stashInvocations('git --git-dir /r/.git stash pop')[0].cArgs).toEqual(['--git-dir', '/r/.git'])
+    expect(stashInvocations('git --namespace n stash pop')).toHaveLength(1)
+    expect(stashInvocations('git --config-env a=B --attr-source t --super-prefix p stash pop')).toHaveLength(1)
+    expect(stashInvocations('builtin cd /tmp/a && git stash pop')[0].cdPath).toBe('/tmp/a')
+    // a heredoc whose line closes a subshell: the cd in that subshell dies with it
+    expect(stashInvocations('(cd /tmp/a; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe(null)
+    expect(stashInvocations('cd /tmp/a; (cd /tmp/b; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe('/tmp/a')
+    expect(stashInvocations('(cd /tmp/a; (cd /tmp/b; cat <<EOF)\nbody\nEOF\ngit stash pop)')[0].cdPath).toBe('/tmp/a')
     expect(stashInvocations('cd "$S" && cd .. && git stash pop')[0].cdPath).toBe('$S/..')
   })
 

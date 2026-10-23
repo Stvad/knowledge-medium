@@ -84,14 +84,16 @@ export const withoutLiteralHeredocs = cmd => {
 // run it. Decided by an ALLOWLIST of commands that never run what they read:
 // a shell, a wrapper, an expanded or unknown command word anywhere on the
 // line keeps the data runnable, so a reader this list misses fails closed. A
-// bare assignment (`S=x;`) runs nothing; a substitution in its value is a
-// command of its own on the line.
+// bare assignment (`S=x;`) runs nothing.
 // python and node run their stdin as their own language; a gh call from that
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
 // A command's own word: past its leading assignments, path dropped.
 const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
+// Assignments alone, none of them substituting: a value that substitutes can
+// capture the data and run it later (`S=$(cat <<'EOF' …)`, then `eval "$S"`).
+const runsNothing = words => commandWord(words) === undefined && !words.some(w => w.includes(SUBSTITUTED))
 // An unquoted word that is a redirection operator (first group), with its
 // target attached (second group) or empty when the target is the next word.
 const REDIRECT = /^(?:\d+|&)?(<<<|>>|>\||>&|>|<)(.*)$/s
@@ -132,8 +134,11 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
   }
   // A redirect operator glued to a quoted or escaped target (`<".env"`,
   // `<\.env`, `<$'.env'`) ends before it, so the target is read as its word.
+  // A here-string's word is text, not a target: it stays a word, so the
+  // scanners that read words still see it.
   const endBareOperator = () => {
-    if (!literal && cur.match(REDIRECT)?.[2] === '') pushToken()
+    const [, op, target] = (!literal && cur.match(REDIRECT)) || []
+    if (target === '' && op !== '<<<') pushToken()
   }
   // Every scope change closes the segment first, so a segment's tokens all
   // live at one depth — scopes.length at push time. A whole command is not
@@ -315,15 +320,15 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       pushSegment()
       // what reads the data is anywhere on the line (`cat <<'EOF' | bash` runs
       // it), read in its words as the shell builds them, a command held open
-      // around a substitution included
-      const lineCommands = [...segments.slice(lineStart).map(s => s.tokens), ...scopes.flatMap(s => (s.outer ? [s.outer.tokens] : []))]
+      // around a substitution included with the word that substitution sits in
+      const lineCommands = [
+        ...segments.slice(lineStart).map(s => s.tokens),
+        ...scopes.flatMap(s => (s.outer ? [[...s.outer.tokens, s.outer.cur + SUBSTITUTED]] : [])),
+      ]
       // a pipe or list left open at the newline, or a subshell, goes on past
       // the data to a reader not read yet
       const readerPending = scopes.some(s => s.kind === 'paren') || pipeOpen
-      const onlyTextReaders = !readerPending && lineCommands.every(words => {
-        const word = commandWord(words)
-        return word === undefined || TEXT_READERS.has(word)
-      })
+      const onlyTextReaders = !readerPending && lineCommands.every(words => runsNothing(words) || TEXT_READERS.has(commandWord(words)))
       let j = i + 1
       while (heredocs.length) {
         const { delim, dash, quoted } = heredocs.shift()

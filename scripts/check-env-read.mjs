@@ -22,51 +22,89 @@
  * A command reads a secret file when, in any command it runs (one inside
  * `$(…)`, backticks or `<(…)`, as the shared tokenizer reads them, or inside
  * `bash -c '…'` or `eval`):
- *  - a reader verb (cat, head, grep, …) has a secret path operand. A list of
- *    readers rather than "any command naming the file", because many commands
- *    that name one only list, test, copy or mention it (`ls`, `test -f`, `cp`,
- *    `node --env-file`, a commit message);
+ *  - a reader verb (cat, head, grep, …, or git's `diff`/`grep --no-index`) has
+ *    a secret path operand. A list of readers rather than "any command naming
+ *    the file", because many commands that name one only list, test, copy or
+ *    mention it (`ls`, `test -f`, `cp`, `node --env-file`, a commit message);
  *  - its input is redirected from a secret path (`< .env`, `$(<.env)`);
- *  - it is a recursive grep, or an `rg` told to read hidden AND ignored files,
- *    over a directory holding a secret file at its top level (where a checkout
- *    keeps them) that grep's `--include`/`--exclude` globs admit. Refusing every
- *    `grep -r` would block every search of `src/`; a search root above that
- *    directory (`grep -r X ..` from a subdirectory) is not checked.
- * Where a command runs follows its own cd and pushd as the stash guard reads
- * them (commandsInContext). Non-secret templates (`.env.example` / `.sample` /
- * `.template` / `.dist` / `.defaults`) are not secret files.
+ *  - it is a recursive grep, or an `rg` that reads hidden AND ignored files or
+ *    has a glob admitting one, over a directory holding a secret file at its
+ *    top level (where a checkout keeps them) that its name globs admit.
+ *    Refusing every `grep -r` would block every search of `src/`; a search
+ *    root above that directory (`grep -r X ..` from a subdirectory) is not
+ *    checked. Claude Code's `grep` is a ugrep shim that skips ignored files,
+ *    so a `grep -r` refused there would not have read the file: accepted, as
+ *    `/usr/bin/grep` and the shim's fallbacks would.
+ * Which words are patterns, files and roots comes from each reader family's
+ * table of options that take a value (OPTIONS). Where a command runs follows
+ * its own cd and pushd as the stash guard reads them (commandsInContext).
+ * Non-secret templates (`.env.example` / `.sample` / `.template` / `.dist` /
+ * `.defaults`) are not secret files.
  *
  * Reads the hook payload (JSON) on stdin. Exit 2 → block; exit 0 → allow.
  */
 
 import { existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { commandsInContext, effectiveCwd, expandTilde } from './check-stash-worktree.mjs'
+import { commandsInContext, effectiveCwd, expandTilde, gitCommand } from './check-stash-worktree.mjs'
 import { readHookPayload } from './hook-context.mjs'
 import { isMainModule } from './is-main-module.mjs'
 import { inputRedirectTargets, shellCommandsWithDepth } from './shell-segments.mjs'
 
+// The reader families that share an option table.
+const GREPS = new Set(['grep', 'egrep', 'fgrep', 'zgrep', 'zegrep', 'zfgrep', 'ugrep', 'ug'])
+const RGS = new Set(['rg', 'ripgrep'])
+const AWKS = new Set(['awk', 'gawk', 'mawk', 'nawk'])
+// Search verbs take a PATTERN or program as their first operand (not a file),
+// so a `.env` *pattern* (`grep ".env" src/`) must not be read as a `.env` file
+// — unless an option supplies it (`-e K`, `--regexp=K`, `sed -f s.sed`).
+const SEARCH = new Set([...GREPS, ...RGS, ...AWKS, 'sed', 'jq', 'ag'])
 // Commands that read/dump file contents (or, for source/`.`, load+expose them).
 const READERS = new Set([
-  'cat', 'head', 'tail', 'less', 'more', 'nl', 'tac', 'od', 'xxd', 'hexdump',
-  'strings', 'sort', 'base64', 'cut', 'dd', 'bat', 'view', 'grep', 'egrep',
-  'fgrep', 'rg', 'ripgrep', 'sed', 'awk', 'source', '.', 'diff', 'sdiff',
-  'comm', 'paste', 'column', 'uniq', 'rev', 'fold',
+  ...SEARCH, 'cat', 'head', 'tail', 'less', 'more', 'nl', 'tac', 'od', 'xxd',
+  'hexdump', 'strings', 'sort', 'base64', 'cut', 'dd', 'bat', 'view', 'source',
+  '.', 'diff', 'sdiff', 'comm', 'paste', 'column', 'uniq', 'rev', 'fold', 'pr',
+  'expand', 'unexpand',
 ])
-// Search verbs take a PATTERN as their first operand (not a file), so a `.env`
-// *pattern* (`grep ".env" src/`) must not be read as a `.env` file — unless a
-// flag supplies the pattern or program (`-e K`, `--regexp=K`, `sed -f s.sed`).
-const SEARCH = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'sed', 'awk'])
-const GREPS = new Set(['grep', 'egrep', 'fgrep'])
+
+// Each reader's options that take a value (attached, `=`-joined or the next
+// word), by what the value is: the search's 'pattern', a 'script' file the
+// pattern is read from, a 'file' it reads, grep's 'include' / 'exclude' name
+// glob, rg's 'glob' / case-blind 'iglob' (a leading `!` excludes), or a
+// 'value' that is none of these. A reader's option missing here leaves its
+// value to be read as an operand, which only over-checks; so is an option
+// whose value is optional or absent in some implementation (BSD grep's -C,
+// BSD sed's -l), since taking the next word there would drop the file.
+const values = names => Object.fromEntries(names.split(' ').map(n => [n, 'value']))
+const GREP_OPTIONS = {
+  e: 'pattern', regexp: 'pattern', f: 'script', file: 'script',
+  include: 'include', exclude: 'exclude', 'exclude-from': 'file',
+  ...values('A B D d m after-context before-context devices directories exclude-dir max-count label binary-files group-separator'),
+}
+const RG_OPTIONS = {
+  e: 'pattern', regexp: 'pattern', f: 'script', file: 'script', 'ignore-file': 'file',
+  g: 'glob', glob: 'glob', iglob: 'iglob',
+  ...values('A B C E M T j m r t after-context before-context context encoding engine max-columns max-count max-depth max-filesize path-separator pre pre-glob replace sort sortr threads type type-add type-not'),
+}
+const OPTIONS = {
+  ...Object.fromEntries([...GREPS].map(v => [v, GREP_OPTIONS])),
+  ...Object.fromEntries([...RGS].map(v => [v, RG_OPTIONS])),
+  ...Object.fromEntries([...AWKS].map(v => [v, { e: 'pattern', source: 'pattern', f: 'script', file: 'script', ...values('F v assign field-separator') }])),
+  sed: { e: 'pattern', expression: 'pattern', f: 'script', file: 'script' },
+  diff: {
+    X: 'file', 'exclude-from': 'file', 'from-file': 'file', 'to-file': 'file',
+    ...values('x I L S U C W exclude ignore-matching-lines label starting-file width tabsize'),
+  },
+}
 // An operand the shell expands (a glob, a brace list, a variable, a
 // substitution) names paths this cannot see.
 const EXPANDS = /[*?[{$]/
-// Options whose value is a name glob rather than a file, per reader.
-const NAME_FILTERS = { grep: ['--include', '--exclude', '--exclude-dir'], diff: ['--exclude', '-x'] }
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
 
-// A secret env file as a path token: preceded by a boundary (start / whitespace
-// / quote / = ( : / slash / a brace list's `{` or `,`), then either `.envrc`
+// A secret env file as a path token: preceded by a boundary (the word's start,
+// or a character a path can follow inside one: whitespace, a quote, `=`, `(`,
+// `:`, a slash, a brace list's `{` or `,`, or shell punctuation quoted into
+// the word), then either `.envrc`
 // (direnv) or `.env` + a CHAIN of dotted suffixes (`.env.local`,
 // `.env.production.local`), then a non-word char. CASE-INSENSITIVE: the dev FS
 // is case-insensitive, so `.ENV.LOCAL` reads the same bytes as `.env.local` and
@@ -98,29 +136,29 @@ const secretFileIn = (dir, admits) => {
   return entries.find(e => !e.isDirectory() && secretPathIn(e.name) && admits(e.name))?.name ?? null
 }
 
-// A search's pattern or program given by a flag, as { file, value }: -e,
-// --regexp and --expression supply it, -f and --file name a file it is read
-// from. `value` is undefined when it is the next word.
-const patternFlag = a => {
-  const long = /^--(regexp|expression|file)(?:=(.*))?$/s.exec(a)
-  if (long) return { file: long[1] === 'file', value: long[2] }
-  const short = /^-[a-zA-Z]*?([ef])(.*)$/s.exec(a)
-  return short ? { file: short[1] === 'f', value: short[2] || undefined } : null
+// An option word's boolean short-flag `letters`, and the `role` of the value
+// it takes (null if none) with the `value` attached to it, if any.
+const optionOf = (a, options) => {
+  const long = /^--([^=]+)(?:=(.*))?$/s.exec(a)
+  if (long) return { letters: '', role: Object.hasOwn(options, long[1]) ? options[long[1]] : null, value: long[2] }
+  let k = 1
+  while (/[a-zA-Z.]/.test(a[k] ?? '') && !Object.hasOwn(options, a[k])) k++
+  const role = Object.hasOwn(options, a[k] ?? '') ? options[a[k]] : null
+  return { letters: a.slice(1, k), role, value: role ? a.slice(k + 1) || undefined : undefined }
 }
 
 /**
  * A reader's words sorted for the checks: `paths` may name a file it reads
- * (every word but a search's pattern and a name filter's value, flags and
- * their attached values included), `roots` are its operands, which a
- * recursive search walks, and `filters` are its --include/--exclude globs
- * in order.
+ * (every word but a search's pattern and an option value known to name no
+ * file), `roots` are its operands, which a recursive search walks, `letters`
+ * are its short flags, and `filters` its name globs in order.
  */
 const readerWords = (verb, args) => {
-  const filterOptions = NAME_FILTERS[GREPS.has(verb) ? 'grep' : verb] ?? []
-  const search = SEARCH.has(verb)
+  const options = OPTIONS[verb] ?? {}
   const paths = []
   const roots = []
   const filters = []
+  let letters = ''
   let patternGiven = false
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -129,63 +167,118 @@ const readerWords = (verb, args) => {
       roots.push(...args.slice(i + 1))
       break
     }
-    const filter = filterOptions.find(o => a === o || a.startsWith(o.startsWith('--') ? `${o}=` : o))
-    if (filter) {
-      const glob = a === filter ? (args[++i] ?? '') : a.slice(filter.length + (filter.startsWith('--') ? 1 : 0))
-      if (filter !== '--exclude-dir') filters.push({ include: filter === '--include', glob })
+    if (a === '-' || !a.startsWith('-')) {
+      paths.push(a)
+      roots.push(a)
       continue
     }
-    const pattern = search ? patternFlag(a) : null
-    if (pattern) {
-      patternGiven = true
-      const value = pattern.value ?? args[++i] ?? ''
-      if (pattern.file) paths.push(value)
+    const option = optionOf(a, options)
+    letters += option.letters
+    if (!option.role) {
+      paths.push(a)
       continue
     }
-    paths.push(a)
-    if (!a.startsWith('-')) roots.push(a)
+    const { role } = option
+    const value = option.value ?? args[++i] ?? ''
+    if (role === 'pattern' || role === 'script') patternGiven = true
+    if (role === 'script' || role === 'file') paths.push(value)
+    if (role === 'include' || role === 'exclude') filters.push({ include: role === 'include', glob: value, dialect: 'grep' })
+    if (role === 'glob' || role === 'iglob')
+      filters.push({ include: !value.startsWith('!'), glob: value.replace(/^!/, ''), dialect: 'rg', caseless: role === 'iglob' })
   }
-  if (search && !patternGiven && roots.length) paths.splice(paths.indexOf(roots.shift()), 1)
-  return { paths, roots, filters }
+  if (SEARCH.has(verb) && !patternGiven && roots.length) paths.splice(paths.indexOf(roots.shift()), 1)
+  return { paths, roots, letters, filters }
 }
 
-// The letters of each short-flag cluster, up to any attached value (`-rnA3` → rnA).
-const shortFlags = args => args.map(a => /^-([a-zA-Z.]+)/.exec(a)?.[1] ?? '').join('')
+// A name glob as a regex, `*` and `?` matching a leading dot too and rg's
+// `{a,b}` either one; null for syntax not modelled here (a class, an escape,
+// grep's braces or `!`), so the filter it is in admits every name. rg's globs
+// are paths from the search root: a leading `/` anchors there and a `**/`
+// opening the glob or a brace alternative may match no directory, while any
+// other `/` (a trailing one included, which names directories) matches no
+// top-level name.
+const globRegex = ({ glob, dialect, caseless }) => {
+  if (/[[\]\\]/.test(glob) || (dialect === 'grep' && /[{}!]/.test(glob))) return null
+  const rg = dialect === 'rg'
+  let source = ''
+  let depth = 0
+  const start = rg && glob.startsWith('/') ? 1 : 0
+  for (let i = start; i < glob.length; i++) {
+    const c = glob[i]
+    if (rg && glob.startsWith('**/', i) && (i === start || (depth && '{,'.includes(glob[i - 1])))) {
+      source += '(?:.*/)?'
+      i += 2
+    } else if (c === '*') source += '.*'
+    else if (c === '?') source += '.'
+    else if (c === '{') {
+      source += '(?:'
+      depth++
+    } else if (c === '}' && depth) {
+      source += ')'
+      depth--
+    } else if (c === ',' && depth) source += '|'
+    else source += c.replace(/[.+^$(){}|]/, '\\$&')
+  }
+  return depth ? null : new RegExp(`^${source}$`, caseless ? 'i' : '')
+}
 
-// grep's globs match a leading dot with `*` and `?` (fnmatch without FNM_PERIOD).
-const globMatches = (glob, name) =>
-  new RegExp('^' + glob.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$').test(name)
-
-// Whether grep reads `name`: the last filter that matches it wins, and with
-// none matching it is read unless the first filter is an --include. A glob
-// using more than `*` and `?` (a class, an escape, ugrep's `!` or braces) is
-// not modelled, so its presence lets every name through.
-const grepAdmits = filters => name => {
-  if (filters.some(f => /[[\]\\{}!]/.test(f.glob))) return true
-  const last = filters.findLast(f => globMatches(f.glob, name))
-  return last ? last.include : !filters[0]?.include
+// The last filter that matches `name`, or null; undefined when a filter is not modelled.
+const lastMatch = filters => {
+  const regexes = filters.map(globRegex)
+  return regexes.includes(null) ? undefined : name => filters.findLast((f, i) => regexes[i].test(name)) ?? null
 }
 
 /** Which top-level names a recursive search reads, as a predicate, or null when it is not one. */
-const walkedNames = (verb, args, filters) => {
-  const short = shortFlags(args)
+const walkedNames = (verb, args, letters, filters) => {
+  const last = lastMatch(filters)
   if (GREPS.has(verb)) {
     const recursive =
-      /[rR]/.test(short) ||
+      /[rR]/.test(letters) ||
       args.some(a => a === '--recursive' || a === '--dereference-recursive' || a === '--directories=recurse') ||
       args.some((a, i) => a === '-d' && args[i + 1] === 'recurse')
-    return recursive ? grepAdmits(filters) : null
+    if (!recursive) return null
+    // grep: the last filter that matches wins; with none, a name is read unless the first filter is an include
+    return last ? name => last(name)?.include ?? !filters[0]?.include : () => true
   }
-  if (verb === 'rg' || verb === 'ripgrep') {
+  if (RGS.has(verb)) {
     // rg skips hidden and gitignored files by default; a checkout gitignores its
     // env files, so it reads them only with both turned off. Any --no-ignore*
     // counts: which one drops the rule hiding a secret depends on where that
     // rule lives (--no-ignore-parent drops a .gitignore above the search root).
-    const u = (short.match(/u/g)?.length ?? 0) + args.filter(a => a === '--unrestricted').length
-    const hidden = u >= 2 || short.includes('.') || args.includes('--hidden')
+    const u = (letters.match(/u/g)?.length ?? 0) + args.filter(a => a === '--unrestricted').length
+    const hidden = u >= 2 || letters.includes('.') || args.includes('--hidden')
     const noIgnore = u >= 1 || args.some(a => a.startsWith('--no-ignore'))
-    return hidden && noIgnore ? () => true : null
+    // A glob decides past both rules: the last that matches wins, and a name
+    // none matches is left out once any include glob is given.
+    if (!filters.length) return hidden && noIgnore ? () => true : null
+    return last ? name => last(name)?.include ?? (hidden && noIgnore && !filters.some(f => f.include)) : () => true
   }
+  if (verb === 'ag') {
+    // ag walks by default, skipping hidden and ignored files; its own filters are not modelled
+    const unrestricted = letters.includes('u') || args.includes('--unrestricted')
+    const ignoresVcs = letters.includes('U') || args.includes('--skip-vcs-ignores')
+    return unrestricted || (args.includes('--hidden') && ignoresVcs) ? () => true : null
+  }
+  return null
+}
+
+// git's readers of files it does not track, as the reader each one is: a
+// `diff` reads its path operands (a path outside the repo implies
+// --no-index, so every one counts), and a `grep` that reads ignored files
+// (--no-index unless --exclude-standard is the last of that pair, or
+// --untracked when --no-exclude-standard is) searches the directory. `words`
+// start at `git`; an abbreviated long option is not recognised.
+const gitReader = words => {
+  const git = gitCommand(words)
+  if (!git) return null
+  const { word, rest, cArgs } = git
+  const c = cArgs.lastIndexOf('-C')
+  const dir = c < 0 ? undefined : cArgs[c + 1]
+  const noIndex = rest.includes('--no-index')
+  if (word === 'diff') return { verb: 'diff', args: rest.filter(a => a !== '--no-index'), dir }
+  const standard = rest.findLast(a => a === '--exclude-standard' || a === '--no-exclude-standard')
+  const readsIgnored = noIndex ? standard !== '--exclude-standard' : rest.includes('--untracked') && standard === '--no-exclude-standard'
+  if (word === 'grep' && readsIgnored) return { verb: 'grep', args: ['-r', ...rest], dir }
   return null
 }
 
@@ -203,27 +296,37 @@ export const secretRead = (script, cwd) => {
   }
   for (const { words, cdPath, text } of commandsInContext(shellCommandsWithDepth(script))) {
     if (text) continue // heredoc data nothing runs
-    const verb = (words[0] ?? '').replace(/.*\//, '') // basename, strip any path
-    const args = words.slice(1)
-    const here = effectiveCwd(cwd, cdPath).cwd
+    let verb = (words[0] ?? '').replace(/.*\//, '') // basename, strip any path
+    let args = words.slice(1)
+    let here
+    let at = () => (here ??= effectiveCwd(cwd, cdPath).cwd)
 
     const nested = verb === 'eval' ? args.join(' ') : SHELLS.has(verb) ? shellScriptOf(args) : undefined
-    const inner = nested && secretRead(nested, here)
+    const inner = nested && secretRead(nested, at())
     if (inner) return inner
 
+    const git = verb === 'git' ? gitReader(words) : null
+    if (git) {
+      ;({ verb, args } = git)
+      if (git.dir) {
+        const base = at()
+        at = () => resolve(base, git.dir)
+      }
+    }
     if (!READERS.has(verb)) continue
-    const { paths, roots, filters } = readerWords(verb, args)
+    const { paths, roots, letters, filters } = readerWords(verb, args)
     for (const word of paths) {
       const file = secretPathIn(word)
       if (file) return { file, walked: false }
     }
-    const admits = walkedNames(verb, args, filters)
+    const admits = walkedNames(verb, args, letters, filters)
     if (!admits) continue
-    // An operand naming no path is the value of an option not modelled here
-    // (`-A 3`), so with none naming one the search runs where grep would: at `.`.
-    const named = roots.filter(r => EXPANDS.test(r) || existsSync(resolve(here, expandTilde(r))))
-    for (const root of named.length ? named : ['.']) {
-      const file = secretFileIn(resolve(here, expandTilde(root)), admits)
+    // An operand naming no path is the value of an option not modelled here,
+    // so with none naming one the search runs where grep would: at `.`.
+    const located = roots.map(root => ({ root, dir: resolve(at(), expandTilde(root)) }))
+    const named = located.filter(({ root, dir }) => EXPANDS.test(root) || existsSync(dir))
+    for (const { root, dir } of named.length ? named : [{ root: '.', dir: at() }]) {
+      const file = secretFileIn(dir, admits)
       if (file) return { file: join(root, file), walked: true }
     }
   }

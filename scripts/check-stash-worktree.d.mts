@@ -37,6 +37,7 @@ export declare const explicitEntry: (args: string[]) => string | null
 export declare const hasMessage: (sub: string | null, args: string[]) => boolean
 export declare const renumbersStack: (inv: Pick<StashInvocation, 'sub'>) => boolean
 export declare const gitInvocations: (cmd: string) => GitInvocation[]
+export declare const gitCommand: (words: string[]) => Pick<GitInvocation, 'word' | 'rest' | 'cArgs'> | null
 export interface CommandInContext {
   words: string[]
   assigns: string[]
