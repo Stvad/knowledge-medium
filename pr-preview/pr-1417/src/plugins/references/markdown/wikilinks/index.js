@@ -1,0 +1,1 @@
+import{ch as e}from"../../../../../chunks/app-BTzlV-fe.js";export{e as wikilinkMarkdownExtension};

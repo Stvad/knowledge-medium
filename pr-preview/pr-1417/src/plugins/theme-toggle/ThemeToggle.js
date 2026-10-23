@@ -1,0 +1,1 @@
+"use client";import{tC as e}from"../../../chunks/app-BTzlV-fe.js";export{e as ThemeToggle};

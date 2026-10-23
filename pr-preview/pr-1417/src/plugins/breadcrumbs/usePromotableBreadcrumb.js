@@ -1,0 +1,1 @@
+import{Kb as e}from"../../../chunks/app-BTzlV-fe.js";export{e as usePromotableBreadcrumb};

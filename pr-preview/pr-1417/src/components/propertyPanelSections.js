@@ -1,0 +1,1 @@
+import{xF as e}from"../../chunks/app-BTzlV-fe.js";export{e as buildPropertyPanelSections};

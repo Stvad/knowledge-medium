@@ -1,0 +1,1 @@
+import{UD as e}from"../../../chunks/app-BTzlV-fe.js";export{e as BlockEmbed};

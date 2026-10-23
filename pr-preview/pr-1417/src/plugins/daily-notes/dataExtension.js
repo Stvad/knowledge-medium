@@ -1,0 +1,1 @@
+import{_U as e}from"../../../chunks/app-BTzlV-fe.js";export{e as dailyNotesDataExtension};

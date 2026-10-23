@@ -1,0 +1,1 @@
+import{Zt as e}from"../../../chunks/app-BTzlV-fe.js";export{e as typeChipsDecoratorContribution};

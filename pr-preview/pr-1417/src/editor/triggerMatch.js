@@ -1,0 +1,1 @@
+import{VH as e}from"../../chunks/app-BTzlV-fe.js";export{e as matchCharTrigger};

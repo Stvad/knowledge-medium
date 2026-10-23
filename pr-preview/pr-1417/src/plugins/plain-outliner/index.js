@@ -1,0 +1,1 @@
+import{Qb as e}from"../../../chunks/app-BTzlV-fe.js";export{e as plainOutlinerPlugin};

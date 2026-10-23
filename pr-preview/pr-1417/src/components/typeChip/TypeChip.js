@@ -1,0 +1,1 @@
+import{QD as e}from"../../../chunks/app-BTzlV-fe.js";export{e as TypeChip};

@@ -1,0 +1,1 @@
+import{wN as e}from"../../chunks/app-BTzlV-fe.js";export{e as BlockEditor};
