@@ -41,6 +41,22 @@ export type UploadMode = SyncMode | 'hold'
  *  workspaces). Returns a usable CryptoKey handle, never raw bytes (§5). */
 export type GetCek = (workspaceId: string) => Promise<CryptoKey | null>
 
+/** A `GetCek` that reads the store once per workspace for as long as it lives.
+ *  Build one per batch/window and drop it: the next batch must read the store
+ *  again so key removal or replacement is observed. A rejected read is cached
+ *  too, so the one batch that hit it fails uniformly. */
+export const snapshotCekPerCall = (getCek: GetCek): GetCek => {
+  const byWorkspace = new Map<string, Promise<CryptoKey | null>>()
+  return workspaceId => {
+    let key = byWorkspace.get(workspaceId)
+    if (!key) {
+      key = getCek(workspaceId)
+      byWorkspace.set(workspaceId, key)
+    }
+    return key
+  }
+}
+
 /** How a workspace's rows should be materialized into `blocks`. This is
  *  sync-seam vocabulary, not observer-internal: the §6 resolver
  *  (`sync/keys/resolver.ts`) produces it and the data-engine observer
