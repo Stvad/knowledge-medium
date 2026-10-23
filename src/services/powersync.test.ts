@@ -395,6 +395,7 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
       const getCek = vi.fn<GetCek>(async () => { throw new Error('idb unavailable') })
       await expect(__encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek))
         .rejects.toThrow('idb unavailable')
+      expect(getCek.mock.calls.length).toBeLessThanOrEqual(2)
     })
 
     it('still rejects the batch when the key is missing', async () => {
