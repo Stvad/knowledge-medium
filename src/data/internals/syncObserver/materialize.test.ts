@@ -229,6 +229,36 @@ describe('materializeStagingRows — decrypt (e2ee workspace with WK)', () => {
     const aliases = await env.db.getAll<{ alias: string }>('SELECT alias FROM block_aliases')
     expect(aliases).toEqual([{ alias: 'Secret' }])
   })
+
+  it('reads the key once per workspace per window, and again in the next window', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const sealer: GetCek = async () => key
+    const getCek = vi.fn<GetCek>(async () => key)
+    const ids = [['k1', 'ws-a'], ['k2', 'ws-a'], ['k3', 'ws-a'], ['k4', 'ws-b']] as const
+    for (const [id, workspaceId] of ids) {
+      const plain = blockData({id, workspaceId, content: `note ${id}`})
+      const wire = await encodeForWire(
+        {
+          id, workspace_id: workspaceId, content: plain.content,
+          properties_json: JSON.stringify(plain.properties),
+          references_json: JSON.stringify(plain.references),
+        },
+        'e2ee',
+        sealer,
+      )
+      await stageRow(plain, stagingCiphertextParams(plain, wire))
+    }
+    const window = {upserted: ids.map(([id]) => id), removed: []}
+    const deps = {getMaterializability: constMat('decrypt'), getCek}
+
+    const first = await materializeStagingRows(env.db, window, deps)
+    expect(first.applied).toHaveLength(4)
+    expect(getCek.mock.calls.map(([ws]) => ws).sort()).toEqual(['ws-a', 'ws-b'])
+
+    getCek.mockClear()
+    await materializeStagingRows(env.db, window, deps)
+    expect(getCek.mock.calls.length).toBeGreaterThan(0)
+  })
 })
 
 describe('materializeStagingRows — defer (not materializable yet)', () => {

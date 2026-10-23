@@ -1,9 +1,9 @@
 /**
- * Shared plumbing for the fact-printing Bash hooks (backup-before-restore
- * before the command, push-scope after it): reading the payload, running git, and
- * emitting additionalContext. Claude Code inlines one hook command's context
- * only up to ~10K characters and shows a 2K preview past that, so a note lists
- * its lines only while they fit a budget and then says how many it left out.
+ * Shared plumbing for the hooks that print facts as additionalContext: reading
+ * a Bash hook's payload, running git, and emitting the context. Claude Code
+ * inlines one hook command's context only up to ~10K characters and shows a 2K
+ * preview past that, so a note lists its lines only while they fit a budget and
+ * then says how many it left out.
  * The emitted JSON carries no permissionDecision: the permission flow applies
  * unchanged.
  */

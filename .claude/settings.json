@@ -105,6 +105,16 @@
           }
         ],
         "matcher": "startup|resume"
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/compaction-handoff.mjs\"",
+            "statusMessage": "Restoring the compaction handoff…",
+            "type": "command"
+          }
+        ],
+        "matcher": "compact"
       }
     ]
   },

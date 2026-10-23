@@ -157,6 +157,7 @@ import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
+import { pidAlive } from './pid-alive.mjs'
 import { shellCommandsWithDepth, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
@@ -1612,14 +1613,6 @@ const STALE_RUN_MS = 10 * 60_000
 // tests.
 const LOCK_WAIT_MS = Number(process.env.KM_BD_SYNC_LOCK_WAIT_MS) || 20_000
 
-const processAlive = pid => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return e.code === 'EPERM'
-  }
-}
 
 /**
  * One sync at a time across sessions/worktrees (they share the one DB). The
@@ -1647,11 +1640,11 @@ const withLock = async (root, fn) => {
       // still could not be taken (a stray directory, no permission) is broken,
       // and fails the run so its record says so.
       if (Date.now() > deadline) {
-        if (holder && processAlive(holder)) return { skipped: `lock at ${lock} held by pid ${holder} past the wait` }
+        if (holder && pidAlive(holder)) return { skipped: `lock at ${lock} held by pid ${holder} past the wait` }
         throw new Error(`could not take the sync lock at ${lock}, and nothing live holds it`)
       }
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
-      if ((holder && !processAlive(holder)) || age > STALE_RUN_MS) {
+      if ((holder && !pidAlive(holder)) || age > STALE_RUN_MS) {
         try {
           unlinkSync(lock)
         } catch {}
@@ -2085,7 +2078,7 @@ const openRunRecord = root => {
 // start with no end is a run still going while its process lives and it is
 // not stale (left out), or one that was killed or crashed, placed where it
 // started. A line with no id — an older build's — stands as a run of its own.
-export const foldRunLog = (logText, isAlive = processAlive, now = Date.now()) => {
+export const foldRunLog = (logText, isAlive = pidAlive, now = Date.now()) => {
   const slots = new Map()
   String(logText ?? '')
     .split('\n')
@@ -2133,7 +2126,7 @@ const parseRunRecord = r => {
 // GitHub having a bad minute as a regression. The latest run decides which of
 // the two it reports. Total over any text — it runs at session start, which
 // must never break.
-export const syncAlarm = (logText, isAlive = processAlive, now = Date.now()) => {
+export const syncAlarm = (logText, isAlive = pidAlive, now = Date.now()) => {
   const runs = foldRunLog(logText, isAlive, now).map(parseRunRecord).filter(Boolean)
   const lastTwo = runs.slice(-2)
   const bad = record => record.failure !== null || overBudget(record)

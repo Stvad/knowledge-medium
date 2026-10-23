@@ -53,6 +53,7 @@ import {deriveReferenceTargetsAtArrival} from './arrivalProcessors.js'
 import {
   decodeFromWire,
   requireCek,
+  snapshotCekPerCall,
   type GetCek,
   type GetMaterializability,
   type Materializability,
@@ -364,17 +365,8 @@ export const materializeStagingRows = async (
     return answer
   }
 
-  // One key snapshot per workspace in this window. The next window reads the
-  // store again, so key removal/replacement never leaves a session-wide cache.
-  const keysByWorkspace = new Map<string, ReturnType<GetCek>>()
-  const getWindowCek: GetCek = workspaceId => {
-    let key = keysByWorkspace.get(workspaceId)
-    if (!key) {
-      key = getCek(workspaceId)
-      keysByWorkspace.set(workspaceId, key)
-    }
-    return key
-  }
+  // One key snapshot per workspace in this window (see `snapshotCekPerCall`).
+  const getWindowCek = snapshotCekPerCall(getCek)
 
   // ── Phase 1 (outside the write tx): decide, then decrypt only survivors. ──
   const prepareRow = async (row: BlockRow): Promise<PreparedStagingRow> => {
