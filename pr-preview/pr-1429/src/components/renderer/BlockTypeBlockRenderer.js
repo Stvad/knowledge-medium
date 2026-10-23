@@ -1,1 +1,0 @@
-import{Dj as e,Oj as t,kj as n}from"../../../chunks/app-BS6_Irsb.js";export{e as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,n as writeBlockTypeLabel};

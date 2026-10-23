@@ -1,1 +1,0 @@
-import{Tl as e,wl as t}from"../../../chunks/app-BS6_Irsb.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};

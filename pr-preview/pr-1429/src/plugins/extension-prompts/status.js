@@ -1,1 +1,0 @@
-import{nk as e,rk as t}from"../../../chunks/app-BS6_Irsb.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

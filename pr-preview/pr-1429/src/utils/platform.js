@@ -1,1 +1,0 @@
-import{GL as e,WL as t}from"../../chunks/app-BS6_Irsb.js";export{t as isIOS,e as isMacPlatform};

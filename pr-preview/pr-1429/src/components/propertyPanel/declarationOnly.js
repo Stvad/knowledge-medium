@@ -1,1 +1,0 @@
-import{EF as e,TF as t}from"../../../chunks/app-BS6_Irsb.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

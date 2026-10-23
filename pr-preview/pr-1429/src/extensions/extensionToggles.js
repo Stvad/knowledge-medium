@@ -1,1 +1,0 @@
-import{iA as e,nA as t,rA as n,tA as r}from"../../chunks/app-BS6_Irsb.js";export{r as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,e as userExtensionToggle};
