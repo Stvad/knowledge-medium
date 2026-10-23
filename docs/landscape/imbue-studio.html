@@ -302,7 +302,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
     <dt>Apps describe themselves</dt>
     <dd>Each app's manifest carries a description and an OpenAPI document generated from its route docstrings. An app's tests fail if a route has no summary. An agent arriving over a share link reads a primer that lists the apps and links each one's API, so it can use an app without reading its code.</dd>
     <dt>Agents start with no access</dt>
-    <dd>Agents run in a sandbox and can't reach your accounts or secrets until you allow it, one agent and one permission at a time. The launch post's example is an agent that can label your email but can't send or delete it.</dd>
+    <dd>Agents run in a container that holds none of your account credentials. Calls to your accounts go through a gateway outside it, which adds the credential and checks each request against the permissions you've approved. Approvals cover the whole workspace, not one agent. The launch post's example is an agent that can label your email but can't send or delete it.</dd>
   </dl>
   <p>Data stays out of git in <code>data/</code> with continuous encrypted backup, and the launch post says traffic and storage are end-to-end encrypted so Imbue can't read them. That is the company's claim; the post gives no independent verification. The agent is also told that derived views must keep the raw source records they were built from, and that progress updates to you shouldn't mention internal machinery such as git or tickets.</p>
 </section>
@@ -475,7 +475,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
         <tr><td>Making it durable</td><td>The agent writes the app directly</td><td>Live first, then crystallize, heal and update on a branch</td><td>Extensions are written by hand or by an agent, then approved</td></tr>
         <tr><td>Sharing</td><td>Collaborators on live state; blueprints for code</td><td>A tool or a whole studio by link; templates</td><td>Workspace members and subtree shares</td></tr>
         <tr><td>Lineage</td><td>Upstream pointer and merge proposals</td><td>Parent template, append-only history, origin and lineage records</td><td>None yet (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>)</td></tr>
-        <tr><td>Safety model</td><td>No ambient authority, gatekeepers, tracking what was read</td><td>Sandboxed agents with zero access by default, granted per agent</td><td>Approve and trust per device; optional end-to-end encryption</td></tr>
+        <tr><td>Safety model</td><td>No ambient authority, gatekeepers, tracking what was read</td><td>Credentials held outside the sandbox; a gateway checks each request against permissions approved for the workspace</td><td>Approve and trust per device; optional end-to-end encryption</td></tr>
         <tr><td>Offline</td><td>No</td><td>On your own machine, if you run it there</td><td>Yes, local-first</td></tr>
         <tr><td>Built for</td><td>An organization</td><td>A person and the people they invite</td><td>A person's long-lived knowledge, plus a few collaborators</td></tr>
       </tbody>
@@ -626,6 +626,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
     <li><a href="https://github.com/imbue-ai/default-workspace-template/blob/main/docs/system/workspace-internals.md">docs/system/workspace-internals.md</a>, <a href="https://github.com/imbue-ai/default-workspace-template/blob/main/docs/VERSION_HISTORY.md">docs/VERSION_HISTORY.md</a> <span class="where">· structure, creation lifecycle, lineage</span></li>
     <li><a href="https://github.com/imbue-ai/default-workspace-template/blob/main/.agents/skills/crystallize-creation/SKILL.md">crystallize-creation</a> and <a href="https://github.com/imbue-ai/default-workspace-template/blob/main/.agents/skills/use-template/SKILL.md">use-template</a> skills</li>
     <li><a href="https://github.com/imbue-ai/default-workspace-template/pull/882">PR 882: an OpenAPI document per app</a>, <a href="https://github.com/imbue-ai/default-workspace-template/pull/910">PR 910: Routines</a> <span class="where">· pull request descriptions, may change</span></li>
+    <li><a href="https://github.com/imbue-ai/latchkey">imbue-ai/latchkey</a> and <a href="https://github.com/imbue-ai/detent">imbue-ai/detent</a> <span class="where">· the credential gateway and its request-permission checker</span></li>
     <li><a href="https://www.inkandswitch.com/essay/malleable-software/">Malleable software</a> <span class="where">· Ink &amp; Switch essay, the framing Knowledge Medium's README cites</span></li>
     <li>Cloudflare OS facts: see the companion page, “Cloudflare OS and Knowledge Medium”.</li>
     <li>Knowledge Medium: <code>README.md</code>, <code>AGENTS.md</code>, <code>src/shortcuts/types.ts</code> (action descriptions), <code>src/extensions/</code> (approval, error boundary, load errors), <code>packages/agent-dispatch/README.md</code> <span class="where">· master as of 23 Oct 2026</span></li>
