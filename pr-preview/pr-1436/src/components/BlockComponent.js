@@ -1,1 +1,1 @@
-export{OA as BlockChildren,kA as BlockComponent}from"../../chunks/app-ofobE383.js";
+export{OA as BlockChildren,kA as BlockComponent}from"../../chunks/app-n8JXtGQR.js";
