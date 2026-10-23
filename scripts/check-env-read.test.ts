@@ -167,6 +167,13 @@ describe('secretRead', () => {
       expect(secretRead(`bash <<'EOF'\ncd ${withSecret}\ngrep -rn FOO .\nEOF`, templateOnly)).not.toBeNull()
       expect(secretRead("bash <<'EOF'\ncd src\nEOF\ngrep -rn FOO .", withSecret)).not.toBeNull()
       expect(secretRead("bash <<'EOF'\ncd src\nEOF\nbash <<'EOF'\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
+      // a subshell inside the heredoc scopes its cd as one outside does
+      expect(secretRead("bash <<'EOF'\n(cd src)\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
+      expect(secretRead("bash <<'EOF'\ncd src\n(ls)\nEOF\ngrep -rn FOO .", withSecret)).not.toBeNull()
+      // its subshells unwind with it, so leaving an enclosing one after it lands outside
+      expect(secretRead("(bash <<'EOF'\ncd src\n(ls)\nEOF\n); grep -rn FOO .", withSecret)).not.toBeNull()
+      // and a cd after the heredoc is the outer shell's again
+      expect(secretRead(`bash <<'EOF'\nls\nEOF\ncd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
     })
 
     it('ignores a cd it cannot follow out of the shell it runs in', () => {

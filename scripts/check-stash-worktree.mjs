@@ -76,18 +76,23 @@ const moveDir = (cdPath, verb, args) => {
  * wrapper commands, shell reserved words and (past position 0) wrapper flags,
  * so `env -i git stash …` and `if git stash …` are seen; a wrapper flag that
  * takes an operand (`sudo -u alice git …`) still hides it — accidents, not
- * adversaries. A cd, pushd or popd moves cdPath and is not returned; one in a
- * heredoc's lines moves only the rest of that heredoc, since a shell reading
- * it (`bash <<'EOF'`) runs as a child.
+ * adversaries. A cd, pushd or popd moves cdPath and is not returned. A shell
+ * reading a heredoc (`bash <<'EOF'`) runs it as a child, so every scope its
+ * lines open or move is dropped when they end.
  */
 export const commandsInContext = segments => {
   const out = []
   let cdPath = null
-  let heredocCd = null // cdPath inside the heredoc being read, once a cd in it moves
-  const outerCd = [] // saved cdPath per enclosing subshell scope
+  const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
   let depth = 0
+  let beforeHeredoc = null // the scope state when the heredoc being read began
   for (const { tokens, depth: d, heredoc = false, text = false } of segments) {
-    if (!heredoc) heredocCd = null
+    if (heredoc && !beforeHeredoc) beforeHeredoc = { cdPath, depth }
+    if (!heredoc && beforeHeredoc) {
+      ;({ cdPath, depth } = beforeHeredoc)
+      outerCd.length = depth
+      beforeHeredoc = null
+    }
     while (depth < d) {
       outerCd.push(cdPath)
       depth++
@@ -110,11 +115,10 @@ export const commandsInContext = segments => {
     }
     if (DIR_CHANGES.has(tokens[i])) {
       // A relative target moves from the previous cd, so `cd a && cd b` lands in a/b.
-      if (heredoc) heredocCd = moveDir(heredocCd ?? cdPath, tokens[i], tokens.slice(i + 1))
-      else cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
+      cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
     }
-    out.push({ words: tokens.slice(i), assigns, cdPath: (heredoc && heredocCd) || cdPath, heredoc, text })
+    out.push({ words: tokens.slice(i), assigns, cdPath, heredoc, text })
   }
   return out
 }
