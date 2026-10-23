@@ -1,1 +1,0 @@
-import{aB as e}from"../../chunks/app-BYEjYXdl.js";export{e as staticDataExtensions};

@@ -1,1 +1,0 @@
-import{Zb as e}from"../../../chunks/app-BYEjYXdl.js";export{e as BreadcrumbList};

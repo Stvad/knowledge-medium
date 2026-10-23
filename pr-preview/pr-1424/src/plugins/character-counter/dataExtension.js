@@ -1,1 +1,0 @@
-import{QU as e}from"../../../chunks/app-BYEjYXdl.js";export{e as characterCounterDataExtension};
