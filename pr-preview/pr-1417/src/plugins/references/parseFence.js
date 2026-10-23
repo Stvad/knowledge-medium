@@ -1,1 +1,1 @@
-import{iV as e,rV as t}from"../../../chunks/app-BYsnvD2A.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};
+import{iV as e,rV as t}from"../../../chunks/app-BvVZKtJh.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};
