@@ -378,6 +378,40 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
     expect(hasEnvelopePrefix(p.payload.content as string)).toBe(true)
   })
 
+  describe('key reads', () => {
+    const manyOps = (): CompactedBlockOperation[] => [
+      ...Array.from({length: 5}, (_, i) => create(`a${i}`, {workspace_id: 'w1', content: 'x'})),
+      ...Array.from({length: 5}, (_, i) => patchOp(`b${i}`, {workspace_id: 'w2', content: 'y'})),
+    ]
+
+    it('reads the key once per workspace per call, not once per op', async () => {
+      const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+      const getCek = vi.fn<GetCek>(async () => key)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      expect(getCek.mock.calls.map(([ws]) => ws).sort()).toEqual(['w1', 'w2'])
+    })
+
+    it('still rejects the batch when the key lookup rejects', async () => {
+      const getCek = vi.fn<GetCek>(async () => { throw new Error('idb unavailable') })
+      await expect(__encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek))
+        .rejects.toThrow('idb unavailable')
+      expect(getCek.mock.calls.length).toBeLessThanOrEqual(2)
+    })
+
+    it('still rejects the batch when the key is missing', async () => {
+      await expect(__encryptUploadOpsForTest(manyOps(), () => 'e2ee', async () => null))
+        .rejects.toThrow(/no workspace key/)
+    })
+
+    it('reads the key again on the next call', async () => {
+      const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+      const getCek = vi.fn<GetCek>(async () => key)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      expect(getCek).toHaveBeenCalledTimes(4)
+    })
+  })
+
   it('passes through an op missing workspace_id (cannot be e2ee-routed)', async () => {
     const getCek: GetCek = async () => { throw new Error('getCek must not be called') }
     const ops: CompactedBlockOperation[] = [patchOp('a', {content: 'x'})]
