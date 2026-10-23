@@ -1,1 +1,0 @@
-import{VH as e}from"../../chunks/app-DKEvDPVW.js";export{e as matchCharTrigger};

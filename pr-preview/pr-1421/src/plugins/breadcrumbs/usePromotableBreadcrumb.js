@@ -1,1 +1,0 @@
-import{Kb as e}from"../../../chunks/app-DKEvDPVW.js";export{e as usePromotableBreadcrumb};

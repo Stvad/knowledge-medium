@@ -1,1 +1,0 @@
-import{sz as e}from"../../../chunks/app-DKEvDPVW.js";export{e as propertyShapeLabel};

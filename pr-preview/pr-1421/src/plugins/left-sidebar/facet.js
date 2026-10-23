@@ -1,1 +1,0 @@
-import{Cx as e,Sx as t}from"../../../chunks/app-DKEvDPVW.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
