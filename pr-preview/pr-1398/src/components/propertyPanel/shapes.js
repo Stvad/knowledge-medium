@@ -1,0 +1,1 @@
+import{sz as e}from"../../../chunks/app-CsubWSze.js";export{e as propertyShapeLabel};

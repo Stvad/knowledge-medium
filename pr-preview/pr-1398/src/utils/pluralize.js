@@ -1,0 +1,1 @@
+import{cQ as e,lQ as t}from"../../chunks/app-CsubWSze.js";export{e as agree,t as pluralize};
