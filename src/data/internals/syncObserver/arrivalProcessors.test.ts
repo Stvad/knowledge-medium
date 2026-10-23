@@ -1,151 +1,105 @@
-import { describe, expect, it } from 'vitest'
-import type { BlockData } from '@/data/api'
-import type { TxDb } from '@/data/internals/txEngine.js'
-import {
-  runArrivalProcessors,
-  type ArrivalProcessor,
-} from './arrivalProcessors.ts'
-import type { MaterializeDeps, SyncSnapshot } from './materialize.ts'
-
-/**
- * Runner-level tests. The registered processor's own behavior is covered
- * end-to-end in `referenceTargetArrival.test.ts`; what's pinned HERE is the
- * runner's contract — which the seam's single member exercises only
- * incidentally, and which becomes load-bearing the moment a second member
- * lands.
- */
+// @vitest-environment node
+import {expect, it, vi} from 'vitest'
+import type {BlockData} from '@/data/api'
+import type {TxDb} from '@/data/internals/txEngine'
+import type {MaterializeDeps, SyncSnapshot} from './materialize'
+import {deriveReferenceTargetsAtArrival} from './arrivalProcessors'
 
 const block = (id: string, content: string): BlockData => ({
-  id,
-  workspaceId: 'ws',
-  parentId: null,
-  orderKey: 'a0',
-  content,
-  properties: {},
-  references: [],
-  createdAt: 0,
-  updatedAt: 0,
-  userUpdatedAt: null,
-  createdBy: null,
-  updatedBy: null,
-  deleted: false,
-  referenceTargetId: null,
-} as unknown as BlockData)
-
-/** Minimal TxDb whose `tx_context.source` answer the test controls — enough
- *  for the runner's invariant probe; processors here never touch real rows. */
-const fakeTx = (sourceRef: {value: string | null}): TxDb => ({
-  execute: async () => undefined,
-  getAll: async () => [],
-  get: async () => { throw new Error('not used') },
-  getOptional: async (sql: string) =>
-    (sql.includes('tx_context') ? {source: sourceRef.value} : null),
+  id, content, workspaceId: 'ws', parentId: null, orderKey: id, properties: {}, references: [],
+  createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'peer', updatedBy: 'peer',
+  deleted: false, referenceTargetId: null, isFieldForm: false,
+})
+const snapshotsWith = (...contents: string[]) => new Map<string, SyncSnapshot>(
+  contents.map((content, i) => [String(i), {before: null, after: block(String(i), content)}]),
+)
+const fakeTx = (source: {value: string | null} = {value: null}): TxDb => ({
+  execute: vi.fn(async () => undefined), getAll: async () => [],
+  get: async () => { throw new Error('unused') },
+  getOptional: async () => ({source: source.value}),
 } as unknown as TxDb)
+const deps = (lookup: NonNullable<MaterializeDeps['referenceTargetLookups']>): MaterializeDeps => ({
+  getMaterializability: () => 'copy', getCek: async () => null, referenceTargetLookups: lookup,
+})
 
-const deps = {} as MaterializeDeps
+it('refuses a lookup that stamps tx_context.source, even when that row throws', async () => {
+  const source = {value: null as string | null}
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    await expect(deriveReferenceTargetsAtArrival(fakeTx(source), snapshotsWith('[[bad]]'), deps(() => ({
+      aliasTargetId: async () => { source.value = 'user'; throw new Error('bad lookup') },
+    })))).rejects.toThrow(/left tx_context.source/)
+  } finally { warning.mockRestore() }
+})
 
-const snapshotsWith = (...ids: string[]): Map<string, SyncSnapshot> =>
-  new Map(ids.map(id => [id, {before: null, after: block(id, id)}] as const))
+it('stamps both local columns and the invalidation snapshots together', async () => {
+  const snapshots = snapshotsWith('::((target))', 'plain', '[[Alias]]')
+  const quarantined = await deriveReferenceTargetsAtArrival(fakeTx(), snapshots, deps(() => ({
+    aliasTargetId: async () => 'alias-target',
+  })))
+  expect(quarantined).toEqual([])
+  expect(snapshots.get('0')?.after).toMatchObject({referenceTargetId: 'target', isFieldForm: true})
+  expect(snapshots.get('1')?.after).toMatchObject({referenceTargetId: null, isFieldForm: false})
+  expect(snapshots.get('2')?.after).toMatchObject({referenceTargetId: 'alias-target', isFieldForm: false})
+})
 
-describe('runArrivalProcessors', () => {
-  it('refuses a processor that stamps tx_context.source', async () => {
-    // The CRITICAL INVARIANT, enforced rather than documented: a stamped
-    // source turns every later write in the window into an upload, echoing
-    // sync-applied rows back to the server as fresh local edits. Silent at
-    // runtime, so it has to fail loudly here — and OUTSIDE the per-row
-    // quarantine, so it's fatal even though the stamp itself didn't throw.
-    const source = {value: null as string | null}
-    const offender: ArrivalProcessor = {
-      name: 'test.stampsSource',
-      prepare: async () => async () => { source.value = 'user' },
-    }
-    await expect(
-      runArrivalProcessors(fakeTx(source), snapshotsWith('b1'), deps, [offender]),
-    ).rejects.toThrow(/test\.stampsSource left tx_context\.source/)
-  })
+it('isolates a throwing lookup and preserves that row while deriving later rows', async () => {
+  const snapshots = snapshotsWith('[[Good]]', '[[Bad]]', '::((later))')
+  snapshots.set('1', {...snapshots.get('1')!, before: {...block('1', '((old-target))'), referenceTargetId: 'old-target'}})
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await deriveReferenceTargetsAtArrival(fakeTx(), snapshots, deps(() => ({
+      aliasTargetId: async alias => { if (alias === 'Bad') throw new Error('poison'); return 'good-target' },
+    })))).toEqual(['1'])
+    expect(snapshots.get('0')?.after?.referenceTargetId).toBe('good-target')
+    expect(snapshots.get('1')?.after?.referenceTargetId).toBe('old-target')
+    expect(snapshots.get('2')?.after?.referenceTargetId).toBe('later')
+  } finally { warning.mockRestore() }
+})
 
-  it('accepts a processor that leaves the source alone, running its handler per row', async () => {
-    const source = {value: null as string | null}
-    let seen = 0
-    const wellBehaved: ArrivalProcessor = {
-      name: 'test.wellBehaved',
-      prepare: async () => async () => { seen += 1 },
-    }
-    const quarantined = await runArrivalProcessors(
-      fakeTx(source), snapshotsWith('b1', 'b2'), deps, [wellBehaved],
-    )
-    expect(seen).toBe(2)
-    expect(quarantined).toEqual([])
-  })
+it('quarantines malformed content during preparation without starving other rows', async () => {
+  const snapshots = snapshotsWith('::((good))', null as unknown as string, '((later))')
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await deriveReferenceTargetsAtArrival(fakeTx(), snapshots, deps(() => ({aliasTargetId: async () => null})))).toEqual(['1'])
+    expect(snapshots.get('0')?.after?.referenceTargetId).toBe('good')
+    expect(snapshots.get('1')?.after?.referenceTargetId).toBeNull()
+    expect(snapshots.get('2')?.after?.referenceTargetId).toBe('later')
+  } finally { warning.mockRestore() }
+})
 
-  it('quarantines a throwing row and still processes the rest', async () => {
-    // A deterministic poison row must not abort the pass — else the whole
-    // window rolls back, retries, and throws again, wedging the drain and
-    // starving every row after it. The bad row is skipped and named; the
-    // others run.
-    const source = {value: null as string | null}
-    const processed: string[] = []
-    const processor: ArrivalProcessor = {
-      name: 'test.throwsOnBad',
-      prepare: async () => async (row) => {
-        if (row.id === 'bad') throw new Error('boom')
-        processed.push(row.id)
-      },
-    }
-    const quarantined = await runArrivalProcessors(
-      fakeTx(source), snapshotsWith('good1', 'bad', 'good2'), deps, [processor],
-    )
-    expect(processed).toEqual(['good1', 'good2'])
-    expect(quarantined).toEqual(['bad'])
-  })
+it('does not construct lookups for absent dependencies, empty windows, or removed-only snapshots', async () => {
+  const lookup = vi.fn(() => ({aliasTargetId: async () => null}))
+  const tx = fakeTx()
+  await deriveReferenceTargetsAtArrival(tx, snapshotsWith('((id))'), {} as MaterializeDeps)
+  await deriveReferenceTargetsAtArrival(tx, new Map(), deps(lookup))
+  await deriveReferenceTargetsAtArrival(tx, new Map([['gone', {before: block('gone', 'x'), after: null}]]), deps(lookup))
+  expect(lookup).not.toHaveBeenCalled()
+  expect(tx.execute).not.toHaveBeenCalled()
+})
 
-  it('skips a processor whose prepare opts out, and does not even prepare when no rows remain', async () => {
-    // prepare → null opts a processor out of the window (a dep is absent): the
-    // opt-out decision happens in prepare, and NO per-row handler runs.
-    const source = {value: null as string | null}
-    let prepareCalls = 0
-    let handlerCalls = 0
-    const optOut: ArrivalProcessor = {
-      name: 'test.optOut',
-      prepare: async () => { prepareCalls += 1; return null },
-    }
-    await runArrivalProcessors(fakeTx(source), snapshotsWith('b1'), deps, [optOut])
-    expect(prepareCalls).toBe(1)
-    expect(handlerCalls).toBe(0)
+it('preserves local columns on content-unchanged arrivals without resolving aliases', async () => {
+  const snapshots = snapshotsWith('::[[Old]]')
+  snapshots.set('0', {...snapshots.get('0')!, before: {...block('0', '::[[Old]]'), referenceTargetId: 'retained', isFieldForm: true}})
+  const aliasTargetId = vi.fn(async () => null)
+  const tx = fakeTx()
+  await deriveReferenceTargetsAtArrival(tx, snapshots, deps(() => ({aliasTargetId})))
+  expect(aliasTargetId).not.toHaveBeenCalled()
+  expect(tx.execute).not.toHaveBeenCalled()
+  expect(snapshots.get('0')?.after).toMatchObject({referenceTargetId: 'retained', isFieldForm: true})
+})
 
-    // `after: null` entries (the `removed` loop's) never reach a processor;
-    // with only those present there are no rows, so prepare isn't even called.
-    const removedOnly = new Map<string, SyncSnapshot>([
-      ['gone', {before: block('gone', 'x'), after: null} as unknown as SyncSnapshot],
-    ])
-    let preparedForEmpty = false
-    const neverPrepared: ArrivalProcessor = {
-      name: 'test.neverPrepared',
-      prepare: async () => { preparedForEmpty = true; return async () => { handlerCalls += 1 } },
-    }
-    await runArrivalProcessors(fakeTx(source), removedOnly, deps, [neverPrepared])
-    expect(preparedForEmpty).toBe(false)
-  })
-
-  it('hands each processor the rows present when it runs, including earlier mutations', async () => {
-    // The runner rebuilds `rows` per processor from the live snapshots map, so
-    // a later member sees an earlier one's amendments. Nothing depends on this
-    // with one member registered — pinning it now so the contract is a
-    // decision rather than an accident when a second lands.
-    const source = {value: null as string | null}
-    const snapshots = snapshotsWith('b1')
-    const first: ArrivalProcessor = {
-      name: 'test.first',
-      prepare: async () => async (_row, snaps) => {
-        snaps.set('b1', {before: null, after: block('b1', 'rewritten')} as unknown as SyncSnapshot)
-      },
-    }
-    let secondSaw = ''
-    const second: ArrivalProcessor = {
-      name: 'test.second',
-      prepare: async () => async (row) => { secondSaw = row.after.content },
-    }
-    await runArrivalProcessors(fakeTx(source), snapshots, deps, [first, second])
-    expect(secondSaw).toBe('rewritten')
-  })
+it('falls back from failed bulk reads and caches each alias per workspace only within the window', async () => {
+  const aliasTargetId = vi.fn(async (_alias: string, ws: string) => `${ws}-target`)
+  const aliasTargetIds = vi.fn(async () => { throw new Error('batch read failed') })
+  const snapshots = snapshotsWith('[[Same]]', '::[[Same]]', '[[Same]]')
+  snapshots.get('2')!.after!.workspaceId = 'other'
+  const lookup = deps(() => ({aliasTargetId, aliasTargetIds}))
+  expect(await deriveReferenceTargetsAtArrival(fakeTx(), snapshots, lookup)).toEqual([])
+  expect(aliasTargetIds).toHaveBeenCalledTimes(2)
+  expect(aliasTargetId).toHaveBeenCalledTimes(2)
+  expect(snapshots.get('0')?.after?.referenceTargetId).toBe('ws-target')
+  expect(snapshots.get('2')?.after?.referenceTargetId).toBe('other-target')
+  await deriveReferenceTargetsAtArrival(fakeTx(), snapshotsWith('[[Same]]'), lookup)
+  expect(aliasTargetId).toHaveBeenCalledTimes(3)
 })

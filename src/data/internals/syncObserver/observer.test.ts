@@ -221,6 +221,21 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
     expect(errors.some(e => e instanceof Error && e.message === 'boom')).toBe(true)
   })
+
+  it('reports its progress once the pass has its id set and after every committed window', async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 2 })
+    await observer.flush()
+
+    const seen: Array<{ done: number; total: number }> = []
+    await observer.drainWorkspace('ws', 'all', progress => seen.push({ ...progress }))
+    expect(seen).toEqual([
+      { done: 0, total: 5 },
+      { done: 2, total: 5 },
+      { done: 4, total: 5 },
+      { done: 5, total: 5 },
+    ])
+  })
 })
 
 describe('blocksSyncedObserver — the queue-blind rescan is observable', () => {

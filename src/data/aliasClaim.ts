@@ -17,8 +17,13 @@
  * the alias plugin's rename sync, and the kernel must not depend on the plugin.
  */
 
-import { ProcessorRejection, type BlockData, type Tx } from '@/data/api'
+import { ProcessorRejection, type AnyPropertySchema, type BlockData, type Tx } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import {
+  childContentsToEncodedPropertyValue,
+  fieldValueChildren,
+  unionValuesAcrossFieldRows,
+} from '@/data/propertyChildren'
 import type { SnapshotsMap } from '@/data/internals/txSnapshots'
 
 /** A name claiming would abort on, and the other live blocks holding it. */
@@ -61,17 +66,39 @@ export const storedAliasNames = (properties: Record<string, unknown>): string[] 
   return values.filter((value): value is string => typeof value === 'string')
 }
 
-/** `properties` with `taken` yielded from the alias bag, written back as a
- *  clean string list. Whatever else a malformed bag held is not a name — the
- *  trigger never indexed it — and keeping it would make the rewritten bag fail
- *  the property's codec, which a child-backed workspace validates on write. */
-const yieldingAliases = (
+/** `properties` with the alias bag replaced by `names`, as a clean string
+ *  list. Whatever else a malformed bag held is not a name — the trigger never
+ *  indexed it — and keeping it would make the rewritten bag fail the
+ *  property's codec, which a child-backed workspace validates on write. */
+const withAliasNames = (
   properties: Record<string, unknown>,
-  taken: ReadonlySet<string>,
-): Record<string, unknown> => ({
-  ...properties,
-  [aliasesProp.name]: aliasesProp.codec.encode(storedAliasNames(properties).filter(alias => !taken.has(alias))),
-})
+  names: readonly string[],
+): Record<string, unknown> => ({...properties, [aliasesProp.name]: aliasesProp.codec.encode([...names])})
+
+/** The names a revival of `tombstone` brings back. Past the properties flip, a
+ *  LIVE alias field row under it — a peer wrote it while the owner was dead —
+ *  is the truth, and ordinary revival takes no value from the stale cell
+ *  there; otherwise the stored bag is. Yielding from anything else would let
+ *  the restore's alias write overrule children it never saw. */
+const revivedAliasNames = async (tx: Tx, tombstone: BlockData): Promise<string[]> => {
+  if (await tx.isPropertyChildBackedWorkspace(tombstone.workspaceId)) {
+    let schema: AnyPropertySchema | null = null
+    const perFieldRow: BlockData[][] = []
+    for (const child of await tx.childrenOf(tombstone.id, undefined)) {
+      if (child.isFieldForm !== true || child.referenceTargetId == null) continue
+      const fieldSchema = tx.resolvePropertyFieldSchema(tombstone.workspaceId, child.referenceTargetId)
+      if (fieldSchema?.name !== aliasesProp.name) continue
+      schema = fieldSchema
+      perFieldRow.push(await fieldValueChildren(tx, child.id))
+    }
+    if (schema !== null) {
+      const live = childContentsToEncodedPropertyValue(
+        schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
+      return Array.isArray(live) ? live.filter((value): value is string => typeof value === 'string') : []
+    }
+  }
+  return storedAliasNames(tombstone.properties)
+}
 
 /** Restore-time `properties` that yield every name another live block took
  *  while `id` was dead, or `undefined` when nothing was taken and the bag can
@@ -84,19 +111,26 @@ export const restorePropertiesYieldingTakenAliases = async (
 ): Promise<Record<string, unknown> | undefined> => {
   const tombstone = await tx.get(id)
   if (tombstone === null) return undefined
-  const taken = await takenAliases(tx, id, tombstone)
-  return taken.size === 0 ? undefined : yieldingAliases(tombstone.properties, taken)
+  // The restore indexes the stored bag: nothing taken there, and it comes back
+  // as stored.
+  if ((await takenAliases(tx, id, tombstone.workspaceId, storedAliasNames(tombstone.properties))).size === 0) {
+    return undefined
+  }
+  const reviving = await revivedAliasNames(tx, tombstone)
+  const taken = await takenAliases(tx, id, tombstone.workspaceId, reviving)
+  return withAliasNames(tombstone.properties, reviving.filter(alias => !taken.has(alias)))
 }
 
-/** The names in `row`'s stored bag that claiming for `id` would abort on,
- *  counting only the holders `counts` accepts. */
+/** Which of `names` claiming for `id` would abort on, counting only the
+ *  holders `counts` accepts. */
 const takenAliases = async (
   tx: Tx,
   id: string,
-  row: BlockData,
+  workspaceId: string,
+  names: readonly string[],
   counts: (holderId: string, alias: string) => boolean = () => true,
 ): Promise<Set<string>> => {
-  const conflicts = await aliasClaimConflicts(tx, id, row.workspaceId, storedAliasNames(row.properties))
+  const conflicts = await aliasClaimConflicts(tx, id, workspaceId, names)
   return new Set(conflicts
     .filter(conflict => conflict.holders.some(holder => counts(holder.id, conflict.alias)))
     .map(conflict => conflict.alias))
@@ -219,9 +253,11 @@ export const yieldNamesHeldPastReplay = async (
   const yields = new Map<string, ReplayYield>()
   for (const [id, target] of stuck) {
     if (target === null || target.deleted) continue
-    const taken = await takenAliases(tx, id, target, keepsPastReplay)
+    const names = storedAliasNames(target.properties)
+    const taken = await takenAliases(tx, id, target.workspaceId, names, keepsPastReplay)
     if (taken.size === 0) continue
-    yields.set(id, {target: {...target, properties: yieldingAliases(target.properties, taken)}, taken})
+    const kept = names.filter(alias => !taken.has(alias))
+    yields.set(id, {target: {...target, properties: withAliasNames(target.properties, kept)}, taken})
   }
   return yields
 }

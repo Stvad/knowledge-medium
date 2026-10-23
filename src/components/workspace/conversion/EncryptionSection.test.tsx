@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
+import { setModePin } from '@/sync/keys/modePin'
 import type { Workspace } from '@/types'
 import { EncryptionSection } from './EncryptionSection'
 
@@ -24,5 +25,17 @@ describe('EncryptionSection', () => {
     fireEvent.click(await screen.findByRole('button', {name: 'Check again'}))
 
     expect(await screen.findByRole('button', {name: 'Finish the conversion…'})).toBeTruthy()
+  })
+
+  it('offers to encrypt a plaintext workspace only on a device that pinned it plaintext', () => {
+    window.localStorage.clear()
+    const plain = {...workspace, encryptionMode: 'none'}
+    render(<EncryptionSection workspace={plain} userId={USER} onStart={() => {}}/>)
+    expect(screen.queryByRole('button', {name: 'Encrypt this workspace…'})).toBeNull()
+    cleanup()
+
+    setModePin(USER, plain.id, 'plaintext')
+    render(<EncryptionSection workspace={plain} userId={USER} onStart={() => {}}/>)
+    expect(screen.getByRole('button', {name: 'Encrypt this workspace…'})).toBeTruthy()
   })
 })

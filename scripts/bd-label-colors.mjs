@@ -13,7 +13,7 @@
  * `type::epic`.
  *
  * The `priority::*` ramp deliberately reuses the hand-maintained P0–P3 colors:
- * the two halves of the dual taxonomy (AGENTS.md) label the same axis and
+ * the two halves of the dual taxonomy (docs/beads.md) label the same axis and
  * should read as one.
  *
  *   node scripts/bd-label-colors.mjs [--dry-run]

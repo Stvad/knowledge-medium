@@ -82,6 +82,7 @@ export interface IssueInfo {
 export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
 export declare const bdVersion: (out: string | null | undefined) => string | null
 export declare const SYNC_RUN_LOG: string
+export declare const BUDGET_PER_MINT_OR_POST_MS: number
 export declare const coveredMs: (intervals: [number, number][]) => number
 export declare const spawnAsync: (
   file: string,

@@ -130,8 +130,8 @@ export const bootstrapWorkspace = async ({
   })
 
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
-  // would make the next empty-hash visit re-select it and render only the key
-  // gate (no switcher), trapping the user away from accessible spaces.
+  // would open every empty-hash visit (a PWA launch) on its key gate rather
+  // than on a workspace the user can work in.
   rememberWorkspace(workspaceId)
 
   // Workspace-scoped one-shot data backfills (workspaceBackfillsFacet) — e.g.

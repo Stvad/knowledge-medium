@@ -1,5 +1,7 @@
 # Tana-style type system
 
+> **Status:** unverified — a dated snapshot of design intent (last edited 2026-05-20). Last verified against code: not since this banner (2026-10-23). CODE + tests are authoritative.
+
 ## Goal
 
 Unify the ad-hoc `type` strings already in use (`extension`, `page`, `panel`, `journal`, `daily-note`) with the future need for user-modelable types (todo, task, project, person, note-with-fields...) under one principled abstraction. Types are facet contributions; a block can carry multiple types; named relationships ride on the existing references pipeline.
@@ -178,7 +180,7 @@ The lift mechanism itself stays internal to the runtime build — `propertySchem
 
 ### 2. Multi-type: `typesProp` replaces `typeProp` as the primary discriminator
 
-Add a new schema and migrate single-string usage to it. Per [feedback_no_backcompat_in_alpha](../.claude/projects/-Users-vlad-coding-knowledge-knowledge-medium-knowledge-medium/memory/feedback_no_backcompat_in_alpha.md), no shim — one-shot data migration, drop `typeProp` after.
+Add a new schema and migrate single-string usage to it. Per `bd recall feedback_no_backcompat_in_alpha`, no shim — one-shot data migration, drop `typeProp` after.
 
 ```ts
 // src/data/properties.ts

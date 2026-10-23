@@ -3,7 +3,7 @@
  * Reply on a PR review thread with a body taken verbatim from a file, signed
  * the way the desktop app's Autofix asks replies to be:
  *
- *   pnpm pr:reply <pr> <comment-id> <body-file>
+ *   pnpm pr:reply <pr> <comment-id> <body-file> [--resolve]
  *
  * It exists so that reply is ONE command the publish gate
  * (bd-github-sync.mjs --hook-pre-pr) recognizes as covered: no shell
@@ -11,6 +11,7 @@
  * reply's URL, which is what bd-publish-verify.mjs reads the published text
  * back from. The body is a file on disk and nothing else — stdin would need
  * a pipe or a heredoc, and either takes the command out of the covered shape.
+ * With --resolve it then resolves the review thread the comment belongs to.
  *
  * Its gh call runs in this process, where no hook sees it, so a spelling of
  * the invocation the hooks fail to recognize would be checked by nobody. The
@@ -33,10 +34,11 @@ export const signedBody = text => {
   return body.endsWith(SIGNATURE) ? body : `${body}\n\n${SIGNATURE}`
 }
 
-const USAGE = 'usage: pnpm pr:reply <pr> <comment-id> <body-file>'
+const USAGE = 'usage: pnpm pr:reply <pr> <comment-id> <body-file> [--resolve]'
 
-// The time the reference echo may take after the post, well inside the Bash
-// tool's own timeout; refsCap turns it into how many lookups fit.
+// The time the reference echo may take after the post; with --resolve's own
+// budget ahead of it, still inside the Bash tool's timeout. refsCap turns it
+// into how many lookups fit.
 const ECHO_BUDGET_MS = (() => {
   const v = Number(process.env.KM_PR_REPLY_ECHO_BUDGET_MS)
   return Number.isFinite(v) && v >= 0 ? v : 60_000
@@ -54,6 +56,69 @@ const readBody = file => {
   return text.trim() ? { text } : { error: `${file}: is empty` }
 }
 
+// The whole --resolve step, every page and the mutation together; the reply is
+// already posted by then, so a hung or long-paging call must not stop the echo
+// that follows.
+const RESOLVE_BUDGET_MS = (() => {
+  const v = Number(process.env.KM_PR_REPLY_RESOLVE_BUDGET_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 30_000
+})()
+
+const THREADS_QUERY =
+  'query($owner:String!,$name:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved comments(first:1){nodes{fullDatabaseId}}}}}}}'
+const RESOLVE_MUTATION = 'mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}'
+
+// Every value travels as a gh variable (-f string, -F typed), never as text of
+// the document. Throws on a gh failure, an answer that is not JSON, or a
+// deadline already past.
+const graphql = (deadline, query, ...variables) => {
+  const timeout = deadline - Date.now()
+  if (timeout <= 0) throw new Error(`out of time (${RESOLVE_BUDGET_MS / 1000}s)`)
+  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=${query}`, ...variables], { encoding: 'utf8', timeout })
+  if (r.status !== 0) throw new Error(r.stderr || r.stdout || r.error?.message || `gh exited ${r.status}`)
+  return JSON.parse(r.stdout)
+}
+
+// The thread whose top-level comment is rootId, paging until found or out of pages.
+const findThread = (pr, rootId, deadline) => {
+  const [owner, name] = REPO.split('/')
+  let after = null
+  do {
+    const page = graphql(
+      deadline,
+      THREADS_QUERY,
+      '-f', `owner=${owner}`,
+      '-f', `name=${name}`,
+      '-F', `pr=${pr}`,
+      ...(after ? ['-f', `after=${after}`] : []),
+    )?.data?.repository?.pullRequest?.reviewThreads
+    if (!Array.isArray(page?.nodes)) throw new Error('unexpected answer to the thread query')
+    // fullDatabaseId is a BigInt, sent as a decimal string: a review comment's
+    // id outgrew databaseId's 32 bits
+    const thread = page.nodes.find(t => String(t.comments?.nodes?.[0]?.fullDatabaseId) === String(rootId))
+    if (thread) return thread
+    after = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null
+  } while (after)
+  return null
+}
+
+// Resolves the review thread rooted at comment rootId. Returns the line for
+// stdout or the error for stderr, never throws: it runs after the post, so it
+// must not decide the exit code.
+const resolveThread = (pr, rootId) => {
+  try {
+    const deadline = Date.now() + RESOLVE_BUDGET_MS
+    const thread = findThread(pr, rootId, deadline)
+    if (!thread) throw new Error(`no review thread starts with comment ${rootId}`)
+    if (thread.isResolved) return { message: `review thread ${thread.id} was already resolved` }
+    const resolved = graphql(deadline, RESOLVE_MUTATION, '-f', `id=${thread.id}`)?.data?.resolveReviewThread?.thread
+    if (resolved?.isResolved !== true) throw new Error(`GitHub left review thread ${thread.id} unresolved`)
+    return { message: `resolved review thread ${thread.id}` }
+  } catch (err) {
+    return { error: `--resolve: could not resolve the review thread: ${String(err.message).replace(/\s+/g, ' ').trim()}` }
+  }
+}
+
 // pnpm runs a package script from the package root and passes the caller's
 // directory as INIT_CWD. Only then is INIT_CWD this invocation's: run any
 // other way, an inherited one belongs to some enclosing pnpm run.
@@ -64,8 +129,10 @@ const callerDir = () =>
 // success nothing here reports failure: the post has happened, and a failed
 // exit would tell the read-back that nothing was published.
 const main = argv => {
-  if (argv.length !== 3) return USAGE
-  const [pr, commentId, file] = argv
+  const resolveRequested = argv.includes('--resolve')
+  const positionals = argv.filter(arg => arg !== '--resolve')
+  if (positionals.length !== 3 || positionals.some(arg => arg.startsWith('--'))) return USAGE
+  const [pr, commentId, file] = positionals
   if (!/^\d+$/.test(pr)) return `pr is not a number: ${pr}\n${USAGE}`
   if (!/^\d+$/.test(commentId)) return `comment-id is not a number: ${commentId}\n${USAGE}`
   const body = readBody(resolve(callerDir(), file))
@@ -86,6 +153,12 @@ const main = argv => {
   // gh's own answer when it names no reply URL: printed as is, so the
   // read-back's report of an unnamed object is what follows.
   console.log(typeof reply?.html_url === 'string' ? reply.html_url : r.stdout.trimEnd())
+  if (resolveRequested) {
+    // in_reply_to_id is the thread's top-level comment, which commentId may not be
+    const outcome = resolveThread(pr, typeof reply?.in_reply_to_id === 'number' ? reply.in_reply_to_id : Number(commentId))
+    if (outcome.error) console.error(outcome.error)
+    else console.log(outcome.message)
+  }
   const published = typeof reply?.body === 'string' ? reply.body : signedBody(body.text)
   const refs = extractIssueRefs(published)
   if (!refs.length) return null

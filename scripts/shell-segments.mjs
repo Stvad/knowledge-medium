@@ -1,6 +1,6 @@
 /**
  * Split a shell command string into segments of unquoted tokens, for
- * PreToolUse(Bash) hooks that must act on VERB POSITION rather than substring
+ * Bash hooks that must act on VERB POSITION rather than substring
  * matches (a command that merely *mentions* a guarded git command or a uuid
  * inside a quoted -m string must not trip a guard).
  *
@@ -16,31 +16,134 @@
  * lines come back as segments flagged `heredoc: true` — data for scanners,
  * never command positions.
  *
+ * Redirections (`2>&1`, `> f`, `&> f`, `2>/dev/null`, `<<< w`) are neither
+ * segment boundaries nor arguments: the operator and its target are dropped,
+ * so `git push origin 2>&1 | tail` yields ['git', 'push', 'origin']. As in
+ * bash, an unquoted `<` or `>` ends the word before it (`f>/dev/null` is `f`
+ * and a redirection); a quoted or escaped one is text.
+ *
  * Deliberately not a full shell parser: no expansions, and a close-paren
  * inside a double-quoted string nested in a substitution closes early. Guards
  * built on this defend against accidents, not adversaries.
  */
-export const shellSegmentsWithDepth = cmd => {
+export const shellSegmentsWithDepth = cmd => segment(cmd, false)
+
+export const shellSegments = cmd => shellSegmentsWithDepth(cmd).map(s => s.tokens)
+
+/** The word a substitution leaves in its command under shellCommandsWithDepth. */
+export const SUBSTITUTED = '$(…)'
+
+/**
+ * The same segments, read for one command's ARGUMENTS rather than its verb:
+ *  - each simple command stays whole. A command or process substitution
+ *    (`$(…)`, `<(…)`, `>(…)`) leaves SUBSTITUTED in the word it sits in, and
+ *    its own commands come back as segments ahead of that command. Under
+ *    shellSegmentsWithDepth a substitution ends the segment, and the
+ *    arguments after it come back as a command of their own;
+ *  - a `#` comment is skipped, and a `$'…'` string is one quoted span, so an
+ *    apostrophe in either cannot open a quote that swallows what follows;
+ *  - heredoc data comes back line by line (`\`-continued lines joined), so a
+ *    call in it ends with its line. A line is read as the commands it would
+ *    be when a shell reads it (`bash <<'EOF'`) or its substitutions run (an
+ *    unquoted delimiter); the text of a quoted heredoc nothing runs is only
+ *    split into words.
+ */
+export const shellCommandsWithDepth = cmd => segment(cmd, true)
+
+/**
+ * The command with each quoted-delimiter heredoc's data (`<<'EOF'`) cut out,
+ * when what reads it is no shell: text nothing runs or expands. An unquoted
+ * heredoc's data stays, since its `$(…)` and backticks run, and so does data
+ * fed to a shell (`bash <<'EOF'`), which runs it as a script.
+ */
+export const withoutLiteralHeredocs = cmd => {
+  const spans = []
+  segment(cmd, true, spans)
+  let out = ''
+  let at = 0
+  for (const [start, end] of spans) {
+    out += cmd.slice(at, start)
+    at = end
+  }
+  return out + cmd.slice(at)
+}
+
+// `literalHeredocs`, when given, collects the [start, end) of each quoted-delimiter
+// heredoc's data that nothing on its line can run, its closing delimiter line
+// included. Decided by an ALLOWLIST of commands that never run what they
+// read: a shell, a wrapper, an expanded or unknown command word anywhere on
+// the line keeps the data runnable, so a reader this list misses fails closed.
+// python and node run their stdin as their own language; a gh call from that
+// code sits in quoted strings no reader here sees, counted or not, so listing
+// them only keeps their heredocs that mention a call from blocking.
+const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
+// A command's own word: past its leading assignments, path dropped.
+const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
+// An unquoted word that is a redirection operator, with its target attached
+// (capture group) or empty when the target is the next word.
+const REDIRECT = /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)(.*)$/s
+
+const segment = (cmd, wholeCommands, literalHeredocs = null) => {
   const segments = []
   let tokens = []
   let cur = ''
   let started = false // distinguishes '' (a real empty token) from no token
+  let literal = false // the current token holds a quoted or escaped character
+  let dropNext = false // the next token is the target of a redirection
   let quote = null // ' or " while inside a quoted span
   let escaped = false
   const scopes = [] // open subshell scopes; length IS the current depth
+  let lineStart = 0 // index of the first segment of the current line
+  let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
-    if (started) tokens.push(cur)
+    if (started) {
+      pipeOpen = false
+      const redirect = !literal && cur.match(REDIRECT)
+      if (dropNext) dropNext = false
+      else if (redirect) dropNext = redirect[1] === ''
+      else tokens.push(cur)
+    }
     cur = ''
     started = false
+    literal = false
   }
   // Every scope change closes the segment first, so a segment's tokens all
-  // live at one depth — scopes.length at push time.
+  // live at one depth — scopes.length at push time. A whole command is not
+  // closed by a substitution: it is set aside on the substitution's scope and
+  // picked up again when that closes.
   const pushSegment = () => {
     pushToken()
+    dropNext = false
     if (tokens.length) segments.push({ tokens, depth: scopes.length })
     tokens = []
+  }
+  const openSubstitution = kind => {
+    if (wholeCommands) {
+      scopes.push({ kind, quote, outer: { tokens, cur, literal, dropNext } })
+      tokens = []
+      cur = ''
+      started = false
+      literal = false
+      dropNext = false
+    } else {
+      pushSegment()
+      scopes.push({ kind, quote })
+    }
+    quote = null
+  }
+  const closeSubstitution = () => {
+    pushSegment()
+    const { quote: outerQuote, outer } = scopes.pop()
+    quote = outerQuote
+    if (outer) {
+      tokens = outer.tokens
+      cur = outer.cur + SUBSTITUTED
+      started = true
+      literal = outer.literal
+      dropNext = outer.dropNext
+    }
   }
 
   for (let i = 0; i < cmd.length; i++) {
@@ -50,6 +153,15 @@ export const shellSegmentsWithDepth = cmd => {
       if (ch === '\n') continue // \<newline> is a continuation — bash drops it
       cur += ch
       started = true
+      literal = true
+      continue
+    }
+    if (quote === "$'") {
+      // an escape decodes to a character this reader does not reproduce
+      // (`\x2d` is `-`), so it leaves a `$`: the word reads as an expansion
+      if (ch === '\\') cur += `$${cmd[++i] ?? ''}`
+      else if (ch === "'") quote = null
+      else cur += ch
       continue
     }
     if (quote === "'") {
@@ -72,20 +184,21 @@ export const shellSegmentsWithDepth = cmd => {
       escaped = true
       continue
     }
+    if (wholeCommands && !quote && ch === '$' && cmd[i + 1] === "'") {
+      quote = "$'"
+      started = true
+      literal = true
+      i++
+      continue
+    }
     if (ch === '$' && cmd[i + 1] === '(') {
-      pushSegment()
-      scopes.push({ kind: 'subst', quote })
-      quote = null
+      openSubstitution('subst')
       i++
       continue
     }
     if (ch === '`') {
-      pushSegment()
-      if (scopes.at(-1)?.kind === 'backtick') quote = scopes.pop().quote
-      else {
-        scopes.push({ kind: 'backtick', quote })
-        quote = null
-      }
+      if (scopes.at(-1)?.kind === 'backtick') closeSubstitution()
+      else openSubstitution('backtick')
       continue
     }
     if (quote === '"') {
@@ -96,9 +209,21 @@ export const shellSegmentsWithDepth = cmd => {
       }
       continue
     }
+    if (wholeCommands && ch === '#' && !started) {
+      const eol = cmd.indexOf('\n', i)
+      i = (eol === -1 ? cmd.length : eol) - 1
+      continue
+    }
     if (ch === "'" || ch === '"') {
       quote = ch
       started = true
+      literal = true
+      continue
+    }
+    if (ch === '(' && wholeCommands && /[<>]$/.test(cur)) {
+      // a process substitution is a word (a /dev/fd path), not a redirection
+      literal = true
+      openSubstitution('subst')
       continue
     }
     if (ch === '(') {
@@ -107,10 +232,12 @@ export const shellSegmentsWithDepth = cmd => {
       continue
     }
     if (ch === ')') {
-      pushSegment()
       const top = scopes.at(-1)
-      if (top?.kind === 'subst') quote = scopes.pop().quote
-      else if (top?.kind === 'paren') scopes.pop()
+      if (top?.kind === 'subst') closeSubstitution()
+      else {
+        pushSegment()
+        if (top?.kind === 'paren') scopes.pop()
+      }
       continue
     }
     if (ch === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<') {
@@ -124,6 +251,7 @@ export const shellSegmentsWithDepth = cmd => {
       while (j < cmd.length && (cmd[j] === ' ' || cmd[j] === '\t')) j++
       let delim = ''
       let dq = null
+      let quoted = false // any quoting in the delimiter turns expansion off in the data
       while (j < cmd.length) {
         const c = cmd[j]
         if (dq) {
@@ -134,12 +262,14 @@ export const shellSegmentsWithDepth = cmd => {
         }
         if (c === "'" || c === '"') {
           dq = c
+          quoted = true
           j++
           continue
         }
         if (/[\s;&|()<>`]/.test(c)) break
         if (c === '\\' && j + 1 < cmd.length) {
           delim += cmd[j + 1]
+          quoted = true
           j += 2
           continue
         }
@@ -147,19 +277,26 @@ export const shellSegmentsWithDepth = cmd => {
         j++
       }
       if (delim) {
-        heredocs.push({ delim, dash })
+        heredocs.push({ delim, dash, quoted })
         i = j - 1
         continue
       }
-      cur += ch
-      started = true
-      continue
     }
     if (ch === '\n' && heredocs.length) {
       pushSegment()
+      // what reads the data is anywhere on the line (`cat <<'EOF' | bash` runs
+      // it), read in its words as the shell builds them, a command held open
+      // around a substitution included
+      const lineCommands = [...segments.slice(lineStart).map(s => s.tokens), ...scopes.flatMap(s => (s.outer ? [s.outer.tokens] : []))]
+      // a pipe or list left open at the newline, or a subshell, goes on past
+      // the data to a reader not read yet
+      const readerPending = scopes.some(s => s.kind === 'paren') || pipeOpen
+      const onlyTextReaders = !readerPending && lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
       let j = i + 1
       while (heredocs.length) {
-        const { delim, dash } = heredocs.shift()
+        const { delim, dash, quoted } = heredocs.shift()
+        const text = quoted && onlyTextReaders
+        const dataStart = j
         const body = []
         while (j <= cmd.length) {
           const eol = cmd.indexOf('\n', j)
@@ -170,25 +307,62 @@ export const shellSegmentsWithDepth = cmd => {
           body.push(line)
           if (eol === -1) break
         }
-        const words = body.join('\n').split(/\s+/).filter(Boolean)
-        if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
+        if (wholeCommands) {
+          // a line a shell reads, or whose substitutions run, is read as the
+          // commands it would be; text nothing runs is only split into words
+          for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n')) {
+            if (!text) for (const s of segment(line, true)) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
+            else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true })
+          }
+        } else {
+          const words = body.join('\n').split(/\s+/).filter(Boolean)
+          if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
+        }
+        if (text) literalHeredocs?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
+      lineStart = segments.length
+      continue
+    }
+    // `2>&1`, `>&2`, `>|`: the & or | belongs to the redirection before it.
+    if ((ch === '&' || ch === '|') && !literal && /^\d*[<>]$/.test(cur)) {
+      cur += ch
+      continue
+    }
+    // `&>` and `&>>` redirect both streams; anywhere in a command, even
+    // between `git` and its verb, they must not end the segment.
+    if (ch === '&' && cmd[i + 1] === '>') {
+      pushToken()
+      cur = ch
+      started = true
       continue
     }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
+      // the next command word closes it, so a newline or a comment in between does not
+      if (ch === '|' || (ch === '&' && (cmd[i - 1] === '&' || cmd[i - 1] === '|' || cmd[i + 1] === '&'))) pipeOpen = true
+      if (ch === '\n') lineStart = segments.length
       continue
     }
     if (/\s/.test(ch)) {
       pushToken()
       continue
     }
+    // bash ends a word at an unquoted `<` or `>`; digits or a `&` before it
+    // are the operator's own (`2>`, `&>`), and `<(` opens a process
+    // substitution, which stays in its word.
+    if ((ch === '<' || ch === '>') && cmd[i + 1] !== '(' && (literal || !/^(?:\d*|&)[<>]*$/.test(cur))) pushToken()
     cur += ch
     started = true
+  }
+  // An unclosed substitution still hands back the command it sat in.
+  while (wholeCommands && scopes.length) {
+    if (scopes.at(-1).outer) closeSubstitution()
+    else {
+      pushSegment()
+      scopes.pop()
+    }
   }
   pushSegment()
   return segments
 }
-
-export const shellSegments = cmd => shellSegmentsWithDepth(cmd).map(s => s.tokens)

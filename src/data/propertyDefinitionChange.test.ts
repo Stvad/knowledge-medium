@@ -41,8 +41,10 @@ import {
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertyDefinitionClaimantsForName } from './propertyDefinitionRegistry'
 import {
+  anyBlockHoldsFieldRowFor,
   consumingParentIds,
   contestedChanges,
+  fieldIdsHeldByAnyBlock,
   type NameClaim,
 } from './internals/propertyDefinitionChangeProcessor'
 import { graphBackfillClaimBlockId } from './internals/graphBackfillClaim'
@@ -55,6 +57,12 @@ import {
   migrationCompletedAtProp,
 } from './properties'
 import type { Repo } from './repo'
+import {
+  beginPropertyDefinitionFanout,
+  markPropertyDefinitionFanoutRunning,
+  propertyDefinitionFanout,
+  __resetPropertyDefinitionFanoutForTests,
+} from './propertyDefinitionFanout'
 
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
@@ -152,6 +160,19 @@ const liveFieldRow = async (blockId: string, fieldId: string): Promise<string | 
     'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
     [blockId, fieldId],
   ))?.id
+
+/** Every live value child under `blockId`'s field row for `fieldId`, in
+ *  sibling order. */
+const valueRowsOf = (
+  blockId: string, fieldId = FIELD_ID,
+): Promise<Array<{id: string; content: string}>> =>
+  sharedDb.db.getAll<{id: string; content: string}>(
+    `SELECT v.id, v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
+      WHERE f.parent_id = ? AND f.reference_target_id = ?
+        AND f.deleted = 0 AND v.deleted = 0
+      ORDER BY v.order_key, v.id`,
+    [blockId, fieldId],
+  )
 
 const createHost = (repo: Repo, blockId: string): Promise<void> =>
   repo.tx(async tx => {
@@ -403,6 +424,36 @@ describe('consumingParentIds', () => {
   })
 })
 
+describe('fieldIdsHeldByAnyBlock', () => {
+  it('answers per definition, across chunks', async () => {
+    // Chunked like `anyBlockHoldsFieldRowFor`, and unlike it keeps WHICH
+    // definition is held — the refusal names that one.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await createDefinition(repo, 'field-unused', 'unused', 'string')
+    await repo.awaitProcessors()
+
+    expect(await fieldIdsHeldByAnyBlock(sharedDb.db, WS, ['field-unused', FIELD_ID], 1))
+      .toEqual(new Set([FIELD_ID]))
+  })
+})
+
+describe('anyBlockHoldsFieldRowFor', () => {
+  it('looks past a chunk that holds nothing', async () => {
+    const calls: unknown[][] = []
+    const db = {
+      getOptional: async <T,>(_sql: string, params?: unknown[]): Promise<T | null> => {
+        calls.push(params ?? [])
+        return (params?.[1] === 'f2' ? {held: 1} : null) as T | null
+      },
+    }
+
+    expect(await anyBlockHoldsFieldRowFor(db, WS, ['f1', 'f2'], 1)).toBe(true)
+    expect(calls.map(params => params[1])).toEqual(['f1', 'f2'])
+  })
+})
+
 describe('rename', () => {
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
@@ -494,9 +545,8 @@ describe('rename', () => {
   })
 
   it('skips a soft-deleted consumer instead of failing the whole edit', async () => {
-    // A tombstoned parent keeps its live field rows, so the consumer query
-    // still returns it — and `tx.update` on a tombstone throws, which would
-    // roll the user's rename back over a block they already deleted.
+    // A bare delete leaves the parent's field rows live, and re-keying a
+    // tombstone's bag is declined, so the walk's own query must leave it out.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedProperty(repo, 'p', 'status', 'done')
@@ -657,21 +707,6 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 42})
   })
 
-  it('re-encodes on the tx that REPAIRS a definition with no buildable codec', async () => {
-    // A preset that cannot build leaves the definition behaviour-less: the
-    // registry publishes metadata only, and nothing on this device can say what
-    // codec its stored values are in. Repairing it to a working preset is the
-    // only moment the re-encode can happen, and the old codec is not needed to
-    // do it — the conversion parses the child's TEXT under the new one.
-    await seedWorkspace('children')
-    const {repo, valueRowId} = await withPresetUnloaded(' 42 ')
-
-    await retype(repo, FIELD_ID, 'number')
-
-    expect(await cell('p')).toEqual({status: 42})
-    expect(await rowContent(valueRowId)).toBe('42')
-  })
-
   it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
     // `date` decode CANONICALIZES a tolerant instant, so carrying the value
     // rewrites the row text: the cell survives, and the spelling a person
@@ -690,72 +725,6 @@ describe('codec change', () => {
 
     expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
     expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
-  })
-
-  it('does NOT refuse a repair over a SCALAR cell that happens to hold an array', async () => {
-    // The cell cannot say the property's arity. An identity codec holds an
-    // array as ONE value in ONE row, so reading the cell's length as a member
-    // count refused a repair that republishes the cell byte-identical — and
-    // the same data with the old codec available commits, which is the
-    // contradiction that gives it away.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      [1, 2, 3], {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
-    expect(await cell('p')).toEqual({status: [1, 2, 3]})
-
-    await retype(repo, FIELD_ID, 'json')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: [1, 2, 3]})
-  })
-
-  it('KEEPS a bare `null` a repair cannot classify, refusing rather than deleting it', async () => {
-    // The cleared sentinel and a real JSON null are the same bytes, and with
-    // the preset gone nothing can say which this is. Counted as a value: the
-    // cost is refusing a repair over a genuinely cleared one (#1077), and the
-    // alternative cost is deleting a real one.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      null, {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
-    expect(await cell('p')).toEqual({status: null})
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-    })
-    expect(await cell('p')).toEqual({status: null})
-  })
-
-  it('ACCEPTS a narrowing with no old codec, losing members silently (#1090)', async () => {
-    // Pinned as an accepted weakness, not as a good answer. With no codec the
-    // only records of what the property held — the cell's length and the row
-    // count — are both UPPER bounds, and a loss count built from those refuses
-    // repairs that lose nothing. So a loss is claimed only where the
-    // projection comes out EMPTY, which misses this one. #1077 is the fix:
-    // rebuild the children FROM the cell, and the counting problem goes away.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      ['1', '2', '3'], {build: () => codecs.list(codecs.string), defaultValue: []})
-    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
-
-    await retype(repo, FIELD_ID, 'number')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: 1})
-  })
-
-  it('REFUSES when the projection comes out empty over a cell that held a value', async () => {
-    // The one loss the no-codec branch can still see, and the reason it is not
-    // simply `return 0`: the row is unreadable under the new codec, so the
-    // projection is empty while the cell plainly holds something. Committing
-    // on that answer unsets a populated key, and nothing follows this pass to
-    // notice.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded('prose value')
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-    })
-    expect(await cell('p')).toEqual({status: 'prose value'})
   })
 
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
@@ -837,28 +806,6 @@ describe('codec change', () => {
     await repo.awaitProcessors()
 
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('number')
-  })
-
-  it('REFUSES a re-type it cannot read the old values with at all', async () => {
-    // A definition whose preset does not build is the one case where the cell
-    // is the only record: PROJECT skips the key for want of a schema, so the
-    // cell keeps what the preset published while it still loaded, and reading
-    // the children answers "no values" about a cell plainly holding one.
-    // Treating that as "nothing was there" committed the re-type and emptied
-    // the cell silently — strictly worse than the report it replaced.
-    await seedWorkspace('children')
-    const {repo, valueRowId} = await withPresetUnloaded('prose value')
-    expect(await cell('p')).toEqual({status: 'prose value'})
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-      meta: {name: 'status', count: 1},
-    })
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: 'prose value'})
-    expect(await rowContent(valueRowId)).toBe('prose value')
-    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
   })
 
   it('does not refuse over a divergent PEER row the cell never projected', async () => {
@@ -1136,35 +1083,6 @@ describe('codec change', () => {
     expect(await isLive(valueRowId)).toBe(true)
   })
 
-  it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
-    // Nothing can reproject the cell, and the transaction that eventually
-    // repairs the preset cannot drop the old key either — by then both sides
-    // carry the new name. Refusing keeps the two halves together.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded()
-
-    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
-      code: 'property.definition-change.unbuildable',
-    })
-    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
-    expect(await cell('p')).toEqual({status: 'done'})
-  })
-
-  it('refuses a RE-TYPE between two presets that BOTH fail to build', async () => {
-    // The row is the only durable record of what encoding its consumers are in,
-    // and it is that record whether or not the preset it names loads today.
-    // Trading one unavailable preset for another overwrites it, so whichever of
-    // the two eventually registers, its codec is published over values nothing
-    // re-encoded.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded()
-
-    await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
-      code: 'property.definition-change.unbuildable',
-    })
-    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
-  })
-
   it('still allows that re-type when the definition has no consumers', async () => {
     // Nothing to strand, so the refusal would be friction for nothing — and
     // this is the path a user takes to point a definition at a preset whose
@@ -1237,6 +1155,250 @@ describe('codec change', () => {
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
     expect(await cell('p')).toEqual({status: 'not a number'})
     expect(await rowContent(valueRowId)).toBe('not a number')
+  })
+})
+
+describe('while the definition\'s CURRENT preset does not build (#1077, #1090)', () => {
+  const CURRENT_TYPE_UNAVAILABLE = 'property.definition-change.current-type-unavailable'
+
+  /** #1077's measured shape: member-wise, each member stored as its verbatim
+   *  text — `codecs.list(codecs.string)`, what the kernel's string-list builds. */
+  const TEXT_LIST = {build: () => codecs.list(codecs.string), defaultValue: []}
+
+  /** Everything a refused edit must leave as it was. */
+  const graphState = async () => ({
+    definition: await cell(FIELD_ID),
+    parent: await cell('p'),
+    values: await valueRowsOf('p'),
+  })
+
+  it.each([
+    'string', 'number', 'boolean', 'date', 'url', 'enum', 'list', 'json', 'ref',
+    'refList', 'string-list',
+  ])('REFUSES re-typing a two-member text list to %s, writing nothing', async target => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const before = await graphState()
+    expect(before.parent).toEqual({status: ['a', 'b']})
+    expect(before.values.map(value => value.content)).toEqual(['a', 'b'])
+
+    await expect(retype(repo, FIELD_ID, target)).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining(`"${UNLOADABLE_PRESET}"`),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES narrowing a three-member list to a scalar, keeping every member (#1090)', async () => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['1', '2', '3'], TEXT_LIST)
+    const before = await graphState()
+    expect(before.parent).toEqual({status: ['1', '2', '3']})
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a CONFIG change, which moves the encoding as a re-type does', async () => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const before = await graphState()
+
+    await expect(repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, {any: 'config'}),
+      {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a scalar re-type the stored text alone would seem to answer', async () => {
+    // ` 42 ` reads as 42 under `number` whatever wrote it, but the text cannot
+    // say what the property held, so this is refused like every other change.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(' 42 ')
+    const before = await graphState()
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('names the way out of THIS refusal over a re-type to a preset that does not build either', async () => {
+    // Position: above the destination's own check. A different destination
+    // cannot make this edit land, so the message must not suggest one.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+
+    await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('Enable that plugin or update the app on this device'),
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
+  })
+
+  it('names the held change that HAS consumers, not an unused one held ahead of it', async () => {
+    // Re-typing an UNUSED definition onto a missing preset is allowed alone, so
+    // its reason and way out are not why this transaction is refused.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+    await createDefinition(repo, 'field-unused', 'unused', 'string')
+    await awaitDefinition(repo, 'unused', 'string')
+
+    await expect(repo.tx(async tx => {
+      await tx.setProperty('field-unused', presetIdProp, 'no-such-preset')
+      await tx.setProperty(FIELD_ID, presetIdProp, 'number')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('property "status"'),
+    })
+    expect((await cell('field-unused'))[presetIdProp.name]).toBe('string')
+  })
+
+  it('refuses a RENAME while consumers exist, since nothing can project their cells', async () => {
+    // Re-keying a cell means projecting it from the children under the new
+    // name, through the same codec a re-type needs.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+    const before = await graphState()
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a re-type off a LOADED preset whose stored config does not decode', async () => {
+    // The other way a current row builds nothing: the preset is registered,
+    // its config is not one it reads. No plugin to enable, so the message
+    // says what is wrong and offers deletion.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await createHost(repo, 'target')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'target')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$."${presetConfigProp.name}"',
+         json('{"targetTypes":"not-a-list"}')) WHERE id = ?`,
+      [FIELD_ID])
+    const before = await graphState()
+
+    const refusal = retype(repo, FIELD_ID, 'string')
+    await expect(refusal).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('the stored settings of its type "ref" cannot be read'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.stringContaining('Update the plugin or the app on this device'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('Enable'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+    expect(await rowContent(valueRowId)).toBe('((target))')
+  })
+
+  it('REFUSES a re-type of a used definition that names no preset, saying so', async () => {
+    // Synced in that way: locally, clearing the preset of a used definition is
+    // itself refused. No plugin is involved, so none is blamed.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_remove(properties_json, '$."${presetIdProp.name}"')
+        WHERE id = ?`,
+      [FIELD_ID])
+    const before = await graphState()
+
+    const refusal = retype(repo, FIELD_ID, 'number')
+    await expect(refusal).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('it has no type set'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('plugin'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a re-type off a LOADED preset whose build throws', async () => {
+    // The third way: the plugin is here and reads its config, and its `build`
+    // fails. Neither "enable the plugin" nor "unreadable settings" is true.
+    await seedWorkspace('children')
+    await withPresetUnloaded()
+    const repo = makeRepo([{
+      id: UNLOADABLE_PRESET,
+      build: () => { throw new Error('[test] preset build failed') },
+      defaultValue: '',
+    } as unknown as AnyValuePresetCore])
+    const before = await graphState()
+
+    const refusal = retype(repo, FIELD_ID, 'number')
+    await expect(refusal).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining(`its type "${UNLOADABLE_PRESET}" fails to build`),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.stringContaining('Update the plugin or the app on this device'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('Enable'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('runs the change once the preset loads again, counting a narrowing\'s loss exactly', async () => {
+    // Enabling the plugin is the way out: the same core registered again, and
+    // the re-type runs under the codec that wrote the values, so the loss count
+    // is exact — two members of three.
+    await seedWorkspace('children')
+    await withPresetUnloaded(['1', '2', '3'], TEXT_LIST)
+    const repo = makeRepo([
+      {id: UNLOADABLE_PRESET, ...TEXT_LIST} as unknown as AnyValuePresetCore,
+    ])
+    await awaitDefinition(repo, 'status', TEXT_LIST.build().type)
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 2},
+    })
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+  })
+
+  it('runs a rename once the preset loads again', async () => {
+    await seedWorkspace('children')
+    await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const repo = makeRepo([
+      {id: UNLOADABLE_PRESET, ...TEXT_LIST} as unknown as AnyValuePresetCore,
+    ])
+    await awaitDefinition(repo, 'status', TEXT_LIST.build().type)
+
+    await rename(repo, FIELD_ID, 'state')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({state: ['a', 'b']})
   })
 })
 
@@ -2138,9 +2300,9 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
   it('refuses although the definition has NO field row anywhere', async () => {
     // The WORST case, not an exempt one: a definition with no field rows is one
-    // whose every consumer is cell-only. The fan-out is dormant for it —
-    // `consumingParentIds` finds nothing — so a refusal that asked "does this
-    // have consumers" the way the two other refusals do would pass it through.
+    // whose every consumer is cell-only. The fan-out is dormant for it, and the
+    // field-row question the two other refusals ask finds nothing, so a
+    // refusal that asked it too would pass this through.
     await seedWorkspace('children')
     const repo = await setupDefinition()
     await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
@@ -2151,7 +2313,7 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
     })
     // The gate itself, asserted rather than assumed: it is blind to this
     // parent, which is why the refusal must not consult it.
-    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual([])
+    expect(await anyBlockHoldsFieldRowFor(sharedDb.db, WS, [FIELD_ID])).toBe(false)
     expect(await cell('cell-only')).toEqual({status: 'pending'})
   })
 
@@ -2336,5 +2498,169 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
 
     expect((await cell(FIELD_ID))[blockTypeLabelProp.name]).toBe('note')
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+})
+
+describe('sizing the fan-out before it starts', () => {
+  /** The gesture's count and the fan-out's walk answer the same question
+   *  through one predicate, so these are about what that predicate CALLS a
+   *  consumer — a number that over-reports asks the user to wait for work
+   *  that never happens, and one that under-reports lets the app freeze after
+   *  promising it would not. */
+  it('counts the parents the fan-out will actually visit, once each', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(2)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toHaveLength(2)
+  })
+
+  it('does not count a plain reference to the definition', async () => {
+    // An unmarked `((fieldId))` row is a link somebody wrote, not a field row,
+    // and the fan-out passes it by. Counting it would put a number in the
+    // confirmation that nothing in the transaction corresponds to.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await createHost(repo, 'mentions')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'mention-row', workspaceId: WS, parentId: 'mentions', orderKey: 'm0',
+        content: `((${FIELD_ID}))`,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the row DID resolve to the
+    // definition, so it is only the field-form bit keeping it out.
+    expect(await referenceTargetOf('mention-row')).toBe(FIELD_ID)
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+
+  it('leaves out an owner that is itself deleted', async () => {
+    // `deleted = 0` on the field row does not cover the OWNER, and a
+    // tombstoned block can still hold live field rows. The fan-out declines
+    // to re-key those, so counting them tells the user their change will
+    // rewrite blocks it then passes over — and on a graph with a long delete
+    // history that number is what decides whether they are asked at all.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await seedProperty(repo, 'p2', 'status', 'todo')
+    await repo.tx(tx => tx.delete('p2'), {scope: ChangeScope.BlockDefault})
+    // The precondition the assertion is about: the field row under the dead
+    // owner is still live, so only the owner's own state keeps it out.
+    expect(await liveFieldRow('p2', FIELD_ID)).toBeDefined()
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(1)
+    expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual(['p1'])
+  })
+
+  describe('while a deleted owner still holds the definition for the refusals', () => {
+    // A bare delete leaves the owner's field rows live: left out of the count
+    // and the walk, but not out of the refusals, since those rows still bind
+    // it to the definition by id.
+    const FIELD_PEER = 'field-peer-sizing'
+
+    const setupDeletedOnlyConsumer = async (): Promise<Repo> => {
+      await seedWorkspace('children')
+      const repo = makeRepo()
+      await createDefinition(repo, FIELD_PEER, 'count', 'number')
+      await awaitDefinition(repo, 'count', 'number')
+      await createDefinition(repo, FIELD_ID, 'status', 'string')
+      await awaitDefinition(repo, 'status', 'string')
+      await seedProperty(repo, 'gone', 'status', 'done')
+      await repo.tx(tx => tx.delete('gone'), {scope: ChangeScope.BlockDefault})
+      // The precondition both tests are about: nothing LIVE consumes either
+      // definition, so only the deleted owner can make the refusal fire.
+      expect(await liveFieldRow('gone', FIELD_ID)).toBeDefined()
+      expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+      return repo
+    }
+
+    it('refuses an unused definition taking its name', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(rename(repo, FIELD_PEER, 'status')).rejects.toMatchObject({
+        code: 'property.definition-change.shared-name',
+      })
+      expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('count')
+    })
+
+    it('refuses a rename onto a name another definition arrives at', async () => {
+      const repo = await setupDeletedOnlyConsumer()
+
+      await expect(repo.tx(async tx => {
+        await tx.setProperty(FIELD_ID, propertyNameProp, 'phase')
+        await tx.setProperty(FIELD_PEER, propertyNameProp, 'phase')
+      }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+        code: 'property.definition-change.contested',
+      })
+      expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
+    })
+  })
+
+  it('stops counting a consumer whose field row is gone', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    await repo.tx(tx => tx.unsetProperty('p1', schemaFor(repo, 'status')),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await repo.countPropertyDefinitionConsumers(FIELD_ID, WS)).toBe(0)
+  })
+})
+
+describe('reporting fan-out progress', () => {
+  afterEach(() => { __resetPropertyDefinitionFanoutForTests() })
+
+  it('reports into a run the gesture opened', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 1)
+    try {
+      expect(propertyDefinitionFanout()?.done).toBeNull()
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
+
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanout()).toMatchObject({done: 1, total: 1})
+    } finally {
+      run.end()
+    }
+    expect(propertyDefinitionFanout()).toBeNull()
+  })
+
+  it('reports the LAST consumer, whatever the stride lands on', async () => {
+    // Without it the surface sits at the previous stride for the whole tail —
+    // "1,000 of 1,124 blocks updated" while the transaction commits, and then
+    // it vanishes. Three consumers is the cheapest total that is neither 1
+    // nor a multiple of the stride.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    for (const id of ['p1', 'p2', 'p3']) await seedProperty(repo, id, 'status', 'done')
+    const run = beginPropertyDefinitionFanout(FIELD_ID, 'status', 3)
+    try {
+      markPropertyDefinitionFanoutRunning(FIELD_ID)
+      await rename(repo, FIELD_ID, 'state')
+
+      expect(propertyDefinitionFanout()).toMatchObject({done: 3, total: 3})
+    } finally {
+      run.end()
+    }
+  })
+
+  it('opens no surface of its own for a caller that did not ask for one', async () => {
+    // A headless rename — the agent CLI, an importer — has nobody to show a
+    // modal to, and a store entry nothing clears would strand one over the
+    // next tab that reads it.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p1', 'status', 'done')
+
+    await rename(repo, FIELD_ID, 'state')
+
+    expect(propertyDefinitionFanout()).toBeNull()
   })
 })

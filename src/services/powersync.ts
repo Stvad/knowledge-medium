@@ -8,7 +8,7 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
-import { encryptUploadColumns, type GetCek, type UploadMode } from '@/sync/transform.js'
+import { encryptUploadColumns, snapshotCekPerCall, type GetCek, type UploadMode } from '@/sync/transform.js'
 
 // `§` references in this file cite docs/e2ee-design.html.
 
@@ -134,6 +134,9 @@ const encryptUploadOps = async (
     return resolved
   }
 
+  // One key read per workspace per call; the next call reads the store again.
+  const batchCek = snapshotCekPerCall(getCek)
+
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
     // Never held, because never queued: blocks have no DELETE upload trigger (a
@@ -153,7 +156,7 @@ const encryptUploadOps = async (
       out.push(op)
       continue
     }
-    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, getCek)
+    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, batchCek)
     out.push(
       op.kind === 'create'
         ? { ...op, payload: payload as BlockUploadPayload }

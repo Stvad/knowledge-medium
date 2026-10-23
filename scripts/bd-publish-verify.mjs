@@ -196,9 +196,9 @@ export const apiPathFor = t =>
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
             : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
-// additionalContext shares the host's ~10K inline budget with every other
-// hook on the event (measured for SessionStart in issue #643; assume the
-// same order here). The trailing surrogate strip keeps a clipped emoji from
+// Claude Code inlines each hook command's additionalContext up to ~10K
+// characters, even when other hooks run on the event (issue #643), and shows
+// a 2K preview past that. The trailing surrogate strip keeps a clipped emoji from
 // mojibaking the tail.
 export const clipContext = (s, max = 9_000) =>
   s.length <= max
@@ -435,8 +435,8 @@ const hookPostPublish = () => {
   if (!all.length && !mergedPrs.length) {
     if (!isPostVerifiable(cmd)) return
     // Nothing to check means nothing to warn about: a command that publishes
-    // no TEXT has no reference the read-back could have verified. That covers
-    // the explicit GET too — a read dressed as a mutation by its field flags.
+    // no TEXT has no reference the read-back could have verified. (An explicit
+    // GET never gets here: it is no publish at all.)
     if (!carriesPublishableText(cmd)) return
     // A command the tool reports as FAILED published nothing, so there is no
     // unkept promise to report. This is read from the payload rather than
