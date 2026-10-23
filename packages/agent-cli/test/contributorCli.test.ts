@@ -122,7 +122,11 @@ const runCli = (args: string[], contributorEnv = '') => execFileAsync(process.ex
   },
 })
 
-describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
+// A test runs up to seven compiled-CLI processes in sequence, each a cold node
+// start plus a few HTTP round trips to the stub bridge: up to ~800ms a test
+// alone, but up to ~38s with three gates on the machine, far past the usual
+// 3-6x. Sized at ~3x that.
+describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
   it.each(['', '   '])('rejects contributor flag value %j before command dispatch', async value => {
     await expect(runCli(['--contributor', value, '--help']))
       .rejects.toMatchObject({stderr: expect.stringContaining('Usage: kmagent')})
