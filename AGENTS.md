@@ -15,7 +15,7 @@ verification and the inner loop (keep the edit→verify cycle tight):
 - Codex sandbox: bridge/server tests that bind `127.0.0.1` fail with `listen EPERM`; run them with elevated permissions. The gate can't write its shared line there, so it runs uncapped.
 - the agent bridge inspects the LIVE client with no rebuild: `pnpm agent <verb> --profile <name>`. Pass the profile unless your shell exports `AGENT_RUNTIME_PROFILE`; a token error prints your token store and the selected profile, so read that before concluding the bridge is down. Read verbs (`runtime-summary`, `describe-runtime`, `sql all`, `get-block`, `subtree`) are free. Mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the user's live client: prefer a scratch page. Full surface and pairing: `packages/agent-cli/README.md`.
 - for `src/` work prefer a LOCAL dev server over the live client (`pnpm dev`, the local-only login, a `localdev` CLI profile), where mutating verbs are free. Setup, reload vs restart, and the dev-vs-production mismatch list: `.claude/skills/local-dev-loop/SKILL.md`.
-- the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
+- the data layer lives in `src/data/`; prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
 
 shell (zsh on macOS):
 - `$VAR` is not word-split (use an array or `xargs`); an unquoted glob that matches nothing is an error, so quote `--include='*.ts'`; `status` and `path` are reserved variables; `$VAR:x` applies a zsh modifier, so write `${VAR}:x`; `echo ===` fails; there is no `timeout` binary; `sed -i` is BSD's.
@@ -35,7 +35,7 @@ one-shot catch-up passes (two KINDS — `bd recall reference_oneshot_passes_two_
 guarding a gesture (refusals, skips, eligibility checks — `bd recall reference_gesture_guard_checklist`): a gesture with an EDIT-MODE branch has TWO write paths and only one is a tx, so refuse BEFORE dispatching into the editor; refuse before the EXPENSIVE step (file picker, fetch, block minting); FILTER INSIDE THE QUERY, before the LIMIT; re-check inside the writing tx, not against a pre-dialog snapshot; when the same decision exists in two places, extract it.
 
 comments (lint carries the mechanical half — `comments/no-invisible-jsdoc`, `comments/no-review-provenance`; method: `bd recall feedback_comments_state_the_invariant_not_the_understanding`):
-- apply the test per SENTENCE: keep what a competent editor would act on — the invariant, a guard's position, "the obvious refactor is wrong because X", a labelled defence-in-depth — and cut how the rule was learned (the incident, the earlier version, the review round, the measured figure). That goes in the PR body and the issue. A bare `#N` pointer is fine; a design citation is a `docs/` path, never a `§` alone. Write the comment from the invariant before the first commit.
+- apply the test per SENTENCE: keep what a competent editor would act on — the invariant, a guard's position, "the obvious refactor is wrong because X", a labelled defence-in-depth — and cut how the rule was learned (the incident, the earlier version, the review round, the measured figure). That goes in the PR body and the issue. Write the comment from the invariant before the first commit.
 - a long comment is a symptom; fix the code first: a paragraph explaining a boolean → a named predicate; captioned cases → a discriminated union; a magic value → a named const; "X, then Y, then Z" → three functions; "callers must first do P" → the type; and, the dominant shape here, the SAME rule at N sites → ONE owner the other sites point at.
 - a comment that contradicts its code is worse than none; fix or delete it on sight, even off-task. A decline recorded at a declaration is one line: the rule and the rejected alternative.
 
@@ -71,7 +71,7 @@ git, worktrees and PRs:
 - push to the PR's own head branch; worktree directory names and branch names differ, so `git push origin HEAD:<pr-head>` when unsure.
 - to bring in master, use the Claude desktop app's `sync_with_base_branch` where you have it; otherwise, or if it fails, `git fetch origin master && git merge --no-edit FETCH_HEAD`. Before acting on a merge-conflict or review event, check it refers to your current head.
 - `refs/stash` is SHARED across all worktrees and the index is shared by every agent in one directory. A hook (`scripts/check-stash-worktree.mjs`) blocks the ambiguous stash forms and an amend whose file set grows (`AMEND_OK=1` overrides); use a throwaway wip commit instead of a stash. Before any push run `git diff --name-status origin/master...HEAD` and confirm it names only intended files (a hook prints the same after each push, deletions first) — a stale-base revert keeps the gate green because it takes the tests with it.
-- in a CLOUD session, read `docs/cloud-sessions.md` before trusting git history, running any `bd` command, or probing pushes (shallow-clone history lies; the tracker looks empty and is not; `bd dolt push` is blocked).
+- in a CLOUD session, read `docs/cloud-sessions.md` before trusting git history, running any `bd` command, or probing pushes.
 - design docs (`docs/`) are intent/history, not ground truth — read `docs/AGENTS.md` before relying on one.
 
 publishing to GitHub (PR bodies, comments, review replies, commit messages):
@@ -122,7 +122,7 @@ supabase / hosted database:
 
 ## Code Review Rules
 
-These steer Codex's PR review (it reads this section) and `/areview`:
+For Codex's PR review (it reads this section) and `/areview`:
 - rate severity by what can actually happen in THIS deployment: a small user base whose rollouts and migrations can be coordinated (devices drained, deploy, reload). A mixed-version window or a concurrent write that only a rollout or migration window opens is P2 at most when the worst case is a crash, a stale view or a retry — a drain closes those windows.
 - stay P1 however rare: data loss or corruption that ordinary use can reach (one user's devices editing offline, an offline device's queued writes); synced data that runs code, reads data or acts in another user's or device's client; a security hole reachable by a signed-in or anonymous user; a private identifier (workspace/page name, block id, uuid, email, local path) in committed or published text; a core file importing from `src/plugins/`.
 - flag added complexity that is disproportionate to the concern it addresses — new machinery for a case that coordinating the rollout already handles is itself a finding, and "accept this case with a note at the declaration" is a valid recommendation.
