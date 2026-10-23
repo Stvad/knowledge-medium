@@ -80,12 +80,10 @@ export const withoutLiteralHeredocs = cmd => {
   return out + cmd.slice(at)
 }
 
-// `sinks.inputRedirects`, when given, collects each input redirection's
-// target word. `sinks.literalHeredocs`, when given, collects the [start, end)
-// of each quoted-delimiter heredoc's data that nothing on its line can run,
-// its closing delimiter line included. Decided by an ALLOWLIST of commands that never run what they
-// read: a shell, a wrapper, an expanded or unknown command word anywhere on
-// the line keeps the data runnable, so a reader this list misses fails closed.
+// A quoted-delimiter heredoc's data is literal when nothing on its line can
+// run it. Decided by an ALLOWLIST of commands that never run what they read:
+// a shell, a wrapper, an expanded or unknown command word anywhere on the
+// line keeps the data runnable, so a reader this list misses fails closed.
 // python and node run their stdin as their own language; a gh call from that
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
@@ -96,6 +94,9 @@ const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace
 // target attached (second group) or empty when the target is the next word.
 const REDIRECT = /^(?:\d+|&)?(<<<|>>|>\||>&|>|<)(.*)$/s
 
+// `sinks.literalHeredocs`, when given, collects the [start, end) of each
+// literal heredoc's data, its closing delimiter line included;
+// `sinks.inputRedirects` collects each input redirection's target word.
 const segment = (cmd, wholeCommands, sinks = {}) => {
   const segments = []
   let tokens = []

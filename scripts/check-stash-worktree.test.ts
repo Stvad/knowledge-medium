@@ -16,7 +16,14 @@ import {
   unresolvedTarget,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
+import {
+  SUBSTITUTED,
+  inputRedirectTargets,
+  shellCommandsWithDepth,
+  shellSegments,
+  shellSegmentsWithDepth,
+  withoutLiteralHeredocs,
+} from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -217,6 +224,25 @@ describe('shellCommandsWithDepth', () => {
 
   it('leaves shellSegmentsWithDepth splitting as before', () => {
     expect(shellSegments('git log $(git rev-parse x) --oneline')).toEqual([['git', 'log'], ['git', 'rev-parse', 'x'], ['--oneline']])
+  })
+})
+
+describe('inputRedirectTargets', () => {
+  it.each([
+    ['cat < a', ['a']],
+    ['cat<a', ['a']],
+    ['sort 0< a', ['a']],
+    ['x=$(<a)', ['a']],
+    ['make 2>&1 < in > out', ['in']],
+    ["bash <<'EOF'\nsort < a\nEOF", ['a']],
+    ['echo "a < b"', []],
+    ['cat <<< word', []],
+    ['cat <<EOF\nx\nEOF', []],
+    ["cat <<'EOF'\nsort < a\nEOF", []],
+    ['cat <&3', []],
+    ['echo x >out 2>err', []],
+  ])('%s → %j', (cmd, targets) => {
+    expect(inputRedirectTargets(cmd)).toEqual(targets)
   })
 })
 

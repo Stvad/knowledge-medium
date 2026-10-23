@@ -3,25 +3,25 @@
  * Secret-file read guard (a PreToolUse(Bash) hook, wired in
  * `.claude/settings.json` and `.codex/hooks.json`).
  *
- * Scope: a backstop against an agent ACCIDENTALLY reading a secret file into
- * the transcript, not a sandbox against a determined one — `node -e`, python,
- * a glob, a variable or a `find -exec` that never names the file all pass.
- *
  * Blocks a Bash command that READS a local secret env file (`.env`,
- * `.env.local`, `.env.production`, `.envrc`, …) so its contents can't be
+ * `.env.local`, `.env.production`, `.envrc`, …), so its contents can't be
  * auto-dumped into the transcript with no human in the loop. The repo's
  * secret-handling policy (AGENTS.md) is "don't read .env unless the user
  * explicitly asks" — this enforces the default-deny half; an explicit,
  * user-authorized read is allowed by prefixing the command with `READ_ENV_OK=1`.
+ *
+ * Scope: a backstop against ACCIDENTAL reads, not a sandbox against a
+ * determined agent — `node -e`, python, a glob, a variable or a `find -exec`
+ * that never names the file all pass.
  *
  * Why a hook and not permission globs: `Read(.env*)` / `Bash(... .env*)` rules
  * are fragile — per the Claude Code docs the Read→Bash bridge applies to `deny`
  * only (not `ask`), so `cat`/`head`/`tail` of `.env` slip an ask-rule; and arg
  * globs miss `./.env`, `config/.env`, and abs paths.
  *
- * A command reads a secret file when, in any command the shared tokenizer finds
- * in it (inside `$(…)`, backticks, `<(…)`, `bash -c '…'` and `eval` included;
- * a `;` inside a quoted awk program is text):
+ * A command reads a secret file when, in any command it runs (one inside
+ * `$(…)`, backticks or `<(…)`, as the shared tokenizer reads them, or inside
+ * `bash -c '…'` or `eval`):
  *  - a reader verb (cat, head, grep, …) has a secret path argument. A list of
  *    readers rather than "any command naming the file", because many commands
  *    that name one only list, test, copy or mention it (`ls`, `test -f`, `cp`,
@@ -38,23 +38,12 @@
  * Reads the hook payload (JSON) on stdin. Exit 2 → block; exit 0 → allow.
  */
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { readHookPayload } from './hook-context.mjs'
+import { isMainModule } from './is-main-module.mjs'
 import { inputRedirectTargets, shellCommandsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
-
-const allow = () => process.exit(0)
-
-let payload = {}
-try {
-  payload = JSON.parse(readFileSync(0, 'utf8'))
-} catch {
-  allow() // not a parseable hook payload — don't get in the way
-}
-
-const cmd = payload?.tool_input?.command ?? ''
-if (!cmd) allow()
-if (/\bREAD_ENV_OK=1\b/.test(cmd)) allow() // explicit, user-authorized read
 
 // Commands that read/dump file contents (or, for source/`.`, load+expose them).
 const READERS = new Set([
@@ -67,8 +56,8 @@ const READERS = new Set([
 // `.env` *pattern* (`grep ".env" src/`) must not be read as a `.env` file.
 const SEARCH = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'sed', 'awk'])
 const GREPS = new Set(['grep', 'egrep', 'fgrep'])
-// Words that run the command after them: assignments, wrappers, and the shell
-// reserved words a command can follow (`if grep …`, `do cat …`).
+// Words that run the command after them: wrappers, and the shell reserved
+// words a command can follow (`if grep …`, `do cat …`).
 const PREFIXES = new Set([
   'sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs', 'exec', 'builtin',
   'if', 'then', 'elif', 'else', 'do', 'while', 'until', '!', '{',
@@ -90,7 +79,7 @@ const TEMPLATE = /^\.(example|sample|template|dist|defaults)$/i
 const secretPathIn = word => {
   for (const m of word.matchAll(ENV_REF)) {
     const suffix = m[2] // undefined for `.envrc`; "" / ".local" / ".example.local" for `.env…`
-    if (suffix !== undefined && TEMPLATE.test(suffix)) continue // exact-template → not a secret
+    if (suffix !== undefined && TEMPLATE.test(suffix)) continue
     return m[1]
   }
   return null
@@ -105,7 +94,6 @@ const secretFileIn = dir => {
   }
 }
 
-// For a search verb, the first non-flag arg is its pattern or program, not a file.
 const withoutPattern = args => {
   const p = args.findIndex(a => !a.startsWith('-'))
   return p < 0 ? args : args.toSpliced(p, 1)
@@ -114,9 +102,10 @@ const withoutPattern = args => {
 const shortFlags = args => args.filter(a => /^-[a-zA-Z.]+$/.test(a)).join('')
 
 const recursesIntoDotfiles = (verb, args) => {
+  const short = shortFlags(args)
   if (GREPS.has(verb)) {
     return (
-      /[rR]/.test(shortFlags(args)) ||
+      /[rR]/.test(short) ||
       args.some(a => a === '--recursive' || a === '--dereference-recursive' || a === '--directories=recurse') ||
       args.some((a, i) => a === '-d' && args[i + 1] === 'recurse')
     )
@@ -124,8 +113,8 @@ const recursesIntoDotfiles = (verb, args) => {
   if (verb === 'rg' || verb === 'ripgrep') {
     // rg skips hidden and gitignored files by default; a checkout gitignores its
     // env files, so it reads them only with both turned off.
-    const u = (shortFlags(args).match(/u/g)?.length ?? 0) + args.filter(a => a === '--unrestricted').length
-    const hidden = u >= 2 || shortFlags(args).includes('.') || args.includes('--hidden')
+    const u = (short.match(/u/g)?.length ?? 0) + args.filter(a => a === '--unrestricted').length
+    const hidden = u >= 2 || short.includes('.') || args.includes('--hidden')
     const noIgnore = u >= 1 || args.some(a => a.startsWith('--no-ignore'))
     return hidden && noIgnore
   }
@@ -146,7 +135,7 @@ const cdTarget = (cwd, args) => {
 }
 
 /** The secret file `script` reads when run in `cwd`, as `{ file, walked }`, or null. */
-const secretRead = (script, cwd) => {
+export const secretRead = (script, cwd) => {
   const live = withoutLiteralHeredocs(script)
   for (const target of inputRedirectTargets(live)) {
     const file = secretPathIn(target)
@@ -180,16 +169,21 @@ const secretRead = (script, cwd) => {
   return null
 }
 
-const hit = secretRead(cmd, payload?.cwd || process.cwd())
-if (!hit) allow()
+const main = () => {
+  const hook = readHookPayload(/\S/)
+  if (!hook || /\bREAD_ENV_OK=1\b/.test(hook.cmd)) return // explicit, user-authorized read
+  const hit = secretRead(hook.cmd, hook.cwd)
+  if (!hit) return
+  process.stderr.write(
+    (hit.walked
+      ? `BLOCKED: this recursive search reads a local secret file (${hit.file}). Search a ` +
+        `narrower path, or use plain rg, which skips hidden and gitignored files.\n`
+      : `BLOCKED: this command reads a local secret file (${hit.file}).\n`) +
+      `Repo policy is to not read .env files unless the user explicitly asks (AGENTS.md ` +
+      `secret-handling); the contents would land in the transcript.\n` +
+      `If the user explicitly asked for this, re-run with READ_ENV_OK=1 prefixed.\n`,
+  )
+  process.exit(2)
+}
 
-process.stderr.write(
-  (hit.walked
-    ? `BLOCKED: this recursive search reads a local secret file (${hit.file}). Search a ` +
-      `narrower path, or use plain rg, which skips hidden and gitignored files.\n`
-    : `BLOCKED: this command reads a local secret file (${hit.file}).\n`) +
-    `Repo policy is to not read .env files unless the user explicitly asks (AGENTS.md ` +
-    `secret-handling); the contents would land in the transcript.\n` +
-    `If the user explicitly asked for this, re-run with READ_ENV_OK=1 prefixed.\n`,
-)
-process.exit(2)
+if (isMainModule(import.meta.url)) main()

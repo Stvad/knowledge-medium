@@ -1,18 +1,19 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
-import { inputRedirectTargets } from './shell-segments.mjs'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { secretRead } from './check-env-read.mjs'
+import { tempDirs } from './hook-test-support'
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'check-env-read.mjs')
+const tempDir = tempDirs()
 
 // Two scratch projects: `withSecret` holds a (dummy) secret env file at its
 // top level the way a checkout does; `templateOnly` holds only a template and
 // a `.env/` directory (a python venv's usual name).
-const mkProject = (name: string, files: Record<string, string>) => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), name)))
+const mkProject = (prefix: string, files: Record<string, string>) => {
+  const dir = tempDir(prefix)
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, path)), { recursive: true })
     writeFileSync(join(dir, path), body)
@@ -21,20 +22,8 @@ const mkProject = (name: string, files: Record<string, string>) => {
 }
 const withSecret = mkProject('env-read-secret-', { '.env.local': 'DUMMY=1\n', '.env.example': 'DUMMY=\n', 'src/a.ts': 'x\n' })
 const templateOnly = mkProject('env-read-template-', { '.env.example': 'DUMMY=\n', '.env/pyvenv.cfg': 'x\n', 'src/a.ts': 'x\n' })
-afterAll(() => {
-  rmSync(withSecret, { recursive: true, force: true })
-  rmSync(templateOnly, { recursive: true, force: true })
-})
 
-const hook = (command: string, cwd = templateOnly, env: NodeJS.ProcessEnv = process.env) =>
-  spawnSync('node', [script], {
-    cwd,
-    env,
-    input: JSON.stringify({ tool_name: 'Bash', cwd, tool_input: { command } }),
-    encoding: 'utf8',
-  })
-
-describe('check-env-read hook', () => {
+describe('secretRead', () => {
   it.each([
     // a reader verb with a secret path argument
     `grep -c '^VAR=' .env.local`,
@@ -63,18 +52,12 @@ describe('check-env-read hook', () => {
     'for f in a; do cat .env.local; done',
     // input redirected from a secret file
     'cat < .env',
-    'cat<.env.local',
-    'x=$(<.env.local)',
     `while read -r l; do echo "$l"; done < .env.local`,
   ])('blocks %s', command => {
-    const r = hook(command)
-    expect(r.status, r.stderr).toBe(2)
-    expect(r.stderr).toMatch(/READ_ENV_OK=1/)
+    expect(secretRead(command, templateOnly)).not.toBeNull()
   })
 
   it.each([
-    'READ_ENV_OK=1 cat .env.local',
-    `READ_ENV_OK=1 grep -c '^VAR=' .env.local`,
     'cat .env.example',
     'cat config/.env.sample',
     // commands that only name the file
@@ -91,8 +74,7 @@ describe('check-env-read hook', () => {
     "git commit -F - <<'EOF'\ncat .env.local is blocked now\nEOF",
     'echo "a < .env.local"',
   ])('allows %s', command => {
-    const r = hook(command)
-    expect(r.status, r.stderr).toBe(0)
+    expect(secretRead(command, templateOnly)).toBeNull()
   })
 
   describe('recursive search', () => {
@@ -105,29 +87,32 @@ describe('check-env-read hook', () => {
       `grep -d recurse FOO .`,
       'grep --dereference-recursive FOO .',
       'grep --directories=recurse FOO .',
-      'grep -drecurse FOO .',
       'rg -uu FOO .',
       'rg --hidden --no-ignore FOO',
       'rg -u --hidden FOO .',
       'rg --unrestricted --unrestricted FOO .',
       'rg -. --no-ignore-vcs FOO .',
     ])('blocks %s over a directory holding a secret file', command => {
-      const r = hook(command, withSecret)
-      expect(r.status, r.stderr).toBe(2)
-      expect(r.stderr).toMatch(/\.env\.local/)
+      expect(secretRead(command, withSecret)).toEqual({ file: expect.stringMatching(/\.env\.local$/), walked: true })
+    })
+
+    it('checks an explicit search root', () => {
+      expect(secretRead(`grep -rn FOO ${withSecret}`, templateOnly)).not.toBeNull()
     })
 
     it('follows a leading cd to the directory searched', () => {
-      expect(hook(`cd ${withSecret} && grep -rn FOO .`).status).toBe(2)
-      expect(hook(`grep -rn FOO ${withSecret}`).status).toBe(2)
-      const home = { ...process.env, HOME: withSecret }
-      expect(hook('cd ~ && grep -rn FOO .', templateOnly, home).status).toBe(2)
-      expect(hook('cd && grep -rn FOO .', templateOnly, home).status).toBe(2)
+      expect(secretRead(`cd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
+      vi.stubEnv('HOME', withSecret)
+      onTestFinished(() => {
+        vi.unstubAllEnvs()
+      })
+      expect(secretRead('cd ~ && grep -rn FOO .', templateOnly)).not.toBeNull()
+      expect(secretRead('cd && grep -rn FOO .', templateOnly)).not.toBeNull()
     })
 
     it('ignores a cd it cannot follow out of the shell it runs in', () => {
-      expect(hook('(cd src && ls); grep -rn FOO .', withSecret).status).toBe(2)
-      expect(hook('cd "$NOPE" && grep -rn FOO .', withSecret).status).toBe(2)
+      expect(secretRead('(cd src && ls); grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd "$NOPE" && grep -rn FOO .', withSecret)).not.toBeNull()
     })
 
     it.each([
@@ -138,37 +123,32 @@ describe('check-env-read hook', () => {
       'rg --no-ignore FOO .',
       `rg -r '$1' FOO .`,
       'git grep FOO',
-      'READ_ENV_OK=1 grep -rn FOO .',
     ])('allows %s', command => {
-      const r = hook(command, withSecret)
-      expect(r.status, r.stderr).toBe(0)
+      expect(secretRead(command, withSecret)).toBeNull()
     })
 
     it('allows a recursive search where only a template sits', () => {
-      expect(hook('grep -rn FOO .', templateOnly).status).toBe(0)
+      expect(secretRead('grep -rn FOO .', templateOnly)).toBeNull()
     })
-  })
-
-  it('lets an unparseable payload through', () => {
-    expect(spawnSync('node', [script], { input: 'not json', encoding: 'utf8' }).status).toBe(0)
   })
 })
 
-describe('inputRedirectTargets', () => {
-  it.each([
-    ['cat < a', ['a']],
-    ['cat<a', ['a']],
-    ['sort 0< a', ['a']],
-    ['x=$(<a)', ['a']],
-    ['make 2>&1 < in > out', ['in']],
-    ["bash <<'EOF'\nsort < a\nEOF", ['a']],
-    ['echo "a < b"', []],
-    ['cat <<< word', []],
-    ['cat <<EOF\nx\nEOF', []],
-    ["cat <<'EOF'\nsort < a\nEOF", []],
-    ['cat <&3', []],
-    ['echo x >out 2>err', []],
-  ])('%s → %j', (cmd, targets) => {
-    expect(inputRedirectTargets(cmd)).toEqual(targets)
+describe('check-env-read hook', () => {
+  const hook = (input: string) => spawnSync('node', [script], { cwd: withSecret, input, encoding: 'utf8' })
+  const payload = (command: string) => JSON.stringify({ tool_name: 'Bash', cwd: withSecret, tool_input: { command } })
+
+  it('blocks a read with exit 2, naming the file and the opt-out', () => {
+    const r = hook(payload('cat .env.local'))
+    expect(r.status, r.stderr).toBe(2)
+    expect(r.stderr).toMatch(/\.env\.local/)
+    expect(r.stderr).toMatch(/READ_ENV_OK=1/)
+  })
+
+  it('lets a READ_ENV_OK=1 read through', () => {
+    expect(hook(payload('READ_ENV_OK=1 cat .env.local')).status).toBe(0)
+  })
+
+  it('lets an unparseable payload through', () => {
+    expect(hook('not json').status).toBe(0)
   })
 })
