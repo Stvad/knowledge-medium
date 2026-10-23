@@ -149,6 +149,8 @@ describe('secretRead', () => {
       `grep -d recurse FOO .`,
       'grep --dereference-recursive FOO .',
       'grep --directories=recurse FOO .',
+      'grep --directories recurse FOO .',
+      'grep -drecurse FOO .',
       'rg -uu FOO .',
       'rg --hidden --no-ignore FOO',
       'rg -u --hidden FOO .',
@@ -261,6 +263,13 @@ describe('secretRead', () => {
       expect(secretRead("(bash <<'EOF'\ncd src\n(ls)\nEOF\n); grep -rn FOO .", withSecret)).not.toBeNull()
       // and a cd after the heredoc is the outer shell's again
       expect(secretRead(`bash <<'EOF'\nls\nEOF\ncd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
+    })
+
+    it('starts a sibling subshell or substitution from its parent directory', () => {
+      expect(secretRead('(cd src); (grep -rn FOO .)', withSecret)).not.toBeNull()
+      expect(secretRead('echo $(cd src) $(grep -rn FOO .)', withSecret)).not.toBeNull()
+      expect(secretRead('(cd src && ls); ( (ls); grep -rn FOO . )', withSecret)).not.toBeNull()
+      expect(secretRead("bash <<'EOF'\n(cd src); (grep -rn FOO .)\nEOF", withSecret)).not.toBeNull()
     })
 
     it('ignores a cd it cannot follow out of the shell it runs in', () => {

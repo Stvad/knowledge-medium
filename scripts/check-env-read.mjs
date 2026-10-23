@@ -70,16 +70,16 @@ const READERS = new Set([
 // Each reader's options that take a value (attached, `=`-joined or the next
 // word), by what the value is: the search's 'pattern', a 'script' file the
 // pattern is read from, a 'file' it reads, grep's 'include' / 'exclude' name
-// glob, rg's 'glob' / case-blind 'iglob' (a leading `!` excludes), or a
-// 'value' that is none of these. A reader's option missing here leaves its
+// glob, rg's 'glob' / case-blind 'iglob' (a leading `!` excludes), grep's
+// 'directories' action (`recurse` walks), or a 'value' that is none of these. A reader's option missing here leaves its
 // value to be read as an operand, which only over-checks; so is an option
 // whose value is optional or absent in some implementation (BSD grep's -C,
 // BSD sed's -l), since taking the next word there would drop the file.
 const values = names => Object.fromEntries(names.split(' ').map(n => [n, 'value']))
 const GREP_OPTIONS = {
   e: 'pattern', regexp: 'pattern', f: 'script', file: 'script',
-  include: 'include', exclude: 'exclude', 'exclude-from': 'file',
-  ...values('A B D d m after-context before-context devices directories exclude-dir max-count label binary-files group-separator'),
+  include: 'include', exclude: 'exclude', 'exclude-from': 'file', d: 'directories', directories: 'directories',
+  ...values('A B D m after-context before-context devices exclude-dir max-count label binary-files group-separator'),
 }
 const RG_OPTIONS = {
   e: 'pattern', regexp: 'pattern', f: 'script', file: 'script', 'ignore-file': 'file',
@@ -151,13 +151,15 @@ const optionOf = (a, options) => {
  * A reader's words sorted for the checks: `paths` may name a file it reads
  * (every word but a search's pattern and an option value known to name no
  * file), `roots` are its operands, which a recursive search walks, `letters`
- * are its short flags, and `filters` its name globs in order.
+ * are its short flags, `filters` its name globs in order, and `directories`
+ * grep's directory actions.
  */
 const readerWords = (verb, args) => {
   const options = OPTIONS[verb] ?? {}
   const paths = []
   const roots = []
   const filters = []
+  const directories = []
   let letters = ''
   let patternGiven = false
   for (let i = 0; i < args.length; i++) {
@@ -181,13 +183,14 @@ const readerWords = (verb, args) => {
     const { role } = option
     const value = option.value ?? args[++i] ?? ''
     if (role === 'pattern' || role === 'script') patternGiven = true
+    if (role === 'directories') directories.push(value)
     if (role === 'script' || role === 'file') paths.push(value)
     if (role === 'include' || role === 'exclude') filters.push({ include: role === 'include', glob: value, dialect: 'grep' })
     if (role === 'glob' || role === 'iglob')
       filters.push({ include: !value.startsWith('!'), glob: value.replace(/^!/, ''), dialect: 'rg', caseless: role === 'iglob' })
   }
   if (SEARCH.has(verb) && !patternGiven && roots.length) paths.splice(paths.indexOf(roots.shift()), 1)
-  return { paths, roots, letters, filters }
+  return { paths, roots, letters, filters, directories }
 }
 
 // A name glob as a regex, `*` and `?` matching a leading dot too and rg's
@@ -229,13 +232,13 @@ const lastMatch = filters => {
 }
 
 /** Which top-level names a recursive search reads, as a predicate, or null when it is not one. */
-const walkedNames = (verb, args, letters, filters) => {
+const walkedNames = (verb, args, { letters, filters, directories }) => {
   const last = lastMatch(filters)
   if (GREPS.has(verb)) {
     const recursive =
       /[rR]/.test(letters) ||
-      args.some(a => a === '--recursive' || a === '--dereference-recursive' || a === '--directories=recurse') ||
-      args.some((a, i) => a === '-d' && args[i + 1] === 'recurse')
+      directories.includes('recurse') ||
+      args.some(a => a === '--recursive' || a === '--dereference-recursive')
     if (!recursive) return null
     // grep: the last filter that matches wins; with none, a name is read unless the first filter is an include
     return last ? name => last(name)?.include ?? !filters[0]?.include : () => true
@@ -323,12 +326,13 @@ export const secretRead = (script, cwd) => {
       }
     }
     if (!READERS.has(verb)) continue
-    const { paths, roots, letters, filters } = readerWords(verb, args)
+    const reader = readerWords(verb, args)
+    const { paths, roots } = reader
     for (const word of paths) {
       const file = secretPathIn(word)
       if (file) return { file, walked: false }
     }
-    const admits = walkedNames(verb, args, letters, filters)
+    const admits = walkedNames(verb, args, reader)
     if (!admits) continue
     // An operand naming no path is the value of an option not modelled here,
     // so with none naming one the search runs where grep would: at `.`.

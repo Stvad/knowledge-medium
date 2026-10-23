@@ -99,15 +99,15 @@ describe('shellSegments', () => {
     expect(shellSegments('git restore f>/dev/null a2>err 2>x')).toEqual([['git', 'restore', 'f', 'a2']])
   })
 
-  it('annotates each segment with its subshell depth', () => {
+  it('annotates each segment with its subshell depth, and a scope opened since the last with fresh', () => {
     expect(shellSegmentsWithDepth('(cd /x && true); ls')).toEqual([
-      { tokens: ['cd', '/x'], depth: 1 },
+      { tokens: ['cd', '/x'], depth: 1, fresh: 1 },
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
     expect(shellSegmentsWithDepth('echo "$(cd /y && true)" && ls')).toEqual([
       { tokens: ['echo', ''], depth: 0 },
-      { tokens: ['cd', '/y'], depth: 1 },
+      { tokens: ['cd', '/y'], depth: 1, fresh: 1 },
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
@@ -117,11 +117,11 @@ describe('shellSegments', () => {
 describe('shellCommandsWithDepth', () => {
   it('keeps a command whole across a substitution, which comes back ahead of it', () => {
     expect(shellCommandsWithDepth(`git log $(git rev-parse "a)b") --oneline -1`)).toEqual([
-      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1 },
+      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1, fresh: 1 },
       { tokens: ['git', 'log', SUBSTITUTED, '--oneline', '-1'], depth: 0 },
     ])
     expect(shellCommandsWithDepth('echo "a `date` b" x')).toEqual([
-      { tokens: ['date'], depth: 1 },
+      { tokens: ['date'], depth: 1, fresh: 1 },
       { tokens: ['echo', `a ${SUBSTITUTED} b`, 'x'], depth: 0 },
     ])
     // nested, and one left unclosed
@@ -194,7 +194,7 @@ describe('shellCommandsWithDepth', () => {
     // whole first, where a subshell spans its lines
     expect(shellCommandsWithDepth("bash <<'EOF'\n(\ncd x\n)\nls\nEOF")).toEqual([
       { tokens: ['bash'], depth: 0 },
-      { tokens: ['cd', 'x'], depth: 1, heredoc: true },
+      { tokens: ['cd', 'x'], depth: 1, heredoc: true, fresh: 1 },
       { tokens: ['ls'], depth: 0, heredoc: true },
       { tokens: ['cd', 'x'], depth: 0, heredoc: true, reread: true },
       { tokens: ['ls'], depth: 0, heredoc: true },
@@ -321,6 +321,9 @@ describe('stashInvocations', () => {
     expect(stashInvocations('git --namespace n stash pop')).toHaveLength(1)
     expect(stashInvocations('git --config-env a=B --attr-source t --super-prefix p stash pop')).toHaveLength(1)
     expect(stashInvocations('builtin cd /tmp/a && git stash pop')[0].cdPath).toBe('/tmp/a')
+    // a sibling subshell starts from its parent's directory
+    expect(stashInvocations('(cd /tmp/a); (git stash pop)')[0].cdPath).toBe(null)
+    expect(stashInvocations('cd /tmp/b; (cd /tmp/a)(git stash pop)')[0].cdPath).toBe('/tmp/b')
     // a heredoc whose line closes a subshell: the cd in that subshell dies with it
     expect(stashInvocations('(cd /tmp/a; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe(null)
     expect(stashInvocations('cd /tmp/a; (cd /tmp/b; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe('/tmp/a')

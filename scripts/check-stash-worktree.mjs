@@ -87,12 +87,14 @@ export const commandsInContext = segments => {
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope; its length is the depth
   let beforeHeredoc = null // the scope state when the heredoc being read began
-  for (const { tokens, depth, heredoc = false, text = false, reread = false } of segments) {
+  for (const { tokens, depth, heredoc = false, text = false, reread = false, fresh } of segments) {
     if (beforeHeredoc && (!heredoc || reread)) {
       cdPath = beforeHeredoc.cdPath
       outerCd.splice(0, outerCd.length, ...beforeHeredoc.outerCd)
       if (!heredoc) beforeHeredoc = null
     }
+    // a scope opened since the last command is new even at a depth seen before: `(cd a); (ls)`
+    if (fresh !== undefined) while (outerCd.length >= fresh) cdPath = outerCd.pop()
     while (outerCd.length < depth) outerCd.push(cdPath)
     while (outerCd.length > depth) cdPath = outerCd.pop()
     // taken at the heredoc's own depth: its line may close a subshell first

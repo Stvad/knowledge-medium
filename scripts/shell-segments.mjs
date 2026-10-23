@@ -114,6 +114,7 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
   const scopes = [] // open subshell scopes; length IS the current depth
   let lineStart = 0 // index of the first segment of the current line
   let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
+  let freshFrom = Infinity // the shallowest scope opened since the last segment
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
@@ -148,12 +149,19 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
   const pushSegment = () => {
     pushToken()
     dropNext = false
-    if (tokens.length) segments.push({ tokens, depth: scopes.length })
+    if (tokens.length) {
+      segments.push({ tokens, depth: scopes.length, ...(freshFrom <= scopes.length && { fresh: freshFrom }) })
+      freshFrom = Infinity
+    }
     tokens = []
+  }
+  const openScope = scope => {
+    scopes.push(scope)
+    freshFrom = Math.min(freshFrom, scopes.length)
   }
   const openSubstitution = kind => {
     if (wholeCommands) {
-      scopes.push({ kind, quote, outer: { tokens, cur, literal, dropNext } })
+      openScope({ kind, quote, outer: { tokens, cur, literal, dropNext } })
       tokens = []
       cur = ''
       started = false
@@ -161,7 +169,7 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       dropNext = false
     } else {
       pushSegment()
-      scopes.push({ kind, quote })
+      openScope({ kind, quote })
     }
     quote = null
   }
@@ -263,7 +271,7 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
     }
     if (ch === '(') {
       pushSegment()
-      scopes.push({ kind: 'paren', quote: null })
+      openScope({ kind: 'paren', quote: null })
       continue
     }
     if (ch === ')') {
@@ -363,7 +371,13 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
               const redirects = []
               const read = parts.flatMap(part => segment(part, true, { inputRedirects: redirects }))
               // a heredoc nested in the data keeps its text flag, so its words stay data
-              const segments = read.map(s => ({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true, ...(s.text && { text: true }) }))
+              const segments = read.map(s => ({
+                tokens: s.tokens,
+                depth: scopes.length + s.depth,
+                heredoc: true,
+                ...(s.text && { text: true }),
+                ...(s.fresh && { fresh: scopes.length + s.fresh }),
+              }))
               return { segments, redirects }
             }
             const lines = read(byLine)
