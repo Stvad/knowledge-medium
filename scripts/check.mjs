@@ -304,11 +304,23 @@ const takeGateSlot = async signal => {
   }
 }
 
-// `rerun` is the failing files' second run, alone. One that fails without
-// naming a file blames all of them: never claim load without a pass to show.
+// Why a vitest run's failures cannot all be pinned on the files it names, or
+// null when they can: it finished (vitest prints the summary last), nothing
+// failed outside a file, and it named every file it counted as failed.
+export const unaccounted = (output, named) => {
+  const summary = /^ *Test Files +(.+)$/m.exec(output)
+  if (!summary) return 'the test run did not finish'
+  if (/^ *Errors +\d+ errors?$/m.test(output)) return 'vitest reported unhandled errors, which belong to no file'
+  const counted = Number(/(\d+) failed/.exec(summary[1])?.[1] ?? 0)
+  if (counted !== named.length) return `vitest counted ${counted} failing files but named ${named.length}`
+  return null
+}
+
+// `rerun` is the failing files' second run, alone. One whose failures it does
+// not account for blames all of them: never claim load without a pass to show.
 export const loadVerdict = (failed, rerun) => {
   const named = extractFailingFiles(rerun.output)
-  const failedAlone = rerun.code === 0 ? [] : named.length ? named : failed
+  const failedAlone = rerun.code === 0 ? [] : named.length && !unaccounted(rerun.output, named) ? named : failed
   const passedAlone = failed.filter(file => !failedAlone.includes(file))
   if (failedAlone.length === 0) return `failed only under load, passed alone: ${passedAlone.join(', ')}`
   const rest = passedAlone.length ? `; passed alone: ${passedAlone.join(', ')}` : ''
@@ -322,13 +334,13 @@ const outputText = result => result.output.map(chunk => chunk.text).join('')
 // verdict is about that file alone and not the load of the others. On stdout,
 // beside the last line, for a reader piping through `tail`.
 const diagnoseTestFailure = async result => {
-  const failed = extractFailingFiles(outputText(result))
-  if (failed.length === 0) {
-    console.log('[check] the test task named no failing file; nothing to re-run')
-    return
-  }
-  if (failed.length > RERUN_MAX_FILES) {
-    console.log(`[check] ${failed.length} test files failed; too many to re-run alone`)
+  const output = outputText(result)
+  const failed = extractFailingFiles(output)
+  const noVerdict = unaccounted(output, failed)
+    ?? (failed.length === 0 ? 'the test task named no failing file' : null)
+    ?? (failed.length > RERUN_MAX_FILES ? `${failed.length} test files failed, too many to re-run alone` : null)
+  if (noVerdict) {
+    console.log(`[check] no verdict: ${noVerdict}`)
     return
   }
   const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, '--no-file-parallelism', ...failed]})
