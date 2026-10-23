@@ -1,5 +1,5 @@
-// Shared fixtures for the Bash hook tests (backup-before-restore,
-// push-scope). Not a test file itself: vitest collects only *.test.ts.
+// Shared fixtures for the scripts/ tests (the Bash hooks, mutate, dev-server).
+// Not a test file itself: vitest collects only *.test.ts.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

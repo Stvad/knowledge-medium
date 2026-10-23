@@ -10,7 +10,7 @@
 // it assigned (`autoPort` in .claude/launch.json); the first free port from the
 // mode's default. A busy port is reported with its holder and never used.
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { constants } from 'node:os'
@@ -20,15 +20,17 @@ import { isMainModule } from './is-main-module.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const BRIDGE_SCRIPT = join('packages', 'agent-cli', 'dist', 'server.js')
+// The bridge's entry on a command line, as an absolute or cwd-relative path.
+const BRIDGE_COMMAND = /(\S*agent-cli\/dist\/server\.js)\b/
 
-export const MODES = {
+const MODES = {
   dev: { viteArgs: [], defaultPort: 5173 },
   preview: { viteArgs: ['preview'], defaultPort: 4173 },
 }
 // The desktop app's autoPort scans the same span above a configured port.
-export const SCAN_SPAN = 20
+const SCAN_SPAN = 20
 
-export const parsePort = (value, source) => {
+const parsePort = (value, source) => {
   const port = Number(value)
   if (!/^\d+$/.test(String(value ?? '')) || port < 1 || port > 65535) {
     throw new Error(`${source} must be a port number from 1 to 65535, not ${JSON.stringify(value ?? null)}`)
@@ -116,7 +118,7 @@ export const portIsBusy = async (port, listeners) => listeners.has(port) || !(aw
 export const pickPort = async ({ requested, defaultPort, isBusy }) => {
   const candidates = requested
     ? [requested.port]
-    : Array.from({ length: Math.min(SCAN_SPAN, 65535 - defaultPort) + 1 }, (_, i) => defaultPort + i)
+    : Array.from({ length: SCAN_SPAN + 1 }, (_, i) => defaultPort + i)
   const busy = []
   for (const port of candidates) {
     if (!(await isBusy(port))) return { port, busy }
@@ -125,24 +127,16 @@ export const pickPort = async ({ requested, defaultPort, isBusy }) => {
   return { port: null, busy }
 }
 
-const real = path => {
-  try {
-    return realpathSync(path)
-  } catch {
-    return path
-  }
-}
-
 /** The checkout a directory is in, or null when it is in none or no longer exists.
  *  Accepted: a leftover directory without its own `.git` reports the checkout it sits in. */
-export const checkoutOf = (dir, exec = run) => {
+const checkoutOf = (dir, exec = run) => {
   const output = exec('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir', '--abbrev-ref', 'HEAD'])
   if (!output) return null
   const [toplevel, commonDir, ref] = output.trim().split('\n')
   const branch = ref === 'HEAD'
     ? `detached at ${exec('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'])?.trim() || '?'}`
     : ref
-  return { toplevel: real(toplevel), commonDir: real(commonDir), branch }
+  return { toplevel, commonDir, branch }
 }
 
 /** pid → when it started and its command line, from `ps -o pid=,lstart=,command=`. */
@@ -158,8 +152,8 @@ export const parseProcesses = output => {
 export const serverKind = command => {
   if (/\bvite(\.js)?\s.*\bpreview\b/.test(command)) return 'vite preview'
   if (/\bvite(\.js)?\b/.test(command)) return 'vite dev server'
-  if (/agent-cli\/dist\/server\.js\b/.test(command)) return 'agent bridge'
-  return basename(command.split(' ')[0] ?? '?')
+  if (BRIDGE_COMMAND.test(command)) return 'agent bridge'
+  return basename(command.split(' ')[0]) || '?'
 }
 
 const RELATIVE_IMPORT = /\b(?:from|import)\s*\(?\s*['"](\.{1,2}\/[^'"]+)['"]/g
@@ -203,7 +197,7 @@ export const bridgeBuildNote = ({ script, startedAt }, ownScript) => {
 
 /** The bridge script a command line runs, absolute: `pnpm agent:server` passes it relative to the bridge's cwd. */
 export const bridgeScript = (command, cwd) => {
-  const script = command.match(/(\S*agent-cli\/dist\/server\.js)\b/)?.[1]
+  const script = command.match(BRIDGE_COMMAND)?.[1]
   if (!script) return undefined
   return isAbsolute(script) ? script : cwd ? resolve(cwd, script) : undefined
 }
@@ -242,7 +236,7 @@ export const inspectServers = (pidsByPort, { exec = run, root = ROOT } = {}) => 
   })
 }
 
-export const formatAge = ms => {
+const formatAge = ms => {
   const minutes = Math.floor(ms / 60_000)
   if (minutes < 1) return `${Math.max(0, Math.floor(ms / 1000))}s`
   if (minutes < 60) return `${minutes}m`
@@ -261,13 +255,13 @@ export const formatServer = (server, here, now = Date.now()) => {
     + (server.note ? `; ${server.note}` : '')
 }
 
-/** One line per holder of `port`, or a line saying lsof could not name one. */
-const describePort = (port, listeners, here, exec) => {
-  const holders = inspectServers(new Map([[port, listeners.get(port) ?? new Set()]]), { exec })
-  return holders.length
-    ? holders.map(server => formatServer(server, here))
-    : [`port ${port}: held by a process lsof cannot name (another user's, one starting or stopping right now, or lsof is missing)`]
-}
+/** One line per holder of the busy `ports`, inspected in one batch, then one per port lsof names no holder for. */
+const describePorts = (ports, listeners, here, exec) => [
+  ...inspectServers(new Map(ports.filter(port => listeners.has(port)).map(port => [port, listeners.get(port)])), { exec })
+    .map(server => formatServer(server, here)),
+  ...ports.filter(port => !listeners.has(port))
+    .map(port => `port ${port}: held by a process lsof cannot name (another user's, one starting or stopping right now, or lsof is missing)`),
+]
 
 /** Choose the port, report every busy one with its holder, and start vite on the chosen one. */
 export const startDevServer = async ({
@@ -275,7 +269,7 @@ export const startDevServer = async ({
   args,
   env = process.env,
   exec = run,
-  isBusy,
+  isBusy = portIsBusy,
   log = line => console.error(line),
   spawnVite,
 }) => {
@@ -286,11 +280,9 @@ export const startDevServer = async ({
   const { port, busy } = await pickPort({
     requested,
     defaultPort,
-    isBusy: isBusy ?? (candidate => portIsBusy(candidate, listeners)),
+    isBusy: candidate => isBusy(candidate, listeners),
   })
-  for (const busyPort of busy) {
-    for (const line of describePort(busyPort, listeners, here, exec)) log(`[dev-server] ${line}`)
-  }
+  for (const line of describePorts(busy, listeners, here, exec)) log(`[dev-server] ${line}`)
   if (port === null) {
     log(requested
       ? `[dev-server] port ${requested.port} (from ${requested.source}) is taken; not starting. `
@@ -302,8 +294,8 @@ export const startDevServer = async ({
   const code = await spawnVite([...viteArgs, '--port', String(port), '--strictPort', ...viteArgsWithout(args)])
   // Lost a race for the port between the check and vite's own bind: name who won it.
   const after = code === 0 ? null : listListeners(exec)
-  if (after && await (isBusy ?? (candidate => portIsBusy(candidate, after)))(port)) {
-    for (const line of describePort(port, after, here, exec)) log(`[dev-server] ${line}`)
+  if (after && await isBusy(port, after)) {
+    for (const line of describePorts([port], after, here, exec)) log(`[dev-server] ${line}`)
   }
   return code
 }
@@ -346,7 +338,7 @@ export const whoHolds = async (ports, { exec = run } = {}) => {
   if (ports.length > 0) {
     const lines = []
     for (const port of ports) {
-      lines.push(...(await portIsBusy(port, listeners) ? describePort(port, listeners, here, exec) : [`port ${port}: free`]))
+      lines.push(...(await portIsBusy(port, listeners) ? describePorts([port], listeners, here, exec) : [`port ${port}: free`]))
     }
     return lines
   }

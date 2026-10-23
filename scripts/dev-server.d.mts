@@ -1,18 +1,15 @@
 // Hand-written declarations for dev-server.mjs (runtime must stay plain
 // node-runnable JS: `pnpm dev` and .claude/launch.json run it with no loader).
 
-/** stdout of a command, or null when it is missing or fails. */
+/** stdout of a command, or null when it could not run. */
 export type Exec = (command: string, args: string[]) => string | null
 
 export type Mode = 'dev' | 'preview'
-export declare const MODES: Record<Mode, { viteArgs: readonly string[]; defaultPort: number }>
-export declare const SCAN_SPAN: number
 
 export interface RequestedPort {
   port: number
   source: '--port' | 'PORT'
 }
-export declare const parsePort: (value: unknown, source: string) => number
 export declare const requestedPort: (args: readonly string[], env: Record<string, string | undefined>) => RequestedPort | null
 export declare const viteArgsWithout: (args: readonly string[]) => string[]
 
@@ -32,7 +29,6 @@ export interface Checkout {
   commonDir: string
   branch: string
 }
-export declare const checkoutOf: (dir: string, exec?: Exec) => Checkout | null
 export declare const parseProcesses: (output: string | null) => Map<number, { startedAt: Date; command: string }>
 export declare const serverKind: (command: string) => string
 export declare const moduleClosure: (entry: string) => string[]
@@ -50,7 +46,6 @@ export interface Server {
   note: string | null
 }
 export declare const inspectServers: (pidsByPort: Map<number, Set<number>>, options?: { exec?: Exec; root?: string }) => Server[]
-export declare const formatAge: (ms: number) => string
 export declare const formatServer: (server: Server, here: Checkout | null, now?: number) => string
 
 export declare const startDevServer: (options: {
@@ -58,7 +53,7 @@ export declare const startDevServer: (options: {
   args: readonly string[]
   env?: Record<string, string | undefined>
   exec?: Exec
-  isBusy?: (port: number) => Promise<boolean>
+  isBusy?: (port: number, listeners: Map<number, Set<number>>) => Promise<boolean>
   log?: (line: string) => void
   spawnVite: (viteArgs: string[]) => Promise<number>
 }) => Promise<number>

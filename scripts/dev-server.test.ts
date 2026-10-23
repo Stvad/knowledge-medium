@@ -1,8 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { createServer, type AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +25,7 @@ import {
   viteArgsWithout,
   whoHolds,
 } from './dev-server.mjs'
+import { tempDirs } from './hook-test-support'
 
 const ROOT = realpathSync(dirname(dirname(fileURLToPath(import.meta.url))))
 const hasLsof = spawnSync('lsof', ['-v']).error === undefined
@@ -35,20 +35,14 @@ const hasLsof = spawnSync('lsof', ['-v']).error === undefined
 const SPAWNING_TEST_TIMEOUT = 30_000
 
 const children = new Set<ChildProcess>()
-const dirs = new Set<string>()
 
 afterEach(() => {
   for (const child of children) child.kill()
   children.clear()
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
-  dirs.clear()
 })
 
-const tempDir = () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dev-server-test-')))
-  dirs.add(dir)
-  return dir
-}
+const makeTempDir = tempDirs()
+const tempDir = () => makeTempDir('dev-server-test-')
 
 /** A separate process listening on `host`: a same-process listener can bind differently. */
 const holdPort = (host: string, cwd = ROOT) => new Promise<{ pid: number, port: number }>((resolve, reject) => {
