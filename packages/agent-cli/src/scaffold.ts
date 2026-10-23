@@ -55,7 +55,7 @@ const packageJson = (slug: string): string => `${JSON.stringify({
     types: 'kmagent types ./types --force',
   },
   devDependencies: {
-    '@types/node': '^25.0.0',
+    '@types/node': '^26.6.5',
     '@types/react': '^19.3.0',
     '@types/react-dom': '^19.3.0',
     '@vitejs/plugin-react': '^6.1.2',
