@@ -4,6 +4,8 @@ export interface ShellSegment {
   tokens: string[]
   depth: number
   heredoc?: boolean
+  /** heredoc data nothing runs, only split into words (shellCommandsWithDepth) */
+  text?: boolean
 }
 export declare const shellSegmentsWithDepth: (cmd: string) => ShellSegment[]
 export declare const shellSegments: (cmd: string) => string[][]

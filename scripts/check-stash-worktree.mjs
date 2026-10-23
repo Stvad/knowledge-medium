@@ -40,7 +40,7 @@ import { join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
-const WRAPPERS = new Set(['sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs'])
+const WRAPPERS = new Set(['sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs', 'exec', 'builtin'])
 // Shell reserved words that can precede a simple command in the same segment.
 const RESERVED = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done'])
 const SUBCOMMANDS = new Set([
@@ -48,7 +48,7 @@ const SUBCOMMANDS = new Set([
 ])
 
 /** The shell's tilde expansion of one word: `~` and `~/…` only. */
-const expandTilde = w => (w === '~' ? homedir() : w.startsWith('~/') ? join(homedir(), w.slice(2)) : w)
+export const expandTilde = w => (w === '~' ? homedir() : w.startsWith('~/') ? join(homedir(), w.slice(2)) : w)
 
 const DIR_CHANGES = new Set(['cd', 'pushd', 'popd'])
 
@@ -68,18 +68,23 @@ const moveDir = (cdPath, verb, args) => {
 }
 
 /**
- * Walk a command string and yield each git invocation with its shell context:
- * word (the token after git's global flags), rest (tokens after it), cArgs
- * (repo-locating globals to replay on state queries), cdPath (last in-scope
- * plain `cd` target — one inside `(…)`/`$(…)` dies with that subshell), and
- * assigns (leading VAR= tokens, for per-invocation opt-outs).
+ * Each simple command in `segments` (from shell-segments) with its shell
+ * context: `words` from the command word on, `assigns` (the leading VAR=
+ * tokens, for per-invocation opt-outs), `cdPath` (the last in-scope plain `cd`
+ * target — one inside `(…)`/`$(…)` dies with that subshell) and the segment's
+ * `heredoc` / `text` flags. The command word is found past VAR= assignments,
+ * wrapper commands, shell reserved words and (past position 0) wrapper flags,
+ * so `env -i git stash …` and `if git stash …` are seen; a wrapper flag that
+ * takes an operand (`sudo -u alice git …`) still hides it — accidents, not
+ * adversaries. A cd, pushd or popd moves cdPath and is not returned; one in
+ * heredoc data moves nothing.
  */
-export const gitInvocations = cmd => {
+export const commandsInContext = segments => {
   const out = []
   let cdPath = null
   const outerCd = [] // saved cdPath per enclosing subshell scope
   let depth = 0
-  for (const { tokens, depth: d, heredoc } of shellSegmentsWithDepth(cmd)) {
+  for (const { tokens, depth: d, heredoc = false, text = false } of segments) {
     while (depth < d) {
       outerCd.push(cdPath)
       depth++
@@ -88,13 +93,8 @@ export const gitInvocations = cmd => {
       cdPath = outerCd.pop()
       depth--
     }
-    if (heredoc) continue // heredoc body lines are data, not commands
     let i = 0
     const assigns = []
-    // Skip VAR= assignments, wrapper commands, shell reserved words, and (past
-    // position 0) wrapper flags, so `env -i git stash …` and `if git stash …`
-    // are seen. A wrapper flag that takes an operand (`sudo -u alice git …`)
-    // still hides git — accidents, not adversaries.
     while (
       i < tokens.length &&
       (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) ||
@@ -105,39 +105,49 @@ export const gitInvocations = cmd => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
-    if (DIR_CHANGES.has(tokens[i])) {
-      // same prefix skip as for git: `{ cd /x && …` counts. A relative target
-      // moves from the previous cd, so `cd a && cd b` lands in a/b.
+    if (!heredoc && DIR_CHANGES.has(tokens[i])) {
+      // A relative target moves from the previous cd, so `cd a && cd b` lands in a/b.
       cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
     }
-    if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
-    i++
-    const cArgs = []
-    while (i < tokens.length && tokens[i].startsWith('-')) {
-      const t = tokens[i]
-      if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && tokens[i + 1] !== undefined) {
-        cArgs.push(t, expandTilde(tokens[i + 1]))
-        i += 2
-      } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
-        cArgs.push(t)
-        i++
-      } else if (t === '-c' && tokens[i + 1] !== undefined) {
-        i += 2 // config override — irrelevant to repo location
-      } else {
-        i++ // other global flag (--no-pager, -P, …)
-      }
-    }
-    if (tokens[i] === undefined) continue
-    out.push({ word: tokens[i], rest: tokens.slice(i + 1), cArgs, cdPath, assigns })
+    out.push({ words: tokens.slice(i), assigns, cdPath, heredoc, text })
   }
   return out
 }
 
 /**
- * `git stash …` invocations: sub is the stash subcommand (null for a bare or
- * flags-only `git stash`), optOut marks a STASH_OK=1 prefixing the invocation.
+ * Each git invocation in a command string, with its shell context: word (the
+ * token after git's global flags), rest (tokens after it), cArgs
+ * (repo-locating globals to replay on state queries), and cdPath and assigns
+ * as commandsInContext reads them.
  */
+export const gitInvocations = cmd => {
+  const out = []
+  for (const { words, assigns, cdPath, heredoc } of commandsInContext(shellSegmentsWithDepth(cmd))) {
+    if (heredoc) continue // heredoc body lines are data, not commands
+    if ((words[0] || '').replace(/.*\//, '') !== 'git') continue
+    let i = 1
+    const cArgs = []
+    while (i < words.length && words[i].startsWith('-')) {
+      const t = words[i]
+      if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && words[i + 1] !== undefined) {
+        cArgs.push(t, expandTilde(words[i + 1]))
+        i += 2
+      } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
+        cArgs.push(t)
+        i++
+      } else if (t === '-c' && words[i + 1] !== undefined) {
+        i += 2 // config override — irrelevant to repo location
+      } else {
+        i++ // other global flag (--no-pager, -P, …)
+      }
+    }
+    if (words[i] === undefined) continue
+    out.push({ word: words[i], rest: words.slice(i + 1), cArgs, cdPath, assigns })
+  }
+  return out
+}
+
 export const stashInvocations = cmd =>
   gitInvocations(cmd).flatMap(g => {
     if (g.word !== 'stash') return []

@@ -46,7 +46,7 @@ export const SUBSTITUTED = '$(…)'
  *    call in it ends with its line. A line is read as the commands it would
  *    be when a shell reads it (`bash <<'EOF'`) or its substitutions run (an
  *    unquoted delimiter); the text of a quoted heredoc nothing runs is only
- *    split into words.
+ *    split into words, and its segments are flagged `text: true`.
  */
 export const shellCommandsWithDepth = cmd => segment(cmd, true)
 
@@ -234,6 +234,8 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       continue
     }
     if (ch === "'" || ch === '"') {
+      // a quoted target ends the operator before it: `<".env"` reads `.env`
+      if (!literal && /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)$/.test(cur)) pushToken()
       quote = ch
       started = true
       literal = true
@@ -331,7 +333,7 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           // commands it would be; text nothing runs is only split into words
           for (const line of body.join('\n').replace(/\\\n/g, ' ').split('\n')) {
             if (!text) for (const s of segment(line, true, { inputRedirects: sinks.inputRedirects })) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
-            else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true })
+            else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
           }
         } else {
           const words = body.join('\n').split(/\s+/).filter(Boolean)

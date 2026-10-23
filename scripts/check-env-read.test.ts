@@ -36,6 +36,15 @@ describe('secretRead', () => {
     'cat .ENV.LOCAL',
     'cat .env.example.local',
     'cat .env.local.backup-1',
+    'cat {.env.example,.env.local}',
+    'env -i cat .env.local',
+    'time -p cat .env.local',
+    // a search whose pattern comes from a flag, so its first operand is a file
+    'grep --regexp=K .env.local',
+    'grep -eK .env.local',
+    // a file an option reads
+    'diff --from-file=.env.local x',
+    `sed -e's/=.*//' .env.local`,
     'source .env.local && psql',
     '. ./.env',
     'diff .env.local .env.example',
@@ -53,6 +62,14 @@ describe('secretRead', () => {
     // input redirected from a secret file
     'cat < .env',
     `while read -r l; do echo "$l"; done < .env.local`,
+    `cat <".env.local"`,
+    `while read -r l; do :; done <'.env.local'`,
+    `x=$(<".env.local")`,
+    // a read after a literal heredoc
+    "cat > x.md <<'EOF'\nnote\nEOF\nls && cat .env.local",
+    `gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)" && cat .env.local`,
+    "cat > x.md <<'EOF'\nnote\nEOF\nwhile read l; do :; done < .env.local",
+    "cat > q.sql <<'SQL'\nselect 1;\nSQL\nset -a; . ./.env.local; set +a",
   ])('blocks %s', command => {
     expect(secretRead(command, templateOnly)).not.toBeNull()
   })
@@ -69,10 +86,14 @@ describe('secretRead', () => {
     'node --env-file=.env.local script.mjs',
     // a search PATTERN that mentions it
     `grep -rn ".env" src/`,
+    `grep --files-with-matches ".env" src/`,
     `awk '/\\.env\\.local/' notes.txt`,
     // literal heredoc data nothing runs
     "git commit -F - <<'EOF'\ncat .env.local is blocked now\nEOF",
+    "cat > x.md <<'EOF'\nnote\nEOF\ngrep -n 'cat .env.local' notes.md",
     'echo "a < .env.local"',
+    // an option value that names it
+    'diff -r --exclude=.env.local a b',
   ])('allows %s', command => {
     expect(secretRead(command, templateOnly)).toBeNull()
   })
@@ -92,6 +113,17 @@ describe('secretRead', () => {
       'rg -u --hidden FOO .',
       'rg --unrestricted --unrestricted FOO .',
       'rg -. --no-ignore-vcs FOO .',
+      'grep -rnA3 FOO .',
+      'rg -uuC3 FOO .',
+      `grep -r --include='*.local' FOO .`,
+      "cat > x.md <<'EOF'\nnote\nEOF\ngrep -rn FOO .",
+      "cat > x.md <<'EOF'\ncd src\nEOF\ngrep -rn FOO .",
+      `grep -r --include='.env.loca?' FOO .`,
+      // the last matching filter wins
+      `grep -r --exclude='*' --include='.env.local' FOO .`,
+      // a glob beyond * and ? is not modelled, so it filters nothing
+      `grep -r --exclude='[.]env*' FOO .`,
+      `grep -r --include='!*.ts' FOO .`,
     ])('blocks %s over a directory holding a secret file', command => {
       expect(secretRead(command, withSecret)).toEqual({ file: expect.stringMatching(/\.env\.local$/), walked: true })
     })
@@ -102,17 +134,26 @@ describe('secretRead', () => {
 
     it('follows a leading cd to the directory searched', () => {
       expect(secretRead(`cd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
+      expect(secretRead(`(cd ${withSecret} && grep -rn FOO .)`, templateOnly)).not.toBeNull()
+      expect(secretRead(`pushd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
       vi.stubEnv('HOME', withSecret)
       onTestFinished(() => {
         vi.unstubAllEnvs()
       })
       expect(secretRead('cd ~ && grep -rn FOO .', templateOnly)).not.toBeNull()
       expect(secretRead('cd && grep -rn FOO .', templateOnly)).not.toBeNull()
+      expect(secretRead('grep -rn FOO ~', templateOnly)).not.toBeNull()
     })
 
     it('ignores a cd it cannot follow out of the shell it runs in', () => {
       expect(secretRead('(cd src && ls); grep -rn FOO .', withSecret)).not.toBeNull()
       expect(secretRead('cd "$NOPE" && grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd /nonexistent-dir; grep -rn FOO .', withSecret)).not.toBeNull()
+      vi.stubEnv('HOME', templateOnly)
+      onTestFinished(() => {
+        vi.unstubAllEnvs()
+      })
+      expect(secretRead('cd - && grep -rn FOO .', withSecret)).not.toBeNull()
     })
 
     it.each([
@@ -123,6 +164,12 @@ describe('secretRead', () => {
       'rg --no-ignore FOO .',
       `rg -r '$1' FOO .`,
       'git grep FOO',
+      `grep -r --include='*.ts' FOO .`,
+      `grep -r --include '*.ts' FOO .`,
+      `grep -r --exclude='.env*' FOO .`,
+      `grep -r --exclude '.env*' FOO .`,
+      // a glob's regex metacharacters are literal
+      `grep -r --include='x).ts' FOO .`,
     ])('allows %s', command => {
       expect(secretRead(command, withSecret)).toBeNull()
     })
@@ -146,6 +193,10 @@ describe('check-env-read hook', () => {
 
   it('lets a READ_ENV_OK=1 read through', () => {
     expect(hook(payload('READ_ENV_OK=1 cat .env.local')).status).toBe(0)
+  })
+
+  it('honors READ_ENV_OK=1 only as the prefix', () => {
+    expect(hook(payload('echo READ_ENV_OK=1 && cat .env.local')).status).toBe(2)
   })
 
   it('lets an unparseable payload through', () => {
