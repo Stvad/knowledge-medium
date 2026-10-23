@@ -1,1 +1,1 @@
-import{ak as e,ik as t}from"../../../chunks/app-CthMz8Rv.js";export{t as extensionPromptStore,e as pendingExtensionPrompts};
+import{ak as e,ik as t}from"../../../chunks/app-BCHCk6AY.js";export{t as extensionPromptStore,e as pendingExtensionPrompts};

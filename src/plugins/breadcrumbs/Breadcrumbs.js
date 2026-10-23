@@ -1,1 +1,1 @@
-import{Xb as e}from"../../../chunks/app-CthMz8Rv.js";export{e as Breadcrumbs};
+import{Xb as e}from"../../../chunks/app-BCHCk6AY.js";export{e as Breadcrumbs};
