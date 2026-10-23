@@ -35,7 +35,9 @@ export interface Checkout {
 export declare const checkoutOf: (dir: string, exec?: Exec) => Checkout | null
 export declare const parseProcesses: (output: string | null) => Map<number, { startedAt: Date; command: string }>
 export declare const serverKind: (command: string) => string
+export declare const moduleClosure: (entry: string) => string[]
 export declare const bridgeBuildNote: (bridge: { script: string; startedAt: Date }, ownScript: string) => string | null
+export declare const bridgeScript: (command: string, cwd: string | null) => string | undefined
 
 export interface Server {
   pid: number
@@ -60,4 +62,4 @@ export declare const startDevServer: (options: {
   log?: (line: string) => void
   spawnVite: (viteArgs: string[]) => Promise<number>
 }) => Promise<number>
-export declare const whoHolds: (ports: readonly number[], options?: { exec?: Exec }) => string[]
+export declare const whoHolds: (ports: readonly number[], options?: { exec?: Exec }) => Promise<string[]>

@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMainModule } from './is-main-module.mjs'
 
@@ -152,14 +152,46 @@ export const serverKind = command => {
   return basename(command.split(' ')[0] ?? '?')
 }
 
-/** A bridge keeps running the code it loaded, whatever later happens to its file. */
+const RELATIVE_IMPORT = /\b(?:from|import)\s*\(?\s*['"](\.{1,2}\/[^'"]+)['"]/g
+
+/** An entry file and every file it reaches through relative imports, as paths
+ *  relative to the entry's directory: the bridge's code is server.js plus the
+ *  config.js and protocol.js it imports, and any of them can be what differs. */
+export const moduleClosure = entry => {
+  const seen = new Set()
+  const visit = file => {
+    if (seen.has(file)) return
+    seen.add(file)
+    if (!existsSync(file)) return
+    for (const [, spec] of readFileSync(file, 'utf8').matchAll(RELATIVE_IMPORT)) visit(resolve(dirname(file), spec))
+  }
+  visit(entry)
+  return [...seen].map(file => relative(dirname(entry), file)).sort()
+}
+
+const sameFiles = (dirA, dirB, files) =>
+  files.every(file => existsSync(join(dirB, file)) && readFileSync(join(dirA, file)).equals(readFileSync(join(dirB, file))))
+
+/** A bridge keeps running the code it loaded, whatever later happens to its files. */
 export const bridgeBuildNote = ({ script, startedAt }, ownScript) => {
   if (!existsSync(script)) return 'its server.js no longer exists'
-  if (statSync(script).mtime > startedAt) return 'its server.js was rebuilt after it started'
+  const dir = dirname(script)
+  const files = moduleClosure(script)
+  if (files.some(file => !existsSync(join(dir, file)) || statSync(join(dir, file)).mtime > startedAt)) {
+    return 'its build was rebuilt after it started'
+  }
   if (!existsSync(ownScript)) return null
-  return readFileSync(script).equals(readFileSync(ownScript))
+  // Equal files mean equal imports, so this checkout's closure is the same set.
+  return sameFiles(dir, dirname(ownScript), files)
     ? 'same build as this checkout'
     : 'a different build from this checkout'
+}
+
+/** The bridge script a command line runs, absolute: `pnpm agent:server` passes it relative to the bridge's cwd. */
+export const bridgeScript = (command, cwd) => {
+  const script = command.match(/(\S*agent-cli\/dist\/server\.js)\b/)?.[1]
+  if (!script) return undefined
+  return isAbsolute(script) ? script : cwd ? resolve(cwd, script) : undefined
 }
 
 /** What is known about each listening process: its ports, age, command and checkout. */
@@ -182,7 +214,7 @@ export const inspectServers = (pidsByPort, { exec = run, root = ROOT } = {}) => 
     const { startedAt = null, command = '' } = processes.get(pid) ?? {}
     const cwd = cwds.get(pid) ?? null
     const kind = serverKind(command)
-    const script = kind === 'agent bridge' ? command.match(/(\S*agent-cli\/dist\/server\.js)\b/)?.[1] : undefined
+    const script = kind === 'agent bridge' ? bridgeScript(command, cwd) : undefined
     return {
       pid,
       ports: ports.sort((a, b) => a - b),
@@ -255,7 +287,7 @@ export const startDevServer = async ({
   const code = await spawnVite([...viteArgs, '--port', String(port), '--strictPort', ...viteArgsWithout(args)])
   // Lost a race for the port between the check and vite's own bind: name who won it.
   const after = code === 0 ? null : listListeners(exec)
-  if (after?.has(port)) {
+  if (after && await (isBusy ?? (candidate => portIsBusy(candidate, after)))(port)) {
     for (const line of describePort(port, after, here, exec)) log(`[dev-server] ${line}`)
   }
   return code
@@ -270,12 +302,20 @@ const spawnViteProcess = viteArgs => new Promise(resolve => {
   child.on('exit', code => resolve(code ?? 1))
 })
 
-/** Every listening server whose directory is a checkout of this repository, or the holders of `ports`. */
-export const whoHolds = (ports, { exec = run } = {}) => {
+/** Every listening server whose directory is a checkout of this repository, or the holders of `ports`.
+ *  A port is busy by the same test the launcher uses, so `free` here means the launcher could bind it. */
+export const whoHolds = async (ports, { exec = run } = {}) => {
   const here = checkoutOf(ROOT, exec)
   const listeners = listListeners(exec)
   if (ports.length > 0) {
-    return ports.flatMap(port => listeners.has(port) ? describePort(port, listeners, here, exec) : [`port ${port}: free`])
+    const lines = []
+    for (const port of ports) {
+      lines.push(...(await portIsBusy(port, listeners) ? describePort(port, listeners, here, exec) : [`port ${port}: free`]))
+    }
+    return lines
+  }
+  if (listeners.size === 0 && exec('lsof', ['-v']) === null) {
+    return ['lsof is not available, so servers cannot be listed; `pnpm dev:who <port>` still says whether a port is taken']
   }
   const servers = inspectServers(listeners, { exec })
     .filter(server => server.checkout && server.checkout.commonDir === here?.commonDir)
@@ -289,7 +329,7 @@ if (isMainModule(import.meta.url)) {
   const [mode, ...args] = process.argv.slice(2)
   try {
     if (mode === 'who') {
-      for (const line of whoHolds(args.map(arg => parsePort(arg, 'port')))) console.log(line)
+      for (const line of await whoHolds(args.map(arg => parsePort(arg, 'port')))) console.log(line)
     } else if (mode in MODES) {
       process.exitCode = await startDevServer({ mode, args, spawnVite: spawnViteProcess })
     } else {

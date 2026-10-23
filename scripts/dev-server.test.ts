@@ -1,15 +1,19 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   bridgeBuildNote,
+  bridgeScript,
   canBind,
   formatServer,
+  inspectServers,
   listListeners,
   loopbackFree,
+  moduleClosure,
   parseLsofFields,
   parseProcesses,
   pickPort,
@@ -169,10 +173,18 @@ describe('port probes', () => {
   })
 })
 
+/** A port nothing listens on: the OS hands one out, and it is closed again at once. */
+const freePort = () => new Promise<number>(resolve => {
+  const server = createServer().listen({ port: 0, host: '::1' }, () => {
+    const { port } = server.address() as AddressInfo
+    server.close(() => resolve(port))
+  })
+})
+
 describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   it('names the holder and the checkout it runs in', async () => {
     const { pid, port } = await holdPort('::1')
-    const [line] = whoHolds([port])
+    const [line] = await whoHolds([port])
     expect(line).toContain(`port ${port}: node (pid ${pid}, up `)
     expect(line).toContain(`in ${ROOT} on `)
     expect(line).toMatch(/\(this worktree\)$/)
@@ -181,16 +193,32 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
   it('says when the holder runs outside any checkout', async () => {
     const dir = tempDir()
     const { port } = await holdPort('::1', dir)
-    expect(whoHolds([port])).toEqual([expect.stringContaining(`in ${dir} (not a checkout)`)])
+    expect(await whoHolds([port])).toEqual([expect.stringContaining(`in ${dir} (not a checkout)`)])
   })
 
-  it('reports a port with no listener as free', () => {
-    expect(whoHolds([1])).toEqual(['port 1: free'])
+  it('reports a port with no listener as free', async () => {
+    const port = await freePort()
+    expect(await whoHolds([port])).toEqual([`port ${port}: free`])
+  })
+})
+
+describe('whoHolds without lsof', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
+  it('still calls a held port taken, by the launcher\'s own bind probe', async () => {
+    const { port } = await holdPort('::1')
+    expect(await whoHolds([port], { exec: () => null })).toEqual([
+      `port ${port}: held by a process lsof cannot name (another user's, or lsof is missing)`,
+    ])
+  })
+
+  it('says it cannot list servers rather than that none run', async () => {
+    expect(await whoHolds([], { exec: () => null })).toEqual([
+      expect.stringMatching(/^lsof is not available, so servers cannot be listed/),
+    ])
   })
 })
 
 // Canned output: the real listing inspects every listener on the machine.
-it('lists only servers in a checkout of this repository when given no port', () => {
+it('lists only servers in a checkout of this repository when given no port', async () => {
   const git = (dir: string) => ({
     [ROOT]: `${ROOT}\n/repo/.git\nclaude/here\n`,
     '/repo/wt-b': '/repo/wt-b\n/repo/.git\nclaude/b\n',
@@ -203,7 +231,7 @@ it('lists only servers in a checkout of this repository when given no port', () 
       ? 'p1\nfcwd\nn/repo/wt-b\np2\nfcwd\nn/elsewhere\n'
       : 'p1\nf3\nn[::1]:5173\np2\nf3\nn[::1]:5174\n'
   }
-  expect(whoHolds([], { exec })).toEqual([
+  expect(await whoHolds([], { exec })).toEqual([
     expect.stringMatching(/^port 5173: vite dev server \(pid 1, up .*\) in \/repo\/wt-b on claude\/b \(NOT this worktree\)$/),
   ])
 })
@@ -232,33 +260,65 @@ describe('formatServer', () => {
   })
 })
 
-describe('bridgeBuildNote', () => {
+describe('bridge build', () => {
   const startedAt = new Date(2_000_000_000_000)
-  const files = () => {
-    const dir = tempDir()
-    const script = join(dir, 'server.js')
-    const own = join(dir, 'own-server.js')
-    writeFileSync(script, 'bridge v1')
-    utimesSync(script, startedAt.getTime() / 1000 - 60, startedAt.getTime() / 1000 - 60)
-    return { script, own }
+  const beforeStart = startedAt.getTime() / 1000 - 60
+  /** A dist directory shaped like agent-cli's: server.js importing config.js and protocol.js. */
+  const dist = (protocol = 'schemas v1', root = tempDir()) => {
+    const dir = join(root, 'packages', 'agent-cli', 'dist')
+    mkdirSync(dir, { recursive: true })
+    const files = {
+      'server.js': "import { a } from './config.js';\nimport { b } from './protocol.js';\n",
+      'config.js': "import fs from 'node:fs/promises';\n",
+      'protocol.js': protocol,
+    }
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(join(dir, name), content)
+      utimesSync(join(dir, name), beforeStart, beforeStart)
+    }
+    return { root, script: join(dir, 'server.js') }
   }
 
-  it('compares an untouched script with this checkout\'s build', () => {
-    const { script, own } = files()
-    writeFileSync(own, 'bridge v1')
-    expect(bridgeBuildNote({ script, startedAt }, own)).toBe('same build as this checkout')
-    writeFileSync(own, 'bridge v2')
-    expect(bridgeBuildNote({ script, startedAt }, own)).toBe('a different build from this checkout')
-    rmSync(own)
-    expect(bridgeBuildNote({ script, startedAt }, own)).toBeNull()
+  it('walks the relative imports, not the packages', () => {
+    expect(moduleClosure(dist().script)).toEqual(['config.js', 'protocol.js', 'server.js'])
   })
 
-  it('says the running code is no longer on disk', () => {
-    const { script, own } = files()
-    utimesSync(script, startedAt.getTime() / 1000 + 60, startedAt.getTime() / 1000 + 60)
-    expect(bridgeBuildNote({ script, startedAt }, own)).toBe('its server.js was rebuilt after it started')
+  it('compares every module the bridge runs, not only server.js', () => {
+    const { script } = dist('schemas v1')
+    expect(bridgeBuildNote({ script, startedAt }, dist('schemas v1').script)).toBe('same build as this checkout')
+    expect(bridgeBuildNote({ script, startedAt }, dist('schemas v2').script)).toBe('a different build from this checkout')
+    expect(bridgeBuildNote({ script, startedAt }, join(tempDir(), 'server.js'))).toBeNull()
+  })
+
+  it('says when the code it runs is no longer what is on disk', () => {
+    const { script } = dist()
+    const protocol = join(dirname(script), 'protocol.js')
+    utimesSync(protocol, beforeStart + 120, beforeStart + 120)
+    expect(bridgeBuildNote({ script, startedAt }, script)).toBe('its build was rebuilt after it started')
+    rmSync(protocol)
+    expect(bridgeBuildNote({ script, startedAt }, script)).toBe('its build was rebuilt after it started')
     rmSync(script)
-    expect(bridgeBuildNote({ script, startedAt }, own)).toBe('its server.js no longer exists')
+    expect(bridgeBuildNote({ script, startedAt }, script)).toBe('its server.js no longer exists')
+  })
+
+  it('resolves the relative path `pnpm agent:server` passes against the bridge\'s own cwd', () => {
+    expect(bridgeScript('node packages/agent-cli/dist/server.js', '/wt')).toBe('/wt/packages/agent-cli/dist/server.js')
+    expect(bridgeScript('/usr/bin/node /wt/packages/agent-cli/dist/server.js', '/elsewhere')).toBe('/wt/packages/agent-cli/dist/server.js')
+    expect(bridgeScript('/usr/bin/node /wt/packages/agent-cli/dist/server.js', null)).toBe('/wt/packages/agent-cli/dist/server.js')
+    expect(bridgeScript('node packages/agent-cli/dist/server.js', null)).toBeUndefined()
+    expect(bridgeScript('node vite.js', '/wt')).toBeUndefined()
+  })
+
+  it('judges another worktree\'s bridge by that worktree\'s files', () => {
+    const holder = dist('schemas v1')
+    const own = dist('schemas v1')
+    const exec = (command: string, args: string[]) => {
+      if (command === 'ps') return '9 Mon Jan  1 00:00:00 2035 node packages/agent-cli/dist/server.js\n'
+      if (command === 'lsof') return args.includes('cwd') ? `p9\nfcwd\nn${holder.root}\n` : null
+      return null
+    }
+    const [server] = inspectServers(new Map([[8787, new Set([9])]]), { exec, root: own.root })
+    expect(server.note).toBe('same build as this checkout')
   })
 })
 
@@ -314,7 +374,7 @@ describe('startDevServer', () => {
         if (command === 'ps') return '9 Thu Oct 22 16:58:29 2026 node /other/node_modules/vite/bin/vite.js\n'
         return args.includes('cwd') ? 'p9\nfcwd\nn/\n' : 'p9\nf3\nn[::1]:5174\n'
       },
-      isBusy: async () => false,
+      isBusy: async () => viteRan,
       log: line => log.push(line),
       spawnVite: async () => {
         viteRan = true
@@ -323,6 +383,24 @@ describe('startDevServer', () => {
     })
     expect(code).toBe(1)
     expect(log.at(-1)).toMatch(/^\[dev-server\] port 5174: vite dev server \(pid 9, up .*\) in \/ \(not a checkout\)$/)
+  })
+
+  it('still reports a lost race when lsof cannot name the winner', async () => {
+    const log: string[] = []
+    let viteRan = false
+    await startDevServer({
+      mode: 'dev',
+      args: [],
+      env: { PORT: '5174' },
+      exec: () => null,
+      isBusy: async () => viteRan,
+      log: line => log.push(line),
+      spawnVite: async () => {
+        viteRan = true
+        return 1
+      },
+    })
+    expect(log.at(-1)).toBe('[dev-server] port 5174: held by a process lsof cannot name (another user\'s, or lsof is missing)')
   })
 
   it('runs vite preview from its own default port', async () => {
