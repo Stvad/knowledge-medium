@@ -33,9 +33,11 @@ const bin = tempDir('check-gate-')
 writeFileSync(
   join(bin, 'pnpm'),
   `#!/usr/bin/env node
-const { appendFileSync, writeFileSync } = require('node:fs')
-// Tells a test this task can now take a signal its own way.
-const ready = () => process.env.SHIM_READY && writeFileSync(process.env.SHIM_READY, '')
+const { appendFileSync, existsSync, writeFileSync } = require('node:fs')
+const { join } = require('node:path')
+// A signal test's side channel to this shim (see shimFiles in the test).
+const shimFile = name => join(process.env.SHIM_DIR, name)
+const ready = () => process.env.SHIM_DIR && writeFileSync(shimFile('ready'), '')
 const [, script, ...files] = process.argv.slice(2)
 const mode = process.env.SHIM_MODE
 // The line vitest prints last, once a run finishes.
@@ -71,20 +73,33 @@ if (mode === 'interrupt-install' && process.argv[2] === 'install') {
   ready()
 }
 if (mode === 'interrupt') {
-  // The suite fails at once, while lint can be made to wind down slowly; the
-  // re-run would take a while.
+  // The suite fails at once; the re-run would take a while.
   if (script === 'test' && !files.length) {
     process.stdout.write(' FAIL  scripts/slow.test.ts > a test\\n')
     summary(1, 1)
     process.exitCode = 1
   } else if (script === 'lint' || script === 'test') {
-    const keepAlive = setTimeout(() => {}, 10_000)
-    if (script === 'lint') {
-      // Only where a test needs the gate still running after its interrupt.
-      const linger = process.env.SHIM_LINGER ? 3_000 : 0
-      process.on('SIGTERM', () => setTimeout(() => clearTimeout(keepAlive), linger))
-      ready()
-    }
+    setTimeout(() => {}, 10_000)
+  }
+}
+if (mode === 'held-lint') {
+  // Lint holds after each SIGTERM until the test releases it, so the gate is
+  // still running for every step the test takes. With SHIM_TEST_FAILS the suite
+  // fails, but only once lint can take that SIGTERM its own way.
+  if (script === 'lint') {
+    process.on('SIGTERM', () => appendFileSync(shimFile('sigterms'), 'x'))
+    const hold = setInterval(() => existsSync(shimFile('release')) && clearInterval(hold), 10)
+    ready()
+  } else if (script === 'test' && !files.length && process.env.SHIM_TEST_FAILS) {
+    const wait = setInterval(() => {
+      if (!existsSync(shimFile('ready'))) return
+      clearInterval(wait)
+      process.stdout.write(' FAIL  scripts/slow.test.ts > a test\\n')
+      summary(1, 1)
+      process.exitCode = 1
+    }, 10)
+  } else if (script === 'test') {
+    setTimeout(() => {}, 10_000)
   }
 }
 `,
@@ -214,40 +229,77 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     gate[stream]!.on('data', watch)
   }
 
-  // SIGINT once the task under test writes its ready file, so the signal lands
-  // in the task's handler rather than before node installed it.
-  const interruptWhenReady = (againAfterMs?: number) => {
-    const file = join(tempDir('check-ready-'), 'ready')
-    const onSpawn = (gate: Gate) => {
-      const poll = setInterval(() => {
-        if (!existsSync(file)) return
-        clearInterval(poll)
-        gate.kill('SIGINT')
-        if (againAfterMs !== undefined) setTimeout(() => gate.kill('SIGINT'), againAfterMs)
-      }, 10)
-      gate.on('close', () => clearInterval(poll))
+  // A signal test's side channel to the shim, in files: `ready` once a task has
+  // installed its SIGTERM handler, a byte in `sigterms` for each SIGTERM a held
+  // lint took, and `release` to let it exit. Every step waits on one of these,
+  // never on time.
+  const shimFiles = () => {
+    const dir = tempDir('check-shim-')
+    const file = (name: string) => join(dir, name)
+    return {
+      env: { SHIM_DIR: dir },
+      ready: () => existsSync(file('ready')),
+      sigterms: () => (existsSync(file('sigterms')) ? readFileSync(file('sigterms'), 'utf8').length : 0),
+      release: () => writeFileSync(file('release'), ''),
     }
-    return { env: { SHIM_READY: file }, onSpawn }
   }
+  // Resolves true once `condition` holds, or false once the gate has exited.
+  const until = (gate: Gate, condition: () => boolean) =>
+    new Promise<boolean>((resolve) => {
+      const poll = setInterval(() => {
+        const exited = gate.exitCode !== null || gate.signalCode !== null
+        if (!exited && !condition()) return
+        clearInterval(poll)
+        resolve(!exited)
+      }, 10)
+    })
 
   it('takes a second copy of the interrupt as the same one, and still releases and reports', async () => {
     const dir = tempDir('check-slots-')
-    // Lint lingers 3s after its SIGTERM, so the second copy lands mid-shutdown.
-    const { env, onSpawn } = interruptWhenReady(100)
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', SHIM_LINGER: '1', KM_CHECK_SLOT_DIR: dir, ...env }, { onSpawn })
+    const shim = shimFiles()
+    const drive = async (gate: Gate) => {
+      if (!(await until(gate, shim.ready))) return
+      gate.kill('SIGINT')
+      // The gate took the first copy and is stopping lint, which holds it.
+      if (!(await until(gate, () => shim.sigterms() >= 1))) return
+      gate.kill('SIGINT')
+      if (!(await until(gate, () => shim.sigterms() >= 2))) return
+      shim.release()
+    }
+    const { status, out } = await runGate(
+      { SHIM_MODE: 'held-lint', KM_CHECK_SLOT_DIR: dir, ...shim.env },
+      { onSpawn: (gate) => void drive(gate) },
+    )
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
     expect(readdirSync(dir)).toEqual([])
   }, 30_000)
 
   it('stops at an interrupt even when the task it lands in exits 0', async () => {
-    const { env, onSpawn } = interruptWhenReady()
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt-install', ...env }, { onSpawn })
+    const shim = shimFiles()
+    const drive = async (gate: Gate) => {
+      if (await until(gate, shim.ready)) gate.kill('SIGINT')
+    }
+    const { status, out } = await runGate(
+      { SHIM_MODE: 'interrupt-install', ...shim.env },
+      { onSpawn: (gate) => void drive(gate) },
+    )
     expect(out).not.toContain('starting compile')
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
   }, 30_000)
 
   it('starts no re-run once interrupted', async () => {
-    const { status, out } = await runGate({ SHIM_MODE: 'interrupt', SHIM_LINGER: '1' }, { onSpawn: interruptOn('stderr', '[check] test failed') })
+    const shim = shimFiles()
+    const drive = async (gate: Gate) => {
+      // The suite failed and the gate is stopping lint, which holds it.
+      if (!(await until(gate, () => shim.sigterms() >= 1))) return
+      gate.kill('SIGINT')
+      if (!(await until(gate, () => shim.sigterms() >= 2))) return
+      shim.release()
+    }
+    const { status, out } = await runGate(
+      { SHIM_MODE: 'held-lint', SHIM_TEST_FAILS: '1', ...shim.env },
+      { onSpawn: (gate) => void drive(gate) },
+    )
     expect(out).not.toContain('failing files, alone')
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
   }, 30_000)
@@ -422,6 +474,14 @@ describe('unaccounted', () => {
 
   it('accounts for a finished run that names every file it failed', () => {
     expect(unaccounted(summary, named)).toBeNull()
+  })
+
+  it('reads a summary in colour, as vitest prints it on CI', () => {
+    const coloured = [
+      '\x1b[41m\x1b[1m FAIL \x1b[22m\x1b[49m scripts/check.test.ts\x1b[2m > \x1b[22ma test',
+      '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m832 passed\x1b[39m\x1b[22m\x1b[90m (833)\x1b[39m',
+    ].join('\n')
+    expect(unaccounted(coloured, ['scripts/check.test.ts'])).toBeNull()
   })
 
   it('refuses a run that never printed its summary', () => {
