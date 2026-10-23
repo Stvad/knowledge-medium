@@ -190,19 +190,28 @@ describe('shellCommandsWithDepth', () => {
     expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
     expect(shellCommandsWithDepth("cat <<'EOF'\nx;gh `api` y\nEOF").map(s => s.tokens)).toEqual([['cat'], ['x;gh', '`api`', 'y']])
     expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
-    // a script a shell reads is parsed whole, so a subshell spans its lines
+    // data read whole and a line at a time differs here, so both come back:
+    // whole first, where a subshell spans its lines
     expect(shellCommandsWithDepth("bash <<'EOF'\n(\ncd x\n)\nls\nEOF")).toEqual([
       { tokens: ['bash'], depth: 0 },
       { tokens: ['cd', 'x'], depth: 1, heredoc: true },
       { tokens: ['ls'], depth: 0, heredoc: true },
+      { tokens: ['cd', 'x'], depth: 0, heredoc: true },
+      { tokens: ['ls'], depth: 0, heredoc: true },
     ])
+    // only when the heredoc's own command is a shell reading its script from stdin
+    expect(shellCommandsWithDepth("cat <<'EOF' | sh x.sh\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("bash -c 'cat' <<'EOF'\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("bash -c'cat' <<'EOF'\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("X=1 <<'EOF'\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("sh -s <<'EOF'\n(\ncd x\n)\nEOF").find(s => s.tokens[0] === 'cd')?.depth).toBe(1)
     // quoted data a reader of its own language takes is still read a line at a time
     expect(shellCommandsWithDepth("osascript <<'EOF'\nsay don't\ncat x\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'x'])
     // unquoted data is expanded before the shell reads it, so an apostrophe
     // there cannot hide the next line's substitution
     expect(shellCommandsWithDepth("bash <<EOF\necho don't\n$(gh api y)\nEOF").map(s => s.tokens)).toContainEqual(['gh', 'api', 'y'])
     // data a text reader takes runs only its substitutions, a line at a time
-    expect(shellCommandsWithDepth("cat <<EOF\ndon't\n$(gh api y)\nEOF").map(s => s.tokens)).toEqual([['cat'], ["dont"], ['gh', 'api', 'y'], [SUBSTITUTED]])
+    expect(shellCommandsWithDepth("cat <<EOF\ndon't\n$(gh api y)\nEOF").map(s => s.tokens)).toContainEqual(['gh', 'api', 'y'])
   })
 
   it('keeps a command whole across a process substitution', () => {

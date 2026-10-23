@@ -90,8 +90,6 @@ export const withoutLiteralHeredocs = cmd => {
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
 const TEXT_READERS = new Set(['cat', 'tee', 'cd', 'git', 'gh', 'bd', 'python', 'python3', 'node', 'printf', 'echo', 'wc', 'grep', 'head', 'tail', 'sort', 'uniq', 'jq', 'mkdir'])
-// The shells, whose stdin is a script.
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 // A command's own word: past its leading assignments, path dropped.
 const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace(/^.*\//, '')
 // Assignments alone, none of them substituting: a value that substitutes can
@@ -348,17 +346,29 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           if (eol === -1) break
         }
         if (wholeCommands) {
-          // quoted data a shell reads is a script, read whole as that shell
-          // reads it, so a subshell or a quote spans its lines. Other data is
-          // read a line at a time: unquoted data is expanded before any
-          // reader sees it, quote-blind, so an apostrophe on one line cannot
-          // hide the next line's substitution. Text nothing runs is only
-          // split into words.
-          const script = quoted && lineCommands.some(words => SHELLS.has(commandWord(words)))
-          const lines = script ? [body.join('\n')] : body.join('\n').replace(/\\\n/g, ' ').split('\n')
-          for (const line of lines) {
-            if (!text) for (const s of segment(line, true, { inputRedirects: sinks.inputRedirects })) segments.push({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })
-            else if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
+          // Data something may run comes back read both ways when they
+          // differ: whole, as a shell reading it as its script does, so a
+          // subshell or a quote spans its lines; and a line at a time, as the
+          // quote-blind expansion of unquoted data or a reader of another
+          // language sees it, so an apostrophe on one line cannot hide the
+          // next. Which command reads the data is not settled here, so a
+          // consumer can see a command twice. Text nothing runs is only split
+          // into words.
+          const byLine = body.join('\n').replace(/\\\n/g, ' ').split('\n')
+          if (text) {
+            for (const line of byLine) if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
+          } else {
+            const read = parts => {
+              const redirects = []
+              const read = parts.flatMap(part => segment(part, true, { inputRedirects: redirects }))
+              return { segments: read.map(s => ({ tokens: s.tokens, depth: scopes.length + s.depth, heredoc: true })), redirects }
+            }
+            const lines = read(byLine)
+            const whole = read([body.join('\n')])
+            for (const view of JSON.stringify(whole.segments) === JSON.stringify(lines.segments) ? [lines] : [whole, lines]) {
+              segments.push(...view.segments)
+              sinks.inputRedirects?.push(...view.redirects)
+            }
           }
         } else {
           const words = body.join('\n').split(/\s+/).filter(Boolean)
