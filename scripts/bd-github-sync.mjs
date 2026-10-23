@@ -1535,7 +1535,7 @@ export const tryRun = (file, args, opts) => {
 
 /**
  * Multi-id `bd show`, parsed from stdout DIRECTLY: unknown ids go to stderr
- * as `Error fetching …` while found rows still print as JSON, exit 0 — a
+ * as `Issue <id> not found` while found rows still print as JSON, exit 0 — a
  * PARTIAL result run()'s error-text check would read as total failure.
  * Returns the rows, or null when stdout is not a JSON array. Callers must
  * hold the DB-exists gate (initializedDbRoot) first — see header.

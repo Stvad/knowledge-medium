@@ -21,8 +21,9 @@
  *  - A Repo built in `beforeAll` (file- or suite-lifetime, by construction) is
  *    registered before any scope is open, so it is NOT released here. That is
  *    deliberate — releasing it would break the file that shares it — and it is
- *    why `createTestDb`'s own teardown is still the right place to cover a
- *    Repo the db outlives.
+ *    why such a file releases its own Repo in `afterAll`, before the db
+ *    closes (`releaseTestRepos` below does it). `createTestDb`'s cleanup only
+ *    closes the db and removes its directory; it releases no Repo.
  *  - A file's own `afterEach` runs BEFORE this release, so a file that already
  *    disposes its Repo keeps working; the second release is a no-op.
  *
