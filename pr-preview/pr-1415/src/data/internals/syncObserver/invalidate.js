@@ -1,0 +1,1 @@
+import{kX as e}from"../../../../chunks/app-NDnX-mPK.js";export{e as applySyncInvalidation};

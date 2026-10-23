@@ -1,0 +1,1 @@
+import{Ck as e,wk as t}from"../chunks/app-NDnX-mPK.js";export{e as checkForAppUpdate,t as registerServiceWorker};

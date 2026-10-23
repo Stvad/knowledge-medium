@@ -1,0 +1,1 @@
+import{LG as e}from"../../../chunks/app-NDnX-mPK.js";export{e as agentDispatchCompanionDataExtension};

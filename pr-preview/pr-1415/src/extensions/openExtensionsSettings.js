@@ -1,0 +1,1 @@
+import{ej as e,tj as t}from"../../chunks/app-NDnX-mPK.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};

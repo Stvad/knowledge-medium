@@ -1,0 +1,1 @@
+import{Rz as e}from"../../../chunks/app-NDnX-mPK.js";export{e as SuspenseFallback};

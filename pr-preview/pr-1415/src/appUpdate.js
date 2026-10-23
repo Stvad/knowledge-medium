@@ -1,0 +1,1 @@
+import{Ek as e,Tk as t}from"../chunks/app-NDnX-mPK.js";export{t as appUpdate,e as useAppUpdateAvailable};
