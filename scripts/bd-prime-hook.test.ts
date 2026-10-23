@@ -435,7 +435,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const r = run()
         expect(r.status).toBe(0)
         const context = contextOf(r.stdout)
-        expect(context).toContain('bd-github-sync is over its 20s budget')
+        expect(context).toContain('bd-github-sync is over budget')
         expect(context).toContain('bd show ×2 20.3s')
         expect(context).toContain('feedback: alpha')
 
@@ -447,7 +447,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         })
         const viaCodex = codex.run(['--codex', 'SessionStart'], '{}')
         expect(viaCodex.status).toBe(0)
-        expect(contextOf(viaCodex.stdout)).toContain('bd-github-sync is over its 20s budget')
+        expect(contextOf(viaCodex.stdout)).toContain('bd-github-sync is over budget')
 
         // A mid-session refresh re-injects the index, not the alarm: it would
         // otherwise repeat on every turn the refresh fires.
@@ -468,7 +468,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         })
         const r = run()
         expect(r.status).toBe(0)
-        expect(contextOf(r.stdout)).toContain('bd-github-sync is over its 20s budget')
+        expect(contextOf(r.stdout)).toContain('bd-github-sync is over budget')
     })
 
     // bd's native session start prints nothing when its own prime fails.
@@ -482,7 +482,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const r = run(['--codex', 'SessionStart'], '{}')
         expect(r.status).toBe(0)
         const context = contextOf(r.stdout)
-        expect(context).toContain('bd-github-sync is over its 20s budget')
+        expect(context).toContain('bd-github-sync is over budget')
         expect(context).toContain('feedback: alpha')
         expect(shimCalls()).toContain('bd codex-hook SessionStart')
     })

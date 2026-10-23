@@ -1,4 +1,4 @@
-agent extensions (the root AGENTS.md data-model rules apply first; keep this file under ~2KB, it shares Codex's 32 KiB budget with the root):
+agent extensions (the root AGENTS.md data-model rules apply first; keep this file under ~2KB, it shares Codex's AGENTS.md budget with the root):
 
 installing:
 - `install-extension` REFUSES an update that changes which codec a value preset id resolves to on this device. That would re-type every stored value under the preset with nothing migrating them. Fix: a NEW preset id with the definitions repointed (`core.migratePropertyDefinition` fans that out); `--allow-preset-change` only when the values are disposable. The check has blind spots (it misses `enable-extension`, and a parse change under an unchanged `type` string), so bump the codec's `type` string whenever its encoding moves. Full semantics: "Preset-change refusals on install" in `packages/agent-cli/README.md`.

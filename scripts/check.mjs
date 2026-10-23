@@ -7,6 +7,7 @@ import { availableParallelism, loadavg } from 'node:os'
 import { basename, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { stripVTControlCharacters } from 'node:util'
 import { FROZEN_INSTALL_ARGS } from './ensure-deps.mjs'
 import { extractFailingFiles } from './fuzz.mjs'
 import { isMainModule } from './is-main-module.mjs'
@@ -300,9 +301,10 @@ const takeGateSlot = async signal => {
 // null when they can: it finished (vitest prints the summary last), nothing
 // failed outside a file, and it named every file it counted as failed.
 export const unaccounted = (output, named) => {
-  const summary = /^ *Test Files +(.+)$/m.exec(output)
+  const plain = stripVTControlCharacters(output)
+  const summary = /^ *Test Files +(.+)$/m.exec(plain)
   if (!summary) return 'the test run did not finish'
-  if (/^ *Errors +\d+ errors?$/m.test(output)) return 'vitest reported unhandled errors, which belong to no file'
+  if (/^ *Errors +\d+ errors?$/m.test(plain)) return 'vitest reported unhandled errors, which belong to no file'
   const counted = Number(/(\d+) failed/.exec(summary[1])?.[1] ?? 0)
   if (counted !== named.length) return `vitest counted ${counted} failing files but named ${named.length}`
   return null

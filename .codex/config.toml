@@ -1,2 +1,6 @@
+# Codex reads the AGENTS.md files from the repo root down to its working directory within this many
+# bytes, and silently drops the rest. AGENTS.md "Code Review Rules" holds the files to it.
+project_doc_max_bytes = 40960
+
 [features]
 hooks = true
