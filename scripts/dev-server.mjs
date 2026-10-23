@@ -44,19 +44,24 @@ export const requestedPort = (args, env) => {
   return env.PORT ? { port: parsePort(env.PORT, 'PORT'), source: 'PORT' } : null
 }
 
+// Every spelling vite reads as this flag, negations included: a later false
+// one would override the `--strictPort` added after the chosen port.
+const STRICT_PORT_FLAG = /^--(no-)?strictPort(=.*)?$/
+
 /** The args forwarded to vite: the port flags are re-added from the chosen port. */
 export const viteArgsWithout = args => {
   const rest = []
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port') i++
-    else if (args[i] !== '--' && args[i] !== '--strictPort' && !args[i].startsWith('--port=')) rest.push(args[i])
+    else if (args[i] !== '--' && !STRICT_PORT_FLAG.test(args[i]) && !args[i].startsWith('--port=')) rest.push(args[i])
   }
   return rest
 }
 
-/** stdout of a command, or null when it is missing or fails (lsof also exits 1 on no match). */
+/** stdout of a command, or null when it is missing or fails (lsof also exits 1 on no match).
+ *  The C locale keeps output parseable: `ps -o lstart` follows the locale's date format. */
 const run = (command, args) => {
-  const result = spawnSync(command, args, { encoding: 'utf8' })
+  const result = spawnSync(command, args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } })
   return result.status === 0 ? result.stdout : null
 }
 
@@ -172,12 +177,16 @@ export const moduleClosure = entry => {
 const sameFiles = (dirA, dirB, files) =>
   files.every(file => existsSync(join(dirB, file)) && readFileSync(join(dirA, file)).equals(readFileSync(join(dirB, file))))
 
+/** Written after a process started at `startedAt`, which ps gives to the whole second: a file
+ *  from within that second may predate the start, so only a later second counts. */
+const writtenAfterStart = (file, startedAt) => statSync(file).mtimeMs >= startedAt.getTime() + 1000
+
 /** A bridge keeps running the code it loaded, whatever later happens to its files. */
 export const bridgeBuildNote = ({ script, startedAt }, ownScript) => {
   if (!existsSync(script)) return 'its server.js no longer exists'
   const dir = dirname(script)
   const files = moduleClosure(script)
-  if (files.some(file => !existsSync(join(dir, file)) || statSync(join(dir, file)).mtime > startedAt)) {
+  if (files.some(file => !existsSync(join(dir, file)) || writtenAfterStart(join(dir, file), startedAt))) {
     return 'its build was rebuilt after it started'
   }
   if (!existsSync(ownScript)) return null
@@ -240,7 +249,8 @@ export const formatServer = (server, here, now = Date.now()) => {
   const where = server.checkout
     ? `${server.checkout.toplevel} on ${server.checkout.branch}`
       + (server.checkout.toplevel === here?.toplevel ? ' (this worktree)' : ' (NOT this worktree)')
-    : server.cwd && existsSync(server.cwd) ? `${server.cwd} (not a checkout)` : 'a directory that no longer exists'
+    : server.cwd === null ? 'a directory lsof could not read'
+    : existsSync(server.cwd) ? `${server.cwd} (not a checkout)` : 'a directory that no longer exists'
   const age = server.startedAt ? `, up ${formatAge(now - server.startedAt.getTime())}` : ''
   return `port ${server.ports.join(',')}: ${server.kind} (pid ${server.pid}${age}) in ${where}`
     + (server.note ? `; ${server.note}` : '')

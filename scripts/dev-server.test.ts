@@ -80,6 +80,10 @@ describe('requestedPort / viteArgsWithout', () => {
     expect(viteArgsWithout(['--', '--host', '--port', '5188', '--strictPort', '--port=1', '--open']))
       .toEqual(['--host', '--open'])
   })
+
+  it('drops every negation of --strictPort, which would override the one the launcher adds', () => {
+    expect(viteArgsWithout(['--no-strictPort', '--strictPort=false', '--strictPort=true', '--host'])).toEqual(['--host'])
+  })
 })
 
 describe('pickPort', () => {
@@ -190,6 +194,17 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
     expect(line).toMatch(/\(this worktree\)$/)
   })
 
+  it('reads ps under the C locale, which is the date format it parses', async () => {
+    // ps formats its start time with the locale's date names: `Do. 22 Okt.` under German.
+    vi.stubEnv('LC_ALL', 'de_DE.UTF-8')
+    try {
+      const { pid, port } = await holdPort('::1')
+      expect(await whoHolds([port])).toEqual([expect.stringContaining(`port ${port}: node (pid ${pid}, up `)])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('says when the holder runs outside any checkout', async () => {
     const dir = tempDir()
     const { port } = await holdPort('::1', dir)
@@ -258,6 +273,11 @@ describe('formatServer', () => {
     expect(formatServer({ ...server, cwd: '/no/such/dir', checkout: null, note: 'its server.js no longer exists' }, here, 3 * 86_400_000))
       .toBe('port 5173: vite dev server (pid 7, up 3d 0h) in a directory that no longer exists; its server.js no longer exists')
   })
+
+  it('does not call a directory lsof could not read gone', () => {
+    expect(formatServer({ ...server, cwd: null, checkout: null }, here, 0))
+      .toBe('port 5173: vite dev server (pid 7, up 0s) in a directory lsof could not read')
+  })
 })
 
 describe('bridge build', () => {
@@ -288,6 +308,16 @@ describe('bridge build', () => {
     expect(bridgeBuildNote({ script, startedAt }, dist('schemas v1').script)).toBe('same build as this checkout')
     expect(bridgeBuildNote({ script, startedAt }, dist('schemas v2').script)).toBe('a different build from this checkout')
     expect(bridgeBuildNote({ script, startedAt }, join(tempDir(), 'server.js'))).toBeNull()
+  })
+
+  it('does not call a file from the second the bridge started a rebuild', () => {
+    // ps gives the start time to the whole second; the file may have been written before the start within it.
+    const { script } = dist()
+    const protocol = join(dirname(script), 'protocol.js')
+    utimesSync(protocol, startedAt.getTime() / 1000 + 0.4, startedAt.getTime() / 1000 + 0.4)
+    expect(bridgeBuildNote({ script, startedAt }, script)).toBe('same build as this checkout')
+    utimesSync(protocol, startedAt.getTime() / 1000 + 1, startedAt.getTime() / 1000 + 1)
+    expect(bridgeBuildNote({ script, startedAt }, script)).toBe('its build was rebuilt after it started')
   })
 
   it('says when the code it runs is no longer what is on disk', () => {
