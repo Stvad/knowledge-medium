@@ -59,12 +59,14 @@ interface NewBlock {
   references?: BlockReference[]
   properties?: BlockProperties
 }
-/** In one transaction, in order: for trees too big to create a tx per block. */
+/** In one transaction, in order, through `createMany`: a loop of `tx.create`
+ *  pays a sequential worker round trip per row, which load stretches far past
+ *  the test budget for a tree of hundreds of blocks. */
 const createAll = async (blocks: readonly NewBlock[]) => {
   await repo.tx(async tx => {
-    for (const args of blocks) {
+    await tx.createMany(blocks.map(args => {
       orderCounter += 1
-      await tx.create({
+      return {
         id: args.id,
         workspaceId: WS,
         parentId: args.parentId ?? null,
@@ -72,8 +74,8 @@ const createAll = async (blocks: readonly NewBlock[]) => {
         content: args.content ?? args.id,
         references: args.references ?? [],
         ...(args.properties ? {properties: args.properties} : {}),
-      })
-    }
+      }
+    }))
   }, {scope: ChangeScope.BlockDefault})
 }
 const create = (args: NewBlock) => createAll([args])
@@ -1174,15 +1176,10 @@ describe('structural edge cases', () => {
     await create({id: target, content: 'Target'})
     const topics = [uuid('d1d1d1d1', 1), uuid('d2d2d2d2', 2)]
     for (const [n, topic] of topics.entries()) await create({id: topic, content: `Topic ${n}`})
-    await repo.tx(async tx => {
-      for (let i = 0; i < 520; i++) {
-        const topic = topics[i % 2]
-        await tx.create({
-          id: uuid('d3d3d3d3', i), workspaceId: WS, parentId: null, orderKey: `m${i}`, content: `member ${i}`,
-          references: [{id: target, alias: 'T'}, {id: topic, alias: 'Topic'}],
-        })
-      }
-    }, {scope: ChangeScope.BlockDefault})
+    await createAll(Array.from({length: 520}, (_, i) => ({
+      id: uuid('d3d3d3d3', i), content: `member ${i}`,
+      references: [{id: target, alias: 'T'}, {id: topics[i % 2], alias: 'Topic'}],
+    })))
     const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, membersPerGroup: 500, format: 'json'})
     expect(out.groups.length).toBeGreaterThanOrEqual(2)
     for (const group of out.groups) expect(group.members.length).toBeLessThanOrEqual(250)
