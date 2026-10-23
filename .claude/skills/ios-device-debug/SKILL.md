@@ -41,7 +41,8 @@ Then in the Tailscale **admin console** (login.tailscale.com/admin/dns) enable *
 ```bash
 tailscale serve --bg http://localhost:<port>   # the port `pnpm dev` printed
 ```
-- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:<port>` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
+- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `localhost` to one family only, often `[::1]:<port>`; then serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` reaches whichever family vite bound.
+- `tailscale serve` has one target for the whole machine. Check `tailscale serve status` first: re-pointing it moves another session's tunnel to your server without telling that session.
 - Run the dev server with **`VITE_TUNNEL=1 pnpm dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `pnpm dev` is unaffected.
 - Sanity-check from the Mac (Homebrew `tailscaled` doesn't wire MagicDNS into the macOS resolver, so force-resolve):
   ```bash

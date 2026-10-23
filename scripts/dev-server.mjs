@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
+import { constants } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMainModule } from './is-main-module.mjs'
@@ -44,9 +45,10 @@ export const requestedPort = (args, env) => {
   return env.PORT ? { port: parsePort(env.PORT, 'PORT'), source: 'PORT' } : null
 }
 
-// Every spelling vite reads as this flag, negations included: a later false
-// one would override the `--strictPort` added after the chosen port.
-const STRICT_PORT_FLAG = /^--(no-)?strictPort(=.*)?$/
+// Every spelling vite reads as this flag (its CLI camel-cases `--strict-port`),
+// negations included: a later false one would override the `--strictPort`
+// added after the chosen port.
+const STRICT_PORT_FLAG = /^--(no-)?strict-?port(=.*)?$/i
 
 /** The args forwarded to vite: the port flags are re-added from the chosen port. */
 export const viteArgsWithout = args => {
@@ -58,15 +60,15 @@ export const viteArgsWithout = args => {
   return rest
 }
 
-/** stdout of a command, or null when it is missing or fails (lsof also exits 1 on no match).
+/** stdout of a command, or null when it could not run. A failing exit still yields its stdout:
+ *  lsof exits 1 when any pid it was asked about is gone, yet lists the live ones.
  *  The C locale keeps output parseable: `ps -o lstart` follows the locale's date format. */
 const run = (command, args) => {
   const result = spawnSync(command, args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } })
-  return result.status === 0 ? result.stdout : null
+  return result.error ? null : result.stdout
 }
 
-// Skip the kernel calls that can block (stat of every mount) and their
-// warnings: without them a call took 2–3.5s on an idle Mac, with them ~0.4s.
+// -b skips the kernel calls that can block on a hung mount (stat, readlink); -w drops their warnings.
 const LSOF_QUIET = ['-b', '-w']
 
 /** `lsof -F` output as one entry per process: its pid and its `n` (name) fields. */
@@ -100,12 +102,14 @@ export const canBind = (port, host) => new Promise(resolve => {
   server.listen({ port, host, exclusive: true }, () => server.close(() => resolve(true)))
 })
 
-/** Both loopback families: vite binds `localhost` (`::1` on macOS), and a browser tries either. */
+/** Both loopback families: vite binds `localhost`, which resolves to either, and a browser tries both. */
 export const loopbackFree = async port =>
   (await Promise.all(['127.0.0.1', '::1'].map(host => canBind(port, host)))).every(Boolean)
 
 /** Busy when lsof sees a listener, which covers a wildcard (`0.0.0.0`, `::`) that does not block a
- *  loopback bind on macOS, or when a loopback bind fails, which covers a missing lsof. */
+ *  loopback bind on macOS, or when a loopback bind fails, which covers a missing lsof.
+ *  Accepted: a server binding a wildcard (`vite --host`) in the instant between another launcher's
+ *  check and its bind shares the port with it, since neither bind fails. */
 export const portIsBusy = async (port, listeners) => listeners.has(port) || !(await loopbackFree(port))
 
 /** The first usable port, and the busy ports it found on the way. `port` is null when none is usable. */
@@ -129,13 +133,14 @@ const real = path => {
   }
 }
 
-/** The checkout a directory is in, or null when it is in none or no longer exists. */
+/** The checkout a directory is in, or null when it is in none or no longer exists.
+ *  Accepted: a leftover directory without its own `.git` reports the checkout it sits in. */
 export const checkoutOf = (dir, exec = run) => {
   const output = exec('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir', '--abbrev-ref', 'HEAD'])
   if (!output) return null
   const [toplevel, commonDir, ref] = output.trim().split('\n')
   const branch = ref === 'HEAD'
-    ? `detached at ${exec('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'])?.trim() ?? '?'}`
+    ? `detached at ${exec('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'])?.trim() || '?'}`
     : ref
   return { toplevel: real(toplevel), commonDir: real(commonDir), branch }
 }
@@ -261,7 +266,7 @@ const describePort = (port, listeners, here, exec) => {
   const holders = inspectServers(new Map([[port, listeners.get(port) ?? new Set()]]), { exec })
   return holders.length
     ? holders.map(server => formatServer(server, here))
-    : [`port ${port}: held by a process lsof cannot name (another user's, or lsof is missing)`]
+    : [`port ${port}: held by a process lsof cannot name (another user's, one starting or stopping right now, or lsof is missing)`]
 }
 
 /** Choose the port, report every busy one with its holder, and start vite on the chosen one. */
@@ -306,14 +311,35 @@ export const startDevServer = async ({
 const viteBin = () =>
   join(dirname(createRequire(join(ROOT, 'package.json')).resolve('vite/package.json')), 'bin', 'vite.js')
 
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
+
+/** Hands the stop signals `source` gets to `child` until the child exits. The desktop app signals
+ *  the whole process group; this covers a `kill` of the launcher's pid alone. */
+export const forwardStopSignals = (child, source = process) => {
+  const forward = signal => child.kill(signal)
+  for (const signal of STOP_SIGNALS) source.on(signal, forward)
+  child.once('exit', () => {
+    for (const signal of STOP_SIGNALS) source.off(signal, forward)
+  })
+}
+
 const spawnViteProcess = viteArgs => new Promise(resolve => {
   const child = spawn(process.execPath, [viteBin(), ...viteArgs], { cwd: ROOT, stdio: 'inherit' })
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal))
-  child.on('exit', code => resolve(code ?? 1))
+  forwardStopSignals(child)
+  child.on('exit', (code, signal) => resolve(code ?? 128 + (constants.signals[signal] ?? 0)))
 })
 
-/** Every listening server whose directory is a checkout of this repository, or the holders of `ports`.
- *  A port is busy by the same test the launcher uses, so `free` here means the launcher could bind it. */
+// What this repository runs: listed even when its directory is gone, because a
+// deleted worktree's server is no longer attributable to a checkout.
+const SERVER_KINDS = new Set(['vite dev server', 'vite preview', 'agent bridge'])
+
+const ownedHere = (server, here) => server.checkout
+  ? server.checkout.commonDir === here?.commonDir
+  : server.cwd !== null && !existsSync(server.cwd) && SERVER_KINDS.has(server.kind)
+
+/** Every listening server a checkout of this repository runs (or ran, from a directory since
+ *  deleted), or the holders of `ports`. A port is busy by the same test the launcher uses, so
+ *  `free` here means the launcher could bind it. */
 export const whoHolds = async (ports, { exec = run } = {}) => {
   const here = checkoutOf(ROOT, exec)
   const listeners = listListeners(exec)
@@ -328,7 +354,7 @@ export const whoHolds = async (ports, { exec = run } = {}) => {
     return ['lsof is not available, so servers cannot be listed; `pnpm dev:who <port>` still says whether a port is taken']
   }
   const servers = inspectServers(listeners, { exec })
-    .filter(server => server.checkout && server.checkout.commonDir === here?.commonDir)
+    .filter(server => ownedHere(server, here))
     .sort((a, b) => a.ports[0] - b.ports[0])
   return servers.length
     ? servers.map(server => formatServer(server, here))

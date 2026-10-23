@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -10,6 +11,7 @@ import {
   bridgeScript,
   canBind,
   formatServer,
+  forwardStopSignals,
   inspectServers,
   listListeners,
   loopbackFree,
@@ -29,7 +31,7 @@ const ROOT = realpathSync(dirname(dirname(fileURLToPath(import.meta.url))))
 const hasLsof = spawnSync('lsof', ['-v']).error === undefined
 
 // Each case below spawns a listener process and runs lsof/ps/git against it:
-// 0.3–2.3s on a quiet machine, up to 4s at a load average of 700.
+// ~40–150ms on a quiet machine, up to 4s at a load average of 700.
 const SPAWNING_TEST_TIMEOUT = 30_000
 
 const children = new Set<ChildProcess>()
@@ -56,6 +58,7 @@ const holdPort = (host: string, cwd = ROOT) => new Promise<{ pid: number, port: 
   `], { cwd, stdio: ['ignore', 'pipe', 'inherit'] })
   children.add(child)
   child.once('error', reject)
+  child.once('exit', code => reject(new Error(`listener on ${host} exited (${code}) before listening`)))
   child.stdout!.once('data', data => resolve({ pid: child.pid!, port: Number(String(data).trim()) }))
 })
 
@@ -83,6 +86,7 @@ describe('requestedPort / viteArgsWithout', () => {
 
   it('drops every negation of --strictPort, which would override the one the launcher adds', () => {
     expect(viteArgsWithout(['--no-strictPort', '--strictPort=false', '--strictPort=true', '--host'])).toEqual(['--host'])
+    expect(viteArgsWithout(['--no-strict-port', '--strict-port=false', '--strict-port'])).toEqual([])
   })
 })
 
@@ -145,7 +149,7 @@ describe('output parsers', () => {
 })
 
 describe('port probes', () => {
-  it('sees an IPv6-only holder, which is how vite binds localhost', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
+  it('sees an IPv6-only holder, as vite binds localhost when it resolves to ::1', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
     const { port } = await holdPort('::1')
     expect(await loopbackFree(port)).toBe(false)
   })
@@ -211,6 +215,16 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
     expect(await whoHolds([port])).toEqual([expect.stringContaining(`in ${dir} (not a checkout)`)])
   })
 
+  it('keeps the live holders when another pid it asked about has exited', async () => {
+    // lsof exits 1 when any pid in its list is gone, and still lists the live ones.
+    const done = spawn(process.execPath, ['-e', ''])
+    const deadPid = done.pid!
+    await new Promise(resolve => done.once('exit', resolve))
+    const { pid, port } = await holdPort('::1')
+    const servers = inspectServers(new Map([[port, new Set([pid, deadPid])]]))
+    expect(servers.find(server => server.pid === pid)?.checkout?.toplevel).toBe(ROOT)
+  })
+
   it('reports a port with no listener as free', async () => {
     const port = await freePort()
     expect(await whoHolds([port])).toEqual([`port ${port}: free`])
@@ -221,7 +235,7 @@ describe('whoHolds without lsof', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   it('still calls a held port taken, by the launcher\'s own bind probe', async () => {
     const { port } = await holdPort('::1')
     expect(await whoHolds([port], { exec: () => null })).toEqual([
-      `port ${port}: held by a process lsof cannot name (another user's, or lsof is missing)`,
+      `port ${port}: held by a process lsof cannot name (another user's, one starting or stopping right now, or lsof is missing)`,
     ])
   })
 
@@ -239,15 +253,18 @@ it('lists only servers in a checkout of this repository when given no port', asy
     '/repo/wt-b': '/repo/wt-b\n/repo/.git\nclaude/b\n',
     '/elsewhere': '/elsewhere\n/elsewhere/.git\nmain\n',
   })[dir] ?? null
+  const ps = (pid: number, command: string) => `${pid} Thu Oct 22 16:58:29 2026 ${command}\n`
   const exec = (command: string, args: string[]) => {
     if (command === 'git') return git(args[1])
-    if (command === 'ps') return '1 Thu Oct 22 16:58:29 2026 node vite.js\n2 Thu Oct 22 16:58:29 2026 node vite.js\n'
+    if (command === 'ps') return ps(1, 'node vite.js') + ps(2, 'node vite.js') + ps(3, 'node vite.js') + ps(4, 'python3 -m http.server') + ps(5, 'node vite.js')
     return args.includes('cwd')
-      ? 'p1\nfcwd\nn/repo/wt-b\np2\nfcwd\nn/elsewhere\n'
-      : 'p1\nf3\nn[::1]:5173\np2\nf3\nn[::1]:5174\n'
+      ? 'p1\nfcwd\nn/repo/wt-b\np2\nfcwd\nn/elsewhere\np3\nfcwd\nn/gone/wt-c\np4\nfcwd\nn/gone/other\np5\nfcwd\nn/\n'
+      : 'p1\nf3\nn[::1]:5173\np2\nf3\nn[::1]:5174\np3\nf3\nn[::1]:5175\np4\nf3\nn[::1]:5176\np5\nf3\nn[::1]:5177\n'
   }
   expect(await whoHolds([], { exec })).toEqual([
     expect.stringMatching(/^port 5173: vite dev server \(pid 1, up .*\) in \/repo\/wt-b on claude\/b \(NOT this worktree\)$/),
+    // A deleted worktree's server: the stale case this listing exists to show.
+    expect.stringMatching(/^port 5175: vite dev server \(pid 3, up .*\) in a directory that no longer exists$/),
   ])
 })
 
@@ -352,6 +369,21 @@ describe('bridge build', () => {
   })
 })
 
+describe('forwardStopSignals', () => {
+  it('passes a stop signal to vite, then stops listening once vite exits', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
+    // A stand-in for `process`, so the test never signals the vitest worker itself.
+    const source = new EventEmitter()
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    children.add(child)
+    await new Promise(resolve => child.once('spawn', resolve))
+    forwardStopSignals(child, source)
+    const exited = new Promise(resolve => child.once('exit', (_code, signal) => resolve(signal)))
+    source.emit('SIGTERM', 'SIGTERM')
+    expect(await exited).toBe('SIGTERM')
+    expect(source.listenerCount('SIGTERM')).toBe(0)
+  })
+})
+
 describe('startDevServer', () => {
   const launch = async (options: { mode?: 'dev' | 'preview', args?: string[], env?: Record<string, string>, busy?: number[] }) => {
     const log: string[] = []
@@ -380,7 +412,7 @@ describe('startDevServer', () => {
     expect(code).toBe(1)
     expect(spawnVite).not.toHaveBeenCalled()
     expect(log).toEqual([
-      '[dev-server] port 5174: held by a process lsof cannot name (another user\'s, or lsof is missing)',
+      '[dev-server] port 5174: held by a process lsof cannot name (another user\'s, one starting or stopping right now, or lsof is missing)',
       expect.stringContaining('port 5174 (from PORT) is taken; not starting.'),
     ])
   })
@@ -430,7 +462,7 @@ describe('startDevServer', () => {
         return 1
       },
     })
-    expect(log.at(-1)).toBe('[dev-server] port 5174: held by a process lsof cannot name (another user\'s, or lsof is missing)')
+    expect(log.at(-1)).toBe('[dev-server] port 5174: held by a process lsof cannot name (another user\'s, one starting or stopping right now, or lsof is missing)')
   })
 
   it('runs vite preview from its own default port', async () => {

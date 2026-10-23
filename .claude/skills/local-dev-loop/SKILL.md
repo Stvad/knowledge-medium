@@ -6,9 +6,9 @@ description: Run the app from the working tree (`pnpm dev`) and drive that tab w
 # Local dev loop for core (`src/`) changes
 
 Nothing here is new machinery: it's `pnpm dev` plus the existing agent-bridge
-pairing, pointed at `http://localhost:<port>` instead of the hosted deploy. The payoff is that every bridge verb — `eval`, `reload`,
-`install-extension`, `run-action`, `sql` — targets a tab running YOUR working
-tree.
+pairing, pointed at `http://localhost:<port>` instead of the hosted deploy. The
+payoff is that every bridge verb — `eval`, `reload`, `install-extension`,
+`run-action`, `sql` — targets a tab running YOUR working tree.
 
 ## Safety: which account the dev tab is signed into
 
@@ -47,12 +47,16 @@ use only that one.
   from 5173, prints `http://localhost:<port>/` with your worktree and branch,
   and names the worktree behind each busy port it skipped. `pnpm dev --port
   <port>` asks for one port exactly and refuses, naming the holder, if it is
-  taken. Run it in the background and keep the log in your scratchpad:
-  `nohup pnpm dev > <scratchpad>/vite.log 2>&1 &`.
+  taken; a `PORT` set in the environment counts the same. Run it in the
+  background and keep the log in your scratchpad:
+  `nohup pnpm dev > <scratchpad>/vite.log 2>&1 &`. In the Codex sandbox a bind
+  needs elevated permissions, as the bridge tests do; without them every port
+  reads as taken.
 - **Before you use a port you did not just start**, ask who holds it:
   `pnpm dev:who <port>`. With no port, `pnpm dev:who` lists every server any
-  checkout of this repository runs: port, kind, pid, age, worktree, branch.
-  Stop only your own (`kill <pid>`).
+  checkout of this repository runs, including one whose worktree has since
+  been deleted: port, kind, pid, age, worktree, branch. Stop only your own
+  (`kill <pid>`).
 - **Never edit `.claude/launch.json` to get a port.** Every entry
   (`dev`, `dev-preview`, `prod-preview`, `agent-server`) has `"autoPort": true`
   and follows `PORT`; a port collision there is a bug to fix in the entry, not
@@ -64,8 +68,9 @@ session ends up reading another branch's app at the port it assumed.
 
 Two things care which port you get. The local Supabase stack's auth redirects
 (`supabase/config.toml`) and the Maps API key's allowed referrers
-(`docs/domain-onboarding.md`) name 5173, so a sandbox sign-in or a map that works
-on 5173 can fail on 5174. Local-only mode needs no particular port.
+(`docs/domain-onboarding.md`) name 5173, so a sign-in against the local stack or
+a map that works on 5173 can fail on 5174. Local-only mode needs no particular
+port.
 
 **A port is an origin.** Each port has its own localStorage, local database,
 agent tokens and extension approvals. A server that moved to another port starts
@@ -101,9 +106,9 @@ pnpm agent eval --profile localdev-<port> 'return {ws: repo.activeWorkspaceId, o
 
 Notes:
 
-- One bridge (`127.0.0.1:8787`) serves every profile; it keys clients by
-  token, so `default` / a sandbox profile / `localdev-<port>` coexist.
-  **Always pass `--profile` explicitly.**
+- The shared bridge (`127.0.0.1:8787`) serves every profile paired without
+  `AGENT_RUNTIME_PORT`; it keys clients by token, so `default` / a sandbox
+  profile / `localdev-<port>` coexist. **Always pass `--profile` explicitly.**
 - A profile you paired earlier reaches whatever now serves its port. Check
   `pnpm dev:who <port>` before trusting it.
 - `AGENT_RUNTIME_APP_URL` matters only to `connect` / `pair-url` — it decides
@@ -111,30 +116,39 @@ Notes:
 - No `AGENT_RUNTIME_ALLOWED_ORIGINS` needed: the bridge always accepts
   loopback origins (`packages/agent-cli/src/server.ts:loopbackOriginPattern`).
 - Re-pair only if your server's port changes, you wipe that origin's storage,
-  or you switch accounts.
+  you switch accounts, or the origin was last paired to a private bridge (see
+  "Your own bridge").
 - The bridge secret rides inside the pairing URL — don't paste that URL
   anywhere but your own browser.
 
 **The shared bridge.** Keep it shared: the user's live client and every
 profile are paired to `127.0.0.1:8787`, so a bridge per worktree would mean
-re-pairing all of them. Whichever checkout's `pnpm agent` found it down started
-it, and it keeps running the build it loaded until it is killed.
-`pnpm dev:who 8787` shows that checkout, its age, and whether its `server.js`
-is gone, was rebuilt after it started, or differs from your build. A different
+re-pairing all of them. Whichever checkout's `pnpm agent` (or the agent-dispatch
+daemon) found it down started it, and it keeps running the build it loaded until
+it is killed.
+`pnpm dev:who 8787` shows that checkout, its age, and whether its code
+(`server.js` and the modules it imports) is gone, was rebuilt after it started,
+or differs from your build. A different
 build matters when the bridge's own code changed in between: it enforces
 read-only token scope from `protocol.ts`, so a bridge older than a new read-only
-verb refuses that verb to a read-scoped token. Restarting it (`kill <pid>`; the
-next `pnpm agent` command starts your checkout's build) drops every session's
-in-flight commands, and app tabs take up to ~30s to reconnect, so do it only
-when its checkout is gone or you need the newer build. To test a change to the
-bridge itself, run your own instead.
+verb refuses that verb to a read-scoped token. Restarting it (`kill <pid>`)
+drops every session's in-flight commands. The next `pnpm agent` from any
+checkout, or the daemon, starts that checkout's build, so run one of yours right
+after the kill. App tabs re-register at their next retry: within ~16s if the
+bridge is back within half a minute, otherwise up to a minute, and at once when
+the tab is focused. Do it only when its checkout is gone or you need the newer
+build. To test a change to the bridge itself, run your own instead.
 
 **Your own bridge**, for a branch that changes `packages/agent-cli/src/server.ts`
-or `protocol.ts`: `preview_start` with `agent-server` (first free port from
-8788), or `AGENT_RUNTIME_PORT=8788 pnpm agent:server`. Build it first
-(`pnpm run compile:packages`). Pass `AGENT_RUNTIME_PORT=<its port>` to every
-`pnpm agent` call, including the `connect` that pairs your dev tab: the tab
-then talks to your bridge instead of the shared one.
+or `protocol.ts`. Build it (`pnpm run compile:packages`), then start it:
+`preview_start` with `agent-server` (first free port from 8788), or
+`AGENT_RUNTIME_PORT=<port> pnpm agent:server` on a port `pnpm dev:who <port>`
+calls free. Confirm `pnpm dev:who <port>` names it as this worktree's agent
+bridge. Pass `AGENT_RUNTIME_PORT=<its port>` to every `pnpm agent` call,
+including the `connect` that pairs your dev tab: the tab saves that bridge's URL
+for its origin and talks only to it from then on. When you are done, re-run
+`connect` without `AGENT_RUNTIME_PORT`, so the next worktree served on that port
+finds the origin paired to the shared bridge again.
 
 **The loop** is then: edit → `pnpm agent reload --profile localdev-<port>` →
 assert headlessly with `pnpm agent eval --profile localdev-<port> '…'`. React Fast Refresh
@@ -143,7 +157,8 @@ always propagates. Changes under `vite-plugins/` or to `vite.config.ts` need a
 dev-server **restart** (Vite does not auto-restart for them), and a restart
 drops the page's HMR socket — reload the tab afterwards. A restart can come back
 on another port when another worktree took yours in between; the app's result or
-`pnpm dev`'s first line says which, and a new port means a new origin to pair.
+the `[dev-server] dev for … http://localhost:<port>/` line says which, and a new
+port means a new origin to pair.
 
 ## Kernel/extension module identity split after a hot update
 
@@ -237,8 +252,9 @@ React Compiler is *not* on this list: `vite.config.ts` applies
 
 The dev server can't tell you anything about those. Build and preview instead
 — `pnpm preview` serves `dist/`, so the SW registers and precaching runs. It
-takes the first free port from 4173, like `pnpm dev` does from 5173; in the
-desktop app the `prod-preview` entry builds and previews in one step.
+takes the first free port from 4173, like `pnpm dev` does from 5173. In the
+desktop app the `prod-preview` entry builds and previews in one step, at base
+`/`; for the Pages base path, use the commands below.
 
 ```bash
 APP_BASE_PATH=/knowledge-medium/ pnpm build

@@ -62,4 +62,5 @@ export declare const startDevServer: (options: {
   log?: (line: string) => void
   spawnVite: (viteArgs: string[]) => Promise<number>
 }) => Promise<number>
+export declare const forwardStopSignals: (child: import('node:child_process').ChildProcess, source?: NodeJS.EventEmitter) => void
 export declare const whoHolds: (ports: readonly number[], options?: { exec?: Exec }) => Promise<string[]>
