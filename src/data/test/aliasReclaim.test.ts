@@ -290,6 +290,28 @@ describe('a revival yields in a workspace whose properties are child blocks', ()
     expect(await aliasChildren(PAGE)).toEqual(['My Page', 'Peer'])
   })
 
+  it('restores a page without touching a member a peer wrote while it was dead', async () => {
+    await pageWithChildren()
+    await repo.mutate.delete({id: PAGE})
+    // A peer that missed the delete still holds the field row and its values
+    // live, and adds a member. Sync-apply lands it under the tombstoned page;
+    // the page's own cell knows nothing of it.
+    const resolution = repo.propertySchemaResolverFor(WS).resolve(aliasesProp.name)
+    if (resolution.status !== 'resolved') throw new Error('alias property does not resolve')
+    const field = await sharedDb.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ?',
+      [PAGE, resolution.schema.fieldId],
+    )
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ? OR parent_id = ?', [field.id, field.id])
+    await insertRaw({id: 'peer-member', content: 'Peer', parentId: field.id, orderKey: 'z'})
+    await createPage('q', 'Q', ['Q', 'Inbox'], 'a1')
+
+    await repo.mutate.restore({id: PAGE})
+
+    expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: ['My Page', 'Peer']})
+    expect(await aliasChildren(PAGE)).toEqual(['My Page', 'Peer'])
+  })
+
   it('restores a malformed bag with a taken name in it', async () => {
     await insertRaw({id: PAGE, content: 'My Page', properties: {[aliasesProp.name]: ['Inbox', 7, 'Mine']}, deleted: true})
     await createPage('q', 'Q', ['Inbox'], 'a1')
