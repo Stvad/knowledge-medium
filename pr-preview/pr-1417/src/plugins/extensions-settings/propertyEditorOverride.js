@@ -1,1 +1,1 @@
-import{Xn as e}from"../../../chunks/app-HVIBenC3.js";export{e as extensionsOverridesUi};
+import{Xn as e}from"../../../chunks/app-DO9tahRL.js";export{e as extensionsOverridesUi};
