@@ -476,6 +476,14 @@ describe('unaccounted', () => {
     expect(unaccounted(summary, named)).toBeNull()
   })
 
+  it('reads a summary in colour, as vitest prints it on CI', () => {
+    const coloured = [
+      '\x1b[41m\x1b[1m FAIL \x1b[22m\x1b[49m scripts/check.test.ts\x1b[2m > \x1b[22ma test',
+      '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m832 passed\x1b[39m\x1b[22m\x1b[90m (833)\x1b[39m',
+    ].join('\n')
+    expect(unaccounted(coloured, ['scripts/check.test.ts'])).toBeNull()
+  })
+
   it('refuses a run that never printed its summary', () => {
     expect(unaccounted(summary.slice(0, summary.indexOf(' Test Files')), named)).toBe('the test run did not finish')
   })
