@@ -35,19 +35,22 @@ import { existsSync, readFileSync } from 'node:fs'
 //      FAIL  src/data/test/twoRepoConvergence.fuzz.test.ts > suite > test
 // Pull the file path out of either. CI output isn't a TTY so vitest
 // disables color, but strip ANSI defensively in case that ever changes.
+// A test file as vitest.config.ts includes it: `*.test.*` and `*.spec.*`.
+const TEST_FILE = String.raw`\S+\.(?:test|spec)\.\w+`
+const TREE_ROW = new RegExp(String.raw`^\s*([✓✗×❯↓])\s+(${TEST_FILE})\s+\(\d+\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)`)
+const FAIL_ROW = new RegExp(String.raw`^\s*FAIL\s+(${TEST_FILE})`)
+
 export function extractFailingFiles(log) {
   const clean = log.replace(/\x1B\[[0-9;]*m/g, '')
   const files = new Set()
   for (const line of clean.split('\n')) {
-    const treeRow = line.match(
-      /^\s*([✓✗×❯↓])\s+(\S+\.test\.\w+)\s+\(\d+\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)/,
-    )
+    const treeRow = line.match(TREE_ROW)
     if (treeRow) {
       const [, marker, file, failedCount] = treeRow
       if (marker !== '✓' || Number(failedCount ?? 0) > 0) files.add(file)
       continue
     }
-    const failRow = line.match(/^\s*FAIL\s+(\S+\.test\.\w+)/)
+    const failRow = line.match(FAIL_ROW)
     if (failRow) files.add(failRow[1])
   }
   return [...files]
