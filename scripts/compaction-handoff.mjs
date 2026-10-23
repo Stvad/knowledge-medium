@@ -5,7 +5,7 @@
 // is renamed to `handoff.consumed.md`, so a later compaction the agent did not
 // prepare for cannot replay stale next steps.
 //
-// Contract: never break session start. Any failure prints nothing and exits 0.
+// Contract: never break session start. Any failure prints nothing on stdout and exits 0.
 import { readFileSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { emitContext, fitLines } from './hook-context.mjs'
