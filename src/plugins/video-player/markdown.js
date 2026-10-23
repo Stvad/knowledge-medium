@@ -1,1 +1,1 @@
-import{vv as e}from"../../../chunks/app-BCHCk6AY.js";export{e as videoPlayerMarkdownExtension};
+import{vv as e}from"../../../chunks/app-C9Cqgk9y.js";export{e as videoPlayerMarkdownExtension};
