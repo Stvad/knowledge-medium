@@ -190,7 +190,14 @@ describe('shellCommandsWithDepth', () => {
     // a line a shell reads is read as the commands it would be; text nothing runs is split into words
     expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
     expect(shellCommandsWithDepth("cat <<'EOF'\nx;gh `api` y\nEOF").map(s => s.tokens)).toEqual([['cat'], ['x;gh', '`api`', 'y']])
-    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
+    // unquoted data's substitutions first come back alone, as the supplying shell runs them
+    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
+    expect(shellCommandsWithDepth('bash <<EOF\n$(x)\nEOF')).toEqual([
+      { tokens: ['bash'], depth: 0 },
+      { tokens: ['x'], depth: 1, heredoc: true, fresh: 1 },
+      { tokens: ['x'], depth: 1, heredoc: true, fresh: 1, reread: true },
+      { tokens: [SUBSTITUTED], depth: 0, heredoc: true },
+    ])
     // data read whole and a line at a time differs here, so both come back:
     // whole first, where a subshell spans its lines
     expect(shellCommandsWithDepth("bash <<'EOF'\n(\ncd x\n)\nls\nEOF")).toEqual([

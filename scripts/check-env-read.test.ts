@@ -272,6 +272,16 @@ describe('secretRead', () => {
       expect(secretRead(`bash <<'EOF'\nls\nEOF\ncd ${withSecret} && grep -rn FOO .`, templateOnly)).not.toBeNull()
     })
 
+    it("runs an unquoted heredoc's substitutions where it began, before its reader runs any of it", () => {
+      expect(secretRead('cat <<EOF\ncd src\n$(grep -rn FOO .)\nEOF', withSecret)).not.toBeNull()
+      expect(secretRead('bash <<EOF\ncd src\n`grep -rn FOO .`\nEOF', withSecret)).not.toBeNull()
+      expect(secretRead('bash <<EOF\n(cd src; echo $(grep -rn FOO .))\nEOF', withSecret)).not.toBeNull()
+      // quoted data is expanded by its reader, after the reader's own cd
+      expect(secretRead("bash <<'EOF'\ncd src\n$(grep -rn FOO .)\nEOF", withSecret)).toBeNull()
+      // heredoc data has no process substitution: its reader runs that one
+      expect(secretRead('bash <<EOF\ncd src\ncat <(grep -rn FOO .)\nEOF', withSecret)).toBeNull()
+    })
+
     it('starts a sibling subshell or substitution from its parent directory', () => {
       expect(secretRead('(cd src); (grep -rn FOO .)', withSecret)).not.toBeNull()
       expect(secretRead('echo $(cd src) $(grep -rn FOO .)', withSecret)).not.toBeNull()
