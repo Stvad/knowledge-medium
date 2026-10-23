@@ -1,0 +1,1 @@
+import{_v as e}from"../../../chunks/app-DMBjolbs.js";export{e as videoPlayerPlugin};

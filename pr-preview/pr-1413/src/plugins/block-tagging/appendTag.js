@@ -1,0 +1,1 @@
+import{nl as e,rl as t}from"../../../chunks/app-DMBjolbs.js";export{e as appendTagToBlocks,t as appendTagToContent};

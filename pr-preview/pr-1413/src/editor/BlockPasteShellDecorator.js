@@ -1,0 +1,1 @@
+import{HO as e,UO as t}from"../../chunks/app-DMBjolbs.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

@@ -1,0 +1,1 @@
+import{_U as e}from"../../../chunks/app-DMBjolbs.js";export{e as dailyNotesDataExtension};

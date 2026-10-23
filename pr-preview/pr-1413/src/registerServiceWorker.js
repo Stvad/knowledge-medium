@@ -1,0 +1,1 @@
+import{Ck as e,wk as t}from"../chunks/app-DMBjolbs.js";export{e as checkForAppUpdate,t as registerServiceWorker};
