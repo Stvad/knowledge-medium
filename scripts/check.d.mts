@@ -18,5 +18,5 @@ export declare const acquireSlot: (options: {
   signal?: AbortSignal
   log?: (line: string) => void
 }) => Promise<Slot | null>
-export declare const clearStaleSlot: (path: string, scratch: string) => void
+export declare const placeOrder: (a: { number: number; id: string }, b: { number: number; id: string }) => number
 export declare const loadVerdict: (failed: string[], rerun: { code: number | null; output: string }) => string

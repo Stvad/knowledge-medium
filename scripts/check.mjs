@@ -2,7 +2,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { availableParallelism, loadavg } from 'node:os'
 import { basename, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -45,6 +45,8 @@ const DEFAULT_SLOTS = 2
 // The cap may cost a gate latency, never progress: past this it runs anyway.
 const SLOT_WAIT_MS = 15 * 60_000
 const SLOT_POLL_MS = 2_000
+// Taking a ticket number takes microseconds, so a count held for one is soon retried.
+const CHOOSING_RECHECK_MS = 10
 // Re-running more failing files than this, one at a time, costs about what the
 // suite does.
 const RERUN_MAX_FILES = 25
@@ -176,52 +178,50 @@ const readHolder = path => {
   }
 }
 
-const tryLink = (from, to) => {
-  try {
-    linkSync(from, to)
-    return true
-  } catch (error) {
-    if (error.code === 'EEXIST') return false
-    throw error
-  }
-}
-
-// Moves a stale record aside rather than deleting it: by now the waiter that
-// read the dead holder may be looking at a record a faster waiter put there,
-// and that one goes back.
-export const clearStaleSlot = (path, scratch) => {
-  try {
-    renameSync(path, scratch)
-  } catch (error) {
-    if (error.code === 'ENOENT') return
-    throw error
-  }
-  const moved = readHolder(scratch)
-  if (moved && pidAlive(moved.pid)) tryLink(scratch, path)
-  rmSync(scratch, {force: true})
-}
-
-// A slot is a file naming its holder, published whole by hard-linking a
-// finished record: link refuses an existing name, so two gates cannot both take
-// a free slot and no reader sees a half-written one. Accepted: a waiter linking
-// between another's move and put-back leaves the moved holder running
-// uncounted, one gate over the cap; a dead holder whose pid is reused keeps its
-// slot until the wait runs out.
-const takeSlot = (path, record) => {
-  if (tryLink(record, path)) return {taken: true}
-  const holder = readHolder(path)
-  // Here and not left to clearStaleSlot's put-back: moving a live record aside,
-  // however briefly, opens its slot to another waiter.
-  if (holder && pidAlive(holder.pid)) return {taken: false, holder}
-  clearStaleSlot(path, `${record}.stale`)
-  if (tryLink(record, path)) return {taken: true, reclaimed: holder}
-  return {taken: false, holder: readHolder(path)}
-}
-
 const describeHolder = holder => holder
   ? `${holder.worktree} (${holder.branch}, pid ${holder.pid}, started ${formatDuration(Date.now() - holder.startedAt)} ago)`
   : 'an unreadable holder'
 
+const TICKET = /^(\d+)-([\w-]+)\.ticket$/
+const CHOOSING = /^(\d+)-[\w-]+\.choosing$/
+
+// A place in line: by ticket number, and by id between gates that took their
+// numbers at the same moment.
+export const placeOrder = (a, b) => a.number - b.number || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
+// The live tickets, in line order. A dead gate's ticket is deleted: no ticket
+// name is ever reused, so that can only free its place.
+const liveTickets = (dir, log) => {
+  const tickets = []
+  for (const name of readdirSync(dir)) {
+    const match = TICKET.exec(name)
+    if (!match) continue
+    const path = join(dir, name)
+    const holder = readHolder(path)
+    if (holder && pidAlive(holder.pid)) {
+      tickets.push({number: Number(match[1]), id: match[2], holder})
+    } else {
+      rmSync(path, {force: true})
+      log(`[check] dropped the place of ${describeHolder(holder)}: it is no longer running`)
+    }
+  }
+  return tickets.sort(placeOrder)
+}
+
+// Whether a live gate is still taking its number, and so may yet land ahead.
+const anyChoosing = dir => readdirSync(dir).some(name => {
+  const match = CHOOSING.exec(name)
+  if (!match) return false
+  if (pidAlive(Number(match[1]))) return true
+  rmSync(join(dir, name), {force: true})
+  return false
+})
+
+// Gates line up by numbered ticket (Lamport's bakery): a ticket is one above
+// every ticket in view, taken under a marker that holds the others' count until
+// it is published, and a gate runs once fewer than `slots` live tickets are
+// ahead of it. Accepted: a dead gate whose pid is reused keeps its place until
+// the wait runs out.
 export const acquireSlot = async ({
   dir,
   slots,
@@ -232,53 +232,56 @@ export const acquireSlot = async ({
   log = console.log,
 }) => {
   mkdirSync(dir, {recursive: true})
-  const record = join(dir, `.${randomUUID()}.tmp`)
-  writeFileSync(record, JSON.stringify(holder))
+  const id = randomUUID()
+  const marker = join(dir, `${holder.pid}-${id}.choosing`)
+  writeFileSync(marker, '')
+  let number, ticket
+  try {
+    number = 1 + Math.max(0, ...liveTickets(dir, log).map(other => other.number))
+    ticket = join(dir, `${number}-${id}.ticket`)
+    writeFileSync(`${ticket}.tmp`, JSON.stringify(holder))
+    renameSync(`${ticket}.tmp`, ticket)
+  } finally {
+    // Even on a throw: a live gate's marker would hold every other gate back.
+    rmSync(marker, {force: true})
+  }
+  const release = () => rmSync(ticket, {force: true})
   const startedAt = Date.now()
   let reported = null
   try {
     for (;;) {
-      const holders = []
-      for (let i = 0; i < slots; i++) {
-        const path = join(dir, `slot-${i}`)
-        const result = takeSlot(path, record)
-        if (result.taken) {
-          if (result.reclaimed) log(`[check] reclaimed a gate slot from ${describeHolder(result.reclaimed)}, which is no longer running`)
+      const choosing = anyChoosing(dir)
+      if (!choosing) {
+        const ahead = liveTickets(dir, log).filter(other => placeOrder(other, {number, id}) < 0)
+        if (ahead.length < slots) {
           if (reported !== null) log(`[check] got a gate slot after waiting ${formatDuration(Date.now() - startedAt)}`)
-          return {
-            // Only our own record: in the accepted race above, another gate
-            // may hold this slot now.
-            release: () => {
-              if (readHolder(path)?.pid === holder.pid) rmSync(path, {force: true})
-            },
-          }
+          return {release}
         }
-        holders.push(result.holder)
+        const key = ahead.map(other => other.id).join()
+        if (key !== reported) {
+          log(`[check] waiting behind ${ahead.length} gate(s), at most ${slots} at a time (${SLOTS_ENV} sets the cap), for up to ${formatDuration(maxWaitMs)}:`)
+          for (const other of ahead) log(`[check]   ${describeHolder(other.holder)}`)
+          reported = key
+        }
       }
       if (Date.now() - startedAt >= maxWaitMs) {
         log(`[check] waited ${formatDuration(Date.now() - startedAt)} for a gate slot; running anyway`)
+        release()
         return null
       }
-      const key = holders.map(h => h?.pid).join()
-      if (key !== reported) {
-        log(`[check] all ${slots} gate slot(s) are taken, waiting up to ${formatDuration(maxWaitMs)} (${SLOTS_ENV} sets the cap):`)
-        for (const h of holders) log(`[check]   ${describeHolder(h)}`)
-        reported = key
-      }
-      await sleep(pollMs, undefined, {signal})
+      await sleep(choosing ? Math.min(pollMs, CHOOSING_RECHECK_MS) : pollMs, undefined, {signal})
     }
   } catch (error) {
+    release()
     if (signal?.aborted) return null
     throw error
-  } finally {
-    rmSync(record, {force: true})
   }
 }
 
 const git = args => execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim()
 
 // Never fails the gate: a cap it cannot set up is a cap it runs without. A
-// gate that dies holding a slot frees it by dying (see takeSlot).
+// gate that dies holding a slot frees it by dying (see liveTickets).
 const takeGateSlot = async signal => {
   const configured = Number(process.env[SLOTS_ENV])
   const slots = Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_SLOTS
@@ -330,7 +333,9 @@ const diagnoseTestFailure = async result => {
   }
   const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, '--no-file-parallelism', ...failed]})
   if (rerun.canceled) return
-  console.log(`[check] verdict: ${loadVerdict(failed, {code: rerun.code, output: outputText(rerun)})}`)
+  // Other gates may still be running, so the verdict says what load it ran under.
+  const load = `re-run at load average ${loadavg()[0].toFixed(1)} on ${availableParallelism()} cores`
+  console.log(`[check] verdict: ${loadVerdict(failed, {code: rerun.code, output: outputText(rerun)})} (${load})`)
 }
 
 // Returns the exit code rather than taking it: every failure path here has

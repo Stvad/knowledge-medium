@@ -1,9 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { acquireSlot, clearStaleSlot, loadVerdict, type SlotHolder } from './check.mjs'
+import { acquireSlot, loadVerdict, placeOrder, type SlotHolder } from './check.mjs'
 
 // Far past what a pipe holds before the reader takes it: at 200 lines a gate
 // that exits on its own output still delivers all of them, and the test loses
@@ -24,7 +25,8 @@ afterAll(() => temps.forEach((dir) => rmSync(dir, { recursive: true, force: true
 const holder = (pid = process.pid, worktree = 'this-wt', branch = 'this-branch'): SlotHolder =>
   ({ pid, worktree, branch, startedAt: Date.now() })
 const quiet = () => {}
-const slotFile = (dir: string, i = 0) => join(dir, `slot-${i}`)
+const writeTicket = (dir: string, number: number, record: SlotHolder) =>
+  writeFileSync(join(dir, `${number}-${randomUUID()}.ticket`), JSON.stringify(record))
 const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid
 
 const bin = tempDir('check-gate-')
@@ -146,9 +148,9 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     const gates = await Promise.all([runGate(env), runGate(env)])
 
     expect(gates.map((g) => [g.status, lastLine(g.out)])).toEqual([[0, 'check: PASS'], [0, 'check: PASS']])
-    expect(gates.filter((g) => g.out.includes('gate slot(s) are taken')).length).toBe(1)
+    expect(gates.filter((g) => g.out.includes('waiting behind')).length).toBe(1)
     // Handed over by release, not by the waiter reclaiming a dead holder's slot.
-    expect(gates.some((g) => g.out.includes('reclaimed'))).toBe(false)
+    expect(gates.some((g) => g.out.includes('no longer running'))).toBe(false)
     // Interleaved (start, start, end, end) when both ran their tests at once.
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['start', 'end', 'start', 'end'])
   }, 30_000)
@@ -157,6 +159,7 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     const { status, out } = await runGate({ SHIM_MODE: 'mixed' })
     expect(status).not.toBe(0)
     expect(out).toContain('fails alone too: scripts/real.test.ts; passed alone: scripts/slow.test.ts')
+    expect(out).toMatch(/verdict: .*\(re-run at load average [\d.]+ on \d+ cores\)/)
     expect(lastLine(out)).toBe('check: FAIL (test)')
   }, 30_000)
 
@@ -168,9 +171,9 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
 
   it.each(['-1', '0.5', '1.5', '1oops'])('takes the nonsense slot count %s as the default', async (slots) => {
     const dir = tempDir('check-slots-')
-    writeFileSync(slotFile(dir), JSON.stringify(holder()))
+    writeTicket(dir, 1, holder())
     const { status, out } = await runGate({ KM_CHECK_SLOTS: slots, KM_CHECK_SLOT_DIR: dir })
-    expect(out).not.toContain('are taken')
+    expect(out).not.toContain('waiting behind')
     expect([status, lastLine(out)]).toEqual([0, 'check: PASS'])
   }, 30_000)
 
@@ -200,10 +203,10 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
 
   it('stops waiting for a slot once interrupted', async () => {
     const dir = tempDir('check-slots-')
-    writeFileSync(join(dir, 'slot-0'), JSON.stringify(holder()))
+    writeTicket(dir, 1, holder())
     const { status, out } = await runGate(
       { KM_CHECK_SLOTS: '1', KM_CHECK_SLOT_DIR: dir },
-      { onSpawn: interruptOn('stdout', 'gate slot(s) are taken') },
+      { onSpawn: interruptOn('stdout', 'waiting behind') },
     )
     expect(out).not.toContain('in parallel')
     expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
@@ -221,15 +224,17 @@ describe('acquireSlot', () => {
   beforeEach(() => {
     dir = tempDir('check-slots-')
   })
+  const tickets = () => readdirSync(dir).filter((name) => name.endsWith('.ticket')).sort()
+  const ticketPids = () => tickets().map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')).pid)
 
-  it('takes a free slot, and release frees it', async () => {
+  it('takes a ticket, and release gives it up', async () => {
     const slot = await acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })
-    expect(readdirSync(dir)).toEqual(['slot-0'])
+    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^1-[\w-]+\.ticket$/)])
     slot!.release()
     expect(readdirSync(dir)).toEqual([])
   })
 
-  it('waits while every slot is held, naming the holders, and proceeds when one frees', async () => {
+  it('waits while the slots are taken, naming the gates ahead, and proceeds when one leaves', async () => {
     const first = await acquireSlot({ dir, slots: 1, holder: holder(process.pid, 'other-wt', 'claude/other'), log: quiet })
     const lines: string[] = []
     let settled = false
@@ -249,52 +254,68 @@ describe('acquireSlot', () => {
     expect(await acquireSlot({ dir, slots: 2, holder: holder(), maxWaitMs: 50, pollMs: 10, log: (l) => lines.push(l) }))
       .toBeNull()
     expect(lines.at(-1)).toMatch(/running anyway/)
+    expect(tickets()).toHaveLength(2)
   })
 
-  it('reclaims a slot whose holder is no longer running', async () => {
-    writeFileSync(slotFile(dir), JSON.stringify(holder(deadPid())))
-    const slot = await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })
-    expect(slot).not.toBeNull()
-    expect(JSON.parse(readFileSync(slotFile(dir), 'utf8')).pid).toBe(process.pid)
+  it('takes a number above every ticket in view', async () => {
+    writeTicket(dir, 7, holder())
+    await acquireSlot({ dir, slots: 2, holder: holder(), log: quiet })
+    expect(tickets()).toEqual([expect.stringMatching(/^7-/), expect.stringMatching(/^8-/)])
   })
 
-  it('reclaims a slot whose record is unreadable', async () => {
-    writeFileSync(slotFile(dir), 'not json')
+  it('serves waiting gates in the order they arrived', async () => {
+    const first = await acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })
+    const admitted: string[] = []
+    const lateLines: string[] = []
+    const early = acquireSlot({ dir, slots: 1, holder: holder(), pollMs: 10, log: quiet })
+      .then((slot) => { admitted.push('early'); return slot })
+    const late = acquireSlot({ dir, slots: 1, holder: holder(), pollMs: 10, log: (l) => lateLines.push(l) })
+      .then((slot) => { admitted.push('late'); return slot })
+
+    first!.release()
+    // `late` has looked again since `first` left, and stayed behind `early`.
+    await vi.waitFor(() => expect(lateLines).toContainEqual(expect.stringContaining('waiting behind 1 gate(s)')))
+    expect(admitted).toEqual(['early'])
+    ;(await early)!.release()
+    expect(await late).not.toBeNull()
+  })
+
+  it('drops the ticket of a gate that is no longer running', async () => {
+    writeTicket(dir, 1, holder(deadPid()))
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
+    expect(ticketPids()).toEqual([process.pid])
+  })
+
+  it('skips a ticket whose record is unreadable', async () => {
+    writeFileSync(join(dir, `1-${randomUUID()}.ticket`), 'not json')
     expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
   })
 
-  it('release leaves a slot that another gate has since taken', async () => {
-    const slot = await acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })
-    writeFileSync(slotFile(dir), JSON.stringify(holder(process.ppid)))
-    slot!.release()
-    expect(existsSync(slotFile(dir))).toBe(true)
+  it('holds its count while another gate is still taking a number', async () => {
+    writeFileSync(join(dir, `${process.pid}-${randomUUID()}.choosing`), '')
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 50, pollMs: 10, log: quiet })).toBeNull()
   })
 
-  it('leaves a live holder\'s record untouched while it waits', async () => {
-    writeFileSync(slotFile(dir), JSON.stringify(holder()))
-    const before = statSync(slotFile(dir), { bigint: true }).ctimeNs
-    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).toBeNull()
-    // A rename or link would have touched it.
-    expect(statSync(slotFile(dir), { bigint: true }).ctimeNs).toBe(before)
+  it('ignores the number-taking marker of a gate that is no longer running', async () => {
+    writeFileSync(join(dir, `${deadPid()}-${randomUUID()}.choosing`), '')
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
+    expect(readdirSync(dir).filter((name) => name.endsWith('.choosing'))).toEqual([])
   })
 
-  it('puts back a live holder that a waiter moved aside as stale', () => {
-    writeFileSync(slotFile(dir), JSON.stringify(holder()))
-    clearStaleSlot(slotFile(dir), join(dir, 'scratch'))
-    expect(readdirSync(dir)).toEqual(['slot-0'])
-    expect(JSON.parse(readFileSync(slotFile(dir), 'utf8')).pid).toBe(process.pid)
-  })
-
-  it('leaves a slot another waiter already cleared', () => {
-    expect(() => clearStaleSlot(slotFile(dir), join(dir, 'scratch'))).not.toThrow()
-  })
-
-  it('stops waiting when the gate is interrupted', async () => {
+  it('stops waiting when the gate is interrupted, and gives up its ticket', async () => {
     await acquireSlot({ dir, slots: 1, holder: holder(), log: quiet })
     const abort = new AbortController()
     const waiting = acquireSlot({ dir, slots: 1, holder: holder(), pollMs: 60_000, signal: abort.signal, log: quiet })
     abort.abort()
     expect(await waiting).toBeNull()
+    expect(tickets()).toHaveLength(1)
+  })
+})
+
+describe('placeOrder', () => {
+  it('orders by number, then by id between gates that drew the same number', () => {
+    const places = [{ number: 2, id: 'a' }, { number: 1, id: 'b' }, { number: 1, id: 'a' }]
+    expect(places.sort(placeOrder)).toEqual([{ number: 1, id: 'a' }, { number: 1, id: 'b' }, { number: 2, id: 'a' }])
   })
 })
 
