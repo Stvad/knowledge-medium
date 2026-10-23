@@ -1,1 +1,1 @@
-import{aB as e}from"../../chunks/app-CoAnidk0.js";export{e as staticDataExtensions};
+import{aB as e}from"../../chunks/app-c-F_f-Qr.js";export{e as staticDataExtensions};

@@ -1,1 +1,1 @@
-import{UD as e}from"../../../chunks/app-CoAnidk0.js";export{e as BlockEmbed};
+import{UD as e}from"../../../chunks/app-c-F_f-Qr.js";export{e as BlockEmbed};

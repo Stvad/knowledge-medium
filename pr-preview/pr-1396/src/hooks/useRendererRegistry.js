@@ -1,1 +1,1 @@
-import{FA as e,IA as t,PA as n}from"../../chunks/app-CoAnidk0.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{FA as e,IA as t,PA as n}from"../../chunks/app-c-F_f-Qr.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
