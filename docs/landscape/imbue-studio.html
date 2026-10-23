@@ -571,9 +571,10 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
     </div>
 
     <div class="opt">
-      <h4>3 · "Change this with an agent" on any block <span class="cost">cost: low · fit: high</span></h4>
+      <h4>3 · "Change this with an agent" on any block <span class="cost">cost: low after eject · fit: high</span></h4>
       <p>Imbue's right-click-to-change, applied to blocks. The block's context menu gets an action that starts a run with the block's id, its types, the renderer drawing it, and the extension that renderer came from. Today you'd write a <code>[[claude]]</code> mention and explain all that context by hand.</p>
-      <p class="example"><b>Example.</b> On a todo block: "show the due date in red when it's overdue". The run knows which renderer to change and where its source block is.</p>
+      <p>Today that only works where a user extension draws the block, because the run can edit that extension's block. Most blocks are drawn by built-in plugins, and an extension can add to a built-in but can't replace it. Content decorators stack, so a new extension can wrap the todo plugin's checkbox but can't swap it out. Changing a built-in in place means ejecting it into an extension block that replaces the original first. That's stage 1 of the plugin materialization design (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>, for the question in <a href="https://github.com/Stvad/knowledge-medium/issues/481">#481</a>).</p>
+      <p class="example"><b>Example.</b> On a todo block: "show the due date in red when it's overdue". With eject in place, the run ejects the todo plugin as a thin wrapper, changes the decorator, and the original stops running on devices that approve the fork.</p>
     </div>
 
     <div class="opt">
@@ -609,8 +610,9 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   <div class="bottom-line">
     <h3 style="margin:0">Suggested order, merged with the Cloudflare OS list</h3>
     <ol>
-      <li><b>"Change this with an agent"</b> and <b>self-describing extensions.</b> Cheap, and both make every later agent run better informed.</li>
+      <li><b>Self-describing extensions.</b> Cheap, and it makes every later agent run better informed.</li>
       <li><b>Upstream tracking</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>) together with <b>Fix with agent</b>, since both end in the same merge proposal.</li>
+      <li><b>Eject built-in plugins</b> (<a href="https://github.com/Stvad/knowledge-medium/pull/289">#289</a>), then <b>"change this with an agent"</b> on any block. An ejected plugin is an extension whose upstream is the app bundle, so its "upstream changed since your fork" check is the same mechanism as <a href="https://github.com/Stvad/knowledge-medium/issues/1427">#1427</a>. Design the two together.</li>
       <li><b>Crystallize a run into an extension.</b> Once the proposal flow exists, a crystallized draft is one more kind of proposal.</li>
       <li><b>Staged outward actions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1426">#1426</a>), as soon as runs post or send anything.</li>
       <li><b>Capability-scoped extensions</b> (<a href="https://github.com/Stvad/knowledge-medium/issues/1425">#1425</a>), then <b>kits</b>, when extensions start moving between people.</li>
