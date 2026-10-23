@@ -1,1 +1,0 @@
-import{HO as e,UO as t}from"../../chunks/app-Br4GiDTh.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

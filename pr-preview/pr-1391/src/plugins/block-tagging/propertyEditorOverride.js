@@ -1,1 +1,0 @@
-import{al as e}from"../../../chunks/app-Br4GiDTh.js";export{e as blockTagsConfigUi};
