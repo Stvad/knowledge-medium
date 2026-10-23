@@ -1,0 +1,1 @@
+import{Xn as e}from"../../../chunks/app-RQ8wUTKU.js";export{e as extensionsOverridesUi};

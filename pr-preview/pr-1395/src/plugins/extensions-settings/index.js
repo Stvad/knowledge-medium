@@ -1,0 +1,1 @@
+import{Cd as e,Jn as t,Sd as n}from"../../../chunks/app-RQ8wUTKU.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
