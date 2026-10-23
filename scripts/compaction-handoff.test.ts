@@ -3,10 +3,12 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from '
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { CONTEXT_BUDGET, injectHandoff } from './compaction-handoff.mjs'
+import { injectHandoff } from './compaction-handoff.mjs'
 import { contextOf, tempDirs } from './hook-test-support'
 
 const tempDir = tempDirs()
+// Claude Code inlines up to this many chars of one hook's context; past it the model sees a 2K preview.
+const HOST_INLINE_LIMIT = 10_000
 
 let scratchpad: string
 let payload: Record<string, string>
@@ -27,7 +29,7 @@ describe('injectHandoff', () => {
     const context = injectHandoff(payload)
     const consumed = join(scratchpad, 'handoff.consumed.md')
     expect(context).toContain('# Handoff\nNext: re-run the gate\n')
-    expect(context).not.toContain('clipped')
+    expect(context).not.toContain('not shown')
     expect(context).toContain(consumed)
     expect(existsSync(join(scratchpad, 'handoff.md'))).toBe(false)
     expect(readFileSync(consumed, 'utf8')).toBe('# Handoff\nNext: re-run the gate\n')
@@ -51,19 +53,12 @@ describe('injectHandoff', () => {
     const lines = Array.from({ length: 200 }, (_, i) => `line ${i} ${'x'.repeat(90)}`)
     writeHandoff(lines.join('\n'))
     const context = injectHandoff(payload)
-    expect(context.length).toBeLessThanOrEqual(CONTEXT_BUDGET)
+    expect(context.length).toBeLessThan(HOST_INLINE_LIMIT)
     const shown = context.split('\n').filter(l => l.startsWith('line '))
     expect(shown.length).toBeGreaterThan(0)
     expect(shown.length).toBeLessThan(200)
     expect(shown.at(-1)).toBe(lines[shown.length - 1])
-    expect(context).toContain(`read the rest at ${join(scratchpad, 'handoff.consumed.md')}`)
-  })
-
-  it('clips a handoff with no line breaks at the budget', () => {
-    writeHandoff('y'.repeat(20_000))
-    const context = injectHandoff(payload)
-    expect(context.length).toBeLessThanOrEqual(CONTEXT_BUDGET)
-    expect(context).toContain('clipped at')
+    expect(context).toContain(`${200 - shown.length} more lines not shown: read them at ${join(scratchpad, 'handoff.consumed.md')}`)
   })
 
   it('ignores a session that has no scratchpad', () => {
