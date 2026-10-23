@@ -1,1 +1,1 @@
-import{Fk as e,Pk as t}from"../../chunks/app-DPVh5v-x.js";export{t as dispatchPointerAction,e as setPointerActionDispatcher};
+import{Fk as e,Pk as t}from"../../chunks/app-C_SR-pix.js";export{t as dispatchPointerAction,e as setPointerActionDispatcher};

@@ -1,1 +1,1 @@
-import{ek as e,tk as t}from"../../../chunks/app-DPVh5v-x.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{ek as e,tk as t}from"../../../chunks/app-C_SR-pix.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
