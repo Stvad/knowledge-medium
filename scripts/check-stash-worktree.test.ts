@@ -134,6 +134,8 @@ describe('shellCommandsWithDepth', () => {
   })
 
   it('cuts out the data of a quoted-delimiter heredoc only', () => {
+    // an assignment on the line runs nothing, so it leaves the data literal
+    expect(withoutLiteralHeredocs("S=/tmp; cat > $S/f <<'EOF'\nx\nEOF\nls")).toBe("S=/tmp; cat > $S/f <<'EOF'\nls")
     expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
     expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
     // a shell reading it runs it, wherever it sits on the line
@@ -241,6 +243,8 @@ describe('inputRedirectTargets', () => {
     ["cat <<'EOF'\nsort < a\nEOF", []],
     ['cat <&3', []],
     ['echo x >out 2>err', []],
+    ['cat <\\a', ['a']],
+    ["cat <$'a'", ['a']],
   ])('%s → %j', (cmd, targets) => {
     expect(inputRedirectTargets(cmd)).toEqual(targets)
   })

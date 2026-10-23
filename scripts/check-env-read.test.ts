@@ -39,11 +39,14 @@ describe('secretRead', () => {
     'cat {.env.example,.env.local}',
     'env -i cat .env.local',
     'time -p cat .env.local',
+    // after --, the first operand is still the pattern
+    'grep -- -K .env.local',
     // a search whose pattern comes from a flag, so its first operand is a file
     'grep --regexp=K .env.local',
     'grep -eK .env.local',
     // a file an option reads
     'diff --from-file=.env.local x',
+    'grep -f .env.local X src',
     `sed -e's/=.*//' .env.local`,
     'source .env.local && psql',
     '. ./.env',
@@ -65,6 +68,7 @@ describe('secretRead', () => {
     `cat <".env.local"`,
     `while read -r l; do :; done <'.env.local'`,
     `x=$(<".env.local")`,
+    'cat <\\.env.local',
     // a read after a literal heredoc
     "cat > x.md <<'EOF'\nnote\nEOF\nls && cat .env.local",
     `gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)" && cat .env.local`,
@@ -91,9 +95,14 @@ describe('secretRead', () => {
     // literal heredoc data nothing runs
     "git commit -F - <<'EOF'\ncat .env.local is blocked now\nEOF",
     "cat > x.md <<'EOF'\nnote\nEOF\ngrep -n 'cat .env.local' notes.md",
+    "S=/tmp; cat > $S/notes.md <<'EOF'\ncat .env.local is blocked now\nEOF",
     'echo "a < .env.local"',
     // an option value that names it
     'diff -r --exclude=.env.local a b',
+    'diff -r -x .env.local a b',
+    'diff -r -x.env.local a b',
+    'diff -r --exclude .env.local a b',
+    `grep -rn -e '.env.local' src`,
   ])('allows %s', command => {
     expect(secretRead(command, templateOnly)).toBeNull()
   })
@@ -124,6 +133,15 @@ describe('secretRead', () => {
       // a glob beyond * and ? is not modelled, so it filters nothing
       `grep -r --exclude='[.]env*' FOO .`,
       `grep -r --include='!*.ts' FOO .`,
+      // --exclude-dir filters directories, not the files at the top
+      `grep -r --exclude-dir='.env*' FOO .`,
+      // with no operand naming a path, the search runs at .
+      'grep -r -e FOO',
+      'grep -r -e src',
+      'grep -rA 3 FOO',
+      'grep -r -f pats.txt',
+      // which --no-ignore* drops the rule hiding a secret depends on where it lives
+      'rg --hidden --no-ignore-parent FOO .',
     ])('blocks %s over a directory holding a secret file', command => {
       expect(secretRead(command, withSecret)).toEqual({ file: expect.stringMatching(/\.env\.local$/), walked: true })
     })
@@ -145,6 +163,12 @@ describe('secretRead', () => {
       expect(secretRead('grep -rn FOO ~', templateOnly)).not.toBeNull()
     })
 
+    it('follows a cd inside a script a shell reads from a heredoc, and only there', () => {
+      expect(secretRead(`bash <<'EOF'\ncd ${withSecret}\ngrep -rn FOO .\nEOF`, templateOnly)).not.toBeNull()
+      expect(secretRead("bash <<'EOF'\ncd src\nEOF\ngrep -rn FOO .", withSecret)).not.toBeNull()
+      expect(secretRead("bash <<'EOF'\ncd src\nEOF\nbash <<'EOF'\ngrep -rn FOO .\nEOF", withSecret)).not.toBeNull()
+    })
+
     it('ignores a cd it cannot follow out of the shell it runs in', () => {
       expect(secretRead('(cd src && ls); grep -rn FOO .', withSecret)).not.toBeNull()
       expect(secretRead('cd "$NOPE" && grep -rn FOO .', withSecret)).not.toBeNull()
@@ -164,6 +188,9 @@ describe('secretRead', () => {
       'rg --no-ignore FOO .',
       `rg -r '$1' FOO .`,
       'git grep FOO',
+      'grep -rn FOO src/*.ts',
+      'grep -rn FOO "$DIR"',
+      'grep -rn FOO $(git ls-files src)',
       `grep -r --include='*.ts' FOO .`,
       `grep -r --include '*.ts' FOO .`,
       `grep -r --exclude='.env*' FOO .`,

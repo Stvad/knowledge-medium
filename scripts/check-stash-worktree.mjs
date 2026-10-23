@@ -76,15 +76,18 @@ const moveDir = (cdPath, verb, args) => {
  * wrapper commands, shell reserved words and (past position 0) wrapper flags,
  * so `env -i git stash …` and `if git stash …` are seen; a wrapper flag that
  * takes an operand (`sudo -u alice git …`) still hides it — accidents, not
- * adversaries. A cd, pushd or popd moves cdPath and is not returned; one in
- * heredoc data moves nothing.
+ * adversaries. A cd, pushd or popd moves cdPath and is not returned; one in a
+ * heredoc's lines moves only the rest of that heredoc, since a shell reading
+ * it (`bash <<'EOF'`) runs as a child.
  */
 export const commandsInContext = segments => {
   const out = []
   let cdPath = null
+  let heredocCd = null // cdPath inside the heredoc being read, once a cd in it moves
   const outerCd = [] // saved cdPath per enclosing subshell scope
   let depth = 0
   for (const { tokens, depth: d, heredoc = false, text = false } of segments) {
+    if (!heredoc) heredocCd = null
     while (depth < d) {
       outerCd.push(cdPath)
       depth++
@@ -105,12 +108,13 @@ export const commandsInContext = segments => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
-    if (!heredoc && DIR_CHANGES.has(tokens[i])) {
+    if (DIR_CHANGES.has(tokens[i])) {
       // A relative target moves from the previous cd, so `cd a && cd b` lands in a/b.
-      cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
+      if (heredoc) heredocCd = moveDir(heredocCd ?? cdPath, tokens[i], tokens.slice(i + 1))
+      else cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
     }
-    out.push({ words: tokens.slice(i), assigns, cdPath, heredoc, text })
+    out.push({ words: tokens.slice(i), assigns, cdPath: (heredoc && heredocCd) || cdPath, heredoc, text })
   }
   return out
 }

@@ -83,7 +83,9 @@ export const withoutLiteralHeredocs = cmd => {
 // A quoted-delimiter heredoc's data is literal when nothing on its line can
 // run it. Decided by an ALLOWLIST of commands that never run what they read:
 // a shell, a wrapper, an expanded or unknown command word anywhere on the
-// line keeps the data runnable, so a reader this list misses fails closed.
+// line keeps the data runnable, so a reader this list misses fails closed. A
+// bare assignment (`S=x;`) runs nothing; a substitution in its value is a
+// command of its own on the line.
 // python and node run their stdin as their own language; a gh call from that
 // code sits in quoted strings no reader here sees, counted or not, so listing
 // them only keeps their heredocs that mention a call from blocking.
@@ -127,6 +129,11 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
     cur = ''
     started = false
     literal = false
+  }
+  // A redirect operator glued to a quoted or escaped target (`<".env"`,
+  // `<\.env`, `<$'.env'`) ends before it, so the target is read as its word.
+  const endBareOperator = () => {
+    if (!literal && cur.match(REDIRECT)?.[2] === '') pushToken()
   }
   // Every scope change closes the segment first, so a segment's tokens all
   // live at one depth — scopes.length at push time. A whole command is not
@@ -200,10 +207,12 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
         started = true
         continue
       }
+      endBareOperator()
       escaped = true
       continue
     }
     if (wholeCommands && !quote && ch === '$' && cmd[i + 1] === "'") {
+      endBareOperator()
       quote = "$'"
       started = true
       literal = true
@@ -234,8 +243,7 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       continue
     }
     if (ch === "'" || ch === '"') {
-      // a quoted target ends the operator before it: `<".env"` reads `.env`
-      if (!literal && /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)$/.test(cur)) pushToken()
+      endBareOperator()
       quote = ch
       started = true
       literal = true
@@ -312,7 +320,10 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       // a pipe or list left open at the newline, or a subshell, goes on past
       // the data to a reader not read yet
       const readerPending = scopes.some(s => s.kind === 'paren') || pipeOpen
-      const onlyTextReaders = !readerPending && lineCommands.every(words => TEXT_READERS.has(commandWord(words)))
+      const onlyTextReaders = !readerPending && lineCommands.every(words => {
+        const word = commandWord(words)
+        return word === undefined || TEXT_READERS.has(word)
+      })
       let j = i + 1
       while (heredocs.length) {
         const { delim, dash, quoted } = heredocs.shift()
