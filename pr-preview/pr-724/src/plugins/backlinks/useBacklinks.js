@@ -1,1 +1,1 @@
-import{Bm as e}from"../../../chunks/app-CcW5i1_E.js";export{e as useBacklinks};
+import{Km as e}from"../../../chunks/app-is2yVBCM.js";export{e as useBacklinks};

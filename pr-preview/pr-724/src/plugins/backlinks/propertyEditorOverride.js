@@ -1,1 +1,1 @@
-import{bm as e}from"../../../chunks/app-CcW5i1_E.js";export{e as dailyNoteBacklinksDefaultsUi};
+import{Em as e}from"../../../chunks/app-is2yVBCM.js";export{e as dailyNoteBacklinksDefaultsUi};

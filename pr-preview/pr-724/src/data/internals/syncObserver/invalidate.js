@@ -1,1 +1,1 @@
-import{SX as e}from"../../../../chunks/app-CcW5i1_E.js";export{e as applySyncInvalidation};
+import{kX as e}from"../../../../chunks/app-is2yVBCM.js";export{e as applySyncInvalidation};
