@@ -1,1 +1,1 @@
-import{nK as e}from"../../chunks/app-CqspBX4P.js";export{e as omnilinerNamespace};
+import{sK as e}from"../../chunks/app-B1Sx9eLu.js";export{e as omnilinerNamespace};

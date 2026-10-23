@@ -1,1 +1,1 @@
-import{Gp as e}from"../../../chunks/app-CqspBX4P.js";export{e as updateIndicatorPlugin};
+import{Zp as e}from"../../../chunks/app-B1Sx9eLu.js";export{e as updateIndicatorPlugin};
