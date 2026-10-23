@@ -10,6 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { FROZEN_INSTALL_ARGS } from './ensure-deps.mjs'
 import { extractFailingFiles } from './fuzz.mjs'
 import { isMainModule } from './is-main-module.mjs'
+import { pidAlive } from './pid-alive.mjs'
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
@@ -160,15 +161,6 @@ const runParallel = async tasks => {
   }))
 }
 
-const pidAlive = pid => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 const readHolder = path => {
   try {
     const holder = JSON.parse(readFileSync(path, 'utf8'))
@@ -220,8 +212,8 @@ const anyChoosing = dir => readdirSync(dir).some(name => {
 // Gates line up by numbered ticket (Lamport's bakery): a ticket is one above
 // every ticket in view, taken under a marker that holds the others' count until
 // it is published, and a gate runs once fewer than `slots` live tickets are
-// ahead of it. Accepted: a dead gate whose pid is reused keeps its place until
-// the wait runs out.
+// ahead of it. Accepted: a dead gate whose pid is reused keeps its place, or
+// with a marker left mid-number holds every gate's count, until the wait runs out.
 export const acquireSlot = async ({
   dir,
   slots,
@@ -374,7 +366,8 @@ const runGate = async signal => {
 
   for (const task of [installTask, compileTask]) {
     const result = await runTask(task)
-    if (result.code !== 0) return finish([result])
+    // A task can outlive the signal and exit 0, and the gate must stop anyway.
+    if (result.code !== 0 || signal.aborted) return finish([result])
   }
 
   const slot = await takeGateSlot(signal)
@@ -397,8 +390,11 @@ const main = async () => {
     stopAll(null)
     process.exitCode = signal === 'SIGINT' ? 130 : 143
   }
-  process.once('SIGINT', () => abortFromSignal('SIGINT'))
-  process.once('SIGTERM', () => abortFromSignal('SIGTERM'))
+  // Every time, not once: under `pnpm run check` a signal to the process group
+  // arrives twice, pnpm forwarding its copy, and the second must not kill the
+  // gate before it releases its ticket and prints its last line.
+  process.on('SIGINT', () => abortFromSignal('SIGINT'))
+  process.on('SIGTERM', () => abortFromSignal('SIGTERM'))
 
   const code = await runGate(abort.signal)
   // A signal already set 130/143 in abortFromSignal; keep it.

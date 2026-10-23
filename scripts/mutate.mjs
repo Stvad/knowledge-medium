@@ -37,6 +37,7 @@ import { constants } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { isMainModule } from './is-main-module.mjs'
+import { pidAlive } from './pid-alive.mjs'
 
 const USAGE =
   'usage: pnpm mutate --file <path> (--delete <literal> | --edit <shell command>) ' +
@@ -320,14 +321,6 @@ const restore = (cfg, paths, state) => {
   return { verified: sameBytes(readOrNull(cfg.file), state.original), changed }
 }
 
-const isAlive = pid => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e) {
-    return e.code === 'EPERM'
-  }
-}
 
 /**
  * Take the checkout lock, or return the facts about the run holding it. A lock
@@ -343,7 +336,7 @@ const takeLock = lock => {
       if (e.code !== 'EEXIST') throw e
     }
     const held = readJson(lock)
-    if (isAlive(held.pid)) {
+    if (pidAlive(held.pid)) {
       return `another pnpm mutate (pid ${held.pid}, started ${held.started}) is running in this checkout; lock: ${lock}`
     }
     rmSync(lock, { force: true })

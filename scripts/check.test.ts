@@ -64,6 +64,11 @@ if (cmd === 'run test' && mode === 'many' && !files.length) {
   summary(26, 26)
   process.exitCode = 1
 }
+if (mode === 'interrupt-install' && process.argv[2] === 'install') {
+  // Outlives the gate's SIGTERM and exits 0, as pnpm does when its script does.
+  const keepAlive = setTimeout(() => {}, 10_000)
+  process.on('SIGTERM', () => clearTimeout(keepAlive))
+}
 if (mode === 'interrupt') {
   // The suite fails at once while lint is still winding down; the re-run would
   // take a while.
@@ -191,17 +196,35 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
     expect([status, lastLine(out)]).toEqual([0, 'check: PASS'])
   }, 30_000)
 
-  // One SIGINT once `stream` shows `marker`: a second one kills the gate outright.
-  const interruptOn = (stream: 'stdout' | 'stderr', marker: string) => (gate: Gate) => {
+  // SIGINT once `stream` shows `marker`, and with `againAfterMs` a second copy,
+  // as a shell's Ctrl-C under `pnpm run` delivers.
+  const interruptOn = (stream: 'stdout' | 'stderr', marker: string, againAfterMs?: number) => (gate: Gate) => {
     let seen = ''
     const watch = (d: Buffer) => {
       seen += d
       if (!seen.includes(marker)) return
       gate[stream]!.off('data', watch)
       gate.kill('SIGINT')
+      if (againAfterMs !== undefined) setTimeout(() => gate.kill('SIGINT'), againAfterMs)
     }
     gate[stream]!.on('data', watch)
   }
+
+  it('takes a second copy of the interrupt as the same one, and still releases and reports', async () => {
+    const dir = tempDir('check-slots-')
+    const { status, out } = await runGate(
+      { SHIM_MODE: 'interrupt', KM_CHECK_SLOT_DIR: dir },
+      { onSpawn: interruptOn('stdout', 'in parallel', 100) },
+    )
+    expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
+    expect(readdirSync(dir)).toEqual([])
+  }, 30_000)
+
+  it('stops at an interrupt even when the task it lands in exits 0', async () => {
+    const { status, out } = await runGate({ SHIM_MODE: 'interrupt-install' }, { onSpawn: interruptOn('stdout', 'starting install') })
+    expect(out).not.toContain('starting compile')
+    expect([status, lastLine(out)]).toEqual([130, 'check: FAIL (interrupted)'])
+  }, 30_000)
 
   it('starts no re-run once interrupted', async () => {
     const { status, out } = await runGate({ SHIM_MODE: 'interrupt' }, { onSpawn: interruptOn('stderr', '[check] test failed') })
@@ -292,6 +315,13 @@ describe('acquireSlot', () => {
     writeTicket(dir, 1, holder(deadPid()))
     expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).not.toBeNull()
     expect(ticketPids()).toEqual([process.pid])
+  })
+
+  it('counts a gate it may not signal as still running', async () => {
+    // pid 1 is root's: signalling it from here fails with EPERM, not ESRCH.
+    writeTicket(dir, 1, holder(1))
+    expect(await acquireSlot({ dir, slots: 1, holder: holder(), maxWaitMs: 0, log: quiet })).toBeNull()
+    expect(ticketPids()).toEqual([1])
   })
 
   it('skips a ticket whose record is unreadable', async () => {
