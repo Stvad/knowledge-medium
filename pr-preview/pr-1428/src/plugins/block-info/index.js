@@ -1,0 +1,1 @@
+import{Yp as e}from"../../../chunks/app-CJ2pg7SW.js";export{e as blockInfoPlugin};
