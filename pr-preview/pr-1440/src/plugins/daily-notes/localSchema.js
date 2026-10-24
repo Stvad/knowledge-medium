@@ -1,0 +1,1 @@
+export{vU as dailyNotesLocalSchema}from"../../../chunks/app-CaIdytmN.js";

@@ -1,0 +1,1 @@
+export{AE as useCommandPaletteActions}from"../../../chunks/app-CaIdytmN.js";

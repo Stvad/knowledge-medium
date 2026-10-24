@@ -1,0 +1,1 @@
+export{al as blockTagsConfigUi}from"../../../chunks/app-CaIdytmN.js";

@@ -1,0 +1,1 @@
+export{CM as BlockInfoDialog}from"../../../chunks/app-CaIdytmN.js";

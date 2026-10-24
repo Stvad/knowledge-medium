@@ -1,0 +1,1 @@
+export{sz as propertyShapeLabel}from"../../../chunks/app-CaIdytmN.js";

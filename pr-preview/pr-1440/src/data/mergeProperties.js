@@ -1,0 +1,1 @@
+export{t$ as mergeProperties}from"../../chunks/app-CaIdytmN.js";

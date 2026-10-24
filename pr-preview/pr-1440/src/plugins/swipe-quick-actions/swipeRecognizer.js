@@ -1,0 +1,1 @@
+export{lD as SWIPE_QUICK_ACTIONS_GESTURE_ID,uD as SWIPE_TRIGGER_PX,dD as swipeRecognizer}from"../../../chunks/app-CaIdytmN.js";

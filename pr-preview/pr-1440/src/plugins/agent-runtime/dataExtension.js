@@ -1,0 +1,1 @@
+export{FG as agentRuntimeDataExtension}from"../../../chunks/app-CaIdytmN.js";

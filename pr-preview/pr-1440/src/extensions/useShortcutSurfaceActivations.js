@@ -1,0 +1,1 @@
+export{MN as useShortcutSurfaceActivations}from"../../chunks/app-CaIdytmN.js";
