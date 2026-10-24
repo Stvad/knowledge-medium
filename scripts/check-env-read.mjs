@@ -143,13 +143,14 @@ const secretFileIn = (dir, admits) => {
   return entries.find(e => !e.isDirectory() && secretPathIn(e.name) && admits(e.name))?.name ?? null
 }
 
-// An option word's boolean short-flag `letters`, and the `role` of the value
-// it takes (null if none) with the `value` attached to it, if any.
+// An option word's boolean short-flag `letters` (digits among them: grep's
+// -NUM is a context length), and the `role` of the value it takes (null if
+// none) with the `value` attached to it, if any.
 const optionOf = (a, options) => {
   const long = /^--([^=]+)(?:=(.*))?$/s.exec(a)
   if (long) return { letters: '', role: Object.hasOwn(options, long[1]) ? options[long[1]] : null, value: long[2] }
   let k = 1
-  while (/[a-zA-Z.]/.test(a[k] ?? '') && !Object.hasOwn(options, a[k])) k++
+  while (/[a-zA-Z.0-9]/.test(a[k] ?? '') && !Object.hasOwn(options, a[k])) k++
   const role = Object.hasOwn(options, a[k] ?? '') ? options[a[k]] : null
   return { letters: a.slice(1, k), role, value: role ? a.slice(k + 1) || undefined : undefined }
 }

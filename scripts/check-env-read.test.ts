@@ -219,6 +219,9 @@ describe('secretRead', () => {
       // the last of --exclude-standard and --no-exclude-standard wins
       'git grep --no-index --exclude-standard --no-exclude-standard FOO',
       'ugrep -r FOO .',
+      // grep's -NUM is a context length; flags after it still count
+      'grep -2r FOO .',
+      'grep -2R FOO .',
       // a long flag counts only as an option, not as another option's value
       'rg -e --files -uu FOO .',
       'rg --context-separator --files -uu FOO .',
@@ -314,6 +317,18 @@ describe('secretRead', () => {
       expect(secretRead(`cd ${withSecret} <<EOF\nx\nEOF\ntrue | cat; grep -rn FOO .`, templateOnly)).not.toBeNull()
       // the last runs in the shell itself, as zsh runs it (bash runs it in a subshell too)
       expect(secretRead(`true | cd ${withSecret}; grep -rn FOO .`, templateOnly)).not.toBeNull()
+    })
+
+    it('runs a compound command a | or & takes in a subshell, whole', () => {
+      expect(secretRead('{ cd src; true; } | cat; grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('{ cd src; true; } & wait; grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('for d in x; do cd src; done | sort; grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('if true; then cd src; fi & grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('true && while false; do cd src; done & grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('for d in x; do { cd src; true; } | cat; done; grep -rn FOO .', withSecret)).not.toBeNull()
+      // a brace group alone is no subshell: its cd moves what follows it
+      expect(secretRead('{ cd src; true; }; grep -rn FOO .', withSecret)).toBeNull()
+      expect(secretRead(`{ cd ${withSecret}; }; grep -rn FOO .`, templateOnly)).not.toBeNull()
     })
 
     it('runs a list a lone & ends in a subshell of its own', () => {

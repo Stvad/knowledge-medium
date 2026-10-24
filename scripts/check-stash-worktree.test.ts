@@ -130,6 +130,13 @@ describe('shellSegments', () => {
       { tokens: ['e'], depth: 0 },
       { tokens: ['f'], depth: 0 },
     ])
+    // a compound command is one command of its pipeline, its own ; and newlines included
+    expect(shellCommandsWithDepth('{ cd /z; b; } | c')).toEqual([
+      { tokens: ['{', 'cd', '/z'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 1 },
+      { tokens: ['}'], depth: 1 },
+      { tokens: ['c'], depth: 0 },
+    ])
     // a pipeline's command holds its substitutions whole, and one inside a substitution starts there
     expect(shellCommandsWithDepth('echo $(a; b) | c')).toEqual([
       { tokens: ['a'], depth: 2, fresh: 1 },

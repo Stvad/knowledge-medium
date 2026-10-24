@@ -100,6 +100,11 @@ const runsNothing = words => commandWord(words) === undefined && !words.some(w =
 const REDIRECT = /^(?:\d+|&)?(<<<|<>|>>|>\||>&|>|<)(.*)$/s
 // the redirection operators that open their target for reading
 const READS = new Set(['<', '<>'])
+// A compound command is one command of the pipeline and list it sits in, its
+// own `;` and newlines included: the word opening each, and the one closing it.
+const COMPOUNDS = { '{': '}', if: 'fi', for: 'done', select: 'done', while: 'done', until: 'done', case: 'esac' }
+// the words after which the next is still in command position
+const LEADING = new Set(['!', 'then', 'do', 'else', 'elif', 'time', ...Object.keys(COMPOUNDS)])
 
 // `sinks.literalHeredocs`, when given, collects the [start, end) of each
 // literal heredoc's data, its closing delimiter line included;
@@ -122,6 +127,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
   let freshFrom = Infinity // the shallowest scope opened since the last segment
   let listStart = 0 // index of the first segment of the and-or list being read, which goes on while pipeOpen
   let pipeStart = 0 // the same for the command of a pipeline being read
+  const groups = [] // open compound commands: the word closing each, and the listStart and pipeStart it began at
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
@@ -135,11 +141,19 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
         const [, op, target] = redirect
         if (target === '') dropNext = op
         else if (READS.has(op) && !target.startsWith('&')) sinks.inputRedirects?.push(target)
-      } else tokens.push(cur)
+      } else {
+        if (tokens.every(t => LEADING.has(t))) compound(cur)
+        tokens.push(cur)
+      }
     }
     cur = ''
     started = false
     literal = false
+  }
+  // a compound command's closing word takes the list and pipeline back to where it began
+  const compound = word => {
+    if (Object.hasOwn(COMPOUNDS, word)) groups.push({ closer: COMPOUNDS[word], listStart, pipeStart })
+    else if (groups.at(-1)?.closer === word) ({ listStart, pipeStart } = groups.pop())
   }
   // A redirect operator glued to a quoted or escaped target (`<".env"`,
   // `<\.env`, `<$'.env'`) ends before it, so the target is read as its word.
