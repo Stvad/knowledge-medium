@@ -116,10 +116,32 @@ describe('shellSegments', () => {
     expect(shellCommandsWithDepth('a; cd /z && b | c & d; e &')).toEqual([
       { tokens: ['a'], depth: 0 },
       { tokens: ['cd', '/z'], depth: 1, fresh: 1 },
-      { tokens: ['b'], depth: 1 },
+      { tokens: ['b'], depth: 2, fresh: 2 },
       { tokens: ['c'], depth: 1 },
       { tokens: ['d'], depth: 0 },
       { tokens: ['e'], depth: 1, fresh: 1 },
+    ])
+    // each of a pipeline's commands but its last runs in a subshell; && and || end a pipeline
+    expect(shellCommandsWithDepth('a | b && c | d |& e || f')).toEqual([
+      { tokens: ['a'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 0 },
+      { tokens: ['c'], depth: 1, fresh: 1 },
+      { tokens: ['d'], depth: 1, fresh: 1 },
+      { tokens: ['e'], depth: 0 },
+      { tokens: ['f'], depth: 0 },
+    ])
+    // a pipeline's command holds its substitutions whole, and one inside a substitution starts there
+    expect(shellCommandsWithDepth('echo $(a; b) | c')).toEqual([
+      { tokens: ['a'], depth: 2, fresh: 1 },
+      { tokens: ['b'], depth: 2 },
+      { tokens: ['echo', SUBSTITUTED], depth: 1 },
+      { tokens: ['c'], depth: 0 },
+    ])
+    expect(shellCommandsWithDepth('echo $(p) $(a | b)')).toEqual([
+      { tokens: ['p'], depth: 1, fresh: 1 },
+      { tokens: ['a'], depth: 2, fresh: 2 },
+      { tokens: ['b'], depth: 1 },
+      { tokens: ['echo', SUBSTITUTED, SUBSTITUTED], depth: 0 },
     ])
     expect(shellCommandsWithDepth('a && b $(c) &')).toEqual([
       { tokens: ['a'], depth: 1, fresh: 1 },

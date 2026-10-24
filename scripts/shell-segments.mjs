@@ -121,6 +121,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
   let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
   let freshFrom = Infinity // the shallowest scope opened since the last segment
   let listStart = 0 // index of the first segment of the and-or list being read, which goes on while pipeOpen
+  let pipeStart = 0 // the same for the command of a pipeline being read
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
@@ -163,26 +164,28 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
     }
     tokens = []
   }
-  // a scope keeps the list it opened in, which goes on when it closes
+  // a scope keeps the list and pipeline command it opened in, which go on when it closes
   const openScope = scope => {
-    scopes.push({ ...scope, listStart })
-    listStart = segments.length
+    scopes.push({ ...scope, listStart, pipeStart })
+    listStart = pipeStart = segments.length
     freshFrom = Math.min(freshFrom, scopes.length)
   }
   const closeScope = () => {
     const scope = scopes.pop()
-    listStart = scope.listStart
+    ;({ listStart, pipeStart } = scope)
     return scope
   }
-  // bash runs a list a lone `&` ends in a subshell: its segments move into a
-  // scope of their own, one deeper
-  const background = () => {
-    const list = segments.slice(listStart)
-    for (const s of list) {
+  // A list a lone `&` ends, and each command of a pipeline but its last, runs
+  // in a subshell: the segments from `start` move into a scope of their own,
+  // one deeper. The last command of a pipeline is read as zsh runs it, in the
+  // shell itself; bash runs it in a subshell too.
+  const subshell = start => {
+    const moved = segments.slice(start)
+    for (const s of moved) {
       s.depth++
       if (s.fresh) s.fresh++
     }
-    if (list.length) list[0].fresh = scopes.length + 1
+    if (moved.length) moved[0].fresh = scopes.length + 1
   }
   // `expands`: the shell supplying unquoted heredoc data expands it, as it
   // does not a process substitution
@@ -435,7 +438,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
         if (text) sinks.literalHeredocs?.push([dataStart, Math.min(j, cmd.length)])
       }
       i = Math.min(j, cmd.length + 1) - 1
-      lineStart = segments.length
+      lineStart = pipeStart = segments.length
       if (!pipeOpen) listStart = segments.length
       continue
     }
@@ -456,12 +459,15 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
       pushSegment()
       // the next command word closes it, so a newline or a comment in between does not
       const joins = ch === '|' || (ch === '&' && (cmd[i - 1] === '&' || cmd[i - 1] === '|' || cmd[i + 1] === '&'))
+      // a | that is not the first of a || ends a pipeline's command (only where
+      // comments are skipped, so a | or & in one is not taken for an operator)
+      if (wholeCommands && ch === '|' && cmd[i + 1] !== '|') subshell(pipeStart)
       if (joins) pipeOpen = true
       else if (!pipeOpen) {
-        // only where comments are skipped, so a & in one is not taken for an operator
-        if (ch === '&' && wholeCommands) background()
+        if (ch === '&' && wholeCommands) subshell(listStart)
         listStart = segments.length
       }
+      pipeStart = segments.length
       if (ch === '\n') lineStart = segments.length
       continue
     }

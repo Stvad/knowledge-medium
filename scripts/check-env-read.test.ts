@@ -107,11 +107,17 @@ describe('secretRead', () => {
     "gawk '{print}' .env.local",
     'zgrep KEY .env.local',
     'jq . .env.local',
+    // jq's --rawfile and --slurpfile read the file they name
+    "jq -n --rawfile s .env.local '$s'",
+    "jq -n --slurpfile s .env.local --arg x y '$s'",
   ])('blocks %s', command => {
     expect(secretRead(command, templateOnly)).not.toBeNull()
   })
 
   it.each([
+    // jq's --arg and --argjson take a name and a value, not a file
+    "jq -n --arg config .env.local '{path: $config}'",
+    "jq -n --argjson n 1 --arg f .env.local '$f'",
     'cat .env.example',
     'cat config/.env.sample',
     // commands that only name the file
@@ -298,6 +304,16 @@ describe('secretRead', () => {
       expect(secretRead('echo $(cd src) $(grep -rn FOO .)', withSecret)).not.toBeNull()
       expect(secretRead('(cd src && ls); ( (ls); grep -rn FOO . )', withSecret)).not.toBeNull()
       expect(secretRead("bash <<'EOF'\n(cd src); (grep -rn FOO .)\nEOF", withSecret)).not.toBeNull()
+    })
+
+    it("runs each of a pipeline's commands but its last in a subshell", () => {
+      expect(secretRead('cd src | cat; grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd src && true | cat; grep -rn FOO .', withSecret)).toBeNull()
+      expect(secretRead('(cd src) | cd src | cat\ngrep -rn FOO .', withSecret)).not.toBeNull()
+      // a heredoc's data ends the command its line began
+      expect(secretRead(`cd ${withSecret} <<EOF\nx\nEOF\ntrue | cat; grep -rn FOO .`, templateOnly)).not.toBeNull()
+      // the last runs in the shell itself, as zsh runs it (bash runs it in a subshell too)
+      expect(secretRead(`true | cd ${withSecret}; grep -rn FOO .`, templateOnly)).not.toBeNull()
     })
 
     it('runs a list a lone & ends in a subshell of its own', () => {

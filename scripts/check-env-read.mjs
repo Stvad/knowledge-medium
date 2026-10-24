@@ -71,7 +71,8 @@ const READERS = new Set([
 // word), by what the value is: the search's 'pattern', a 'script' file the
 // pattern is read from, a 'file' it reads, grep's 'include' / 'exclude' name
 // glob, rg's 'glob' / case-blind 'iglob' (a leading `!` excludes), grep's
-// 'directories' action (`recurse` walks), or a 'value' that is none of these. A reader's option missing here leaves its
+// 'directories' action (`recurse` walks), jq's 'named-value' / 'named-file'
+// (a name, then a value or a file it reads), or a 'value' that is none of these. A reader's option missing here leaves its
 // value to be read as an operand, which only over-checks; so is an option
 // whose value is optional or absent in some implementation (BSD grep's -C,
 // BSD sed's -l), since taking the next word there would drop the file.
@@ -93,6 +94,10 @@ const OPTIONS = {
   ...Object.fromEntries([...RGS].map(v => [v, RG_OPTIONS])),
   ...Object.fromEntries([...AWKS].map(v => [v, { e: 'pattern', source: 'pattern', f: 'script', file: 'script', ...values('F v assign field-separator') }])),
   sed: { e: 'pattern', expression: 'pattern', f: 'script', file: 'script' },
+  jq: {
+    f: 'script', 'from-file': 'script', arg: 'named-value', argjson: 'named-value', rawfile: 'named-file', slurpfile: 'named-file',
+    ...values('L library-path indent'),
+  },
   diff: {
     X: 'file', 'exclude-from': 'file', 'from-file': 'file', 'to-file': 'file',
     ...values('x I L S U C W exclude ignore-matching-lines label starting-file width tabsize'),
@@ -190,6 +195,10 @@ const readerWords = (verb, args) => {
     if (role === 'pattern' || role === 'script') patternGiven = true
     if (role === 'directories') directories.push(value)
     if (role === 'script' || role === 'file') paths.push(value)
+    if (role === 'named-value' || role === 'named-file') {
+      const second = args[++i] ?? ''
+      if (role === 'named-file') paths.push(second)
+    }
     if (role === 'include' || role === 'exclude') filters.push({ include: role === 'include', glob: value, dialect: 'grep' })
     if (role === 'glob' || role === 'iglob')
       filters.push({ include: !value.startsWith('!'), glob: value.replace(/^!/, ''), dialect: 'rg', caseless: role === 'iglob' })
