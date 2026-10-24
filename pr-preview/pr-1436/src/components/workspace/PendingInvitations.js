@@ -1,1 +1,0 @@
-export{NS as PendingInvitations}from"../../../chunks/app-n8JXtGQR.js";

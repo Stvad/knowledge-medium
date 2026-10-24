@@ -1,1 +1,0 @@
-export{QE as CommandPaletteHeaderItem}from"../../../chunks/app-n8JXtGQR.js";

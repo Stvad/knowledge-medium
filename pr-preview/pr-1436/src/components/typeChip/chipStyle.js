@@ -1,1 +1,0 @@
-export{$D as chipStyle}from"../../../chunks/app-n8JXtGQR.js";
