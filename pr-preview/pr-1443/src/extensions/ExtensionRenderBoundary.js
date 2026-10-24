@@ -1,1 +1,0 @@
-export{wM as ExtensionRenderBoundary}from"../../chunks/app-CrWJPONW.js";

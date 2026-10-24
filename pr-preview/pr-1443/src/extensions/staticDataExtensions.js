@@ -1,1 +1,0 @@
-export{oB as staticDataExtensions}from"../../chunks/app-CrWJPONW.js";

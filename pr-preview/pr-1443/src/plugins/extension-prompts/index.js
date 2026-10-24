@@ -1,1 +1,0 @@
-export{ek as ExtensionPromptSurface,tk as extensionPromptsExtension}from"../../../chunks/app-CrWJPONW.js";

@@ -1,1 +1,0 @@
-export{CG as aliasDataExtension}from"../../../chunks/app-CrWJPONW.js";

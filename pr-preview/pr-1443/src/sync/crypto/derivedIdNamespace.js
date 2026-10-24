@@ -1,1 +1,0 @@
-export{$8 as deriveWorkspaceIdNamespace}from"../../../chunks/app-CrWJPONW.js";

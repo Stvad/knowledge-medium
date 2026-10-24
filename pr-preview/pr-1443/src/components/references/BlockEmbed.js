@@ -1,1 +1,0 @@
-export{UD as BlockEmbed}from"../../../chunks/app-CrWJPONW.js";
