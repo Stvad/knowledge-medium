@@ -11,9 +11,12 @@
  * (src/appUpdate.ts). The wait is what makes that safe while one of them is
  * still being edited.
  *
- * Every tab holds a shared Web Lock named for (database, build) for its whole
- * life; before opening, it asks for each other build's name exclusively,
- * which the lock manager grants only once every holder has unloaded.
+ * Every admitted tab holds a shared Web Lock named for (database, build) for
+ * its whole life. To be admitted, a tab asks for each other build's name
+ * exclusively, which the lock manager grants only once every holder has
+ * unloaded, and only then takes its own. Admission is one tab at a time per
+ * database, so a waiting tab holds no build lock: two builds starting together
+ * cannot each wait on the other.
  */
 import { appVersion } from '@/appVersion.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
@@ -22,6 +25,8 @@ const LOCK_PREFIX = 'km-db-build:'
 
 export const localDbBuildLockName = (dbFilename: string, buildId: string): string =>
   `${LOCK_PREFIX}${dbFilename}|${buildId}`
+
+const admissionLockName = (dbFilename: string): string => `km-db-build-admission:${dbFilename}`
 
 /** The part of `navigator.locks` the gate uses. */
 export interface GateLocks {
@@ -56,17 +61,15 @@ export const createLocalDbBuildGate = (locks: GateLocks | undefined) => {
     return [...new Set(names)]
   }
 
-  const enter = async (dbFilename: string, buildId: string): Promise<void> => {
-    const own = localDbBuildLockName(dbFilename, buildId)
-    await holdForPageLife(own)
-    let others = await otherBuilds(dbFilename, own)
-    while (others.length > 0) {
-      setWaiting(true)
+  const enter = (dbFilename: string, buildId: string): Promise<void> =>
+    locks!.request(admissionLockName(dbFilename), {mode: 'exclusive'}, async () => {
+      const own = localDbBuildLockName(dbFilename, buildId)
+      // One pass: build locks are only taken under admission, which we hold.
+      const others = await otherBuilds(dbFilename, own)
+      if (others.length > 0) setWaiting(true)
       for (const name of others) await locks!.request(name, {mode: 'exclusive'}, () => undefined)
-      // A third build can have opened meanwhile.
-      others = await otherBuilds(dbFilename, own)
-    }
-  }
+      await holdForPageLife(own)
+    })
 
   return {
     /** Resolves once this tab may open `dbFilename`. */

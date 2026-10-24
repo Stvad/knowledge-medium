@@ -6,8 +6,8 @@
  * The new service worker controls every open tab from the moment it activates
  * (src/sw/sw.ts), so a module this tab imports after that comes from the newer
  * build's cache, and the newer build may change the local database. The tab
- * therefore reloads at the first moment that loses nothing — no text entry
- * focused, no write in flight — and every open tab does the same, because
+ * therefore reloads at the first moment that loses nothing — no input in
+ * progress, no write in flight — and every open tab does the same, because
  * activation reaches them all at once. Set by registerServiceWorker; read by
  * the update prompt (toast) and the status chip.
  */
@@ -19,12 +19,16 @@ export type AppUpdatePhase = 'current' | 'downloading' | 'ready'
 /** How often a deferred reload re-checks whether it is safe yet. */
 export const RELOAD_POLL_MS = 250
 
-/** True while reloading would throw away input the user is typing: editors
- *  commit on a debounce, and an input's value may not be committed at all. */
-export const isTextEntryFocused = (doc: Document): boolean => {
+/** True while reloading could throw away input the user has not committed:
+ *  editors commit on a debounce, and a form's fields may live only in component
+ *  state until it is submitted — still so after focus moves on to its Save
+ *  button, or out of a dialog's field. Not covered: a draft left in an input
+ *  outside any form or dialog once focus has left it. */
+export const hasInputInProgress = (doc: Document): boolean => {
+  if (doc.querySelector('[role="dialog"], [role="alertdialog"]')) return true
   const el = doc.activeElement
   if (!(el instanceof HTMLElement)) return false
-  return el.isContentEditable || el.matches('input, textarea, select')
+  return el.isContentEditable || el.matches('input, textarea, select') || el.closest('form') !== null
 }
 
 export interface AppUpdateDeps {
@@ -92,7 +96,7 @@ export type AppUpdate = ReturnType<typeof createAppUpdate>
 
 export const appUpdate: AppUpdate = createAppUpdate({
   reload: () => window.location.reload(),
-  isEditing: () => isTextEntryFocused(document),
+  isEditing: () => hasInputInProgress(document),
 })
 
 /** Reactive read of {@link AppUpdate.phase} for components (toast, status chip). */

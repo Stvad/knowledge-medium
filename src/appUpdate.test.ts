@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAppUpdate, isTextEntryFocused, RELOAD_POLL_MS } from './appUpdate'
+import { createAppUpdate, hasInputInProgress, RELOAD_POLL_MS } from './appUpdate'
 
 describe('appUpdate', () => {
   let editing: boolean
@@ -100,7 +100,7 @@ describe('appUpdate', () => {
   })
 })
 
-describe('isTextEntryFocused', () => {
+describe('hasInputInProgress', () => {
   afterEach(() => {
     document.body.innerHTML = ''
   })
@@ -110,21 +110,31 @@ describe('isTextEntryFocused', () => {
     document.body.querySelector<HTMLElement>('#target')!.focus()
   }
 
-  it('is false with nothing focused', () => {
-    expect(isTextEntryFocused(document)).toBe(false)
+  it('is false with nothing focused and nothing open', () => {
+    expect(hasInputInProgress(document)).toBe(false)
   })
 
   it('is true for a focused input, textarea or editable element', () => {
     focus('<input id="target">')
-    expect(isTextEntryFocused(document)).toBe(true)
+    expect(hasInputInProgress(document)).toBe(true)
     focus('<textarea id="target"></textarea>')
-    expect(isTextEntryFocused(document)).toBe(true)
+    expect(hasInputInProgress(document)).toBe(true)
     focus('<div id="target" contenteditable="true" tabindex="0"></div>')
-    expect(isTextEntryFocused(document)).toBe(true)
+    expect(hasInputInProgress(document)).toBe(true)
   })
 
-  it('is false for a focused button', () => {
+  it('is true once focus moves on to a form’s submit button', () => {
+    focus('<form><input value="draft"><button id="target">Save</button></form>')
+    expect(hasInputInProgress(document)).toBe(true)
+  })
+
+  it('is true while a dialog is open, wherever focus is', () => {
+    document.body.innerHTML = '<div role="dialog"><input value="draft"></div>'
+    expect(hasInputInProgress(document)).toBe(true)
+  })
+
+  it('is false for a focused button outside any form', () => {
     focus('<button id="target">Reload</button>')
-    expect(isTextEntryFocused(document)).toBe(false)
+    expect(hasInputInProgress(document)).toBe(false)
   })
 })

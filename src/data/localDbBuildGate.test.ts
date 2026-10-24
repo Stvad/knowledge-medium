@@ -3,10 +3,11 @@ import { createLocalDbBuildGate, localDbBuildLockName, type GateLocks } from './
 
 /** Web Locks' grant rules, in memory: per name, requests are granted in
  *  order, shared with shared, exclusive alone; a lock is held until the
- *  callback's promise settles, and released before `request` resolves. */
+ *  callback's promise settles, and released before `request` resolves.
+ *  Requests belong to a tab; unloading a tab drops all of its requests. */
 const fakeLocks = () => {
-  type Entry = {name: string, mode: LockMode, run: () => void, granted: boolean}
-  const entries: Entry[] = []
+  type Entry = {name: string, mode: LockMode, tab: number, run: () => void, granted: boolean}
+  let entries: Entry[] = []
   const pump = () => {
     for (const entry of entries) {
       if (entry.granted) continue
@@ -18,34 +19,44 @@ const fakeLocks = () => {
       entry.run()
     }
   }
-  const locks: GateLocks = {
-    request: (name, options, callback) => new Promise((resolve, reject) => {
-      const release = () => {
-        entries.splice(entries.indexOf(entry), 1)
+  let tabs = 0
+  const tab = () => {
+    const id = tabs++
+    const locks: GateLocks = {
+      request: (name, options, callback) => new Promise((resolve, reject) => {
+        const release = () => {
+          entries.splice(entries.indexOf(entry), 1)
+          pump()
+        }
+        const entry: Entry = {name, mode: options.mode ?? 'exclusive', tab: id, granted: false, run: () => {
+          Promise.resolve(callback(null)).then(
+            value => { release(); resolve(value) },
+            error => { release(); reject(error) },
+          )
+        }}
+        entries.push(entry)
         pump()
-      }
-      const entry: Entry = {name, mode: options.mode ?? 'exclusive', granted: false, run: () => {
-        Promise.resolve(callback(null)).then(
-          value => { release(); resolve(value) },
-          error => { release(); reject(error) },
-        )
-      }}
-      entries.push(entry)
+      }),
+      query: async () => ({
+        held: entries.filter(e => e.granted).map(({name, mode}) => ({name, mode})),
+        pending: entries.filter(e => !e.granted).map(({name, mode}) => ({name, mode})),
+      }),
+    }
+    const unload = () => {
+      entries = entries.filter(e => e.tab !== id)
       pump()
-    }),
-    query: async () => ({
-      held: entries.filter(e => e.granted).map(({name, mode}) => ({name, mode})),
-      pending: entries.filter(e => !e.granted).map(({name, mode}) => ({name, mode})),
-    }),
+    }
+    return {locks, unload}
   }
+  const {locks} = tab()
   /** Another tab holding `name` until the returned close() runs. */
   const otherTab = (name: string) => {
-    let close!: () => void
-    void locks.request(name, {mode: 'shared'}, () => new Promise<void>(resolve => { close = resolve }))
-    return () => close()
+    const other = tab()
+    void other.locks.request(name, {mode: 'shared'}, () => new Promise<void>(() => {}))
+    return other.unload
   }
   const heldNames = () => entries.filter(e => e.granted).map(e => e.name)
-  return {locks, otherTab, heldNames}
+  return {locks, tab, otherTab, heldNames}
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -80,6 +91,25 @@ describe('localDbBuildGate', () => {
     closeSecond()
     await entered
     expect(waits).toEqual([true, false])
+  })
+
+  it('admits tabs of two builds starting together one build at a time', async () => {
+    const {tab} = fakeLocks()
+    const older = tab()
+    const newer = tab()
+    const olderGate = createLocalDbBuildGate(older.locks)
+    const newerGate = createLocalDbBuildGate(newer.locks)
+
+    const olderEntered = olderGate.enter('a.db', 'build-1')
+    let newerOpened = false
+    const newerEntered = newerGate.enter('a.db', 'build-2').then(() => { newerOpened = true })
+    await olderEntered
+    await settle()
+    expect(newerOpened).toBe(false)
+    expect(newerGate.isWaiting()).toBe(true)
+
+    older.unload()
+    await newerEntered
   })
 
   it('shares the database with tabs of the same build', async () => {
