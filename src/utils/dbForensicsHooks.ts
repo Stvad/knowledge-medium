@@ -11,10 +11,8 @@ import { reportRuntimeLocalDbCorruption } from '@/data/localDbCorruptionSignal.j
 import { omnilinerNamespace } from '@/utils/omnilinerNamespace.js'
 
 // Structural PowerSync status surface (avoids importing PowerSync types; see
-// firstSync.ts for the same approach). `downloadError` lives under
-// `dataFlowStatus` in current PowerSync, but check both shapes defensively.
+// firstSync.ts for the same approach).
 interface DownloadErrorStatus {
-  dataFlowStatus?: { downloadError?: unknown }
   downloadError?: unknown
 }
 interface CorruptionWatchDb {
@@ -22,8 +20,7 @@ interface CorruptionWatchDb {
   registerListener?: (l: { statusChanged?: (s: DownloadErrorStatus) => void }) => () => void
 }
 
-const downloadErrorOf = (s: DownloadErrorStatus | undefined): unknown =>
-  s?.dataFlowStatus?.downloadError ?? s?.downloadError
+const downloadErrorOf = (s: DownloadErrorStatus | undefined): unknown => s?.downloadError
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)

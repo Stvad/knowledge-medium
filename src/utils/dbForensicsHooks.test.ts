@@ -37,9 +37,7 @@ describe('watchForRuntimeCorruption', () => {
     const forensics = stubForensics()
     const db = {
       currentStatus: {
-        dataFlowStatus: {
-          downloadError: new Error('powersync_control: internal SQLite call returned CORRUPT'),
-        },
+        downloadError: new Error('powersync_control: internal SQLite call returned CORRUPT'),
       },
     }
     watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
@@ -50,7 +48,7 @@ describe('watchForRuntimeCorruption', () => {
 
   it('does not route a benign (non-corruption) downloadError to recovery', () => {
     const forensics = stubForensics()
-    const db = { currentStatus: { dataFlowStatus: { downloadError: new Error('network request failed') } } }
+    const db = { currentStatus: { downloadError: new Error('network request failed') } }
     watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
 
     expect(forensics.captureCorruptionSnapshot).not.toHaveBeenCalled()
@@ -71,7 +69,7 @@ describe('watchForRuntimeCorruption', () => {
     watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
     expect(getLocalDbCorruptionSnapshot()).toBeNull()
 
-    emit?.({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
+    emit?.({ downloadError: new Error('database disk image is malformed') })
     expect(getLocalDbCorruptionSnapshot()?.userId).toBe('user-1')
   })
 
@@ -79,7 +77,7 @@ describe('watchForRuntimeCorruption', () => {
     // A bare (non-CORRUPT) powersync_control sync failure must NOT capture — else
     // it would consume the one-shot and mask a later real-corruption snapshot.
     const forensics = stubForensics()
-    const benign = { currentStatus: { dataFlowStatus: { downloadError: new Error('powersync_control: sync iteration failed') } } }
+    const benign = { currentStatus: { downloadError: new Error('powersync_control: sync iteration failed') } }
     watchForRuntimeCorruption(benign, 'user-1', 'kmp-v6-user-1.db', forensics)
     expect(forensics.captureCorruptionSnapshot).not.toHaveBeenCalled()
     expect(getLocalDbCorruptionSnapshot()).toBeNull()
@@ -90,7 +88,7 @@ describe('watchForRuntimeCorruption', () => {
     // "…not a database…" etc. That must not yank a healthy session to reset.
     const forensics = stubForensics()
     const httpErr = { name: 'Error', message: 'HTTP Bad Request: table "x" is not a database table', stack: 'x' }
-    const db = { currentStatus: { dataFlowStatus: { downloadError: httpErr } } }
+    const db = { currentStatus: { downloadError: httpErr } }
     watchForRuntimeCorruption(db, 'user-1', 'kmp-v6-user-1.db', forensics)
     expect(forensics.captureCorruptionSnapshot).not.toHaveBeenCalled()
     expect(getLocalDbCorruptionSnapshot()).toBeNull()
@@ -106,11 +104,11 @@ describe('watchForRuntimeCorruption', () => {
 
     // A's listener is disposed, so a stale event from user A's (disconnected) DB
     // never reaches us — user A's corruption can't be routed into user B's session.
-    a.emit({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
+    a.emit({ downloadError: new Error('database disk image is malformed') })
     expect(getLocalDbCorruptionSnapshot()).toBeNull()
 
     // User B's corruption routes, tagged to user B.
-    b.emit({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
+    b.emit({ downloadError: new Error('database disk image is malformed') })
     expect(getLocalDbCorruptionSnapshot()?.userId).toBe('user-B')
   })
 })

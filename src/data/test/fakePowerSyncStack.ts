@@ -85,7 +85,7 @@ export interface FakeStack extends FakeAdapter {
   db: Record<string, unknown>
   /** Fed by the instrumented adapter. Pass to `new DbMetrics(pool)`. */
   pool: DbContention
-  /** Push a `dataFlowStatus` transition at whatever registered a listener. */
+  /** Push an upload/download transition at whatever registered a listener. */
   setSyncStatus: (flow: {downloading?: boolean; uploading?: boolean}) => void
 }
 
@@ -126,7 +126,7 @@ export const makeFakeStack = (opts: {
   const listeners: Array<(s: unknown) => void> = []
   if (opts.withSyncChannel !== false) {
     const channel = db as FakeSyncChannel
-    channel.currentStatus = opts.syncing ? {dataFlowStatus: opts.syncing} : undefined
+    channel.currentStatus = opts.syncing ? {...opts.syncing} : undefined
     channel.registerListener = (l) => {
       const fn = l.statusChanged
       if (!fn) return () => {}
@@ -144,7 +144,7 @@ export const makeFakeStack = (opts: {
     db,
     pool,
     setSyncStatus: (flow) => {
-      for (const l of [...listeners]) l({dataFlowStatus: flow})
+      for (const l of [...listeners]) l({...flow})
     },
   }
 }

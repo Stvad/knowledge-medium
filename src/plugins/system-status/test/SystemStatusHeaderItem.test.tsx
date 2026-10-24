@@ -23,12 +23,10 @@ const mocks = vi.hoisted(() => ({
     connected: true,
     connecting: false,
     hasSynced: true,
-    dataFlowStatus: {
-      uploading: false,
-      downloading: false,
-      uploadError: null as {message: string} | null,
-      downloadError: null as {message: string} | null,
-    },
+    uploading: false,
+    downloading: false,
+    uploadError: null as {message: string} | null,
+    downloadError: null as {message: string} | null,
     downloadProgress: null,
     lastSyncedAt: undefined,
   },
@@ -110,12 +108,10 @@ const defaultStatus = () => ({
   connected: true,
   connecting: false,
   hasSynced: true,
-  dataFlowStatus: {
-    uploading: false,
-    downloading: false,
-    uploadError: null as {message: string} | null,
-    downloadError: null as {message: string} | null,
-  },
+  uploading: false,
+  downloading: false,
+  uploadError: null as {message: string} | null,
+  downloadError: null as {message: string} | null,
   downloadProgress: null,
   lastSyncedAt: undefined,
 })
@@ -222,12 +218,10 @@ describe('SystemStatusHeaderItem', () => {
     mocks.status = {
       ...defaultStatus(),
       connected: false,
-      dataFlowStatus: {
-        uploading: false,
-        downloading: false,
-        uploadError: null,
-        downloadError: {message: 'WebSocket connection failed: 1006'},
-      },
+      uploading: false,
+      downloading: false,
+      uploadError: null,
+      downloadError: {message: 'WebSocket connection failed: 1006'},
     }
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -250,12 +244,10 @@ describe('SystemStatusHeaderItem', () => {
         ...defaultStatus(),
         connected: false,
         connecting: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: null,
-          downloadError: {message: 'PowerSync endpoint returned 401'},
-        },
+        uploading: false,
+        downloading: false,
+        uploadError: null,
+        downloadError: {message: 'PowerSync endpoint returned 401'},
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -281,12 +273,10 @@ describe('SystemStatusHeaderItem', () => {
       mocks.status = {
         ...defaultStatus(),
         connected: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: {message: 'token refresh hiccup'},
-          downloadError: null,
-        },
+        uploading: false,
+        downloading: false,
+        uploadError: {message: 'token refresh hiccup'},
+        downloadError: null,
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -313,12 +303,10 @@ describe('SystemStatusHeaderItem', () => {
       const erroring = {
         ...defaultStatus(),
         connected: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: {message: 'token refresh hiccup'},
-          downloadError: null,
-        },
+        uploading: false,
+        downloading: false,
+        uploadError: {message: 'token refresh hiccup'},
+        downloadError: null,
       }
       const healthy = {...defaultStatus(), connected: true}
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
