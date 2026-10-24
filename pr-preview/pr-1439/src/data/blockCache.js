@@ -1,1 +1,1 @@
-export{Xq as BlockCache,Zq as BlockCacheMetrics}from"../../chunks/app-D3HYfwxa.js";
+export{Xq as BlockCache,Zq as BlockCacheMetrics}from"../../chunks/app-B3hM5bwf.js";

@@ -1,1 +1,1 @@
-export{jZ as assertAliasClaimable,MZ as claimedAliases}from"../../chunks/app-D3HYfwxa.js";
+export{jZ as assertAliasClaimable,MZ as claimedAliases}from"../../chunks/app-B3hM5bwf.js";

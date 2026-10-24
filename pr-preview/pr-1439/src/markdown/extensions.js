@@ -1,1 +1,1 @@
-export{KP as markdownExtensionsFacet,qP as resolveMarkdownRenderConfig}from"../../chunks/app-D3HYfwxa.js";
+export{KP as markdownExtensionsFacet,qP as resolveMarkdownRenderConfig}from"../../chunks/app-B3hM5bwf.js";

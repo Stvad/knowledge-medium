@@ -1,1 +1,1 @@
-export{Yh as richPasteDecisionContribution}from"../../../chunks/app-D3HYfwxa.js";
+export{Yh as richPasteDecisionContribution}from"../../../chunks/app-B3hM5bwf.js";
