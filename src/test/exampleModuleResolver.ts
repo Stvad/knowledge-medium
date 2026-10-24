@@ -146,7 +146,7 @@ const parseFixture = (source: string, path: string) =>
     sourceType: 'module',
     // Derived from the extension: an angle-bracket type assertion is legal in
     // .ts and a parse error under the jsx plugin, so a blanket
-    // ['typescript','jsx'] crashed on source tsgo and eslint both accept.
+    // ['typescript','jsx'] crashed on source tsc and eslint both accept.
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 

@@ -38,8 +38,8 @@ jobs:
       - name: Install Social Publisher extension dependencies
         run: pnpm -C agent-extensions/social-media-publisher install --frozen-lockfile
 
-      # Persist the incremental build caches across runs: tsgo -b (the
-      # compiler for compile and compile:packages; plain tsc for compile:tsc) writes
+      # Persist the incremental build caches across runs: tsc -b (TypeScript 7's
+      # native compiler for compile and compile:packages; TS 6 for compile:ts6) writes
       # node_modules/.tmp/*.tsbuildinfo, eslint --cache writes
       # node_modules/.cache/eslint. Both live under node_modules and are wiped
       # on a cold runner. The key hashes the tsconfig/eslint config + rules +

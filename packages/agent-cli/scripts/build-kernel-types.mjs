@@ -13,13 +13,14 @@ const distDir = path.resolve(packageDir, 'dist')
 const kernelTypesOutDir = path.resolve(distDir, 'kernel-types')
 const tsBuildInfoPath = path.resolve(packageDir, 'node_modules/.tmp/kernel-types.tsbuildinfo')
 
-// Prefer the native compiler (tsgo) — same diagnostics, ~7x faster — and
-// fall back to plain tsc when it isn't installed. Its exports map hides the
-// bin, so resolve the package root via the exported package.json.
+// Prefer TypeScript 7's native compiler (installed as `typescript-native`;
+// `typescript` stays on 6 for the JS API typescript-eslint needs) and fall
+// back to TS 6's tsc when it isn't installed. Its exports map hides the bin,
+// so resolve the package root via the exported package.json.
 const resolveCompilerBin = () => {
   try {
-    const pkgRoot = path.dirname(require.resolve('@typescript/native-preview/package.json'))
-    return path.join(pkgRoot, 'bin', 'tsgo')
+    const pkgRoot = path.dirname(require.resolve('typescript-native/package.json'))
+    return path.join(pkgRoot, 'bin', 'tsc')
   } catch {
     return require.resolve('typescript/bin/tsc')
   }
