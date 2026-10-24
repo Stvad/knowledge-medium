@@ -18,7 +18,15 @@ export declare const classifyPackage: (
   times: Record<string, string>,
   policy: {now: number; cooldownMs: number},
 ) => PackageRow
-export declare const latestUpCommand: (rows: Pick<PackageRow, 'name' | 'sameMajor' | 'major'>[]) => string | null
+export declare const sameMajorUpCommand: (
+  rows: (Pick<PackageRow, 'name' | 'sameMajor'> & {packageManager?: boolean})[],
+) => string | null
+export declare const readOutdated: (result: {
+  status: number | null
+  stdout: string
+  stderr: string
+  error?: Error
+}) => {name: string; current: string | null; usedBy: string}[]
 export declare const parseWorkflowUses: (text: string) => {action: string; ref: string}[]
 export declare const parseEsmShPins: (text: string) => {name: string; version: string}[]
 export declare const actionRefMajor: (ref: string) => number | null

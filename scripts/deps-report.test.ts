@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionRefMajor, classifyPackage, latestUpCommand, parseEsmShPins, parseWorkflowUses } from './deps-report.mjs'
+import { actionRefMajor, classifyPackage, parseEsmShPins, parseWorkflowUses, readOutdated, sameMajorUpCommand } from './deps-report.mjs'
 
 const DAY = 86_400_000
 const now = Date.parse('2026-10-24T00:00:00Z')
@@ -58,19 +58,60 @@ describe('classifyPackage', () => {
   })
 })
 
-describe('latestUpCommand', () => {
-  it('lists only packages whose newest eligible version stays in their major', () => {
+describe('sameMajorUpCommand', () => {
+  it('names every same-major target explicitly, including packages whose next major is held', () => {
     const rows = [
       {name: 'vite', sameMajor: {version: '8.3.4'}, major: null},
       {name: '@babel/standalone', sameMajor: {version: '7.29.10'}, major: {version: '8.0.7'}},
       {name: 'typescript', sameMajor: null, major: {version: '7.0.2'}},
-      {name: 'sonner', sameMajor: {version: '2.0.8'}, major: null},
+      {name: 'cmdk', sameMajor: {version: '1.1.2'}, major: {version: '2.0.0'}},
     ]
-    expect(latestUpCommand(rows as never)).toBe('pnpm up -r --latest vite sonner')
+    expect(sameMajorUpCommand(rows as never)).toBe('pnpm up -r vite@8.3.4 @babel/standalone@7.29.10 cmdk@1.1.2')
+  })
+
+  it('leaves out the pinned package manager, which is not a dependency', () => {
+    const rows = [
+      {name: 'vite', sameMajor: {version: '8.3.4'}, major: null},
+      {name: 'pnpm', sameMajor: {version: '10.34.7'}, major: null, packageManager: true},
+    ]
+    expect(sameMajorUpCommand(rows as never)).toBe('pnpm up -r vite@8.3.4')
   })
 
   it('returns null when nothing qualifies', () => {
-    expect(latestUpCommand([])).toBeNull()
+    expect(sameMajorUpCommand([])).toBeNull()
+  })
+})
+
+describe('readOutdated', () => {
+  const json = (o: object) => JSON.stringify(o)
+  const dependents = [{name: 'app', location: '/x'}]
+
+  it('maps each package to its installed version and dependents', () => {
+    const stdout = json({vite: {current: '8.0.10', wanted: '8.0.10', latest: '8.3.5', dependentPackages: dependents}})
+    expect(readOutdated({status: 1, stdout, stderr: ''})).toEqual([{name: 'vite', current: '8.0.10', usedBy: 'app'}])
+  })
+
+  it('falls back to the locked version before the first install', () => {
+    const stdout = json({clsx: {wanted: '2.1.1', latest: '2.1.1', dependentPackages: dependents}})
+    expect(readOutdated({status: 0, stdout, stderr: ''})).toEqual([{name: 'clsx', current: '2.1.1', usedBy: 'app'}])
+  })
+
+  it('reads an empty successful scan as nothing outdated', () => {
+    expect(readOutdated({status: 0, stdout: '', stderr: ''})).toEqual([])
+  })
+
+  it('refuses a command that did not run', () => {
+    const error = Object.assign(new Error('spawnSync pnpm ENOENT'), {code: 'ENOENT'})
+    expect(() => readOutdated({status: null, stdout: '', stderr: '', error})).toThrow(/pnpm outdated did not run: spawnSync pnpm ENOENT/)
+  })
+
+  it('refuses a failing exit status, with its stderr, even when it printed JSON', () => {
+    expect(() => readOutdated({status: 2, stdout: '{}', stderr: 'ERR_PNPM_NO_LOCKFILE'})).toThrow(/failed \(exit 2\).*ERR_PNPM_NO_LOCKFILE/)
+  })
+
+  it('refuses "outdated" with nothing printed, and output that is not JSON', () => {
+    expect(() => readOutdated({status: 1, stdout: '', stderr: ''})).toThrow(/printed no JSON/)
+    expect(() => readOutdated({status: 1, stdout: 'Scope: all 3 workspace projects', stderr: ''})).toThrow(/printed no JSON/)
   })
 })
 

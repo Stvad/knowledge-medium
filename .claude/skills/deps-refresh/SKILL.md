@@ -13,7 +13,7 @@ The output is one PR with one commit per concern. It takes everything safe under
   - Never lower it, and never add a `minimumReleaseAgeExclude` to pull something in sooner.
   - A security fix still inside the cooldown goes in the PR's Audit section with the date it clears. Whether to make an exclusion is Vlad's call.
 - Start from an up-to-date master on a fresh branch, with a clean tree.
-- Snapshot first:
+- Snapshot first, after `pnpm install --frozen-lockfile` here and in `agent-extensions/social-media-publisher` (the report falls back to locked versions without it, but the gate needs the install anyway):
   - Run `node scripts/deps-report.mjs`. Run it again with `--cwd agent-extensions/social-media-publisher`, a standalone install with its own lockfile.
   - Record `pnpm audit` (counts by severity) and the test count from the last `pnpm run check`.
   - The PR compares against these.
@@ -21,8 +21,8 @@ The output is one PR with one commit per concern. It takes everything safe under
 ## 1. Same-major refresh (first commit)
 
 1. Run the two commands the report prints.
-   - `pnpm up -r --latest <names>` covers only packages whose newest eligible version stays in their major. `--latest` also moves exact pins.
-   - Then `pnpm up -r` updates everything in range, transitive dependencies included.
+   - `pnpm up -r name@version …` names every same-major target. It keeps each specifier's pin style, and it is the only way to move an exact pin.
+   - Then `pnpm up -r` updates everything else in range, transitive dependencies included.
 2. Set each `overrides` entry in `pnpm-workspace.yaml` to the specifier its direct dependency now carries. A lower override floor makes the gate's `pnpm install --frozen-lockfile` fail with "specifiers in the lockfile don't match".
 3. Mirror the toolchain pins in `packages/agent-cli/src/scaffold.ts`. The scaffolded extension's devDependencies follow the app's.
 4. React: if `vite-plugins/reactImportMapMode.ts` exists, production loads React from esm.sh through SRI-pinned URLs. Those URLs live in that file, `index.html` and `minimal-editor.html`.

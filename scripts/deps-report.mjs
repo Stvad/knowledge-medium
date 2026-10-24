@@ -61,13 +61,14 @@ export const classifyPackage = ({name, current}, times, {now, cooldownMs}) => {
 }
 
 /**
- * The bump that is safe to apply mechanically: `--latest` moves exact pins
- * too, so it may only name packages whose newest eligible version stays in
- * their major. Everything else in range is `pnpm up -r`'s job.
+ * The bump that is safe to apply mechanically. Every target is named with its
+ * version: `pnpm up -r name@version` keeps each specifier's pin style (exact
+ * stays exact, `^` stays `^`), and a bare `pnpm up -r` cannot move an exact
+ * pin at all. `--latest` would also cross into a held major.
  */
-export const latestUpCommand = rows => {
-  const names = rows.filter(r => r.sameMajor && !r.major).map(r => r.name)
-  return names.length ? `pnpm up -r --latest ${names.join(' ')}` : null
+export const sameMajorUpCommand = rows => {
+  const targets = rows.filter(r => r.sameMajor && !r.packageManager).map(r => `${r.name}@${r.sameMajor.version}`)
+  return targets.length ? `pnpm up -r ${targets.join(' ')}` : null
 }
 
 export const parseWorkflowUses = text =>
@@ -95,14 +96,31 @@ const readCooldownMinutes = dir => {
   return match ? Number(match[1]) : null
 }
 
-const pnpmOutdated = dir => {
-  const result = spawnSync('pnpm', ['outdated', '-r', '--format', 'json'], {cwd: dir, encoding: 'utf8'})
-  // Exit 1 means "something is outdated"; only unparseable output is an error.
-  try {
-    return JSON.parse(result.stdout || '{}')
-  } catch {
-    throw new Error(`pnpm outdated printed no JSON (exit ${result.status}): ${result.stderr.trim().slice(0, 500)}`)
+/**
+ * `result` is spawnSync's for `pnpm outdated -r --format json`, which exits 1
+ * when something is outdated. Anything that is not a clean scan throws, so a
+ * failed scan can never read as "nothing to update". Before the first install
+ * pnpm prints no `current`, only the lockfile's `wanted`.
+ */
+export const readOutdated = ({status, stdout, stderr, error}) => {
+  if (error) throw new Error(`pnpm outdated did not run: ${error.message}`)
+  const detail = `(exit ${status}): ${(stderr ?? '').trim().slice(0, 500)}`
+  if (status !== 0 && status !== 1) throw new Error(`pnpm outdated failed ${detail}`)
+  if (!stdout.trim()) {
+    if (status === 0) return []
+    throw new Error(`pnpm outdated printed no JSON ${detail}`)
   }
+  let parsed
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    throw new Error(`pnpm outdated printed no JSON ${detail}`)
+  }
+  return Object.entries(parsed).map(([name, info]) => ({
+    name,
+    current: info.current ?? info.wanted ?? null,
+    usedBy: (info.dependentPackages ?? []).map(d => d.name).join(', '),
+  }))
 }
 
 /** null when npmjs doesn't have it (a private scope, a typo'd URL import). */
@@ -157,16 +175,19 @@ const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
   table('Same-major updates', rows.filter(r => r.sameMajor), [
     ['package', r => r.name], ['current', r => r.current], ['target', r => r.sameMajor.version], ['used by', r => r.usedBy],
   ])
-  const command = latestUpCommand(rows)
+  const command = sameMajorUpCommand(rows)
   if (command) lines.push('Apply with:', '', '```bash', command, 'pnpm up -r', '```', '')
+  const pm = rows.find(r => r.packageManager && r.sameMajor)
+  if (pm) lines.push(`Set \`"packageManager": "pnpm@${pm.sameMajor.version}"\` in package.json.`, '')
   table('Eligible majors (research before taking)', rows.filter(r => r.major), [
     ['package', r => r.name], ['current', r => r.current], ['major', r => r.major.version], ['published', r => day(r.major.published)], ['used by', r => r.usedBy],
   ])
   table('Held by the cooldown', rows.filter(r => r.held), [
     ['package', r => r.name], ['newest', r => r.held.version], ['published', r => day(r.held.published)], ['eligible from', r => r.held.eligibleAt.slice(0, 16)],
   ])
-  table('Check by hand (prerelease, or not on npmjs)', rows.filter(r => r.prerelease || r.notOnNpm), [
-    ['package', r => r.name], ['current', r => r.current], ['why', r => r.notOnNpm ? 'not on npmjs' : 'prerelease'],
+  const whyByHand = r => r.noVersion ? 'no installed or locked version' : r.notOnNpm ? 'not on npmjs' : 'prerelease'
+  table('Check by hand', rows.filter(r => r.prerelease || r.notOnNpm || r.noVersion), [
+    ['package', r => r.name], ['current', r => r.current ?? '?'], ['why', whyByHand],
   ])
   table('esm.sh URL pins', esmPins, [
     ['package', r => r.name], ['pinned', r => r.version], ['newest eligible', r => r.target ?? 'current'], ['files', r => r.files.join(', ')],
@@ -188,16 +209,15 @@ const main = async argv => {
   const cooldownMinutes = readCooldownMinutes(dir)
   const policy = {now: Date.now(), cooldownMs: (cooldownMinutes ?? 0) * 60_000}
 
-  const outdated = Object.entries(pnpmOutdated(dir)).map(([name, info]) => ({
-    name, current: info.current, usedBy: (info.dependentPackages ?? []).map(d => d.name).join(', '),
-  }))
+  const outdated = readOutdated(spawnSync('pnpm', ['outdated', '-r', '--format', 'json'], {cwd: dir, encoding: 'utf8'}))
   const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
   const pinnedPnpm = /^pnpm@(\d+\.\d+\.\d+)/.exec(manifest.packageManager ?? '')
-  if (pinnedPnpm) outdated.push({name: 'pnpm', current: pinnedPnpm[1], usedBy: 'packageManager'})
+  if (pinnedPnpm) outdated.push({name: 'pnpm', current: pinnedPnpm[1], usedBy: 'packageManager', packageManager: true})
   const rows = (await mapLimit(outdated, 8, async pkg => {
+    if (pkg.current === null) return {...pkg, noVersion: true}
     const times = await registryTimes(pkg.name)
-    return times ? {...classifyPackage(pkg, times, policy), usedBy: pkg.usedBy} : {...pkg, notOnNpm: true}
-  })).filter(r => r.sameMajor || r.major || r.held || r.prerelease || r.notOnNpm)
+    return times ? {...classifyPackage(pkg, times, policy), usedBy: pkg.usedBy, packageManager: pkg.packageManager} : {...pkg, notOnNpm: true}
+  })).filter(r => r.sameMajor || r.major || r.held || r.prerelease || r.notOnNpm || r.noVersion)
 
   const pinsByName = new Map()
   for (const file of trackedFiles(dir, 'https://esm\\.sh/')) {
