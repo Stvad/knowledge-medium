@@ -1,0 +1,1 @@
+export{Gd as lintExtensionSource}from"../../../chunks/app-BlvgMVID.js";

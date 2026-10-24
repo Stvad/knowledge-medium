@@ -1,0 +1,1 @@
+export{Rz as SuspenseFallback}from"../../../chunks/app-BlvgMVID.js";

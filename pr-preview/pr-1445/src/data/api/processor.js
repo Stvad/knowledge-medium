@@ -1,0 +1,1 @@
+export{Set as definePostCommitProcessor}from"../../../chunks/app-BlvgMVID.js";

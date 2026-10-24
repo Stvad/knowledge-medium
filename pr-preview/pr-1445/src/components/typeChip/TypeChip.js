@@ -1,0 +1,1 @@
+export{QD as TypeChip}from"../../../chunks/app-BlvgMVID.js";

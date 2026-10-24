@@ -1,0 +1,1 @@
+export{SG as aliasDataExtension}from"../../../chunks/app-BlvgMVID.js";

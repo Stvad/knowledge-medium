@@ -1,0 +1,1 @@
+export{sN as canConvertEmptyChildBlockToProperty,cN as convertEmptyChildBlockToProperty}from"../../chunks/app-BlvgMVID.js";

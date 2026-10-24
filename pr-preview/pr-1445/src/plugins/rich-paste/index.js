@@ -1,0 +1,1 @@
+export{Jh as richPastePlugin}from"../../../chunks/app-BlvgMVID.js";

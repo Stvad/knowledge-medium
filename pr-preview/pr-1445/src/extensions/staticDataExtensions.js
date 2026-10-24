@@ -1,0 +1,1 @@
+export{aB as staticDataExtensions}from"../../chunks/app-BlvgMVID.js";
