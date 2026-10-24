@@ -1,1 +1,1 @@
-export{Qp as UpdateIndicator}from"../../../chunks/app-Bz2fC379.js";
+export{Qp as UpdateIndicator}from"../../../chunks/app-B0AfrydY.js";

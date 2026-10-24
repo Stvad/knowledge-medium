@@ -1,1 +1,1 @@
-export{fm as inlineBacklinkCountsExtension}from"../../../../chunks/app-Bz2fC379.js";
+export{fm as inlineBacklinkCountsExtension}from"../../../../chunks/app-B0AfrydY.js";

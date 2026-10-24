@@ -1,1 +1,1 @@
-export{Qh as attachmentsPlugin}from"../../../chunks/app-Bz2fC379.js";
+export{Qh as attachmentsPlugin}from"../../../chunks/app-B0AfrydY.js";

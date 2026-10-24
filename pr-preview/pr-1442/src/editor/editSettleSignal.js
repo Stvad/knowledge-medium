@@ -1,1 +1,1 @@
-export{TN as blockEditResumed,EN as blockEditSettled,DN as notifyBlockEditResumed,ON as notifyBlockEditSettled}from"../../chunks/app-Bz2fC379.js";
+export{TN as blockEditResumed,EN as blockEditSettled,DN as notifyBlockEditResumed,ON as notifyBlockEditSettled}from"../../chunks/app-B0AfrydY.js";
