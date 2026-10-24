@@ -30,10 +30,9 @@ const FAILURE_TAIL_LINES = 10
 /**
  * The one non-interactive install, shared with the gate. `--frozen-lockfile`
  * reconciles in both directions, so a package left newer than the branch asks
- * for is downgraded. The purge flag is load-bearing: an install that has to
- * recreate node_modules aborts without a TTY, and neither caller has one.
+ * for is downgraded.
  */
-export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile', '--config.confirmModulesPurge=false']
+export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile']
 export const BUILD_ARGS = ['run', 'compile:packages']
 
 /**
@@ -64,6 +63,8 @@ const readOrNull = path => {
 
 const mtimeOf = path => statSync(path, { throwIfNoEntry: false })?.mtimeMs
 
+// pnpm writes the install record even when the install fails on an unlisted
+// build script, so the hook reports that failure once; the gate's install keeps failing.
 export const readDepsState = root => {
   const wanted = readOrNull(join(root, LOCKFILE))
   if (!wanted) return 'no-lockfile'

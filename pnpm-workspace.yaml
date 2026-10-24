@@ -23,12 +23,13 @@ minimumReleaseAge: 10080
 # Say when node_modules is out of sync before `pnpm run`/`exec`, but leave the
 # reinstall to its two owners, scripts/ensure-deps.mjs (session start) and the
 # gate's first task: both are frozen. The default, `install`, runs a non-frozen
-# install that rewrites pnpm-lock.yaml from whatever package.json says.
+# install outside CI, which rewrites pnpm-lock.yaml from whatever package.json says.
 verifyDepsBeforeRun: warn
 
 # Every dependency with an install script must be listed: true runs it, false
 # skips it, and an unlisted one fails the install (strictDepBuilds). These two
-# genuinely need theirs (native/wasm setup).
+# genuinely need theirs (native/wasm setup). pnpm silently ignores the old
+# `onlyBuiltDependencies` list.
 allowBuilds:
   better-sqlite3: true
   '@journeyapps/wa-sqlite': true
