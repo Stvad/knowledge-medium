@@ -1,0 +1,1 @@
+export{BP as defineVariant,VP as defineVariantFacet}from"../../chunks/app-BGSHgReq.js";

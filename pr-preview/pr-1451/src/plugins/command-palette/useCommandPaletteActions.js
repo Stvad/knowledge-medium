@@ -1,0 +1,1 @@
+export{kE as useCommandPaletteActions}from"../../../chunks/app-BGSHgReq.js";

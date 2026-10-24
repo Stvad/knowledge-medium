@@ -1,0 +1,1 @@
+export{hO as ensureMetricsConsoleHook}from"../../chunks/app-BGSHgReq.js";

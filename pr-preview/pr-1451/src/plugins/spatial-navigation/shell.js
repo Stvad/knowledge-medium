@@ -1,0 +1,1 @@
+export{Py as spatialNavigationShellDecorator}from"../../../chunks/app-BGSHgReq.js";

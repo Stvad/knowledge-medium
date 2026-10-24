@@ -1,0 +1,1 @@
+export{Yp as BlockMetaCard}from"../../../chunks/app-BGSHgReq.js";

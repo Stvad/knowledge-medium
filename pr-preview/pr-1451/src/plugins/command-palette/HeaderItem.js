@@ -1,0 +1,1 @@
+export{ZE as CommandPaletteHeaderItem}from"../../../chunks/app-BGSHgReq.js";

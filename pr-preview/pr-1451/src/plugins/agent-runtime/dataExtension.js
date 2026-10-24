@@ -1,0 +1,1 @@
+export{WG as agentRuntimeDataExtension}from"../../../chunks/app-BGSHgReq.js";

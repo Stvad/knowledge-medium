@@ -1,0 +1,1 @@
+export{ZP as BlockProperties}from"../../chunks/app-BGSHgReq.js";

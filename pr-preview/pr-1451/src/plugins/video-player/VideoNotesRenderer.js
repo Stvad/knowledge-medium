@@ -1,0 +1,1 @@
+export{Sv as VideoNotesLayout,Cv as VideoNotesRenderer,wv as videoNotesLayoutContribution}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{sW as characterCounterDataExtension}from"../../../chunks/app-BGSHgReq.js";

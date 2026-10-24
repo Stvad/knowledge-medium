@@ -1,0 +1,1 @@
+export{ol as blockTaggingDataExtension}from"../../../chunks/app-BGSHgReq.js";

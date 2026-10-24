@@ -1,0 +1,1 @@
+export{SM as ExtensionRenderBoundary}from"../../chunks/app-BGSHgReq.js";

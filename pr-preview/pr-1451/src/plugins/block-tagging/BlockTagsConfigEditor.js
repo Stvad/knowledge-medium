@@ -1,0 +1,1 @@
+export{al as BlockTagsConfigEditor}from"../../../chunks/app-BGSHgReq.js";

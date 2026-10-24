@@ -1,0 +1,1 @@
+export{Bb as mobileBottomNavItemsFacet}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{tx as blockEditingContentRenderer}from"../../../chunks/app-BGSHgReq.js";

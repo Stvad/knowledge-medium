@@ -1,0 +1,1 @@
+export{T8 as getOrCreateTypesPage,E8 as typesPageBlockId}from"../../chunks/app-BGSHgReq.js";

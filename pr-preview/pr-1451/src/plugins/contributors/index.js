@@ -1,0 +1,1 @@
+export{Au as contributorsPlugin}from"../../../chunks/app-BGSHgReq.js";

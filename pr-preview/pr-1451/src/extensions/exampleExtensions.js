@@ -1,0 +1,1 @@
+export{kO as exampleExtensions,AO as insertExampleExtensionsUnder}from"../../chunks/app-BGSHgReq.js";

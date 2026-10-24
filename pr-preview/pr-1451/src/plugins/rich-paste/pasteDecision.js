@@ -1,0 +1,1 @@
+export{Jh as richPasteDecisionContribution}from"../../../chunks/app-BGSHgReq.js";

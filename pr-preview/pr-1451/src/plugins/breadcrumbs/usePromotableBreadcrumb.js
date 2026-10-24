@@ -1,0 +1,1 @@
+export{Gb as usePromotableBreadcrumb}from"../../../chunks/app-BGSHgReq.js";

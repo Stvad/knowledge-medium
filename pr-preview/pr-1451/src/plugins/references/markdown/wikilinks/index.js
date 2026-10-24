@@ -1,0 +1,1 @@
+export{sh as wikilinkMarkdownExtension}from"../../../../../chunks/app-BGSHgReq.js";

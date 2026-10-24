@@ -1,0 +1,1 @@
+export{vd as extensionApiCatalog,yd as extensionApiRuntimeExports}from"../../chunks/app-BGSHgReq.js";

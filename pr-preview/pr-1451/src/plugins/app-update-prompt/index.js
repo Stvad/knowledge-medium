@@ -1,0 +1,1 @@
+export{pk as appUpdatePromptExtension}from"../../../chunks/app-BGSHgReq.js";

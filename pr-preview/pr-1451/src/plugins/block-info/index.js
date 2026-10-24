@@ -1,0 +1,1 @@
+export{Jp as blockInfoPlugin}from"../../../chunks/app-BGSHgReq.js";

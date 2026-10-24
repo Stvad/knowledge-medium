@@ -1,0 +1,1 @@
+export{HL as isIOS,UL as isMacPlatform}from"../../chunks/app-BGSHgReq.js";

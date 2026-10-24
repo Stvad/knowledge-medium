@@ -1,0 +1,1 @@
+export{XH as matchCharTrigger}from"../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{$R as floatingAnchorFromRect,ez as useAnchoredFloating}from"../../../chunks/app-BGSHgReq.js";

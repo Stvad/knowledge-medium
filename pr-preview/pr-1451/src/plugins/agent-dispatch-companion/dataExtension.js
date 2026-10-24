@@ -1,0 +1,1 @@
+export{KG as agentDispatchCompanionDataExtension}from"../../../chunks/app-BGSHgReq.js";

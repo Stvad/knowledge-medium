@@ -1,0 +1,1 @@
+export{UA as DialogHost,WA as dialogAppMountExtension}from"../../chunks/app-BGSHgReq.js";

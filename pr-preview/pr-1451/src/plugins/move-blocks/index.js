@@ -1,0 +1,1 @@
+export{Sh as MOVE_BLOCKS_ACTION_ID,Ch as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Ah as MoveDestinationPicker,wh as moveBlockAction,Th as moveBlocksAction,yh as moveBlocksPlugin,kh as moveBlocksTo}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{ch as Wikilink}from"../../../../../chunks/app-BGSHgReq.js";

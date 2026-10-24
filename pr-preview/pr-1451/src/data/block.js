@@ -1,0 +1,1 @@
+export{KX as Block,qX as requireLoadedBlock}from"../../chunks/app-BGSHgReq.js";

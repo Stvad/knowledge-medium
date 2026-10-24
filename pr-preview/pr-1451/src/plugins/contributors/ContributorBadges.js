@@ -1,0 +1,1 @@
+export{ju as contributorBadgesDecoratorContribution}from"../../../chunks/app-BGSHgReq.js";

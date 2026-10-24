@@ -1,0 +1,1 @@
+export{PA as defaultRegistry,FA as defaultRendererContributions,IA as defaultRenderersExtension}from"../../chunks/app-BGSHgReq.js";

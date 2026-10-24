@@ -1,0 +1,1 @@
+export{r6 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,i6 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,a6 as __resetLayoutSessionIdForTesting,o6 as getLayoutSessionId,s6 as isInstalledAppDisplayMode,c6 as readOrCreateLayoutSessionId}from"../../chunks/app-BGSHgReq.js";

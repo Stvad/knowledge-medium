@@ -1,0 +1,1 @@
+export{lh as remarkWikilinks}from"../../../../../chunks/app-BGSHgReq.js";

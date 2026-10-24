@@ -1,0 +1,1 @@
+export{TZ as emitKernelInvalidations,EZ as kernelInvalidationRule}from"../../../chunks/app-BGSHgReq.js";

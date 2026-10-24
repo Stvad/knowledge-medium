@@ -1,0 +1,1 @@
+export{wd as PROVENANCE_BLOCKS_PER_KEY,Td as PROVENANCE_KEY_LIMIT,Ed as auditPropertyRegistration,Dd as describeUnregisteredProperty}from"../../../chunks/app-BGSHgReq.js";

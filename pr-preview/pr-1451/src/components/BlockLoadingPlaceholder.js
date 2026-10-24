@@ -1,0 +1,1 @@
+export{jA as BlockLoadingPlaceholder}from"../../chunks/app-BGSHgReq.js";

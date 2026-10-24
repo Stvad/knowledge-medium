@@ -1,0 +1,1 @@
+export{s5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{vx as getOrCreateShortcutsBlock,yx as journalShortcutBlockId,bx as shortcutsBlockId}from"../../../chunks/app-BGSHgReq.js";

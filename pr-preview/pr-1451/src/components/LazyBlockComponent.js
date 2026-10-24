@@ -1,0 +1,1 @@
+export{OA as LazyBlockComponent}from"../../chunks/app-BGSHgReq.js";

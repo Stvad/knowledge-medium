@@ -1,0 +1,1 @@
+export{ff as assertActiveWorkspace}from"../../../chunks/app-BGSHgReq.js";

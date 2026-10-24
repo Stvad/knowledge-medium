@@ -1,0 +1,1 @@
+export{il as blockTagsConfigUi}from"../../../chunks/app-BGSHgReq.js";

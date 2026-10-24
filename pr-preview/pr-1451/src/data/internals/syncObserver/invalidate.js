@@ -1,0 +1,1 @@
+export{LX as applySyncInvalidation}from"../../../../chunks/app-BGSHgReq.js";

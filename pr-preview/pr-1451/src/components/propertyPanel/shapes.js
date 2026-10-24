@@ -1,0 +1,1 @@
+export{az as propertyShapeLabel}from"../../../chunks/app-BGSHgReq.js";

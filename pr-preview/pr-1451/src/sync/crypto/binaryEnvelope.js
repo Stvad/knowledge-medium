@@ -1,0 +1,1 @@
+export{sS as BINARY_ENVELOPE_MAGIC,cS as BINARY_ENVELOPE_MIN_BYTES,lS as BINARY_ENVELOPE_OVERHEAD_BYTES,uS as BINARY_MAGIC_BYTES,dS as decodeBinaryEnvelope,fS as encodeBinaryEnvelope,pS as hasBinaryEnvelopeMagic}from"../../../chunks/app-BGSHgReq.js";

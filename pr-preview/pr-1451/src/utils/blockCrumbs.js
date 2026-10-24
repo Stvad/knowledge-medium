@@ -1,0 +1,1 @@
+export{rw as CRUMB_ELLIPSIS,iw as CRUMB_MAX_CHARS,aw as CRUMB_MAX_SEGMENTS,ow as collapseCrumbs,sw as crumbsFromAncestors}from"../../chunks/app-BGSHgReq.js";

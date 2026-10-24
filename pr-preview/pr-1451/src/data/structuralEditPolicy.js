@@ -1,0 +1,1 @@
+export{jO as resolveStructuralEditPolicy,MO as structuralEditPolicyForBlock}from"../../chunks/app-BGSHgReq.js";

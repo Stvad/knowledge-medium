@@ -1,0 +1,1 @@
+export{Sk as checkForAppUpdate,Ck as registerServiceWorker,wk as watchServiceWorkerUpdates}from"../chunks/app-BGSHgReq.js";

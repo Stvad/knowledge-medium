@@ -1,0 +1,1 @@
+export{Mk as dispatchPointerAction,Nk as setPointerActionDispatcher}from"../../chunks/app-BGSHgReq.js";

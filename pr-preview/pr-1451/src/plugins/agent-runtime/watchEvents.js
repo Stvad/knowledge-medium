@@ -1,0 +1,1 @@
+export{gf as createWatchEventsRegistry,_f as watchEventsRegistry}from"../../../chunks/app-BGSHgReq.js";

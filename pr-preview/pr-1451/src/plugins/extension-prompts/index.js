@@ -1,0 +1,1 @@
+export{$O as ExtensionPromptSurface,ek as extensionPromptsExtension}from"../../../chunks/app-BGSHgReq.js";

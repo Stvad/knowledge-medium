@@ -1,0 +1,1 @@
+export{Xb as BreadcrumbList}from"../../../chunks/app-BGSHgReq.js";

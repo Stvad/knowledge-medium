@@ -1,0 +1,1 @@
+export{gQ as agree,_Q as pluralize}from"../../chunks/app-BGSHgReq.js";

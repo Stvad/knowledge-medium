@@ -1,0 +1,1 @@
+export{sK as SYNCED_TABLES,cK as syncedWriteTarget,lK as writeTargets}from"../../chunks/app-BGSHgReq.js";

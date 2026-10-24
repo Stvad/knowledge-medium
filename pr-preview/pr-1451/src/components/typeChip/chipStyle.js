@@ -1,0 +1,1 @@
+export{QD as chipStyle}from"../../../chunks/app-BGSHgReq.js";

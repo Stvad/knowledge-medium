@@ -1,0 +1,1 @@
+export{mB as staticDataExtensions}from"../../chunks/app-BGSHgReq.js";

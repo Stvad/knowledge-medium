@@ -1,0 +1,1 @@
+export{gK as omnilinerNamespace}from"../../chunks/app-BGSHgReq.js";

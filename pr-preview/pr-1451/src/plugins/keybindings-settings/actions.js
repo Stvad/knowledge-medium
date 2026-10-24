@@ -1,0 +1,1 @@
+export{gE as openKeybindingsSettingsAction}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{mM as useIsMobile,hM as usePointerCoarse}from"../../chunks/app-BGSHgReq.js";

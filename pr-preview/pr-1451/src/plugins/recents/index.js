@@ -1,0 +1,1 @@
+export{hC as OPEN_RECENTS_ACTION_ID,gC as openRecentsAction,_C as recentsHeaderItem,vC as recentsPlugin}from"../../../chunks/app-BGSHgReq.js";

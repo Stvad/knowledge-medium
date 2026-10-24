@@ -1,0 +1,1 @@
+export{HP as isFocalRender,UP as useIsFocalRender}from"../../chunks/app-BGSHgReq.js";

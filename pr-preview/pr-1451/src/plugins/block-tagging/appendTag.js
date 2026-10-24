@@ -1,0 +1,1 @@
+export{tl as appendTagToBlocks,nl as appendTagToContent}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{aB as appVersion}from"../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{XO as editorAutocompleteExtension}from"../../chunks/app-BGSHgReq.js";

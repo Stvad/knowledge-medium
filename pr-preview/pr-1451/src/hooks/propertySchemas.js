@@ -1,0 +1,1 @@
+export{tz as usePropertySchemas}from"../../chunks/app-BGSHgReq.js";

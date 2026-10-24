@@ -1,0 +1,1 @@
+export{rm as backlinksViewPlugin}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{OC as useMinuteClock}from"../../chunks/app-BGSHgReq.js";

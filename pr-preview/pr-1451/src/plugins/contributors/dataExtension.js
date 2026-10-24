@@ -1,0 +1,1 @@
+export{GU as contributorsDataExtension}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{CF as declarationOnlyDefinitionForName,wF as declarationOnlyStatusText}from"../../../chunks/app-BGSHgReq.js";

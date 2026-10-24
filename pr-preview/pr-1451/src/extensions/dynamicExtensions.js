@@ -1,0 +1,1 @@
+export{qk as dynamicExtensionsExtension}from"../../chunks/app-BGSHgReq.js";

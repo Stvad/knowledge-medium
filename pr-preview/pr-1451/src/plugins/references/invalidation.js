@@ -1,0 +1,1 @@
+export{jB as REFERENCES_TARGET_INVALIDATION_CHANNEL,MB as referencesInvalidationRule}from"../../../chunks/app-BGSHgReq.js";

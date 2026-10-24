@@ -1,0 +1,1 @@
+export{Uk as ClientLocalSettings,Wk as clientLocalSettings}from"../../chunks/app-BGSHgReq.js";

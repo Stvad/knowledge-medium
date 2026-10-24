@@ -1,0 +1,1 @@
+export{uW as charLimitProp,dW as charProfileProp,fW as charScopeProp}from"../../../chunks/app-BGSHgReq.js";

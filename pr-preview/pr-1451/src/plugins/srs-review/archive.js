@@ -1,0 +1,1 @@
+export{Is as archiveSrsCard}from"../../../chunks/app-BGSHgReq.js";

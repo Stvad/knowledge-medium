@@ -1,0 +1,1 @@
+export{vQ as NAMES_IN_A_SENTENCE,yQ as describeNames,bQ as firstFew}from"../../chunks/app-BGSHgReq.js";

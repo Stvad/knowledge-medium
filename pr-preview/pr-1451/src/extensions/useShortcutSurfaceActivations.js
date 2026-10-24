@@ -1,0 +1,1 @@
+export{AN as useShortcutSurfaceActivations}from"../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{hh as backlinkCompletionSource,gh as createBacklinkAutocomplete,_h as isInsideBacklinkBrackets}from"../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{D8 as getOrCreatePropertiesPage,O8 as propertiesPageBlockId}from"../../chunks/app-BGSHgReq.js";

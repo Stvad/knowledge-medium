@@ -1,0 +1,1 @@
+export{Vz as SuspenseFallback}from"../../../chunks/app-BGSHgReq.js";

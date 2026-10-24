@@ -1,0 +1,1 @@
+export{OW as BACKLINKS_COUNT_FOR_BLOCK_QUERY,kW as backlinksCountForBlockQuery}from"../../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{_m as inlineBacklinksApplies}from"../../../../chunks/app-BGSHgReq.js";

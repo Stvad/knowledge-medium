@@ -1,0 +1,1 @@
+export{jG as aliasDataExtension}from"../../../chunks/app-BGSHgReq.js";

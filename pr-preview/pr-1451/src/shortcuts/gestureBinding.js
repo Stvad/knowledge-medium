@@ -1,0 +1,1 @@
+export{Ak as gestureBindingDescriptor,jk as matchesGestureEvent}from"../../chunks/app-BGSHgReq.js";

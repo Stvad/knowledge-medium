@@ -1,0 +1,1 @@
+export{mtt as CHANGE_SCOPE_POLICIES,htt as ChangeScope,gtt as isChangeScope,_tt as policyForScope,vtt as scopeAllowedInReadOnly,ytt as scopeIsUndoable,btt as scopePoliciesEquivalent,xtt as scopeUploadsToServer,Stt as sourceForScope}from"../../../chunks/app-BGSHgReq.js";

@@ -1,0 +1,1 @@
+export{get as SYSTEM_AUTHOR_PREFIX,_et as isSystemAuthor,vet as systemAuthor}from"../../../chunks/app-BGSHgReq.js";

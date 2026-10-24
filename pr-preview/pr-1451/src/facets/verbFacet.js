@@ -1,0 +1,1 @@
+export{UG as defineVerbFacet}from"../../chunks/app-BGSHgReq.js";
