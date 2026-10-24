@@ -128,6 +128,15 @@ describe('BlockEditor focus when edit mode moves to another block', () => {
       return heldFrames.length
     })
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    // Browsers queue `selectionchange` as a task; happy-dom fires it inside
+    // Selection.collapse, which CodeMirror calls mid-update, so dispatching
+    // into a focused editor re-enters EditorView.update and throws.
+    const dispatchEvent = document.dispatchEvent.bind(document)
+    vi.spyOn(document, 'dispatchEvent').mockImplementation(event => {
+      if (event.type !== 'selectionchange') return dispatchEvent(event)
+      setTimeout(() => dispatchEvent(event))
+      return true
+    })
 
     await repo.tx(async tx => {
       await tx.create({
