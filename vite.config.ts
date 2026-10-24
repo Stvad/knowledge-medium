@@ -2,9 +2,7 @@ import {defineConfig, type Plugin} from 'vite'
 import path from "path"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
-import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
-import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode.ts'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls.ts'
 import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults.ts'
 import {resolveAppVersion} from './scripts/app-version.ts'
@@ -75,12 +73,6 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
     )
 }
 
-const isReactImportExternal = (id: string): boolean =>
-    id === 'react' ||
-    id.startsWith('react/') ||
-    id === 'react-dom' ||
-    id.startsWith('react-dom/')
-
 // https://vite.dev/config/
 export default defineConfig(({command}) => {
     const isDev = command === 'serve';
@@ -110,10 +102,6 @@ export default defineConfig(({command}) => {
             react(),
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
-            externalize({
-                externals: [isReactImportExternal],
-            }),
-            reactImportMapProductionPlugin(),
             // Substitutes the theme-boot placeholder tokens in index.html's
             // pre-paint script with the source-of-truth values from
             // src/themeBootDefaults.ts — see that file and
@@ -171,8 +159,6 @@ export default defineConfig(({command}) => {
                     if (isDashjsCommonjsVariableWarning(log)) return
                     defaultHandler(level, log)
                 },
-                // Mark react and react-dom subpaths as external to rely on the import map.
-                external: isReactImportExternal,
                 input: {
                     index: path.resolve(import.meta.dirname, 'index.html'),
                     ...allSrcEntries(import.meta.dirname),
