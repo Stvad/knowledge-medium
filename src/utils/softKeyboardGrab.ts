@@ -4,7 +4,7 @@
  *  *synchronously inside a user gesture*. Entering block edit mode focuses the
  *  CodeMirror editor later: an async state round-trip
  *  (`enterEditModeForBlock`) mounts the editor, and BlockEditor's focus effect
- *  calls `editorView.focus()` in that mount's commit. That focus is
+ *  calls `editorView.focus()` in the same task as that mount's commit. That focus is
  *  outside the original tap's gesture, so iOS refuses to raise the keyboard —
  *  the block enters edit mode but the keyboard only appears on a *second*,
  *  direct tap on the now-mounted editable. (Device-verified on iPad iOS 26: a
@@ -41,7 +41,7 @@ let failsafeTimer: ReturnType<typeof setTimeout> | undefined
  *  It must comfortably outlast the async edit-entry → editor-focus handoff, or
  *  the failsafe blurs mid-handoff and drops the keyboard the grab just raised.
  *  Device-measured on iPad over a dev tunnel: the editor focuses ~1.1s after the
- *  tap (an `enterEditModeForBlock` DB round-trip → re-render → CM mount → rAF
+ *  tap (an `enterEditModeForBlock` DB round-trip → re-render → CM mount →
  *  focus), so this sits well beyond that. On success the editor steals focus
  *  long before the timeout, so the failsafe is a no-op; it only fires when edit
  *  mode never materializes, briefly stranding the keyboard until then. */

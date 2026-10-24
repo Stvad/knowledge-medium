@@ -187,12 +187,15 @@ export const BlockEditor = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockEditData, editorView, block.id])
 
-  // A layout effect that focuses in place: the commit that mounts this editor
-  // also unmounts the one edit mode is leaving, and until this focus runs
-  // nothing editable has focus, so the browser drops typed keys. Deferring it
-  // (e.g. to a rAF) drops exactly the keys typed right after Enter or a
-  // navigation: input queued during this commit is dispatched before the
-  // next frame.
+  // Focus in place, in the task of the commit that swaps editors: that commit
+  // unmounts the editor edit mode is leaving, so until this runs nothing
+  // editable has focus and typed keys are dropped. A rAF here drops exactly
+  // the keys typed right after Enter or a navigation, since the browser
+  // dispatches input queued during the swap before the next frame.
+  // `editorView` arrives via commit-phase state updates, which React flushes
+  // within that task. A layout rather than passive effect is defence in
+  // depth: the swap renders on the sync lane, whose passive effects flush in
+  // that task too, but a layout effect does not depend on the lane.
   useLayoutEffect(() => {
     if (!isEditing || !inEditMode || !editorView) return
 

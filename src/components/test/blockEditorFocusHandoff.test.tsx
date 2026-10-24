@@ -1,77 +1,34 @@
 // @vitest-environment happy-dom
 /**
- * Pins BlockEditor's in-commit focus (the comment on its focus effect has the
- * rule). Frames are held for the whole test, which is the order a key typed
- * during an editor swap sees: the swap's commit, then queued input, then the
- * next frame.
+ * Pins BlockEditor's same-task focus (the comment on its focus effect has the
+ * rule). Frames are held for the whole test, and a task armed in the swap
+ * commit must not have run by the time the new editor takes focus: that is the
+ * order a key typed during an editor swap sees — the swap, then queued input,
+ * then later tasks and the next frame.
  */
-import { Suspense } from 'react'
+import { Suspense, useLayoutEffect } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
-import {
-  focusBlock,
-  focusedBlockLocationProp,
-  isEditingProp,
-} from '@/data/properties'
+import { focusBlock } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
-import { actionContextsFacet } from '@/extensions/core'
-import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { BlockContextProvider } from '@/context/block'
+import { RepoContext, useRepo } from '@/context/repo'
 import { useInEditMode } from '@/data/globalState'
 import { BlockEditor } from '@/components/BlockEditor'
 
-const UI_STATE = 'ui-state'
-
-const {testGlobals, testRepo} = vi.hoisted(() => {
-  const testGlobals = {repo: undefined as Repo | undefined}
-  const testRepo = (): Repo => {
-    if (!testGlobals.repo) throw new Error('test repo not initialised')
-    return testGlobals.repo
-  }
-  return {testGlobals, testRepo}
-})
-
-vi.mock('@/context/repo.tsx', () => ({
-  useRepo: testRepo,
-}))
-
-vi.mock('@/data/globalState.ts', async () => {
-  const {useBlockContext} = await vi.importActual<typeof import('@/context/block')>('@/context/block')
-  const {useHandle, usePropertyValue} = await vi.importActual<typeof import('@/hooks/block')>('@/hooks/block')
-  const properties = await vi.importActual<typeof import('@/data/properties')>('@/data/properties')
-  const uiStateBlock = () => testRepo().block(UI_STATE)
-  const useLocationMatch = (blockId: string, requireEditing: boolean): boolean => {
-    const {renderScopeId} = useBlockContext()
-    return useHandle(uiStateBlock(), {
-      selector: doc => {
-        const location = properties.focusedBlockLocationFromProperties(doc?.properties)
-        return location?.blockId === blockId &&
-          location.renderScopeId === renderScopeId &&
-          (!requireEditing || Boolean(doc?.properties[properties.isEditingProp.name]))
-      },
-    })
-  }
-  return {
-    useUIStateBlock: uiStateBlock,
-    useUIStateProperty: <T,>(schema: import('@/data/api').PropertySchema<T>) =>
-      usePropertyValue(uiStateBlock(), schema),
-    useIsEditing: () => usePropertyValue(uiStateBlock(), properties.isEditingProp),
-    useInFocus: (blockId: string) => useLocationMatch(blockId, false),
-    useInEditMode: (blockId: string) => useLocationMatch(blockId, true),
-    useIsSelected: () => false,
-  }
-})
-
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
+/** A panel row is its own ui-state block, so the real globalState hooks read it. */
+const PANEL = 'panel'
+
+vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
 
 let heldFrames: FrameRequestCallback[] = []
 const runHeldFrames = () => act(() => {
@@ -80,36 +37,39 @@ const runHeldFrames = () => act(() => {
   for (const frame of frames) frame(performance.now())
 })
 
+/** Set once any task queued from the swap commit has run. */
+let laterTaskRan = false
+
 /** The outline's edit-mode shape: a block shows its editor only while it owns
  *  edit mode, so moving edit mode unmounts one editor as it mounts the next. */
 function EditorWhileEditing({blockId}: {blockId: string}) {
+  const repo = useRepo()
   const inEditMode = useInEditMode(blockId)
+  useLayoutEffect(() => {
+    if (!inEditMode) return
+    laterTaskRan = false
+    const markRan = () => { laterTaskRan = true }
+    setTimeout(markRan)
+    setImmediate(markRan)
+  }, [inEditMode])
   return (
     <div data-testid={`row-${blockId}`}>
-      {inEditMode && <BlockEditor block={testRepo().block(blockId)}/>}
+      {inEditMode && <BlockEditor block={repo.block(blockId)}/>}
     </div>
   )
 }
 
-const editorOf = (blockId: string): EditorView | null => {
-  const dom = document.querySelector<HTMLElement>(`[data-testid="row-${blockId}"] .cm-editor`)
-  return dom ? EditorView.findFromDOM(dom) : null
-}
+const editorDomOf = (blockId: string) =>
+  document.querySelector(`[data-testid="row-${blockId}"] .cm-editor`)
+/** Where the browser delivers a typed key: the focused editor, or nowhere. */
+const focusedEditorDom = () => document.activeElement?.closest('.cm-editor') ?? null
 
-/** What the browser does with a typed character: the focused editor gets it,
- *  and with nothing editable focused it goes nowhere. */
-const typeIntoFocusedEditor = (text: string): boolean => {
-  const editorDom = document.activeElement?.closest<HTMLElement>('.cm-editor')
-  const view = editorDom ? EditorView.findFromDOM(editorDom) : null
-  if (!view) return false
-  view.dispatch({...view.state.replaceSelection(text), userEvent: 'input.type'})
-  return true
-}
+const editBlock = (repo: Repo, blockId: string) =>
+  focusBlock(repo.block(PANEL), blockId, {edit: true, renderScopeId: outlineRenderScopeId(blockId)})
 
 describe('BlockEditor focus when edit mode moves to another block', () => {
   let sharedDb: TestDb
   let repo: Repo
-  let runtime: FacetRuntime
 
   beforeAll(async () => { sharedDb = await createTestDb() })
   afterAll(async () => { await sharedDb.cleanup() })
@@ -118,85 +78,67 @@ describe('BlockEditor focus when edit mode moves to another block', () => {
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({db: sharedDb.db, user: USER}).repo
     repo.setActiveWorkspaceId(WS)
-    testGlobals.repo = repo
-    runtime = resolveFacetRuntimeSync(
-      defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
-    )
     heldFrames = []
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(frame => {
       heldFrames.push(frame)
       return heldFrames.length
     })
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
-    // Browsers queue `selectionchange` as a task; happy-dom fires it inside
-    // Selection.collapse, which CodeMirror calls mid-update, so dispatching
-    // into a focused editor re-enters EditorView.update and throws.
-    const dispatchEvent = document.dispatchEvent.bind(document)
-    vi.spyOn(document, 'dispatchEvent').mockImplementation(event => {
-      if (event.type !== 'selectionchange') return dispatchEvent(event)
-      setTimeout(() => dispatchEvent(event))
-      return true
-    })
 
     await repo.tx(async tx => {
-      await tx.create({
-        id: UI_STATE,
-        workspaceId: WS,
-        parentId: null,
-        orderKey: 'a0',
-        content: '',
-        properties: {
-          [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
-            blockId: 'block-a',
-            renderScopeId: outlineRenderScopeId('block-a'),
-          }),
-          [isEditingProp.name]: isEditingProp.codec.encode(true),
-        },
-      })
+      await tx.create({id: PANEL, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
       await tx.create({id: 'block-a', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'first'})
       await tx.create({id: 'block-b', workspaceId: WS, parentId: null, orderKey: 'b1', content: ''})
     }, {scope: ChangeScope.BlockDefault, description: 'focus handoff fixture'})
+    await editBlock(repo, 'block-a')
   })
 
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
-    testGlobals.repo = undefined
   })
 
-  it('a key typed right after the swap lands in the newly focused editor', async () => {
+  it('the newly mounted editor owns focus before any later task or frame runs', async () => {
     render(
-      <AppRuntimeContextProvider value={runtime}>
-        <ActiveContextsProvider>
-          <Suspense fallback={null}>
-            {['block-a', 'block-b'].map(blockId => (
-              <BlockContextProvider key={blockId} initialValue={{renderScopeId: outlineRenderScopeId(blockId)}}>
-                <EditorWhileEditing blockId={blockId}/>
-              </BlockContextProvider>
-            ))}
-          </Suspense>
-        </ActiveContextsProvider>
-      </AppRuntimeContextProvider>,
+      <RepoContext value={repo}>
+        <AppRuntimeContextProvider value={resolveFacetRuntimeSync([])}>
+          <ActiveContextsProvider>
+            <Suspense fallback={null}>
+              {['block-a', 'block-b'].map(blockId => (
+                <BlockContextProvider
+                  key={blockId}
+                  initialValue={{panelId: PANEL, renderScopeId: outlineRenderScopeId(blockId)}}
+                >
+                  <EditorWhileEditing blockId={blockId}/>
+                </BlockContextProvider>
+              ))}
+            </Suspense>
+          </ActiveContextsProvider>
+        </AppRuntimeContextProvider>
+      </RepoContext>,
     )
-    await vi.waitFor(() => expect(editorOf('block-a')).not.toBeNull())
-    // Precondition: block A is being edited and owns focus, so the typing model
-    // below routes to an editor when one is focused.
+    await vi.waitFor(() => expect(editorDomOf('block-a')).not.toBeNull())
+    // Precondition, with A's frames run too: the harness can focus an editor,
+    // so the failures below are about WHEN the new editor focuses.
     await runHeldFrames()
-    expect(document.activeElement?.closest('.cm-editor')).toBe(editorOf('block-a')?.dom)
+    expect(focusedEditorDom()).toBe(editorDomOf('block-a'))
 
-    await act(async () => {
-      await focusBlock(repo.block(UI_STATE), 'block-b', {
-        edit: true,
-        renderScopeId: outlineRenderScopeId('block-b'),
-      })
-    })
-    await vi.waitFor(() => expect(editorOf('block-b')).not.toBeNull())
-    expect(editorOf('block-a')).toBeNull()
+    let laterTaskRanBeforeFocus: boolean | undefined
+    const recordFocus = (event: FocusEvent) => {
+      const target = event.target instanceof Element ? event.target : null
+      if (laterTaskRanBeforeFocus === undefined && target?.closest('[data-testid="row-block-b"]')) {
+        laterTaskRanBeforeFocus = laterTaskRan
+      }
+    }
+    document.addEventListener('focusin', recordFocus)
 
-    expect(typeIntoFocusedEditor('x'), 'the key was dropped: nothing editable had focus once the new editor mounted').toBe(true)
-    await runHeldFrames()
+    await act(() => editBlock(repo, 'block-b'))
+    await vi.waitFor(() => expect(editorDomOf('block-b')).not.toBeNull())
+    document.removeEventListener('focusin', recordFocus)
+    expect(editorDomOf('block-a')).toBeNull()
 
-    expect(editorOf('block-b')?.state.doc.toString()).toBe('x')
-    expect(repo.block('block-a').peek()?.content).toBe('first')
+    expect(focusedEditorDom(), 'a key typed now is dropped: nothing editable has focus')
+      .toBe(editorDomOf('block-b'))
+    expect(laterTaskRanBeforeFocus, 'the new editor focused in a later task, after queued keys were dispatched')
+      .toBe(false)
   })
 })
