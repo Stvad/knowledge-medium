@@ -431,10 +431,7 @@ export const startBlocksSyncedObserver = (
   // landed while the observer was down (durable queue). Both serialize, and
   // the drain is idempotent, so the overlap is harmless.
   unsubscribe = db.onChange(
-    {
-      onChange: () => { void flush() },
-      onError,
-    },
+    { onChange: () => { void flush() } },
     { tables: ['blocks_synced_changes'], throttleMs },
   )
   void flush()

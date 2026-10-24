@@ -590,7 +590,7 @@ export const awaitLocalMemberRole = async (
           return error
         }
       } else {
-        // onError/abort may fire synchronously while onChange is still
+        // An abort may fire synchronously while onChange is still
         // constructing its disposer. Honor cleanup as soon as it returns.
         disposeRequested = true
       }
@@ -634,7 +634,7 @@ export const awaitLocalMemberRole = async (
 
     try {
       unsubscribe = repo.db.onChange(
-        {onChange: check, onError: fail},
+        {onChange: check},
         {tables: ['workspace_members']},
       )
       if (disposeRequested) {

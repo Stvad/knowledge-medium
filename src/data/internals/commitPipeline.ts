@@ -75,7 +75,6 @@ import {
  *  typed invalidation surface. */
 export interface PowerSyncDbChangeHandler {
   onChange: () => void | Promise<void>
-  onError?: (error: unknown) => void
 }
 
 export interface PowerSyncDbChangeOptions {

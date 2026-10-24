@@ -1,19 +1,20 @@
 /**
- * A fake database with the SAME LAYERS production has: a connection pool, the
- * library's own `DBAdapterDefaultMixin` over it, our occupancy instrumentation,
+ * A fake database with the SAME LAYERS production has: a connection pool on the
+ * library's own `DBAdapter` base class, our occupancy instrumentation,
  * and a `PowerSyncDatabase`-shaped surface that delegates to the adapter the
- * way `AbstractPowerSyncDatabase` does.
+ * way `CommonPowerSyncDatabase` does.
  *
  * The layering is the point. Occupancy is counted at the adapter, so a fake
  * that answered `getAll` directly would never occupy the pool — every read
  * would classify as having had the database to itself and every assertion about
  * contention would pass with the instrumentation deleted. Building on the real
- * mixin also means a PowerSync upgrade that reroutes a method away from the
+ * base class also means a PowerSync upgrade that reroutes a method away from the
  * locks shows up here rather than as a silent under-count.
  */
 import {
-  DBAdapterDefaultMixin,
-  type DBAdapter,
+  DBAdapter,
+  queryResultFromRaw,
+  queryResultWithoutRows,
   type LockContext,
   type Transaction,
 } from '@powersync/common'
@@ -39,9 +40,9 @@ const lockContext = (sql: string[], lock: string): LockContext => {
     return result
   }
   return {
-    execute: (s: string) => run('execute', s, {rowsAffected: 0}),
-    executeRaw: (s: string) => run('executeRaw', s, [] as unknown[][]),
-    executeBatch: (s: string) => run('executeBatch', s, {rowsAffected: 0}),
+    execute: <T>(s: string) => run('execute', s, queryResultFromRaw<T>({columnNames: [], rawRows: [], rowsAffected: 0})),
+    executeRaw: (s: string) => run('executeRaw', s, {columnNames: [], rawRows: [], rowsAffected: 0}),
+    executeBatch: (s: string) => run('executeBatch', s, queryResultWithoutRows({rowsAffected: 0})),
     getAll: <T>(s: string) => run('getAll', s, [{sql: s}] as unknown as T[]),
     getOptional: <T>(s: string) => run('getOptional', s, {sql: s} as unknown as T),
     get: <T>(s: string) => run('get', s, {sql: s} as unknown as T),
@@ -55,13 +56,12 @@ export const makeFakeAdapter = (): FakeAdapter => {
   // Reached through `this`, deliberately: the real pool finds its connections
   // on its own instance, so a wrapper that invoked these as bare references
   // would break in production while a closure-based fake stayed green.
-  class Pool {
+  class Pool extends DBAdapter {
     name = 'fake.db'
     readonly locks = locks
     readonly sql = sql
     close() {}
     async refreshSchema() {}
-    registerListener() { return () => {} }
     async readLock<T>(fn: (tx: LockContext) => Promise<T>): Promise<T> {
       this.locks.push('read')
       return fn(lockContext(this.sql, 'read'))
@@ -71,8 +71,7 @@ export const makeFakeAdapter = (): FakeAdapter => {
       return fn(lockContext(this.sql, 'write'))
     }
   }
-  const Adapter = DBAdapterDefaultMixin(Pool)
-  return {adapter: new Adapter() as unknown as DBAdapter, locks, sql}
+  return {adapter: new Pool(), locks, sql}
 }
 
 /** The status surface `watchSyncOccupancy` reads, shaped as PowerSync's. */
@@ -105,7 +104,7 @@ export const makeFakeStack = (opts: {
   const fake = makeFakeAdapter()
   const adapter = instrumentAdapter(fake.adapter, pool)
 
-  // Delegating exactly as `AbstractPowerSyncDatabase` does — every method to
+  // Delegating exactly as `CommonPowerSyncDatabase` does — every method to
   // `this.database.<same method>` — so the call reaches a connection by the
   // same route it does in production.
   const db: Record<string, unknown> = {

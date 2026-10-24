@@ -7,7 +7,7 @@
  * things use these connections without passing it (#965).
  *
  * `DBAdapter` is where the database work actually happens, and PowerSync routes
- * everything through it: `AbstractPowerSyncDatabase.getAll` / `get` /
+ * everything through it: `CommonPowerSyncDatabase.getAll` / `get` /
  * `execute` / `readLock` / `writeTransaction` and its own internals — schema
  * load, version probe, `getUploadQueueStats` — all delegate to
  * `this.database.*`. So does anything holding the raw handle, which is the case
