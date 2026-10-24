@@ -18,9 +18,3 @@ export const crudEntry = (
     toComparisonArray,
   }
 }
-
-/** The entry the SDK reads back from a `ps_crud` row. */
-export const crudEntryFromRow = (row: {id: string, tx_id: number, data: string}): CrudEntry => {
-  const envelope = JSON.parse(row.data) as {op: UpdateType, type: string, id: string, data?: Record<string, unknown>}
-  return crudEntry(Number.parseInt(row.id, 10), envelope.op, envelope.type, envelope.id, row.tx_id, envelope.data)
-}

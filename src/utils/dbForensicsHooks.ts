@@ -20,8 +20,6 @@ interface CorruptionWatchDb {
   registerListener?: (l: { statusChanged?: (s: DownloadErrorStatus) => void }) => () => void
 }
 
-const downloadErrorOf = (s: DownloadErrorStatus | undefined): unknown => s?.downloadError
-
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
@@ -92,7 +90,7 @@ export const watchForRuntimeCorruption = (
   runtimeCorruptionCaptured = false // re-arm the one-shot capture for the new user
 
   const check = (status: DownloadErrorStatus | undefined): void => {
-    const err = downloadErrorOf(status)
+    const err = status?.downloadError
     // Tight matcher: `downloadError` also carries benign HTTP/network failures
     // whose server body could echo a broad corruption phrase — those must NOT
     // route to the destructive recovery UI.

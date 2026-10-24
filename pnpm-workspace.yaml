@@ -20,8 +20,9 @@ linkWorkspacePackages: true
 # npm `min-release-age=7` cooldown, which pnpm does not read from .npmrc.
 minimumReleaseAge: 10080
 
-# pnpm blocks dependency build scripts by default; this one genuinely needs
-# its (native addon). Anything new that wants one will warn at install.
+# pnpm blocks dependency build scripts by default; better-sqlite3 genuinely
+# needs its own, to build the native addon. Anything new that wants one will
+# warn at install.
 onlyBuiltDependencies:
   - better-sqlite3
 

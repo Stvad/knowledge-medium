@@ -7,18 +7,18 @@
  * things use these connections without passing it (#965).
  *
  * `DBAdapter` is where the database work actually happens, and PowerSync routes
- * everything through it: `CommonPowerSyncDatabase.getAll` / `get` /
+ * everything through it: `PowerSyncDatabase.getAll` / `get` /
  * `execute` / `readLock` / `writeTransaction` and its own internals — schema
  * load, version probe, `getUploadQueueStats` — all delegate to
  * `this.database.*`. So does anything holding the raw handle, which is the case
  * the proxy could not fix even in principle: `getUploadQueueStats` is
  * PowerSync's own method, and its reads never pass a wrapper placed above it.
  *
- * ONE PAIR OF METHODS COVERS ALL OF IT. `DBAdapterDefaultMixin` implements
+ * ONE PAIR OF METHODS COVERS ALL OF IT. The `DBAdapter` base class implements
  * every data method in terms of `readLock` / `writeLock`, so intercepting those
  * two counts each call exactly once and leaves the rest of the surface
  * untouched. That is a property of the library, not of our code, so
- * `poolInstrumentation.test.ts` pins it against the real exported mixin: an
+ * `poolInstrumentation.test.ts` pins it against the real exported class: an
  * upgrade that gives some method its own connection path would otherwise make
  * this file silently under-count.
  *
@@ -46,7 +46,7 @@ type Lock = <T>(fn: (tx: LockContext) => Promise<T>, options?: DBLockOptions) =>
  * Return `adapter` with its connection acquisitions counted into `pool`.
  *
  * A Proxy rather than a subclass or a delegating object, and that is
- * load-bearing: the mixin's `getAll` reaches its connection as `this.readLock`,
+ * load-bearing: the base class's `getAll` reaches its connection as `this.readLock`,
  * so the interception only applies if `this` is the wrapper. A delegate that
  * forwarded `getAll` to the inner adapter would run the inner `readLock` and
  * count nothing.
@@ -82,7 +82,7 @@ export const instrumentAdapter = (adapter: DBAdapter, pool: DbContention): DBAda
     get(target, prop) {
       if (prop === 'readLock' || prop === 'writeLock') return overrides[prop]
       // UNBOUND, and no receiver. Unbound so a method called through this proxy
-      // runs with `this` set to it, which is what routes the mixin's `getAll`
+      // runs with `this` set to it, which is what routes the base class's `getAll`
       // into the interception above. No receiver so an accessor still reads the
       // real adapter's own state rather than resolving back through here.
       return Reflect.get(target, prop)

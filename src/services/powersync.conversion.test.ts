@@ -2,7 +2,7 @@
 // Uploads across an in-place conversion (docs/workspace-e2ee-conversion.md
 // §6.2): the real §6 resolver decides, the real upload orchestrator acts.
 import { type CrudEntry, UpdateType, type CommonPowerSyncDatabase, type CrudTransaction } from '@powersync/common'
-import { crudEntry, crudEntryFromRow } from '@/data/test/crudEntry'
+import { crudEntry } from '@/data/test/crudEntry'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/services/supabase.js', () => ({
@@ -162,17 +162,13 @@ describe('uploads for a workspace the server converted', () => {
   // the rejected envelope back into ps_crud verbatim; after the pin upgrade that
   // queued plaintext must go out SEALED.
   it('a quarantined edit retried after the upgrade uploads sealed', async () => {
-    const rejectedEnvelope = JSON.stringify({
-      op: 'PATCH',
-      type: 'blocks',
-      id: 'block-quarantined',
-      data: {workspace_id: WS, content: 'written during the window', base_updated_at: 5},
-    })
     await keyStore.put(USER, WS, record)
     upgradeModePinToE2ee(USER, WS)
 
     const {deps, applyOperations, recordRejection} = buildDeps()
-    const retried = fakeTx(7, [crudEntryFromRow({id: '1', tx_id: 7, data: rejectedEnvelope})])
+    const retried = fakeTx(7, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-quarantined', 7, {
+      workspace_id: WS, content: 'written during the window', base_updated_at: 5,
+    })])
     await __uploadTransactionsWithFallbackForTest(fakeDb, [retried] as unknown as CrudTransaction[], deps)
 
     expect(recordRejection).not.toHaveBeenCalled()

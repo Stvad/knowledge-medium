@@ -459,7 +459,8 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
           getCek: resolver.getCek,
         },
       }), {
-        // The 1.x SDK's default; 2.x defaults to HTTP streaming.
+        // Kept from 1.x, whose default it was; 2.x defaults to HTTP
+        // streaming, a switch that needs testing against the real service.
         connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET,
       })
     })

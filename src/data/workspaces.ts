@@ -557,7 +557,6 @@ export const awaitLocalMemberRole = async (
   return new Promise<WorkspaceRole>((resolve, reject) => {
     let settled = false
     let unsubscribe: (() => void) | null = null
-    let disposeRequested = false
     // Rechecks in flight. The park says "waiting on the outside world", so it is
     // held exactly when no bounded local read is running: `check` lifts it on the
     // way in and the LAST one out re-enters it. Counting rather than re-entering
@@ -589,10 +588,6 @@ export const awaitLocalMemberRole = async (
         } catch (error) {
           return error
         }
-      } else {
-        // An abort may fire synchronously while onChange is still
-        // constructing its disposer. Honor cleanup as soon as it returns.
-        disposeRequested = true
       }
       return null
     }
@@ -637,12 +632,6 @@ export const awaitLocalMemberRole = async (
         {onChange: check},
         {tables: ['workspace_members']},
       )
-      if (disposeRequested) {
-        const current = unsubscribe
-        unsubscribe = null
-        current()
-        return
-      }
       signal?.addEventListener('abort', onAbort, {once: true})
       if (signal?.aborted) {
         onAbort()

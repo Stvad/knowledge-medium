@@ -2,7 +2,7 @@
  * A fake database with the SAME LAYERS production has: a connection pool on the
  * library's own `DBAdapter` base class, our occupancy instrumentation,
  * and a `PowerSyncDatabase`-shaped surface that delegates to the adapter the
- * way `CommonPowerSyncDatabase` does.
+ * way PowerSync's `BasePowerSyncDatabase` does.
  *
  * The layering is the point. Occupancy is counted at the adapter, so a fake
  * that answered `getAll` directly would never occupy the pool — every read
@@ -86,7 +86,7 @@ export interface FakeStack extends FakeAdapter {
   /** Fed by the instrumented adapter. Pass to `new DbMetrics(pool)`. */
   pool: DbContention
   /** Push an upload/download transition at whatever registered a listener. */
-  setSyncStatus: (flow: {downloading?: boolean; uploading?: boolean}) => void
+  setSyncStatus: (status: {downloading?: boolean; uploading?: boolean}) => void
 }
 
 /**
@@ -104,7 +104,7 @@ export const makeFakeStack = (opts: {
   const fake = makeFakeAdapter()
   const adapter = instrumentAdapter(fake.adapter, pool)
 
-  // Delegating exactly as `CommonPowerSyncDatabase` does — every method to
+  // Delegating exactly as PowerSync's `BasePowerSyncDatabase` does — every method to
   // `this.database.<same method>` — so the call reaches a connection by the
   // same route it does in production.
   const db: Record<string, unknown> = {
@@ -126,7 +126,7 @@ export const makeFakeStack = (opts: {
   const listeners: Array<(s: unknown) => void> = []
   if (opts.withSyncChannel !== false) {
     const channel = db as FakeSyncChannel
-    channel.currentStatus = opts.syncing ? {...opts.syncing} : undefined
+    channel.currentStatus = opts.syncing
     channel.registerListener = (l) => {
       const fn = l.statusChanged
       if (!fn) return () => {}
@@ -143,8 +143,8 @@ export const makeFakeStack = (opts: {
     adapter,
     db,
     pool,
-    setSyncStatus: (flow) => {
-      for (const l of [...listeners]) l({...flow})
+    setSyncStatus: (status) => {
+      for (const l of [...listeners]) l(status)
     },
   }
 }

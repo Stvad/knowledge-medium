@@ -2,9 +2,9 @@
 /**
  * Adapter-level occupancy counting.
  *
- * Built on the LIBRARY'S OWN `DBAdapterDefaultMixin` rather than a hand-written
+ * Built on the LIBRARY'S OWN `DBAdapter` base class rather than a hand-written
  * adapter, because the coverage claim in `poolInstrumentation.ts` is a claim
- * about that mixin: intercepting `readLock`/`writeLock` counts every call only
+ * about that class: intercepting `readLock`/`writeLock` counts every call only
  * because every other method is implemented in terms of them. A fake adapter
  * that merely behaved that way would pin our belief about PowerSync instead of
  * PowerSync. The stack itself is `@/data/test/fakePowerSyncStack`, shared with
