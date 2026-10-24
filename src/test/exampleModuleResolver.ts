@@ -64,7 +64,7 @@ export const evaluateExampleModule = async (
     filename,
     presets: EXTENSION_BABEL_PRESETS,
     plugins: ['transform-modules-commonjs'],
-  }).code
+  })?.code
   if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
 
   const module = {exports: {} as {default?: AppExtension}}
@@ -144,10 +144,9 @@ const callSpecifier = (argument: unknown): string => {
 const parseFixture = (source: string, path: string) =>
   Babel.packages.parser.parse(source, {
     sourceType: 'module',
-    // Derived from the extension, as Babel.transform does: an angle-bracket
-    // type assertion is legal in .ts and a parse error under the jsx plugin,
-    // so a blanket ['typescript','jsx'] crashed on source the transform,
-    // tsgo and eslint all accept.
+    // Derived from the extension: an angle-bracket type assertion is legal in
+    // .ts and a parse error under the jsx plugin, so a blanket
+    // ['typescript','jsx'] crashed on source tsgo and eslint both accept.
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 
@@ -165,10 +164,14 @@ export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string
     ) {
       found.push(candidate.source.value)
     }
-    if (candidate.type === 'CallExpression') {
-      const isDynamic = candidate.callee?.type === 'Import'
-      const isRequire = candidate.callee?.type === 'Identifier' && candidate.callee.name === 'require'
-      if (isDynamic || isRequire) found.push(callSpecifier(candidate.arguments?.[0]))
+    // Babel 8 parses `import(…)` as an ImportExpression, not a call on `Import`.
+    if (candidate.type === 'ImportExpression') found.push(callSpecifier(candidate.source))
+    if (
+      candidate.type === 'CallExpression'
+      && candidate.callee?.type === 'Identifier'
+      && candidate.callee.name === 'require'
+    ) {
+      found.push(callSpecifier(candidate.arguments?.[0]))
     }
     // `import x = require('…')` — neither an ImportDeclaration nor a call.
     if (candidate.type === 'TSImportEqualsDeclaration') {

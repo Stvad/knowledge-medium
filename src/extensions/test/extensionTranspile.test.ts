@@ -27,6 +27,24 @@ describe('extension JSX transpile — host React identity', () => {
     expect(compiled).not.toMatch(/\bReact\.Fragment\b/)
   })
 
+  it('erases an import whose bindings are only used as types', async () => {
+    // Stored extensions write `import {SomeType} from '@/…'` without `type`. A
+    // kept import has to resolve and link from the blob URL, and a type-only
+    // export does not exist at runtime, so the module would fail to load.
+    const persistent = new InMemoryCompiledModuleCache()
+    await approveExtension(
+      'block-1',
+      `import {Shape} from '@/types-only.js'\n` +
+      `import {value} from '@/runtime.js'\n` +
+      `export const read = (shape: Shape): unknown => [shape, value]\n`,
+      persistent,
+    )
+
+    const {compiled} = (await persistent.read('block-1'))!
+    expect(compiled).toMatch(/from\s*["']@\/runtime\.js["']/)
+    expect(compiled).not.toMatch(/@\/types-only\.js/)
+  })
+
   it('recompiles an approval pinned by a classic-runtime compiler instead of running it as stored', async () => {
     const persistent = new InMemoryCompiledModuleCache()
     // '2' is the last COMPILER_VERSION that emitted `React.createElement`; a
