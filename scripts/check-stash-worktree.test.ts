@@ -112,6 +112,20 @@ describe('shellSegments', () => {
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
+    // a list a lone & ends runs in a background subshell, its && and | included
+    expect(shellCommandsWithDepth('a; cd /z && b | c & d; e &')).toEqual([
+      { tokens: ['a'], depth: 0 },
+      { tokens: ['cd', '/z'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 1 },
+      { tokens: ['c'], depth: 1 },
+      { tokens: ['d'], depth: 0 },
+      { tokens: ['e'], depth: 1, fresh: 1 },
+    ])
+    expect(shellCommandsWithDepth('a && b $(c) &')).toEqual([
+      { tokens: ['a'], depth: 1, fresh: 1 },
+      { tokens: ['c'], depth: 2, fresh: 2 },
+      { tokens: ['b', SUBSTITUTED], depth: 1 },
+    ])
   })
 })
 
@@ -345,6 +359,8 @@ describe('stashInvocations', () => {
 
   it('recognizes cd behind a reserved-word prefix', () => {
     expect(stashInvocations('{ cd /wt && git stash pop stash@{0}; }')[0].cdPath).toBe('/wt')
+    // segments keep comments, so a & there is not read as one that runs the list in the background
+    expect(stashInvocations('cd /wt # notes & more\ngit stash pop stash@{0}')[0].cdPath).toBe('/wt')
   })
 
   it('accumulates consecutive relative cds, and an absolute one resets', () => {

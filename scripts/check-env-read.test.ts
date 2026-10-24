@@ -300,6 +300,26 @@ describe('secretRead', () => {
       expect(secretRead("bash <<'EOF'\n(cd src); (grep -rn FOO .)\nEOF", withSecret)).not.toBeNull()
     })
 
+    it('runs a list a lone & ends in a subshell of its own', () => {
+      expect(secretRead('cd src && true & wait; grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd src & grep -rn FOO .', withSecret)).not.toBeNull()
+      // the list holds its subshells and substitutions
+      expect(secretRead('cd src && (true) & grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd src && echo $(true) & grep -rn FOO .', withSecret)).not.toBeNull()
+      // inside the list its cd still moves what follows it
+      expect(secretRead(`cd ${withSecret} && grep -rn FOO . &`, templateOnly)).not.toBeNull()
+      // a newline after && or | goes on with the list, a heredoc's data in between too
+      expect(secretRead('cd src &&\n true & grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd src && # a note\n true & grep -rn FOO .', withSecret)).not.toBeNull()
+      expect(secretRead('cd src && cat <<EOF &&\nx\nEOF\ntrue & grep -rn FOO .', withSecret)).not.toBeNull()
+      // a ; ends the list before it, so its cd moves the commands after the &
+      expect(secretRead('cd src; true & grep -rn FOO .', withSecret)).toBeNull()
+      // a & inside a subshell ends the subshell's own list
+      expect(secretRead(`cd ${withSecret} && (true & ls); grep -rn FOO .`, templateOnly)).not.toBeNull()
+      // a heredoc's data ends the list its line began
+      expect(secretRead(`cd ${withSecret} && cat <<EOF\nx\nEOF\ntrue &\ngrep -rn FOO .`, templateOnly)).not.toBeNull()
+    })
+
     it('ignores a cd it cannot follow out of the shell it runs in', () => {
       expect(secretRead('(cd src && ls); grep -rn FOO .', withSecret)).not.toBeNull()
       expect(secretRead('cd "$NOPE" && grep -rn FOO .', withSecret)).not.toBeNull()

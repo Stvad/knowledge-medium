@@ -120,6 +120,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
   let lineStart = 0 // index of the first segment of the current line
   let pipeOpen = false // a `|`, `|&`, `&&` or `||` with no command after it yet
   let freshFrom = Infinity // the shallowest scope opened since the last segment
+  let listStart = 0 // index of the first segment of the and-or list being read, which goes on while pipeOpen
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
@@ -162,9 +163,26 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
     }
     tokens = []
   }
+  // a scope keeps the list it opened in, which goes on when it closes
   const openScope = scope => {
-    scopes.push(scope)
+    scopes.push({ ...scope, listStart })
+    listStart = segments.length
     freshFrom = Math.min(freshFrom, scopes.length)
+  }
+  const closeScope = () => {
+    const scope = scopes.pop()
+    listStart = scope.listStart
+    return scope
+  }
+  // bash runs a list a lone `&` ends in a subshell: its segments move into a
+  // scope of their own, one deeper
+  const background = () => {
+    const list = segments.slice(listStart)
+    for (const s of list) {
+      s.depth++
+      if (s.fresh) s.fresh++
+    }
+    if (list.length) list[0].fresh = scopes.length + 1
   }
   // `expands`: the shell supplying unquoted heredoc data expands it, as it
   // does not a process substitution
@@ -184,7 +202,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
   }
   const closeSubstitution = () => {
     pushSegment()
-    const { quote: outerQuote, outer } = scopes.pop()
+    const { quote: outerQuote, outer } = closeScope()
     quote = outerQuote
     if (outer) {
       tokens = outer.tokens
@@ -288,7 +306,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
       if (top?.kind === 'subst') closeSubstitution()
       else {
         pushSegment()
-        if (top?.kind === 'paren') scopes.pop()
+        if (top?.kind === 'paren') closeScope()
       }
       continue
     }
@@ -418,6 +436,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
       }
       i = Math.min(j, cmd.length + 1) - 1
       lineStart = segments.length
+      if (!pipeOpen) listStart = segments.length
       continue
     }
     // `2>&1`, `>&2`, `>|`: the & or | belongs to the redirection before it.
@@ -436,7 +455,13 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
       // the next command word closes it, so a newline or a comment in between does not
-      if (ch === '|' || (ch === '&' && (cmd[i - 1] === '&' || cmd[i - 1] === '|' || cmd[i + 1] === '&'))) pipeOpen = true
+      const joins = ch === '|' || (ch === '&' && (cmd[i - 1] === '&' || cmd[i - 1] === '|' || cmd[i + 1] === '&'))
+      if (joins) pipeOpen = true
+      else if (!pipeOpen) {
+        // only where comments are skipped, so a & in one is not taken for an operator
+        if (ch === '&' && wholeCommands) background()
+        listStart = segments.length
+      }
       if (ch === '\n') lineStart = segments.length
       continue
     }
@@ -456,7 +481,7 @@ const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
     if (scopes.at(-1).outer) closeSubstitution()
     else {
       pushSegment()
-      scopes.pop()
+      closeScope()
     }
   }
   pushSegment()
