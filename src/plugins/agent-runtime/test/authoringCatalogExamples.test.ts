@@ -246,7 +246,7 @@ describe('authoring catalog example drift guard', () => {
         const transpiled = Babel.transform(example.code, {
           filename: `${path}.tsx`,
           presets: EXTENSION_BABEL_PRESETS,
-        }).code
+        })?.code
         if (!transpiled) {
           failures.push(`${path}: Babel returned empty output`)
         }

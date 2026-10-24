@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import * as Babel from '@babel/standalone'
 import {InMemoryCompiledModuleCache} from '@/extensions/compiledModuleCache'
 import {
   __setInstantiateImplForTest,
@@ -8,9 +9,24 @@ import {
   loadApprovedExtension,
 } from '@/extensions/compileExtensionModule'
 
-// Both tests run the REAL transpile (no `__setTranspileImplForTest`): the
-// contract under test is what the loader's Babel step emits for JSX, because
-// that output is what the page import map resolves.
+// The Babel major that output cached under the current COMPILER_VERSION was
+// produced with. Persisted output is keyed by COMPILER_VERSION, not by Babel.
+const COMPILER_BABEL_MAJOR = '8'
+
+describe('COMPILER_VERSION', () => {
+  it('was set under the installed Babel major', () => {
+    expect(
+      Babel.version.split('.')[0],
+      '@babel/standalone changed major. Bump COMPILER_VERSION, or every device keeps serving ' +
+      'output cached under the old major. Transpile real extension sources with both versions ' +
+      'and compare outputs and errors, then update COMPILER_BABEL_MAJOR.',
+    ).toBe(COMPILER_BABEL_MAJOR)
+  })
+})
+
+// These tests run the REAL transpile (no `__setTranspileImplForTest`): the
+// contract under test is what the loader's Babel step emits, because that
+// output is what the page import map resolves.
 describe('extension JSX transpile — host React identity', () => {
   it('compiles JSX to react/jsx-runtime, never a React global', async () => {
     const persistent = new InMemoryCompiledModuleCache()
@@ -25,6 +41,24 @@ describe('extension JSX transpile — host React identity', () => {
     expect(compiled).toMatch(/from\s*["']react\/jsx-runtime["']/)
     expect(compiled).not.toMatch(/\bReact\.createElement\b/)
     expect(compiled).not.toMatch(/\bReact\.Fragment\b/)
+  })
+
+  it('erases an import whose bindings are only used as types', async () => {
+    // Stored extensions write `import {SomeType} from '@/…'` without `type`. A
+    // kept import has to resolve and link from the blob URL, and a type-only
+    // export does not exist at runtime, so the module would fail to load.
+    const persistent = new InMemoryCompiledModuleCache()
+    await approveExtension(
+      'block-1',
+      `import {Shape} from '@/types-only.js'\n` +
+      `import {value} from '@/runtime.js'\n` +
+      `export const read = (shape: Shape): unknown => [shape, value]\n`,
+      persistent,
+    )
+
+    const {compiled} = (await persistent.read('block-1'))!
+    expect(compiled).toMatch(/from\s*["']@\/runtime\.js["']/)
+    expect(compiled).not.toMatch(/@\/types-only\.js/)
   })
 
   it('recompiles an approval pinned by a classic-runtime compiler instead of running it as stored', async () => {
