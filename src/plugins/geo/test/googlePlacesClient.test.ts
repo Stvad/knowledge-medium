@@ -182,6 +182,49 @@ describe('searchNearby', () => {
   })
 })
 
+describe('searchText', () => {
+  it('sends the query with a location bias and normalises matches like getDetails', async () => {
+    const {fetchImpl, calls} = stubFetch([
+      okJson({
+        places: [
+          {
+            id: 'ChIJaq',
+            displayName: {text: 'Monterey Bay Aquarium'},
+            formattedAddress: '886 Cannery Row, Monterey',
+            location: {latitude: 36.618, longitude: -121.902},
+            googleMapsUri: 'https://maps.google.com/?cid=13089793790722612067',
+            types: ['aquarium'],
+          },
+          // No location — can't become a Place, so it is not a match.
+          {id: 'ChIJnoloc', displayName: {text: 'Somewhere'}},
+        ],
+      }),
+    ])
+    const client = createGooglePlacesClient({apiKey: 'key-1', fetchImpl})
+
+    const out = await client.searchText('Monterey Bay Aquarium', {bias: {lat: 36.6, lng: -121.9, radiusM: 300}})
+
+    expect(out).toEqual([{
+      placeId: 'ChIJaq',
+      name: 'Monterey Bay Aquarium',
+      lat: 36.618,
+      lng: -121.902,
+      address: '886 Cannery Row, Monterey',
+      googleMapsUrl: 'https://maps.google.com/?cid=13089793790722612067',
+      website: undefined,
+      phone: undefined,
+      categories: ['aquarium'],
+    }])
+    expect(calls[0].url).toContain('places:searchText')
+    const body = JSON.parse(calls[0].init!.body as string) as Record<string, unknown>
+    expect(body).toEqual({
+      textQuery: 'Monterey Bay Aquarium',
+      locationBias: {circle: {center: {latitude: 36.6, longitude: -121.9}, radius: 300}},
+    })
+    expect(headerValue(calls[0].init, 'X-Goog-FieldMask')).toContain('places.location')
+  })
+})
+
 describe('haversineMeters', () => {
   it('returns ~0 for identical points', () => {
     expect(haversineMeters({lat: 37.761, lng: -122.421}, {lat: 37.761, lng: -122.421}))
