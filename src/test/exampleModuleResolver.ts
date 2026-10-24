@@ -133,14 +133,6 @@ const callSpecifier = (argument: unknown): string => {
   return '<computed>'
 }
 
-/** Every module specifier a source imports, from the PARSED module — static
- *  imports, `export … from`, dynamic `import()` and `require()`.
- *
- *  This was a regex over the source text and it silently missed the most
- *  common shape in these files: a multiline `import {\n  a,\n} from '…'`,
- *  because the pattern could not span a newline. Five real imports in the
- *  fixtures went unchecked. Parsing removes that whole class — and the
- *  prose false positives with it, since a comment is not an import node. */
 const parseFixture = (source: string, path: string) =>
   Babel.packages.parser.parse(source, {
     sourceType: 'module',
@@ -150,6 +142,10 @@ const parseFixture = (source: string, path: string) =>
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 
+/** Every module specifier a source imports — static imports, `export … from`,
+ *  dynamic `import()` and `require()` — from the PARSED module. A regex over
+ *  the text misses a multiline `import {…}` and matches imports quoted in
+ *  comments. */
 export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string[] => {
   const ast = parseFixture(source, path)
   const found: string[] = []

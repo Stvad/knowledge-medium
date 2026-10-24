@@ -6,7 +6,7 @@ import {
 } from '@/extensions/compiledModuleCache.js'
 import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
-// Bump when the Babel preset list / transform options change so older
+// Bump when the Babel major, preset list or transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
 // output. This is checked against the persisted record's
 // `compilerVersion`, NOT folded into the source hash — a compiler bump
@@ -29,7 +29,7 @@ export const COMPILER_VERSION = '4'
  *  `onlyRemoveTypeImports: false` erases an import whose bindings are used
  *  only as types even when it is not written `import type`. Stored extensions
  *  rely on that, and a kept import of a type-only export fails to link. */
-export const EXTENSION_BABEL_PRESETS: Array<string | [string, object]> = [
+export const EXTENSION_BABEL_PRESETS: Array<[string, object]> = [
   ['react', {runtime: 'automatic'}],
   ['typescript', {onlyRemoveTypeImports: false}],
 ]
@@ -134,7 +134,7 @@ export async function hashExtensionSource(content: string): Promise<string> {
 }
 
 /** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
- *  `import()` so `@babel/standalone` (~0.56 MB gz) leaves the eager
+ *  `import()` so the large `@babel/standalone` leaves the eager
  *  startup preload set (#167) — it's fetched/evaluated only here, on a
  *  genuine compile-cache miss.
  *

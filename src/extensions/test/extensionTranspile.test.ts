@@ -27,7 +27,7 @@ describe('COMPILER_VERSION', () => {
 // These tests run the REAL transpile (no `__setTranspileImplForTest`): the
 // contract under test is what the loader's Babel step emits, because that
 // output is what the page import map resolves.
-describe('extension JSX transpile — host React identity', () => {
+describe('extension transpile — real Babel output', () => {
   it('compiles JSX to react/jsx-runtime, never a React global', async () => {
     const persistent = new InMemoryCompiledModuleCache()
     await approveExtension(
@@ -44,9 +44,7 @@ describe('extension JSX transpile — host React identity', () => {
   })
 
   it('erases an import whose bindings are only used as types', async () => {
-    // Stored extensions write `import {SomeType} from '@/…'` without `type`. A
-    // kept import has to resolve and link from the blob URL, and a type-only
-    // export does not exist at runtime, so the module would fail to load.
+    // Pins `onlyRemoveTypeImports: false`; see EXTENSION_BABEL_PRESETS.
     const persistent = new InMemoryCompiledModuleCache()
     await approveExtension(
       'block-1',
