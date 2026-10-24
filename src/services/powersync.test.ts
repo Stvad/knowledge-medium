@@ -1,4 +1,5 @@
-import { CrudEntry, UpdateType, type CrudTransaction, type AbstractPowerSyncDatabase } from '@powersync/common'
+import { type CrudEntry, UpdateType, type CrudTransaction, type CommonPowerSyncDatabase } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const supabaseRef = vi.hoisted(() => ({
@@ -38,17 +39,17 @@ const put = (
   id: string,
   data: Record<string, unknown>,
   txId = 1,
-) => new CrudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
+) => crudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
 
 const patch = (
   clientId: number,
   id: string,
   data: Record<string, unknown>,
   txId = 1,
-) => new CrudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
+) => crudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
 
 const del = (clientId: number, id: string, txId = 1) =>
-  new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
+  crudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 describe('PowerSync upload compaction', () => {
   it('fuses same-tx PUT + PATCH into a single create with merged columns', () => {
@@ -323,7 +324,7 @@ const fakeTx = (transactionId: number, entries: CrudEntry[]): FakeTransaction =>
   return tx
 }
 
-const fakeDb = {} as AbstractPowerSyncDatabase
+const fakeDb = {} as CommonPowerSyncDatabase
 
 const fkError = (): Error => {
   const err = new Error('insert or update on table "blocks" violates foreign key constraint')
@@ -429,7 +430,7 @@ describe('uploadTransactionsWithFallback', () => {
       {kind: 'create', id: 'b1', order: 0, payload: {id: 'b1', workspace_id: 'w', content: 'SEALED'}},
     ]
     const encryptOps = vi.fn(async () => sealed)
-    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
+    const tx = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
@@ -448,10 +449,10 @@ describe('uploadTransactionsWithFallback', () => {
     // ps_crud). Mock applyOperations resolves cleanly; the fallback
     // loop must not run.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'}),
+      crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'}),
     ])
     const tx2 = fakeTx(2, [
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'}),
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
 
@@ -473,9 +474,9 @@ describe('uploadTransactionsWithFallback', () => {
     // tx1 (succeeds), tx2 (fails — recorded), tx3 (succeeds). All
     // three end up complete()'d so ps_crud drains; only tx2 lands
     // in ps_crud_rejected. Fixing commit: 58140b90d (issue #459).
-    const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
-    const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
-    const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
+    const tx1 = fakeTx(10, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
+    const tx2 = fakeTx(20, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
+    const tx3 = fakeTx(30, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
     const {applyOperations, recordRejection} = collectCalls()
     // Batch call (call 1) fails. Per-tx calls: tx1 ok, tx2 fails, tx3 ok.
     applyOperations
@@ -507,8 +508,8 @@ describe('uploadTransactionsWithFallback', () => {
     // already-landed create (tx1) — a real WAL write + fleet echo each — for the
     // life of the transient. tx1 drains once; tx2 stays queued (not recorded —
     // transient is not a rejection). Fixing commit: 05fe86074 (issue #459).
-    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
-    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
+    const tx1 = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(networkError()) // batch fails transiently → per-tx
@@ -536,9 +537,9 @@ describe('uploadTransactionsWithFallback', () => {
     // calls uploadData again, we re-pull tx2 + tx3, retry. The
     // alternative (recording transient as a rejection) would silently
     // discard data on a temporary blip.
-    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
-    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
-    const tx3 = fakeTx(3, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 3, {content: 'C'})])
+    const tx1 = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
+    const tx3 = fakeTx(3, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 3, {content: 'C'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(fkError())      // batch fails permanently → fallback
@@ -567,10 +568,10 @@ describe('uploadTransactionsWithFallback', () => {
     // back). tx2 is NOT recorded as a rejection — a missing key is transient, so
     // discarding the edit would be data loss.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w-ok', content: 'A'}),
+      crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w-ok', content: 'A'}),
     ])
     const tx2 = fakeTx(2, [
-      new CrudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
+      crudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
     const encryptOps = vi.fn(async (ops: readonly CompactedBlockOperation[]) => {
@@ -605,14 +606,14 @@ describe('uploadTransactionsWithFallback', () => {
     // bootstrap (user_prefs etc.) where the server already has the
     // row would receive a bare PATCH that wipes properties_json.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {
+      crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {
         workspace_id: 'w', parent_id: null, content: 'A', properties_json: '{}',
       }),
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 1, {
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 1, {
         properties_json: '{"types":["page"]}',
       }),
     ])
-    const tx2 = fakeTx(2, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
+    const tx2 = fakeTx(2, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(fkError())      // force per-tx path
@@ -656,7 +657,7 @@ const stubSink = (overrides: Partial<BlockUploadSink> = {}): BlockUploadSink => 
   ...overrides,
 })
 
-const fakeDatabase = {} as AbstractPowerSyncDatabase
+const fakeDatabase = {} as CommonPowerSyncDatabase
 
 describe('applyCompactedBlockOperations — patch routing', () => {
   it('ships every compacted PATCH as a single applyPatches call with verbatim payloads', async () => {
@@ -915,7 +916,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
       recordRejection,
     }
     const onePass = () => {
-      const tx = fakeTx(7, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
+      const tx = fakeTx(7, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
       const run = __uploadTransactionsWithFallbackForTest(
         fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
       )
@@ -951,7 +952,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
       recordRejection,
     }
     const onePass = () => {
-      const tx = fakeTx(9, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
+      const tx = fakeTx(9, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
       const run = __uploadTransactionsWithFallbackForTest(
         fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
       )
@@ -991,7 +992,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // transient credentials problem, the exact silent-data-loss the classifier
     // is built to avoid.
     supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'JWT expired'}, status: 401})
-    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
+    const tx = fakeTx(1, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
     const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
 
     await expect(
@@ -1160,7 +1161,7 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
           },
         })
       },
-    } as unknown as AbstractPowerSyncDatabase
+    } as unknown as CommonPowerSyncDatabase
     return {db, calls, directExecute, writeTxCount: () => writeTxCount}
   }
 
@@ -1168,8 +1169,8 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     // Fixing commit: 267558e29 (issue #459).
     const {db, calls, directExecute, writeTxCount} = collectWrites()
     const tx = fakeTx(42, [
-      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
+      crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
     ])
     const err = Object.assign(new Error('Bad Request'), {status: 400})
 

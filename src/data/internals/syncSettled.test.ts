@@ -6,12 +6,13 @@ import { onSyncSettled } from './firstSync'
 /** Minimal stand-in for PowerSync's status surface. `emit` drives a status
  *  change the way the real client does. */
 const fakeDb = (initial: {connected?: boolean; downloading?: boolean; downloadError?: unknown} | null) => {
-  const listeners: ((s: {connected?: boolean; dataFlowStatus?: {downloading?: boolean; downloadError?: unknown}}) => void)[] = []
+  const listeners: ((s: {connected?: boolean; downloading?: boolean; downloadError?: unknown}) => void)[] = []
   return {
     db: initial === null ? {} : {
       currentStatus: {
         connected: initial.connected,
-        dataFlowStatus: {downloading: initial.downloading, downloadError: initial.downloadError},
+        downloading: initial.downloading,
+        downloadError: initial.downloadError,
       },
       registerListener: (l: {statusChanged?: (s: never) => void}) => {
         if (l.statusChanged) listeners.push(l.statusChanged as never)
@@ -21,7 +22,8 @@ const fakeDb = (initial: {connected?: boolean; downloading?: boolean; downloadEr
     emit: (s: {connected?: boolean; downloading?: boolean; downloadError?: unknown}) => {
       for (const l of [...listeners]) l({
         connected: s.connected,
-        dataFlowStatus: {downloading: s.downloading, downloadError: s.downloadError},
+        downloading: s.downloading,
+        downloadError: s.downloadError,
       })
     },
     get listenerCount() { return listeners.length },

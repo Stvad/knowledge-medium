@@ -20,11 +20,10 @@ linkWorkspacePackages: true
 # npm `min-release-age=7` cooldown, which pnpm does not read from .npmrc.
 minimumReleaseAge: 10080
 
-# pnpm blocks dependency build scripts by default; these two genuinely need
-# theirs (native/wasm setup). Anything new that wants one will warn at install.
+# pnpm blocks dependency build scripts by default; this one genuinely needs
+# its (native addon). Anything new that wants one will warn at install.
 onlyBuiltDependencies:
   - better-sqlite3
-  - '@journeyapps/wa-sqlite'
 
 # Was `resolutions` under yarn 1: pin the CodeMirror/Lezer family to single
 # versions so transitive copies can't fork editor state.

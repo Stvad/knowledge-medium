@@ -20,7 +20,14 @@
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  */
 
-import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
+import {
+  PowerSyncDatabase,
+  Schema,
+  SyncStreamConnectionMethod,
+  WASQLiteOpenFactory,
+  WASQLiteVFS,
+  createConsoleLogger,
+} from '@powersync/web'
 import { instrumentOpenFactory } from './internals/poolInstrumentation.js'
 import { DbContention, registerContention } from './internals/timingMetrics.js'
 import {
@@ -265,17 +272,20 @@ const buildPowerSyncDb = (userId: string) => {
   // lands in the first snapshot — read `busyMs` and `maxDepth` as spanning the
   // database's life, the same way the per-method timings are page totals.
   const contention = new DbContention()
+  const logger = createConsoleLogger()
   const db = new PowerSyncDatabase({
     schema: appSchema,
-    database: instrumentOpenFactory(new WASQLiteOpenFactory({
-      dbFilename,
-      vfs,
-      additionalReaders: ADDITIONAL_READERS,
-      cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
+    logger,
+    factory: instrumentOpenFactory(new WASQLiteOpenFactory({
+      open: {
+        dbFilename,
+        vfs,
+        additionalReaders: ADDITIONAL_READERS,
+        cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
+        enableMultiTabs: true,
+      },
+      logger,
     }), contention),
-    flags: {
-      enableMultiTabs: true,
-    },
   })
   registerContention(db, contention)
   return db
@@ -436,7 +446,10 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
           getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,
         },
-      }))
+      }), {
+        // The 1.x SDK's default; 2.x defaults to HTTP streaming.
+        connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET,
+      })
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)

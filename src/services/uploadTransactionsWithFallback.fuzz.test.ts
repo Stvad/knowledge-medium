@@ -143,11 +143,11 @@
  * this issue asks for.
  */
 import {
-  AbstractPowerSyncDatabase,
-  CrudEntry,
+  CommonPowerSyncDatabase,
   CrudTransaction,
   UpdateType,
 } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
@@ -170,7 +170,7 @@ import {
   type CompactedBlockOperation,
 } from './powersync'
 
-const fakeDatabase = {} as unknown as AbstractPowerSyncDatabase
+const fakeDatabase = {} as unknown as CommonPowerSyncDatabase
 
 // ──────────────────────────────────────────────────────────────────────
 // Real error shapes — mirrors uploadErrorClassifier.ts's own buckets and
@@ -947,7 +947,7 @@ const runSimulationUnspied = async (
     const thrownErrorByBlockId = new Map<string, unknown>()
 
     const crudTxs = passPending.map((tx, idxInPass) => {
-      const entry = new CrudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
+      const entry = crudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
       const complete = async (): Promise<void> => {
         // Site (a): the BATCH's own complete() (powersync.ts:647) — only
         // the LAST tx's closure is ever invoked for this, and only once
@@ -1008,7 +1008,7 @@ const runSimulationUnspied = async (
     })
 
     const applyOperations = async (
-      _database: AbstractPowerSyncDatabase,
+      _database: CommonPowerSyncDatabase,
       operations: readonly CompactedBlockOperation[],
     ): Promise<void> => {
       const touchedIds = operations.map(op => op.id)
@@ -1055,7 +1055,7 @@ const runSimulationUnspied = async (
     // passing silently.
     const recordRejectionErrorByBlockId = new Map<string, unknown>()
     const recordRejection = async (
-      _database: AbstractPowerSyncDatabase,
+      _database: CommonPowerSyncDatabase,
       transaction: CrudTransaction,
       error: unknown,
     ): Promise<void> => {
