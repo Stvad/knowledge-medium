@@ -1,1 +1,1 @@
-export{ek as ExtensionPromptSurface,tk as extensionPromptsExtension}from"../../../chunks/app-EGNvRFbp.js";
+export{ek as ExtensionPromptSurface,tk as extensionPromptsExtension}from"../../../chunks/app-C4iM-McW.js";

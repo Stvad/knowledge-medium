@@ -1,1 +1,1 @@
-export{Z8 as deriveWorkspaceIdNamespace}from"../../../chunks/app-EGNvRFbp.js";
+export{Q8 as deriveWorkspaceIdNamespace}from"../../../chunks/app-C4iM-McW.js";

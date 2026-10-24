@@ -1,1 +1,1 @@
-export{b3 as InvalidBlockIdError,x3 as assertCanonicalBlockId}from"../../chunks/app-EGNvRFbp.js";
+export{x3 as InvalidBlockIdError,S3 as assertCanonicalBlockId}from"../../chunks/app-C4iM-McW.js";

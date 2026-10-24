@@ -1,1 +1,1 @@
-export{MW as pluginPrefsExtension,NW as pluginUIStateExtension}from"../../chunks/app-EGNvRFbp.js";
+export{NW as pluginPrefsExtension,PW as pluginUIStateExtension}from"../../chunks/app-C4iM-McW.js";

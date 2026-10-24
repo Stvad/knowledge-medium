@@ -1,1 +1,1 @@
-export{UD as BlockEmbed}from"../../../chunks/app-EGNvRFbp.js";
+export{UD as BlockEmbed}from"../../../chunks/app-C4iM-McW.js";

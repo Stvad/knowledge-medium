@@ -1,1 +1,1 @@
-export{WP as isFocalRender,GP as useIsFocalRender}from"../../chunks/app-EGNvRFbp.js";
+export{WP as isFocalRender,GP as useIsFocalRender}from"../../chunks/app-C4iM-McW.js";
