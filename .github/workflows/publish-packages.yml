@@ -69,12 +69,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Produce the publish-ready dist for both packages: tsgo -b scoped to just
+      # Produce the publish-ready dist for both packages: tsc -b scoped to just
       # the two packages (not the whole app — agent-dispatch pulls agent-cli via
       # its project reference) plus agent-cli's generated kernel-types (which
       # still walk the app's @/ source, so the app types shipped to consumers
       # stay correct). Equivalent to the dist each package's prepublishOnly
-      # builds with plain tsc; the publish job never has to build. compile:packages shares its build-
+      # builds with its own TS 6 tsc; the publish job never has to build. compile:packages shares its build-
       # kernel-types + chmod tail with `compile` (compile:post), so it can't
       # drift from the full build.
       - name: Build packages

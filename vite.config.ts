@@ -4,13 +4,11 @@ import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
-import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
-import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
-import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
-import {resolveAppVersion} from './scripts/app-version'
+import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode.ts'
+import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls.ts'
+import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults.ts'
+import {resolveAppVersion} from './scripts/app-version.ts'
 import {globSync} from 'node:fs'
-// import noBundlePlugin from 'vite-plugin-no-bundle';
-
 
 /** Every internal module as a Rollup input, so an extension can import ANY of
  *  them at its stable `@/` path and get its full export surface. The boot
@@ -143,7 +141,7 @@ export default defineConfig(({command}) => {
         ].filter(Boolean),
         resolve: {
             alias: {
-                '@': path.resolve(__dirname, './src'),
+                '@': path.resolve(import.meta.dirname, './src'),
                 // Resolve the kernel's import of the wire-protocol schemas
                 // to the agent-cli source. The schemas live in the
                 // publishable package; the kernel uses them at runtime
@@ -151,7 +149,7 @@ export default defineConfig(({command}) => {
                 // knownAgentCommandSchema.safeParse) and at type time
                 // (commands.ts narrows on the discriminated union).
                 '@knowledge-medium/agent-cli/protocol': path.resolve(
-                    __dirname,
+                    import.meta.dirname,
                     './packages/agent-cli/src/protocol.ts',
                 ),
             },
@@ -176,14 +174,14 @@ export default defineConfig(({command}) => {
                 // Mark react and react-dom subpaths as external to rely on the import map.
                 external: isReactImportExternal,
                 input: {
-                    index: path.resolve(__dirname, 'index.html'),
-                    ...allSrcEntries(__dirname),
+                    index: path.resolve(import.meta.dirname, 'index.html'),
+                    ...allSrcEntries(import.meta.dirname),
                 },
                 // input: '/src/main.tsx',
                 // input: {
-                //     index: path.resolve(__dirname, 'index.html'),
+                //     index: path.resolve(import.meta.dirname, 'index.html'),
                 //     If you need to also specify your main file explicitly:
-                // main: path.resolve(__dirname, 'src/main.tsx'),
+                // main: path.resolve(import.meta.dirname, 'src/main.tsx'),
                 // },
                 output: {
                     // Entries (every src/** file, see allSrcEntries) keep their
@@ -200,7 +198,7 @@ export default defineConfig(({command}) => {
                         // module's static dependencies recursively by default and stops
                         // at import(), so a lazy boundary in the source is one in the
                         // build. The emitted shape is gated by scripts/check-dist-exports.ts.
-                        groups: [{name: 'app', minSize: 0, test: (id: string) => id === path.resolve(__dirname, 'src/main.tsx')}],
+                        groups: [{name: 'app', minSize: 0, test: (id: string) => id === path.resolve(import.meta.dirname, 'src/main.tsx')}],
                     },
                 },
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point

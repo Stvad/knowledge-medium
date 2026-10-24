@@ -147,7 +147,7 @@ const parseFixture = (source: string, path: string) =>
     // Derived from the extension, as Babel.transform does: an angle-bracket
     // type assertion is legal in .ts and a parse error under the jsx plugin,
     // so a blanket ['typescript','jsx'] crashed on source the transform,
-    // tsgo and eslint all accept.
+    // tsc and eslint all accept.
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 
