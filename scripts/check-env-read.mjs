@@ -81,10 +81,12 @@ const GREP_OPTIONS = {
   include: 'include', exclude: 'exclude', 'exclude-from': 'file', d: 'directories', directories: 'directories',
   ...values('A B D m after-context before-context devices exclude-dir max-count label binary-files group-separator'),
 }
+// every option ripgrep 15.2 takes a value for (its --help), and rg refuses one
+// it does not know, so a word read here as rg's flag is one: `--files` relies on it
 const RG_OPTIONS = {
   e: 'pattern', regexp: 'pattern', f: 'script', file: 'script', 'ignore-file': 'file',
   g: 'glob', glob: 'glob', iglob: 'iglob',
-  ...values('A B C E M T j m r t after-context before-context context encoding engine max-columns max-count max-depth max-filesize path-separator pre pre-glob replace sort sortr threads type type-add type-not'),
+  ...values('A B C E M T d j m r t after-context before-context color colors context context-separator dfa-size-limit encoding engine field-context-separator field-match-separator generate hostname-bin hyperlink-format max-columns max-count max-depth max-filesize path-separator pre pre-glob regex-size-limit replace sort sortr threads type type-add type-clear type-not'),
 }
 const OPTIONS = {
   ...Object.fromEntries([...GREPS].map(v => [v, GREP_OPTIONS])),
@@ -151,8 +153,9 @@ const optionOf = (a, options) => {
  * A reader's words sorted for the checks: `paths` may name a file it reads
  * (every word but a search's pattern and an option value known to name no
  * file), `roots` are its operands, which a recursive search walks, `letters`
- * are its short flags, `filters` its name globs in order, and `directories`
- * grep's directory actions.
+ * are its short flags, `flags` its long options that take no value (as read
+ * among its options, never another option's value), `filters` its name globs
+ * in order, and `directories` grep's directory actions.
  */
 const readerWords = (verb, args) => {
   const options = OPTIONS[verb] ?? {}
@@ -161,7 +164,7 @@ const readerWords = (verb, args) => {
   const filters = []
   const directories = []
   let letters = ''
-  let globCaseless = false // its --no- form is ignored: it may be an unmodelled option's value
+  const flags = []
   let patternGiven = false
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -175,10 +178,10 @@ const readerWords = (verb, args) => {
       roots.push(a)
       continue
     }
-    if (a === '--glob-case-insensitive') globCaseless = true
     const option = optionOf(a, options)
     letters += option.letters
     if (!option.role) {
+      if (a.startsWith('--')) flags.push(a)
       paths.push(a)
       continue
     }
@@ -192,9 +195,10 @@ const readerWords = (verb, args) => {
       filters.push({ include: !value.startsWith('!'), glob: value.replace(/^!/, ''), dialect: 'rg', caseless: role === 'iglob' })
   }
   if (SEARCH.has(verb) && !patternGiven && roots.length) paths.splice(paths.indexOf(roots.shift()), 1)
-  // rg's --glob-case-insensitive makes every -g an --iglob
-  if (globCaseless) for (const f of filters) if (f.dialect === 'rg') f.caseless = true
-  return { paths, roots, letters, filters, directories }
+  // rg's --glob-case-insensitive makes every -g an --iglob; its --no- form is
+  // ignored, as it may be the value of an option the table does not model
+  if (flags.includes('--glob-case-insensitive')) for (const f of filters) if (f.dialect === 'rg') f.caseless = true
+  return { paths, roots, letters, flags, filters, directories }
 }
 
 // A name glob as a regex, `*` and `?` matching a leading dot too and rg's
@@ -236,25 +240,26 @@ const lastMatch = filters => {
 }
 
 /** Which top-level names a recursive search reads, as a predicate, or null when it is not one. */
-const walkedNames = (verb, args, { letters, filters, directories }) => {
+const walkedNames = (verb, { letters, flags, filters, directories }) => {
   const last = lastMatch(filters)
   if (GREPS.has(verb)) {
     const recursive =
       /[rR]/.test(letters) ||
       directories.includes('recurse') ||
-      args.some(a => a === '--recursive' || a === '--dereference-recursive')
+      flags.some(a => a === '--recursive' || a === '--dereference-recursive')
     if (!recursive) return null
     // grep: the last filter that matches wins; with none, a name is read unless the first filter is an include
     return last ? name => last(name)?.include ?? !filters[0]?.include : () => true
   }
   if (RGS.has(verb)) {
+    if (flags.includes('--files')) return null // it lists the names it would search
     // rg skips hidden and gitignored files by default; a checkout gitignores its
     // env files, so it reads them only with both turned off. Any --no-ignore*
     // counts: which one drops the rule hiding a secret depends on where that
     // rule lives (--no-ignore-parent drops a .gitignore above the search root).
-    const u = (letters.match(/u/g)?.length ?? 0) + args.filter(a => a === '--unrestricted').length
-    const hidden = u >= 2 || letters.includes('.') || args.includes('--hidden')
-    const noIgnore = u >= 1 || args.some(a => a.startsWith('--no-ignore'))
+    const u = (letters.match(/u/g)?.length ?? 0) + flags.filter(a => a === '--unrestricted').length
+    const hidden = u >= 2 || letters.includes('.') || flags.includes('--hidden')
+    const noIgnore = u >= 1 || flags.some(a => a.startsWith('--no-ignore'))
     // A glob decides past both rules: the last that matches wins, and a name
     // none matches is left out once any include glob is given.
     if (!filters.length) return hidden && noIgnore ? () => true : null
@@ -262,9 +267,9 @@ const walkedNames = (verb, args, { letters, filters, directories }) => {
   }
   if (verb === 'ag') {
     // ag walks by default, skipping hidden and ignored files; its own filters are not modelled
-    const unrestricted = letters.includes('u') || args.includes('--unrestricted')
-    const ignoresVcs = letters.includes('U') || args.includes('--skip-vcs-ignores')
-    return unrestricted || (args.includes('--hidden') && ignoresVcs) ? () => true : null
+    const unrestricted = letters.includes('u') || flags.includes('--unrestricted')
+    const ignoresVcs = letters.includes('U') || flags.includes('--skip-vcs-ignores')
+    return unrestricted || (flags.includes('--hidden') && ignoresVcs) ? () => true : null
   }
   return null
 }
@@ -336,7 +341,7 @@ export const secretRead = (script, cwd) => {
       const file = secretPathIn(word)
       if (file) return { file, walked: false }
     }
-    const admits = walkedNames(verb, args, reader)
+    const admits = walkedNames(verb, reader)
     if (!admits) continue
     // An operand naming no path is the value of an option not modelled here,
     // so with none naming one the search runs where grep would: at `.`.

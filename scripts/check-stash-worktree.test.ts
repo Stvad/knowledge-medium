@@ -284,6 +284,11 @@ describe('inputRedirectTargets', () => {
     ['echo x >out 2>err', []],
     ['cat <\\a', ['a']],
     ["cat <$'a'", ['a']],
+    ['cat <>a', ['a']],
+    ['exec 3<> a', ['a']],
+    ['cat <>"a"', ['a']],
+    // unquoted heredoc data is read again as its supplying shell expands it, where it is text
+    ['cat <<EOF\n<a $(b)\nEOF', ['a']],
   ])('%s → %j', (cmd, targets) => {
     expect(inputRedirectTargets(cmd)).toEqual(targets)
   })

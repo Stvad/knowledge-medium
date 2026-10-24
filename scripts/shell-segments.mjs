@@ -97,20 +97,24 @@ const commandWord = words => words.find(w => !/^[A-Za-z_]\w*=/.test(w))?.replace
 const runsNothing = words => commandWord(words) === undefined && !words.some(w => w.includes(SUBSTITUTED))
 // An unquoted word that is a redirection operator (first group), with its
 // target attached (second group) or empty when the target is the next word.
-const REDIRECT = /^(?:\d+|&)?(<<<|>>|>\||>&|>|<)(.*)$/s
+const REDIRECT = /^(?:\d+|&)?(<<<|<>|>>|>\||>&|>|<)(.*)$/s
+// the redirection operators that open their target for reading
+const READS = new Set(['<', '<>'])
 
 // `sinks.literalHeredocs`, when given, collects the [start, end) of each
 // literal heredoc's data, its closing delimiter line included;
 // `sinks.inputRedirects` collects each input redirection's target word;
 // `sinks.substitutions` collects the segments inside a `$(…)` or backticks.
-const segment = (cmd, wholeCommands, sinks = {}) => {
+// `expanding` reads cmd as unquoted heredoc data its supplying shell
+// expands: text, quotes and `#` included, but for substitutions and `\`.
+const segment = (cmd, wholeCommands, sinks = {}, expanding = false) => {
   const segments = []
   let tokens = []
   let cur = ''
   let started = false // distinguishes '' (a real empty token) from no token
-  let literal = false // the current token holds a quoted or escaped character
+  let literal = expanding // the current token holds a quoted or escaped character
   let dropNext = false // the operator whose target is the next token, or false
-  let quote = null // ' or " while inside a quoted span
+  let quote = expanding ? '<<' : null // ', ", $' inside a quoted span; << through expanded heredoc data
   let escaped = false
   const scopes = [] // open subshell scopes; length IS the current depth
   let lineStart = 0 // index of the first segment of the current line
@@ -123,12 +127,12 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       pipeOpen = false
       const redirect = !literal && cur.match(REDIRECT)
       if (dropNext) {
-        if (dropNext === '<') sinks.inputRedirects?.push(cur)
+        if (READS.has(dropNext)) sinks.inputRedirects?.push(cur)
         dropNext = false
       } else if (redirect) {
         const [, op, target] = redirect
         if (target === '') dropNext = op
-        else if (op === '<' && !target.startsWith('&')) sinks.inputRedirects?.push(target)
+        else if (READS.has(op) && !target.startsWith('&')) sinks.inputRedirects?.push(target)
       } else tokens.push(cur)
     }
     cur = ''
@@ -248,8 +252,8 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
       else openSubstitution('backtick')
       continue
     }
-    if (quote === '"') {
-      if (ch === '"') quote = null
+    if (quote === '"' || quote === '<<') {
+      if (quote === '"' && ch === '"') quote = null
       else {
         cur += ch
         started = true
@@ -366,7 +370,8 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           // language sees it, so an apostrophe on one line cannot hide the
           // next. Unquoted data's substitutions come first, as a reading of
           // their own: the shell supplying the data runs them before its
-          // reader runs any of it. Which command reads the data is not
+          // reader runs any of it, its quotes and comments being text to that
+          // shell. Which command reads the data is not
           // settled here, so a consumer can see a command more than once;
           // each later reading's first segment is flagged `reread`. Text
           // nothing runs is only split into words.
@@ -374,10 +379,12 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
           if (text) {
             for (const line of byLine) if (line.trim()) segments.push({ tokens: line.split(/\s+/).filter(Boolean), depth: scopes.length, heredoc: true, text: true })
           } else {
-            const read = parts => {
+            const read = (parts, expanding = false) => {
               const redirects = []
               const substitutions = new Set()
-              const read = parts.flatMap(part => segment(part, true, { inputRedirects: redirects, substitutions }))
+              const read = parts
+                .flatMap(part => segment(part, true, { inputRedirects: redirects, substitutions }, expanding))
+                .filter(s => !expanding || substitutions.has(s))
               // a heredoc nested in the data keeps its text and reread flags,
               // and `nested` counts the data it sits in: it runs, if at all,
               // in a child of the shell reading this data
@@ -390,14 +397,13 @@ const segment = (cmd, wholeCommands, sinks = {}) => {
                 ...(s.heredoc && { nested: 1 + (s.nested ?? 0) }),
                 ...(s.fresh && { fresh: scopes.length + s.fresh }),
               }))
-              const supplied = quoted ? [] : segments.filter((_, k) => substitutions.has(read[k])).map(s => ({ ...s }))
-              return { segments, supplied, redirects }
+              return { segments, redirects }
             }
             const lines = read(byLine)
             const whole = read([body.join('\n')])
-            const readings = JSON.stringify(whole.segments) === JSON.stringify(lines.segments) ? [lines] : [whole, lines]
-            const views = [readings.flatMap(r => r.supplied), ...readings.map(r => r.segments)].filter(view => view.length)
-            for (const [n, view] of views.entries()) {
+            const same = JSON.stringify(whole.segments) === JSON.stringify(lines.segments)
+            const readings = [...(quoted ? [] : [read([body.join('\n')], true)]), ...(same ? [lines] : [whole, lines])]
+            for (const [n, { segments: view }] of readings.filter(r => r.segments.length).entries()) {
               // a later reading starts from the scope the heredoc began in
               if (n > 0) view[0].reread = true
               segments.push(...view)

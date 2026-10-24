@@ -72,6 +72,13 @@ describe('secretRead', () => {
     `while read -r l; do :; done <'.env.local'`,
     `x=$(<".env.local")`,
     'cat <\\.env.local',
+    // a read-write redirection reads too
+    `cat <>".env.local"`,
+    'cat <>.env.local',
+    'wc 0<> .env.local',
+    // unquoted heredoc data is expanded with its quotes and comments as text
+    "cat <<EOF\n'$(cat .env.local)'\nEOF",
+    'cat <<EOF\n# $(cat .env.local)\nEOF',
     // a read after a literal heredoc
     "cat > x.md <<'EOF'\nnote\nEOF\nls && cat .env.local",
     `gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)" && cat .env.local`,
@@ -206,6 +213,10 @@ describe('secretRead', () => {
       // the last of --exclude-standard and --no-exclude-standard wins
       'git grep --no-index --exclude-standard --no-exclude-standard FOO',
       'ugrep -r FOO .',
+      // a long flag counts only as an option, not as another option's value
+      'rg -e --files -uu FOO .',
+      'rg --context-separator --files -uu FOO .',
+      'rg --hyperlink-format --files -uu FOO .',
     ])('blocks %s over a directory holding a secret file', command => {
       expect(secretRead(command, withSecret)).toEqual({ file: expect.stringMatching(/\.env\.local$/), walked: true })
     })
@@ -333,6 +344,10 @@ describe('secretRead', () => {
       // an -e pattern's letters are not flags
       'grep -eERROR',
       'git grep --no-index --exclude-standard FOO',
+      // rg --files lists the names it would search and reads none
+      'rg --files -uu',
+      `rg --files -g '.env*' .`,
+      'rg -e --hidden -u FOO .',
     ])('allows %s', command => {
       expect(secretRead(command, withSecret)).toBeNull()
     })
