@@ -1,1 +1,1 @@
-import{sr as e}from"../../../chunks/app-0QHHW6pb.js";export{e as perfMonitorPlugin};
+import{sr as e}from"../../../chunks/app-gfreHTa2.js";export{e as perfMonitorPlugin};
