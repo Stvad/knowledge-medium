@@ -1,1 +1,1 @@
-import{Cd as e,Sd as t,wd as n,xd as r}from"../../../chunks/app-Dxxu2xcm.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};
+export{xd as extensionsOverridesPresetCore,Sd as extensionsOverridesProp,Cd as extensionsPrefsType,wd as overridesCodec}from"../../../chunks/app-ByvFkjy1.js";

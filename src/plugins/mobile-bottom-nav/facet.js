@@ -1,1 +1,1 @@
-import{Vb as e}from"../../../chunks/app-Dxxu2xcm.js";export{e as mobileBottomNavItemsFacet};
+export{Vb as mobileBottomNavItemsFacet}from"../../../chunks/app-ByvFkjy1.js";

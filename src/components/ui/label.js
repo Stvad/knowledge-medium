@@ -1,1 +1,1 @@
-import{Pw as e}from"../../../chunks/app-Dxxu2xcm.js";export{e as Label};
+export{Pw as Label}from"../../../chunks/app-ByvFkjy1.js";

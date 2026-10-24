@@ -1,1 +1,1 @@
-import{sh as e}from"../../../chunks/app-Dxxu2xcm.js";export{e as referencesPlugin};
+export{sh as referencesPlugin}from"../../../chunks/app-ByvFkjy1.js";
