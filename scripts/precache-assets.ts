@@ -50,13 +50,14 @@ export const isPrecacheableAsset = (relPath: string): boolean =>
 
 /** The local-database worker's graph, which a cold launch needs before first
  *  paint but which no HTML tag names: PowerSync's worker (database and sync in
- *  one script) and the VFS-probe worker, the
- *  VFS variants the app can select (`src/data/localDbVfs.ts`), and the
- *  matching wa-sqlite builds with their wasm. The `mc-` (cipher) builds are
- *  never selected (no `encryptionKey` is passed) and stay in the rest list.
- *  Dist-relative POSIX paths in, the matching subset out. Name-pinned, so a
- *  rename in `@powersync/web` fails the build here instead of silently
- *  moving the DB worker back behind Cache Storage. */
+ *  one script) and the VFS-probe worker, the VFS variants the app can select
+ *  (`src/data/localDbVfs.ts`), and the matching wa-sqlite builds with their
+ *  wasm. The `mc-` (cipher) builds are never selected (no `encryptionKey` is
+ *  passed) and stay in the rest list. Dist-relative POSIX paths in, the
+ *  matching subset out. Name-pinned, so a rename in `@powersync/web` fails the
+ *  build here instead of silently moving the DB worker back behind Cache
+ *  Storage. PowerSync's stem is the generic `worker`, so a module of ours
+ *  named `worker` would also satisfy the pin; there is none. */
 const BOOT_WORKER_ASSET = /^assets\/(?:(?:worker|writeAheadVfsProbe\.worker)-[^/]+\.js|(?:OPFSCoopSyncVFS|OPFSWriteAheadVFS|FacadeVFS)-[^/]+\.js|wa-sqlite(?:-async)?-[^/]+\.(?:js|wasm))$/
 const BOOT_WORKER_REQUIRED = [/^assets\/worker-/, /writeAheadVfsProbe\.worker-/, /OPFSCoopSyncVFS-/, /\.wasm$/]
 export const bootWorkerAssets = (allFiles: readonly string[]): string[] => {

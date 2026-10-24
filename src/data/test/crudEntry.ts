@@ -12,8 +12,8 @@ export const crudEntry = (
 ): CrudEntry => {
   const toComparisonArray = () => [transactionId, clientId, op, table, id, opData, undefined, undefined]
   return {
-    clientId, op, table, id, transactionId, opData,
-    toJSON: () => ({op_id: clientId, op, type: table, id, tx_id: transactionId, data: opData}),
+    clientId, op, table, id, transactionId, opData, previousValues: undefined, metadata: undefined,
+    toJSON: () => ({op_id: clientId, op, type: table, id, tx_id: transactionId, data: opData, old: undefined, metadata: undefined}),
     equals: entry => JSON.stringify(toComparisonArray()) === JSON.stringify(entry.toComparisonArray()),
     toComparisonArray,
   }

@@ -12,7 +12,7 @@
  */
 import type { DBAdapter, LockContext } from '@powersync/common'
 import { describe, expect, it } from 'vitest'
-import { instrumentAdapter, instrumentOpenFactory } from './poolInstrumentation'
+import { instrumentAdapter } from './poolInstrumentation'
 import { DbContention } from './timingMetrics'
 import { makeFakeAdapter } from '@/data/test/fakePowerSyncStack'
 
@@ -142,16 +142,6 @@ describe('instrumentAdapter', () => {
     } as unknown as DBAdapter
     await instrumentAdapter(adapter, pool).readLock(async () => 1, {timeoutMs: 1234})
     expect(seen).toEqual([{timeoutMs: 1234}])
-  })
-})
-
-describe('instrumentOpenFactory', () => {
-  it('instruments whatever the wrapped factory opens', async () => {
-    const pool = new DbContention()
-    const {adapter} = makeFakeAdapter()
-    const factory = instrumentOpenFactory({openDB: () => adapter}, pool)
-    await factory.openDB().getAll('SELECT 1')
-    expect(pool.snapshot().calls).toBe(1)
   })
 })
 

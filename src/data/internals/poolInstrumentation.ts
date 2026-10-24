@@ -36,7 +36,7 @@
  * which is why the classification is worded as "nothing THIS CAN SEE was
  * competing" rather than as a guarantee.
  */
-import type { DBAdapter, DBLockOptions, LockContext, SQLOpenFactory } from '@powersync/common'
+import type { DBAdapter, DBLockOptions, LockContext } from '@powersync/common'
 import type { DbContention } from './timingMetrics.js'
 
 /** The two methods every other one funnels through. */
@@ -89,17 +89,3 @@ export const instrumentAdapter = (adapter: DBAdapter, pool: DbContention): DBAda
     },
   }) as DBAdapter
 }
-
-/**
- * Wrap an open factory so the adapter it opens is instrumented.
- *
- * PowerSync accepts a `SQLOpenFactory` structurally (`isSQLOpenFactory` tests
- * for `openDB`), so this needs no knowledge of which factory it wraps and
- * changes nothing about how the database is opened.
- */
-export const instrumentOpenFactory = (
-  inner: SQLOpenFactory,
-  pool: DbContention,
-): SQLOpenFactory => ({
-  openDB: () => instrumentAdapter(inner.openDB(), pool),
-})
