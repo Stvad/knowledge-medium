@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionRefMajor, classifyPackage, parseEsmShPins, parseWorkflowUses, readOutdated, sameMajorUpCommand } from './deps-report.mjs'
+import { actionRefMajor, classifyPackage, parseEsmShPins, parseWorkflowUses, readInventory, sameMajorUpCommand } from './deps-report.mjs'
 
 const DAY = 86_400_000
 const now = Date.parse('2026-10-24T00:00:00Z')
@@ -69,6 +69,14 @@ describe('sameMajorUpCommand', () => {
     expect(sameMajorUpCommand(rows as never)).toBe('pnpm up -r vite@8.3.4 @babel/standalone@7.29.10 cmdk@1.1.2')
   })
 
+  it('leaves out aliased dependencies, whose specifier names another package', () => {
+    const rows = [
+      {name: 'typescript-native', from: 'typescript', sameMajor: {version: '7.0.3'}, major: null},
+      {name: 'vite', from: 'vite', sameMajor: {version: '8.3.4'}, major: null},
+    ]
+    expect(sameMajorUpCommand(rows as never)).toBe('pnpm up -r vite@8.3.4')
+  })
+
   it('leaves out the pinned package manager, which is not a dependency', () => {
     const rows = [
       {name: 'vite', sameMajor: {version: '8.3.4'}, major: null},
@@ -82,36 +90,34 @@ describe('sameMajorUpCommand', () => {
   })
 })
 
-describe('readOutdated', () => {
-  const json = (o: object) => JSON.stringify(o)
-  const dependents = [{name: 'app', location: '/x'}]
+describe('readInventory', () => {
+  const dep = (from: string, version: string) => ({from, version, resolved: `https://registry.npmjs.org/${from}/-/x.tgz`, path: 'p'})
+  const listing = JSON.stringify([
+    {name: 'app', path: '/a', dependencies: {vite: dep('vite', '8.3.4'), 'typescript-native': dep('typescript', '7.0.2')}, devDependencies: {typescript: dep('typescript', '6.0.3')}},
+    {name: 'cli', path: '/b', dependencies: {zod: dep('zod', '4.6.7'), app: {from: 'app', version: 'link:..', path: '/a'}}, devDependencies: {typescript: dep('typescript', '6.0.3')}},
+  ])
 
-  it('maps each package to its installed version and dependents', () => {
-    const stdout = json({vite: {current: '8.0.10', wanted: '8.0.10', latest: '8.3.5', dependentPackages: dependents}})
-    expect(readOutdated({status: 1, stdout, stderr: ''})).toEqual([{name: 'vite', current: '8.0.10', usedBy: 'app'}])
-  })
-
-  it('falls back to the locked version before the first install', () => {
-    const stdout = json({clsx: {wanted: '2.1.1', latest: '2.1.1', dependentPackages: dependents}})
-    expect(readOutdated({status: 0, stdout, stderr: ''})).toEqual([{name: 'clsx', current: '2.1.1', usedBy: 'app'}])
-  })
-
-  it('reads an empty successful scan as nothing outdated', () => {
-    expect(readOutdated({status: 0, stdout: '', stderr: ''})).toEqual([])
+  it('lists every direct dependency once per version, with its registry name and dependents', () => {
+    expect(readInventory({status: 0, stdout: listing, stderr: ''})).toEqual([
+      {name: 'vite', from: 'vite', current: '8.3.4', usedBy: 'app'},
+      {name: 'typescript-native', from: 'typescript', current: '7.0.2', usedBy: 'app'},
+      {name: 'typescript', from: 'typescript', current: '6.0.3', usedBy: 'app, cli'},
+      {name: 'zod', from: 'zod', current: '4.6.7', usedBy: 'cli'},
+    ])
   })
 
   it('refuses a command that did not run', () => {
     const error = Object.assign(new Error('spawnSync pnpm ENOENT'), {code: 'ENOENT'})
-    expect(() => readOutdated({status: null, stdout: '', stderr: '', error})).toThrow(/pnpm outdated did not run: spawnSync pnpm ENOENT/)
+    expect(() => readInventory({status: null, stdout: '', stderr: '', error})).toThrow(/pnpm ls did not run: spawnSync pnpm ENOENT/)
   })
 
   it('refuses a failing exit status, with its stderr, even when it printed JSON', () => {
-    expect(() => readOutdated({status: 2, stdout: '{}', stderr: 'ERR_PNPM_NO_LOCKFILE'})).toThrow(/failed \(exit 2\).*ERR_PNPM_NO_LOCKFILE/)
+    expect(() => readInventory({status: 1, stdout: '[]', stderr: 'ERR_PNPM_NO_LOCKFILE'})).toThrow(/failed \(exit 1\).*ERR_PNPM_NO_LOCKFILE/)
   })
 
-  it('refuses "outdated" with nothing printed, and output that is not JSON', () => {
-    expect(() => readOutdated({status: 1, stdout: '', stderr: ''})).toThrow(/printed no JSON/)
-    expect(() => readOutdated({status: 1, stdout: 'Scope: all 3 workspace projects', stderr: ''})).toThrow(/printed no JSON/)
+  it('refuses output that is not a project list', () => {
+    expect(() => readInventory({status: 0, stdout: '', stderr: ''})).toThrow(/printed no project list/)
+    expect(() => readInventory({status: 0, stdout: '{}', stderr: ''})).toThrow(/printed no project list/)
   })
 })
 
