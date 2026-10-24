@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import * as Babel from '@babel/standalone'
 import {InMemoryCompiledModuleCache} from '@/extensions/compiledModuleCache'
 import {
   __setInstantiateImplForTest,
@@ -8,9 +9,24 @@ import {
   loadApprovedExtension,
 } from '@/extensions/compileExtensionModule'
 
-// Both tests run the REAL transpile (no `__setTranspileImplForTest`): the
-// contract under test is what the loader's Babel step emits for JSX, because
-// that output is what the page import map resolves.
+// The Babel major that output cached under the current COMPILER_VERSION was
+// produced with. Persisted output is keyed by COMPILER_VERSION, not by Babel.
+const COMPILER_BABEL_MAJOR = '8'
+
+describe('COMPILER_VERSION', () => {
+  it('was set under the installed Babel major', () => {
+    expect(
+      Babel.version.split('.')[0],
+      '@babel/standalone changed major. Bump COMPILER_VERSION, or every device keeps serving ' +
+      'output cached under the old major. Transpile real extension sources with both versions ' +
+      'and compare outputs and errors, then update COMPILER_BABEL_MAJOR.',
+    ).toBe(COMPILER_BABEL_MAJOR)
+  })
+})
+
+// These tests run the REAL transpile (no `__setTranspileImplForTest`): the
+// contract under test is what the loader's Babel step emits, because that
+// output is what the page import map resolves.
 describe('extension JSX transpile — host React identity', () => {
   it('compiles JSX to react/jsx-runtime, never a React global', async () => {
     const persistent = new InMemoryCompiledModuleCache()
