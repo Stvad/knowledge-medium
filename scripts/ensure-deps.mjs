@@ -20,9 +20,11 @@ import { isMainModule } from './is-main-module.mjs'
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LOCKFILE = 'pnpm-lock.yaml'
 // pnpm's record of the lockfile node_modules was installed from, byte-identical
-// to it after a successful install. Compared by content: a checkout rewrites
-// the lockfile's mtime without changing what it says.
+// after a successful install to the lockfile minus its leading package-manager
+// document. Compared by content: a checkout rewrites the lockfile's mtime
+// without changing what it says.
 const INSTALL_RECORD = join('node_modules', '.pnpm', 'lock.yaml')
+const PACKAGE_MANAGER_DOC = /^---\n[\s\S]*?\n---\n/
 const FAILURE_TAIL_LINES = 10
 
 /**
@@ -53,7 +55,7 @@ export const DIST_PACKAGES = [
 
 const readOrNull = path => {
   try {
-    return readFileSync(path)
+    return readFileSync(path, 'utf8')
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -67,7 +69,7 @@ export const readDepsState = root => {
   if (!wanted) return 'no-lockfile'
   const installed = readOrNull(join(root, INSTALL_RECORD))
   if (!installed) return 'missing'
-  return installed.equals(wanted) ? 'fresh' : 'mismatch'
+  return installed === wanted.replace(PACKAGE_MANAGER_DOC, '') ? 'fresh' : 'mismatch'
 }
 
 const filesUnder = (pkgDir, sub) =>
@@ -157,7 +159,7 @@ const DIST_REASON = {
 
 const UNFORMATTED_LOCKFILE_NOTE =
   `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
-  `so this reinstall repeats at every session start. \`cp ${INSTALL_RECORD} ${LOCKFILE}\` and commit it to stop that.`
+  `so this reinstall repeats at every session start. \`pnpm install --lockfile-only --force\` rewrites it; commit that to stop it.`
 
 /** Reconciles `root`; returns the context for the session, '' when nothing was stale. */
 export const ensureDeps = ({ root, env = process.env }) => {
