@@ -1,6 +1,12 @@
 # Root marker: this extension installs standalone (it is outside the repo's
 # workspace on purpose — see agent-extensions/AGENTS.md). Without this file pnpm climbs to the
-# repo root's pnpm-workspace.yaml and installs the wrong project.
+# repo root's pnpm-workspace.yaml and installs the wrong project. Its
+# package.json pins the root's pnpm, so the install doesn't run whatever pnpm
+# is global; bump the two together.
+
+# core-js's postinstall only prints a funding banner.
+allowBuilds:
+  core-js: false
 
 # The repo's release cooldown (see the root pnpm-workspace.yaml); this
 # standalone install doesn't inherit it.
