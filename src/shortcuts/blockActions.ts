@@ -108,9 +108,9 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   if (uiStateBlock.repo.isReadOnly) return
 
   void resetBlockSelection(uiStateBlock)
-  setIsEditing(uiStateBlock, true)
-
+  // Before the edit flag, for the reason in enterEditModeForBlock.
   if (selection) void uiStateBlock.set(editorSelection, selection)
+  setIsEditing(uiStateBlock, true)
   requestEditorFocus(uiStateBlock)
 }
 

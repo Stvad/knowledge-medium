@@ -776,14 +776,15 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
-
+  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
+  // it, so a selection written after edit mode moves misses that placement.
   if (selection) {
-    void uiStateBlock.set(editorSelection, {
+    await uiStateBlock.set(editorSelection, {
       blockId: block.id,
       ...selection,
     })
   }
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
 
   requestEditorFocus(uiStateBlock)
 }
