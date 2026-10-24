@@ -1,1 +1,0 @@
-export{jC as openRecentsPage}from"../../../chunks/app-BZ78PrKV.js";

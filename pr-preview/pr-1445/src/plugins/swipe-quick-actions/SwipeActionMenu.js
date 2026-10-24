@@ -1,1 +1,0 @@
-export{cD as SwipeActionMenu}from"../../../chunks/app-BZ78PrKV.js";

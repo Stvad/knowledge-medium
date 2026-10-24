@@ -1,1 +1,0 @@
-export{sK as omnilinerNamespace}from"../../chunks/app-BZ78PrKV.js";

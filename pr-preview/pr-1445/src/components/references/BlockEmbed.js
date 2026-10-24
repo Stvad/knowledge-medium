@@ -1,1 +1,0 @@
-export{UD as BlockEmbed}from"../../../chunks/app-BZ78PrKV.js";

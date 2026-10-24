@@ -1,1 +1,0 @@
-export{QU as characterCounterDataExtension}from"../../../chunks/app-BZ78PrKV.js";

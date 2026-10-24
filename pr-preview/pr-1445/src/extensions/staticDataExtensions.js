@@ -1,1 +1,0 @@
-export{aB as staticDataExtensions}from"../../chunks/app-BZ78PrKV.js";
