@@ -202,6 +202,22 @@ describe('download gating on this device\'s own uploads', () => {
     expect(await env.db.getAll('SELECT 1 FROM ps_crud')).toHaveLength(1)
   })
 
+  it('holds a checkpoint when the service hands out a write checkpoint below one already seen', async () => {
+    const serverCheckpoint = serverBucket()
+    await createLocally()
+    await acknowledgeUploads('100')
+    await serverCheckpoint([putOp(1, created)], '100')
+    await editLocally()
+    // The service's counter restarted: its storage was wiped, or this is a new instance.
+    await acknowledgeUploads('3')
+
+    await expectHeldByHold(await serverCheckpoint([putOp(2, created)], null))
+    expect(await stagedContent()).toBe(created.content)
+
+    await serverCheckpoint([putOp(3, edited)], '3')
+    expect(await stagedContent()).toBe(edited.content)
+  })
+
   it('publishes a checkpoint that arrived while the write checkpoint was in flight, once it is taken', async () => {
     const serverCheckpoint = serverBucket()
     await createLocally()

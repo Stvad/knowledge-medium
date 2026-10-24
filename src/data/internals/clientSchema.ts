@@ -322,6 +322,26 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
   ON ps_crud_rejected (tx_id)
 `
 
+/** Forget the last write checkpoint the sync stream showed, on every enqueue,
+ *  as PowerSync's own crud path does. A remembered id from before the write
+ *  could already meet the target the next upload sets, if the service's counter
+ *  restarted (its storage wiped, or a new instance), and release a checkpoint
+ *  cut before the upload landed. On the queue rather than its writers, so a
+ *  direct enqueue (the rejected-upload retry) forgets too.
+ *
+ *  The keys are the core's internal state: `writeCheckpointGate.test.ts` drives
+ *  the real core, so a rename fails there rather than silently disarming this.
+ *  Retire it once uploads enqueue through `powersync_crud`, which does this
+ *  itself. */
+export const CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS ps_crud_forget_seen_checkpoint
+  AFTER INSERT ON ps_crud
+  BEGIN
+    DELETE FROM ps_kv
+    WHERE key IN ('last_seen_checkpoint_request_id', 'last_applied_checkpoint_request_id');
+  END
+`
+
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
 // observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
@@ -528,8 +548,8 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // path these writes need is the download hold, which the SDK raises itself
 // when an upload completes (`CrudTransaction.complete()` sets the core's
 // `target_checkpoint_request_id`), and which a non-empty queue keeps shut
-// before that. Skipped: the path also forgets the last checkpoint id it saw,
-// which matters only if the service's write-checkpoint ids go backwards.
+// before that. The path also forgets the last checkpoint id it saw; that part
+// is the queue's own trigger: {@link CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL}.
 // ============================================================================
 
 interface UploadColumnSpec {
@@ -1326,9 +1346,10 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
-  // 2 upload-routing triggers
+  // 2 upload-routing triggers, and the upload queue's checkpoint reset
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
+  CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL,
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
