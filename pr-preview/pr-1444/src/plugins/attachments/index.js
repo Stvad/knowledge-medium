@@ -1,0 +1,1 @@
+export{Qh as attachmentsPlugin}from"../../../chunks/app-BSlYaFgX.js";

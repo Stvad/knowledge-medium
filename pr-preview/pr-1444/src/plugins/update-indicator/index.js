@@ -1,0 +1,1 @@
+export{Zp as updateIndicatorPlugin}from"../../../chunks/app-BSlYaFgX.js";

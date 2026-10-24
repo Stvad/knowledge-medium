@@ -1,0 +1,1 @@
+export{Xp as BlockMetaCard}from"../../../chunks/app-BSlYaFgX.js";

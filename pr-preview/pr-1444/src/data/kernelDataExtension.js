@@ -1,0 +1,1 @@
+export{HX as kernelDataExtension}from"../../chunks/app-BSlYaFgX.js";
