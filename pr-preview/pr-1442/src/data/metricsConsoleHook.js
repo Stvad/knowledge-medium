@@ -1,0 +1,1 @@
+export{gO as ensureMetricsConsoleHook}from"../../chunks/app-Bz2fC379.js";
