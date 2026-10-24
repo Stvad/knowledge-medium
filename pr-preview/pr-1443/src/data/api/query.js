@@ -1,1 +1,1 @@
-export{fet as defineQuery}from"../../../chunks/app-2d8SZX0x.js";
+export{fet as defineQuery}from"../../../chunks/app-EGNvRFbp.js";

@@ -1,1 +1,1 @@
-export{ig as createAttachmentCleanerIO,ag as listMediaBlocks,og as listWorkspaceObjects}from"../../../chunks/app-2d8SZX0x.js";
+export{ig as createAttachmentCleanerIO,ag as listMediaBlocks,og as listWorkspaceObjects}from"../../../chunks/app-EGNvRFbp.js";

@@ -1,1 +1,1 @@
-export{qD as kernelPropertyUiExtension,JD as typesPropertyUi,YD as typesPropertyUiExtension}from"../../../chunks/app-2d8SZX0x.js";
+export{qD as kernelPropertyUiExtension,JD as typesPropertyUi,YD as typesPropertyUiExtension}from"../../../chunks/app-EGNvRFbp.js";
