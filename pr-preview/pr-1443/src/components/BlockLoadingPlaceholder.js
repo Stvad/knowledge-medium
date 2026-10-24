@@ -1,1 +1,1 @@
-export{NA as BlockLoadingPlaceholder}from"../../chunks/app-C4iM-McW.js";
+export{NA as BlockLoadingPlaceholder}from"../../chunks/app-d70kToU-.js";

@@ -1,1 +1,1 @@
-export{IA as defaultRegistry,LA as defaultRendererContributions,RA as defaultRenderersExtension}from"../../chunks/app-C4iM-McW.js";
+export{IA as defaultRegistry,LA as defaultRendererContributions,RA as defaultRenderersExtension}from"../../chunks/app-d70kToU-.js";

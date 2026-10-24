@@ -1,1 +1,1 @@
-export{pet as defineQuery}from"../../../chunks/app-C4iM-McW.js";
+export{pet as defineQuery}from"../../../chunks/app-d70kToU-.js";
