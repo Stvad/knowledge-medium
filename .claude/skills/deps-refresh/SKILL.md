@@ -24,7 +24,7 @@ The output is one PR with one commit per concern. It takes everything safe under
    - `pnpm up -r name@version …` names every same-major target. It keeps each specifier's pin style, and it is the only way to move an exact pin.
    - Then `pnpm up -r` updates everything else in range, transitive dependencies included.
    - Bump an aliased dependency (an `npm:` specifier, such as `typescript-native`) by hand, as the report says.
-2. Set each `overrides` entry in `pnpm-workspace.yaml` to the specifier its direct dependency now carries. A lower override floor makes the gate's `pnpm install --frozen-lockfile` fail with "specifiers in the lockfile don't match".
+2. Set each `overrides` entry in `pnpm-workspace.yaml` to the specifier its direct dependency now carries, then run a plain `pnpm install` so the lockfile records the new overrides. Skip either half and the gate's `pnpm install --frozen-lockfile` fails, either with "specifiers in the lockfile don't match" or with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`.
 3. Mirror the toolchain pins in `packages/agent-cli/src/scaffold.ts`. The scaffolded extension's devDependencies follow the app's.
 4. React: if `vite-plugins/reactImportMapMode.ts` exists, production loads React from esm.sh through SRI-pinned URLs. Those URLs live in that file, `index.html` and `minimal-editor.html`.
    - In that case keep `react`/`react-dom` at the version those URLs pin, and list them as held.
@@ -55,6 +55,7 @@ For each row under "Eligible majors", read the release notes or migration guide 
 ## 3. GitHub Actions and pnpm
 
 - For each action behind its latest major (see the report table), read the breaking changes and bump the `uses:` refs across `.github/workflows/`.
+  - If the report says the GitHub API rate-limited it, set `GITHUB_TOKEN` and re-run it. Where no token is available, read each action's latest release with the GitHub MCP tools instead.
   - Leave a SHA-pinned ref alone unless a comment beside it says which tag it tracks.
 - `packageManager`: a pnpm patch or minor goes in the first commit. A pnpm major changes installs for every worktree and agent, so hold it for its own PR.
 

@@ -137,20 +137,9 @@ export const readInventory = ({status, stdout, stderr, error}) => {
   return [...rows.values()].map(({users, ...row}) => ({...row, usedBy: [...users].join(', ')}))
 }
 
-const registryUrl = name => `https://registry.npmjs.org/${name.replace('/', '%2F')}`
-
-/** The `latest` dist-tag's version: a small manifest, enough to skip the
- *  full history when nothing newer exists. null when npmjs doesn't have it. */
-const registryLatest = async name => {
-  const response = await fetch(`${registryUrl(name)}/latest`)
-  if (response.status === 404) return null
-  if (!response.ok) throw new Error(`registry ${response.status} for ${name}`)
-  return (await response.json()).version
-}
-
 /** null when npmjs doesn't have it (a private scope, a typo'd URL import). */
 const registryTimes = async name => {
-  const response = await fetch(registryUrl(name))
+  const response = await fetch(`https://registry.npmjs.org/${name.replace('/', '%2F')}`)
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`registry ${response.status} for ${name}`)
   return (await response.json()).time ?? {}
@@ -168,13 +157,14 @@ const mapLimit = async (items, limit, fn) => {
   return out
 }
 
+/** `{tag, major}`, or `{error}` saying why the latest release is unreadable. */
 const latestActionMajor = async action => {
   const headers = process.env.GITHUB_TOKEN ? {authorization: `Bearer ${process.env.GITHUB_TOKEN}`} : {}
   const response = await fetch(`https://api.github.com/repos/${action}/releases/latest`, {headers})
-  if (!response.ok) return null
+  if (!response.ok) return {error: `HTTP ${response.status}`}
   const {tag_name: tag} = await response.json()
-  const major = /^v?(\d+)/.exec(tag ?? '')?.[1]
-  return major ? {tag, major: Number(major)} : null
+  const major = actionRefMajor(tag ?? '')
+  return major === null ? {error: `tag ${tag}`} : {tag, major}
 }
 
 const trackedFiles = (dir, pattern) => {
@@ -220,13 +210,17 @@ const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
   table('esm.sh URL pins', esmPins, [
     ['package', r => r.name], ['pinned', r => r.version], ['newest eligible', r => r.target ?? 'current'], ['files', r => r.files.join(', ')],
   ])
-  table('GitHub Actions behind their latest major', actions.filter(a => a.major !== null && a.latest && a.latest.major > a.major), [
+  table('GitHub Actions behind their latest major', actions.filter(a => a.major !== null && a.latest.major > a.major), [
     ['action', a => a.action], ['used', a => a.ref], ['latest', a => a.latest.tag],
   ])
   const bySha = actions.filter(a => a.major === null)
   if (bySha.length) lines.push(`Actions pinned to a SHA or branch (check by hand): ${bySha.map(a => `${a.action}@${a.ref.slice(0, 12)}`).join(', ')}`, '')
-  const unknown = actions.filter(a => a.major !== null && !a.latest)
-  if (unknown.length) lines.push(`Actions with no readable latest release: ${unknown.map(a => a.action).join(', ')}`, '')
+  const unknown = actions.filter(a => a.major !== null && a.latest.error)
+  if (unknown.length) {
+    const rateLimited = unknown.some(a => a.latest.error === 'HTTP 403' || a.latest.error === 'HTTP 429')
+    lines.push(`Actions whose latest release could not be read: ${unknown.map(a => `${a.action} (${a.latest.error})`).join(', ')}`, '')
+    if (rateLimited) lines.push('GitHub allows 60 unauthenticated API requests an hour: set GITHUB_TOKEN and re-run.', '')
+  }
   return lines.join('\n')
 }
 
@@ -242,12 +236,9 @@ const main = async argv => {
   const pinnedPnpm = /^pnpm@(\d+\.\d+\.\d+)/.exec(manifest.packageManager ?? '')
   if (pinnedPnpm) inventory.push({name: 'pnpm', from: 'pnpm', current: pinnedPnpm[1], usedBy: 'packageManager', packageManager: true})
   const rows = (await mapLimit(inventory, 8, async pkg => {
-    const latest = await registryLatest(pkg.from)
-    if (latest === null) return {...pkg, notOnNpm: true}
-    if (latest === pkg.current) return null
     const times = await registryTimes(pkg.from)
-    return {...pkg, ...classifyPackage(pkg, times, policy)}
-  })).filter(r => r && (r.sameMajor || r.major || r.held || r.prerelease || r.notOnNpm))
+    return times ? {...pkg, ...classifyPackage(pkg, times, policy)} : {...pkg, notOnNpm: true}
+  })).filter(r => r.sameMajor || r.major || r.held || r.prerelease || r.notOnNpm)
 
   const pinsByName = new Map()
   for (const file of trackedFiles(dir, 'https://esm\\.sh/')) {
