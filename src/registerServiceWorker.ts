@@ -1,4 +1,4 @@
-import { appUpdate } from '@/appUpdate.js'
+import { appUpdate, type AppUpdate } from '@/appUpdate.js'
 
 /**
  * Registers the PWA service worker once per page load.
@@ -7,18 +7,16 @@ import { appUpdate } from '@/appUpdate.js'
  * file is served from the app's base URL (so it works under any
  * APP_BASE_PATH).
  *
- * Update behaviour (see also src/appUpdate.ts):
- *  - When a new SW reaches `installed` while an old one still controls the
- *    page, we flag the update. The SW self-`skipWaiting()`s in its own
- *    install handler (src/sw/sw.ts), so it activates in the background on
- *    its own — the `SKIP_WAITING` postMessage below is only a fallback for
- *    a worker that somehow didn't. We do NOT reload the page. The point is
- *    that the *next* load — whether the user clicks the Reload prompt or
- *    just reloads the tab on their own — is served by the new build in a
- *    single reload, instead of the new SW sitting "waiting" until every tab
- *    closes (which is why a plain reload used to keep serving the old build).
- *  - We then flag `appUpdate.markAvailable()` so the toast + status
- *    chip can offer a deliberate "Reload" without surprising the user.
+ * How a deploy reaches an open tab (see also src/appUpdate.ts):
+ *  - The shell is served cache-first by the installed worker, so the load
+ *    that DETECTS a deploy (the browser re-fetches sw.js on navigation) still
+ *    boots the build that was installed. That keeps boot fast and offline.
+ *  - The new worker installs in the background (`downloading`) and
+ *    self-`skipWaiting()`s (src/sw/sw.ts). Activation hands it every open tab
+ *    of this scope at once, firing `controllerchange` in each; each tab then
+ *    reloads at its first safe moment (`ready`). So one reload — the user's,
+ *    or none at all when the poll below finds the deploy — ends with every
+ *    tab on the new build.
  *  - Long-lived PWA tabs may never navigate, so the browser's implicit
  *    update check never fires. We poll `registration.update()` on an
  *    interval and when the tab regains focus / the device reconnects, so a
@@ -34,9 +32,7 @@ import { appUpdate } from '@/appUpdate.js'
 const UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000
 
 // The active registration, captured once register() resolves, so the
-// `app.checkForUpdates` action can trigger an on-demand update check. This
-// matters more under cache-first navigation (src/sw/worker.ts): a new deploy is
-// otherwise only noticed on the interval poll or the next reload.
+// `app.checkForUpdates` action can trigger an on-demand update check.
 let activeRegistration: ServiceWorkerRegistration | undefined
 
 export type AppUpdateCheckResult = 'update-found' | 'up-to-date' | 'no-worker' | 'error'
@@ -45,8 +41,8 @@ export type AppUpdateCheckResult = 'update-found' | 'up-to-date' | 'no-worker' |
  * Imperatively ask the browser to re-fetch sw.js and install it if it changed —
  * the same check the interval poll / visibilitychange / online listeners run,
  * exposed for the `app.checkForUpdates` action. A found update still flows
- * through the existing `updatefound` → `appUpdate.markAvailable()` path (the
- * reload toast); here we only classify the outcome for immediate feedback.
+ * through {@link watchServiceWorkerUpdates}; here we only classify the outcome
+ * for immediate feedback.
  */
 export const checkForAppUpdate = async (): Promise<AppUpdateCheckResult> => {
   if (typeof navigator === 'undefined' || !navigator.serviceWorker) return 'no-worker'
@@ -57,9 +53,53 @@ export const checkForAppUpdate = async (): Promise<AppUpdateCheckResult> => {
   } catch {
     return 'error'
   }
-  return registration.installing || registration.waiting || appUpdate.isAvailable()
+  return registration.installing || registration.waiting || appUpdate.phase() !== 'current'
     ? 'update-found'
     : 'up-to-date'
+}
+
+type WatchedWorker = Pick<ServiceWorker, 'state' | 'postMessage' | 'addEventListener'>
+type WatchedContainer = Pick<ServiceWorkerContainer, 'addEventListener'> & {
+  readonly controller: unknown
+}
+type WatchedRegistration = Pick<ServiceWorkerRegistration, 'addEventListener'> & {
+  readonly installing: WatchedWorker | null
+  readonly waiting: WatchedWorker | null
+}
+
+/** Feed the registration's lifecycle into {@link appUpdate}. */
+export const watchServiceWorkerUpdates = async (
+  container: WatchedContainer,
+  registering: Promise<WatchedRegistration>,
+  update: AppUpdate = appUpdate,
+): Promise<void> => {
+  // The worker is never told to claim, so a controller only changes when a
+  // newer one activates over the one that served this page. Listening before
+  // the registration resolves, so a takeover during that wait still counts.
+  container.addEventListener('controllerchange', () => update.markReady())
+  const registration = await registering
+
+  const track = (worker: WatchedWorker): void => {
+    // With no controller this is the first install, not an update.
+    if (!container.controller) return
+    update.markDownloading()
+    const onState = (): void => {
+      // The worker skips waiting on its own (sw.ts); this is a fallback.
+      if (worker.state === 'installed') worker.postMessage('SKIP_WAITING')
+      if (worker.state === 'redundant' && !registration.installing && !registration.waiting) {
+        update.markDownloadFailed()
+      }
+    }
+    worker.addEventListener('statechange', onState)
+    onState()
+  }
+
+  // A worker that installed during a previous visit but never activated.
+  if (registration.waiting) track(registration.waiting)
+  if (registration.installing) track(registration.installing)
+  registration.addEventListener('updatefound', () => {
+    if (registration.installing) track(registration.installing)
+  })
 }
 
 export const registerServiceWorker = (): void => {
@@ -69,33 +109,11 @@ export const registerServiceWorker = (): void => {
 
   const swUrl = `${import.meta.env.BASE_URL}sw.js`
 
-  navigator.serviceWorker
-    .register(swUrl, {scope: import.meta.env.BASE_URL})
+  const registering = navigator.serviceWorker.register(swUrl, {scope: import.meta.env.BASE_URL})
+  watchServiceWorkerUpdates(navigator.serviceWorker, registering)
+    .then(() => registering)
     .then((registration) => {
       activeRegistration = registration
-      // A worker that reaches `installed` *while another version already
-      // controls the page* is a pending update. On the very first install
-      // there's no controller yet, so that worker is the first version, not
-      // an update — `navigator.serviceWorker.controller` is the guard.
-      const onInstalled = (worker: ServiceWorker | null) => {
-        if (!worker || worker.state !== 'installed') return
-        if (!navigator.serviceWorker.controller) return
-        // The SW self-skipWaiting()s on install, so it's already activating
-        // in the background; this postMessage is just a fallback. Either way
-        // the next reload is served fresh — we leave the reload to the user.
-        worker.postMessage('SKIP_WAITING')
-        appUpdate.markAvailable()
-      }
-
-      // A worker that installed during a previous visit but never activated
-      // (the old SW kept control) is already sitting in `waiting`.
-      onInstalled(registration.waiting)
-
-      registration.addEventListener('updatefound', () => {
-        const next = registration.installing
-        if (!next) return
-        next.addEventListener('statechange', () => onInstalled(next))
-      })
 
       const checkForUpdate = () => {
         registration.update().catch(() => {})

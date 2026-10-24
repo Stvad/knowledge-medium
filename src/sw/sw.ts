@@ -9,8 +9,8 @@
  *     can import them through the import map), which means a
  *     URL's *bytes* differ between deploys. Pinning each generation to its
  *     own cache and never overwriting an entry in place is what keeps a
- *     generation internally consistent — a page only ever sees the single
- *     build it booted with, even across many small lazy-loaded modules.
+ *     generation internally consistent — a worker only ever serves the single
+ *     build it was installed with, even across many small lazy-loaded modules.
  *     For that to hold for LAZY modules too, each generation's cache must be
  *     COMPLETE: `install` precaches the whole emitted asset graph (first-paint
  *     + every other cacheable asset, see PRECACHE_REST_ASSETS), so
@@ -19,25 +19,25 @@
  *     foreign-build bytes onto an old page (the `does not provide an export
  *     named …` skew). The same completeness is what makes the app work OFFLINE,
  *     so `install` ALWAYS precaches the whole graph — we never skip it for
- *     storage; footprint is bounded by KEEP_GENERATIONS and reclaimed by the
- *     activate GC instead. Caveat: this is only as good as the precache — a
- *     swallowed precache failure (flaky net, quota) leaves a hole, and a miss
- *     there still network-grafts. Fully closing the miss path (so the fallback
- *     refuses cross-generation bytes) needs a per-generation guard and is a
- *     follow-up, not done here.
- *   - We deliberately do NOT call clients.claim(). A freshly installed
- *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
- *     controls the NEXT load — so one reload, the user's own or our update
- *     prompt's, lands fully on the new build). But an already-open page
- *     keeps its existing controller, and therefore its generation, until it
- *     reloads. That is what removes mid-session version skew: an old tab
- *     that lazy-imports a chunk after a deploy gets *its* generation's
- *     chunk from its own cache, not the just-deployed one grafted onto its
- *     already-loaded (old) modules.
- *   - On activate we retain the last KEEP_GENERATIONS generations (current +
- *     previous, tracked by an install-order ledger) so a tab still on the
- *     previous build has a consistent cache to read from. Older generations
- *     are garbage-collected.
+ *     storage; footprint is bounded by the activate GC instead. Caveat: this is
+ *     only as good as the precache — a swallowed precache failure (flaky net,
+ *     quota) leaves a hole, and a miss there still network-grafts. Fully
+ *     closing the miss path (so the fallback refuses cross-generation bytes)
+ *     needs a per-generation guard and is a follow-up, not done here.
+ *   - A freshly installed worker self-skipWaiting()s, so it activates the
+ *     moment install ends. Activation hands it every page this scope already
+ *     controls (each gets `controllerchange`), and from then on such a page's
+ *     lazy imports come from the NEW generation's cache, grafted onto its
+ *     already-loaded modules. So a page of the previous build must not keep
+ *     running: each reloads at its first safe moment (src/appUpdate.ts), and
+ *     that reload — not the controller — is what keeps a page on one build.
+ *     We do not call clients.claim(): it would only add pages loaded WITHOUT
+ *     a worker (first visit, hard reload), which came from the network and
+ *     are already the newest build.
+ *   - On activate we keep only this generation, tracked by an install-order
+ *     ledger: once this worker activates nothing serves an older one, since
+ *     the pages that booted it are now this worker's. Older generations are
+ *     garbage-collected.
  *   - esm.sh imports: cache-first in a single shared, un-namespaced cache —
  *     those URLs carry version + integrity, so they're immutable across
  *     generations and need not be re-fetched on every deploy. The React vendor
@@ -46,9 +46,10 @@
  *     lazily on first use.
  *   - HTML navigations: CACHE-FIRST from this generation's own shell cache
  *     (network only on a cold miss). The shell is pinned like the assets, so a
- *     controlled load never mixes a new build's HTML with an old build's assets;
- *     a new deploy is applied on the next reload, and the app.checkForUpdates
- *     action / the update poll surface that a new build is available.
+ *     controlled load never mixes a new build's HTML with an old build's assets,
+ *     and boot never waits on the network. The load that detects a deploy
+ *     therefore still boots this generation; the new worker installs behind it
+ *     and the reload above moves the page over.
  *   - Everything else (Supabase, PowerSync, agent relay): straight to the
  *     network, never cached.
  *
@@ -82,11 +83,9 @@ const sw = createServiceWorker(
     // The SW lives at <base>/sw.js, so its scope shares the app's base path;
     // everything resolves relative to it.
     scopeURL: new URL(self.registration.scope),
-    // Keep the current build plus the two previous ones, so a tab held open
-    // across up to two deploys stays pinned to a cache that still exists. Each
-    // retained generation is roughly one full asset cache (~15-17MB) — a
-    // storage-for-resilience trade bounded by deploy-span, not fleet size.
-    keepGenerations: 3,
+    // Only this build: no worker serves an older generation once this one is
+    // active (see the header). Each generation is ~15-17MB of asset cache.
+    keepGenerations: 1,
     // Reap a PR-preview scope's leaked caches once it's sat untouched for 14
     // days (a merged preview's SW never runs again to clean up after itself).
     // Production is never a preview scope, so this can't touch prod caches.
@@ -125,8 +124,8 @@ const sw = createServiceWorker(
 
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
-  // Become active immediately so the NEXT load is served by this build.
-  // We do NOT claim — open pages keep their generation until they reload.
+  // Activate as soon as install ends: that takes over every open page, which
+  // then reloads onto this build (see the header).
   self.skipWaiting()
 })
 

@@ -6,8 +6,7 @@
  *
  * Each deploy is an immutable generation with its own km-shell-<id> /
  * km-assets-<id> caches. On activate we keep the most recent `keep`
- * generations (so a tab still on a prior build has a consistent cache to read
- * from) and GC the rest.
+ * generations and GC the rest.
  */
 import {PREVIEW_SUBTREE} from './preview'
 

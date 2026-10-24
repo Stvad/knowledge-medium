@@ -112,6 +112,7 @@ import {
   dbFilenameForUser,
   recordPreviewDatabaseForReaper,
 } from '@/data/localDbStorage.js'
+import { enterLocalDbBuildGate } from '@/data/localDbBuildGate.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -353,6 +354,8 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
   await assertOpfsAvailable()
 
   const dbFilename = dbFilenameForUser(userId)
+  // Before anything below opens the file — the VFS handoff already does.
+  await enterLocalDbBuildGate(dbFilename)
   await recordPreviewDatabaseForReaper(dbFilename)
   let prepared = preparedDbFiles.get(dbFilename)
   if (!prepared) {

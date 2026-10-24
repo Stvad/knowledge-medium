@@ -1,15 +1,14 @@
 /**
- * App-mount that surfaces "a new version is available" as a persistent
- * toast with a Reload action. Pairs with the dot + actionable row on the
- * status chip (src/plugins/system-status) — the toast is the loud,
- * dismissible nudge; the chip is the quiet, always-there fallback once the
- * toast is gone.
+ * App-mount that says what a deploy is doing to this tab: a toast while the
+ * new version downloads, then — only if the tab can't reload yet because the
+ * user is editing — one that says it will, with a Reload now action. Pairs with
+ * the status chip row (src/plugins/system-status): the toast is the loud
+ * nudge; the chip is the quiet, always-there fallback.
  *
- * We never reload on our own (see src/registerServiceWorker.ts): the new
- * build is already active in the background, so Reload — or any manual
- * reload — lands on it. The toast uses `duration: Infinity` so it waits for
- * the user instead of auto-dismissing, and a stable id so repeated SW
- * detections never stack.
+ * The reload itself is core's (src/appUpdate.ts): a tab whose build was
+ * superseded reloads at its first safe moment whether or not this plugin is
+ * on. Both toasts share one id and `duration: Infinity`, so each replaces the
+ * last and waits instead of auto-dismissing.
  *
  * Distinct from the `update-indicator` plugin, which flags per-block
  * content edited by another user — this one is about the app build itself.
@@ -21,7 +20,7 @@
  * sanctioned direction — instead of core reaching up into a plugin's facet.
  */
 import { useEffect } from 'react'
-import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
+import { appUpdate, useAppUpdatePhase } from '@/appUpdate.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { appMountsFacet } from '@/extensions/core.js'
 import {
@@ -35,16 +34,23 @@ import { systemToggle } from '@/facets/togglable.js'
 const UPDATE_TOAST_ID = 'app-update-available'
 
 const AppUpdatePrompt = () => {
-  const available = useAppUpdateAvailable()
+  const phase = useAppUpdatePhase()
   useEffect(() => {
-    if (!available) return
-    showInfo('A new version is available.', {
-      id: UPDATE_TOAST_ID,
-      duration: Number.POSITIVE_INFINITY,
-      action: {label: 'Reload', onClick: () => appUpdate.reload()},
-    })
+    if (phase === 'current') return
+    if (phase === 'downloading') {
+      showInfo('Downloading a new version of the app…', {
+        id: UPDATE_TOAST_ID,
+        duration: Number.POSITIVE_INFINITY,
+      })
+    } else {
+      showInfo('A new version is ready. This tab reloads once you finish editing.', {
+        id: UPDATE_TOAST_ID,
+        duration: Number.POSITIVE_INFINITY,
+        action: {label: 'Reload now', onClick: () => appUpdate.reload()},
+      })
+    }
     return () => dismissToast(UPDATE_TOAST_ID)
-  }, [available])
+  }, [phase])
   return null
 }
 

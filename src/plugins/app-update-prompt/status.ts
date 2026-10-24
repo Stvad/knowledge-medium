@@ -1,15 +1,15 @@
 /**
- * Routes "a new app build is available" onto the shared diagnostics seam, so
- * the status indicator shows it generically (an ambient dot + a "Reload" row in
- * the dropdown) instead of the chip hardcoding `appUpdate`. Pairs with the
- * loud, dismissible toast in `appUpdateMount.tsx`; this is the quiet, always-
- * there chip presence.
+ * Routes "a new app build is downloading / ready" onto the shared diagnostics
+ * seam, so the status indicator shows it generically (an ambient dot + a
+ * "Reload" row in the dropdown) instead of the chip hardcoding `appUpdate`.
+ * Pairs with the toast in `index.tsx`; this is the quiet, always-there chip
+ * presence.
  *
  * The actual reload is a normal global action (`app.reload`) the dropdown
  * button runs via `runActionById` — same indirection every diagnostic uses.
  */
 import { RefreshCcw, RefreshCw } from 'lucide-react'
-import { appUpdate } from '@/appUpdate.js'
+import { appUpdate, type AppUpdatePhase } from '@/appUpdate.js'
 import { checkForAppUpdate } from '@/registerServiceWorker.js'
 import { showInfo } from '@/utils/toast.js'
 import { actionsFacet } from '@/extensions/core.js'
@@ -27,9 +27,9 @@ const appReloadAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   description: 'Reload to apply the new version',
   context: ActionContextTypes.GLOBAL,
   icon: RefreshCw,
-  // Only meaningful when an update is pending — keep it out of the palette
-  // otherwise (the chip's dropdown button still dispatches it regardless).
-  isVisible: () => appUpdate.isAvailable(),
+  // Only meaningful once a newer build has taken over — keep it out of the
+  // palette otherwise (the chip's dropdown button still dispatches it regardless).
+  isVisible: () => appUpdate.phase() === 'ready',
   handler: () => {
     appUpdate.reload()
   },
@@ -40,12 +40,11 @@ export const APP_CHECK_FOR_UPDATES_ACTION_ID = 'app.checkForUpdates'
 // One transient toast, replaced in place by id as the check progresses.
 const CHECK_TOAST_ID = 'app-update-check'
 
-// Manually poke the SW update check. Useful now that navigation is cache-first
-// (src/sw/worker.ts): a new deploy no longer appears on the next navigation, so
-// this — alongside the 30-min poll — is how a user pulls a new build on demand.
-// A found update still surfaces the persistent reload prompt via the existing
-// updatefound → appUpdate.markAvailable() path; this toast is just the immediate
-// "what happened" feedback.
+// Manually poke the SW update check. Navigation is cache-first (src/sw/worker.ts),
+// so this — alongside the navigation check, the focus check and the 30-min poll —
+// is how a user pulls a new build on demand. A found update then downloads and
+// reloads the tab through appUpdate; this toast is just the immediate "what
+// happened" feedback.
 const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: APP_CHECK_FOR_UPDATES_ACTION_ID,
   description: 'Check for updates',
@@ -58,7 +57,7 @@ const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
     const result = await checkForAppUpdate()
     const message =
       result === 'update-found'
-        ? 'A new version is available — reload to apply.'
+        ? 'Found a new version — the app reloads once it has downloaded.'
         : result === 'up-to-date'
           ? "You're on the latest version."
           : result === 'no-worker'
@@ -68,22 +67,29 @@ const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
   },
 }
 
-// One stable snapshot ref — the content never varies, so reusing it keeps the
-// source's getSnapshot referentially stable while an update is pending (a
-// useSyncExternalStore requirement; see useDiagnostics).
-const UPDATE_AVAILABLE_SNAPSHOT: DiagnosticSnapshot = {
-  severity: 'info',
-  summary: 'A new version is available',
-  actionId: APP_RELOAD_ACTION_ID,
-  actionLabel: 'Reload',
-  nudge: true,
+// One stable snapshot ref per phase — the content never varies, so reusing it
+// keeps the source's getSnapshot referentially stable (a useSyncExternalStore
+// requirement; see useDiagnostics).
+const PHASE_SNAPSHOTS: Record<AppUpdatePhase, DiagnosticSnapshot | null> = {
+  current: null,
+  downloading: {
+    severity: 'info',
+    summary: 'Downloading a new version',
+  },
+  ready: {
+    severity: 'info',
+    summary: 'A new version is ready — this tab reloads once you finish editing',
+    actionId: APP_RELOAD_ACTION_ID,
+    actionLabel: 'Reload now',
+    nudge: true,
+  },
 }
 
 const appUpdateDiagnosticSource: DiagnosticSourceContribution = {
   id: 'app-update',
   label: 'App update',
   subscribe: appUpdate.subscribe,
-  getSnapshot: () => (appUpdate.isAvailable() ? UPDATE_AVAILABLE_SNAPSHOT : null),
+  getSnapshot: () => PHASE_SNAPSHOTS[appUpdate.phase()],
 }
 
 export const appReloadActionContribution = actionsFacet.of(appReloadAction, {

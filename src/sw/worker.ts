@@ -56,7 +56,7 @@ export interface SwConfig {
   buildId: string
   /** self.registration.scope as a URL — the base every path resolves against. */
   scopeURL: URL
-  /** How many generations to retain on activate (current + previous). */
+  /** How many generations to retain on activate, this one included. */
   keepGenerations: number
   /**
    * How long a PR-preview scope may sit untouched before its leaked generation
@@ -407,9 +407,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     } catch {
       // benign — leaked previews just persist to the next activate.
     }
-    // NB: intentionally no clients.claim() — see the sw.ts header. Taking over
-    // already-open pages is exactly what would let a new chunk land in an old
-    // page mid-session.
+    // NB: intentionally no clients.claim() — see the sw.ts header.
   }
 
   // Cache Storage is shared per-ORIGIN, so a client accumulates the caches of
@@ -636,11 +634,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // navigation URLs (deep links, query-strings, hash routes) share one entry.
   //
   // We deliberately do NOT overwrite a shell that's already present: a
-  // generation's cache stays immutable after install (like its assets), so an
-  // old-gen tab can never get a new build's HTML grafted over its old assets.
-  // A new deploy is applied on the NEXT reload (once the freshly-installed worker
-  // controls) — never mid-generation; the app.checkForUpdates action and the
-  // 30-min update poll surface that a new build exists so the user can reload.
+  // generation's cache stays immutable after install (like its assets), so a
+  // load never gets a new build's HTML grafted over an old build's assets. A
+  // new deploy reaches a page by reloading it onto the worker that activates
+  // with that deploy (src/appUpdate.ts).
   const shellCacheFirst = async (request: Request, shellURL: string): Promise<Response> => {
     const cache = await caches.open(SHELL_CACHE)
     env.mark?.('shellCacheOpenedAt')

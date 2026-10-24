@@ -18,6 +18,7 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { BootFallback } from '@/components/util/BootFallback.js'
+import { appUpdate } from '@/appUpdate.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -79,6 +80,9 @@ const initRepo = memoizeAsync(
     // rejections (data-only runtime) surface via the raw-message fallback.
     // The Repo is a process singleton; we don't unsubscribe.
     repo.onUserError(error => surfaceProcessorRejection(error, repo))
+    // A reload onto a new build waits out this repo's writes, counted from the
+    // moment one is requested. Process singleton, like the subscriber above.
+    appUpdate.addBusyCheck(() => repo.hasWriteInFlight)
     markStartup('repoReady')
     return repo
   },
