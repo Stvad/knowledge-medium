@@ -1,1 +1,0 @@
-export{VX as kernelDataExtension}from"../../chunks/app-B3hM5bwf.js";
