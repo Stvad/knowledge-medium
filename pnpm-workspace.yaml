@@ -27,12 +27,11 @@ minimumReleaseAge: 10080
 verifyDepsBeforeRun: warn
 
 # Every dependency with an install script must be listed: true runs it, false
-# skips it, and an unlisted one fails the install (strictDepBuilds). These two
-# genuinely need theirs (native/wasm setup). pnpm silently ignores the old
-# `onlyBuiltDependencies` list.
+# skips it, and an unlisted one fails the install (strictDepBuilds).
+# better-sqlite3 genuinely needs its own, to build the native addon. pnpm
+# silently ignores the old `onlyBuiltDependencies` list.
 allowBuilds:
   better-sqlite3: true
-  '@journeyapps/wa-sqlite': true
 
 # Was `resolutions` under yarn 1: pin the CodeMirror/Lezer family to single
 # versions so transitive copies can't fork editor state.

@@ -322,39 +322,25 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
   ON ps_crud_rejected (tx_id)
 `
 
-/** Hold downloads until the server's checkpoint includes every queued upload.
+/** Forget the last write checkpoint the sync stream showed, on every enqueue,
+ *  as PowerSync's own crud path does. A remembered id from before the write
+ *  could already meet the target the next upload sets, if the service's counter
+ *  restarted (its storage wiped, or a new instance), and release a checkpoint
+ *  cut before the upload landed. On the queue rather than its writers, so a
+ *  direct enqueue (the rejected-upload retry) forgets too.
  *
- *  The core publishes a checkpoint only when `ps_crud` is empty AND the
- *  `$local` bucket's `target_op` does not exceed its `last_op`. Raising
- *  `target_op` to the max op id keeps that shut after the upload empties
- *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
- *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
- *  upload landed is published, and the drain applies that older version over
- *  the newer local row (#1226). The row PowerSync's own crud path writes,
- *  which our writers bypass by inserting into `ps_crud` directly. */
-const LOCAL_HOLD_ROW_SQL = "'$local', 0, 9223372036854775807"
-
-/** On the queue rather than on its writers, so every enqueue holds: the block
- *  upload triggers and a direct insert (the rejected-upload retry) alike.
- *
- *  A DELETE then a plain INSERT, not PowerSync's `INSERT OR REPLACE`, for the
- *  same row: a trigger's own conflict clause yields to the one on the statement
- *  that fired it, so a `blocks` write carrying `OR IGNORE` would skip the hold
- *  and one carrying `OR ABORT` would fail on it. */
-export const CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS ps_crud_hold_downloads
+ *  The keys are the core's internal state: `writeCheckpointGate.test.ts` drives
+ *  the real core, so a rename fails there rather than silently disarming this.
+ *  Retire it once uploads enqueue through `powersync_crud`, which does this
+ *  itself. */
+export const CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS ps_crud_forget_seen_checkpoint
   AFTER INSERT ON ps_crud
   BEGIN
-    DELETE FROM ps_buckets WHERE name = '$local';
-    INSERT INTO ps_buckets(name, last_op, target_op) VALUES(${LOCAL_HOLD_ROW_SQL});
+    DELETE FROM ps_kv
+    WHERE key IN ('last_seen_checkpoint_request_id', 'last_applied_checkpoint_request_id');
   END
 `
-
-/** Uploads queued before the trigger existed hold too. Runs every boot; with
- *  nothing queued it writes nothing, and with something queued the hold is
- *  already the state PowerSync keeps. */
-export const HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL =
-  `INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) SELECT ${LOCAL_HOLD_ROW_SQL} WHERE EXISTS (SELECT 1 FROM ps_crud)`
 
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
@@ -559,8 +545,11 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
 // Writing it directly bypasses PowerSync's own crud path. The part of that
-// path these writes need, the download hold, is the queue's own trigger:
-// {@link CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL}.
+// path these writes need is the download hold, which the SDK raises itself
+// when an upload completes (`CrudTransaction.complete()` sets the core's
+// `target_checkpoint_request_id`), and which a non-empty queue keeps shut
+// before that. The path also forgets the last checkpoint id it saw; that part
+// is the queue's own trigger: {@link CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL}.
 // ============================================================================
 
 interface UploadColumnSpec {
@@ -1348,7 +1337,6 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
-  HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
@@ -1358,10 +1346,10 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
-  // 2 upload-routing triggers, and the upload queue's download hold
+  // 2 upload-routing triggers, and the upload queue's checkpoint reset
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
-  CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL,
+  CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL,
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
@@ -1414,13 +1402,24 @@ const normalizeTriggerSql = (sql: string): string =>
 export const triggerSqlMatches = (stored: string | null | undefined, createSql: string): boolean =>
   typeof stored === 'string' && normalizeTriggerSql(stored) === normalizeTriggerSql(createSql)
 
-/** DROP + CREATE pairs for every client-schema trigger whose stored definition
- *  is missing or differs from the code's. Read `stored` from `sqlite_master`,
- *  not from a version marker: a marker cannot see a trigger a crashed
- *  `withTriggerSuspended` left dropped. */
-export const triggerRecreateStatements = (stored: ReadonlyMap<string, string>): string[] =>
-  [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, createSql]) =>
-    triggerSqlMatches(stored.get(name), createSql) ? [] : [`DROP TRIGGER IF EXISTS ${name}`, createSql])
+/** Triggers an earlier build installed and this one does not. */
+const RETIRED_TRIGGER_NAMES: readonly string[] = [
+  // The download hold on `ps_crud`, from before the SDK raised its own. Its
+  // body writes `ps_buckets.target_op`, which core schema 14 drops, so while it
+  // exists every enqueue fails.
+  'ps_crud_hold_downloads',
+]
+
+/** A DROP for each retired trigger still installed, and DROP + CREATE pairs for
+ *  every client-schema trigger whose stored definition is missing or differs
+ *  from the code's. Read `stored` from `sqlite_master`, not from a version
+ *  marker: a marker cannot see a trigger a crashed `withTriggerSuspended` left
+ *  dropped. */
+export const triggerRecreateStatements = (stored: ReadonlyMap<string, string>): string[] => [
+  ...RETIRED_TRIGGER_NAMES.filter(name => stored.has(name)).map(name => `DROP TRIGGER IF EXISTS ${name}`),
+  ...[...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, createSql]) =>
+    triggerSqlMatches(stored.get(name), createSql) ? [] : [`DROP TRIGGER IF EXISTS ${name}`, createSql]),
+]
 
 export const SELECT_CLIENT_SCHEMA_TRIGGERS_SQL = `SELECT name, sql FROM sqlite_master WHERE type = 'trigger'`
 
