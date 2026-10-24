@@ -1,1 +1,0 @@
-export{sK as omnilinerNamespace}from"../../chunks/app-B0AfrydY.js";

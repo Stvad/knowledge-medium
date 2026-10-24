@@ -1,1 +1,0 @@
-export{ju as contributorsPlugin}from"../../../chunks/app-B0AfrydY.js";

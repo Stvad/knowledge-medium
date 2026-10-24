@@ -1,1 +1,0 @@
-export{VH as matchCharTrigger}from"../../chunks/app-B0AfrydY.js";
