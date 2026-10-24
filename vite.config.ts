@@ -92,6 +92,11 @@ export default defineConfig(({command}) => {
         server: process.env.VITE_TUNNEL
             ? {allowedHosts: ['.ts.net']}
             : undefined,
+        // Preview stands in for GitHub Pages when testing the service worker,
+        // and Pages sends no `Vary: Origin`. Vite's default CORS answer adds
+        // one, and module requests carry `Origin`, so every precached module
+        // misses in the SW and an offline reload of a preview boots blank.
+        preview: {cors: false},
         // Baked into the bundle as a literal so the client can show which
         // build it's running (see src/appVersion.ts). The same object is
         // emitted as dist/version.json below for the deploy-time update check.
