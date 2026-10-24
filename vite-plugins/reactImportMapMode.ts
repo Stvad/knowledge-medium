@@ -6,11 +6,11 @@ type ImportMap = {
   [key: string]: unknown
 }
 
-export const REACT_ESM_VERSION = '19.2.6'
+export const REACT_ESM_VERSION = '19.3.1'
 
 const REACT_ESM_BASE = `https://esm.sh/react@${REACT_ESM_VERSION}`
 const REACT_DOM_ESM_BASE = `https://esm.sh/react-dom@${REACT_ESM_VERSION}`
-const SCHEDULER_ESM_ENTRY = 'https://esm.sh/scheduler@%5E0.27.0?target=es2022'
+const SCHEDULER_ESM_ENTRY = 'https://esm.sh/scheduler@%5E0.28.0?target=es2022'
 
 const productionReactImports = {
   react: REACT_ESM_BASE,
@@ -20,22 +20,22 @@ const productionReactImports = {
 }
 
 export const productionReactIntegrity = {
-  [REACT_ESM_BASE]: 'sha384-cULQr/uUHnGWJTu+mMitrsp8U68hnawvW+WKOfrKWimkxs2Ro7FPDDOR/AifqLA+',
-  [`${REACT_ESM_BASE}/compiler-runtime`]: 'sha384-Fetdv9KLlqvxstqIkJWEGp31fyVT1TqMC7Yig02LJFUADNWT65bc3wqpjsWcKxsW',
-  [`${REACT_ESM_BASE}/jsx-runtime`]: 'sha384-2MkM23snzEOobDh9ZvQc4ZiNwV4DZewa8K/YrI5sguhYIKLs36CzQnCtRnm5pnid',
-  [`${REACT_ESM_BASE}/es2022/compiler-runtime.mjs`]: 'sha384-740x+PeUUcmx/b3EEI3La2teqx4c2dWSKiEi9CoaWtCjKTX3aBNjpAcn5A/ctQqc',
-  [`${REACT_ESM_BASE}/es2022/jsx-runtime.mjs`]: 'sha384-gBQKGl1AHiJKC6Wfs0mwGjZb51AT0m5hy5F6TpgIqj0P6QEVho66PGQzoEiVwJtI',
-  [`${REACT_ESM_BASE}/es2022/react.mjs`]: 'sha384-xDJ6u7Y7gVsDGlMDZKWtnIKbcb7FZrux+VIi5cLbyuN06Ae3jhX6+F7CvakLuBZp',
-  [REACT_DOM_ESM_BASE]: 'sha384-P0E4fscwP/KjngFh/I4mdUbuvPooaN8nXl9kUohx30r8a/q3HE7erwThGp6+slgE',
-  [`${REACT_DOM_ESM_BASE}/client`]: 'sha384-reX2i+i9B0laoaK9sTuz3ad6lLCGvS/hP3fj2eSncdD7g+LGG3t+WZPzh/7mRagc',
-  [`${REACT_DOM_ESM_BASE}/server`]: 'sha384-tTy7T4lm9zbn4WLf9sNOE68LSnJDnyqgfNVqZpMKQubeVEmzruL9nC2qn5DovrgM',
-  [`${REACT_DOM_ESM_BASE}/es2022/client.mjs`]: 'sha384-vK9eHXJaYh23bHnPGQmnoNh9HfePoj1uFQPpm1MgDcLVNW5EcVPIzDKxPHkxjgmP',
-  [`${REACT_DOM_ESM_BASE}/es2022/react-dom.mjs`]: 'sha384-EyquMVSONwhMrth737GgF6y3Z9+XoRaJgacXp2XxUwchleTwltUUZiVF37zDJkZ4',
-  [`${REACT_DOM_ESM_BASE}/es2022/server.mjs`]: 'sha384-IwzC8eRS5WH1zi7moYXhPmDA8p6w0r3uVG2yrfNRHHngpelUxeDz0raWF6O89APj',
-  [`${REACT_DOM_ESM_BASE}/es2022/cjs/react-dom-server-legacy.browser.production.mjs`]: 'sha384-RPa0ImTl9OI1lRLPTu6UD3Pi1dGOkzNqX5jmHAbzM9lGpC/4P40HuAhcXm3fIGUg',
-  [`${REACT_DOM_ESM_BASE}/es2022/cjs/react-dom-server.browser.production.mjs`]: 'sha384-4xw4onVS7+N9AtveaWuTyJlbV2W0onO6MGaTqkIUppwz4o3CDgWSwJRfv900ltXA',
-  [SCHEDULER_ESM_ENTRY]: 'sha384-Hn0En/+NbrkiN2qg3vteMOo2bUZo6FSvCNMXYl56LT6iDZPcvE+dM5KihcQci8Pi',
-  'https://esm.sh/scheduler@0.27.0/es2022/scheduler.mjs': 'sha384-FlH+dunulq4haKZQI6cgqxRdEF65XdB6qi6BJPf2tC0mxkN+PmNGZVIvhcobyxKX',
+  [REACT_ESM_BASE]: 'sha384-ut1U+oIs0ClaOE7uF1+DZAaHVvYvEJZME3mUuqn95yVqQ70a+8u2LN2LD37JgJkO',
+  [`${REACT_ESM_BASE}/compiler-runtime`]: 'sha384-OwMucnCwvSvEvLGQZRYvzXLqTO62Tpxtr44jwVXcNCIDc1dxedT3i+c3K6gbTH0T',
+  [`${REACT_ESM_BASE}/jsx-runtime`]: 'sha384-WuUlFXf93SyYfvc/sync3BdSKZvd7a21DD7d8nz9SZcsw9d8SgBxha4mBOzb/ITP',
+  [`${REACT_ESM_BASE}/es2022/compiler-runtime.mjs`]: 'sha384-7EAuIpifon0qC3yWooyL7sHUAW0NPw2qPgdNk3N9aYJspAtpRGsM0fmc6epWRm5I',
+  [`${REACT_ESM_BASE}/es2022/jsx-runtime.mjs`]: 'sha384-gh8xw1wmcir9SHUqXziDr2z4Oz0Kyy0SrQ8ZhX/0UyjVAHiQnKjEs0ePh4PDo5o2',
+  [`${REACT_ESM_BASE}/es2022/react.mjs`]: 'sha384-Psq5WJvVF357tIF0zhz8ailHVmWVJLwyWH6vLzhozGkNMdVwvi/q4PAofRwgDYt6',
+  [REACT_DOM_ESM_BASE]: 'sha384-FKbbSw/nINZRM0ej/iwjfXbJeAZMJdBKqKmn/I+aIM4Io5qupmM8sZJxaJZDO0sv',
+  [`${REACT_DOM_ESM_BASE}/client`]: 'sha384-1lS4GktdgllRF1OQSgYP4ehItzJL2hrWYUJUMcxRA+kL/LOwA1mZvQBYOtlnrXBq',
+  [`${REACT_DOM_ESM_BASE}/server`]: 'sha384-7LadG21GTWfntE+DeXejoxQ+k1gypabL0MJIbIkBf7PsSEvzt1NWLn9uGwJkuK/c',
+  [`${REACT_DOM_ESM_BASE}/es2022/client.mjs`]: 'sha384-JUXRbhM1IMfjD0bcuXxiI1PtHumQtqdAU20XJc2cfPh4Lg6RYVoCfuDeTd6QFY6R',
+  [`${REACT_DOM_ESM_BASE}/es2022/react-dom.mjs`]: 'sha384-uHZRqepbVmDxV8LisyTnW3yCxfF9qg9n2ZP6UU+2B+T5Eu2fYDHfxN+/yXTtURWg',
+  [`${REACT_DOM_ESM_BASE}/es2022/server.mjs`]: 'sha384-DIoAILCPCWbSLEk4QFR+/fzTaD65IRF2bnJKA24VR3nZKEB24EDtpX0iuv0AVDAw',
+  [`${REACT_DOM_ESM_BASE}/es2022/cjs/react-dom-server-legacy.browser.production.mjs`]: 'sha384-s+uNA0UqWtCt8l6Y9EO05tVt83j6XMxoXFd0QlCRKJuIM6F+Jn/DbUe7CMDn9X7N',
+  [`${REACT_DOM_ESM_BASE}/es2022/cjs/react-dom-server.browser.production.mjs`]: 'sha384-QxXIBn1Mhq+M6bPsT8z1a8w8o4FbFB2lGow88kCqrijG8hvHKtRZB8ISjbxu+GA7',
+  [SCHEDULER_ESM_ENTRY]: 'sha384-jsXPGE3JN4R3aK6oENd9F0e2R6Uwd+VdljSDtnYZ6Fzl9FHR8ivWA95iPLW+KJd2',
+  'https://esm.sh/scheduler@0.28.0/es2022/scheduler.mjs': 'sha384-VTqzDxK+Nfu62ZqrHojPSgKqkcLx9wWONGvOJwFQqD00uvRqQKGsX4stOJmJsauz',
 }
 
 const importMapScriptPattern =
