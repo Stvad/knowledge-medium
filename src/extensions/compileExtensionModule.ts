@@ -6,7 +6,7 @@ import {
 } from '@/extensions/compiledModuleCache.js'
 import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
-// Bump when the Babel preset list / transform options change so older
+// Bump when the Babel major, preset list or transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
 // output. This is checked against the persisted record's
 // `compilerVersion`, NOT folded into the source hash — a compiler bump
@@ -16,17 +16,22 @@ import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.
 // (debuggable extensions). Bumping regenerates older map-less cached output.
 // '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
 // map) instead of the `React` global.
-export const COMPILER_VERSION = '3'
+// '4': Babel 8. Uninitialized class fields are kept, not deleted.
+export const COMPILER_VERSION = '4'
 
 /** Babel presets the extension loader transpiles with; tests that mirror the
  *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
  *  an extension's JSX on the host's React: it imports its factory from
  *  `react/jsx-runtime`, which the page import map resolves to the module the
  *  app itself uses. The classic runtime would emit `React.createElement` and
- *  depend on whichever `React` global happens to be in scope. */
-export const EXTENSION_BABEL_PRESETS: Array<string | [string, object]> = [
+ *  depend on whichever `React` global happens to be in scope.
+ *
+ *  `onlyRemoveTypeImports: false` erases an import whose bindings are used
+ *  only as types even when it is not written `import type`. Stored extensions
+ *  rely on that, and a kept import of a type-only export fails to link. */
+export const EXTENSION_BABEL_PRESETS: Array<[string, object]> = [
   ['react', {runtime: 'automatic'}],
-  'typescript',
+  ['typescript', {onlyRemoveTypeImports: false}],
 ]
 
 export type ExtensionModule = Record<string, unknown>
@@ -129,7 +134,7 @@ export async function hashExtensionSource(content: string): Promise<string> {
 }
 
 /** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
- *  `import()` so `@babel/standalone` (~0.85 MB gz) leaves the eager
+ *  `import()` so the large `@babel/standalone` leaves the eager
  *  startup preload set (#167) — it's fetched/evaluated only here, on a
  *  genuine compile-cache miss.
  *
@@ -162,7 +167,7 @@ async function defaultTranspileViaBabel(content: string, blockId?: string): Prom
     sourceFileName: sourceName,
     sourceMaps: 'inline',
     presets: EXTENSION_BABEL_PRESETS,
-  }).code
+  })?.code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
   return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`
 }
@@ -402,6 +407,8 @@ export async function loadApprovedExtension(
       // compilerVersion change). Loading must never establish trust for a
       // new/changed source — that is exclusively `approveExtension`'s job.
       // Do not "optimize" by persisting live content here.
+      // Accepted: a blind write, so an approve or revoke landing mid-recompile
+      // is overwritten with this older pin. Costs a re-approval, never trust.
       await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
       return instantiateImpl(compiled)
     }
