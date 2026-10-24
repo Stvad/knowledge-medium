@@ -1,1 +1,1 @@
-export{Sd as extensionsOverridesProp,Cd as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-ByvFkjy1.js";
+export{Sd as extensionsOverridesProp,Cd as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DuHeo_02.js";
