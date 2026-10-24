@@ -1,1 +1,1 @@
-export{Yk as dynamicExtensionsExtension}from"../../chunks/app-CMLjR_-r.js";
+export{Yk as dynamicExtensionsExtension}from"../../chunks/app-CENe62V4.js";

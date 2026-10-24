@@ -1,1 +1,1 @@
-export{NA as BlockLoadingPlaceholder}from"../../chunks/app-CMLjR_-r.js";
+export{NA as BlockLoadingPlaceholder}from"../../chunks/app-CENe62V4.js";

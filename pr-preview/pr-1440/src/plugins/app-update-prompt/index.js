@@ -1,1 +1,1 @@
-export{mk as appUpdatePromptExtension}from"../../../chunks/app-CMLjR_-r.js";
+export{mk as appUpdatePromptExtension}from"../../../chunks/app-CENe62V4.js";

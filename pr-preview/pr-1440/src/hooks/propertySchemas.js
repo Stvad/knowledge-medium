@@ -1,1 +1,1 @@
-export{rz as usePropertySchemas}from"../../chunks/app-CMLjR_-r.js";
+export{rz as usePropertySchemas}from"../../chunks/app-CENe62V4.js";

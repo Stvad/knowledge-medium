@@ -1,1 +1,1 @@
-export{ott as CHANGE_SCOPE_POLICIES,stt as ChangeScope,ctt as isChangeScope,ltt as policyForScope,utt as scopeAllowedInReadOnly,dtt as scopeIsUndoable,ftt as scopePoliciesEquivalent,ptt as scopeUploadsToServer,mtt as sourceForScope}from"../../../chunks/app-CMLjR_-r.js";
+export{ott as CHANGE_SCOPE_POLICIES,stt as ChangeScope,ctt as isChangeScope,ltt as policyForScope,utt as scopeAllowedInReadOnly,dtt as scopeIsUndoable,ftt as scopePoliciesEquivalent,ptt as scopeUploadsToServer,mtt as sourceForScope}from"../../../chunks/app-CENe62V4.js";

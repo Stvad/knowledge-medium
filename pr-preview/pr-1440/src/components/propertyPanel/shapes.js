@@ -1,1 +1,1 @@
-export{sz as propertyShapeLabel}from"../../../chunks/app-CMLjR_-r.js";
+export{sz as propertyShapeLabel}from"../../../chunks/app-CENe62V4.js";
