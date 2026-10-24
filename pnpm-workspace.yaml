@@ -20,11 +20,18 @@ linkWorkspacePackages: true
 # npm `min-release-age=7` cooldown, which pnpm does not read from .npmrc.
 minimumReleaseAge: 10080
 
-# pnpm blocks dependency build scripts by default; these two genuinely need
-# theirs (native/wasm setup). Anything new that wants one will warn at install.
-onlyBuiltDependencies:
-  - better-sqlite3
-  - '@journeyapps/wa-sqlite'
+# Say when node_modules is out of sync before `pnpm run`/`exec`, but leave the
+# reinstall to its two owners, scripts/ensure-deps.mjs (session start) and the
+# gate's first task: both are frozen. The default, `install`, runs a non-frozen
+# install that rewrites pnpm-lock.yaml from whatever package.json says.
+verifyDepsBeforeRun: warn
+
+# Every dependency with an install script must be listed: true runs it, false
+# skips it, and an unlisted one fails the install (strictDepBuilds). These two
+# genuinely need theirs (native/wasm setup).
+allowBuilds:
+  better-sqlite3: true
+  '@journeyapps/wa-sqlite': true
 
 # Was `resolutions` under yarn 1: pin the CodeMirror/Lezer family to single
 # versions so transitive copies can't fork editor state.
