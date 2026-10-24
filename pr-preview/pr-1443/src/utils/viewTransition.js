@@ -1,0 +1,1 @@
+export{XL as withMoveTransition}from"../../chunks/app-2d8SZX0x.js";

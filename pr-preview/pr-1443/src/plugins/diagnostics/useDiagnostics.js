@@ -1,0 +1,1 @@
+export{is as aggregateDiagnostics,as as useDiagnostics}from"../../../chunks/app-2d8SZX0x.js";

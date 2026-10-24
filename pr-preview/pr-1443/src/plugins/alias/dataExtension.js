@@ -1,0 +1,1 @@
+export{SG as aliasDataExtension}from"../../../chunks/app-2d8SZX0x.js";
