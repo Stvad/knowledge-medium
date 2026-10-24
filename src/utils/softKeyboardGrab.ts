@@ -2,9 +2,9 @@
  *
  *  iOS WebKit only pops the soft keyboard when an element is focused
  *  *synchronously inside a user gesture*. Entering block edit mode focuses the
- *  CodeMirror editor a frame later: an async state round-trip
- *  (`enterEditModeForBlock`) mounts the editor, then a `requestAnimationFrame`
- *  in BlockEditor's focus effect calls `editorView.focus()`. That focus is
+ *  CodeMirror editor later: an async state round-trip
+ *  (`enterEditModeForBlock`) mounts the editor, and BlockEditor's focus effect
+ *  calls `editorView.focus()` in that mount's commit. That focus is
  *  outside the original tap's gesture, so iOS refuses to raise the keyboard —
  *  the block enters edit mode but the keyboard only appears on a *second*,
  *  direct tap on the now-mounted editable. (Device-verified on iPad iOS 26: a
@@ -13,7 +13,7 @@
  *
  *  `grabSoftKeyboard()` bridges the gap. Called synchronously from the tap
  *  handler, it focuses a hidden proxy `<input>`, so the OS raises the keyboard
- *  immediately. When the real editor focuses a frame later, focus simply
+ *  immediately. When the real editor focuses after the round-trip, focus simply
  *  transfers between two text-entry elements and the already-up keyboard stays
  *  visible. Focusing an input is a no-op for the keyboard when a hardware
  *  keyboard is attached, so this only ever surfaces a keyboard the user was
@@ -24,8 +24,8 @@
  *  the keyboard flash-then-hide, so it must not run there. It DOES run when the
  *  keyboard is already up (switching from one editing block to another): the tap
  *  blurs the old editor and a non-editable `.tm-block` container briefly grabs
- *  focus, which dismisses the keyboard before the new editor focuses ~a frame
- *  later — so the proxy is needed to hold the keyboard across that gap too. */
+ *  focus, which dismisses the keyboard before the new editor focuses after the
+ *  round-trip — so the proxy is needed to hold the keyboard across that gap too. */
 
 import { isIOS } from '@/utils/platform.js'
 
