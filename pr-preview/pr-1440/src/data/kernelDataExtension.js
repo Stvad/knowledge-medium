@@ -1,1 +1,1 @@
-export{VX as kernelDataExtension}from"../../chunks/app-CaIdytmN.js";
+export{VX as kernelDataExtension}from"../../chunks/app-DABiPk0z.js";

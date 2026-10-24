@@ -1,1 +1,1 @@
-export{Yp as blockInfoPlugin}from"../../../chunks/app-CaIdytmN.js";
+export{Yp as blockInfoPlugin}from"../../../chunks/app-DABiPk0z.js";

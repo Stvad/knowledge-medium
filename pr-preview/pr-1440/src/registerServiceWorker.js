@@ -1,1 +1,1 @@
-export{Ck as checkForAppUpdate,wk as registerServiceWorker}from"../chunks/app-CaIdytmN.js";
+export{Ck as checkForAppUpdate,wk as registerServiceWorker}from"../chunks/app-DABiPk0z.js";
