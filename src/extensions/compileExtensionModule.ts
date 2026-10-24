@@ -407,6 +407,8 @@ export async function loadApprovedExtension(
       // compilerVersion change). Loading must never establish trust for a
       // new/changed source — that is exclusively `approveExtension`'s job.
       // Do not "optimize" by persisting live content here.
+      // Accepted: a blind write, so an approve or revoke landing mid-recompile
+      // is overwritten with this older pin. Costs a re-approval, never trust.
       await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
       return instantiateImpl(compiled)
     }

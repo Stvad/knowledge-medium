@@ -9,18 +9,18 @@ import {
   loadApprovedExtension,
 } from '@/extensions/compileExtensionModule'
 
-// The Babel major that output cached under the current COMPILER_VERSION was
-// produced with. Persisted output is keyed by COMPILER_VERSION, not by Babel.
-const COMPILER_BABEL_MAJOR = '8'
+// Output cached under a COMPILER_VERSION was produced by this Babel major.
+// Persisted output is keyed by COMPILER_VERSION, not by Babel's version.
+const COMPILER_VERSION_SET_UNDER = {compilerVersion: '4', babelMajor: '8'}
 
 describe('COMPILER_VERSION', () => {
   it('was set under the installed Babel major', () => {
     expect(
-      Babel.version.split('.')[0],
-      '@babel/standalone changed major. Bump COMPILER_VERSION, or every device keeps serving ' +
-      'output cached under the old major. Transpile real extension sources with both versions ' +
-      'and compare outputs and errors, then update COMPILER_BABEL_MAJOR.',
-    ).toBe(COMPILER_BABEL_MAJOR)
+      {compilerVersion: COMPILER_VERSION, babelMajor: Babel.version.split('.')[0]},
+      'If @babel/standalone changed major, bump COMPILER_VERSION, or every device keeps ' +
+      'serving output cached under the old major; transpile real extension sources with both ' +
+      'versions and compare outputs and errors. Then record the new pair here.',
+    ).toEqual(COMPILER_VERSION_SET_UNDER)
   })
 })
 
