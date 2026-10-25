@@ -1,1 +1,1 @@
-export{NS as PendingInvitations}from"../../../chunks/app-2MU-2JTg.js";
+export{NS as PendingInvitations}from"../../../chunks/app-DVXhpIVh.js";
