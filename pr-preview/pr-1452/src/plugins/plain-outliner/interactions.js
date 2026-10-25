@@ -1,1 +1,1 @@
-export{nx as blockEditingContentRenderer}from"../../../chunks/app-CgF_X16P.js";
+export{nx as blockEditingContentRenderer}from"../../../chunks/app-otp5Iace.js";
