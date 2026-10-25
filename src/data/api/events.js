@@ -1,1 +1,1 @@
-export{Tet as CORE_BLOCK_DELETED_EVENT,Eet as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-a6f-KV-A.js";
+export{Tet as CORE_BLOCK_DELETED_EVENT,Eet as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DNNU5JH5.js";

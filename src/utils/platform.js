@@ -1,1 +1,1 @@
-export{WL as isIOS,GL as isMacPlatform}from"../../chunks/app-a6f-KV-A.js";
+export{WL as isIOS,GL as isMacPlatform}from"../../chunks/app-DNNU5JH5.js";
