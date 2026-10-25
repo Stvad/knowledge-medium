@@ -1,1 +1,1 @@
-export{QD as TypeChip}from"../../../chunks/app-BSlYaFgX.js";
+export{QD as TypeChip}from"../../../chunks/app-Bi4hhTHI.js";
