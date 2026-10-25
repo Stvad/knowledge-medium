@@ -1,1 +1,1 @@
-export{DF as AddPropertyForm}from"../../../chunks/app-CZQhnY8z.js";
+export{DF as AddPropertyForm}from"../../../chunks/app-5gt8L3-Q.js";
