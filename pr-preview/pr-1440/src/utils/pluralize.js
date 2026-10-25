@@ -1,1 +1,0 @@
-export{lQ as agree,uQ as pluralize}from"../../chunks/app-BtmcZBSL.js";

@@ -1,1 +1,0 @@
-export{$U as characterCounterDataExtension}from"../../../chunks/app-BtmcZBSL.js";
