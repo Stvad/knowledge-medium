@@ -1,1 +1,1 @@
-export{zX as Block,BX as requireLoadedBlock}from"../../chunks/app-D9zeuplj.js";
+export{zX as Block,BX as requireLoadedBlock}from"../../chunks/app-CgF_X16P.js";

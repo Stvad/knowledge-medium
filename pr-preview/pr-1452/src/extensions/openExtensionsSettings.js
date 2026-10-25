@@ -1,1 +1,1 @@
-export{ej as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tj as openExtensionsSettings}from"../../chunks/app-D9zeuplj.js";
+export{ej as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tj as openExtensionsSettings}from"../../chunks/app-CgF_X16P.js";

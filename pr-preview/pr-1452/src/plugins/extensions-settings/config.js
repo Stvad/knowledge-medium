@@ -1,1 +1,1 @@
-export{xd as extensionsOverridesPresetCore,Sd as extensionsOverridesProp,Cd as extensionsPrefsType,wd as overridesCodec}from"../../../chunks/app-D9zeuplj.js";
+export{xd as extensionsOverridesPresetCore,Sd as extensionsOverridesProp,Cd as extensionsPrefsType,wd as overridesCodec}from"../../../chunks/app-CgF_X16P.js";
