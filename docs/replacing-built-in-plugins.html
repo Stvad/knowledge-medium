@@ -416,7 +416,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
               <li class="prop"><span class="k">extension:upstream-kind</span> bundle</li>
               <li class="prop"><span class="k">extension:base-path</span> src/plugins/todo/index.tsx</li>
               <li class="prop"><span class="k">extension:base-version</span> the app version at eject</li>
-              <li class="prop"><span class="k">extension:base-hash</span> sha256 of the content below</li>
+              <li class="prop"><span class="k">extension:base-hash</span> sha256 of the authored file at eject, as the source provider reports it <span class="note">— not of the content below</span></li>
               <li class="note">content: the file as ejected, the base of a later merge</li>
             </ul>
           </li>
@@ -805,14 +805,14 @@ export const todoPlugin: AppExtension = systemToggle({
 <!-- 9 ─────────────────────────────────────────────────────────── -->
 <section id="upstream">
   <h2 class="sec"><span class="n">9</span>Keeping up with upstream</h2>
-  <p>After an app update, each device checks once per new version. For every forked file whose upstream is the bundle, it fetches that plugin's source file (§5) and compares the file's hash with the fork's base. Nothing writes during the check; it only sets a status. The check is the same for the other kinds of upstream in #1427 (a shared extension block, a URL). Only how it reads the current upstream differs.</p>
+  <p>After an app update, each device checks once per new version. For every forked file whose upstream is the bundle, it fetches that plugin's source file (§5) and compares the authored file's hash with the fork's <code>base-hash</code>. Both are hashes of authored text, before eject's import rewrite, so an unchanged file compares equal. Nothing writes during the check; it only sets a status. The check is the same for the other kinds of upstream in #1427 (a shared extension block, a URL). Only how it reads the current upstream differs.</p>
 
   <div class="table-wrap"><table>
     <thead><tr><th style="width:22%">Status</th><th>When</th><th style="width:38%">What you can do</th></tr></thead>
     <tbody>
-      <tr><td>Up to date</td><td>The base hash matches the current upstream file.</td><td>Nothing.</td></tr>
-      <tr><td>Upstream changed</td><td>The file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one write. Then it's an ordinary <code>update-available</code> review on each device.</td></tr>
-      <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets base, yours and upstream, writes the merged source and moves the base to that upstream version in the same write. Then it goes through the same review.</td></tr>
+      <tr><td>Up to date</td><td><code>base-hash</code> matches the current upstream file's hash.</td><td>Nothing.</td></tr>
+      <tr><td>Upstream changed</td><td>The file changed upstream, and the fork's content still equals the base text, which is the file as ejected.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one write. Then it's an ordinary <code>update-available</code> review on each device.</td></tr>
+      <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets three texts in the same ejected form: the base, yours, and the new upstream run through the same import rewrite. It writes the merged source and moves the base to that upstream version in the same write. Then it goes through the same review.</td></tr>
       <tr><td>File gone</td><td>This app version has no file at the path the fork serves.</td><td>The fork isn't mapped, and settings says so. A plugin file was renamed or removed upstream.</td></tr>
       <tr><td>Can't check</td><td>Offline, or the source file is from a newer app than the running page.</td><td>Retried later. No status change.</td></tr>
     </tbody>
