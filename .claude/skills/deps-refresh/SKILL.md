@@ -55,6 +55,7 @@ For each row under "Eligible majors", read the release notes or migration guide 
 - For each action behind its latest major (see the report table), read the breaking changes and bump the `uses:` refs across `.github/workflows/`.
   - If the report says the GitHub API rate-limited it, set `GITHUB_TOKEN` and re-run it. Where no token is available, read each action's latest release with the GitHub MCP tools instead.
   - Leave a SHA-pinned ref alone unless a comment beside it says which tag it tracks.
+- The report's esm.sh URL pins are agent extensions' runtime imports, not app dependencies. List them in the PR, but leave bumping one to a change to that extension.
 - `packageManager`: a pnpm patch or minor goes in the first commit. Bump `agent-extensions/social-media-publisher/package.json`'s pin to the same version, since the standalone install pins pnpm separately. A pnpm major changes installs for every worktree and agent, so hold it for its own PR.
 
 ## 4. Verify (all of it, before the PR)
