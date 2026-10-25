@@ -1,1 +1,1 @@
-export{mk as appUpdatePromptExtension}from"../../../chunks/app-n3jO1R05.js";
+export{mk as appUpdatePromptExtension}from"../../../chunks/app-CayOmW_a.js";

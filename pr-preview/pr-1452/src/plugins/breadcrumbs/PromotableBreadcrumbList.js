@@ -1,1 +1,1 @@
-export{qb as PromotableBreadcrumbList}from"../../../chunks/app-n3jO1R05.js";
+export{qb as PromotableBreadcrumbList}from"../../../chunks/app-CayOmW_a.js";
