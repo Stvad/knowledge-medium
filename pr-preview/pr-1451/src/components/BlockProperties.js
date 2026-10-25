@@ -1,1 +1,0 @@
-export{ZP as BlockProperties}from"../../chunks/app-CDc7p9Eu.js";

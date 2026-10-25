@@ -1,1 +1,0 @@
-export{Sk as checkForAppUpdate,Ck as registerServiceWorker,wk as watchServiceWorkerUpdates}from"../chunks/app-CDc7p9Eu.js";

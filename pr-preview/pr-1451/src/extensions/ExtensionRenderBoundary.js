@@ -1,1 +1,0 @@
-export{SM as ExtensionRenderBoundary}from"../../chunks/app-CDc7p9Eu.js";

@@ -1,1 +1,0 @@
-export{M5 as isChildBackedPropertiesWorkspace}from"../chunks/app-CDc7p9Eu.js";

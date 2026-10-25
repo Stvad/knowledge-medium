@@ -1,1 +1,0 @@
-export{sh as wikilinkMarkdownExtension}from"../../../../../chunks/app-CDc7p9Eu.js";

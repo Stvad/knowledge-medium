@@ -1,1 +1,0 @@
-export{XR as FloatingListbox}from"../../../chunks/app-CDc7p9Eu.js";

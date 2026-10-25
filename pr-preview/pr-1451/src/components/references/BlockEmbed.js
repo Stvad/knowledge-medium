@@ -1,1 +1,0 @@
-export{HD as BlockEmbed}from"../../../chunks/app-CDc7p9Eu.js";

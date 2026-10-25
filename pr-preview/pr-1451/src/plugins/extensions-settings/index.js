@@ -1,1 +1,0 @@
-export{xd as extensionsOverridesProp,Sd as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CDc7p9Eu.js";

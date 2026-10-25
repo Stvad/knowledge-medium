@@ -1,1 +1,0 @@
-export{MS as PendingInvitations}from"../../../chunks/app-CDc7p9Eu.js";

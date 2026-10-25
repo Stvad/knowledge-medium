@@ -1,1 +1,0 @@
-export{$R as floatingAnchorFromRect,ez as useAnchoredFloating}from"../../../chunks/app-CDc7p9Eu.js";

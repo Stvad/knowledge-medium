@@ -1,1 +1,0 @@
-export{tz as usePropertySchemas}from"../../chunks/app-CDc7p9Eu.js";

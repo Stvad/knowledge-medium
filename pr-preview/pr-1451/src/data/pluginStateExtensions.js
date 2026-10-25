@@ -1,1 +1,0 @@
-export{BW as pluginPrefsExtension,VW as pluginUIStateExtension}from"../../chunks/app-CDc7p9Eu.js";

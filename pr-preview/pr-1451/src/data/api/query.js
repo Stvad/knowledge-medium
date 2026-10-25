@@ -1,1 +1,0 @@
-export{xet as defineQuery}from"../../../chunks/app-CDc7p9Eu.js";

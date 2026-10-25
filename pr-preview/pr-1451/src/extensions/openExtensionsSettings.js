@@ -1,1 +1,0 @@
-export{QA as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,$A as openExtensionsSettings}from"../../chunks/app-CDc7p9Eu.js";

@@ -1,1 +1,0 @@
-export{fq as instrumentAdapter}from"../../../chunks/app-CDc7p9Eu.js";

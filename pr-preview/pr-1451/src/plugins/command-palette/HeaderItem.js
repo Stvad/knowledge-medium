@@ -1,1 +1,0 @@
-export{ZE as CommandPaletteHeaderItem}from"../../../chunks/app-CDc7p9Eu.js";

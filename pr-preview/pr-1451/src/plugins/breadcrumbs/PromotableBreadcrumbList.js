@@ -1,1 +1,0 @@
-export{Kb as PromotableBreadcrumbList}from"../../../chunks/app-CDc7p9Eu.js";

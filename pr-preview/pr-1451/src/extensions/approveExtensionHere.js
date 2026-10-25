@@ -1,1 +1,0 @@
-export{ck as approveExtensionHere}from"../../chunks/app-CDc7p9Eu.js";

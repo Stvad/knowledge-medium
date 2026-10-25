@@ -1,1 +1,0 @@
-export{AC as openRecentsPage}from"../../../chunks/app-CDc7p9Eu.js";

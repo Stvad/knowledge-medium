@@ -1,1 +1,0 @@
-export{tk as extensionPromptDiagnosticContribution,nk as extensionPromptDiagnosticSource}from"../../../chunks/app-CDc7p9Eu.js";

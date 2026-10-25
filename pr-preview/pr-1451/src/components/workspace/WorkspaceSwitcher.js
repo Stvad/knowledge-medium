@@ -1,1 +1,0 @@
-export{wx as WorkspaceSwitcher}from"../../../chunks/app-CDc7p9Eu.js";
