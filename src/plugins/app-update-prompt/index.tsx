@@ -1,14 +1,12 @@
 /**
  * App-mount that says what a deploy is doing to this tab: a toast while the
- * new version downloads, then — only if the tab can't reload yet because the
- * user is editing — one that says it will, with a Reload now action. Pairs with
- * the status chip row (src/plugins/system-status): the toast is the loud
- * nudge; the chip is the quiet, always-there fallback.
+ * new version downloads, then one with a Reload action once it has taken over.
+ * Pairs with the status chip row (src/plugins/system-status): the toast is the
+ * loud, dismissible nudge; the chip is the quiet, always-there fallback.
  *
- * The reload itself is core's (src/appUpdate.ts): a tab whose build was
- * superseded reloads at its first safe moment whether or not this plugin is
- * on. Both toasts share one id and `duration: Infinity`, so each replaces the
- * last and waits instead of auto-dismissing.
+ * We never reload on our own; the reload waits only for writes in flight
+ * (src/appUpdate.ts). Both toasts share one id and `duration: Infinity`, so
+ * each replaces the last and waits for the user instead of auto-dismissing.
  *
  * Distinct from the `update-indicator` plugin, which flags per-block
  * content edited by another user — this one is about the app build itself.
@@ -43,10 +41,10 @@ const AppUpdatePrompt = () => {
         duration: Number.POSITIVE_INFINITY,
       })
     } else {
-      showInfo('A new version is ready. This tab reloads once you finish editing.', {
+      showInfo('A new version is ready. Reload to use it.', {
         id: UPDATE_TOAST_ID,
         duration: Number.POSITIVE_INFINITY,
-        action: {label: 'Reload now', onClick: () => appUpdate.reload()},
+        action: {label: 'Reload', onClick: () => appUpdate.reload()},
       })
     }
     return () => dismissToast(UPDATE_TOAST_ID)

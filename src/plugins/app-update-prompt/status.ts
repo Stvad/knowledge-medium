@@ -57,7 +57,7 @@ const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
     const result = await checkForAppUpdate()
     const message =
       result === 'update-found'
-        ? 'Found a new version — the app reloads once it has downloaded.'
+        ? 'Found a new version — downloading; reload when it is ready.'
         : result === 'up-to-date'
           ? "You're on the latest version."
           : result === 'no-worker'
@@ -78,9 +78,9 @@ const PHASE_SNAPSHOTS: Record<AppUpdatePhase, DiagnosticSnapshot | null> = {
   },
   ready: {
     severity: 'info',
-    summary: 'A new version is ready — this tab reloads once you finish editing',
+    summary: 'A new version is ready',
     actionId: APP_RELOAD_ACTION_ID,
-    actionLabel: 'Reload now',
+    actionLabel: 'Reload',
     nudge: true,
   },
 }

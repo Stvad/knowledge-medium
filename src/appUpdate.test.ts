@@ -1,68 +1,35 @@
-// @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createAppUpdate, hasInputInProgress, RELOAD_POLL_MS } from './appUpdate'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createAppUpdate, RELOAD_POLL_MS } from './appUpdate'
 
 describe('appUpdate', () => {
-  let editing: boolean
   let reload: ReturnType<typeof vi.fn<() => void>>
-  const make = () => createAppUpdate({reload, isEditing: () => editing})
+  const make = () => createAppUpdate({reload})
 
   beforeEach(() => {
     vi.useFakeTimers()
-    editing = false
     reload = vi.fn<() => void>()
-  })
-  afterEach(() => {
-    vi.useRealTimers()
+    return () => vi.useRealTimers()
   })
 
-  it('reloads at once when a newer build takes over an idle tab', () => {
+  it('only prompts when a newer build takes over the tab', () => {
     const update = make()
     update.markReady()
+    vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
     expect(update.phase()).toBe('ready')
-    expect(reload).toHaveBeenCalledOnce()
-  })
-
-  it('waits for editing to end before reloading', () => {
-    editing = true
-    const update = make()
-    update.markReady()
-    vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
     expect(reload).not.toHaveBeenCalled()
+  })
 
-    editing = false
-    vi.advanceTimersByTime(RELOAD_POLL_MS)
-    expect(reload).toHaveBeenCalledOnce()
-    vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
+  it('reloads at once when asked and nothing is being written', () => {
+    const update = make()
+    update.reload()
     expect(reload).toHaveBeenCalledOnce()
   })
 
-  it('waits for a busy check to clear before reloading', () => {
+  it('waits for a write in flight before reloading', () => {
     let busy = true
     const update = make()
     update.addBusyCheck(() => busy)
-    update.markReady()
-    vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
-    expect(reload).not.toHaveBeenCalled()
-
-    busy = false
-    vi.advanceTimersByTime(RELOAD_POLL_MS)
-    expect(reload).toHaveBeenCalledOnce()
-  })
-
-  it('stops consulting a removed busy check', () => {
-    const update = make()
-    const remove = update.addBusyCheck(() => true)
-    remove()
-    update.markReady()
-    expect(reload).toHaveBeenCalledOnce()
-  })
-
-  it('reloads on request while editing, but still not over a write in flight', () => {
-    editing = true
-    let busy = true
-    const update = make()
-    update.addBusyCheck(() => busy)
+    update.reload()
     update.reload()
     vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
     expect(reload).not.toHaveBeenCalled()
@@ -70,12 +37,14 @@ describe('appUpdate', () => {
     busy = false
     vi.advanceTimersByTime(RELOAD_POLL_MS)
     expect(reload).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(RELOAD_POLL_MS * 4)
+    expect(reload).toHaveBeenCalledOnce()
   })
 
-  it('lets a requested reload override a deferred automatic one', () => {
-    editing = true
+  it('stops consulting a removed busy check', () => {
     const update = make()
-    update.markReady()
+    const remove = update.addBusyCheck(() => true)
+    remove()
     update.reload()
     expect(reload).toHaveBeenCalledOnce()
   })
@@ -91,50 +60,10 @@ describe('appUpdate', () => {
   })
 
   it('stays ready when a download fails after a newer build took over', () => {
-    editing = true
     const update = make()
     update.markReady()
     update.markDownloadFailed()
     update.markDownloading()
     expect(update.phase()).toBe('ready')
-  })
-})
-
-describe('hasInputInProgress', () => {
-  afterEach(() => {
-    document.body.innerHTML = ''
-  })
-
-  const focus = (html: string): void => {
-    document.body.innerHTML = html
-    document.body.querySelector<HTMLElement>('#target')!.focus()
-  }
-
-  it('is false with nothing focused and nothing open', () => {
-    expect(hasInputInProgress(document)).toBe(false)
-  })
-
-  it('is true for a focused input, textarea or editable element', () => {
-    focus('<input id="target">')
-    expect(hasInputInProgress(document)).toBe(true)
-    focus('<textarea id="target"></textarea>')
-    expect(hasInputInProgress(document)).toBe(true)
-    focus('<div id="target" contenteditable="true" tabindex="0"></div>')
-    expect(hasInputInProgress(document)).toBe(true)
-  })
-
-  it('is true once focus moves on to a form’s submit button', () => {
-    focus('<form><input value="draft"><button id="target">Save</button></form>')
-    expect(hasInputInProgress(document)).toBe(true)
-  })
-
-  it('is true while a dialog is open, wherever focus is', () => {
-    document.body.innerHTML = '<div role="dialog"><input value="draft"></div>'
-    expect(hasInputInProgress(document)).toBe(true)
-  })
-
-  it('is false for a focused button outside any form', () => {
-    focus('<button id="target">Reload</button>')
-    expect(hasInputInProgress(document)).toBe(false)
   })
 })

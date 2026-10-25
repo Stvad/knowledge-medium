@@ -6,10 +6,9 @@
  * client schema's triggers). A tab of the previous build writing beside the
  * new one can fail its writes, and one that boots beside it can migrate the
  * file back down. So a tab opens the database only once no tab of a DIFFERENT
- * build holds it. The previous build's tabs leave by themselves: the new
- * service worker taking over makes each reload at its first safe moment
- * (src/appUpdate.ts). The wait is what makes that safe while one of them is
- * still being edited.
+ * build holds it. The previous build's tabs are prompted to reload once the
+ * new service worker takes them over (src/appUpdate.ts); until each has
+ * reloaded or closed, the new build waits.
  *
  * Every admitted tab holds a shared Web Lock named for (database, build) for
  * its whole life. To be admitted, a tab asks for each other build's name

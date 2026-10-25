@@ -16,7 +16,7 @@ export const BootFallback = () => {
   const logBytes = writeAheadSidecarBytes(useSyncExternalStore(onStartupDbFileBytes, getStartupDbFileBytes))
   const waitingForOtherBuild = useSyncExternalStore(localDbBuildGate.subscribe, localDbBuildGate.isWaiting)
   if (waitingForOtherBuild) {
-    return <div>Loading... another tab is still on the previous version of the app. It reloads by itself once you finish editing there; switch to it, or close it.</div>
+    return <div>Loading... another tab is still on the previous version of the app. Reload or close it to continue here.</div>
   }
   if (logBytes < NOTICEABLE_LOG_BYTES) return <SuspenseFallback/>
   return <div>Loading... applying {formatBytes(logBytes)} of pending database changes from the last session. This can take a while.</div>

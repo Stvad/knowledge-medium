@@ -28,9 +28,10 @@
  *     moment install ends. Activation hands it every page this scope already
  *     controls (each gets `controllerchange`), and from then on such a page's
  *     lazy imports come from the NEW generation's cache, grafted onto its
- *     already-loaded modules. So a page of the previous build must not keep
- *     running: each reloads at its first safe moment (src/appUpdate.ts), and
- *     that reload — not the controller — is what keeps a page on one build.
+ *     already-loaded modules. So a page of the previous build should not keep
+ *     running: each is prompted to reload (src/appUpdate.ts), and that reload
+ *     — not the controller — is what puts a page back on one build. Meanwhile
+ *     the new build keeps off the local database (src/data/localDbBuildGate.ts).
  *     We do not call clients.claim(): it would only add pages loaded WITHOUT
  *     a worker (first visit, hard reload), which came from the network and
  *     are already the newest build.
@@ -49,7 +50,7 @@
  *     controlled load never mixes a new build's HTML with an old build's assets,
  *     and boot never waits on the network. The load that detects a deploy
  *     therefore still boots this generation; the new worker installs behind it
- *     and the reload above moves the page over.
+ *     and the prompted reload above moves the page over.
  *   - Everything else (Supabase, PowerSync, agent relay): straight to the
  *     network, never cached.
  *

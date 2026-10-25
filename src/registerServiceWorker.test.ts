@@ -34,14 +34,14 @@ class FakeContainer extends EventTarget {
 describe('watchServiceWorkerUpdates', () => {
   const setup = (controlled = true) => {
     const reload = vi.fn()
-    const update = createAppUpdate({reload, isEditing: () => false})
+    const update = createAppUpdate({reload})
     const container = new FakeContainer(controlled ? new FakeWorker('activated') : null)
     const registration = new FakeRegistration()
     const watch = () => watchServiceWorkerUpdates(container, Promise.resolve(registration), update)
     return {reload, update, container, registration, watch}
   }
 
-  it('reports a download, hands over, and reloads once the new worker controls the tab', async () => {
+  it('reports a download, then prompts once the new worker controls the tab', async () => {
     const {reload, update, container, registration, watch} = setup()
     await watch()
     const next = registration.startInstall()
@@ -53,7 +53,7 @@ describe('watchServiceWorkerUpdates', () => {
 
     container.handOver()
     expect(update.phase()).toBe('ready')
-    expect(reload).toHaveBeenCalledOnce()
+    expect(reload).not.toHaveBeenCalled()
   })
 
   it('treats the first install as no update', async () => {
@@ -89,12 +89,12 @@ describe('watchServiceWorkerUpdates', () => {
     expect(update.phase()).toBe('downloading')
   })
 
-  it('reloads on a takeover that lands before the registration resolves', async () => {
-    const {reload, update, container, registration} = setup()
+  it('prompts on a takeover that lands before the registration resolves', async () => {
+    const {update, container, registration} = setup()
     let resolve!: (value: FakeRegistration) => void
     const watching = watchServiceWorkerUpdates(container, new Promise(r => { resolve = r }), update)
     container.handOver()
-    expect(reload).toHaveBeenCalledOnce()
+    expect(update.phase()).toBe('ready')
     resolve(registration)
     await watching
   })

@@ -14,9 +14,9 @@ import { appUpdate, type AppUpdate } from '@/appUpdate.js'
  *  - The new worker installs in the background (`downloading`) and
  *    self-`skipWaiting()`s (src/sw/sw.ts). Activation hands it every open tab
  *    of this scope at once, firing `controllerchange` in each; each tab then
- *    reloads at its first safe moment (`ready`). So one reload — the user's,
- *    or none at all when the poll below finds the deploy — ends with every
- *    tab on the new build.
+ *    prompts for a reload (`ready`). A tab of the new build keeps off the
+ *    local database until every tab of the old one has reloaded or closed
+ *    (src/data/localDbBuildGate.ts).
  *  - Long-lived PWA tabs may never navigate, so the browser's implicit
  *    update check never fires. We poll `registration.update()` on an
  *    interval and when the tab regains focus / the device reconnects, so a
