@@ -17,6 +17,7 @@ import * as Babel from '@babel/standalone'
 import {extensionApiCatalog} from '@/extensions/apiCatalog'
 import {EXTENSION_BABEL_PRESETS} from '@/extensions/compileExtensionModule'
 import type {AppExtension} from '@/facets/facet'
+import {pageImports} from '@/test/pageImportMap'
 
 const IMPORT_SPECIFIER_RE = /\bfrom\s*['"]([^'"]+)['"]/g
 
@@ -195,18 +196,17 @@ const commentTexts = (source: string, path: string): string[] =>
 /** The ONE form the extension runtime accepts. `@/` is an importmap prefix
  *  mapping to ./src/, and the loader instantiates from a `blob:` URL — so a
  *  relative or extensionless specifier cannot resolve there, however happily
- *  tsconfig's bundler resolution accepts it. `react` / `react-dom` are
- *  importmap entries in their own right, including their subpath prefixes
- *  (`react/jsx-runtime`, `react-dom/client`). Backtracking above the `@/`
- *  prefix is rejected by the import-maps spec even though it typechecks. */
+ *  tsconfig's bundler resolution accepts it. React's specifiers are exact
+ *  importmap entries (`react/jsx-runtime`, `react-dom/client`, …): a subpath
+ *  the page does not map does not resolve. Backtracking above the `@/` prefix
+ *  is rejected by the import-maps spec even though it typechecks. */
 const runnableSpecifier = (specifier: string): boolean => {
-  // Backtracking rejected on EVERY branch, as a path SEGMENT: `react/..` and
-  // `react/a/..` carry no `../` substring yet the import-maps prefix rule
-  // rejects them for the same reason `react/../../evil.js` is rejected.
+  // Backtracking rejected as a path SEGMENT: `@/a/..` carries no `../`
+  // substring yet the import-maps prefix rule rejects it for the same reason
+  // `@/../../evil.js` is rejected.
   if (specifier.split('/').includes('..')) return false
   if (specifier === '<computed>') return false
-  if (specifier === 'react' || specifier === 'react-dom') return true
-  if (specifier.startsWith('react/') || specifier.startsWith('react-dom/')) return true
+  if (!specifier.endsWith('/') && Object.hasOwn(pageImports, specifier)) return true
   return /^@\/[\w][\w./-]*\.js$/.test(specifier)
 }
 
