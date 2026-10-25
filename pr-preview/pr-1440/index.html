@@ -39,39 +39,32 @@
         }
       })()
     </script>
+    <!-- Extensions import React and the app's own modules by bare specifier; both resolve to same-origin modules the build emits (src/vendor/react.js says why React needs its own facades). The React entries are every subpath React's packages export that runs in a browser, except react-dom/profiling (a second renderer); src/vendor/vendorEntries.test.ts derives that set. A specifier missing here does not resolve. -->
 
     <script type="importmap">
       {
-              "imports": {
-                      "react": "https://esm.sh/react@19.3.1",
-                      "react/": "https://esm.sh/react@19.3.1/",
-                      "react-dom": "https://esm.sh/react-dom@19.3.1",
-                      "react-dom/": "https://esm.sh/react-dom@19.3.1/",
-                      "@/": "./src/"
-              },
-              "integrity": {
-                      "https://esm.sh/react@19.3.1": "sha384-ut1U+oIs0ClaOE7uF1+DZAaHVvYvEJZME3mUuqn95yVqQ70a+8u2LN2LD37JgJkO",
-                      "https://esm.sh/react@19.3.1/compiler-runtime": "sha384-OwMucnCwvSvEvLGQZRYvzXLqTO62Tpxtr44jwVXcNCIDc1dxedT3i+c3K6gbTH0T",
-                      "https://esm.sh/react@19.3.1/jsx-runtime": "sha384-WuUlFXf93SyYfvc/sync3BdSKZvd7a21DD7d8nz9SZcsw9d8SgBxha4mBOzb/ITP",
-                      "https://esm.sh/react@19.3.1/es2022/compiler-runtime.mjs": "sha384-7EAuIpifon0qC3yWooyL7sHUAW0NPw2qPgdNk3N9aYJspAtpRGsM0fmc6epWRm5I",
-                      "https://esm.sh/react@19.3.1/es2022/jsx-runtime.mjs": "sha384-gh8xw1wmcir9SHUqXziDr2z4Oz0Kyy0SrQ8ZhX/0UyjVAHiQnKjEs0ePh4PDo5o2",
-                      "https://esm.sh/react@19.3.1/es2022/react.mjs": "sha384-Psq5WJvVF357tIF0zhz8ailHVmWVJLwyWH6vLzhozGkNMdVwvi/q4PAofRwgDYt6",
-                      "https://esm.sh/react-dom@19.3.1": "sha384-FKbbSw/nINZRM0ej/iwjfXbJeAZMJdBKqKmn/I+aIM4Io5qupmM8sZJxaJZDO0sv",
-                      "https://esm.sh/react-dom@19.3.1/client": "sha384-1lS4GktdgllRF1OQSgYP4ehItzJL2hrWYUJUMcxRA+kL/LOwA1mZvQBYOtlnrXBq",
-                      "https://esm.sh/react-dom@19.3.1/server": "sha384-7LadG21GTWfntE+DeXejoxQ+k1gypabL0MJIbIkBf7PsSEvzt1NWLn9uGwJkuK/c",
-                      "https://esm.sh/react-dom@19.3.1/es2022/client.mjs": "sha384-JUXRbhM1IMfjD0bcuXxiI1PtHumQtqdAU20XJc2cfPh4Lg6RYVoCfuDeTd6QFY6R",
-                      "https://esm.sh/react-dom@19.3.1/es2022/react-dom.mjs": "sha384-uHZRqepbVmDxV8LisyTnW3yCxfF9qg9n2ZP6UU+2B+T5Eu2fYDHfxN+/yXTtURWg",
-                      "https://esm.sh/react-dom@19.3.1/es2022/server.mjs": "sha384-DIoAILCPCWbSLEk4QFR+/fzTaD65IRF2bnJKA24VR3nZKEB24EDtpX0iuv0AVDAw",
-                      "https://esm.sh/react-dom@19.3.1/es2022/cjs/react-dom-server-legacy.browser.production.mjs": "sha384-s+uNA0UqWtCt8l6Y9EO05tVt83j6XMxoXFd0QlCRKJuIM6F+Jn/DbUe7CMDn9X7N",
-                      "https://esm.sh/react-dom@19.3.1/es2022/cjs/react-dom-server.browser.production.mjs": "sha384-QxXIBn1Mhq+M6bPsT8z1a8w8o4FbFB2lGow88kCqrijG8hvHKtRZB8ISjbxu+GA7",
-                      "https://esm.sh/scheduler@%5E0.28.0?target=es2022": "sha384-jsXPGE3JN4R3aK6oENd9F0e2R6Uwd+VdljSDtnYZ6Fzl9FHR8ivWA95iPLW+KJd2",
-                      "https://esm.sh/scheduler@0.28.0/es2022/scheduler.mjs": "sha384-VTqzDxK+Nfu62ZqrHojPSgKqkcLx9wWONGvOJwFQqD00uvRqQKGsX4stOJmJsauz"
-              }
+        "imports": {
+          "react": "./src/vendor/react.js",
+          "react/jsx-runtime": "./src/vendor/react-jsx-runtime.js",
+          "react/jsx-dev-runtime": "./src/vendor/react-jsx-dev-runtime.js",
+          "react/compiler-runtime": "./src/vendor/react-compiler-runtime.js",
+          "react-dom": "./src/vendor/react-dom.js",
+          "react-dom/client": "./src/vendor/react-dom-client.js",
+          "react-dom/server": "./src/vendor/react-dom-server.js",
+          "react-dom/server.browser": "./src/vendor/react-dom-server.js",
+          "react-dom/server.edge": "./src/vendor/react-dom-server-edge.js",
+          "react-dom/static": "./src/vendor/react-dom-static.js",
+          "react-dom/static.browser": "./src/vendor/react-dom-static.js",
+          "react-dom/static.edge": "./src/vendor/react-dom-static-edge.js",
+          "react-dom/test-utils": "./src/vendor/react-dom-test-utils.js",
+
+          "@/": "./src/"
+        }
       }
     </script>
     <script type="module" crossorigin src="/knowledge-medium/pr-preview/pr-1440/index.js"></script>
     <link rel="modulepreload" crossorigin href="/knowledge-medium/pr-preview/pr-1440/chunks/rolldown-runtime-CNOWq4Kh.js">
-    <link rel="modulepreload" crossorigin href="/knowledge-medium/pr-preview/pr-1440/chunks/app-CKqD4dQE.js">
+    <link rel="modulepreload" crossorigin href="/knowledge-medium/pr-preview/pr-1440/chunks/app-D15OLH9D.js">
     <link rel="stylesheet" crossorigin href="/knowledge-medium/pr-preview/pr-1440/app.css">
   </head>
   <body>

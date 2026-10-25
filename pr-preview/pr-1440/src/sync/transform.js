@@ -1,1 +1,1 @@
-export{s0 as SEALED_COLUMNS,c0 as decodeFromWire,l0 as encodeForWire,u0 as encryptUploadColumns,d0 as materializabilityToMode,f0 as requireCek,p0 as snapshotCekPerCall}from"../../chunks/app-CKqD4dQE.js";
+export{c0 as SEALED_COLUMNS,l0 as decodeFromWire,u0 as encodeForWire,d0 as encryptUploadColumns,f0 as materializabilityToMode,p0 as requireCek,m0 as snapshotCekPerCall}from"../../chunks/app-D15OLH9D.js";
