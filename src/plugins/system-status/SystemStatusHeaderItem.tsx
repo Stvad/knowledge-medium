@@ -252,7 +252,6 @@ function SyncStatusHeaderContent({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const deviceOnline = useIsDeviceOnline()
-  const dataFlow = status.dataFlowStatus
   // Decide whether a sync error is worth showing. When the *device* is
   // offline, any upload/download error is just connectivity noise — show the
   // calm "Offline" chip, not a raw websocket/fetch error. But when the
@@ -263,7 +262,7 @@ function SyncStatusHeaderContent({
   // and hides the very reason sync isn't working. The grace window below
   // still debounces transient blips in both cases.
   const networkError = deviceOnline
-    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    ? (status.uploadError?.message ?? status.downloadError?.message ?? null)
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
@@ -288,8 +287,8 @@ function SyncStatusHeaderContent({
     connected: status.connected,
     connecting: status.connecting,
     hasSynced: status.hasSynced,
-    uploading: Boolean(dataFlow.uploading),
-    downloading: Boolean(dataFlow.downloading),
+    uploading: status.uploading,
+    downloading: status.downloading,
     pendingChanges,
     pendingChangesApproximate,
     rejectedChanges: rejectedCount,

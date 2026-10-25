@@ -32,7 +32,7 @@ export const enterBlockEditModeOnClickAction: ActionConfig<typeof ActionContextT
   pointerBinding: {kind: 'mouse', mods: [], phase: 'click'},
   handler: ({block, uiStateBlock, renderScopeId}, trigger: ActionTrigger) => {
     // Surface the soft keyboard NOW, synchronously inside the tap gesture: the
-    // editor's own focus lands a frame later (async edit-mode entry + rAF),
+    // editor's own focus lands after the async edit-mode entry,
     // outside the gesture, and iOS won't raise the keyboard for it — so without
     // this the block enters edit mode but needs a second tap for a keyboard.
     // The editor's later focus transfers seamlessly. See grabSoftKeyboard.

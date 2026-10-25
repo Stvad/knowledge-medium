@@ -17,6 +17,7 @@ import * as Babel from '@babel/standalone'
 import {extensionApiCatalog} from '@/extensions/apiCatalog'
 import {EXTENSION_BABEL_PRESETS} from '@/extensions/compileExtensionModule'
 import type {AppExtension} from '@/facets/facet'
+import {pageImports} from '@/test/pageImportMap'
 
 const IMPORT_SPECIFIER_RE = /\bfrom\s*['"]([^'"]+)['"]/g
 
@@ -64,7 +65,7 @@ export const evaluateExampleModule = async (
     filename,
     presets: EXTENSION_BABEL_PRESETS,
     plugins: ['transform-modules-commonjs'],
-  }).code
+  })?.code
   if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
 
   const module = {exports: {} as {default?: AppExtension}}
@@ -133,24 +134,19 @@ const callSpecifier = (argument: unknown): string => {
   return '<computed>'
 }
 
-/** Every module specifier a source imports, from the PARSED module — static
- *  imports, `export … from`, dynamic `import()` and `require()`.
- *
- *  This was a regex over the source text and it silently missed the most
- *  common shape in these files: a multiline `import {\n  a,\n} from '…'`,
- *  because the pattern could not span a newline. Five real imports in the
- *  fixtures went unchecked. Parsing removes that whole class — and the
- *  prose false positives with it, since a comment is not an import node. */
 const parseFixture = (source: string, path: string) =>
   Babel.packages.parser.parse(source, {
     sourceType: 'module',
-    // Derived from the extension, as Babel.transform does: an angle-bracket
-    // type assertion is legal in .ts and a parse error under the jsx plugin,
-    // so a blanket ['typescript','jsx'] crashed on source the transform,
-    // tsc and eslint all accept.
+    // Derived from the extension: an angle-bracket type assertion is legal in
+    // .ts and a parse error under the jsx plugin, so a blanket
+    // ['typescript','jsx'] crashed on source tsc and eslint both accept.
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 
+/** Every module specifier a source imports — static imports, `export … from`,
+ *  dynamic `import()` and `require()` — from the PARSED module. A regex over
+ *  the text misses a multiline `import {…}` and matches imports quoted in
+ *  comments. */
 export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string[] => {
   const ast = parseFixture(source, path)
   const found: string[] = []
@@ -165,10 +161,14 @@ export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string
     ) {
       found.push(candidate.source.value)
     }
-    if (candidate.type === 'CallExpression') {
-      const isDynamic = candidate.callee?.type === 'Import'
-      const isRequire = candidate.callee?.type === 'Identifier' && candidate.callee.name === 'require'
-      if (isDynamic || isRequire) found.push(callSpecifier(candidate.arguments?.[0]))
+    // Babel 8 parses `import(…)` as an ImportExpression, not a call on `Import`.
+    if (candidate.type === 'ImportExpression') found.push(callSpecifier(candidate.source))
+    if (
+      candidate.type === 'CallExpression'
+      && candidate.callee?.type === 'Identifier'
+      && candidate.callee.name === 'require'
+    ) {
+      found.push(callSpecifier(candidate.arguments?.[0]))
     }
     // `import x = require('…')` — neither an ImportDeclaration nor a call.
     if (candidate.type === 'TSImportEqualsDeclaration') {
@@ -196,18 +196,17 @@ const commentTexts = (source: string, path: string): string[] =>
 /** The ONE form the extension runtime accepts. `@/` is an importmap prefix
  *  mapping to ./src/, and the loader instantiates from a `blob:` URL — so a
  *  relative or extensionless specifier cannot resolve there, however happily
- *  tsconfig's bundler resolution accepts it. `react` / `react-dom` are
- *  importmap entries in their own right, including their subpath prefixes
- *  (`react/jsx-runtime`, `react-dom/client`). Backtracking above the `@/`
- *  prefix is rejected by the import-maps spec even though it typechecks. */
+ *  tsconfig's bundler resolution accepts it. React's specifiers are exact
+ *  importmap entries (`react/jsx-runtime`, `react-dom/client`, …): a subpath
+ *  the page does not map does not resolve. Backtracking above the `@/` prefix
+ *  is rejected by the import-maps spec even though it typechecks. */
 const runnableSpecifier = (specifier: string): boolean => {
-  // Backtracking rejected on EVERY branch, as a path SEGMENT: `react/..` and
-  // `react/a/..` carry no `../` substring yet the import-maps prefix rule
-  // rejects them for the same reason `react/../../evil.js` is rejected.
+  // Backtracking rejected as a path SEGMENT: `@/a/..` carries no `../`
+  // substring yet the import-maps prefix rule rejects it for the same reason
+  // `@/../../evil.js` is rejected.
   if (specifier.split('/').includes('..')) return false
   if (specifier === '<computed>') return false
-  if (specifier === 'react' || specifier === 'react-dom') return true
-  if (specifier.startsWith('react/') || specifier.startsWith('react-dom/')) return true
+  if (!specifier.endsWith('/') && Object.hasOwn(pageImports, specifier)) return true
   return /^@\/[\w][\w./-]*\.js$/.test(specifier)
 }
 

@@ -39,7 +39,7 @@ describe('createTestDb harness', () => {
   it('installs the documented set of blocks triggers', async () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES spans triggers on `blocks`, `block_aliases`,
     // `blocks_synced` (the Layout B change-capture triggers), and `ps_crud`
-    // (the download hold); see the analogous test in clientSchema.test.ts.
+    // (the checkpoint reset); see the analogous test in clientSchema.test.ts.
     const names = (await h.db.getAll<{name: string}>(
       "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced', 'ps_crud') ORDER BY name",
     )).map(r => r.name)
