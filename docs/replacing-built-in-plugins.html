@@ -399,10 +399,10 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   <div class="rules">
     <h4>Four rules</h4>
     <ol>
-      <li><b>A fork replaces behaviour, never identity.</b> The built-in's identity contributions stay in its slot whatever the fork does. A fork may include the built-in's own identity objects, imported from the original modules. The loader passes those through untouched instead of throwing. A fork may not declare different ones for the same names.</li>
+      <li><b>A fork replaces behaviour, never identity.</b> The built-in's identity contributions stay in its slot whatever the fork does. A fork may include any of the bundle's own contribution objects, imported from the original modules. The loader passes those through uncopied and unbound instead of throwing, so they dedupe against the static tree. A fork may not declare different identity contributions under the same names.</li>
       <li><b>A fork replaces only where it runs.</b> The swap happens on a device where the fork is enabled by intent, approved here, and loaded without error. Anywhere else the built-in runs, and settings shows the usual "Enable here".</li>
       <li><b>A fork takes the built-in's slot.</b> It goes into the plugin list where the built-in was, so order-sensitive facets behave as before. It loads before first paint, like the built-in did.</li>
-      <li><b>A replaced built-in doesn't come back in through another plugin.</b> Its behaviour parts are removed wherever another plugin bundled them, unless the fork carries them too.</li>
+      <li><b>A replaced built-in doesn't come back in through another plugin or another fork.</b> Wherever it appears other than its own slot, nested or bundled, it keeps only its identity contributions.</li>
     </ol>
   </div>
 
@@ -529,27 +529,33 @@ plugin_source({pluginId: 'system:todo', path: 'src/plugins/todo/actions.ts'})   
   <h2 class="sec"><span class="n">6</span>Taking the slot</h2>
   <p>The swap is a pure function over the static tree, run before resolution. It needs no change to the walker and no new manifest shape, because the toggle boundary already carries the id. <span class="prov">Observed</span> <code>getBoundary</code> reads it, <code>src/facets/togglable.ts:78-81</code>.</p>
 <pre><span class="c">// src/extensions/replacements.ts (sketch)</span>
-<span class="c">/** Swap each replaced built-in for its fork, in place. Identity contributions stay
- *  in the built-in's slot (rule 1); parts of a replaced built-in that another plugin
- *  bundled are dropped there (rule 4). The fork is already loaded and approved (rule 2). */</span>
-export const substituteReplacements = (
-  tree: readonly AppExtension[],
-  forks: ReadonlyMap&lt;string, AppExtension&gt;,   <span class="c">// 'system:todo' → the fork's boundary</span>
-): AppExtension[] =&gt; tree.map(node =&gt; substitute(node, forks))
+<span class="c">/** The one place a plugin list meets its forks. A fork goes in its built-in's
+ *  top-level slot. Every other occurrence of a replaced built-in keeps only its
+ *  identity contributions (rules 1, 3, 4): a boundary nested in another plugin, a
+ *  part another plugin bundled, or either of those inside a fork. The forks are
+ *  already loaded and approved (rule 2). */</span>
+export const assemblePlugins = (
+  list: readonly AppExtension[],
+  forks: ReadonlyMap&lt;string, AppExtension&gt;,   <span class="c">// 'system:todo' → the loaded fork</span>
+): AppExtension[] =&gt;
+  list.map(entry =&gt; {
+    const slot = getBoundary(entry)
+    const fork = slot &amp;&amp; forks.get(slot.id)
+    return fork
+      ? withBoundary(slot, [identityOf(entry), stripReplaced(fork, forks)])   <span class="c">// its toggle still gates it</span>
+      : stripReplaced(entry, forks)
+  })
 
-const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtension&gt;): AppExtension =&gt; {
+<span class="c">/** Below the top level, a replaced built-in keeps only its identity contributions. */</span>
+const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtension&gt;): AppExtension =&gt; {
   if (!Array.isArray(node)) return node
-  const boundary = getBoundary(node)
-  const owner = boundary ?? getOwnerMark(node)
-  const fork = owner &amp;&amp; forks.get(owner.id)
-  if (fork) {
-    const kept = identityContributionsOf(node)
-    return boundary
-      ? withBoundary(boundary, [kept, fork])   <span class="c">// the built-in's own slot: its toggle still gates it</span>
-      : kept                                  <span class="c">// a part bundled by another plugin</span>
-  }
-  return withSameMarks(node, node.map(child =&gt; substitute(child, forks)))
+  const owner = getBoundary(node) ?? getOwnerMark(node)
+  if (owner &amp;&amp; forks.has(owner.id)) return identityOf(node)
+  return withSameMarks(node, node.map(child =&gt; stripReplaced(child, forks)))
 }</pre>
+  <p><b>Every list goes through it.</b> <span class="prov">Observed</span> Four places build a runtime from a static list today: <code>AppRuntimeProvider.tsx:80</code>, the settings tree (<code>useToggleTree.ts:69</code>), bootstrap's own landing runtime (<code>src/bootstrap/workspaceBootstrap.ts:42-65</code>, read at :78 before the app runtime exists), and the Repo's first data runtime (<code>src/context/repo.tsx:67</code>). Each calls <code>assemblePlugins</code> with the same forks. Otherwise a forked daily-notes would still have the original's landing resolver picking the first page.</p>
+  <p><b>Forks are walked too.</b> Under that rule, a fork's own tree goes through <code>stripReplaced</code> before it is inserted. Fork Locations while References is also forked, and the original <code>referencesPlugin</code> that geo bundles (<code>src/plugins/geo/index.ts:14, 27</code>) is cut down to its identity contributions inside the Locations fork, too. Inserting the fork only at the top-level slot means two forks that bundle each other can't nest forever.</p>
+  <p><b>The bundle's own objects aren't copied.</b> <span class="prov">Observed</span> The loader copies every contribution to prefix its source with <code>block:&lt;id&gt;</code> (<code>dynamicExtensions.ts:341-345</code>). So a built-in part that a fork imports becomes a second object, and the walker's identity dedup can't merge it with the static one. Rule 1's pass-through therefore covers every contribution object reachable from the static lists, not only identity ones. The loader leaves those uncopied and unbound, so they dedupe against the static tree and stay attributed to their built-in.</p>
 
   <figure>
     <div class="fig-frame">
@@ -617,7 +623,7 @@ const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtensi
   </figure>
 
   <h3>Slots in the data list</h3>
-  <p>The Repo gets its first data runtime, before React, from <code>staticDataExtensions.ts</code>. That list holds bare data extensions with no boundaries, so the sketch would find no slot in it. A replaced plugin's marked part would lose its behaviour, and nothing would put the fork's in its place. So each entry in that list is wrapped in its own plugin's boundary, the same handle the plugin's index uses (<code>todoToggle.of(todoDataExtension)</code>). <span class="prov">Observed</span> Nothing changes today. The data runtime is collected without looking at boundaries (<code>resolveFacetRuntimeSync</code>, <code>src/facets/facet.ts:476-484</code>, called from <code>src/context/repo.tsx:67</code>). The settings tree is built from the app list only (<code>src/plugins/extensions-settings/useToggleTree.ts:69</code>), so no row appears twice. The boundary only marks the slot. The boot step (§7) then runs the same <code>substituteReplacements</code> over this list, and the fork's data contributions are installed where the built-in's were, before bootstrap. The whole fork goes in; its UI contributions sit unread until the app runtime replaces this one, just as the static plugins' do when the app runtime installs.</p>
+  <p>The Repo gets its first data runtime, before React, from <code>staticDataExtensions.ts</code>. That list holds bare data extensions with no boundaries, so the sketch would find no slot in it. A replaced plugin's marked part would lose its behaviour, and nothing would put the fork's in its place. So each entry in that list is wrapped in its own plugin's boundary, the same handle the plugin's index uses (<code>todoToggle.of(todoDataExtension)</code>). <span class="prov">Observed</span> Nothing changes today. The data runtime is collected without looking at boundaries (<code>resolveFacetRuntimeSync</code>, <code>src/facets/facet.ts:476-484</code>, called from <code>src/context/repo.tsx:67</code>). The settings tree is built from the app list only (<code>src/plugins/extensions-settings/useToggleTree.ts:69</code>), so no row appears twice. The boundary only marks the slot. The boot step (§7) then runs the same <code>assemblePlugins</code> over this list, and the fork's data contributions are installed where the built-in's were, before bootstrap. The whole fork goes in; its UI contributions sit unread until the app runtime replaces this one, just as the static plugins' do when the app runtime installs.</p>
 
   <h3>Parts bundled by another plugin</h3>
   <p>Some plugins compose another plugin's parts by importing them. <span class="prov">Observed</span> srs-review bundles the data extensions of srs-rescheduling, daily-notes, references and block-tagging (<code>src/plugins/srs-review/index.ts:77-80</code>). Geo composes the whole references plugin, boundary included (<code>src/plugins/geo/index.ts:27</code>). If references is replaced, its original processors would come back in through srs-review, which bundles <code>referencesDataExtension</code>. srs-review sits later in the list, and processors are keyed last-wins, so the original <code>references.parseReferences</code> would beat the fork's.</p>
@@ -625,7 +631,7 @@ const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtensi
   <p>After assembly, a check covers what marks can't catch. For every key the fork contributes to a keyed facet, the fork's value must be the winner. A loss is reported at review time, before the fork goes live, for example "srs-review still provides references' original <code>references.parseReferences</code>".</p>
 
   <h3>The same path when you reload, not only at boot</h3>
-  <p>Toggling a fork, approving an update or editing a fork's source dispatches <code>refreshAppRuntime()</code>. The provider's async resolve then uses the same <code>substituteReplacements</code> over the forks the loader just returned. <span class="prov">Observed</span> Effects are diffed by id across the swap (<code>EffectReconciler</code>, <code>src/extensions/liveRuntime.ts:278-291</code>), so only the replaced plugin's effects restart.</p>
+  <p>Toggling a fork, approving an update or editing a fork's source dispatches <code>refreshAppRuntime()</code>. The provider's async resolve then uses the same <code>assemblePlugins</code> over the forks the loader just returned. <span class="prov">Observed</span> Effects are diffed by id across the swap (<code>EffectReconciler</code>, <code>src/extensions/liveRuntime.ts:278-291</code>), so only the replaced plugin's effects restart.</p>
 </section>
 
 <!-- 7 ─────────────────────────────────────────────────────────── -->
@@ -670,7 +676,7 @@ const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtensi
   </figure>
 
   <ul>
-    <li><b>What the new step does.</b> It queries the workspace's extension blocks that carry <code>extension:replaces</code>. For each one enabled by intent and approved on this device, it instantiates the pinned output, using <code>loadApprovedExtension</code> as today. It applies <code>substituteReplacements</code> to the static data list, whose entries now carry their plugins' boundaries (§6), and installs the result on the Repo before <code>bootstrapWorkspace</code>.</li>
+    <li><b>What the new step does.</b> It queries the workspace's extension blocks that carry <code>extension:replaces</code>. For each one enabled by intent and approved on this device, it instantiates the pinned output, using <code>loadApprovedExtension</code> as today. It applies <code>assemblePlugins</code> to the static data list, whose entries now carry their plugins' boundaries (§6), and installs the result on the Repo. It hands the same forks to bootstrap's landing runtime, so the landing resolver that runs is the fork's. Both happen before <code>bootstrapWorkspace</code>.</li>
     <li><b>One instance per module.</b> The loaded forks reach <code>AppRuntimeProvider</code> through the boot result. The compile cache keys modules by block and source hash anyway (<code>compileExtensionModule.ts:201-232</code>), so even a second load is a lookup.</li>
     <li><b>Safe mode</b> skips the step entirely, so recovery never depends on any of this.</li>
     <li><b>Cost, reasoned, not measured.</b> With nothing forked, the step is one query that returns nothing, so boot is effectively today's. With N forks it's N approval reads from IndexedDB and N imports of already-compiled strings. Plausibly tens of milliseconds for a few forks; the build should measure it with <code>markStartup</code> marks. The slow case is the first boot after a compiler-version bump, which recompiles from the approved source.</li>
@@ -763,13 +769,14 @@ const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtensi
     <thead><tr><th style="width:22%">Status</th><th>When</th><th style="width:38%">What you can do</th></tr></thead>
     <tbody>
       <tr><td>Up to date</td><td>Every base hash matches the current upstream file.</td><td>Nothing.</td></tr>
-      <tr><td>Upstream changed</td><td>A base file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one transaction. Then it's an ordinary <code>update-available</code> review.</td></tr>
-      <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets base, yours and upstream, writes the merged source, and it goes through the same review. The base moves only when you approve.</td></tr>
+      <tr><td>Upstream changed</td><td>A base file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one transaction. Then it's an ordinary <code>update-available</code> review on each device.</td></tr>
+      <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets base, yours and upstream, writes the merged source and moves the base to that upstream version in the same write. Then it goes through the same review.</td></tr>
       <tr><td>Built-in gone</td><td>This app version has no toggle with the <code>replaces</code> id.</td><td>The fork doesn't run, and settings says so. "Run it on its own" clears <code>replaces</code>.</td></tr>
       <tr><td>Can't check</td><td>Offline, or the source file is from a newer app than the running page.</td><td>Retried later. No status change.</td></tr>
     </tbody>
   </table></div>
 
+  <p><b>The base and the pin answer different questions.</b> The base is shared. It records which upstream the fork's content came from, and it is what a merge starts from, so it moves in the same write as the content. The pin is per device: <code>approvedSource</code> in this device's approval record (<code>compileExtensionModule.ts:346-379</code>). A review always diffs the new source against this device's pin. That shows what this device is about to start running, even after another device has approved first and moved the base, or when an update leaves content and base equal. Only a first approval, with no pin yet, diffs against the base.</p>
   <p>Wrappers rarely trip this. A wrapper copied only the entry module and imports the rest, so a fix inside <code>actions.ts</code> reaches it with no merge. If an upstream change breaks an import the wrapper relies on, the fork fails to load. Rule 2 then falls back to the built-in and the error toast offers "Fix with agent". Code you paste into a fork by hand isn't tracked. Eject can copy a named submodule instead, which records a base for it too.</p>
   <p><b>Why updates are never automatic.</b> The content write syncs. If every device fast-forwarded on its own, several devices would race to write the same change. A click on one device writes once, and every device then reviews it. That's the same rule as "a data migration runs once per graph", applied to a smaller write.</p>
 </section>
@@ -865,10 +872,10 @@ const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtensi
 
   <ol>
     <li><b>P1 · Source provider (#1435).</b> The build plugin and dev middleware for <code>plugin-sources/&lt;name&gt;.json</code>, <code>src/extensions/pluginSources.ts</code> (files, version check, import rewrite), the bridge command, and the <code>plugin_source</code> row in <code>GRAPH_READ_TOOLS</code>. Tests: the rewrite over every plugin's entry (each rewritten import resolves), the version mismatch, the bounded response.</li>
-    <li><b>P2 · Eject, lineage and identity.</b> The <code>extension:replaces</code>, <code>extension-upstream</code> and <code>extension-base</code> seeds, with ledger entries. <code>identity: true</code> on the identity facets, and the loader passing a replaced built-in's own identity objects through, so the ejected entry loads as written. The eject action (menu, palette, CLI, and an MCP write tool through the existing write guard), which approves only on a user gesture.</li>
-    <li><b>P3 · Replaces and taking the slot.</b> <code>substituteReplacements</code>, the plugins' boundaries on the data-list entries, the <code>ownedBy</code> mark on the four composed data extensions, the warm-reload path, and the "replaced by" settings row. Tests: position kept for an order-sensitive facet, unapproved device keeps the built-in, a failed load keeps the built-in, a bundled original doesn't come back, identity stays.</li>
-    <li><b>P4 · Load before paint.</b> The step in <code>resolveInitialLayout</code>, passing loaded forks to <code>AppRuntimeProvider</code>, and a <code>markStartup</code> measurement. Tests: a fork's data contribution is visible to bootstrap, and safe mode boots static-only.</li>
-    <li><b>P5 · Review content.</b> Before approval, in the existing prompt: the diff against the base, imports the built-in didn't have, and the <code>replaces</code> target, all read without running anything. After approval, on the first load: the contribution summary against the built-in and the winner check, reported in settings.</li>
+    <li><b>P2 · Eject, lineage and identity.</b> The <code>extension:replaces</code>, <code>extension-upstream</code> and <code>extension-base</code> seeds, with ledger entries. <code>identity: true</code> on the identity facets, and the loader passing the bundle's own contribution objects through uncopied, so the ejected entry loads as written and dedupes against the static tree. The eject action (menu, palette, CLI, and an MCP write tool through the existing write guard), which approves only on a user gesture.</li>
+    <li><b>P3 · Replaces and taking the slot.</b> <code>assemblePlugins</code>, called from all four places that build a runtime from a static list, the plugins' boundaries on the data-list entries, the <code>ownedBy</code> mark on the four composed data extensions, the warm-reload path, and the "replaced by" settings row. Tests: position kept for an order-sensitive facet, unapproved device keeps the built-in, a failed load keeps the built-in, a bundled original doesn't come back (also from inside another fork), identity stays.</li>
+    <li><b>P4 · Load before paint.</b> The step in <code>resolveInitialLayout</code>, passing loaded forks to bootstrap's landing runtime and to <code>AppRuntimeProvider</code>, and a <code>markStartup</code> measurement. Tests: a fork's data contribution is visible to bootstrap, a forked landing resolver picks the first page, and safe mode boots static-only.</li>
+    <li><b>P5 · Review content.</b> Before approval, in the existing prompt: the diff against what this device last approved (against the base for a first approval), imports the built-in didn't have, and the <code>replaces</code> target, all read without running anything. After approval, on the first load: the contribution summary against the built-in and the winner check, reported in settings.</li>
     <li><b>P6 · Upstream check</b>, shared with #1427: the per-version check, Update (fast-forward), and Merge with agent.</li>
     <li><b>P7 · Owners and inspector.</b> Owner attribution in the resolver, the inspector, and the per-plugin <code>describe-runtime</code> listing.</li>
   </ol>
