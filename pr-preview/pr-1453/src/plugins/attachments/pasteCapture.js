@@ -1,1 +1,0 @@
-export{Ig as captureMediaContribution,Lg as mediaPasteDecisionContribution}from"../../../chunks/app-D6LeM3wE.js";

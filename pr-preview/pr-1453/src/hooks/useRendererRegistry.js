@@ -1,1 +1,0 @@
-export{IA as defaultRegistry,PA as refreshRendererRegistry,FA as useRenderer}from"../../chunks/app-D6LeM3wE.js";

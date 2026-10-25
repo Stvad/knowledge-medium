@@ -1,1 +1,0 @@
-export{Yk as dynamicExtensionsExtension}from"../../chunks/app-D6LeM3wE.js";
