@@ -1,1 +1,1 @@
-export{py as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,my as enterBlockEditModeOnGestureAction,hy as vimClickToFocusDecorator,gy as vimNormalModeActivation}from"../../../chunks/app-5gt8L3-Q.js";
+export{py as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,my as enterBlockEditModeOnGestureAction,hy as vimClickToFocusDecorator,gy as vimNormalModeActivation}from"../../../chunks/app-2MU-2JTg.js";
