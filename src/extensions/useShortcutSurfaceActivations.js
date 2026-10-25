@@ -1,1 +1,1 @@
-export{MN as useShortcutSurfaceActivations}from"../../chunks/app-BtvJ0C2L.js";
+export{MN as useShortcutSurfaceActivations}from"../../chunks/app-DUwpvZqE.js";
