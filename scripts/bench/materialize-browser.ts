@@ -1,4 +1,4 @@
-import {PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS} from '@powersync/web'
+import {PowerSyncDatabase, Schema, WASQLiteVFS} from '@powersync/web'
 import * as blockSchema from '@/data/blockSchema'
 import {CLIENT_SCHEMA_STATEMENTS} from '@/data/internals/clientSchema'
 import {CREATE_WORKSPACES_TABLE_SQL, CREATE_WORKSPACE_MEMBERS_TABLE_SQL} from '@/data/workspaceSchema'
@@ -14,13 +14,12 @@ export async function openBrowserTestDb() {
   schema.withRawTables({blocks_synced: blockSchema.BLOCKS_SYNCED_RAW_TABLE})
   const db = new PowerSyncDatabase({
     schema,
-    database: new WASQLiteOpenFactory({
+    database: {
       dbFilename: 'synthetic-materialize-benchmark.db',
       vfs: WASQLiteVFS.OPFSCoopSyncVFS,
       cacheSizeKb: 262144,
-      flags: {enableMultiTabs: false},
-    }),
-    flags: {enableMultiTabs: false},
+      enableMultiTabs: false,
+    },
   })
   console.info('waiting for SQLite')
   await db.waitForReady()

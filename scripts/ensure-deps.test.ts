@@ -157,6 +157,34 @@ describe('readDepsState', () => {
     expect(readDepsState(root)).toBe('mismatch')
   })
 
+  // What pnpm 11+ writes: the project's own lockfile document follows one
+  // recording the pinned package manager, which the install record leaves out.
+  const PACKAGE_MANAGER_DOC = `---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    packageManagerDependencies:
+      pnpm:
+        specifier: 12.14.0
+        version: 12.14.0
+
+---
+`
+
+  it('is fresh when the install record matches the lockfile after its package-manager document', () => {
+    const root = makeCheckout(`${PACKAGE_MANAGER_DOC}lock: v1\n`)
+    writeInstallRecord(root, 'lock: v1\n')
+    expect(readDepsState(root)).toBe('fresh')
+  })
+
+  it('is a mismatch when the lockfile after its package-manager document differs from the install record', () => {
+    const root = makeCheckout(`${PACKAGE_MANAGER_DOC}lock: v1\n`)
+    writeInstallRecord(root, 'lock: v0\n')
+    expect(readDepsState(root)).toBe('mismatch')
+  })
+
   it('is missing when node_modules has no install record', () => {
     const root = makeCheckout()
     rmSync(join(root, 'node_modules'), { recursive: true })
@@ -278,7 +306,7 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     writeInstallRecord(root, 'lock: v0\n')
     const { text, calls } = run(root, { FAKE_PNPM_REFORMAT: '1' })
     expect(calls).toEqual([INSTALL, BUILD])
-    expect(text).toContain('cp node_modules/.pnpm/lock.yaml pnpm-lock.yaml')
+    expect(text).toContain('pnpm install --lockfile-only --force')
   })
 
   it('leaves a checkout without pnpm-lock.yaml alone', () => {

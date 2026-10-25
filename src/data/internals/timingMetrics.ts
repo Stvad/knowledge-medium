@@ -491,11 +491,12 @@ interface SyncStatusDb {
   registerListener?: (l: {statusChanged?: (s: SyncStatus) => void}) => () => void
 }
 interface SyncStatus {
-  dataFlowStatus?: {downloading?: boolean; uploading?: boolean}
+  downloading?: boolean
+  uploading?: boolean
 }
 
 const syncBusy = (s: SyncStatus | undefined): boolean =>
-  s?.dataFlowStatus?.downloading === true || s?.dataFlowStatus?.uploading === true
+  s?.downloading === true || s?.uploading === true
 
 /**
  * Bracket the sync engine's database work as pool occupancy.

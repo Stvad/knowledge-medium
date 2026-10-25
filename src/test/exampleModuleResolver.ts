@@ -65,7 +65,7 @@ export const evaluateExampleModule = async (
     filename,
     presets: EXTENSION_BABEL_PRESETS,
     plugins: ['transform-modules-commonjs'],
-  }).code
+  })?.code
   if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
 
   const module = {exports: {} as {default?: AppExtension}}
@@ -134,24 +134,19 @@ const callSpecifier = (argument: unknown): string => {
   return '<computed>'
 }
 
-/** Every module specifier a source imports, from the PARSED module — static
- *  imports, `export … from`, dynamic `import()` and `require()`.
- *
- *  This was a regex over the source text and it silently missed the most
- *  common shape in these files: a multiline `import {\n  a,\n} from '…'`,
- *  because the pattern could not span a newline. Five real imports in the
- *  fixtures went unchecked. Parsing removes that whole class — and the
- *  prose false positives with it, since a comment is not an import node. */
 const parseFixture = (source: string, path: string) =>
   Babel.packages.parser.parse(source, {
     sourceType: 'module',
-    // Derived from the extension, as Babel.transform does: an angle-bracket
-    // type assertion is legal in .ts and a parse error under the jsx plugin,
-    // so a blanket ['typescript','jsx'] crashed on source the transform,
-    // tsc and eslint all accept.
+    // Derived from the extension: an angle-bracket type assertion is legal in
+    // .ts and a parse error under the jsx plugin, so a blanket
+    // ['typescript','jsx'] crashed on source tsc and eslint both accept.
     plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
 
+/** Every module specifier a source imports — static imports, `export … from`,
+ *  dynamic `import()` and `require()` — from the PARSED module. A regex over
+ *  the text misses a multiline `import {…}` and matches imports quoted in
+ *  comments. */
 export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string[] => {
   const ast = parseFixture(source, path)
   const found: string[] = []
@@ -166,10 +161,14 @@ export const importedSpecifiers = (source: string, path = 'fixture.tsx'): string
     ) {
       found.push(candidate.source.value)
     }
-    if (candidate.type === 'CallExpression') {
-      const isDynamic = candidate.callee?.type === 'Import'
-      const isRequire = candidate.callee?.type === 'Identifier' && candidate.callee.name === 'require'
-      if (isDynamic || isRequire) found.push(callSpecifier(candidate.arguments?.[0]))
+    // Babel 8 parses `import(…)` as an ImportExpression, not a call on `Import`.
+    if (candidate.type === 'ImportExpression') found.push(callSpecifier(candidate.source))
+    if (
+      candidate.type === 'CallExpression'
+      && candidate.callee?.type === 'Identifier'
+      && candidate.callee.name === 'require'
+    ) {
+      found.push(callSpecifier(candidate.arguments?.[0]))
     }
     // `import x = require('…')` — neither an ImportDeclaration nor a call.
     if (candidate.type === 'TSImportEqualsDeclaration') {

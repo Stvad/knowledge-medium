@@ -20,18 +20,19 @@ import { isMainModule } from './is-main-module.mjs'
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LOCKFILE = 'pnpm-lock.yaml'
 // pnpm's record of the lockfile node_modules was installed from, byte-identical
-// to it after a successful install. Compared by content: a checkout rewrites
-// the lockfile's mtime without changing what it says.
+// after a successful install to the lockfile minus its leading package-manager
+// document. Compared by content: a checkout rewrites the lockfile's mtime
+// without changing what it says.
 const INSTALL_RECORD = join('node_modules', '.pnpm', 'lock.yaml')
+const PACKAGE_MANAGER_DOC = /^---\n[\s\S]*?\n---\n/
 const FAILURE_TAIL_LINES = 10
 
 /**
  * The one non-interactive install, shared with the gate. `--frozen-lockfile`
  * reconciles in both directions, so a package left newer than the branch asks
- * for is downgraded. The purge flag is load-bearing: an install that has to
- * recreate node_modules aborts without a TTY, and neither caller has one.
+ * for is downgraded.
  */
-export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile', '--config.confirmModulesPurge=false']
+export const FROZEN_INSTALL_ARGS = ['install', '--frozen-lockfile']
 export const BUILD_ARGS = ['run', 'compile:packages']
 
 /**
@@ -53,7 +54,7 @@ export const DIST_PACKAGES = [
 
 const readOrNull = path => {
   try {
-    return readFileSync(path)
+    return readFileSync(path, 'utf8')
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -62,12 +63,14 @@ const readOrNull = path => {
 
 const mtimeOf = path => statSync(path, { throwIfNoEntry: false })?.mtimeMs
 
+// pnpm writes the install record even when the install fails on an unlisted
+// build script, so the hook reports that failure once; the gate's install keeps failing.
 export const readDepsState = root => {
   const wanted = readOrNull(join(root, LOCKFILE))
   if (!wanted) return 'no-lockfile'
   const installed = readOrNull(join(root, INSTALL_RECORD))
   if (!installed) return 'missing'
-  return installed.equals(wanted) ? 'fresh' : 'mismatch'
+  return installed === wanted.replace(PACKAGE_MANAGER_DOC, '') ? 'fresh' : 'mismatch'
 }
 
 const filesUnder = (pkgDir, sub) =>
@@ -157,7 +160,7 @@ const DIST_REASON = {
 
 const UNFORMATTED_LOCKFILE_NOTE =
   `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
-  `so this reinstall repeats at every session start. \`cp ${INSTALL_RECORD} ${LOCKFILE}\` and commit it to stop that.`
+  `so this reinstall repeats at every session start. \`pnpm install --lockfile-only --force\` rewrites it; commit that to stop it.`
 
 /** Reconciles `root`; returns the context for the session, '' when nothing was stale. */
 export const ensureDeps = ({ root, env = process.env }) => {

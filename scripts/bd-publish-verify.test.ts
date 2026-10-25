@@ -96,7 +96,7 @@ describe('publishedTargets', () => {
   // pnpm pr:reply prints the reply's URL (after pnpm's own banner); the
   // reply is the only kind it can produce.
   it('reads a review-comment reply target from pr:reply output', () => {
-    const out = ['> knowledge-medium@0.0.0 pr:reply /repo', '> node scripts/pr-reply.mjs 652 41 b.md', '', url('pull/652#discussion_r42'), url('pull/652')].join('\n')
+    const out = ['$ node scripts/pr-reply.mjs 652 41 b.md', url('pull/652#discussion_r42'), url('pull/652')].join('\n')
     expect(publishedTargets('pnpm pr:reply 652 41 b.md', out)).toEqual([{ kind: 'review-comment', id: 42 }])
   })
 

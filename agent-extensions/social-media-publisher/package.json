@@ -2,6 +2,7 @@
   "name": "social-media-publisher-extension",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.14.0",
   "scripts": {
     "typecheck": "../../node_modules/.bin/tsc -p tsconfig.json --noEmit",
     "test": "../../node_modules/.bin/vitest run --config vitest.config.ts",
