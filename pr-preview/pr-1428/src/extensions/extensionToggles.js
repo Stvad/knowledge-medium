@@ -1,1 +1,0 @@
-import{iA as e,nA as t,rA as n,tA as r}from"../../chunks/app-6lap2JI4.js";export{r as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,e as userExtensionToggle};
