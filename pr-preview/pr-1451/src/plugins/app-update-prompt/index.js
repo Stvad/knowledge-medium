@@ -1,1 +1,1 @@
-export{pk as appUpdatePromptExtension}from"../../../chunks/app-BGSHgReq.js";
+export{pk as appUpdatePromptExtension}from"../../../chunks/app-CDc7p9Eu.js";

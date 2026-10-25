@@ -1,1 +1,1 @@
-export{VW as pluginPrefsExtension,HW as pluginUIStateExtension}from"../../chunks/app-BGSHgReq.js";
+export{BW as pluginPrefsExtension,VW as pluginUIStateExtension}from"../../chunks/app-CDc7p9Eu.js";

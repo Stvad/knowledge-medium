@@ -1,1 +1,1 @@
-export{KX as Block,qX as requireLoadedBlock}from"../../chunks/app-BGSHgReq.js";
+export{GX as Block,KX as requireLoadedBlock}from"../../chunks/app-CDc7p9Eu.js";

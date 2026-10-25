@@ -1,1 +1,1 @@
-export{OA as LazyBlockComponent}from"../../chunks/app-BGSHgReq.js";
+export{OA as LazyBlockComponent}from"../../chunks/app-CDc7p9Eu.js";

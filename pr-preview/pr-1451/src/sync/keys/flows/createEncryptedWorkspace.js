@@ -1,1 +1,1 @@
-export{Wx as createEncryptedWorkspace}from"../../../../chunks/app-BGSHgReq.js";
+export{Wx as createEncryptedWorkspace}from"../../../../chunks/app-CDc7p9Eu.js";

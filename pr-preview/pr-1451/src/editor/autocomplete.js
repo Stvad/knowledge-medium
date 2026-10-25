@@ -1,1 +1,1 @@
-export{XO as editorAutocompleteExtension}from"../../chunks/app-BGSHgReq.js";
+export{XO as editorAutocompleteExtension}from"../../chunks/app-CDc7p9Eu.js";

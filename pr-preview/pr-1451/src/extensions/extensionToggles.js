@@ -1,1 +1,1 @@
-export{$k as extensionDisplayName,eA as extensionName,tA as userExtensionShellToggle,nA as userExtensionToggle}from"../../chunks/app-BGSHgReq.js";
+export{$k as extensionDisplayName,eA as extensionName,tA as userExtensionShellToggle,nA as userExtensionToggle}from"../../chunks/app-CDc7p9Eu.js";

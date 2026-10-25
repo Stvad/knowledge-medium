@@ -1,1 +1,1 @@
-export{ZE as CommandPaletteHeaderItem}from"../../../chunks/app-BGSHgReq.js";
+export{ZE as CommandPaletteHeaderItem}from"../../../chunks/app-CDc7p9Eu.js";

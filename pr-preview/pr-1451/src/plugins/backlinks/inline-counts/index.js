@@ -1,1 +1,1 @@
-export{dm as inlineBacklinkCountsExtension}from"../../../../chunks/app-BGSHgReq.js";
+export{dm as inlineBacklinkCountsExtension}from"../../../../chunks/app-CDc7p9Eu.js";

@@ -1,1 +1,1 @@
-export{QE as commandPaletteToggle}from"../../../chunks/app-BGSHgReq.js";
+export{QE as commandPaletteToggle}from"../../../chunks/app-CDc7p9Eu.js";

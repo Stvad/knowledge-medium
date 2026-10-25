@@ -1,1 +1,1 @@
-export{Jb as getBreadcrumbContentPreview}from"../../../chunks/app-BGSHgReq.js";
+export{Jb as getBreadcrumbContentPreview}from"../../../chunks/app-CDc7p9Eu.js";

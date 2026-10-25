@@ -1,1 +1,1 @@
-export{AN as useShortcutSurfaceActivations}from"../../chunks/app-BGSHgReq.js";
+export{AN as useShortcutSurfaceActivations}from"../../chunks/app-CDc7p9Eu.js";

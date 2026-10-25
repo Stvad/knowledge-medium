@@ -1,1 +1,1 @@
-export{QD as chipStyle}from"../../../chunks/app-BGSHgReq.js";
+export{QD as chipStyle}from"../../../chunks/app-CDc7p9Eu.js";

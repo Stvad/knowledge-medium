@@ -1,1 +1,1 @@
-export{wx as WorkspaceSwitcher}from"../../../chunks/app-BGSHgReq.js";
+export{wx as WorkspaceSwitcher}from"../../../chunks/app-CDc7p9Eu.js";

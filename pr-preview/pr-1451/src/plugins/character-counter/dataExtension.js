@@ -1,1 +1,1 @@
-export{sW as characterCounterDataExtension}from"../../../chunks/app-BGSHgReq.js";
+export{oW as characterCounterDataExtension}from"../../../chunks/app-CDc7p9Eu.js";

@@ -1,1 +1,1 @@
-export{qk as dynamicExtensionsExtension}from"../../chunks/app-BGSHgReq.js";
+export{qk as dynamicExtensionsExtension}from"../../chunks/app-CDc7p9Eu.js";

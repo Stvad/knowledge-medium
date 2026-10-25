@@ -1,1 +1,1 @@
-export{kO as exampleExtensions,AO as insertExampleExtensionsUnder}from"../../chunks/app-BGSHgReq.js";
+export{kO as exampleExtensions,AO as insertExampleExtensionsUnder}from"../../chunks/app-CDc7p9Eu.js";

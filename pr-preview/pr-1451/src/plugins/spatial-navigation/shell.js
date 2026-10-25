@@ -1,1 +1,1 @@
-export{Py as spatialNavigationShellDecorator}from"../../../chunks/app-BGSHgReq.js";
+export{Py as spatialNavigationShellDecorator}from"../../../chunks/app-CDc7p9Eu.js";

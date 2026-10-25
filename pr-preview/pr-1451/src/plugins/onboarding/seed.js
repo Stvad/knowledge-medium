@@ -1,1 +1,1 @@
-export{iy as seedTutorial}from"../../../chunks/app-BGSHgReq.js";
+export{iy as seedTutorial}from"../../../chunks/app-CDc7p9Eu.js";

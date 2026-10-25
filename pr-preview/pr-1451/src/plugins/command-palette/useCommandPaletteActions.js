@@ -1,1 +1,1 @@
-export{kE as useCommandPaletteActions}from"../../../chunks/app-BGSHgReq.js";
+export{kE as useCommandPaletteActions}from"../../../chunks/app-CDc7p9Eu.js";

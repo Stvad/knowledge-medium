@@ -1,1 +1,1 @@
-export{vu as resolveDailyPage}from"../../../chunks/app-BGSHgReq.js";
+export{vu as resolveDailyPage}from"../../../chunks/app-CDc7p9Eu.js";

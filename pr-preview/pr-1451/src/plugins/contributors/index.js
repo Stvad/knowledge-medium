@@ -1,1 +1,1 @@
-export{Au as contributorsPlugin}from"../../../chunks/app-BGSHgReq.js";
+export{Au as contributorsPlugin}from"../../../chunks/app-CDc7p9Eu.js";

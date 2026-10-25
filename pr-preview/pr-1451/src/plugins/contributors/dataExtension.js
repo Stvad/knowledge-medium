@@ -1,1 +1,1 @@
-export{GU as contributorsDataExtension}from"../../../chunks/app-BGSHgReq.js";
+export{WU as contributorsDataExtension}from"../../../chunks/app-CDc7p9Eu.js";
