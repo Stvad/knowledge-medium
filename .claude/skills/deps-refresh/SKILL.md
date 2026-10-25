@@ -26,9 +26,7 @@ The output is one PR with one commit per concern. It takes everything safe under
    - Bump an aliased dependency (an `npm:` specifier, such as `typescript-native`) by hand, as the report says.
 2. Set each `overrides` entry in `pnpm-workspace.yaml` to the specifier its direct dependency now carries, then run a plain `pnpm install` so the lockfile records the new overrides. Skip either half and the gate's `pnpm install --frozen-lockfile` fails, either with "specifiers in the lockfile don't match" or with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`.
 3. Mirror the toolchain pins in `packages/agent-cli/src/scaffold.ts`. The scaffolded extension's devDependencies follow the app's.
-4. React: if `vite-plugins/reactImportMapMode.ts` exists, production loads React from esm.sh through SRI-pinned URLs. Those URLs live in that file, `index.html` and `minimal-editor.html`.
-   - In that case keep `react`/`react-dom` at the version those URLs pin, and list them as held.
-   - Once that file is gone, React is an ordinary dependency.
+4. React: extensions get the app's own React through the hand-written export lists in `src/vendor/`, which the page importmap points at. When a React bump changes React's exports or browser subpaths, `src/vendor/vendorEntries.test.ts` fails. Update the facades to the set it names. `react-dom/profiling` stays unmapped on purpose.
 5. In the standalone install, run `pnpm -C agent-extensions/social-media-publisher up`. CI installs it with `--frozen-lockfile`.
 6. Remove a direct dependency nothing references instead of bumping it.
    - Check with `git grep` for its imports, config keys, and CSS `@import`/`@plugin`.
@@ -45,7 +43,7 @@ For each row under "Eligible majors", read the release notes or migration guide 
 
   The commit message says what changed and what was checked.
 - **Hold it, always**, when it can change stored data or how stored user content runs. Name it in the PR with what a dedicated PR would need:
-  - `@powersync/*`, `@journeyapps/wa-sqlite` and `better-sqlite3`: the local DB format and core schema migrations.
+  - `@powersync/*` and `better-sqlite3`: the local DB format and core schema migrations.
   - `@babel/standalone`: it compiles stored user extensions, so an output change breaks them on recompile.
   - Crypto (`@noble/*`, `@scure/*`), and `@supabase/*`.
 - **Hold it** when a peer range blocks it. Check the peer each run instead of assuming it still blocks.
@@ -57,7 +55,7 @@ For each row under "Eligible majors", read the release notes or migration guide 
 - For each action behind its latest major (see the report table), read the breaking changes and bump the `uses:` refs across `.github/workflows/`.
   - If the report says the GitHub API rate-limited it, set `GITHUB_TOKEN` and re-run it. Where no token is available, read each action's latest release with the GitHub MCP tools instead.
   - Leave a SHA-pinned ref alone unless a comment beside it says which tag it tracks.
-- `packageManager`: a pnpm patch or minor goes in the first commit. A pnpm major changes installs for every worktree and agent, so hold it for its own PR.
+- `packageManager`: a pnpm patch or minor goes in the first commit. Bump `agent-extensions/social-media-publisher/package.json`'s pin to the same version, since the standalone install pins pnpm separately. A pnpm major changes installs for every worktree and agent, so hold it for its own PR.
 
 ## 4. Verify (all of it, before the PR)
 
