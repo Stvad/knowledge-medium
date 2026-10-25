@@ -1,1 +1,0 @@
-export{wM as ExtensionRenderBoundary}from"../../chunks/app-9eevm4nA.js";

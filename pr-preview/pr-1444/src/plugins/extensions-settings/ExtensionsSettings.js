@@ -1,1 +1,0 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-9eevm4nA.js";
