@@ -13,20 +13,26 @@ export interface PackageRow {
   major: VersionPick | null
   held: VersionPick | null
 }
+export interface InventoryRow {
+  name: string
+  from: string
+  current: string
+  users: string[]
+}
 export declare const classifyPackage: (
   pkg: {name: string; current: string},
-  times: Record<string, string>,
+  packument: {time?: Record<string, string>; versions?: Record<string, {deprecated?: string}>},
   policy: {now: number; cooldownMs: number},
 ) => PackageRow
-export declare const sameMajorUpCommand: (
-  rows: (Pick<PackageRow, 'name' | 'sameMajor'> & {from?: string; packageManager?: boolean})[],
-) => string | null
+export declare const refreshCommands: (
+  rows: {name: string; from: string; users: string[]; packageManager?: boolean; sameMajor: {version: string} | null}[],
+  label?: string,
+) => string[]
 export declare const readInventory: (result: {
   status: number | null
   stdout: string
   stderr: string
   error?: Error
-}) => {name: string; from: string; current: string; usedBy: string}[]
+}) => InventoryRow[]
 export declare const parseWorkflowUses: (text: string) => {action: string; ref: string}[]
-export declare const parseEsmShPins: (text: string) => {name: string; version: string}[]
 export declare const actionRefMajor: (ref: string) => number | null

@@ -2,37 +2,32 @@
 /**
  * Dependency report — `node scripts/deps-report.mjs [--cwd <dir>]`.
  *
- * Prints, as markdown, what a dependency refresh could take TODAY under the
+ * Prints, as markdown, what a dependency refresh can take TODAY under the
  * project's release cooldown (`minimumReleaseAge` in pnpm-workspace.yaml):
- * the newest eligible version inside each package's current major, the newest
- * eligible next major, and what the cooldown still holds back (with the date
- * it clears). Also the pinned pnpm (`packageManager`), version-pinned esm.sh
- * URL imports, and GitHub Actions refs behind their latest major.
+ * per-project bump commands for the newest eligible version inside each
+ * package's major, the newest eligible next major, what the cooldown still
+ * holds back (with the date it clears), the pinned pnpm, and GitHub Actions
+ * refs behind their latest major.
  *
  * The inventory is the lockfile (`pnpm ls --lockfile-only`), not `pnpm
  * outdated`: outdated already applies the cooldown, so a package whose only
  * newer releases are still inside it would vanish instead of showing as held.
- * Eligibility comes from each package's registry publish times. It changes
- * nothing; the deps-refresh skill (.claude/skills/deps-refresh) says what to
- * do with the report.
+ * Eligibility comes from each package's registry document. It changes nothing;
+ * the deps-refresh skill (.claude/skills/deps-refresh) says what to do with
+ * the report.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
 
 const STABLE = /^(\d+)\.(\d+)\.(\d+)$/
 
-/** A version's major LINE: `x` for x >= 1, `0.y` below 1 (caret semantics). */
+/** A version's caret line: `x` for x >= 1, `0.y` below 1, `0.0.z` below that. */
 const lineOf = version => {
-  const [, major, minor] = STABLE.exec(version)
-  return major === '0' ? `0.${minor}` : major
-}
-
-const compareLines = (a, b) => {
-  const [aMajor, aMinor = 0] = a.split('.').map(Number)
-  const [bMajor, bMinor = 0] = b.split('.').map(Number)
-  return aMajor - bMajor || aMinor - bMinor
+  const [, major, minor, patch] = STABLE.exec(version)
+  if (major !== '0') return major
+  return minor !== '0' ? `0.${minor}` : `0.0.${patch}`
 }
 
 const compareVersions = (a, b) => {
@@ -42,39 +37,52 @@ const compareVersions = (a, b) => {
 }
 
 /**
- * `times` is the registry's `time` map (version -> ISO publish date, plus
- * `created`/`modified`). Prereleases never count as targets.
+ * `packument` is the registry document: `time` (version -> publish date) and
+ * `versions` (the published manifests). Only published, non-deprecated stable
+ * versions are targets: `time` keeps unpublished versions, and pnpm itself
+ * steers around deprecated ones, which an explicit `name@version` overrides.
  */
-export const classifyPackage = ({name, current}, times, {now, cooldownMs}) => {
+export const classifyPackage = ({name, current}, {time = {}, versions = {}}, {now, cooldownMs}) => {
   const row = {name, current, prerelease: !STABLE.test(current), sameMajor: null, major: null, held: null}
   if (row.prerelease) return row
-  const newer = Object.entries(times)
-    .filter(([version]) => STABLE.test(version) && compareVersions(version, current) > 0)
-    .map(([version, published]) => ({version, published, eligibleAt: new Date(Date.parse(published) + cooldownMs).toISOString()}))
+  const newer = Object.keys(versions)
+    .filter(v => STABLE.test(v) && !versions[v].deprecated && time[v] && compareVersions(v, current) > 0)
+    .map(version => ({version, published: time[version], eligibleAt: new Date(Date.parse(time[version]) + cooldownMs).toISOString()}))
     .sort((a, b) => compareVersions(a.version, b.version))
   const eligible = newer.filter(v => Date.parse(v.eligibleAt) <= now)
   const line = lineOf(current)
-  row.sameMajor = eligible.filter(v => lineOf(v.version) === line).at(-1) ?? null
-  row.major = eligible.filter(v => compareLines(lineOf(v.version), line) > 0).at(-1) ?? null
+  // Everything in `newer` is above `current`, so any other line is a higher one.
+  row.sameMajor = eligible.findLast(v => lineOf(v.version) === line) ?? null
+  row.major = eligible.findLast(v => lineOf(v.version) !== line) ?? null
   const newest = newer.at(-1)
-  const best = row.major ?? row.sameMajor
-  if (newest && (!best || compareVersions(newest.version, best.version) > 0)) row.held = newest
+  row.held = newest && !eligible.includes(newest) ? newest : null
   return row
 }
 
-/**
- * The bump that is safe to apply mechanically. Every target is named with its
- * version: `pnpm up -r name@version` keeps each specifier's pin style (exact
- * stays exact, `^` stays `^`), and a bare `pnpm up -r` cannot move an exact
- * pin at all. `--latest` would also cross into a held major.
- */
-const isAliased = row => row.from !== undefined && row.from !== row.name
+const isAliased = row => row.from !== row.name
 
-export const sameMajorUpCommand = rows => {
-  const targets = rows
-    .filter(r => r.sameMajor && !r.packageManager && !isAliased(r))
-    .map(r => `${r.name}@${r.sameMajor.version}`)
-  return targets.length ? `pnpm up -r ${targets.join(' ')}` : null
+/**
+ * The bumps that are safe to apply mechanically. One command per project:
+ * `pnpm up -r pkg@x` applies x to every project that has pkg, so a package on
+ * different majors in different projects would drag one across. Each target
+ * is named with its version, which keeps each specifier's pin style and is the
+ * only way to move an exact pin. Aliases and the pinned pnpm are left out:
+ * `pnpm up name@version` would rewrite an `npm:` specifier, and pnpm isn't a
+ * dependency. The final `up -r` refreshes everything else in range,
+ * transitive dependencies included.
+ */
+export const refreshCommands = (rows, label = '.') => {
+  const pnpm = label === '.' ? 'pnpm' : `pnpm -C ${label}`
+  const targetsByProject = new Map()
+  for (const row of rows) {
+    if (!row.sameMajor || row.packageManager || isAliased(row)) continue
+    for (const project of row.users) {
+      if (!targetsByProject.has(project)) targetsByProject.set(project, [])
+      targetsByProject.get(project).push(`${row.name}@${row.sameMajor.version}`)
+    }
+  }
+  const perProject = [...targetsByProject].map(([project, targets]) => `${pnpm} --filter ${project} up ${targets.join(' ')}`)
+  return [...perProject, `${pnpm} up -r`]
 }
 
 export const parseWorkflowUses = text =>
@@ -92,14 +100,13 @@ export const actionRefMajor = ref => {
   return match ? Number(match[1]) : null
 }
 
-export const parseEsmShPins = text =>
-  [...text.matchAll(/https:\/\/esm\.sh\/((?:@[\w.-]+\/)?[\w.-]+)@(\d+\.\d+\.\d+)/g)].map(m => ({name: m[1], version: m[2]}))
-
-/** null when the project sets none (pnpm's own default then applies). */
-const readCooldownMinutes = dir => {
+/** A missing setting throws: the report must never treat every release as
+ *  eligible because a project forgot its cooldown. */
+const readCooldownMinutes = (dir, label) => {
   const file = join(dir, 'pnpm-workspace.yaml')
   const match = existsSync(file) && /^minimumReleaseAge:\s*(\d+)/m.exec(readFileSync(file, 'utf8'))
-  return match ? Number(match[1]) : null
+  if (!match) throw new Error(`${label}/pnpm-workspace.yaml sets no minimumReleaseAge: refusing to guess a cooldown`)
+  return Number(match[1])
 }
 
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies']
@@ -134,15 +141,30 @@ export const readInventory = ({status, stdout, stderr, error}) => {
       }
     }
   }
-  return [...rows.values()].map(({users, ...row}) => ({...row, usedBy: [...users].join(', ')}))
+  return [...rows.values()].map(({users, ...row}) => ({...row, users: [...users]}))
 }
 
-/** null when npmjs doesn't have it (a private scope, a typo'd URL import). */
-const registryTimes = async name => {
-  const response = await fetch(`https://registry.npmjs.org/${name.replace('/', '%2F')}`)
+/** The registry document, reduced to what classifyPackage reads; null when
+ *  npmjs doesn't have it (a private scope). */
+const fetchPackument = async name => {
+  let response
+  try {
+    response = await fetch(`https://registry.npmjs.org/${name.replace('/', '%2F')}`)
+  } catch (error) {
+    throw new Error(`registry fetch for ${name} failed: ${error.message}`)
+  }
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`registry ${response.status} for ${name}`)
-  return (await response.json()).time ?? {}
+  const {time = {}, versions = {}} = await response.json()
+  const deprecation = Object.fromEntries(Object.entries(versions).map(([v, m]) => [v, {deprecated: m.deprecated}]))
+  return {time, versions: deprecation}
+}
+
+/** Cached per name: an alias shares its package's document. */
+const packuments = new Map()
+const registryPackument = name => {
+  if (!packuments.has(name)) packuments.set(name, fetchPackument(name))
+  return packuments.get(name)
 }
 
 const mapLimit = async (items, limit, fn) => {
@@ -157,30 +179,25 @@ const mapLimit = async (items, limit, fn) => {
   return out
 }
 
-/** `{tag, major}`, or `{error}` saying why the latest release is unreadable. */
-const latestActionMajor = async action => {
+/** `{tag, major, published}`, or `{error}` saying why the latest release is unreadable. */
+const latestActionRelease = async action => {
   const headers = process.env.GITHUB_TOKEN ? {authorization: `Bearer ${process.env.GITHUB_TOKEN}`} : {}
-  const response = await fetch(`https://api.github.com/repos/${action}/releases/latest`, {headers})
+  let response
+  try {
+    response = await fetch(`https://api.github.com/repos/${action}/releases/latest`, {headers})
+  } catch (error) {
+    return {error: error.message}
+  }
   if (!response.ok) return {error: `HTTP ${response.status}`}
-  const {tag_name: tag} = await response.json()
+  const {tag_name: tag, published_at: published} = await response.json()
   const major = actionRefMajor(tag ?? '')
-  return major === null ? {error: `tag ${tag}`} : {tag, major}
+  return major === null ? {error: `tag ${tag}`} : {tag, major, published}
 }
 
-const trackedFiles = (dir, pattern) => {
-  // Tests and docs hold example URLs, not dependencies.
-  const exclude = [':!pnpm-lock.yaml', ':!.beads', ':!docs', ':!*.test.*', ':!**/test/**']
-  const result = spawnSync('git', ['grep', '-l', '-E', pattern, '--', ...exclude], {cwd: dir, encoding: 'utf8'})
-  return result.stdout.split('\n').filter(Boolean).map(file => join(dir, file))
-}
+const day = iso => (iso ?? '').slice(0, 10)
 
-const day = iso => iso.slice(0, 10)
-
-const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
-  const cooldown = cooldownMinutes === null
-    ? 'NONE set in pnpm-workspace.yaml: every newer version below counts as eligible.'
-    : `${cooldownMinutes} minutes (${(cooldownMinutes / 1440).toFixed(1)} days).`
-  const lines = [`# Dependency report: ${label}`, '', `Cooldown: ${cooldown}`, '']
+const render = ({label, cooldownMinutes, rows, actions}) => {
+  const lines = [`# Dependency report: ${label}`, '', `Cooldown: ${cooldownMinutes} minutes (${(cooldownMinutes / 1440).toFixed(1)} days).`, '']
   const table = (title, filtered, columns) => {
     if (!filtered.length) return
     lines.push(`## ${title}`, '', `| ${columns.map(c => c[0]).join(' | ')} |`, `|${columns.map(() => '---').join('|')}|`)
@@ -188,18 +205,18 @@ const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
     lines.push('')
   }
   const shown = r => isAliased(r) ? `${r.name} (npm:${r.from})` : r.name
+  const usedBy = r => r.users.join(', ')
   table('Same-major updates', rows.filter(r => r.sameMajor), [
-    ['package', shown], ['current', r => r.current], ['target', r => r.sameMajor.version], ['used by', r => r.usedBy],
+    ['package', shown], ['current', r => r.current], ['target', r => r.sameMajor.version], ['used by', usedBy],
   ])
-  const command = sameMajorUpCommand(rows)
-  if (command) lines.push('Apply with:', '', '```bash', command, 'pnpm up -r', '```', '')
+  lines.push('Apply with:', '', '```bash', ...refreshCommands(rows, label), '```', '')
   const pm = rows.find(r => r.packageManager && r.sameMajor)
   if (pm) lines.push(`Set \`"packageManager": "pnpm@${pm.sameMajor.version}"\` in package.json.`, '')
   for (const r of rows.filter(r => r.sameMajor && isAliased(r))) {
     lines.push(`Aliased, so bump its specifier by hand: \`${r.name}\` to \`npm:${r.from}@${r.sameMajor.version}\`, keeping its range prefix.`, '')
   }
   table('Eligible majors (research before taking)', rows.filter(r => r.major), [
-    ['package', shown], ['current', r => r.current], ['major', r => r.major.version], ['published', r => day(r.major.published)], ['used by', r => r.usedBy],
+    ['package', shown], ['current', r => r.current], ['major', r => r.major.version], ['published', r => day(r.major.published)], ['used by', usedBy],
   ])
   table('Held by the cooldown', rows.filter(r => r.held), [
     ['package', shown], ['newest', r => r.held.version], ['published', r => day(r.held.published)], ['eligible from', r => r.held.eligibleAt.slice(0, 16)],
@@ -207,11 +224,8 @@ const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
   table('Check by hand', rows.filter(r => r.prerelease || r.notOnNpm), [
     ['package', shown], ['current', r => r.current], ['why', r => r.notOnNpm ? 'not on npmjs' : 'prerelease'],
   ])
-  table('esm.sh URL pins', esmPins, [
-    ['package', r => r.name], ['pinned', r => r.version], ['newest eligible', r => r.target ?? 'current'], ['files', r => r.files.join(', ')],
-  ])
   table('GitHub Actions behind their latest major', actions.filter(a => a.major !== null && a.latest.major > a.major), [
-    ['action', a => a.action], ['used', a => a.ref], ['latest', a => a.latest.tag],
+    ['action', a => a.action], ['used', a => a.ref], ['latest', a => a.latest.tag], ['released', a => day(a.latest.published)],
   ])
   const bySha = actions.filter(a => a.major === null)
   if (bySha.length) lines.push(`Actions pinned to a SHA or branch (check by hand): ${bySha.map(a => `${a.action}@${a.ref.slice(0, 12)}`).join(', ')}`, '')
@@ -219,42 +233,26 @@ const render = ({label, cooldownMinutes, rows, actions, esmPins}) => {
   if (unknown.length) {
     const rateLimited = unknown.some(a => a.latest.error === 'HTTP 403' || a.latest.error === 'HTTP 429')
     lines.push(`Actions whose latest release could not be read: ${unknown.map(a => `${a.action} (${a.latest.error})`).join(', ')}`, '')
-    if (rateLimited) lines.push('GitHub allows 60 unauthenticated API requests an hour: set GITHUB_TOKEN and re-run.', '')
+    if (rateLimited) lines.push('GitHub allows 60 unauthenticated API requests an hour; a GITHUB_TOKEN already in the environment raises that.', '')
   }
   return lines.join('\n')
 }
 
 const main = async argv => {
   const cwdFlag = argv.indexOf('--cwd')
-  const label = cwdFlag >= 0 ? argv[cwdFlag + 1] : '.'
-  const dir = resolve(label)
-  const cooldownMinutes = readCooldownMinutes(dir)
-  const policy = {now: Date.now(), cooldownMs: (cooldownMinutes ?? 0) * 60_000}
+  const dir = resolve(cwdFlag >= 0 ? argv[cwdFlag + 1] : '.')
+  // Relative, so the header and commands never carry a local absolute path.
+  const label = relative(process.cwd(), dir) || '.'
+  const cooldownMinutes = readCooldownMinutes(dir, label)
+  const policy = {now: Date.now(), cooldownMs: cooldownMinutes * 60_000}
 
   const inventory = readInventory(spawnSync('pnpm', ['ls', '-r', '--depth', '0', '--json', '--lockfile-only'], {cwd: dir, encoding: 'utf8'}))
   const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
   const pinnedPnpm = /^pnpm@(\d+\.\d+\.\d+)/.exec(manifest.packageManager ?? '')
-  if (pinnedPnpm) inventory.push({name: 'pnpm', from: 'pnpm', current: pinnedPnpm[1], usedBy: 'packageManager', packageManager: true})
-  const rows = (await mapLimit(inventory, 8, async pkg => {
-    const times = await registryTimes(pkg.from)
-    return times ? {...pkg, ...classifyPackage(pkg, times, policy)} : {...pkg, notOnNpm: true}
-  })).filter(r => r.sameMajor || r.major || r.held || r.prerelease || r.notOnNpm)
-
-  const pinsByName = new Map()
-  for (const file of trackedFiles(dir, 'https://esm\\.sh/')) {
-    for (const pin of parseEsmShPins(readFileSync(file, 'utf8'))) {
-      const key = `${pin.name}@${pin.version}`
-      const entry = pinsByName.get(key) ?? {...pin, files: []}
-      const relative = file.slice(dir.length + 1)
-      if (!entry.files.includes(relative)) entry.files.push(relative)
-      pinsByName.set(key, entry)
-    }
-  }
-  const esmPins = await mapLimit([...pinsByName.values()], 8, async pin => {
-    const times = await registryTimes(pin.name)
-    if (!times) return {...pin, target: 'not on npm'}
-    const row = classifyPackage({name: pin.name, current: pin.version}, times, policy)
-    return {...pin, target: (row.major ?? row.sameMajor)?.version}
+  if (pinnedPnpm) inventory.push({name: 'pnpm', from: 'pnpm', current: pinnedPnpm[1], users: ['packageManager'], packageManager: true})
+  const rows = await mapLimit(inventory, 8, async pkg => {
+    const doc = await registryPackument(pkg.from)
+    return doc ? {...pkg, ...classifyPackage(pkg, doc, policy)} : {...pkg, notOnNpm: true}
   })
 
   const workflowDir = join(dir, '.github', 'workflows')
@@ -262,9 +260,12 @@ const main = async argv => {
     ? readdirSync(workflowDir).filter(f => /\.ya?ml$/.test(f)).flatMap(f => parseWorkflowUses(readFileSync(join(workflowDir, f), 'utf8')))
     : []
   const distinct = [...new Map(uses.map(u => [`${u.action}@${u.ref}`, u])).values()]
-  const actions = await mapLimit(distinct, 4, async u => ({...u, major: actionRefMajor(u.ref), latest: await latestActionMajor(u.action)}))
+  const actions = await mapLimit(distinct, 4, async u => {
+    const major = actionRefMajor(u.ref)
+    return {...u, major, latest: major === null ? null : await latestActionRelease(u.action)}
+  })
 
-  console.log(render({label, cooldownMinutes, rows, actions, esmPins}))
+  console.log(render({label, cooldownMinutes, rows, actions}))
 }
 
 if (isMainModule(import.meta.url)) {
