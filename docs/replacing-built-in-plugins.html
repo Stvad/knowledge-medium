@@ -221,21 +221,22 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
 <body>
 <div class="page">
 
-<aside class="doc-status"><strong>Status: proposed</strong> · design only, nothing built. Supersedes stage 1 of <code>docs/plugin-materialization.md</code> (PR #289, last verified 2026-07-02), whose source-map plan, manifest refactor and declaration shadowing no longer fit master (§2). Stages 2 and 3 of that doc stand as written there. <strong>Last verified against code:</strong> 2026-10-24 (master @ <code>1b3fbb2093c</code>).</aside>
+<aside class="doc-status"><strong>Status: proposed</strong> · design only, nothing built. <strong>Revised 2026-10-24:</strong> a fork is now served at the original file's module path, so every importer gets it. That replaces the first draft's slot substitution and #289's need for seam migration. This doc supersedes stages 1 and 3 of <code>docs/plugin-materialization.md</code> (PR #289, last verified 2026-07-02). Its stage 2 (string-keyed seams) stays useful but is no longer needed for a fork to reach the importers of the file it replaces. <strong>Last verified against code:</strong> 2026-10-24 (master @ <code>1b3fbb2093c</code>).</aside>
 
 <header class="masthead">
-  <div class="eyebrow">Design · 24 October 2026 · successor to #289 stage 1 · answers #481</div>
+  <div class="eyebrow">Design · 24 October 2026 · successor to #289 · answers #481</div>
   <h1>Replacing a <span class="bi">built-in</span> plugin with <span class="fork">your own copy</span></h1>
-  <p class="dek measure">How someone, or an agent working for them, turns a built-in plugin into an extension they own and edit, so that it takes the built-in's place on every device that trusts it, and finds out when the built-in changes upstream. Rebuilt against current master, with ideas from Imbue Studio, Cloudflare OS and the malleable-systems catalog in #365.</p>
+  <p class="dek measure">How someone, or an agent working for them, turns a file of a built-in plugin into one they own and edit. The app then loads their copy wherever it used to load the original, on every device that trusts it, and they find out when the original changes upstream. Built against current master, with ideas from Imbue Studio, Cloudflare OS and the malleable-systems catalog in #365.</p>
 
   <div class="summary">
     <h2>The short version</h2>
     <ul>
-      <li>An extension block can name the built-in it <b>replaces</b> (<code>extension:replaces = system:todo</code>). On a device that has approved it and can load it, it runs <b>in the built-in's place in the plugin list</b>, from the first paint. Every other device keeps running the built-in, so nothing ever runs <em>neither</em>.</li>
-      <li>A copy replaces a built-in's <b>behaviour</b>, never its <b>declarations</b>. Types, properties, codecs, local schema and backfills stay the built-in's, because stored data is keyed by them.</li>
-      <li>The built-in's source reaches any run, including graph-only agent runs, through one read tool backed by a per-plugin source file the build emits. The source maps #289 planned to read no longer fit the build.</li>
-      <li>Every later change goes through one loop: someone changes the copy's source, each device keeps running its approved version, and a review on that device approves the new one. That covers an agent's edit, a fix, and an update from upstream. The review prompt already exists. What's new is what it shows.</li>
-      <li>Seven PR-sized pieces. The first is the source provider (#1435).</li>
+      <li>A fork is an edited copy of one plugin file, stored in a block. On a device that has approved it, the page's import map points the file's module path (<code>@/plugins/todo/index.js</code>) at the fork. <b>Everything that imported the original now imports the fork</b>: the plugin list, other plugins, extensions. The original file is never loaded.</li>
+      <li>That needs one build change. Today every built-in is linked inside one bundled chunk, so imports between them never go through a URL (§2). Plugin files have to become modules the browser loads by path. That costs files at boot, so the first build PR measures it.</li>
+      <li>Because the fork <em>is</em> the module, it keeps its place in every list, its imports, and its own type and property declarations. Nothing has to be swapped, pruned or passed through.</li>
+      <li>A device that hasn't approved a fork maps nothing and loads the original, so no device runs neither. A fork that breaks boot is skipped on the next load.</li>
+      <li>Every later change goes through one loop: the source changes, each device keeps its approved version until someone approves the new one there, then a reload serves it.</li>
+      <li>Seven PR-sized pieces. The source provider (#1435) and the build change can start in parallel.</li>
     </ul>
   </div>
 
@@ -251,7 +252,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
     <a href="#borrowed"><span class="n">3</span>Borrowed ideas</a>
     <a href="#model"><span class="n">4</span>The model</a>
     <a href="#source"><span class="n">5</span>Getting the source</a>
-    <a href="#assembly"><span class="n">6</span>Taking the slot</a>
+    <a href="#serving"><span class="n">6</span>Serving a fork</a>
     <a href="#boot"><span class="n">7</span>Boot</a>
     <a href="#loop"><span class="n">8</span>One loop for changes</a>
     <a href="#upstream"><span class="n">9</span>Keeping up</a>
@@ -266,31 +267,30 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
 <section id="problem">
   <h2 class="sec"><span class="n">1</span>The problem <span class="prov">Observed</span></h2>
   <p>Say you want finished todos dimmed instead of struck through. That styling is one class string in <code>TodoContentDecorator</code>, inside <code>src/plugins/todo/index.tsx</code>, which ships in the app bundle. You can't edit it from the app.</p>
-  <p>What works today: copy the plugin into an extension block, change the line, and turn the built-in Todo off. The copy has to leave out <code>todoDataExtension</code>. That extension declares Todo's type and properties under <code>system:todo/…</code> seed keys, and the loader rejects any seed key outside <code>@extension/…</code> (<code>src/extensions/dynamicExtensionSeeds.ts:83-87</code>). A copy that keeps it loads as an empty error shell, so on that device Todo is gone and nothing replaces it. The copy imports the original's other modules through the page import map, so it gets the same module instances the app runs. Other plugins import only todo's action ids (srs-rescheduling) and schema constants (roam-import, onboarding). Action ids are looked up by string, so no plugin is left calling the original. It works, with five costs:</p>
+  <p>What works today: copy the plugin into an extension block, change the line, and turn the built-in Todo off. The copy has to leave out <code>todoDataExtension</code>. That extension declares Todo's type and properties under <code>system:todo/…</code> seed keys, and the extension loader rejects any seed key outside <code>@extension/…</code> (<code>src/extensions/dynamicExtensionSeeds.ts:83-87</code>). A copy that keeps it loads as an empty error shell. The copy imports the original's other modules through the page import map. Other plugins import only todo's action ids (srs-rescheduling) and schema constants (roam-import, onboarding), so for Todo nothing is left calling the original. For daily-notes that isn't true: five plugins import <code>getOrCreateDailyNote</code> itself. The workaround has five costs:</p>
 
   <div class="table-wrap"><table>
     <thead><tr><th style="width:26%">Cost</th><th>Why it happens</th><th style="width:24%">Removed by</th></tr></thead>
     <tbody>
-      <tr><td>A device that hasn't approved the copy runs neither version</td><td>Turning Todo off is synced intent. Running the copy needs this device's approval, which doesn't sync. A laptop that hasn't approved yet has Todo off and the copy blocked, so todos lose their checkbox there.</td><td>The <code>replaces</code> relation and the approval condition (§4, §6)</td></tr>
-      <tr><td>The copy loads after first paint and lands after every built-in</td><td>User extensions compile in an effect after the static plugins paint, and are appended after the whole static list. Decorators wrap in list order, so the copy's checkbox row now wraps the decorators that came after Todo.</td><td>Taking the slot (§6) and loading before paint (§7)</td></tr>
+      <tr><td>A device that hasn't approved the copy runs neither version</td><td>Turning Todo off is synced intent. Running the copy needs this device's approval, which doesn't sync. A laptop that hasn't approved yet has Todo off and the copy blocked, so todos lose their checkbox there.</td><td>Only approved forks are mapped; everywhere else the original loads (§7)</td></tr>
+      <tr><td>The copy loads after first paint and lands after every built-in</td><td>User extensions compile in an effect after the static plugins paint, and are appended after the whole static list. Decorators wrap in list order, so the copy's checkbox row now wraps the decorators that came after Todo (Figure 3).</td><td>The fork is the module the plugin list imports, so it loads with the rest of the app, in place (§6, §7)</td></tr>
       <tr><td>Nothing records that the copy came from Todo</td><td>No property says so, so nothing can tell you that Todo changed upstream.</td><td>Lineage (§4, §9)</td></tr>
       <tr><td>A graph-only run can't read Todo's source</td><td>An agent-dispatch run has the km MCP tools and no shell.</td><td>The source provider (§5, #1435)</td></tr>
-      <tr><td>The copy can't carry Todo's declarations</td><td>The loader rejects a built-in's seed keys, so the copy leaves them out. With Todo off, nothing declares Todo's type and <code>status</code> property while the copy runs. I haven't traced what the registry then does with them.</td><td>Rule 1: declarations stay in the built-in's slot, and the loader passes the built-in's own seed objects through (§4)</td></tr>
+      <tr><td>The copy can't carry Todo's declarations</td><td>The loader rejects a built-in's seed keys, so the copy leaves them out. With Todo off, nothing declares Todo's type and <code>status</code> property while the copy runs. I haven't traced what the registry then does with them.</td><td>A fork isn't loaded as an extension. It's the module, with its own <code>system:</code> seeds (§6)</td></tr>
     </tbody>
   </table></div>
 
   <figure>
     <div class="fig-frame">
       <svg viewBox="0 0 880 330" role="img" aria-labelledby="f1t f1d">
-        <title id="f1t">Two devices, today and with replaces</title>
-        <desc id="f1d">Left: the toggle that turns Todo off syncs to both devices, but only the phone approved the copy, so the laptop runs neither. Right: the copy names the built-in it replaces; the phone runs the copy in Todo's place and the laptop keeps the built-in until it approves.</desc>
+        <title id="f1t">Two devices, today and with a fork</title>
+        <desc id="f1d">Left: the toggle that turns Todo off syncs to both devices, but only the phone approved the copy, so the laptop runs neither. Right: the fork block syncs; the phone, which approved it, maps the todo module path to it; the laptop maps nothing and loads the original.</desc>
         <defs>
           <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
         </defs>
         <text x="20" y="20" class="t-cap">TODAY · COPY, THEN TURN THE BUILT-IN OFF</text>
-        <text x="460" y="20" class="t-cap">PROPOSED · THE COPY REPLACES THE BUILT-IN</text>
+        <text x="460" y="20" class="t-cap">PROPOSED · A FORK OF THE FILE</text>
 
-        <!-- left -->
         <rect x="20" y="34" width="400" height="64" rx="6" class="b-n"/>
         <text x="36" y="58" class="t-title">Synced to every device</text>
         <text x="36" y="80" class="t-mono">system:todo = off   ·   block “My todo”</text>
@@ -309,27 +309,26 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
         <rect x="244" y="282" width="150" height="26" rx="13" class="b-n"/>
         <text x="319" y="299" text-anchor="middle" class="t-warn" font-weight="650">runs neither</text>
 
-        <!-- right -->
         <rect x="460" y="34" width="400" height="64" rx="6" class="b-n"/>
         <text x="476" y="58" class="t-title">Synced to every device</text>
-        <text x="476" y="80" class="t-mono">block “My todo” · replaces system:todo</text>
+        <text x="476" y="80" class="t-mono">block “My todo” · serves todo/index.js</text>
         <line x1="550" y1="98" x2="550" y2="120" class="ln" marker-end="url(#a1)"/>
         <line x1="740" y1="98" x2="740" y2="226" class="ln" marker-end="url(#a1)"/>
 
         <rect x="460" y="124" width="190" height="88" rx="6" class="b-n"/>
         <text x="474" y="146" class="t-title">Phone</text>
-        <text x="474" y="164" class="t-sub">approved the copy</text>
+        <text x="474" y="164" class="t-sub">approved the fork</text>
         <rect x="474" y="176" width="164" height="26" rx="13" class="b-fork"/>
-        <text x="556" y="193" text-anchor="middle" class="t-fork" font-weight="650">My todo, in Todo's slot</text>
+        <text x="556" y="193" text-anchor="middle" class="t-fork" font-weight="650">loads My todo</text>
 
         <rect x="670" y="230" width="190" height="88" rx="6" class="b-n"/>
         <text x="684" y="252" class="t-title">Laptop</text>
         <text x="684" y="270" class="t-sub">hasn't approved yet</text>
         <rect x="684" y="282" width="164" height="26" rx="13" class="b-bi"/>
-        <text x="766" y="299" text-anchor="middle" class="t-bi" font-weight="650">built-in Todo + prompt</text>
+        <text x="766" y="299" text-anchor="middle" class="t-bi" font-weight="650">original Todo + prompt</text>
       </svg>
     </div>
-    <figcaption><b>Figure 1.</b> Today the decision "don't run Todo" syncs, but the decision "trust the copy" doesn't, so a device can end up with neither. With <code>replaces</code>, the built-in is suppressed only on a device where the copy actually runs.</figcaption>
+    <figcaption><b>Figure 1.</b> Today the decision "don't run Todo" syncs, but the decision "trust the copy" doesn't, so a device can end up with neither. With a fork, nothing about the original is turned off. A device either maps the fork or loads the original.</figcaption>
   </figure>
 </section>
 
@@ -339,20 +338,19 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   <p>#289 was checked against code on 2026-07-02. Since then the build, the type and property model and the extension catalog have all moved. These are the facts this design rests on, checked on master at <code>1b3fbb2093c</code>.</p>
 
   <div class="table-wrap"><table>
-    <thead><tr><th style="width:24%">Area</th><th>What the code does</th><th style="width:30%">What it means here</th></tr></thead>
+    <thead><tr><th style="width:22%">Area</th><th>What the code does</th><th style="width:32%">What it means here</th></tr></thead>
     <tbody>
-      <tr><td>Build shape</td><td><code>preserveModules</code> is gone. Every <code>src/**</code> module is still an entry at a stable path, but it emits as a one-line file that re-exports from one bundled <code>chunks/app-&lt;hash&gt;.js</code>. Minify is on.<span class="where">vite.config.ts:13-60, 168-210 · dist/src/plugins/todo/actions.js</span></td><td>A fork still imports any module at its <code>@/</code> path and gets the running instance.</td></tr>
-      <tr><td>Source maps</td><td>The small re-export files have no maps. All 492 plugin sources live in the app chunk's one map: 17,980,134 bytes, 1,735 sources, authored TSX from before react-compiler (local build of 2026-10-23). Maps aren't precached (<code>precache-assets.ts</code>), but Pages deploys them, and each deploy deletes the previous build's files.<span class="where">scripts/precache-assets.ts:23-30 · .github/workflows/deploy-pages.yml</span></td><td>#289's per-module <code>.js.map</code> plan no longer applies; see §5.</td></tr>
-      <tr><td>Extension catalog</td><td><code>src/extensions/api.ts</code> is gone. Extensions import from the module that owns a symbol, and <code>apiCatalog.ts</code> lists what is blessed.<span class="where">src/extensions/apiCatalog.ts:1-47</span></td><td>Rewritten imports point at real modules, e.g. <code>@/plugins/todo/actions.js</code>.</td></tr>
-      <tr><td>Boot order</td><td>The Repo installs all 15 static data extensions, ignoring toggles, and applies their local schema. Then <code>resolveInitialLayout</code> resolves the workspace and runs <code>bootstrapWorkspace</code>, before React mounts. Then the app paints the static plugins and merges user extensions afterwards, appended after the static list.<span class="where">src/context/repo.tsx:67-72 · src/data/repoProvider.ts:644-646 · src/bootstrap/initialLayout.ts:35-120 · src/extensions/AppRuntimeProvider.tsx:80-122, 146-199</span></td><td>There's a natural place to load forks: between workspace resolution and bootstrap (§7).</td></tr>
-      <tr><td>Resolver walk</td><td>One walker visits the tree in list order. Toggle boundaries are marked arrays it can recognise, and each contribution is kept once, by object identity, at its first occurrence.<span class="where">src/facets/facet.ts:579-618 · src/facets/resolveAppRuntime.ts:73-104</span></td><td>Swapping a boundary for its fork is a pure pre-pass. The id-keyed manifest #289 required first isn't needed (§6).</td></tr>
-      <tr><td>How facets combine</td><td>Content decorators wrap in contribution order, so later ones sit outside earlier ones. Renderers are a map keyed by id and alias, and the last write wins silently. Keyed maps are last-wins with a warning.<span class="where">src/extensions/blockInteraction.ts:520-535 · src/extensions/core.ts:179-199 · src/facets/facet.ts:102-123</span></td><td>Position matters for decorators and keyed registries, so a fork has to take the original's slot.</td></tr>
-      <tr><td>Contribution source</td><td><code>source?</code> is an optional free-form string. The loader prefixes every user-extension contribution with <code>block:&lt;id&gt;</code>. Built-ins write a short name like <code>'todo'</code>, not their toggle id.<span class="where">src/facets/facet.ts:13-25 · src/extensions/dynamicExtensions.ts:325-350</span></td><td>Nothing reliably says which plugin owns a contribution yet (§10).</td></tr>
-      <tr><td>Types and properties</td><td>They're seeds now. The registry treats declared seeds as authoritative, and a <code>system:</code> owner outranks any other. A user extension must key its seeds <code>@extension/…</code>; the loader throws on any other key.<span class="where">src/data/typeDefinitionRegistry.ts:183-322 · src/data/definitionSeeds.ts:104-109 · src/extensions/dynamicExtensionSeeds.ts:83-87, 196-198</span></td><td>A fork can't carry or re-key a built-in's seeds, and it shouldn't (§4, rule 1). #289's "forks may change their data extension" and §8 "shadow a system type" no longer hold.</td></tr>
-      <tr><td>Trust</td><td>Two gates: synced intent in the overrides map, then a per-device approval that pins the compiled source. A drifted source keeps running its pin and reports <code>update-available</code>. The bridge's install command pins on the paired device. The km MCP tools have no approve.<span class="where">src/extensions/dynamicExtensions.ts:115-127, 159-187 · src/plugins/agent-runtime/commands.ts:1438-1442</span></td><td>An agent-dispatch run can write a fork but can't make it run. That's the proposal boundary (§8).</td></tr>
-      <tr><td>Overrides map</td><td><code>extensions:overrides</code>, an <code>object&lt;string, boolean&gt;</code> on a per-user preferences block, mirrored per workspace into localStorage for first paint.<span class="where">src/plugins/extensions-settings/config.ts:44-64 · src/extensions/overridesCache.ts</span></td><td>Left exactly as it is. <code>replaces</code> lives on the extension block, not in this map.</td></tr>
-      <tr><td>Essential boundaries</td><td>Twelve can't be turned off: kernel data, default renderers, interactions, shortcuts and value presets, the toast mount, and the plugins extensions-settings, keybindings-settings, command-palette, properties-migration, workspace-header and app-intents.<span class="where">grep "essential: true" in src</span></td><td>None of these can be replaced in v1.</td></tr>
-      <tr><td>Coupling</td><td>75 plugin-to-plugin import pairs (173 import statements). Daily-notes is imported by 13 plugins, and its <code>getOrCreateDailyNote</code> by 5. Todo is imported by 4, for constants, schema and action ids only.</td><td>Todo is a clean first target. Daily-notes still has the split-brain problem (§11).</td></tr>
+      <tr><td>Build shape</td><td><code>preserveModules</code> is gone. Every <code>src/**</code> module is still an entry at a stable path, but it emits as a one-line file that re-exports from one bundled <code>chunks/app-&lt;hash&gt;.js</code>. The config comment gives the reason: about 1,500 files cost about 0.5 s of an iPhone cold launch, and now the browser loads about 3 at boot.<span class="where">vite.config.ts:13-60, 168-210 · dist/src/plugins/todo/actions.js</span></td><td>Any change that brings back files at boot has to be measured against that.</td></tr>
+      <tr><td>Who imports through a URL</td><td>The 3.5 MB app chunk has no runtime import of any app module, static or dynamic (local build of 2026-10-23). Built-in plugins reach each other, and the plugin list reaches them, by bindings inside the chunk. Only extension blocks resolve <code>@/…</code> at runtime, through the import map's <code>"@/": "./src/"</code>.<span class="where">dist/chunks/app-*.js · index.html:42-69</span></td><td>Mapping a fork at <code>@/plugins/todo/index.js</code> would reach extension blocks and nothing else. Plugin files have to be loaded by path for it to reach the rest (§6).</td></tr>
+      <tr><td>Source maps</td><td>The re-export files have no maps. All 492 plugin sources live in the app chunk's one map: 17,980,134 bytes, authored TSX from before react-compiler. Maps aren't precached, but Pages deploys them, and each deploy deletes the previous build's files.<span class="where">scripts/precache-assets.ts:23-30 · .github/workflows/deploy-pages.yml</span></td><td>#289's per-module <code>.js.map</code> plan no longer applies (§5).</td></tr>
+      <tr><td>Boot order</td><td>The Repo installs all 15 static data extensions, ignoring toggles, and applies their local schema. Then <code>resolveInitialLayout</code> resolves the workspace and runs <code>bootstrapWorkspace</code>. Then the app paints the static plugins and merges user extensions afterwards, appended after the static list.<span class="where">src/context/repo.tsx:67-72 · src/data/repoProvider.ts:644-646 · src/bootstrap/initialLayout.ts:35-120 · src/extensions/AppRuntimeProvider.tsx:80-122, 146-199</span></td><td>Everything here imports plugins by path, so a fork mapped before the first module loads reaches all of it.</td></tr>
+      <tr><td>Before any module loads</td><td><code>index.html</code> runs a classic inline script (the theme boot), then the static import map, then <code>&lt;script type="module" src="./src/main.tsx"&gt;</code>. The workspace to open can be read synchronously: the URL hash, else <code>ftm.lastWorkspaceId</code> in localStorage. So can the per-workspace overrides cache.<span class="where">index.html:17-73 · src/utils/lastWorkspace.ts · src/extensions/overridesCache.ts</span></td><td>A small loader there can decide which forks to map before the module graph starts (§7).</td></tr>
+      <tr><td>How facets combine</td><td>Content decorators wrap in contribution order, so later ones sit outside earlier ones. Renderers are a map keyed by id and alias, and the last write wins silently. Keyed maps are last-wins with a warning.<span class="where">src/extensions/blockInteraction.ts:520-535 · src/extensions/core.ts:179-199 · src/facets/facet.ts:102-123</span></td><td>Position matters, and a fork served at the original's path keeps it automatically.</td></tr>
+      <tr><td>Types and properties</td><td>They're seeds. The registry treats declared seeds as authoritative. A user extension must key its seeds <code>@extension/…</code>; the loader throws on any other key.<span class="where">src/data/typeDefinitionRegistry.ts:183-322 · src/extensions/dynamicExtensionSeeds.ts:83-87, 196-198</span></td><td>That rule is the extension loader's. A fork isn't loaded through it, so it declares <code>system:todo/…</code> seeds like the original did.</td></tr>
+      <tr><td>Trust</td><td>Two gates: synced intent in the overrides map, then a per-device approval in IndexedDB holding the approved source, its hash and the compiled output (<code>CompiledRecord</code>). The bridge's install command pins on the paired device. The km MCP tools have no approve.<span class="where">src/extensions/dynamicExtensions.ts:115-127, 159-187 · src/extensions/compiledModuleCache.ts:34-58 · src/plugins/agent-runtime/commands.ts:1438-1442</span></td><td>An agent-dispatch run can write a fork but can't make it load. The compiled output a fork needs at boot is already stored at rest.</td></tr>
+      <tr><td>Boot failure</td><td><code>main.tsx</code> has a render error boundary. Nothing catches a module that fails to link or throws while the graph evaluates, which would leave a blank page.<span class="where">src/main.tsx:50-79</span></td><td>Serving forks needs its own crash guard (§7).</td></tr>
+      <tr><td>Essential boundaries</td><td>Twelve can't be turned off: kernel data, default renderers, interactions, shortcuts and value presets, the toast mount, and the plugins extensions-settings, keybindings-settings, command-palette, properties-migration, workspace-header and app-intents.</td><td>Files of essential plugins aren't forkable in v1. Core isn't either: it stays bundled.</td></tr>
+      <tr><td>Coupling</td><td>75 plugin-to-plugin import pairs (173 import statements). Daily-notes is imported by 13 plugins, and its <code>getOrCreateDailyNote</code> by 5. Todo is imported by 4, for constants, schema and action ids only.</td><td>With forks served at paths, all of these reach the fork, including daily-notes' helpers.</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -363,23 +361,23 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   <p>The two landscape pages (<code>docs/landscape/imbue-studio.html</code>, <code>docs/landscape/cloudflare-os.html</code>) and the malleable-systems catalog in #365 each have something to say about owning a copy of software you didn't write. This design takes these ideas.</p>
 
   <div class="cards">
-    <div class="card"><span class="from im">Imbue · templates</span><h4>Check that it boots before it goes live</h4><p>Adopting a template merges it into a scratch copy, checks that it boots, and only then updates the live workspace.</p><p class="becomes">Approving a fork lets this device run it. It then loads on its own first and takes the slot only if that works; a fork that fails leaves the built-in running. The check comes after approval, not in the review, because checking means running the code (§8).</p></div>
-    <div class="card"><span class="from im">Imbue · creations</span><h4>One loop for every change</h4><p>Crystallize, heal and update all build on a branch and merge on approval.</p><p class="becomes">Here the device's approval is the branch point. Edited source syncs at once, but each device keeps running its approved version until someone approves the new one there (§8).</p></div>
-    <div class="card"><span class="from im">Imbue · critical apps</span><h4>More care for the parts everything stands on</h4><p>The shell and chat get a more careful edit flow.</p><p class="becomes">Essential boundaries can't be replaced, for the same reason they can't be turned off.</p></div>
-    <div class="card"><span class="from cf">Cloudflare · blueprints</span><h4>Remember the upstream; update by proposal</h4><p>A gadget remembers its blueprint. An update is a proposal: follow, fast-forward, or a three-way merge the agent checks.</p><p class="becomes">A lineage record on the fork, shared with upstream tracking for shared extensions (#1427), so there is one owner for both (§9).</p></div>
+    <div class="card"><span class="from im">Imbue · templates</span><h4>Check that it boots before it goes live</h4><p>Adopting a template merges it into a scratch copy, checks that it boots, and only then updates the live workspace.</p><p class="becomes">After approval, the fork is loaded once on its own in the running page and compared with the original before it is ever mapped. If a mapped fork still breaks boot, the next load skips it (§7, §8).</p></div>
+    <div class="card"><span class="from im">Imbue · creations</span><h4>One loop for every change</h4><p>Crystallize, heal and update all build on a branch and merge on approval.</p><p class="becomes">Here the device's approval is the branch point. Edited source syncs at once, but each device keeps serving its approved version until someone approves the new one there (§8).</p></div>
+    <div class="card"><span class="from im">Imbue · critical apps</span><h4>More care for the parts everything stands on</h4><p>The shell and chat get a more careful edit flow.</p><p class="becomes">Core and essential plugins aren't forkable in v1.</p></div>
+    <div class="card"><span class="from cf">Cloudflare · blueprints</span><h4>Remember the upstream; update by proposal</h4><p>A gadget remembers its blueprint. An update is a proposal: follow, fast-forward, or a three-way merge the agent checks.</p><p class="becomes">A base record on each forked file, shared with upstream tracking for shared extensions (#1427), so there is one owner for both (§9).</p></div>
     <div class="card"><span class="from cf">Cloudflare · one surface</span><h4>The same methods for people and agents</h4><p>The UI and the agent call the same server methods.</p><p class="becomes">Eject is one action, reachable from the menu, the palette, the CLI and an MCP tool. The source tool is generated from the same table as the other graph read tools (§5).</p></div>
-    <div class="card"><span class="from cf">Cloudflare</span> <span class="from ms">#365 · §5</span><h4>Say what code may do; diff it on update</h4><p>Capabilities are granted narrowly. In #365, a manifest is shown at enable time and diffed when an update arrives.</p><p class="becomes">Not enforced yet (that's #1425). Before approval, the review lists the modules the fork imports that the built-in didn't, read from the source without running it. After approval, the first load reports what the fork contributes compared with the built-in (§8).</p></div>
-    <div class="card"><span class="from ms">#365 · §1</span><h4>Reveal codes</h4><p>A block inspector that answers "which extension did this?" and links each answer to its source.</p><p class="becomes">Every contribution gets an owning plugin. That powers the inspector, which is where "change this" and "make my own copy" start (§10).</p></div>
-    <div class="card"><span class="from ms">#365 · validates</span><h4>Compose before you fork</h4><p>Model 2 (an additive override layer, like CSS) beats Model 1 (fork and modify).</p><p class="becomes">The default copy is a wrapper. It copies only the plugin's entry module and imports the rest, so upstream fixes inside those modules reach it with no merge (§4).</p></div>
+    <div class="card"><span class="from cf">Cloudflare</span> <span class="from ms">#365 · §5</span><h4>Say what code may do; diff it on update</h4><p>Capabilities are granted narrowly. In #365, a manifest is shown at enable time and diffed when an update arrives.</p><p class="becomes">Not enforced yet (that's #1425). Before approval, the review lists imports the original didn't have. After approval, the check compares exports and declarations with the original's (§8).</p></div>
+    <div class="card"><span class="from ms">#365 · §1</span><h4>Reveal codes</h4><p>A block inspector that answers "which extension did this?" and links each answer to its source.</p><p class="becomes">Every contribution gets an owning plugin and file. That's where "change this" and "make my own copy" start (§10).</p></div>
+    <div class="card"><span class="from ms">#365 · validates</span><h4>Compose before you fork</h4><p>Model 2 (an additive override layer, like CSS) beats Model 1 (fork and modify).</p><p class="becomes">Fork the smallest file that holds the change. The rest of the plugin stays upstream's and keeps receiving fixes with no merge (§4).</p></div>
     <div class="card"><span class="from ms">#365 · lithification</span><h4>Fixes don't reach forks on their own</h4><p>Once you own a copy, propagating upstream fixes to it is the unsolved cost.</p><p class="becomes">An upstream check after each app update, with fast-forward when you haven't edited the copy (§9).</p></div>
-    <div class="card"><span class="from ms">#365 · Hinsen</span><h4>Keep the dependency graph a tree</h4><p>Bound the blast radius by not letting extensions reach across.</p><p class="becomes">When one plugin bundles another's parts, that's the edge where a replaced original would sneak back in. A replaced plugin's parts are removed wherever they appear (§6).</p></div>
+    <div class="card"><span class="from ms">#365 · Hinsen</span><h4>Keep the dependency graph a tree</h4><p>Bound the blast radius by not letting extensions reach across.</p><p class="becomes">A served fork needs no pruning: when srs-review bundles daily-notes' data extension, it imports it by path, so it gets the fork too.</p></div>
   </div>
 
   <h3>Not taken</h3>
   <ul>
     <li><b>Git branches for changes.</b> Block history, undo and the approval already give the branch-and-merge shape.</li>
     <li><b>A resident agent or server-side apps.</b> These give up offline use and end-to-end encryption, as both landscape pages argue.</li>
-    <li><b>Enforced capabilities now.</b> A fork of a built-in runs the same code the bundle already runs. Sandboxing matters once extensions pass between people (#1425).</li>
+    <li><b>Enforced capabilities now.</b> A fork runs with the authority the original had. Sandboxing matters once extensions pass between people (#1425).</li>
     <li><b>Automatic upstream merges.</b> Updates are always a gesture. A synced write that several devices would each try to make is a race, so no device writes on its own (§9).</li>
   </ul>
 </section>
@@ -388,63 +386,57 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
 <section id="model">
   <h2 class="sec"><span class="n">4</span>The model <span class="prov read">Our read</span></h2>
   <dl class="terms">
-    <dt>Built-in</dt><dd>A plugin in the app bundle, wrapped in a <code>systemToggle({id: 'system:&lt;name&gt;'})</code> boundary (<code>src/facets/togglable.ts:111-122</code>).</dd>
-    <dt>Fork</dt><dd>An extension block whose <code>extension:replaces</code> names a built-in's toggle id. It's an ordinary user extension in every other way: TS/JSX content, compiled in the browser, enabled by intent, run only from this device's approval.</dd>
-    <dt>Eject</dt><dd>Making a fork from a built-in's source: copy its entry module, rewrite its imports, record its lineage. (The word comes from build tools that hand you their hidden config.)</dd>
-    <dt>Wrapper, entry fork, deep fork</dt><dd>A <b>wrapper</b> copies only the entry module and imports everything else from the original; that's what eject produces. An <b>entry fork</b> is a wrapper into which someone pasted a function to change it. A <b>deep fork</b> edits several modules as separate blocks. That needs cross-block imports, which is #253 and out of scope.</dd>
-    <dt>Identity contributions</dt><dd>Contributions that name or shape stored data: type and property seeds, value-preset codecs, local schema, workspace backfills, system pages (the Journal page daily-notes ensures, say). Their facets would say so where they're defined (<code>defineFacet({…, identity: true})</code>), so there's one owner for the list.</dd>
-    <dt>Lineage</dt><dd>Where a fork's source came from: an upstream (a built-in at an app version, or for #1427 a shared extension block or URL) and the base text of every file it copied.</dd>
+    <dt>Built-in</dt><dd>A plugin in the app bundle (<code>src/plugins/&lt;name&gt;/</code>), wrapped in a <code>systemToggle({id: 'system:&lt;name&gt;'})</code> boundary (<code>src/facets/togglable.ts:111-122</code>).</dd>
+    <dt>Fork</dt><dd>A block holding an edited copy of one built-in file, plus <code>extension:serves</code>, the module path it answers (<code>@/plugins/todo/index.js</code>). It's approved and toggled like an extension, but the extension loader skips it: it isn't a contribution list, it's a module.</dd>
+    <dt>Eject</dt><dd>Making a fork from a built-in file: copy it, make its relative imports absolute, record its base. (The word comes from build tools that hand you their hidden config.)</dd>
+    <dt>Base</dt><dd>The text and hash of the file a fork was made from, and the app version it came from. It's what upstream changes are compared with and what a merge starts from. The same record serves #1427, where the upstream is a shared extension block instead of the bundle.</dd>
+    <dt>Frozen identity</dt><dd>What stored data is keyed by: a property's name and encoding (<code>presetId</code>, <code>codec.type</code>), and a type's id (<code>src/data/seedIdentityLedger.ts</code>, header). A release can't change these, and neither can a fork.</dd>
   </dl>
 
   <div class="rules">
     <h4>Four rules</h4>
     <ol>
-      <li><b>A fork replaces behaviour, never identity.</b> The built-in's identity contributions stay in its slot whatever the fork does. A fork may include any of the bundle's own contribution objects, imported from the original modules. The loader passes those through uncopied and unbound instead of throwing, so they dedupe against the static tree. A fork may not declare different identity contributions under the same names.</li>
-      <li><b>A fork replaces only where it runs.</b> The swap happens on a device where the fork is enabled by intent, approved here, and loaded without error. Anywhere else the built-in runs, and settings shows the usual "Enable here".</li>
-      <li><b>A fork takes the built-in's slot.</b> It goes into the plugin list where the built-in was, so order-sensitive facets behave as before. It loads before first paint, like the built-in did.</li>
-      <li><b>A replaced built-in doesn't come back in through another plugin or another fork.</b> Wherever it appears other than its own slot, nested or bundled, it keeps only its identity contributions.</li>
+      <li><b>A fork is the module.</b> It's served at the original file's path, so every importer gets it: the plugin list, other plugins, extensions. The original file is never loaded.</li>
+      <li><b>A fork is served only where it may run.</b> That means approved on this device, passed its check, and enabled by intent. Anywhere else the original loads, and settings shows the usual "Enable here".</li>
+      <li><b>A fork keeps the original's contract.</b> It exports at least what the original exported, and it doesn't change the frozen identity of anything the original declared. The check refuses a fork that does either.</li>
+      <li><b>Changing what's served takes a reload.</b> The import map is fixed when the page loads.</li>
     </ol>
   </div>
 
-  <p>The fork and its lineage are blocks, following the record-grain rule: you'd want to see, link and edit each of them on its own. Here is the fork eject would create for Todo:</p>
+  <p>The fork and its base are blocks, following the record-grain rule: you'd want to see, link and edit each of them on its own. Here is the fork eject would create for Todo's entry file:</p>
   <div class="outline">
     <ul>
-      <li>My todo <span class="type">extension</span>
+      <li>My todo: index.tsx <span class="type">extension</span>
         <ul>
           <li class="prop"><span class="k">extension:name</span> My todo</li>
-          <li class="prop"><span class="k">extension:replaces</span> system:todo <span class="note">— a toggle id, not a block, so a string is right here</span></li>
-          <li class="note">content: the ejected entry, about 70 lines (§5)</li>
-          <li>Upstream <span class="type">extension-upstream</span>
+          <li class="prop"><span class="k">extension:serves</span> @/plugins/todo/index.js <span class="note">— a module path, not a block, so a string is right here</span></li>
+          <li class="note">content: the file, with relative imports made absolute (§5)</li>
+          <li>Base <span class="type">extension-base</span>
             <ul>
               <li class="prop"><span class="k">extension:upstream-kind</span> bundle</li>
-              <li class="prop"><span class="k">extension:upstream</span> system:todo</li>
+              <li class="prop"><span class="k">extension:base-path</span> src/plugins/todo/index.tsx</li>
               <li class="prop"><span class="k">extension:base-version</span> the app version at eject</li>
-              <li>index.tsx <span class="type">extension-base</span>
-                <ul>
-                  <li class="prop"><span class="k">extension:base-path</span> src/plugins/todo/index.tsx</li>
-                  <li class="prop"><span class="k">extension:base-hash</span> sha256 of the content below</li>
-                  <li class="note">content: the file as ejected, the base of a later merge</li>
-                </ul>
-              </li>
+              <li class="prop"><span class="k">extension:base-hash</span> sha256 of the content below</li>
+              <li class="note">content: the file as ejected, the base of a later merge</li>
             </ul>
           </li>
         </ul>
       </li>
     </ul>
   </div>
-  <p>The base text has to be stored. Pages deletes the previous build's files on every deploy (<code>clean-exclude</code> keeps only PR previews), so the version a fork came from can't be fetched again later. All new properties and types are seeds and go in <code>src/data/seedIdentityLedger.ts</code>. For #1427 the same <code>extension-upstream</code> block takes <code>upstream-kind = block</code> with an <code>optional-ref</code> to the source extension.</p>
+  <p>A change that spans several files is several fork blocks, usually under one page. The base text has to be stored, because Pages deletes the previous build's files on every deploy (<code>clean-exclude</code> keeps only PR previews), so the version a fork came from can't be fetched later. The new properties and types are seeds and go in <code>src/data/seedIdentityLedger.ts</code>. For #1427 the same <code>extension-base</code> block takes <code>upstream-kind = block</code> with an <code>optional-ref</code> to the source extension.</p>
 </section>
 
 <!-- 5 ─────────────────────────────────────────────────────────── -->
 <section id="source">
   <h2 class="sec"><span class="n">5</span>Getting a built-in's source (#1435)</h2>
-  <p>The source provider maps a toggle id to the plugin's files and their authored text, and it works the same in dev and production. #289 planned to read each module's <code>.js.map</code>. On master those per-module maps don't exist (§2), so there are three ways to do it:</p>
+  <p>The source provider maps a plugin to its files and their authored text, and it works the same in dev and production. #289 planned to read each module's <code>.js.map</code>. On master those per-module maps don't exist (§2), so there are three ways to do it:</p>
 
   <div class="table-wrap"><table>
     <thead><tr><th style="width:22%">Option</th><th>How</th><th style="width:34%">Cost</th></tr></thead>
     <tbody>
-      <tr><td>A · Read the app chunk's map</td><td>Find the chunk name from a re-export file, fetch <code>app-&lt;hash&gt;.js.map</code>, and take the plugin's entries from <code>sourcesContent</code>. Dev needs a separate path.</td><td>An 18 MB download to read Todo's 8 KB, network only, and a 404 once a deploy has replaced the build. Type-only modules may be missing. Two code paths.</td></tr>
-      <tr><td>B · A source file per plugin <b>(recommended)</b></td><td>A small Vite plugin emits <code>plugin-sources/&lt;name&gt;.json</code>: every non-test file under <code>src/plugins/&lt;name&gt;/</code>, with its sha256 and the app version. In dev, middleware serves the same file built from disk.</td><td>About 3.3 MB on the server in total (todo 8 KB, the largest, agent-runtime, 511 KB). <code>.json</code> isn't precached, so devices pay nothing until asked. One code path.</td></tr>
+      <tr><td>A · Read the app chunk's map</td><td>Find the chunk name from a re-export file, fetch <code>app-&lt;hash&gt;.js.map</code>, and take the plugin's entries from <code>sourcesContent</code>. Dev needs a separate path.</td><td>An 18 MB download to read Todo's 8 KB, network only, and a 404 once a deploy has replaced the build. Type-only modules may be missing. Two code paths. The map's shape also changes with the build change in §6.</td></tr>
+      <tr><td>B · A source file per plugin <b>(recommended)</b></td><td>A small Vite plugin emits <code>plugin-sources/&lt;name&gt;.json</code>: every non-test file under <code>src/plugins/&lt;name&gt;/</code>, with its sha256, its import list and the app version. In dev, middleware serves the same file built from disk.</td><td>About 3.3 MB on the server in total (todo 8 KB, the largest, agent-runtime, 511 KB). <code>.json</code> isn't precached, so devices pay nothing until asked. One code path.</td></tr>
       <tr><td>C · Lazy <code>import.meta.glob(…, ?raw)</code></td><td>Vite turns each source file into a lazily loaded module.</td><td>About 500 extra <code>.js</code> files in <code>dist</code>. The service worker precaches every <code>.js</code>, so every device downloads about 3.3 MB more and makes about 500 more requests on each deploy.</td></tr>
     </tbody>
   </table></div>
@@ -485,83 +477,122 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule);
   </figure>
 
   <p class="code-label">What the tool returns, bounded so a large plugin doesn't flood a run</p>
-<pre>plugin_source({pluginId: 'system:todo'})
+<pre>plugin_source({plugin: 'todo'})
 {
-  "pluginId": "system:todo",
-  "name": "Todo",
+  "plugin": "todo",
+  "toggle": "system:todo",
   "appVersion": "…",
   "files": [
-    {"path": "src/plugins/todo/index.tsx",        "importPath": "@/plugins/todo/index.js",         "bytes": 2981, "sha256": "…"},
-    {"path": "src/plugins/todo/actions.ts",       "importPath": "@/plugins/todo/actions.js",       "bytes": 3343, "sha256": "…"},
-    {"path": "src/plugins/todo/dataExtension.ts", "importPath": "@/plugins/todo/dataExtension.js", "bytes": 418,  "sha256": "…"},
-    {"path": "src/plugins/todo/schema.ts",        "importPath": "@/plugins/todo/schema.js",        "bytes": 1247, "sha256": "…"}
-  ],
-  "entry": {"path": "src/plugins/todo/index.tsx", "ejected": "<i>…the entry, rewritten as below…</i>"}
+    {"path": "src/plugins/todo/index.tsx",        "serves": "@/plugins/todo/index.js",         "bytes": 2981, "imports": ["./actions.ts", "./dataExtension.ts", "./schema.ts", …]},
+    {"path": "src/plugins/todo/actions.ts",       "serves": "@/plugins/todo/actions.js",       "bytes": 3343, "imports": […]},
+    {"path": "src/plugins/todo/dataExtension.ts", "serves": "@/plugins/todo/dataExtension.js", "bytes": 418,  "imports": […]},
+    {"path": "src/plugins/todo/schema.ts",        "serves": "@/plugins/todo/schema.js",        "bytes": 1247, "imports": […]}
+  ]
 }
 
-plugin_source({pluginId: 'system:todo', path: 'src/plugins/todo/actions.ts'})   <span class="c">// one file's text</span></pre>
+plugin_source({plugin: 'todo', path: 'src/plugins/todo/index.tsx'})   <span class="c">// one file: authored text and the ejected form</span></pre>
 
   <h3>The rewrite</h3>
-  <p>A fork runs from a blob URL, which has no usable base, so relative imports must become absolute <code>@/</code> paths. Plugins write relative imports several ways (<code>./actions.ts</code>, <code>./config</code>, <code>../other/x.js</code>), so the rewrite resolves each one against the file list. It also unwraps the plugin's <code>systemToggle(…).of([…])</code> into the module's default export, so the fork carries no <code>system:</code> boundary of its own. Babel is already loaded to compile extensions, so this can be an AST transform rather than text surgery.</p>
+  <p>A fork runs from a blob URL, which has no usable base, so its relative imports must become absolute <code>@/</code> paths. Plugins write relative imports several ways (<code>./actions.ts</code>, <code>./config</code>, <code>../other/x.js</code>), so the rewrite resolves each one against the file list. That's the whole eject transform. The fork keeps the file's exports, its <code>systemToggle</code> and its seeds exactly as they were, because it is going to be that module. Babel is already loaded to compile extensions, so the rewrite can be an AST pass rather than text surgery.</p>
 <pre><span class="c">// src/plugins/todo/index.tsx, as shipped</span>
 <span class="del">import { todoActionsExtension } from './actions.ts'</span>
 <span class="del">import { todoDataExtension } from './dataExtension.ts'</span>
 <span class="del">import { statusProp, TODO_TYPE, type TodoStatus } from './schema.ts'</span>
-…
-<span class="del">export const todoPlugin: AppExtension = systemToggle({</span>
-<span class="del">  id: 'system:todo', name: 'Todo', description: 'Checkbox / done-state property on blocks.',</span>
-<span class="del">}).of([</span>
 
-<span class="c">// the fork's content after eject</span>
+<span class="c">// the fork's content after eject; everything below the imports is unchanged</span>
 <span class="add">import { todoActionsExtension } from '@/plugins/todo/actions.js'</span>
 <span class="add">import { todoDataExtension } from '@/plugins/todo/dataExtension.js'</span>
 <span class="add">import { statusProp, TODO_TYPE, type TodoStatus } from '@/plugins/todo/schema.js'</span>
 …
-<span class="add">export default [</span>
-  todoDataExtension,          <span class="c">// identity: the built-in's own objects, passed through (rule 1)</span>
-  todoActionsExtension,       <span class="c">// imported, not copied: upstream fixes arrive untouched</span>
+export const todoPlugin: AppExtension = systemToggle({
+  id: 'system:todo', name: 'Todo', description: 'Checkbox / done-state property on blocks.',
+}).of([
+  todoDataExtension,          <span class="c">// still Todo's own seeds, under system:todo/… keys</span>
+  todoActionsExtension,
   blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),
-] satisfies AppExtension</pre>
+])</pre>
 </section>
 
 <!-- 6 ─────────────────────────────────────────────────────────── -->
-<section id="assembly">
-  <h2 class="sec"><span class="n">6</span>Taking the slot</h2>
-  <p>The swap is a pure function over the static tree, run before resolution. It needs no change to the walker and no new manifest shape, because the toggle boundary already carries the id. <span class="prov">Observed</span> <code>getBoundary</code> reads it, <code>src/facets/togglable.ts:78-81</code>.</p>
-<pre><span class="c">// src/extensions/replacements.ts (sketch)</span>
-<span class="c">/** The one place a plugin list meets its forks. A fork goes in its built-in's
- *  top-level slot. Every other occurrence of a replaced built-in keeps only its
- *  identity contributions (rules 1, 3, 4): a boundary nested in another plugin, a
- *  part another plugin bundled, or either of those inside a fork. The forks are
- *  already loaded and approved (rule 2). */</span>
-export const assemblePlugins = (
-  list: readonly AppExtension[],
-  forks: ReadonlyMap&lt;string, AppExtension&gt;,   <span class="c">// 'system:todo' → the loaded fork</span>
-): AppExtension[] =&gt;
-  list.map(entry =&gt; {
-    const slot = getBoundary(entry)
-    const fork = slot &amp;&amp; forks.get(slot.id)
-    return fork
-      ? withBoundary(slot, [identityOf(entry), stripReplaced(fork, forks)])   <span class="c">// its toggle still gates it</span>
-      : stripReplaced(entry, forks)
-  })
-
-<span class="c">/** Below the top level, a replaced built-in keeps only its identity contributions. */</span>
-const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtension&gt;): AppExtension =&gt; {
-  if (!Array.isArray(node)) return node
-  const owner = getBoundary(node) ?? getOwnerMark(node)
-  if (owner &amp;&amp; forks.has(owner.id)) return identityOf(node)
-  return withSameMarks(node, node.map(child =&gt; stripReplaced(child, forks)))
-}</pre>
-  <p><b>Every list goes through it.</b> <span class="prov">Observed</span> Four places build a runtime from a static list today: <code>AppRuntimeProvider.tsx:80</code>, the settings tree (<code>useToggleTree.ts:69</code>), bootstrap's own landing runtime (<code>src/bootstrap/workspaceBootstrap.ts:42-65</code>, read at :78 before the app runtime exists), and the Repo's first data runtime (<code>src/context/repo.tsx:67</code>). Each calls <code>assemblePlugins</code> with the same forks. Otherwise a forked daily-notes would still have the original's landing resolver picking the first page.</p>
-  <p><b>Forks are walked too.</b> Under that rule, a fork's own tree goes through <code>stripReplaced</code> before it is inserted. Fork Locations while References is also forked, and the original <code>referencesPlugin</code> that geo bundles (<code>src/plugins/geo/index.ts:14, 27</code>) is cut down to its identity contributions inside the Locations fork, too. Inserting the fork only at the top-level slot means two forks that bundle each other can't nest forever.</p>
-  <p><b>The bundle's own objects aren't copied.</b> <span class="prov">Observed</span> The loader copies every contribution to prefix its source with <code>block:&lt;id&gt;</code> (<code>dynamicExtensions.ts:341-345</code>). So a built-in part that a fork imports becomes a second object, and the walker's identity dedup can't merge it with the static one. Rule 1's pass-through therefore covers every contribution object reachable from the static lists, not only identity ones. The loader leaves those uncopied and unbound, so they dedupe against the static tree and stay attributed to their built-in.</p>
+<section id="serving">
+  <h2 class="sec"><span class="n">6</span>Serving a fork at the original's path</h2>
+  <p>The import map can already point any specifier at any URL. What stops it from replacing a built-in file today is that built-ins never import each other through a specifier. The build links them inside one chunk (§2). So the one build change is this: <b>imports of plugin files stay real imports</b>, written as <code>@/plugins/…</code> specifiers that the import map resolves when the page loads. Core stays bundled as it is.</p>
 
   <figure>
     <div class="fig-frame">
-      <svg viewBox="0 0 880 380" role="img" aria-labelledby="f3t f3d">
-        <title id="f3t">Where the copy lands in the decorator order</title>
-        <desc id="f3d">Ten plugins contribute block content decorators, in this order: daily-notes, geo, character-counter, supertags, backlinks, todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Today a copy goes after all of them, so its checkbox row wraps the contributor badges and the update indicator. Proposed, the copy takes todo's sixth slot and the nesting is unchanged.</desc>
+      <svg viewBox="0 0 880 300" role="img" aria-labelledby="f3t f3d">
+        <title id="f3t">Which importers a mapped fork reaches</title>
+        <desc id="f3d">Today the plugin list and srs-rescheduling reach todo's files inside one bundled chunk, so only an extension block's import goes through the import map. Proposed, all three import todo's files by path through the import map; on a device with an approved fork, todo/index.js resolves to the fork and todo/actions.js to the original.</desc>
+        <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+        <marker id="a3f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-fork"/></marker></defs>
+        <text x="10" y="18" class="t-cap">TODAY · ONE BUNDLED CHUNK</text>
+        <text x="460" y="18" class="t-cap">PROPOSED · PLUGIN FILES LOADED BY PATH</text>
+
+        <!-- left: importers -->
+        <rect x="10" y="40"  width="140" height="44" rx="5" class="b-n"/><text x="80" y="66"  text-anchor="middle" class="t-small">plugin list</text>
+        <rect x="10" y="110" width="140" height="44" rx="5" class="b-n"/><text x="80" y="136" text-anchor="middle" class="t-small">srs-rescheduling</text>
+        <rect x="10" y="200" width="140" height="44" rx="5" class="b-n"/><text x="80" y="226" text-anchor="middle" class="t-small">an extension block</text>
+        <!-- left: chunk -->
+        <rect x="240" y="30" width="190" height="140" rx="6" class="b-bi"/>
+        <text x="335" y="48" text-anchor="middle" class="t-small">chunks/app-…js</text>
+        <rect x="256" y="58"  width="158" height="40" rx="5" class="b-n"/><text x="335" y="82"  text-anchor="middle" class="t-small">todo/index (original)</text>
+        <rect x="256" y="114" width="158" height="40" rx="5" class="b-n"/><text x="335" y="138" text-anchor="middle" class="t-small">todo/actions (original)</text>
+        <line x1="150" y1="62"  x2="252" y2="76"  class="ln" marker-end="url(#a3)"/>
+        <line x1="150" y1="132" x2="252" y2="134" class="ln" marker-end="url(#a3)"/>
+        <rect x="240" y="200" width="190" height="44" rx="5" class="b-n"/><text x="335" y="220" text-anchor="middle" class="t-small">import map → facade</text><text x="335" y="236" text-anchor="middle" class="t-small">src/plugins/todo/…js</text>
+        <line x1="150" y1="222" x2="236" y2="222" class="ln" marker-end="url(#a3)"/>
+        <line x1="335" y1="200" x2="335" y2="174" class="ln" marker-end="url(#a3)"/>
+        <text x="10" y="282" class="t-sub">A fork mapped at a URL here would reach only the extension block.</text>
+
+        <!-- right: importers -->
+        <rect x="460" y="40"  width="140" height="44" rx="5" class="b-n"/><text x="530" y="66"  text-anchor="middle" class="t-small">plugin list</text>
+        <rect x="460" y="120" width="140" height="44" rx="5" class="b-n"/><text x="530" y="146" text-anchor="middle" class="t-small">srs-rescheduling</text>
+        <rect x="460" y="200" width="140" height="44" rx="5" class="b-n"/><text x="530" y="226" text-anchor="middle" class="t-small">an extension block</text>
+        <!-- import map column -->
+        <rect x="622" y="30" width="70" height="224" rx="6" class="b-new"/>
+        <text x="657" y="136" text-anchor="middle" class="t-small">import</text>
+        <text x="657" y="150" text-anchor="middle" class="t-small">map</text>
+        <line x1="600" y1="62"  x2="618" y2="62"  class="ln" marker-end="url(#a3)"/>
+        <line x1="600" y1="142" x2="618" y2="142" class="ln" marker-end="url(#a3)"/>
+        <line x1="600" y1="222" x2="618" y2="222" class="ln" marker-end="url(#a3)"/>
+        <!-- targets -->
+        <rect x="716" y="40" width="156" height="44" rx="5" class="b-fork"/><text x="794" y="58" text-anchor="middle" class="t-small t-fork">todo/index.js →</text><text x="794" y="74" text-anchor="middle" class="t-small t-fork">My todo (fork)</text>
+        <rect x="716" y="120" width="156" height="44" rx="5" class="b-n"/><text x="794" y="138" text-anchor="middle" class="t-small">todo/actions.js →</text><text x="794" y="154" text-anchor="middle" class="t-small">original</text>
+        <line x1="692" y1="62"  x2="712" y2="62"  class="ln-fork" marker-end="url(#a3f)"/>
+        <line x1="692" y1="142" x2="712" y2="142" class="ln" marker-end="url(#a3)"/>
+        <path d="M692,222 C705,222 705,72 712,70" class="ln-fork" marker-end="url(#a3f)"/>
+        <rect x="716" y="200" width="156" height="44" rx="5" class="b-off"/><text x="794" y="218" text-anchor="middle" class="t-small t-warn">original index.js</text><text x="794" y="234" text-anchor="middle" class="t-small t-warn">never fetched here</text>
+        <text x="460" y="282" class="t-sub">Every importer goes through the map, so all of them reach the fork.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 3.</b> Observed on the left: the built app chunk has no runtime imports of app modules, so the plugin list and srs-rescheduling reach todo's files by bindings inside it. Proposed on the right: plugin files are modules the browser loads by path, and on this device the map sends <code>todo/index.js</code> to the fork while <code>todo/actions.js</code> stays the original.</figcaption>
+  </figure>
+
+  <h3>The build change, and what it costs</h3>
+  <p>A build setting keeps every import that resolves into <code>src/plugins/</code> external, emitted as a bare <code>@/plugins/…</code> specifier. Each plugin file's own module imports core from the app chunk as rolldown already does between chunks. <code>scripts/check-dist-exports.ts</code> keeps gating the emitted shape. There are two ways to cut it, and the first build PR measures both with the existing <code>markStartup</code> marks:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:22%">Shape</th><th>What loads at boot</th><th>What a fork of an inner file needs</th></tr></thead>
+    <tbody>
+      <tr><td>Per file</td><td>The app chunk plus every plugin file the plugin list reaches, roughly the 492 the map lists. About a third of the 1,500 files the bundling removed. <span class="prov read">Our read</span> If cost is linear, that's around 0.15–0.2 s of iPhone cold launch, not measured.</td><td>Nothing more. Any file forks alone, and the original is never fetched.</td></tr>
+      <tr><td>Per plugin</td><td>The app chunk, one chunk per plugin (about 60), and a re-export file for each path another plugin imports.</td><td>Imports inside a plugin are bundled, so forking <code>todo/actions.ts</code> also needs every todo file that imports it, up to the entry. Eject can compute that list from the source provider's import lists. The original's chunk still loads and its top-level code still runs; only its contributions are never registered.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Per file is the simpler model, so the design starts there and treats per plugin as the optimisation if the numbers call for it. Either way the cost is paid by every user, forks or not, so it gets measured on the iPhone before the change merges, and reduced afterwards if it has to be. One reduction worth testing early: make the import map's plain <code>@/plugins/…</code> entries point straight at each module's file, skipping any re-export hop.</p>
+
+  <h3>Why this is a stage-1 mechanism now</h3>
+  <p>#289 §7 set the import-map variant aside for three reasons. Two of them no longer apply:</p>
+  <ul>
+    <li><b>Bytes at rest.</b> The approval store already keeps each approved extension's compiled output in IndexedDB (<code>CompiledRecord.compiled</code>), so serving a fork from it adds no new copy of plaintext.</li>
+    <li><b>Remapping by URL, with several import maps.</b> Neither is needed. The build emits bare <code>@/</code> specifiers, so the map remaps specifiers, the original feature. The loader writes one map, before any module loads (§7).</li>
+    <li><b>Reload to apply.</b> Still true, and accepted (rule 4).</li>
+  </ul>
+  <p>The service-worker variant (#253) would serve fork bytes at the file's URL instead. It needs the bytes in Cache Storage and a worker that knows which workspace the page is opening, so the import map is the smaller step. The two can coexist later.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 380" role="img" aria-labelledby="f4t f4d">
+        <title id="f4t">Where a copy lands in the decorator order</title>
+        <desc id="f4d">Ten plugins contribute block content decorators, in this order: daily-notes, geo, character-counter, supertags, backlinks, todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Today a copy goes after all of them, so its checkbox row wraps the contributor badges and the update indicator. A served fork is todo's module, so it stays sixth and the nesting is unchanged.</desc>
         <text x="10" y="18" class="t-cap">CONTENT DECORATORS, IN CONTRIBUTION ORDER (LATER = OUTSIDE)</text>
         <text x="10" y="48" class="t-title">Today</text>
         <g class="t-small">
@@ -577,7 +608,7 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
           <rect x="674" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="705" y="48" text-anchor="middle">contrib.</text>
           <rect x="744" y="30" width="132" height="28" rx="4" class="b-fork"/><text x="810" y="48" text-anchor="middle" class="t-fork">My todo (appended)</text>
         </g>
-        <text x="10" y="98" class="t-title">Proposed</text>
+        <text x="10" y="98" class="t-title">Fork</text>
         <g class="t-small">
           <rect x="80"  y="80" width="62" height="28" rx="4" class="b-bi"/><text x="111" y="98" text-anchor="middle">daily</text>
           <rect x="146" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="177" y="98" text-anchor="middle">geo</text>
@@ -592,7 +623,6 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
         </g>
 
         <text x="10" y="148" class="t-cap">WHAT A TODO BLOCK RENDERS AS (OUTERMOST FIRST)</text>
-        <!-- today nesting -->
         <text x="10" y="174" class="t-title">Today</text>
         <rect x="10"  y="184" width="420" height="180" rx="6" class="b-fork"/>
         <text x="24" y="204" class="t-fork" font-weight="650">My todo: ☐ checkbox · dims and strikes through ↓</text>
@@ -606,8 +636,7 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
         <text x="72" y="296">… the earlier decorators and the content</text>
         <text x="72" y="316" class="t-sub">srs-review, backlinks, tags, chars, geo, daily</text>
 
-        <!-- proposed nesting -->
-        <text x="450" y="174" class="t-title">Proposed</text>
+        <text x="450" y="174" class="t-title">Fork</text>
         <rect x="450" y="184" width="420" height="180" rx="6" class="b-bi"/>
         <text x="464" y="204">contributors: avatar badges</text>
         <rect x="466" y="214" width="388" height="138" rx="6" class="b-bi"/>
@@ -619,165 +648,178 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
         <text x="512" y="316" class="t-sub">and the content</text>
       </svg>
     </div>
-    <figcaption><b>Figure 3.</b> The order is from <code>staticAppExtensions.ts</code>: daily-notes, geo, character-counter, supertags, backlinks (inline counts), todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Read from the combine loop in <code>blockInteraction.ts:525-532</code>, not run: an appended copy's checkbox row wraps the decorators that came after Todo, so its styling covers the contributor badges and the update dot as well. In the slot, nesting is what the built-in had.</figcaption>
+    <figcaption><b>Figure 4.</b> The order is from <code>staticAppExtensions.ts</code>: daily-notes, geo, character-counter, supertags, backlinks (inline counts), todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Read from the combine loop in <code>blockInteraction.ts:525-532</code>, not run: an appended copy's checkbox row wraps the decorators that came after Todo, so its styling covers the contributor badges and the update dot as well. A served fork is the module the plugin list already imports in sixth place, so nothing moves.</figcaption>
   </figure>
 
-  <h3>Slots in the data list</h3>
-  <p>The Repo gets its first data runtime, before React, from <code>staticDataExtensions.ts</code>. That list holds bare data extensions with no boundaries, so the sketch would find no slot in it. A replaced plugin's marked part would lose its behaviour, and nothing would put the fork's in its place. So each entry in that list is wrapped in its own plugin's boundary, the same handle the plugin's index uses (<code>todoToggle.of(todoDataExtension)</code>). <span class="prov">Observed</span> Nothing changes today. The data runtime is collected without looking at boundaries (<code>resolveFacetRuntimeSync</code>, <code>src/facets/facet.ts:476-484</code>, called from <code>src/context/repo.tsx:67</code>). The settings tree is built from the app list only (<code>src/plugins/extensions-settings/useToggleTree.ts:69</code>), so no row appears twice. The boundary only marks the slot. The boot step (§7) then runs the same <code>assemblePlugins</code> over this list, and the fork's data contributions are installed where the built-in's were, before bootstrap. The whole fork goes in; its UI contributions sit unread until the app runtime replaces this one, just as the static plugins' do when the app runtime installs.</p>
-
-  <h3>Parts bundled by another plugin</h3>
-  <p>Some plugins compose another plugin's parts by importing them. <span class="prov">Observed</span> srs-review bundles the data extensions of srs-rescheduling, daily-notes, references and block-tagging (<code>src/plugins/srs-review/index.ts:77-80</code>). Geo composes the whole references plugin, boundary included (<code>src/plugins/geo/index.ts:27</code>). If references is replaced, its original processors would come back in through srs-review, which bundles <code>referencesDataExtension</code>. srs-review sits later in the list, and processors are keyed last-wins, so the original <code>references.parseReferences</code> would beat the fork's.</p>
-  <p>Rule 4 needs a mark that says who owns those bundled parts. The plugin's own boundary marks its slot. An <code>ownedBy('system:daily-notes', […])</code> mark, a non-gating twin of the boundary symbol, goes on each exported part that another plugin composes. Today that's four data extensions; geo's composed copy already carries the references boundary. Marking by owner rather than by "reachable from the replaced plugin" matters, because shared infrastructure like the dialog mount is reachable from many plugins and must not be dropped when one of them is replaced.</p>
-  <p>After assembly, a check covers what marks can't catch. For every key the fork contributes to a keyed facet, the fork's value must be the winner. A loss is reported at review time, before the fork goes live, for example "srs-review still provides references' original <code>references.parseReferences</code>".</p>
-
-  <h3>The same path when you reload, not only at boot</h3>
-  <p>Toggling a fork, approving an update or editing a fork's source dispatches <code>refreshAppRuntime()</code>. The provider's async resolve then uses the same <code>assemblePlugins</code> over the forks the loader just returned. <span class="prov">Observed</span> Effects are diffed by id across the swap (<code>EffectReconciler</code>, <code>src/extensions/liveRuntime.ts:278-291</code>), so only the replaced plugin's effects restart.</p>
+  <h3>What no longer needs building</h3>
+  <p>The first draft of this doc swapped forks into the plugin list. That needed a substitution pass run from four separate places, marks on parts other plugins bundle, slots in the data list, special handling inside forks, and a loader exception for a built-in's seeds. Two review rounds kept finding places it didn't reach. Serving the module removes all of it. Every list, bootstrap's landing runtime, srs-review's bundled data extensions and other forks all import by path, so they all get the fork. And the fork keeps its <code>system:</code> seeds because it isn't loaded as an extension.</p>
 </section>
 
 <!-- 7 ─────────────────────────────────────────────────────────── -->
 <section id="boot">
-  <h2 class="sec"><span class="n">7</span>Boot: load forks before anything runs</h2>
-  <p>To take the slot from the first paint, a fork must be loaded before the static plugins resolve. Its data contributions must also be installed before the workspace bootstrap runs its landing and seeding. The boot already has the right gap.</p>
+  <h2 class="sec"><span class="n">7</span>Boot: write the import map, then start the app</h2>
+  <p>The import map has to be complete before the first module loads, and which forks to map depends on this device's approvals. Those are in IndexedDB, which can only be read asynchronously. So <code>index.html</code>'s module script becomes a small classic loader, emitted by a Vite HTML transform. It decides the map, writes it as the page's only import map, then adds the app's module script.</p>
 
   <figure>
     <div class="fig-frame">
-      <svg viewBox="0 0 880 220" role="img" aria-labelledby="f4t f4d">
-        <title id="f4t">Boot, today and proposed</title>
-        <desc id="f4d">Today: open the database, install static data, resolve the workspace, bootstrap, paint static plugins, then compile user extensions and merge them appended. Proposed: after resolving the workspace, load approved forks and swap them into their slots before bootstrap and first paint; other user extensions keep loading after paint.</desc>
-        <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+      <svg viewBox="0 0 880 230" role="img" aria-labelledby="f5t f5d">
+        <title id="f5t">Boot, today and with forks</title>
+        <desc id="f5d">Today the static import map is in the HTML and the app's module script starts at once; user extensions merge after first paint. Proposed, a loader first reads the device's approved forks for the workspace being opened, writes one import map that includes them, and then starts the app, which loads the forks as part of its own module graph.</desc>
+        <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
         <text x="10" y="20" class="t-cap">TODAY</text>
         <g>
-          <rect x="10"  y="30" width="110" height="46" rx="5" class="b-n"/><text x="65"  y="58" text-anchor="middle" class="t-small">open DB</text>
-          <rect x="126" y="30" width="110" height="46" rx="5" class="b-n"/><text x="181" y="58" text-anchor="middle" class="t-small">static data</text>
-          <rect x="242" y="30" width="110" height="46" rx="5" class="b-n"/><text x="297" y="58" text-anchor="middle" class="t-small">workspace</text>
-          <rect x="358" y="30" width="110" height="46" rx="5" class="b-n"/><text x="413" y="58" text-anchor="middle" class="t-small">bootstrap</text>
-          <rect x="474" y="30" width="110" height="46" rx="5" class="b-bi"/><text x="529" y="58" text-anchor="middle" class="t-small">paint: Todo runs</text>
-          <line x1="592" y1="20" x2="592" y2="88" class="ln ln-d"/>
-          <text x="598" y="20" class="t-sub">first paint</text>
-          <rect x="600" y="30" width="130" height="46" rx="5" class="b-n"/><text x="665" y="58" text-anchor="middle" class="t-small">compile extensions</text>
-          <rect x="736" y="30" width="134" height="46" rx="5" class="b-fork"/><text x="803" y="58" text-anchor="middle" class="t-small">merge, appended</text>
+          <rect x="10"  y="30" width="96" height="46" rx="5" class="b-n"/><text x="58"  y="58" text-anchor="middle" class="t-small">static map</text>
+          <rect x="110" y="30" width="110" height="46" rx="5" class="b-n"/><text x="165" y="58" text-anchor="middle" class="t-small">app graph</text>
+          <rect x="224" y="30" width="96" height="46" rx="5" class="b-n"/><text x="272" y="58" text-anchor="middle" class="t-small">open DB</text>
+          <rect x="324" y="30" width="96" height="46" rx="5" class="b-n"/><text x="372" y="58" text-anchor="middle" class="t-small">workspace</text>
+          <rect x="424" y="30" width="96" height="46" rx="5" class="b-n"/><text x="472" y="58" text-anchor="middle" class="t-small">bootstrap</text>
+          <rect x="524" y="30" width="110" height="46" rx="5" class="b-bi"/><text x="579" y="58" text-anchor="middle" class="t-small">paint: Todo</text>
+          <line x1="640" y1="22" x2="640" y2="88" class="ln ln-d"/>
+          <text x="646" y="20" class="t-sub">first paint</text>
+          <rect x="646" y="30" width="224" height="46" rx="5" class="b-fork"/><text x="758" y="58" text-anchor="middle" class="t-small">copies compile, merge appended</text>
         </g>
-        <text x="10" y="122" class="t-cap">PROPOSED</text>
+        <text x="10" y="122" class="t-cap">WITH FORKS</text>
         <g>
-          <rect x="10"  y="132" width="96" height="46" rx="5" class="b-n"/><text x="58"  y="160" text-anchor="middle" class="t-small">open DB</text>
-          <rect x="110" y="132" width="96" height="46" rx="5" class="b-n"/><text x="158" y="160" text-anchor="middle" class="t-small">static data</text>
-          <rect x="210" y="132" width="104" height="46" rx="5" class="b-n"/><text x="262" y="160" text-anchor="middle" class="t-small">workspace</text>
-          <rect x="318" y="132" width="108" height="46" rx="5" class="b-new"/><text x="372" y="152" text-anchor="middle" class="t-small">load approved</text><text x="372" y="166" text-anchor="middle" class="t-small">forks</text>
-          <rect x="430" y="132" width="100" height="46" rx="5" class="b-new"/><text x="480" y="152" text-anchor="middle" class="t-small">swap into</text><text x="480" y="166" text-anchor="middle" class="t-small">slots</text>
-          <rect x="534" y="132" width="76" height="46" rx="5" class="b-n"/><text x="572" y="160" text-anchor="middle" class="t-small">bootstrap</text>
-          <rect x="614" y="132" width="110" height="46" rx="5" class="b-fork"/><text x="669" y="160" text-anchor="middle" class="t-small">paint: My todo</text>
-          <line x1="730" y1="122" x2="730" y2="190" class="ln ln-d"/>
-          <rect x="736" y="132" width="134" height="46" rx="5" class="b-n"/><text x="803" y="152" text-anchor="middle" class="t-small">other extensions,</text><text x="803" y="166" text-anchor="middle" class="t-small">as today</text>
+          <rect x="10"  y="132" width="96" height="46" rx="5" class="b-new"/><text x="58"  y="152" text-anchor="middle" class="t-small">loader:</text><text x="58" y="166" text-anchor="middle" class="t-small">forks → map</text>
+          <rect x="110" y="132" width="110" height="46" rx="5" class="b-fork"/><text x="165" y="152" text-anchor="middle" class="t-small">app graph,</text><text x="165" y="166" text-anchor="middle" class="t-small">My todo inside</text>
+          <rect x="224" y="132" width="96" height="46" rx="5" class="b-n"/><text x="272" y="160" text-anchor="middle" class="t-small">open DB</text>
+          <rect x="324" y="132" width="96" height="46" rx="5" class="b-n"/><text x="372" y="160" text-anchor="middle" class="t-small">workspace</text>
+          <rect x="424" y="132" width="96" height="46" rx="5" class="b-n"/><text x="472" y="160" text-anchor="middle" class="t-small">bootstrap</text>
+          <rect x="524" y="132" width="110" height="46" rx="5" class="b-fork"/><text x="579" y="160" text-anchor="middle" class="t-small">paint: My todo</text>
+          <line x1="640" y1="124" x2="640" y2="190" class="ln ln-d"/>
+          <rect x="646" y="132" width="224" height="46" rx="5" class="b-n"/><text x="758" y="160" text-anchor="middle" class="t-small">other extensions, as today</text>
         </g>
-        <text x="10" y="210" class="t-sub">Dashed: new, in resolveInitialLayout between resolveWorkspace (:44) and bootstrapWorkspace (:93). Safe mode skips both.</text>
+        <text x="10" y="212" class="t-sub">No forks for this workspace: the loader sees an empty index in localStorage, writes the base map and starts the app, with no IndexedDB read.</text>
       </svg>
     </div>
-    <figcaption><b>Figure 4.</b> Only replacing forks move before paint. Additive extensions keep today's post-paint load, so boot latency only changes for people who have actually forked a built-in.</figcaption>
+    <figcaption><b>Figure 5.</b> The forked files load as part of the app's own module graph, before the Repo, bootstrap or first paint, so every one of them sees the fork. Additive extensions keep today's post-paint load.</figcaption>
   </figure>
 
+  <h3>What the loader does</h3>
+  <ol class="steps">
+    <li>Leave if <code>?safeMode</code> is in the URL: write the base map, start the app.</li>
+    <li>Read the workspace being opened: the URL hash, else <code>ftm.lastWorkspaceId</code> (<code>src/utils/lastWorkspace.ts</code>). Both are synchronous.</li>
+    <li>Read that workspace's fork index from localStorage. It lists the forks that passed their check on this device, with the path each one serves. It's written by the check in §8, never by sync. If the index is empty, write the base map and start the app.</li>
+    <li>Drop forks whose intent is off in the overrides cache (<code>extensions.overrides.&lt;workspace&gt;</code>, also synchronous). Drop files of essential plugins.</li>
+    <li>Read each remaining fork's approval from IndexedDB, check its source hash against the index, and make a blob URL from its compiled output.</li>
+    <li>Write one import map: the base entries (react, integrity, <code>"@/": "./src/"</code>) plus one entry per fork, <code>"@/plugins/todo/index.js": "blob:…"</code>. Set the crash flag, then add the app's module script.</li>
+  </ol>
+
   <ul>
-    <li><b>What the new step does.</b> It queries the workspace's extension blocks that carry <code>extension:replaces</code>. For each one enabled by intent and approved on this device, it instantiates the pinned output, using <code>loadApprovedExtension</code> as today. It applies <code>assemblePlugins</code> to the static data list, whose entries now carry their plugins' boundaries (§6), and installs the result on the Repo. It hands the same forks to bootstrap's landing runtime, so the landing resolver that runs is the fork's. Both happen before <code>bootstrapWorkspace</code>.</li>
-    <li><b>One instance per module.</b> The loaded forks reach <code>AppRuntimeProvider</code> through the boot result. The compile cache keys modules by block and source hash anyway (<code>compileExtensionModule.ts:201-232</code>), so even a second load is a lookup.</li>
-    <li><b>Safe mode</b> skips the step entirely, so recovery never depends on any of this.</li>
-    <li><b>Cost, reasoned, not measured.</b> With nothing forked, the step is one query that returns nothing, so boot is effectively today's. With N forks it's N approval reads from IndexedDB and N imports of already-compiled strings. Plausibly tens of milliseconds for a few forks; the build should measure it with <code>markStartup</code> marks. The slow case is the first boot after a compiler-version bump, which recompiles from the approved source.</li>
-    <li><b>Local schema and backfills</b> are identity contributions (rule 1), so they stay the built-in's. They already run at Repo setup for every static data extension, whatever its toggle state (<code>repoProvider.ts:644</code>), so forking changes nothing about them.</li>
+    <li><b>Crash guard.</b> Before starting the app, the loader writes which forks it mapped to a localStorage flag. The app clears the flag once it has painted. If the next load finds the flag still set, the last boot never finished. The loader maps nothing this time, and settings explains which forks were suspended and offers to retry. A fork that fails to link, throws while loading, or breaks the first render therefore costs one bad load, not a stuck app. A tab closed mid-boot also trips the guard, and costs one load without forks.</li>
+    <li><b>Wrong workspace guess.</b> If the workspace the app actually opens isn't the one the loader guessed, and their fork sets differ, the app reloads once into the right one. Switching workspaces in the app does the same when the sets differ.</li>
+    <li><b>Is the map current?</b> After sync settles, the app compares what was mapped with what should be. A fork turned off or re-approved on this device, or a new fork that passed its check, shows "Reload to apply".</li>
+    <li><b>Cost, reasoned, not measured.</b> With no forks, the loader adds a few synchronous localStorage reads. With N forks, it adds one IndexedDB open and N reads before the first module loads, plausibly a few tens of milliseconds. The build change in §6 is the larger cost, and it's paid with or without forks.</li>
+    <li><b>To verify first.</b> Writing the import map from script before any module loads should work wherever import maps do, but iOS Safari is the browser that matters and nothing here has run on it yet. That's the first thing P4 checks.</li>
   </ul>
 </section>
 
 <!-- 8 ─────────────────────────────────────────────────────────── -->
 <section id="loop">
   <h2 class="sec"><span class="n">8</span>One loop for every change</h2>
-  <p>Imbue builds every change on a branch and merges it when you approve. Knowledge Medium already has that shape, without git. A change to a fork's source is a block edit that syncs at once. But no device runs it until that device approves it, and until then it keeps running its pinned version. The edited source <em>is</em> the proposal, and approval on a device is the merge. So eject by an agent, fix with agent (#1433), crystallize (#1434) and an upstream update (§9) need no new state. They all end in the <code>needs-approval</code> or <code>update-available</code> prompt that exists today.</p>
+  <p>Imbue builds every change on a branch and merges it when you approve. Knowledge Medium already has that shape, without git. A change to a fork's source is a block edit that syncs at once. But no device serves it until that device approves it, and until then it keeps serving its pinned version. The edited source <em>is</em> the proposal, and approval on a device is the merge. So eject by an agent, fix with agent (#1433), crystallize (#1434) and an upstream update (§9) need no new state. They all end in the <code>needs-approval</code> or <code>update-available</code> prompt that exists today.</p>
 
   <figure>
     <div class="fig-frame">
-      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f5t f5d">
-        <title id="f5t">The change loop</title>
-        <desc id="f5d">Three triggers, change this with an agent, fix with agent, and upstream changed, all produce new source for the fork. The source syncs; every device keeps running its approved version; the review on a device shows the diff, read without running anything; approving lets it run there, where it loads on its own before taking the slot. A later trigger starts the loop again.</desc>
+      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f6t f6d">
+        <title id="f6t">The change loop</title>
+        <desc id="f6d">Three triggers, change this with an agent, fix with agent, and upstream changed, all produce new source for the fork. The source syncs; every device keeps serving its approved version; the review on a device shows the diff, read without running anything; approving lets it run there, where it is checked on its own and then served after a reload.</desc>
         <defs>
-          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
-          <marker id="a5f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-fork"/></marker>
+          <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          <marker id="a6f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-fork"/></marker>
         </defs>
-        <rect x="10" y="20"  width="170" height="40" rx="5" class="b-im"/><text x="95" y="45" text-anchor="middle" class="t-small">Change this… #1432</text>
-        <rect x="10" y="70"  width="170" height="40" rx="5" class="b-im"/><text x="95" y="95" text-anchor="middle" class="t-small">Fix with agent #1433</text>
-        <rect x="10" y="120" width="170" height="40" rx="5" class="b-im"/><text x="95" y="145" text-anchor="middle" class="t-small">Upstream changed §9</text>
-        <line x1="180" y1="40"  x2="224" y2="84" class="ln" marker-end="url(#a5)"/>
-        <line x1="180" y1="90"  x2="224" y2="90" class="ln" marker-end="url(#a5)"/>
-        <line x1="180" y1="140" x2="224" y2="98" class="ln" marker-end="url(#a5)"/>
+        <rect x="10" y="20"  width="160" height="40" rx="5" class="b-im"/><text x="90" y="45" text-anchor="middle" class="t-small">Change this… #1432</text>
+        <rect x="10" y="70"  width="160" height="40" rx="5" class="b-im"/><text x="90" y="95" text-anchor="middle" class="t-small">Fix with agent #1433</text>
+        <rect x="10" y="120" width="160" height="40" rx="5" class="b-im"/><text x="90" y="145" text-anchor="middle" class="t-small">Upstream changed §9</text>
+        <line x1="170" y1="40"  x2="204" y2="84" class="ln" marker-end="url(#a6)"/>
+        <line x1="170" y1="90"  x2="204" y2="90" class="ln" marker-end="url(#a6)"/>
+        <line x1="170" y1="140" x2="204" y2="98" class="ln" marker-end="url(#a6)"/>
 
-        <rect x="228" y="62" width="150" height="58" rx="6" class="b-n"/>
-        <text x="303" y="86" text-anchor="middle" class="t-title">New source</text>
-        <text x="303" y="104" text-anchor="middle" class="t-sub">written to the fork</text>
-        <line x1="378" y1="91" x2="414" y2="91" class="ln" marker-end="url(#a5)"/>
+        <rect x="208" y="62" width="130" height="58" rx="6" class="b-n"/>
+        <text x="273" y="86" text-anchor="middle" class="t-title">New source</text>
+        <text x="273" y="104" text-anchor="middle" class="t-sub">in the fork block</text>
+        <line x1="338" y1="91" x2="358" y2="91" class="ln" marker-end="url(#a6)"/>
 
-        <rect x="418" y="62" width="150" height="58" rx="6" class="b-n"/>
-        <text x="493" y="84" text-anchor="middle" class="t-title">Syncs everywhere</text>
-        <text x="493" y="102" text-anchor="middle" class="t-sub">devices keep their pin</text>
-        <line x1="568" y1="91" x2="604" y2="91" class="ln" marker-end="url(#a5)"/>
+        <rect x="362" y="62" width="130" height="58" rx="6" class="b-n"/>
+        <text x="427" y="84" text-anchor="middle" class="t-title">Syncs</text>
+        <text x="427" y="102" text-anchor="middle" class="t-sub">devices keep their pin</text>
+        <line x1="492" y1="91" x2="512" y2="91" class="ln" marker-end="url(#a6)"/>
 
-        <rect x="608" y="62" width="120" height="58" rx="6" class="b-new"/>
-        <text x="668" y="86" text-anchor="middle" class="t-title">Review</text>
-        <text x="668" y="104" text-anchor="middle" class="t-sub">on this device</text>
-        <line x1="728" y1="91" x2="756" y2="91" class="ln-fork" marker-end="url(#a5f)"/>
+        <rect x="516" y="62" width="110" height="58" rx="6" class="b-new"/>
+        <text x="571" y="86" text-anchor="middle" class="t-title">Review</text>
+        <text x="571" y="104" text-anchor="middle" class="t-sub">reads, never runs</text>
+        <line x1="626" y1="91" x2="646" y2="91" class="ln-fork" marker-end="url(#a6f)"/>
 
-        <rect x="760" y="62" width="110" height="58" rx="6" class="b-fork"/>
-        <text x="815" y="86" text-anchor="middle" class="t-title t-fork">Approve here</text>
-        <text x="815" y="104" text-anchor="middle" class="t-sub">new pin runs</text>
+        <rect x="650" y="62" width="110" height="58" rx="6" class="b-new"/>
+        <text x="705" y="86" text-anchor="middle" class="t-title t-fork">Approve</text>
+        <text x="705" y="104" text-anchor="middle" class="t-sub">then the check</text>
+        <line x1="760" y1="91" x2="780" y2="91" class="ln-fork" marker-end="url(#a6f)"/>
 
-        <path d="M815,120 C815,210 303,210 303,124" class="ln ln-d" marker-end="url(#a5)"/>
-        <text x="560" y="200" text-anchor="middle" class="t-sub">the next change starts over; a device that never approves keeps the last version it approved</text>
-        <text x="10" y="240" class="t-sub">Purple: triggers, from the Imbue comparison. Dashed: what's new — the review's content, not its state.</text>
+        <rect x="784" y="62" width="86" height="58" rx="6" class="b-fork"/>
+        <text x="827" y="86" text-anchor="middle" class="t-title t-fork">Reload</text>
+        <text x="827" y="104" text-anchor="middle" class="t-sub">served</text>
+
+        <path d="M827,120 C827,210 273,210 273,124" class="ln ln-d" marker-end="url(#a6)"/>
+        <text x="550" y="200" text-anchor="middle" class="t-sub">the next change starts over; a device that never approves keeps the last version it approved</text>
+        <text x="10" y="240" class="t-sub">Purple: triggers, from the Imbue comparison. Dashed: what's new.</text>
       </svg>
     </div>
-    <figcaption><b>Figure 5.</b> The approval pin from #67 plays the part of Imbue's branch. Every trigger produces source, and every device decides for itself when to run it.</figcaption>
+    <figcaption><b>Figure 6.</b> The approval pin from #67 plays the part of Imbue's branch. Every trigger produces source, and every device decides for itself when to serve it.</figcaption>
   </figure>
 
   <h3>Worked example: "dim done todos" from the bullet menu</h3>
   <ol class="steps">
     <li>On a todo block you choose <b>Change this…</b> (#1432) and type "dim done todos, don't strike them through".</li>
-    <li>The run's brief lists what draws the block and who owns each part: the default renderer (core), and decorators from Character counter, Todo, the update indicator and Contributors (§10).</li>
-    <li>The run calls <code>plugin_source</code> for <code>system:todo</code>, then <code>eject_plugin</code>. That creates "My todo" with its lineage, enabled by intent and approved nowhere.</li>
+    <li>The run's brief lists what draws the block, and which plugin and file each part comes from (§10). The checkbox is <code>todo/index.tsx</code>.</li>
+    <li>The run calls <code>plugin_source</code> for that file, then <code>eject_file</code>. That creates "My todo: index.tsx" with its base, enabled by intent and approved nowhere.</li>
     <li>It changes one line in the fork's content with <code>edit_block</code>.</li>
-    <li>Nothing runs yet. Each of your devices shows the existing prompt, now reading "My todo would replace Todo — review".</li>
-    <li>You review the diff on the phone and approve. My todo loads on its own first, then takes Todo's slot, and settings reports what it contributes compared with Todo. The laptop keeps the built-in until you approve there too.</li>
+    <li>Nothing runs yet. Each of your devices shows the existing prompt, now reading "My todo would replace todo/index.tsx — review".</li>
+    <li>You review the diff on the phone and approve. The check loads the fork once on its own, compares it with the original, and records it in the fork index. Settings shows "Reload to use My todo". After the reload, every importer of <code>todo/index.js</code> on the phone gets the fork. The laptop keeps the original until you approve there too.</li>
   </ol>
 
   <div class="mock" role="img" aria-label="Sketch of the review dialog">
-    <div class="row"><span class="mock-title">My todo would replace Todo on this device</span><span class="pill fork">fork</span></div>
-    <div class="muted">Written by an agent run · base: Todo at this app version</div>
+    <div class="row"><span class="mock-title">My todo would replace todo/index.tsx on this device</span><span class="pill fork">fork</span></div>
+    <div class="muted">Written by an agent run · base: todo/index.tsx at this app version</div>
 <pre><span class="c">src/plugins/todo/index.tsx → My todo · 1 line changed</span>
 <span class="del">- &lt;div className={done ? 'min-w-0 flex-1 text-muted-foreground line-through' : …</span>
 <span class="add">+ &lt;div className={done ? 'min-w-0 flex-1 text-muted-foreground' : …</span></pre>
     <ul>
-      <li><span class="check">✓</span> Imports only modules Todo's entry already imports</li>
-      <li><span class="check">✓</span> Replaces <code>system:todo</code>, which this app version has</li>
-      <li>Not run yet. Approving runs it here, on its own first; it takes Todo's place only if it loads.</li>
+      <li><span class="check">✓</span> Imports only modules the original file already imports</li>
+      <li><span class="check">✓</span> Serves <code>@/plugins/todo/index.js</code>, which this app version has</li>
+      <li>Not run yet. Approving lets it run here: first a check on its own, then, after a reload, in Todo's place.</li>
     </ul>
     <div class="row"><button class="btn primary" type="button">Approve on this device</button><button class="btn" type="button">Full source</button><button class="btn" type="button">Not now</button></div>
   </div>
-  <p><b>Nothing runs before approval.</b> Everything the review shows is read from the source: the diff, the imports, the <code>replaces</code> target. What a fork contributes can only be known by running it. Running unapproved code in order to describe it is exactly what the approval gate exists to prevent; the comment above <code>resolveExtensionInIsolation</code> (<code>src/plugins/agent-runtime/commands.ts:281-302</code>) says the same about <code>--verify</code>. So approval authorizes running the fork, and the contribution checks happen on its first load after that.</p>
-  <p class="example"><b>What the checks catch, after approval.</b> The fork loads on its own before it takes the slot. A failed load leaves the built-in running. A fork that loads goes in, and settings reports any difference from the built-in. If the run had also dropped <code>todoActionsExtension</code>, the report would read "My todo drops 2 actions that other plugins run by id: <code>todo.cycle</code> (srs-rescheduling)", next to <b>Use built-in instead</b>. The winner check from §6 is reported the same way. That's the #365 manifest-diff idea, computed from what the fork actually registers instead of from a manifest someone has to keep up to date.</p>
+
+  <p><b>Nothing runs before approval.</b> Everything the review shows is read from the source: the diff, the imports and the path it serves. The diff is always against what this device last approved, or against the base for a first approval. Running unapproved code in order to describe it is exactly what the approval gate exists to prevent; the comment above <code>resolveExtensionInIsolation</code> (<code>src/plugins/agent-runtime/commands.ts:281-302</code>) says the same about <code>--verify</code>.</p>
+  <p class="example"><b>The check, after approval.</b> Approval lets this device run the fork, so the app loads it once on its own, as a module in the running page, and compares it with the original file:</p>
+  <ul>
+    <li><b>Exports.</b> If the fork dropped an export another module imports, a page that mapped it would fail to link. Then "My todo no longer exports <code>todoActions</code>, which other modules import", and it isn't mapped.</li>
+    <li><b>Frozen identity.</b> For every seed the fork declares under a key the original also declares, the name, encoding and type id must match. Then "My todo changes how <code>status</code> is stored". Widening, like adding an enum option, is allowed. It comes with a note that devices still on the original will read the new value as invalid until they approve.</li>
+    <li><b>Loading.</b> If importing the fork throws, it isn't mapped, and the error toast offers "Fix with agent".</li>
+  </ul>
+  <p>A fork that passes goes into this workspace's fork index on this device, and the next load serves it. The #365 manifest-diff idea is computed here, from what the module actually exports and declares, instead of from a manifest someone has to keep up to date.</p>
   <p><b>Who may approve.</b> A gesture you make yourself in the UI can approve immediately, as #289 §5.7 argued: the source is the trusted bundle's own, plus the mechanical rewrite. A run reached through the km MCP tools never approves; it can only write. The paired dev bridge keeps the install-and-pin it has today (<code>agent-runtime/commands.ts:1438-1442</code>), because whoever paired the CLI has already chosen to trust it on that device.</p>
 </section>
 
 <!-- 9 ─────────────────────────────────────────────────────────── -->
 <section id="upstream">
   <h2 class="sec"><span class="n">9</span>Keeping up with upstream</h2>
-  <p>After an app update, each device checks once per new version. For every fork whose upstream is the bundle, it fetches that plugin's source file (§5) and compares hashes with the fork's base records. Nothing writes during the check; it only sets a status. The check is the same for the other kinds of upstream in #1427 (a shared extension block, a URL). Only how it reads the current upstream differs.</p>
+  <p>After an app update, each device checks once per new version. For every forked file whose upstream is the bundle, it fetches that plugin's source file (§5) and compares the file's hash with the fork's base. Nothing writes during the check; it only sets a status. The check is the same for the other kinds of upstream in #1427 (a shared extension block, a URL). Only how it reads the current upstream differs.</p>
 
   <div class="table-wrap"><table>
     <thead><tr><th style="width:22%">Status</th><th>When</th><th style="width:38%">What you can do</th></tr></thead>
     <tbody>
-      <tr><td>Up to date</td><td>Every base hash matches the current upstream file.</td><td>Nothing.</td></tr>
-      <tr><td>Upstream changed</td><td>A base file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one transaction. Then it's an ordinary <code>update-available</code> review on each device.</td></tr>
+      <tr><td>Up to date</td><td>The base hash matches the current upstream file.</td><td>Nothing.</td></tr>
+      <tr><td>Upstream changed</td><td>The file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one write. Then it's an ordinary <code>update-available</code> review on each device.</td></tr>
       <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets base, yours and upstream, writes the merged source and moves the base to that upstream version in the same write. Then it goes through the same review.</td></tr>
-      <tr><td>Built-in gone</td><td>This app version has no toggle with the <code>replaces</code> id.</td><td>The fork doesn't run, and settings says so. "Run it on its own" clears <code>replaces</code>.</td></tr>
+      <tr><td>File gone</td><td>This app version has no file at the path the fork serves.</td><td>The fork isn't mapped, and settings says so. A plugin file was renamed or removed upstream.</td></tr>
       <tr><td>Can't check</td><td>Offline, or the source file is from a newer app than the running page.</td><td>Retried later. No status change.</td></tr>
     </tbody>
   </table></div>
 
-  <p><b>The base and the pin answer different questions.</b> The base is shared. It records which upstream the fork's content came from, and it is what a merge starts from, so it moves in the same write as the content. The pin is per device: <code>approvedSource</code> in this device's approval record (<code>compileExtensionModule.ts:346-379</code>). A review always diffs the new source against this device's pin. That shows what this device is about to start running, even after another device has approved first and moved the base, or when an update leaves content and base equal. Only a first approval, with no pin yet, diffs against the base.</p>
-  <p>Wrappers rarely trip this. A wrapper copied only the entry module and imports the rest, so a fix inside <code>actions.ts</code> reaches it with no merge. If an upstream change breaks an import the wrapper relies on, the fork fails to load. Rule 2 then falls back to the built-in and the error toast offers "Fix with agent". Code you paste into a fork by hand isn't tracked. Eject can copy a named submodule instead, which records a base for it too.</p>
+  <p><b>The base and the pin answer different questions.</b> The base is shared. It records which upstream the fork's content came from, and it is what a merge starts from, so it moves in the same write as the content. The pin is per device: <code>approvedSource</code> in this device's approval record. A review always diffs the new source against this device's pin. That shows what this device is about to start serving, even after another device has approved first and moved the base.</p>
+  <p><b>Upstream changes that break a fork.</b> A fork imports the plugin's other files by path, so a fix inside <code>actions.ts</code> reaches it with no merge. If an upstream change removes something the fork imports, or adds an export the rest of the app now imports from the forked file, the page fails to link. The crash guard (§7) then turns the fork off for the next load, settings says why, and "Fix with agent" can start a merge.</p>
   <p><b>Why updates are never automatic.</b> The content write syncs. If every device fast-forwarded on its own, several devices would race to write the same change. A click on one device writes once, and every device then reviews it. That's the same rule as "a data migration runs once per graph", applied to a smaller write.</p>
 </section>
 
@@ -785,12 +827,12 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
 <section id="seen">
   <h2 class="sec"><span class="n">10</span>What you see</h2>
   <div class="mock-pair">
-    <div class="mock" role="img" aria-label="Sketch of the Extensions settings row for a replaced built-in">
+    <div class="mock" role="img" aria-label="Sketch of the Extensions settings row for a forked built-in">
       <div class="muted">Settings › Extensions › Built-in</div>
-      <div class="row"><span class="mock-title">Todo</span><span class="pill bi">built-in</span><span class="pill fork">replaced by My todo</span><span class="pill warn">upstream changed</span></div>
-      <div class="muted">Checkbox / done-state property on blocks.</div>
-      <div class="row"><button class="btn" type="button">Use built-in instead</button><button class="btn" type="button">Update My todo…</button><button class="btn" type="button">Open My todo</button></div>
-      <div class="muted">On a device that hasn't approved My todo: “Todo — My todo is waiting for approval here” and <b>Enable here</b>.</div>
+      <div class="row"><span class="mock-title">Todo</span><span class="pill bi">built-in</span><span class="pill fork">modified: index.tsx</span><span class="pill warn">upstream changed</span></div>
+      <div class="muted">Checkbox / done-state property on blocks. index.tsx is served from My todo.</div>
+      <div class="row"><button class="btn" type="button">Use the original</button><button class="btn" type="button">Update My todo…</button><button class="btn" type="button">Open My todo</button></div>
+      <div class="muted">On a device that hasn't approved it: “Todo — My todo is waiting for approval here” and <b>Enable here</b>.</div>
     </div>
     <div class="mock" role="img" aria-label="Sketch of the block inspector">
       <div class="muted">Inspect block · “Buy oat milk”</div>
@@ -799,7 +841,7 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
       <div><b>Decorated by, inside out</b>
         <ul>
           <li>character count <span class="owner">· Character counter</span></li>
-          <li>checkbox <span class="owner">· My todo (replaces Todo)</span></li>
+          <li>checkbox <span class="owner">· Todo · index.tsx (My todo)</span></li>
           <li>“changed” dot <span class="owner">· Update indicator</span></li>
           <li>avatar badges <span class="owner">· Contributors</span></li>
         </ul>
@@ -807,34 +849,39 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
       <div class="row"><button class="btn primary" type="button">Change this…</button><button class="btn" type="button">Make my own copy of…</button></div>
     </div>
   </div>
-  <p>The inspector is the "reveal codes" idea from #365. It needs one small core change: the resolver records, for each contribution, the nearest toggle boundary it was found under, so <code>FacetRuntime</code> can answer "who owns this". That same field gives <code>describe-runtime</code> a per-plugin listing (#1431) and briefs "Change this…" (#1432). It can be built in parallel with everything else.</p>
+  <p>The inspector is the "reveal codes" idea from #365. It needs the resolver to record, for each contribution, the nearest toggle boundary it was found under, and the file that created it. That same field gives <code>describe-runtime</code> a per-plugin listing (#1431) and tells "Change this…" which file to eject (#1432). It can be built in parallel with everything else.</p>
 
   <h3>Across devices and failures</h3>
   <div class="table-wrap"><table>
-    <thead><tr><th style="width:34%">Situation</th><th>What runs</th></tr></thead>
+    <thead><tr><th style="width:36%">Situation</th><th>What loads</th></tr></thead>
     <tbody>
-      <tr><td>Approved here, enabled, loads</td><td>The fork, in the built-in's slot, from the first paint.</td></tr>
-      <tr><td>Not approved here yet</td><td>The built-in, plus the existing prompt.</td></tr>
-      <tr><td>Approved, but the source drifted (another device edited it)</td><td>The pinned version of the fork, plus <code>update-available</code>.</td></tr>
-      <tr><td>Fails to load or throws while resolving</td><td>The built-in, plus the load-error toast and "Fix with agent".</td></tr>
-      <tr><td>Fork turned off ("Use built-in instead")</td><td>The built-in. The fork stays, ready to turn back on.</td></tr>
-      <tr><td>Built-in turned off as well</td><td>Neither, which is what turning a plugin off means.</td></tr>
-      <tr><td>Safe mode</td><td>Static plugins only, as today.</td></tr>
-      <tr><td>A synced block claims <code>replaces</code> for something you never approved</td><td>Nothing changes. It isn't approved here, so it can't run and can't suppress the built-in.</td></tr>
-      <tr><td>Another workspace</td><td>Forks are workspace blocks, so a workspace without the fork runs the built-in.</td></tr>
+      <tr><td>Approved, checked and enabled here</td><td>The fork, at the original's path, from the first module load.</td></tr>
+      <tr><td>Not approved here yet</td><td>The original, plus the existing prompt.</td></tr>
+      <tr><td>Approved, but another device edited the source since</td><td>The pinned version of the fork, plus <code>update-available</code>.</td></tr>
+      <tr><td>Fails its check</td><td>The original. Settings says why.</td></tr>
+      <tr><td>Mapped, but the page didn't finish booting</td><td>The original on the next load, with the fork suspended and a retry offered (crash guard).</td></tr>
+      <tr><td>Fork turned off ("Use the original")</td><td>The original, after a reload.</td></tr>
+      <tr><td>Built-in turned off as well</td><td>Neither, which is what turning a plugin off means. The fork carries the original's toggle.</td></tr>
+      <tr><td>Safe mode</td><td>Nothing mapped.</td></tr>
+      <tr><td>A synced block claims to serve a path you never approved</td><td>Nothing changes. Only this device's fork index maps anything, and only the check writes it.</td></tr>
+      <tr><td>Another workspace</td><td>That workspace's forks. Switching reloads when the two sets differ.</td></tr>
+      <tr><td>The app updates</td><td>Forks stay mapped. A link failure trips the crash guard, and the upstream check (§9) flags changed files.</td></tr>
     </tbody>
   </table></div>
 </section>
 
 <!-- 11 ────────────────────────────────────────────────────────── -->
 <section id="limits">
-  <h2 class="sec"><span class="n">11</span>What this doesn't fix <span class="prov read">Our read</span></h2>
+  <h2 class="sec"><span class="n">11</span>Costs and limits <span class="prov read">Our read</span></h2>
   <ul>
-    <li><b>Behaviour imported by other plugins still reaches the original.</b> Five plugins import <code>getOrCreateDailyNote</code> directly. A fork of daily-notes that changes it gets split-brain: its own calls use the new code, theirs the old. The fix is #289's stage 2: move those entry points behind string-keyed seams, which are mutators, queries, actions and, now, verbs (<code>src/facets/verbFacet.ts</code>). Eject can name the affected importers up front, because they are statically known.</li>
-    <li><b>Deep forks</b> need cross-block imports (#253). Until then, a fork stays one block and pulls in the original's other modules.</li>
-    <li><b>Types and properties can't be forked as code.</b> They're identity (rule 1). Editing a built-in type is a separate design. #289 §8's "shadow it with a block" no longer works, because the registry is declaration-authoritative.</li>
-    <li><b>No sandbox.</b> A fork runs in the page with full authority, like every user extension. Forking a built-in doesn't widen that, but "edit a built-in" will bring more people to the approval prompt, so its wording carries weight. Enforcement is #1425.</li>
-    <li><b>Toggle ids become stored references.</b> <code>replaces</code> stores <code>system:&lt;name&gt;</code>, so renaming a built-in breaks the forks of it. Pin the set of toggle ids with a test, the way the seed-identity ledger pins seeds, so a rename is a deliberate step.</li>
+    <li><b>Every user pays for the build change.</b> Plugin files loaded by path cost boot time whether anyone forks or not. It's measured in the first build PR and optimised after (§6).</li>
+    <li><b>Changes take a reload.</b> The import map is fixed per page.</li>
+    <li><b>Exports are a contract.</b> A fork can add exports but not drop ones the rest of the app imports. The check enforces it, and the crash guard catches what the check can't, like an upstream change after approval.</li>
+    <li><b>Core isn't forkable.</b> It stays bundled, so changing core still means a build and a deploy. Essential plugins' files aren't forkable in v1.</li>
+    <li><b>Dev mode isn't designed yet.</b> Vite's dev server serves each module at its own URL and adds query strings on hot reload. Whether the loader's map entries match those, or a dev-server plugin should serve forks, needs a spike.</li>
+    <li><b>Only the page's module graph.</b> Workers have their own graphs, and the import map doesn't apply to them. No plugin code runs in a worker today, as far as I know.</li>
+    <li><b>No sandbox.</b> A fork runs with the authority the original had. Forking a built-in doesn't widen that, but "edit a built-in" will bring more people to the approval prompt, so its wording carries weight. Enforcement is #1425.</li>
+    <li><b>Module paths become stored references.</b> <code>extension:serves</code> stores a file path, so renaming a plugin file orphans the forks of it. The upstream check reports it ("File gone"). That seems enough without freezing paths the way the seed ledger freezes seeds.</li>
     <li><b>Slightly slower renders.</b> Forks skip the build-time react-compiler pass. That's cosmetic at plugin scale.</li>
   </ul>
 </section>
@@ -846,38 +893,37 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
 
   <figure>
     <div class="fig-frame">
-      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f6t f6d">
-        <title id="f6t">Order of the pieces</title>
-        <desc id="f6d">P1 source provider leads to P2 eject and lineage, which leads to P3 slot substitution, then P4 boot loading. P2 also leads to P5 review content and P6 upstream check. P7 owner attribution and inspector is independent.</desc>
-        <defs><marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
-        <rect x="10"  y="30" width="170" height="64" rx="6" class="b-fork"/><text x="95"  y="56" text-anchor="middle" class="t-title">P1 Source provider</text><text x="95" y="76" text-anchor="middle" class="t-sub">#1435 · [4]</text>
-        <line x1="180" y1="62" x2="216" y2="62" class="ln" marker-end="url(#a6)"/>
-        <rect x="220" y="30" width="170" height="64" rx="6" class="b-n"/><text x="305" y="56" text-anchor="middle" class="t-title">P2 Eject + lineage</text><text x="305" y="76" text-anchor="middle" class="t-sub">identity pass-through · [5]</text>
-        <line x1="390" y1="62" x2="426" y2="62" class="ln" marker-end="url(#a6)"/>
-        <rect x="430" y="30" width="200" height="64" rx="6" class="b-n"/><text x="530" y="56" text-anchor="middle" class="t-title">P3 Replaces + take the slot</text><text x="530" y="76" text-anchor="middle" class="t-sub">rules 1–4, settings row · [1, 2 order]</text>
-        <line x1="630" y1="62" x2="666" y2="62" class="ln" marker-end="url(#a6)"/>
-        <rect x="670" y="30" width="200" height="64" rx="6" class="b-n"/><text x="770" y="56" text-anchor="middle" class="t-title">P4 Load before paint</text><text x="770" y="76" text-anchor="middle" class="t-sub">boot step · [2 timing]</text>
+      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f7t f7d">
+        <title id="f7t">Order of the pieces</title>
+        <desc id="f7d">P1 source provider and P2 the build change start in parallel. P1 leads to P3 fork blocks, eject and the check. P2 and P3 lead to P4, the boot loader. P3 also leads to P5 review content and P6 the upstream check. P7 owner attribution and inspector is independent.</desc>
+        <defs><marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+        <rect x="10"  y="20" width="200" height="60" rx="6" class="b-fork"/><text x="110" y="45" text-anchor="middle" class="t-title">P1 Source provider</text><text x="110" y="65" text-anchor="middle" class="t-sub">#1435 · [4]</text>
+        <rect x="10"  y="110" width="200" height="60" rx="6" class="b-fork"/><text x="110" y="135" text-anchor="middle" class="t-title">P2 Plugin files by path</text><text x="110" y="155" text-anchor="middle" class="t-sub">build change, measured</text>
+        <line x1="210" y1="50" x2="246" y2="50" class="ln" marker-end="url(#a7)"/>
+        <rect x="250" y="20" width="200" height="60" rx="6" class="b-n"/><text x="350" y="45" text-anchor="middle" class="t-title">P3 Forks, eject, check</text><text x="350" y="65" text-anchor="middle" class="t-sub">base records · [3 half]</text>
+        <path d="M450,50 C480,50 480,110 506,110" class="ln" marker-end="url(#a7)"/>
+        <path d="M210,140 C360,140 360,140 506,140" class="ln" marker-end="url(#a7)"/>
+        <rect x="510" y="96" width="200" height="60" rx="6" class="b-n"/><text x="610" y="121" text-anchor="middle" class="t-title">P4 Boot loader</text><text x="610" y="141" text-anchor="middle" class="t-sub">map, crash guard · [1, 2, 5]</text>
 
-        <line x1="305" y1="94" x2="305" y2="140" class="ln" marker-end="url(#a6)"/>
-        <rect x="220" y="144" width="200" height="64" rx="6" class="b-n"/><text x="320" y="170" text-anchor="middle" class="t-title">P5 Review content</text><text x="320" y="190" text-anchor="middle" class="t-sub">diff before, checks after</text>
-        <path d="M330,94 C330,120 530,120 530,140" class="ln" marker-end="url(#a6)"/>
-        <rect x="440" y="144" width="200" height="64" rx="6" class="b-n"/><text x="540" y="170" text-anchor="middle" class="t-title">P6 Upstream check</text><text x="540" y="190" text-anchor="middle" class="t-sub">with #1427 · [3]</text>
+        <line x1="300" y1="80" x2="300" y2="176" class="ln" marker-end="url(#a7)"/>
+        <rect x="250" y="180" width="180" height="56" rx="6" class="b-n"/><text x="340" y="204" text-anchor="middle" class="t-title">P5 Review content</text><text x="340" y="223" text-anchor="middle" class="t-sub">diff, imports</text>
+        <path d="M420,80 C420,150 560,150 560,176" class="ln" marker-end="url(#a7)"/>
+        <rect x="470" y="180" width="180" height="56" rx="6" class="b-n"/><text x="560" y="204" text-anchor="middle" class="t-title">P6 Upstream check</text><text x="560" y="223" text-anchor="middle" class="t-sub">with #1427 · [3]</text>
 
-        <rect x="670" y="144" width="200" height="64" rx="6" class="b-off"/><text x="770" y="170" text-anchor="middle" class="t-title">P7 Owners + inspector</text><text x="770" y="190" text-anchor="middle" class="t-sub">independent · feeds #1431, #1432</text>
-        <text x="10" y="236" class="t-sub">Green: first. Dashed: can start any time.</text>
+        <rect x="690" y="180" width="180" height="56" rx="6" class="b-off"/><text x="780" y="204" text-anchor="middle" class="t-title">P7 Owners + inspector</text><text x="780" y="223" text-anchor="middle" class="t-sub">independent</text>
       </svg>
     </div>
-    <figcaption><b>Figure 6.</b> P1 is useful alone: with it, a graph-only run can do today's copy-and-disable, as long as the copy leaves out the built-in's seeds (§1). P2 removes that need. P3 and P4 together remove the cross-device and ordering costs.</figcaption>
+    <figcaption><b>Figure 7.</b> P1 and P2 have no dependencies and can start together. P1 is useful alone: with it, a graph-only run can already do today's copy-and-disable, leaving out the built-in's seeds (§1). P4 is where forks start loading.</figcaption>
   </figure>
 
   <ol>
-    <li><b>P1 · Source provider (#1435).</b> The build plugin and dev middleware for <code>plugin-sources/&lt;name&gt;.json</code>, <code>src/extensions/pluginSources.ts</code> (files, version check, import rewrite), the bridge command, and the <code>plugin_source</code> row in <code>GRAPH_READ_TOOLS</code>. Tests: the rewrite over every plugin's entry (each rewritten import resolves), the version mismatch, the bounded response.</li>
-    <li><b>P2 · Eject, lineage and identity.</b> The <code>extension:replaces</code>, <code>extension-upstream</code> and <code>extension-base</code> seeds, with ledger entries. <code>identity: true</code> on the identity facets, and the loader passing the bundle's own contribution objects through uncopied, so the ejected entry loads as written and dedupes against the static tree. The eject action (menu, palette, CLI, and an MCP write tool through the existing write guard), which approves only on a user gesture.</li>
-    <li><b>P3 · Replaces and taking the slot.</b> <code>assemblePlugins</code>, called from all four places that build a runtime from a static list, the plugins' boundaries on the data-list entries, the <code>ownedBy</code> mark on the four composed data extensions, the warm-reload path, and the "replaced by" settings row. Tests: position kept for an order-sensitive facet, unapproved device keeps the built-in, a failed load keeps the built-in, a bundled original doesn't come back (also from inside another fork), identity stays.</li>
-    <li><b>P4 · Load before paint.</b> The step in <code>resolveInitialLayout</code>, passing loaded forks to bootstrap's landing runtime and to <code>AppRuntimeProvider</code>, and a <code>markStartup</code> measurement. Tests: a fork's data contribution is visible to bootstrap, a forked landing resolver picks the first page, and safe mode boots static-only.</li>
-    <li><b>P5 · Review content.</b> Before approval, in the existing prompt: the diff against what this device last approved (against the base for a first approval), imports the built-in didn't have, and the <code>replaces</code> target, all read without running anything. After approval, on the first load: the contribution summary against the built-in and the winner check, reported in settings.</li>
+    <li><b>P1 · Source provider (#1435).</b> The build plugin and dev middleware for <code>plugin-sources/&lt;name&gt;.json</code>, <code>src/extensions/pluginSources.ts</code> (files, imports, version check, import rewrite), the bridge command, and the <code>plugin_source</code> row in <code>GRAPH_READ_TOOLS</code>. Tests: the rewrite over every plugin file (each rewritten import resolves), the version mismatch, the bounded response.</li>
+    <li><b>P2 · Plugin files loaded by path.</b> The build setting that keeps imports into <code>src/plugins/</code> external as <code>@/plugins/…</code> specifiers, <code>check-dist-exports.ts</code> updated, and cold-boot numbers for per-file and per-plugin on the iPhone and on desktop, using the startup marks. Behaviour doesn't change; this PR is where the cost is decided.</li>
+    <li><b>P3 · Fork blocks, eject and the check.</b> The <code>extension:serves</code> and <code>extension-base</code> seeds, with ledger entries. The extension loader skipping fork blocks. The eject action (menu, palette, CLI, and an <code>eject_file</code> MCP write tool through the existing write guard), which approves only on a user gesture. The post-approval check (exports, frozen identity, loads), and the per-workspace fork index it writes.</li>
+    <li><b>P4 · Boot loader.</b> The HTML transform and the classic loader, the crash guard, the workspace-guess reload, "Reload to apply", and the "modified" settings row. Tests: an approved fork is what every importer gets, an unapproved one maps nothing, a fork that throws on load is suspended on the next boot, safe mode maps nothing. The iOS Safari check comes first.</li>
+    <li><b>P5 · Review content.</b> In the existing prompt, before approval: the diff against this device's pin (against the base for a first approval), imports the original didn't have, and the path served, all read without running anything.</li>
     <li><b>P6 · Upstream check</b>, shared with #1427: the per-version check, Update (fast-forward), and Merge with agent.</li>
-    <li><b>P7 · Owners and inspector.</b> Owner attribution in the resolver, the inspector, and the per-plugin <code>describe-runtime</code> listing.</li>
+    <li><b>P7 · Owners and inspector.</b> Owner and file attribution in the resolver, the inspector, and the per-plugin <code>describe-runtime</code> listing.</li>
   </ol>
 </section>
 
@@ -885,23 +931,24 @@ const stripReplaced = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExte
 <section id="open">
   <h2 class="sec"><span class="n">13</span>Open questions</h2>
   <ul>
-    <li><b>Where the base text lives.</b> Leaning toward one child block per copied file, as sketched in §4: visible, editable, consistent with end-to-end encryption. The alternative is a hash only, with the text fetched from a versioned asset, which Pages' deploy-time cleanup rules out unless the build starts keeping old source files.</li>
-    <li><b>The built-in is gone.</b> Leaning toward not running the fork, with a "Run it on its own" button (§9). Running it alongside whatever replaced the built-in could double up decorators.</li>
-    <li><b>Additive extensions before paint.</b> Not in this design. Move them only if a user extension needs a type that bootstrap can see, and measure first.</li>
-    <li><b>Everywhere or per workspace.</b> Forks are workspace blocks, like every extension. "Replace daily-notes in all my workspaces" can wait for kits (#1430).</li>
-    <li><b>How much of <code>@/</code> a fork may rely on.</b> Leaning toward accepting drift, as #289 did: a wrapper's breakage is shallow, a failed load falls back to the built-in, and P6 flags it.</li>
+    <li><b>Per file or per plugin.</b> P2's numbers decide. Leaning per file for its simpler model, unless it costs clearly more than per plugin on the iPhone.</li>
+    <li><b>After an app update, map forks at once or hold them?</b> Mapping at once keeps your fork across deploys, and the crash guard catches a fork the update broke. Holding them until they are rechecked costs one load without forks per deploy. Leaning toward mapping at once.</li>
+    <li><b>Dev mode.</b> Map Vite's own module URLs, or serve forks from a dev-server plugin. Needs a spike.</li>
+    <li><b>Where the base text lives.</b> Leaning toward a child block per forked file, as sketched in §4: visible, editable, consistent with end-to-end encryption.</li>
+    <li><b>Everywhere or per workspace.</b> Forks are workspace blocks, like every extension. "Fork daily-notes in all my workspaces" can wait for kits (#1430).</li>
+    <li><b>How much of <code>@/</code> a fork may rely on.</b> Leaning toward accepting drift, as #289 did. A fork imports by path, a broken import trips the crash guard, and P6 flags the change.</li>
   </ul>
 </section>
 
 <section id="sources">
   <h2 class="sec"><span class="n">·</span>Sources</h2>
   <ul class="sources">
-    <li>Knowledge Medium, master at <code>1b3fbb2093c</code>: <code>vite.config.ts</code>, <code>scripts/precache-assets.ts</code>, <code>.github/workflows/deploy-pages.yml</code>, <code>src/context/repo.tsx</code>, <code>src/data/repoProvider.ts</code>, <code>src/bootstrap/initialLayout.ts</code>, <code>src/extensions/AppRuntimeProvider.tsx</code>, <code>dynamicExtensions.ts</code>, <code>dynamicExtensionSeeds.ts</code>, <code>compileExtensionModule.ts</code>, <code>staticAppExtensions.ts</code>, <code>staticDataExtensions.ts</code>, <code>src/facets/facet.ts</code>, <code>togglable.ts</code>, <code>resolveAppRuntime.ts</code>, <code>src/data/facets.ts</code>, <code>typeDefinitionRegistry.ts</code>, <code>definitionSeeds.ts</code>, <code>seedIdentityLedger.ts</code>, <code>src/plugins/todo/</code>, <code>src/plugins/agent-runtime/commands.ts</code>, <code>packages/agent-cli/src/readTools.ts</code>, <code>mcpServer.ts</code>.</li>
-    <li>A local production build from 2026-10-23, for the map sizes and the shape of the re-export files.</li>
-    <li><code>docs/plugin-materialization.md</code> on PR #289's branch: the design this one succeeds for stage 1.</li>
+    <li>Knowledge Medium, master at <code>1b3fbb2093c</code>: <code>index.html</code>, <code>vite.config.ts</code>, <code>scripts/precache-assets.ts</code>, <code>.github/workflows/deploy-pages.yml</code>, <code>src/main.tsx</code>, <code>src/context/repo.tsx</code>, <code>src/data/repoProvider.ts</code>, <code>src/bootstrap/initialLayout.ts</code>, <code>resolveWorkspace.ts</code>, <code>workspaceBootstrap.ts</code>, <code>src/utils/lastWorkspace.ts</code>, <code>src/extensions/AppRuntimeProvider.tsx</code>, <code>dynamicExtensions.ts</code>, <code>dynamicExtensionSeeds.ts</code>, <code>compileExtensionModule.ts</code>, <code>compiledModuleCache.ts</code>, <code>overridesCache.ts</code>, <code>staticAppExtensions.ts</code>, <code>staticDataExtensions.ts</code>, <code>src/facets/facet.ts</code>, <code>togglable.ts</code>, <code>src/data/typeDefinitionRegistry.ts</code>, <code>seedIdentityLedger.ts</code>, <code>src/plugins/todo/</code>, <code>src/plugins/agent-runtime/commands.ts</code>, <code>packages/agent-cli/src/readTools.ts</code>, <code>mcpServer.ts</code>.</li>
+    <li>A local production build from 2026-10-23, for the map sizes, the shape of the re-export files and the app chunk's lack of runtime imports.</li>
+    <li><code>docs/plugin-materialization.md</code> on PR #289's branch, the design this one succeeds. Its §7 explored the import-map variant this design adopts.</li>
     <li><code>docs/landscape/imbue-studio.html</code> and <code>docs/landscape/cloudflare-os.html</code> (PR #1428), and the issues filed from them: #1425, #1426, #1427, #1430, #1431, #1432, #1433, #1434, #1435.</li>
     <li>The malleable-systems experiment catalog in #365 (<code>docs/malleable-experiments.html</code> on that PR): §1 block inspector, §5 capability manifests, and the notes on lithification, Model 1 and Model 2, and keeping the dependency graph a tree.</li>
-    <li>#481, the original question; #67, the per-device approval model; #253, cross-block imports.</li>
+    <li>#481, the original question; #67, the per-device approval model; #253, service-worker module URLs.</li>
   </ul>
 </section>
 
