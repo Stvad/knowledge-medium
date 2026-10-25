@@ -7,3 +7,11 @@
 # core-js's postinstall only prints a funding banner.
 allowBuilds:
   core-js: false
+
+# The repo's release cooldown (see the root pnpm-workspace.yaml); this
+# standalone install doesn't inherit it.
+minimumReleaseAge: 10080
+
+# As in the root pnpm-workspace.yaml: a stale install warns instead of
+# running a non-frozen install that rewrites pnpm-lock.yaml.
+verifyDepsBeforeRun: warn
