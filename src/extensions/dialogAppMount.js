@@ -1,1 +1,1 @@
-export{GA as DialogHost,KA as dialogAppMountExtension}from"../../chunks/app-DUwpvZqE.js";
+export{GA as DialogHost,KA as dialogAppMountExtension}from"../../chunks/app-B6wrWEbg.js";

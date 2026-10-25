@@ -1,1 +1,1 @@
-export{Nu as agentDispatchCompanionPlugin}from"../../../chunks/app-DUwpvZqE.js";
+export{Nu as agentDispatchCompanionPlugin}from"../../../chunks/app-B6wrWEbg.js";

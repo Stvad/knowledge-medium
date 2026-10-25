@@ -1,1 +1,1 @@
-export{NZ as KERNEL_PROCESSORS}from"../../../chunks/app-DUwpvZqE.js";
+export{PZ as KERNEL_PROCESSORS}from"../../../chunks/app-B6wrWEbg.js";

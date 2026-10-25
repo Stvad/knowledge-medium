@@ -1,1 +1,1 @@
-export{MG as attachmentCleanerIOContribution,NG as attachmentsDataExtension}from"../../../chunks/app-DUwpvZqE.js";
+export{MG as attachmentCleanerIOContribution,NG as attachmentsDataExtension}from"../../../chunks/app-B6wrWEbg.js";

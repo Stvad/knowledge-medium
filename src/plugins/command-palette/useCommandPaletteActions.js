@@ -1,1 +1,1 @@
-export{AE as useCommandPaletteActions}from"../../../chunks/app-DUwpvZqE.js";
+export{AE as useCommandPaletteActions}from"../../../chunks/app-B6wrWEbg.js";

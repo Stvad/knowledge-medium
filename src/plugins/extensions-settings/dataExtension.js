@@ -1,1 +1,1 @@
-export{Yn as extensionsDataExtension}from"../../../chunks/app-DUwpvZqE.js";
+export{Yn as extensionsDataExtension}from"../../../chunks/app-B6wrWEbg.js";
