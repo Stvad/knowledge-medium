@@ -1,0 +1,1 @@
+export{nJ as FacetBridge}from"../../chunks/app-n3jO1R05.js";
