@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Replacing a built-in plugin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..650;1,8..60,400&display=swap">
+<style>
+/* Same styling as the docs/landscape pages: one 68ch reading column in a 920px frame, figures and tables at full frame width. */
+:root {
+  --bg: #f3f5f6;
+  --surface: #ffffff;
+  --fg: #19222a;
+  --muted: #55626d;
+  --rule: #d4dbe0;
+  --rule-strong: #98a6b1;
+  --bi: #3a4db0;        /* built-in (the app bundle) */
+  --bi-tint: #e6e9f8;
+  --fork: #2b7956;      /* the user's copy */
+  --fork-tint: #def0e6;
+  --im: #8b3a7a;        /* borrowed from Imbue Studio */
+  --im-tint: #f4e3ef;
+  --cf: #a14b1f;        /* borrowed from Cloudflare OS */
+  --cf-tint: #f8e7dc;
+  --ms: #1e6f7c;        /* borrowed from the malleable-systems catalog (#365) */
+  --ms-tint: #dcf0f2;
+  --warn: #a5661a;
+  --warn-tint: #f6ead6;
+  --code-bg: #eaeef1;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Serif 4", Charter, Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101418; --surface: #182026; --fg: #e1e6ea; --muted: #9aa7b1;
+    --rule: #2a343d; --rule-strong: #52616d;
+    --bi: #95a3f3; --bi-tint: #1f2748; --fork: #6dc79c; --fork-tint: #153328;
+    --im: #e29bd3; --im-tint: #3a1c33; --cf: #f0a77c; --cf-tint: #3d2216;
+    --ms: #7fd0dc; --ms-tint: #12343a;
+    --warn: #e1ab5b; --warn-tint: #382a15; --code-bg: #1c242b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101418; --surface: #182026; --fg: #e1e6ea; --muted: #9aa7b1;
+  --rule: #2a343d; --rule-strong: #52616d;
+  --bi: #95a3f3; --bi-tint: #1f2748; --fork: #6dc79c; --fork-tint: #153328;
+  --im: #e29bd3; --im-tint: #3a1c33; --cf: #f0a77c; --cf-tint: #3d2216;
+  --ms: #7fd0dc; --ms-tint: #12343a;
+  --warn: #e1ab5b; --warn-tint: #382a15; --code-bg: #1c242b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body);
+  font-size: 17px; line-height: 1.62; -webkit-font-smoothing: antialiased;
+}
+.page {
+  max-width: 920px; margin: 0 auto; padding-block: 40px 96px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.measure { max-width: 68ch; }
+a { color: var(--bi); text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--bi); outline-offset: 2px; border-radius: 2px; }
+code { font-family: var(--mono); font-size: 0.86em; }
+p code, li code, dd code, td code, figcaption code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+p { margin: 0; }
+
+aside.doc-status { margin: 0 0 28px; padding: .7rem 1rem; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-tint); font-family: var(--display); font-size: 14px; line-height: 1.5; }
+
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+h1 {
+  font-family: var(--display); font-weight: 650; font-size: clamp(2rem, 5.6vw, 3.1rem);
+  line-height: 1.06; letter-spacing: -0.025em; margin: 14px 0 0; text-wrap: balance;
+}
+h1 .bi { color: var(--bi); white-space: nowrap; } h1 .fork { color: var(--fork); }
+.dek { font-size: 1.2rem; line-height: 1.5; margin-top: 20px; }
+.masthead { padding-bottom: 32px; border-bottom: 1px solid var(--rule); }
+.summary { margin-top: 32px; background: var(--surface); border: 1px solid var(--rule); padding: 22px 26px; display: grid; gap: 12px; }
+.summary h2 { font-family: var(--display); font-size: 1rem; font-weight: 650; margin: 0; }
+.summary ul { margin: 0; padding-left: 1.1em; display: grid; gap: 8px; }
+.legend-row { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; margin-top: 20px; font-family: var(--display); font-size: 14px; color: var(--muted); }
+.legend-row > span { display: inline-flex; gap: 8px; align-items: center; }
+.prov {
+  display: inline-block; font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase; line-height: 1;
+  padding: 5px 8px 4px; border-radius: 999px; border: 1px solid var(--rule-strong);
+  color: var(--muted); vertical-align: 0.3em; white-space: nowrap;
+}
+.prov.read { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.from { display: inline-block; font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 7px 3px; border-radius: 4px; white-space: nowrap; }
+.from.im { color: var(--im); background: var(--im-tint); }
+.from.cf { color: var(--cf); background: var(--cf-tint); }
+.from.ms { color: var(--ms); background: var(--ms-tint); }
+nav.toc { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 6px 20px; font-family: var(--display); font-size: 15px; }
+nav.toc a { color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--rule-strong); }
+nav.toc a:hover { border-bottom-color: var(--fg); }
+nav.toc .n { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-right: 4px; }
+
+section { padding-top: 56px; display: grid; gap: 18px; }
+section > p, section > ul, section > ol, section > dl, section > h3, section > h4 { max-width: 68ch; }
+h2.sec {
+  font-family: var(--display); font-weight: 650; font-size: 1.75rem; line-height: 1.15;
+  letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+}
+h2.sec .n { font-family: var(--mono); font-size: 0.9rem; font-weight: 500; color: var(--muted); }
+h3 { font-family: var(--display); font-weight: 650; font-size: 1.18rem; margin: 14px 0 0; text-wrap: balance; }
+h4 { font-family: var(--display); font-weight: 650; font-size: 1.05rem; margin: 0; }
+section ul, section ol { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; }
+dl.terms { margin: 0; display: grid; gap: 12px; }
+dl.terms dt { font-family: var(--display); font-weight: 650; font-size: 1.02rem; }
+dl.terms dd { margin: 2px 0 0; }
+
+figure { margin: 10px 0; display: grid; gap: 10px; }
+.fig-frame { background: var(--surface); border: 1px solid var(--rule); padding: 18px; overflow-x: auto; }
+.fig-frame svg { display: block; width: 100%; min-width: 660px; height: auto; }
+figcaption { font-family: var(--display); font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 80ch; }
+figcaption b { color: var(--fg); font-weight: 650; }
+
+svg text { font-family: var(--display); font-size: 13px; fill: var(--fg); }
+svg .t-title { font-size: 14px; font-weight: 650; }
+svg .t-sub { font-size: 12px; fill: var(--muted); }
+svg .t-mono { font-family: var(--mono); font-size: 11.5px; fill: var(--fg); }
+svg .t-small { font-family: var(--mono); font-size: 10.5px; fill: var(--fg); }
+svg .t-cap { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em; fill: var(--muted); }
+svg .t-bi { fill: var(--bi); } svg .t-fork { fill: var(--fork); } svg .t-warn { fill: var(--warn); }
+svg .t-im { fill: var(--im); } svg .t-cf { fill: var(--cf); } svg .t-ms { fill: var(--ms); }
+svg .b-bi { fill: var(--bi-tint); stroke: var(--bi); stroke-width: 1.4; }
+svg .b-fork { fill: var(--fork-tint); stroke: var(--fork); stroke-width: 1.4; }
+svg .b-new { fill: var(--surface); stroke: var(--fork); stroke-width: 1.4; stroke-dasharray: 5 4; }
+svg .b-warn { fill: var(--warn-tint); stroke: var(--warn); stroke-width: 1.4; }
+svg .b-im { fill: var(--im-tint); stroke: var(--im); stroke-width: 1.4; }
+svg .b-n { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.2; }
+svg .b-off { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.2; stroke-dasharray: 3 3; }
+svg .ln { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .ln-d { stroke-dasharray: 4 4; }
+svg .ln-fork { stroke: var(--fork); stroke-width: 1.6; fill: none; }
+svg .ah { fill: var(--muted); }
+svg .ah-fork { fill: var(--fork); }
+svg .strike { stroke: var(--warn); stroke-width: 1.6; }
+
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); }
+table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 15px; line-height: 1.45; }
+th {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); text-align: left;
+  padding: 12px 14px; border-bottom: 1px solid var(--rule-strong);
+}
+td { padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td:first-child { font-family: var(--display); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td .where { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--rule); padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.card h4 { font-size: 1.04rem; }
+.card p { font-size: 15.5px; line-height: 1.55; }
+.card .becomes { font-size: 15px; padding-left: 10px; border-left: 2px solid var(--fork); }
+
+.rules { background: var(--surface); border: 1px solid var(--rule); padding: 20px 24px; display: grid; gap: 12px; }
+.rules ol { margin: 0; padding-left: 1.3em; display: grid; gap: 10px; }
+.rules b { font-family: var(--display); }
+
+pre { margin: 0; background: var(--code-bg); border: 1px solid var(--rule); padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+pre .c { color: var(--muted); }
+pre .add { color: var(--fork); }
+pre .del { color: var(--warn); }
+.code-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: -10px; }
+
+.example { font-size: 16px; padding-left: 14px; border-left: 2px solid var(--rule-strong); max-width: 68ch; }
+.example b { font-family: var(--display); font-weight: 650; font-size: 14px; }
+
+/* Interface sketches */
+.mock { background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 10px; padding: 16px 18px; font-family: var(--display); font-size: 14.5px; line-height: 1.45; display: grid; gap: 10px; max-width: 640px; }
+.mock .mock-title { font-weight: 650; font-size: 15.5px; }
+.mock .muted { color: var(--muted); font-size: 13.5px; }
+.mock .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.mock .pill { font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--rule-strong); color: var(--muted); }
+.mock .pill.bi { color: var(--bi); border-color: var(--bi); background: var(--bi-tint); }
+.mock .pill.fork { color: var(--fork); border-color: var(--fork); background: var(--fork-tint); }
+.mock .pill.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-tint); }
+.mock .btn { font-family: var(--display); font-size: 13.5px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--rule-strong); background: var(--bg); color: var(--fg); }
+.mock .btn.primary { background: var(--fork); color: var(--surface); border-color: var(--fork); }
+.mock .check { color: var(--fork); font-weight: 650; }
+.mock pre { font-size: 12px; padding: 10px 12px; }
+.mock ul { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; }
+.mock .owner { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.mock-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+.outline { background: var(--surface); border: 1px solid var(--rule); padding: 16px 18px; font-family: var(--display); font-size: 14.5px; line-height: 1.5; max-width: 680px; }
+.outline ul { list-style: none; margin: 0; padding-left: 20px; display: grid; gap: 4px; border-left: 1px solid var(--rule); }
+.outline > ul { padding-left: 0; border-left: 0; }
+.outline li::before { content: "•"; color: var(--muted); margin-right: 8px; }
+.outline .prop { font-family: var(--mono); font-size: 12.5px; }
+.outline .prop .k { color: var(--muted); }
+.outline .type { font-family: var(--mono); font-size: 11px; color: var(--fork); border: 1px solid var(--fork); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+.outline .note { color: var(--muted); font-size: 13px; }
+
+.steps { counter-reset: s; list-style: none; padding-left: 0 !important; max-width: 68ch; }
+.steps li { counter-increment: s; position: relative; padding-left: 36px; }
+.steps li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 50%; background: var(--fork-tint); color: var(--fork); font-family: var(--mono); font-size: 12px; display: grid; place-items: center; }
+
+.bottom-line { background: var(--surface); border: 1px solid var(--rule); padding: 22px 26px; display: grid; gap: 12px; }
+.sources { font-size: 15px; line-height: 1.5; }
+.sources li { overflow-wrap: anywhere; }
+footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule); font-family: var(--display); font-size: 13.5px; color: var(--muted); }
+
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .summary, .bottom-line, .rules { padding: 18px; }
+  .fig-frame { padding: 12px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<aside class="doc-status"><strong>Status: proposed</strong> · design only, nothing built. Supersedes stage 1 of <code>docs/plugin-materialization.md</code> (PR #289, last verified 2026-07-02), whose source-map plan, manifest refactor and declaration shadowing no longer fit master (§2). Stages 2 and 3 of that doc stand as written there. <strong>Last verified against code:</strong> 2026-10-24 (master @ <code>1b3fbb2093c</code>).</aside>
+
+<header class="masthead">
+  <div class="eyebrow">Design · 24 October 2026 · successor to #289 stage 1 · answers #481</div>
+  <h1>Replacing a <span class="bi">built-in</span> plugin with <span class="fork">your own copy</span></h1>
+  <p class="dek measure">How someone, or an agent working for them, turns a built-in plugin into an extension they own and edit, so that it takes the built-in's place on every device that trusts it, and finds out when the built-in changes upstream. Rebuilt against current master, with ideas from Imbue Studio, Cloudflare OS and the malleable-systems catalog in #365.</p>
+
+  <div class="summary">
+    <h2>The short version</h2>
+    <ul>
+      <li>An extension block can name the built-in it <b>replaces</b> (<code>extension:replaces = system:todo</code>). On a device that has approved it and can load it, it runs <b>in the built-in's place in the plugin list</b>, from the first paint. Every other device keeps running the built-in, so nothing ever runs <em>neither</em>.</li>
+      <li>A copy replaces a built-in's <b>behaviour</b>, never its <b>declarations</b>. Types, properties, codecs, local schema and backfills stay the built-in's, because stored data is keyed by them.</li>
+      <li>The built-in's source reaches any run, including graph-only agent runs, through one read tool backed by a per-plugin source file the build emits. The source maps #289 planned to read no longer fit the build.</li>
+      <li>Every later change goes through one loop: someone changes the copy's source, each device keeps running its approved version, and a review on that device approves the new one. That covers an agent's edit, a fix, and an update from upstream. The review prompt already exists. What's new is what it shows.</li>
+      <li>Seven PR-sized pieces. The first is the source provider (#1435).</li>
+    </ul>
+  </div>
+
+  <div class="legend-row">
+    <span><span class="prov">Observed</span> checked in the code on master</span>
+    <span><span class="prov read">Our read</span> reasoning, not measured</span>
+    <span><span class="from im">Imbue</span> <span class="from cf">Cloudflare</span> <span class="from ms">#365</span> where an idea comes from</span>
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <a href="#problem"><span class="n">1</span>The problem</a>
+    <a href="#master"><span class="n">2</span>Master today</a>
+    <a href="#borrowed"><span class="n">3</span>Borrowed ideas</a>
+    <a href="#model"><span class="n">4</span>The model</a>
+    <a href="#source"><span class="n">5</span>Getting the source</a>
+    <a href="#assembly"><span class="n">6</span>Taking the slot</a>
+    <a href="#boot"><span class="n">7</span>Boot</a>
+    <a href="#loop"><span class="n">8</span>One loop for changes</a>
+    <a href="#upstream"><span class="n">9</span>Keeping up</a>
+    <a href="#seen"><span class="n">10</span>What you see</a>
+    <a href="#limits"><span class="n">11</span>Limits</a>
+    <a href="#plan"><span class="n">12</span>Plan</a>
+    <a href="#open"><span class="n">13</span>Open questions</a>
+  </nav>
+</header>
+
+<!-- 1 ─────────────────────────────────────────────────────────── -->
+<section id="problem">
+  <h2 class="sec"><span class="n">1</span>The problem <span class="prov">Observed</span></h2>
+  <p>Say you want finished todos dimmed instead of struck through. That styling is one class string in <code>TodoContentDecorator</code>, inside <code>src/plugins/todo/index.tsx</code>, which ships in the app bundle. You can't edit it from the app.</p>
+  <p>What works today: copy the plugin into an extension block, change the line, and turn the built-in Todo off. The copy imports the original's other modules through the page import map, so it gets the same module instances the app runs. Other plugins import only todo's action ids (srs-rescheduling) and schema constants (roam-import, onboarding). Action ids are looked up by string, so no plugin is left calling the original. It works, with four costs:</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:26%">Cost</th><th>Why it happens</th><th style="width:24%">Removed by</th></tr></thead>
+    <tbody>
+      <tr><td>A device that hasn't approved the copy runs neither version</td><td>Turning Todo off is synced intent. Running the copy needs this device's approval, which doesn't sync. A laptop that hasn't approved yet has Todo off and the copy blocked, so todos lose their checkbox there.</td><td>The <code>replaces</code> relation and the approval condition (§4, §6)</td></tr>
+      <tr><td>The copy loads after first paint and lands after every built-in</td><td>User extensions compile in an effect after the static plugins paint, and are appended after the whole static list. Decorators wrap in list order, so the copy's checkbox row now wraps the decorators that came after Todo.</td><td>Taking the slot (§6) and loading before paint (§7)</td></tr>
+      <tr><td>Nothing records that the copy came from Todo</td><td>No property says so, so nothing can tell you that Todo changed upstream.</td><td>Lineage (§4, §9)</td></tr>
+      <tr><td>A graph-only run can't read Todo's source</td><td>An agent-dispatch run has the km MCP tools and no shell.</td><td>The source provider (§5, #1435)</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 330" role="img" aria-labelledby="f1t f1d">
+        <title id="f1t">Two devices, today and with replaces</title>
+        <desc id="f1d">Left: the toggle that turns Todo off syncs to both devices, but only the phone approved the copy, so the laptop runs neither. Right: the copy names the built-in it replaces; the phone runs the copy in Todo's place and the laptop keeps the built-in until it approves.</desc>
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+        </defs>
+        <text x="20" y="20" class="t-cap">TODAY · COPY, THEN TURN THE BUILT-IN OFF</text>
+        <text x="460" y="20" class="t-cap">PROPOSED · THE COPY REPLACES THE BUILT-IN</text>
+
+        <!-- left -->
+        <rect x="20" y="34" width="400" height="64" rx="6" class="b-n"/>
+        <text x="36" y="58" class="t-title">Synced to every device</text>
+        <text x="36" y="80" class="t-mono">system:todo = off   ·   block “My todo”</text>
+        <line x1="110" y1="98" x2="110" y2="120" class="ln" marker-end="url(#a1)"/>
+        <line x1="300" y1="98" x2="300" y2="226" class="ln" marker-end="url(#a1)"/>
+
+        <rect x="20" y="124" width="190" height="88" rx="6" class="b-n"/>
+        <text x="34" y="146" class="t-title">Phone</text>
+        <text x="34" y="164" class="t-sub">approved the copy</text>
+        <rect x="34" y="176" width="150" height="26" rx="13" class="b-fork"/>
+        <text x="109" y="193" text-anchor="middle" class="t-fork" font-weight="650">runs My todo</text>
+
+        <rect x="230" y="230" width="190" height="88" rx="6" class="b-warn"/>
+        <text x="244" y="252" class="t-title">Laptop</text>
+        <text x="244" y="270" class="t-sub">hasn't approved yet</text>
+        <rect x="244" y="282" width="150" height="26" rx="13" class="b-n"/>
+        <text x="319" y="299" text-anchor="middle" class="t-warn" font-weight="650">runs neither</text>
+
+        <!-- right -->
+        <rect x="460" y="34" width="400" height="64" rx="6" class="b-n"/>
+        <text x="476" y="58" class="t-title">Synced to every device</text>
+        <text x="476" y="80" class="t-mono">block “My todo” · replaces system:todo</text>
+        <line x1="550" y1="98" x2="550" y2="120" class="ln" marker-end="url(#a1)"/>
+        <line x1="740" y1="98" x2="740" y2="226" class="ln" marker-end="url(#a1)"/>
+
+        <rect x="460" y="124" width="190" height="88" rx="6" class="b-n"/>
+        <text x="474" y="146" class="t-title">Phone</text>
+        <text x="474" y="164" class="t-sub">approved the copy</text>
+        <rect x="474" y="176" width="164" height="26" rx="13" class="b-fork"/>
+        <text x="556" y="193" text-anchor="middle" class="t-fork" font-weight="650">My todo, in Todo's slot</text>
+
+        <rect x="670" y="230" width="190" height="88" rx="6" class="b-n"/>
+        <text x="684" y="252" class="t-title">Laptop</text>
+        <text x="684" y="270" class="t-sub">hasn't approved yet</text>
+        <rect x="684" y="282" width="164" height="26" rx="13" class="b-bi"/>
+        <text x="766" y="299" text-anchor="middle" class="t-bi" font-weight="650">built-in Todo + prompt</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.</b> Today the decision "don't run Todo" syncs, but the decision "trust the copy" doesn't, so a device can end up with neither. With <code>replaces</code>, the built-in is suppressed only on a device where the copy actually runs.</figcaption>
+  </figure>
+</section>
+
+<!-- 2 ─────────────────────────────────────────────────────────── -->
+<section id="master">
+  <h2 class="sec"><span class="n">2</span>What master looks like now <span class="prov">Observed</span></h2>
+  <p>#289 was checked against code on 2026-07-02. Since then the build, the type and property model and the extension catalog have all moved. These are the facts this design rests on, checked on master at <code>1b3fbb2093c</code>.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:24%">Area</th><th>What the code does</th><th style="width:30%">What it means here</th></tr></thead>
+    <tbody>
+      <tr><td>Build shape</td><td><code>preserveModules</code> is gone. Every <code>src/**</code> module is still an entry at a stable path, but it emits as a one-line file that re-exports from one bundled <code>chunks/app-&lt;hash&gt;.js</code>. Minify is on.<span class="where">vite.config.ts:13-60, 168-210 · dist/src/plugins/todo/actions.js</span></td><td>A fork still imports any module at its <code>@/</code> path and gets the running instance.</td></tr>
+      <tr><td>Source maps</td><td>The small re-export files have no maps. All 492 plugin sources live in the app chunk's one map: 17,980,134 bytes, 1,735 sources, authored TSX from before react-compiler (local build of 2026-10-23). Maps aren't precached (<code>precache-assets.ts</code>), but Pages deploys them, and each deploy deletes the previous build's files.<span class="where">scripts/precache-assets.ts:23-30 · .github/workflows/deploy-pages.yml</span></td><td>#289's per-module <code>.js.map</code> plan no longer applies; see §5.</td></tr>
+      <tr><td>Extension catalog</td><td><code>src/extensions/api.ts</code> is gone. Extensions import from the module that owns a symbol, and <code>apiCatalog.ts</code> lists what is blessed.<span class="where">src/extensions/apiCatalog.ts:1-47</span></td><td>Rewritten imports point at real modules, e.g. <code>@/plugins/todo/actions.js</code>.</td></tr>
+      <tr><td>Boot order</td><td>The Repo installs all 15 static data extensions, ignoring toggles, and applies their local schema. Then <code>resolveInitialLayout</code> resolves the workspace and runs <code>bootstrapWorkspace</code>, before React mounts. Then the app paints the static plugins and merges user extensions afterwards, appended after the static list.<span class="where">src/context/repo.tsx:67-72 · src/data/repoProvider.ts:644-646 · src/bootstrap/initialLayout.ts:35-120 · src/extensions/AppRuntimeProvider.tsx:80-122, 146-199</span></td><td>There's a natural place to load forks: between workspace resolution and bootstrap (§7).</td></tr>
+      <tr><td>Resolver walk</td><td>One walker visits the tree in list order. Toggle boundaries are marked arrays it can recognise, and each contribution is kept once, by object identity, at its first occurrence.<span class="where">src/facets/facet.ts:579-618 · src/facets/resolveAppRuntime.ts:73-104</span></td><td>Swapping a boundary for its fork is a pure pre-pass. The id-keyed manifest #289 required first isn't needed (§6).</td></tr>
+      <tr><td>How facets combine</td><td>Content decorators wrap in contribution order, so later ones sit outside earlier ones. Renderers are a map keyed by id and alias, and the last write wins silently. Keyed maps are last-wins with a warning.<span class="where">src/extensions/blockInteraction.ts:520-535 · src/extensions/core.ts:179-199 · src/facets/facet.ts:102-123</span></td><td>Position matters for decorators and keyed registries, so a fork has to take the original's slot.</td></tr>
+      <tr><td>Contribution source</td><td><code>source?</code> is an optional free-form string. The loader prefixes every user-extension contribution with <code>block:&lt;id&gt;</code>. Built-ins write a short name like <code>'todo'</code>, not their toggle id.<span class="where">src/facets/facet.ts:13-25 · src/extensions/dynamicExtensions.ts:325-350</span></td><td>Nothing reliably says which plugin owns a contribution yet (§10).</td></tr>
+      <tr><td>Types and properties</td><td>They're seeds now. The registry treats declared seeds as authoritative, and a <code>system:</code> owner outranks any other. A user extension must key its seeds <code>@extension/…</code>; the loader throws on any other key.<span class="where">src/data/typeDefinitionRegistry.ts:183-322 · src/data/definitionSeeds.ts:104-109 · src/extensions/dynamicExtensionSeeds.ts:83-87, 196-198</span></td><td>A fork can't carry or re-key a built-in's seeds, and it shouldn't (§4, rule 1). #289's "forks may change their data extension" and §8 "shadow a system type" no longer hold.</td></tr>
+      <tr><td>Trust</td><td>Two gates: synced intent in the overrides map, then a per-device approval that pins the compiled source. A drifted source keeps running its pin and reports <code>update-available</code>. The bridge's install command pins on the paired device. The km MCP tools have no approve.<span class="where">src/extensions/dynamicExtensions.ts:115-127, 159-187 · src/plugins/agent-runtime/commands.ts:1438-1442</span></td><td>An agent-dispatch run can write a fork but can't make it run. That's the proposal boundary (§8).</td></tr>
+      <tr><td>Overrides map</td><td><code>extensions:overrides</code>, an <code>object&lt;string, boolean&gt;</code> on a per-user preferences block, mirrored per workspace into localStorage for first paint.<span class="where">src/plugins/extensions-settings/config.ts:44-64 · src/extensions/overridesCache.ts</span></td><td>Left exactly as it is. <code>replaces</code> lives on the extension block, not in this map.</td></tr>
+      <tr><td>Essential boundaries</td><td>Twelve can't be turned off: kernel data, default renderers, interactions, shortcuts and value presets, the toast mount, and the plugins extensions-settings, keybindings-settings, command-palette, properties-migration, workspace-header and app-intents.<span class="where">grep "essential: true" in src</span></td><td>None of these can be replaced in v1.</td></tr>
+      <tr><td>Coupling</td><td>75 plugin-to-plugin import pairs (173 import statements). Daily-notes is imported by 13 plugins, and its <code>getOrCreateDailyNote</code> by 5. Todo is imported by 4, for constants, schema and action ids only.</td><td>Todo is a clean first target. Daily-notes still has the split-brain problem (§11).</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 3 ─────────────────────────────────────────────────────────── -->
+<section id="borrowed">
+  <h2 class="sec"><span class="n">3</span>Ideas borrowed <span class="prov read">Our read</span></h2>
+  <p>The two landscape pages (<code>docs/landscape/imbue-studio.html</code>, <code>docs/landscape/cloudflare-os.html</code>) and the malleable-systems catalog in #365 each have something to say about owning a copy of software you didn't write. This design takes these ideas.</p>
+
+  <div class="cards">
+    <div class="card"><span class="from im">Imbue · templates</span><h4>Check that it boots before it goes live</h4><p>Adopting a template merges it into a scratch copy, checks that it boots, and only then updates the live workspace.</p><p class="becomes">A fork is resolved on its own (the existing <code>--verify</code> path) and compared with the built-in before it can take the slot. A fork that fails to load leaves the built-in running (§6, §8).</p></div>
+    <div class="card"><span class="from im">Imbue · creations</span><h4>One loop for every change</h4><p>Crystallize, heal and update all build on a branch and merge on approval.</p><p class="becomes">Here the device's approval is the branch point. Edited source syncs at once, but each device keeps running its approved version until someone approves the new one there (§8).</p></div>
+    <div class="card"><span class="from im">Imbue · critical apps</span><h4>More care for the parts everything stands on</h4><p>The shell and chat get a more careful edit flow.</p><p class="becomes">Essential boundaries can't be replaced, for the same reason they can't be turned off.</p></div>
+    <div class="card"><span class="from cf">Cloudflare · blueprints</span><h4>Remember the upstream; update by proposal</h4><p>A gadget remembers its blueprint. An update is a proposal: follow, fast-forward, or a three-way merge the agent checks.</p><p class="becomes">A lineage record on the fork, shared with upstream tracking for shared extensions (#1427), so there is one owner for both (§9).</p></div>
+    <div class="card"><span class="from cf">Cloudflare · one surface</span><h4>The same methods for people and agents</h4><p>The UI and the agent call the same server methods.</p><p class="becomes">Eject is one action, reachable from the menu, the palette, the CLI and an MCP tool. The source tool is generated from the same table as the other graph read tools (§5).</p></div>
+    <div class="card"><span class="from cf">Cloudflare</span> <span class="from ms">#365 · §5</span><h4>Say what code may do; diff it on update</h4><p>Capabilities are granted narrowly. In #365, a manifest is shown at enable time and diffed when an update arrives.</p><p class="becomes">Not enforced yet (that's #1425). The review shows what the fork contributes compared with the built-in, so approving means something (§8).</p></div>
+    <div class="card"><span class="from ms">#365 · §1</span><h4>Reveal codes</h4><p>A block inspector that answers "which extension did this?" and links each answer to its source.</p><p class="becomes">Every contribution gets an owning plugin. That powers the inspector, which is where "change this" and "make my own copy" start (§10).</p></div>
+    <div class="card"><span class="from ms">#365 · validates</span><h4>Compose before you fork</h4><p>Model 2 (an additive override layer, like CSS) beats Model 1 (fork and modify).</p><p class="becomes">The default copy is a wrapper. It copies only the plugin's entry module and imports the rest, so upstream fixes inside those modules reach it with no merge (§4).</p></div>
+    <div class="card"><span class="from ms">#365 · lithification</span><h4>Fixes don't reach forks on their own</h4><p>Once you own a copy, propagating upstream fixes to it is the unsolved cost.</p><p class="becomes">An upstream check after each app update, with fast-forward when you haven't edited the copy (§9).</p></div>
+    <div class="card"><span class="from ms">#365 · Hinsen</span><h4>Keep the dependency graph a tree</h4><p>Bound the blast radius by not letting extensions reach across.</p><p class="becomes">When one plugin bundles another's parts, that's the edge where a replaced original would sneak back in. A replaced plugin's parts are removed wherever they appear (§6).</p></div>
+  </div>
+
+  <h3>Not taken</h3>
+  <ul>
+    <li><b>Git branches for changes.</b> Block history, undo and the approval already give the branch-and-merge shape.</li>
+    <li><b>A resident agent or server-side apps.</b> These give up offline use and end-to-end encryption, as both landscape pages argue.</li>
+    <li><b>Enforced capabilities now.</b> A fork of a built-in runs the same code the bundle already runs. Sandboxing matters once extensions pass between people (#1425).</li>
+    <li><b>Automatic upstream merges.</b> Updates are always a gesture. A synced write that several devices would each try to make is a race, so no device writes on its own (§9).</li>
+  </ul>
+</section>
+
+<!-- 4 ─────────────────────────────────────────────────────────── -->
+<section id="model">
+  <h2 class="sec"><span class="n">4</span>The model <span class="prov read">Our read</span></h2>
+  <dl class="terms">
+    <dt>Built-in</dt><dd>A plugin in the app bundle, wrapped in a <code>systemToggle({id: 'system:&lt;name&gt;'})</code> boundary (<code>src/facets/togglable.ts:111-122</code>).</dd>
+    <dt>Fork</dt><dd>An extension block whose <code>extension:replaces</code> names a built-in's toggle id. It's an ordinary user extension in every other way: TS/JSX content, compiled in the browser, enabled by intent, run only from this device's approval.</dd>
+    <dt>Eject</dt><dd>Making a fork from a built-in's source: copy its entry module, rewrite its imports, record its lineage. (The word comes from build tools that hand you their hidden config.)</dd>
+    <dt>Wrapper, entry fork, deep fork</dt><dd>A <b>wrapper</b> copies only the entry module and imports everything else from the original; that's what eject produces. An <b>entry fork</b> is a wrapper into which someone pasted a function to change it. A <b>deep fork</b> edits several modules as separate blocks. That needs cross-block imports, which is #253 and out of scope.</dd>
+    <dt>Identity contributions</dt><dd>Contributions that name or shape stored data: type and property seeds, value-preset codecs, local schema, workspace backfills, system pages (the Journal page daily-notes ensures, say). Their facets would say so where they're defined (<code>defineFacet({…, identity: true})</code>), so there's one owner for the list.</dd>
+    <dt>Lineage</dt><dd>Where a fork's source came from: an upstream (a built-in at an app version, or for #1427 a shared extension block or URL) and the base text of every file it copied.</dd>
+  </dl>
+
+  <div class="rules">
+    <h4>Four rules</h4>
+    <ol>
+      <li><b>A fork replaces behaviour, never identity.</b> The built-in's identity contributions stay in its slot whatever the fork does. A fork may include the built-in's own identity objects, imported from the original modules. The loader passes those through untouched instead of throwing. A fork may not declare different ones for the same names.</li>
+      <li><b>A fork replaces only where it runs.</b> The swap happens on a device where the fork is enabled by intent, approved here, and loaded without error. Anywhere else the built-in runs, and settings shows the usual "Enable here".</li>
+      <li><b>A fork takes the built-in's slot.</b> It goes into the plugin list where the built-in was, so order-sensitive facets behave as before. It loads before first paint, like the built-in did.</li>
+      <li><b>A replaced built-in doesn't come back in through another plugin.</b> Its behaviour parts are removed wherever another plugin bundled them, unless the fork carries them too.</li>
+    </ol>
+  </div>
+
+  <p>The fork and its lineage are blocks, following the record-grain rule: you'd want to see, link and edit each of them on its own. Here is the fork eject would create for Todo:</p>
+  <div class="outline">
+    <ul>
+      <li>My todo <span class="type">extension</span>
+        <ul>
+          <li class="prop"><span class="k">extension:name</span> My todo</li>
+          <li class="prop"><span class="k">extension:replaces</span> system:todo <span class="note">— a toggle id, not a block, so a string is right here</span></li>
+          <li class="note">content: the ejected entry, about 70 lines (§5)</li>
+          <li>Upstream <span class="type">extension-upstream</span>
+            <ul>
+              <li class="prop"><span class="k">extension:upstream-kind</span> bundle</li>
+              <li class="prop"><span class="k">extension:upstream</span> system:todo</li>
+              <li class="prop"><span class="k">extension:base-version</span> the app version at eject</li>
+              <li>index.tsx <span class="type">extension-base</span>
+                <ul>
+                  <li class="prop"><span class="k">extension:base-path</span> src/plugins/todo/index.tsx</li>
+                  <li class="prop"><span class="k">extension:base-hash</span> sha256 of the content below</li>
+                  <li class="note">content: the file as ejected, the base of a later merge</li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+  <p>The base text has to be stored. Pages deletes the previous build's files on every deploy (<code>clean-exclude</code> keeps only PR previews), so the version a fork came from can't be fetched again later. All new properties and types are seeds and go in <code>src/data/seedIdentityLedger.ts</code>. For #1427 the same <code>extension-upstream</code> block takes <code>upstream-kind = block</code> with an <code>optional-ref</code> to the source extension.</p>
+</section>
+
+<!-- 5 ─────────────────────────────────────────────────────────── -->
+<section id="source">
+  <h2 class="sec"><span class="n">5</span>Getting a built-in's source (#1435)</h2>
+  <p>The source provider maps a toggle id to the plugin's files and their authored text, and it works the same in dev and production. #289 planned to read each module's <code>.js.map</code>. On master those per-module maps don't exist (§2), so there are three ways to do it:</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:22%">Option</th><th>How</th><th style="width:34%">Cost</th></tr></thead>
+    <tbody>
+      <tr><td>A · Read the app chunk's map</td><td>Find the chunk name from a re-export file, fetch <code>app-&lt;hash&gt;.js.map</code>, and take the plugin's entries from <code>sourcesContent</code>. Dev needs a separate path.</td><td>An 18 MB download to read Todo's 8 KB, network only, and a 404 once a deploy has replaced the build. Type-only modules may be missing. Two code paths.</td></tr>
+      <tr><td>B · A source file per plugin <b>(recommended)</b></td><td>A small Vite plugin emits <code>plugin-sources/&lt;name&gt;.json</code>: every non-test file under <code>src/plugins/&lt;name&gt;/</code>, with its sha256 and the app version. In dev, middleware serves the same file built from disk.</td><td>About 3.3 MB on the server in total (todo 8 KB, the largest, agent-runtime, 511 KB). <code>.json</code> isn't precached, so devices pay nothing until asked. One code path.</td></tr>
+      <tr><td>C · Lazy <code>import.meta.glob(…, ?raw)</code></td><td>Vite turns each source file into a lazily loaded module.</td><td>About 500 extra <code>.js</code> files in <code>dist</code>. The service worker precaches every <code>.js</code>, so every device downloads about 3.3 MB more and makes about 500 more requests on each deploy.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>B costs about one small build plugin and its test, and it's the only option that is cheap for devices and the same in dev and production. The file names the app version it was built from. The URL is stable, so after a deploy it can be newer than the running page. If its version doesn't match <code>__APP_VERSION__</code>, the provider says "the app has updated, reload" instead of handing back source that doesn't match what's running.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 170" role="img" aria-labelledby="f2t f2d">
+        <title id="f2t">How a run reaches a built-in's source</title>
+        <desc id="f2d">An agent-dispatch run calls the plugin_source MCP tool; the km MCP server forwards it over the agent bridge to the live client; the client's source provider fetches the plugin's source file from the deployed build or the dev server and returns it.</desc>
+        <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+        <rect x="10" y="40" width="150" height="70" rx="6" class="b-im"/>
+        <text x="85" y="68" text-anchor="middle" class="t-title">Agent run</text>
+        <text x="85" y="88" text-anchor="middle" class="t-sub">graph tools only</text>
+        <line x1="160" y1="75" x2="196" y2="75" class="ln" marker-end="url(#a2)"/>
+        <rect x="200" y="40" width="160" height="70" rx="6" class="b-n"/>
+        <text x="280" y="66" text-anchor="middle" class="t-title">km MCP server</text>
+        <text x="280" y="88" text-anchor="middle" class="t-mono">plugin_source</text>
+        <line x1="360" y1="75" x2="396" y2="75" class="ln" marker-end="url(#a2)"/>
+        <rect x="400" y="40" width="150" height="70" rx="6" class="b-n"/>
+        <text x="475" y="66" text-anchor="middle" class="t-title">Agent bridge</text>
+        <text x="475" y="88" text-anchor="middle" class="t-sub">to the live client</text>
+        <line x1="550" y1="75" x2="586" y2="75" class="ln" marker-end="url(#a2)"/>
+        <rect x="590" y="40" width="130" height="70" rx="6" class="b-new"/>
+        <text x="655" y="66" text-anchor="middle" class="t-title">pluginSources.ts</text>
+        <text x="655" y="88" text-anchor="middle" class="t-sub">+ import rewrite</text>
+        <line x1="720" y1="75" x2="756" y2="75" class="ln" marker-end="url(#a2)"/>
+        <rect x="760" y="30" width="112" height="90" rx="6" class="b-new"/>
+        <text x="816" y="58" text-anchor="middle" class="t-small">plugin-sources/</text>
+        <text x="816" y="74" text-anchor="middle" class="t-small">todo.json</text>
+        <text x="816" y="96" text-anchor="middle" class="t-sub">Pages · or Vite</text>
+        <text x="816" y="110" text-anchor="middle" class="t-sub">middleware in dev</text>
+        <text x="10" y="150" class="t-sub">Dashed: new. The tool is one more row in GRAPH_READ_TOOLS (packages/agent-cli/src/readTools.ts:112), which also generates the CLI verb.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.</b> One read path for every caller. The bridge's <code>pnpm agent plugin-source</code> verb and the MCP tool come from the same table, so they can't drift.</figcaption>
+  </figure>
+
+  <p class="code-label">What the tool returns, bounded so a large plugin doesn't flood a run</p>
+<pre>plugin_source({pluginId: 'system:todo'})
+{
+  "pluginId": "system:todo",
+  "name": "Todo",
+  "appVersion": "…",
+  "files": [
+    {"path": "src/plugins/todo/index.tsx",        "importPath": "@/plugins/todo/index.js",         "bytes": 2981, "sha256": "…"},
+    {"path": "src/plugins/todo/actions.ts",       "importPath": "@/plugins/todo/actions.js",       "bytes": 3343, "sha256": "…"},
+    {"path": "src/plugins/todo/dataExtension.ts", "importPath": "@/plugins/todo/dataExtension.js", "bytes": 418,  "sha256": "…"},
+    {"path": "src/plugins/todo/schema.ts",        "importPath": "@/plugins/todo/schema.js",        "bytes": 1247, "sha256": "…"}
+  ],
+  "entry": {"path": "src/plugins/todo/index.tsx", "ejected": "<i>…the entry, rewritten as below…</i>"}
+}
+
+plugin_source({pluginId: 'system:todo', path: 'src/plugins/todo/actions.ts'})   <span class="c">// one file's text</span></pre>
+
+  <h3>The rewrite</h3>
+  <p>A fork runs from a blob URL, which has no usable base, so relative imports must become absolute <code>@/</code> paths. Plugins write relative imports several ways (<code>./actions.ts</code>, <code>./config</code>, <code>../other/x.js</code>), so the rewrite resolves each one against the file list. It also unwraps the plugin's <code>systemToggle(…).of([…])</code> into the module's default export, so the fork carries no <code>system:</code> boundary of its own. Babel is already loaded to compile extensions, so this can be an AST transform rather than text surgery.</p>
+<pre><span class="c">// src/plugins/todo/index.tsx, as shipped</span>
+<span class="del">import { todoActionsExtension } from './actions.ts'</span>
+<span class="del">import { todoDataExtension } from './dataExtension.ts'</span>
+<span class="del">import { statusProp, TODO_TYPE, type TodoStatus } from './schema.ts'</span>
+…
+<span class="del">export const todoPlugin: AppExtension = systemToggle({</span>
+<span class="del">  id: 'system:todo', name: 'Todo', description: 'Checkbox / done-state property on blocks.',</span>
+<span class="del">}).of([</span>
+
+<span class="c">// the fork's content after eject</span>
+<span class="add">import { todoActionsExtension } from '@/plugins/todo/actions.js'</span>
+<span class="add">import { todoDataExtension } from '@/plugins/todo/dataExtension.js'</span>
+<span class="add">import { statusProp, TODO_TYPE, type TodoStatus } from '@/plugins/todo/schema.js'</span>
+…
+<span class="add">export default [</span>
+  todoDataExtension,          <span class="c">// identity: the built-in's own objects, passed through (rule 1)</span>
+  todoActionsExtension,       <span class="c">// imported, not copied: upstream fixes arrive untouched</span>
+  blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),
+] satisfies AppExtension</pre>
+</section>
+
+<!-- 6 ─────────────────────────────────────────────────────────── -->
+<section id="assembly">
+  <h2 class="sec"><span class="n">6</span>Taking the slot</h2>
+  <p>The swap is a pure function over the static tree, run before resolution. It needs no change to the walker and no new manifest shape, because the toggle boundary already carries the id. <span class="prov">Observed</span> <code>getBoundary</code> reads it, <code>src/facets/togglable.ts:78-81</code>.</p>
+<pre><span class="c">// src/extensions/replacements.ts (sketch)</span>
+<span class="c">/** Swap each replaced built-in for its fork, in place. Identity contributions stay
+ *  in the built-in's slot (rule 1); parts of a replaced built-in that another plugin
+ *  bundled are dropped there (rule 4). The fork is already loaded and approved (rule 2). */</span>
+export const substituteReplacements = (
+  tree: readonly AppExtension[],
+  forks: ReadonlyMap&lt;string, AppExtension&gt;,   <span class="c">// 'system:todo' → the fork's boundary</span>
+): AppExtension[] =&gt; tree.map(node =&gt; substitute(node, forks))
+
+const substitute = (node: AppExtension, forks: ReadonlyMap&lt;string, AppExtension&gt;): AppExtension =&gt; {
+  if (!Array.isArray(node)) return node
+  const boundary = getBoundary(node)
+  const owner = boundary ?? getOwnerMark(node)
+  const fork = owner &amp;&amp; forks.get(owner.id)
+  if (fork) {
+    const kept = identityContributionsOf(node)
+    return boundary
+      ? withBoundary(boundary, [kept, fork])   <span class="c">// the built-in's own slot: its toggle still gates it</span>
+      : kept                                  <span class="c">// a part bundled by another plugin</span>
+  }
+  return withSameMarks(node, node.map(child =&gt; substitute(child, forks)))
+}</pre>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 380" role="img" aria-labelledby="f3t f3d">
+        <title id="f3t">Where the copy lands in the decorator order</title>
+        <desc id="f3d">Ten plugins contribute block content decorators, in this order: daily-notes, geo, character-counter, supertags, backlinks, todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Today a copy goes after all of them, so its checkbox row wraps the contributor badges and the update indicator. Proposed, the copy takes todo's sixth slot and the nesting is unchanged.</desc>
+        <text x="10" y="18" class="t-cap">CONTENT DECORATORS, IN CONTRIBUTION ORDER (LATER = OUTSIDE)</text>
+        <text x="10" y="48" class="t-title">Today</text>
+        <g class="t-small">
+          <rect x="80"  y="30" width="62" height="28" rx="4" class="b-bi"/><text x="111" y="48" text-anchor="middle">daily</text>
+          <rect x="146" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="177" y="48" text-anchor="middle">geo</text>
+          <rect x="212" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="243" y="48" text-anchor="middle">chars</text>
+          <rect x="278" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="309" y="48" text-anchor="middle">tags</text>
+          <rect x="344" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="375" y="48" text-anchor="middle">backl.</text>
+          <rect x="410" y="30" width="62" height="28" rx="4" class="b-off"/><text x="441" y="48" text-anchor="middle" class="t-sub">todo off</text>
+          <rect x="476" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="507" y="48" text-anchor="middle">srs</text>
+          <rect x="542" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="573" y="48" text-anchor="middle">update</text>
+          <rect x="608" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="639" y="48" text-anchor="middle">dispatch</text>
+          <rect x="674" y="30" width="62" height="28" rx="4" class="b-bi"/><text x="705" y="48" text-anchor="middle">contrib.</text>
+          <rect x="744" y="30" width="132" height="28" rx="4" class="b-fork"/><text x="810" y="48" text-anchor="middle" class="t-fork">My todo (appended)</text>
+        </g>
+        <text x="10" y="98" class="t-title">Proposed</text>
+        <g class="t-small">
+          <rect x="80"  y="80" width="62" height="28" rx="4" class="b-bi"/><text x="111" y="98" text-anchor="middle">daily</text>
+          <rect x="146" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="177" y="98" text-anchor="middle">geo</text>
+          <rect x="212" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="243" y="98" text-anchor="middle">chars</text>
+          <rect x="278" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="309" y="98" text-anchor="middle">tags</text>
+          <rect x="344" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="375" y="98" text-anchor="middle">backl.</text>
+          <rect x="410" y="80" width="62" height="28" rx="4" class="b-fork"/><text x="441" y="98" text-anchor="middle" class="t-fork">My todo</text>
+          <rect x="476" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="507" y="98" text-anchor="middle">srs</text>
+          <rect x="542" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="573" y="98" text-anchor="middle">update</text>
+          <rect x="608" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="639" y="98" text-anchor="middle">dispatch</text>
+          <rect x="674" y="80" width="62" height="28" rx="4" class="b-bi"/><text x="705" y="98" text-anchor="middle">contrib.</text>
+        </g>
+
+        <text x="10" y="148" class="t-cap">WHAT A TODO BLOCK RENDERS AS (OUTERMOST FIRST)</text>
+        <!-- today nesting -->
+        <text x="10" y="174" class="t-title">Today</text>
+        <rect x="10"  y="184" width="420" height="180" rx="6" class="b-fork"/>
+        <text x="24" y="204" class="t-fork" font-weight="650">My todo: ☐ checkbox · dims and strikes through ↓</text>
+        <rect x="26"  y="214" width="388" height="138" rx="6" class="b-bi"/>
+        <text x="40" y="234">contributors: avatar badges</text>
+        <line x1="40" y1="230" x2="210" y2="230" class="strike"/>
+        <rect x="42"  y="244" width="356" height="96" rx="6" class="b-bi"/>
+        <text x="56" y="264">update indicator: “changed” dot</text>
+        <line x1="56" y1="260" x2="250" y2="260" class="strike"/>
+        <rect x="58"  y="274" width="324" height="54" rx="6" class="b-n"/>
+        <text x="72" y="296">… the earlier decorators and the content</text>
+        <text x="72" y="316" class="t-sub">srs-review, backlinks, tags, chars, geo, daily</text>
+
+        <!-- proposed nesting -->
+        <text x="450" y="174" class="t-title">Proposed</text>
+        <rect x="450" y="184" width="420" height="180" rx="6" class="b-bi"/>
+        <text x="464" y="204">contributors: avatar badges</text>
+        <rect x="466" y="214" width="388" height="138" rx="6" class="b-bi"/>
+        <text x="480" y="234">update indicator · dispatch · srs-review</text>
+        <rect x="482" y="244" width="356" height="96" rx="6" class="b-fork"/>
+        <text x="496" y="264" class="t-fork" font-weight="650">My todo: ☐ checkbox · dims ↓</text>
+        <rect x="498" y="274" width="324" height="54" rx="6" class="b-n"/>
+        <text x="512" y="296">backlinks, tags, chars, geo, daily</text>
+        <text x="512" y="316" class="t-sub">and the content</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 3.</b> The order is from <code>staticAppExtensions.ts</code>: daily-notes, geo, character-counter, supertags, backlinks (inline counts), todo, srs-review, update-indicator, agent-dispatch-companion, contributors. Read from the combine loop in <code>blockInteraction.ts:525-532</code>, not run: an appended copy's checkbox row wraps the decorators that came after Todo, so its styling covers the contributor badges and the update dot as well. In the slot, nesting is what the built-in had.</figcaption>
+  </figure>
+
+  <h3>Parts bundled by another plugin</h3>
+  <p>Some plugins compose another plugin's parts by importing them. <span class="prov">Observed</span> srs-review bundles the data extensions of srs-rescheduling, daily-notes, references and block-tagging (<code>src/plugins/srs-review/index.ts:77-80</code>). Geo composes the whole references plugin, boundary included (<code>src/plugins/geo/index.ts:27</code>). If references is replaced, its original processors would come back in through srs-review, which bundles <code>referencesDataExtension</code>. srs-review sits later in the list, and processors are keyed last-wins, so the original <code>references.parseReferences</code> would beat the fork's.</p>
+  <p>Rule 4 needs a mark that says who owns those bundled parts. The plugin's own boundary marks its slot. An <code>ownedBy('system:daily-notes', […])</code> mark, a non-gating twin of the boundary symbol, goes on each exported part that another plugin composes. Today that's four data extensions; geo's composed copy already carries the references boundary. Marking by owner rather than by "reachable from the replaced plugin" matters, because shared infrastructure like the dialog mount is reachable from many plugins and must not be dropped when one of them is replaced.</p>
+  <p>After assembly, a check covers what marks can't catch. For every key the fork contributes to a keyed facet, the fork's value must be the winner. A loss is reported at review time, before the fork goes live, for example "srs-review still provides references' original <code>references.parseReferences</code>".</p>
+
+  <h3>The same path when you reload, not only at boot</h3>
+  <p>Toggling a fork, approving an update or editing a fork's source dispatches <code>refreshAppRuntime()</code>. The provider's async resolve then uses the same <code>substituteReplacements</code> over the forks the loader just returned. <span class="prov">Observed</span> Effects are diffed by id across the swap (<code>EffectReconciler</code>, <code>src/extensions/liveRuntime.ts:278-291</code>), so only the replaced plugin's effects restart.</p>
+</section>
+
+<!-- 7 ─────────────────────────────────────────────────────────── -->
+<section id="boot">
+  <h2 class="sec"><span class="n">7</span>Boot: load forks before anything runs</h2>
+  <p>To take the slot from the first paint, a fork must be loaded before the static plugins resolve. Its data contributions must also be installed before the workspace bootstrap runs its landing and seeding. The boot already has the right gap.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 220" role="img" aria-labelledby="f4t f4d">
+        <title id="f4t">Boot, today and proposed</title>
+        <desc id="f4d">Today: open the database, install static data, resolve the workspace, bootstrap, paint static plugins, then compile user extensions and merge them appended. Proposed: after resolving the workspace, load approved forks and swap them into their slots before bootstrap and first paint; other user extensions keep loading after paint.</desc>
+        <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+        <text x="10" y="20" class="t-cap">TODAY</text>
+        <g>
+          <rect x="10"  y="30" width="110" height="46" rx="5" class="b-n"/><text x="65"  y="58" text-anchor="middle" class="t-small">open DB</text>
+          <rect x="126" y="30" width="110" height="46" rx="5" class="b-n"/><text x="181" y="58" text-anchor="middle" class="t-small">static data</text>
+          <rect x="242" y="30" width="110" height="46" rx="5" class="b-n"/><text x="297" y="58" text-anchor="middle" class="t-small">workspace</text>
+          <rect x="358" y="30" width="110" height="46" rx="5" class="b-n"/><text x="413" y="58" text-anchor="middle" class="t-small">bootstrap</text>
+          <rect x="474" y="30" width="110" height="46" rx="5" class="b-bi"/><text x="529" y="58" text-anchor="middle" class="t-small">paint: Todo runs</text>
+          <line x1="592" y1="20" x2="592" y2="88" class="ln ln-d"/>
+          <text x="598" y="20" class="t-sub">first paint</text>
+          <rect x="600" y="30" width="130" height="46" rx="5" class="b-n"/><text x="665" y="58" text-anchor="middle" class="t-small">compile extensions</text>
+          <rect x="736" y="30" width="134" height="46" rx="5" class="b-fork"/><text x="803" y="58" text-anchor="middle" class="t-small">merge, appended</text>
+        </g>
+        <text x="10" y="122" class="t-cap">PROPOSED</text>
+        <g>
+          <rect x="10"  y="132" width="96" height="46" rx="5" class="b-n"/><text x="58"  y="160" text-anchor="middle" class="t-small">open DB</text>
+          <rect x="110" y="132" width="96" height="46" rx="5" class="b-n"/><text x="158" y="160" text-anchor="middle" class="t-small">static data</text>
+          <rect x="210" y="132" width="104" height="46" rx="5" class="b-n"/><text x="262" y="160" text-anchor="middle" class="t-small">workspace</text>
+          <rect x="318" y="132" width="108" height="46" rx="5" class="b-new"/><text x="372" y="152" text-anchor="middle" class="t-small">load approved</text><text x="372" y="166" text-anchor="middle" class="t-small">forks</text>
+          <rect x="430" y="132" width="100" height="46" rx="5" class="b-new"/><text x="480" y="152" text-anchor="middle" class="t-small">swap into</text><text x="480" y="166" text-anchor="middle" class="t-small">slots</text>
+          <rect x="534" y="132" width="76" height="46" rx="5" class="b-n"/><text x="572" y="160" text-anchor="middle" class="t-small">bootstrap</text>
+          <rect x="614" y="132" width="110" height="46" rx="5" class="b-fork"/><text x="669" y="160" text-anchor="middle" class="t-small">paint: My todo</text>
+          <line x1="730" y1="122" x2="730" y2="190" class="ln ln-d"/>
+          <rect x="736" y="132" width="134" height="46" rx="5" class="b-n"/><text x="803" y="152" text-anchor="middle" class="t-small">other extensions,</text><text x="803" y="166" text-anchor="middle" class="t-small">as today</text>
+        </g>
+        <text x="10" y="210" class="t-sub">Dashed: new, in resolveInitialLayout between resolveWorkspace (:44) and bootstrapWorkspace (:93). Safe mode skips both.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 4.</b> Only replacing forks move before paint. Additive extensions keep today's post-paint load, so boot latency only changes for people who have actually forked a built-in.</figcaption>
+  </figure>
+
+  <ul>
+    <li><b>What the new step does.</b> It queries the workspace's extension blocks that carry <code>extension:replaces</code>. For each one enabled by intent and approved on this device, it instantiates the pinned output, using <code>loadApprovedExtension</code> as today. It applies <code>substituteReplacements</code> to the static data list and installs the result on the Repo before <code>bootstrapWorkspace</code>.</li>
+    <li><b>One instance per module.</b> The loaded forks reach <code>AppRuntimeProvider</code> through the boot result. The compile cache keys modules by block and source hash anyway (<code>compileExtensionModule.ts:201-232</code>), so even a second load is a lookup.</li>
+    <li><b>Safe mode</b> skips the step entirely, so recovery never depends on any of this.</li>
+    <li><b>Cost, reasoned, not measured.</b> With nothing forked, the step is one query that returns nothing, so boot is effectively today's. With N forks it's N approval reads from IndexedDB and N imports of already-compiled strings. Plausibly tens of milliseconds for a few forks; the build should measure it with <code>markStartup</code> marks. The slow case is the first boot after a compiler-version bump, which recompiles from the approved source.</li>
+    <li><b>Local schema and backfills</b> are identity contributions (rule 1), so they stay the built-in's. They already run at Repo setup for every static data extension, whatever its toggle state (<code>repoProvider.ts:644</code>), so forking changes nothing about them.</li>
+  </ul>
+</section>
+
+<!-- 8 ─────────────────────────────────────────────────────────── -->
+<section id="loop">
+  <h2 class="sec"><span class="n">8</span>One loop for every change</h2>
+  <p>Imbue builds every change on a branch and merges it when you approve. Knowledge Medium already has that shape, without git. A change to a fork's source is a block edit that syncs at once. But no device runs it until that device approves it, and until then it keeps running its pinned version. The edited source <em>is</em> the proposal, and approval on a device is the merge. So eject by an agent, fix with agent (#1433), crystallize (#1434) and an upstream update (§9) need no new state. They all end in the <code>needs-approval</code> or <code>update-available</code> prompt that exists today.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f5t f5d">
+        <title id="f5t">The change loop</title>
+        <desc id="f5d">Three triggers, change this with an agent, fix with agent, and upstream changed, all produce new source for the fork. The source syncs; every device keeps running its approved version; the review on a device shows the diff and what the fork contributes; approving makes it run there. A later trigger starts the loop again.</desc>
+        <defs>
+          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          <marker id="a5f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-fork"/></marker>
+        </defs>
+        <rect x="10" y="20"  width="170" height="40" rx="5" class="b-im"/><text x="95" y="45" text-anchor="middle" class="t-small">Change this… #1432</text>
+        <rect x="10" y="70"  width="170" height="40" rx="5" class="b-im"/><text x="95" y="95" text-anchor="middle" class="t-small">Fix with agent #1433</text>
+        <rect x="10" y="120" width="170" height="40" rx="5" class="b-im"/><text x="95" y="145" text-anchor="middle" class="t-small">Upstream changed §9</text>
+        <line x1="180" y1="40"  x2="224" y2="84" class="ln" marker-end="url(#a5)"/>
+        <line x1="180" y1="90"  x2="224" y2="90" class="ln" marker-end="url(#a5)"/>
+        <line x1="180" y1="140" x2="224" y2="98" class="ln" marker-end="url(#a5)"/>
+
+        <rect x="228" y="62" width="150" height="58" rx="6" class="b-n"/>
+        <text x="303" y="86" text-anchor="middle" class="t-title">New source</text>
+        <text x="303" y="104" text-anchor="middle" class="t-sub">written to the fork</text>
+        <line x1="378" y1="91" x2="414" y2="91" class="ln" marker-end="url(#a5)"/>
+
+        <rect x="418" y="62" width="150" height="58" rx="6" class="b-n"/>
+        <text x="493" y="84" text-anchor="middle" class="t-title">Syncs everywhere</text>
+        <text x="493" y="102" text-anchor="middle" class="t-sub">devices keep their pin</text>
+        <line x1="568" y1="91" x2="604" y2="91" class="ln" marker-end="url(#a5)"/>
+
+        <rect x="608" y="62" width="120" height="58" rx="6" class="b-new"/>
+        <text x="668" y="86" text-anchor="middle" class="t-title">Review</text>
+        <text x="668" y="104" text-anchor="middle" class="t-sub">on this device</text>
+        <line x1="728" y1="91" x2="756" y2="91" class="ln-fork" marker-end="url(#a5f)"/>
+
+        <rect x="760" y="62" width="110" height="58" rx="6" class="b-fork"/>
+        <text x="815" y="86" text-anchor="middle" class="t-title t-fork">Approve here</text>
+        <text x="815" y="104" text-anchor="middle" class="t-sub">new pin runs</text>
+
+        <path d="M815,120 C815,210 303,210 303,124" class="ln ln-d" marker-end="url(#a5)"/>
+        <text x="560" y="200" text-anchor="middle" class="t-sub">the next change starts over; a device that never approves keeps the last version it approved</text>
+        <text x="10" y="240" class="t-sub">Purple: triggers, from the Imbue comparison. Dashed: what's new — the review's content, not its state.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.</b> The approval pin from #67 plays the part of Imbue's branch. Every trigger produces source, and every device decides for itself when to run it.</figcaption>
+  </figure>
+
+  <h3>Worked example: "dim done todos" from the bullet menu</h3>
+  <ol class="steps">
+    <li>On a todo block you choose <b>Change this…</b> (#1432) and type "dim done todos, don't strike them through".</li>
+    <li>The run's brief lists what draws the block and who owns each part: the default renderer (core), and decorators from Character counter, Todo, the update indicator and Contributors (§10).</li>
+    <li>The run calls <code>plugin_source</code> for <code>system:todo</code>, then <code>eject_plugin</code>. That creates "My todo" with its lineage, enabled by intent and approved nowhere.</li>
+    <li>It changes one line in the fork's content with <code>edit_block</code>.</li>
+    <li>Nothing runs yet. Each of your devices shows the existing prompt, now reading "My todo would replace Todo — review".</li>
+    <li>You review on the phone and approve. The runtime refreshes and My todo takes Todo's slot. The laptop keeps the built-in until you approve there too.</li>
+  </ol>
+
+  <div class="mock" role="img" aria-label="Sketch of the review dialog">
+    <div class="row"><span class="mock-title">My todo would replace Todo on this device</span><span class="pill fork">fork</span></div>
+    <div class="muted">Written by an agent run · base: Todo at this app version</div>
+<pre><span class="c">src/plugins/todo/index.tsx → My todo · 1 line changed</span>
+<span class="del">- &lt;div className={done ? 'min-w-0 flex-1 text-muted-foreground line-through' : …</span>
+<span class="add">+ &lt;div className={done ? 'min-w-0 flex-1 text-muted-foreground' : …</span></pre>
+    <ul>
+      <li><span class="check">✓</span> Loaded on its own without errors</li>
+      <li><span class="check">✓</span> Contributes what Todo did: 1 content decorator, the todo actions, Todo's own types and properties</li>
+      <li><span class="check">✓</span> Wins every key it contributes</li>
+    </ul>
+    <div class="row"><button class="btn primary" type="button">Approve on this device</button><button class="btn" type="button">Full source</button><button class="btn" type="button">Not now</button></div>
+  </div>
+  <p class="example"><b>What the checks catch.</b> If the run had also dropped <code>todoActionsExtension</code>, the second line would read "drops 2 actions that other plugins run by id: <code>todo.cycle</code> (srs-rescheduling)". That's the #365 manifest-diff idea, computed from what the fork actually registers instead of a manifest someone has to keep up to date.</p>
+  <p><b>Who may approve.</b> A gesture you make yourself in the UI can approve immediately, as #289 §5.7 argued: the source is the trusted bundle's own, plus the mechanical rewrite. A run reached through the km MCP tools never approves; it can only write. The paired dev bridge keeps the install-and-pin it has today (<code>agent-runtime/commands.ts:1438-1442</code>), because whoever paired the CLI has already chosen to trust it on that device.</p>
+</section>
+
+<!-- 9 ─────────────────────────────────────────────────────────── -->
+<section id="upstream">
+  <h2 class="sec"><span class="n">9</span>Keeping up with upstream</h2>
+  <p>After an app update, each device checks once per new version. For every fork whose upstream is the bundle, it fetches that plugin's source file (§5) and compares hashes with the fork's base records. Nothing writes during the check; it only sets a status. The check is the same for the other kinds of upstream in #1427 (a shared extension block, a URL). Only how it reads the current upstream differs.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:22%">Status</th><th>When</th><th style="width:38%">What you can do</th></tr></thead>
+    <tbody>
+      <tr><td>Up to date</td><td>Every base hash matches the current upstream file.</td><td>Nothing.</td></tr>
+      <tr><td>Upstream changed</td><td>A base file changed upstream, and the fork's content still equals what eject produced from the base.</td><td><b>Update</b>: replace the content with a fresh eject and move the base forward, in one transaction. Then it's an ordinary <code>update-available</code> review.</td></tr>
+      <tr><td>Upstream changed, and so did you</td><td>Both sides moved.</td><td><b>Merge with agent</b>: a run gets base, yours and upstream, writes the merged source, and it goes through the same review. The base moves only when you approve.</td></tr>
+      <tr><td>Built-in gone</td><td>This app version has no toggle with the <code>replaces</code> id.</td><td>The fork doesn't run, and settings says so. "Run it on its own" clears <code>replaces</code>.</td></tr>
+      <tr><td>Can't check</td><td>Offline, or the source file is from a newer app than the running page.</td><td>Retried later. No status change.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Wrappers rarely trip this. A wrapper copied only the entry module and imports the rest, so a fix inside <code>actions.ts</code> reaches it with no merge. If an upstream change breaks an import the wrapper relies on, the fork fails to load. Rule 2 then falls back to the built-in and the error toast offers "Fix with agent". Code you paste into a fork by hand isn't tracked. Eject can copy a named submodule instead, which records a base for it too.</p>
+  <p><b>Why updates are never automatic.</b> The content write syncs. If every device fast-forwarded on its own, several devices would race to write the same change. A click on one device writes once, and every device then reviews it. That's the same rule as "a data migration runs once per graph", applied to a smaller write.</p>
+</section>
+
+<!-- 10 ────────────────────────────────────────────────────────── -->
+<section id="seen">
+  <h2 class="sec"><span class="n">10</span>What you see</h2>
+  <div class="mock-pair">
+    <div class="mock" role="img" aria-label="Sketch of the Extensions settings row for a replaced built-in">
+      <div class="muted">Settings › Extensions › Built-in</div>
+      <div class="row"><span class="mock-title">Todo</span><span class="pill bi">built-in</span><span class="pill fork">replaced by My todo</span><span class="pill warn">upstream changed</span></div>
+      <div class="muted">Checkbox / done-state property on blocks.</div>
+      <div class="row"><button class="btn" type="button">Use built-in instead</button><button class="btn" type="button">Update My todo…</button><button class="btn" type="button">Open My todo</button></div>
+      <div class="muted">On a device that hasn't approved My todo: “Todo — My todo is waiting for approval here” and <b>Enable here</b>.</div>
+    </div>
+    <div class="mock" role="img" aria-label="Sketch of the block inspector">
+      <div class="muted">Inspect block · “Buy oat milk”</div>
+      <div><b>Types</b> <span class="owner">todo · Todo</span></div>
+      <div><b>Drawn by</b> <span class="owner">default renderer · core</span></div>
+      <div><b>Decorated by, inside out</b>
+        <ul>
+          <li>character count <span class="owner">· Character counter</span></li>
+          <li>checkbox <span class="owner">· My todo (replaces Todo)</span></li>
+          <li>“changed” dot <span class="owner">· Update indicator</span></li>
+          <li>avatar badges <span class="owner">· Contributors</span></li>
+        </ul>
+      </div>
+      <div class="row"><button class="btn primary" type="button">Change this…</button><button class="btn" type="button">Make my own copy of…</button></div>
+    </div>
+  </div>
+  <p>The inspector is the "reveal codes" idea from #365. It needs one small core change: the resolver records, for each contribution, the nearest toggle boundary it was found under, so <code>FacetRuntime</code> can answer "who owns this". That same field gives <code>describe-runtime</code> a per-plugin listing (#1431) and briefs "Change this…" (#1432). It can be built in parallel with everything else.</p>
+
+  <h3>Across devices and failures</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:34%">Situation</th><th>What runs</th></tr></thead>
+    <tbody>
+      <tr><td>Approved here, enabled, loads</td><td>The fork, in the built-in's slot, from the first paint.</td></tr>
+      <tr><td>Not approved here yet</td><td>The built-in, plus the existing prompt.</td></tr>
+      <tr><td>Approved, but the source drifted (another device edited it)</td><td>The pinned version of the fork, plus <code>update-available</code>.</td></tr>
+      <tr><td>Fails to load or throws while resolving</td><td>The built-in, plus the load-error toast and "Fix with agent".</td></tr>
+      <tr><td>Fork turned off ("Use built-in instead")</td><td>The built-in. The fork stays, ready to turn back on.</td></tr>
+      <tr><td>Built-in turned off as well</td><td>Neither, which is what turning a plugin off means.</td></tr>
+      <tr><td>Safe mode</td><td>Static plugins only, as today.</td></tr>
+      <tr><td>A synced block claims <code>replaces</code> for something you never approved</td><td>Nothing changes. It isn't approved here, so it can't run and can't suppress the built-in.</td></tr>
+      <tr><td>Another workspace</td><td>Forks are workspace blocks, so a workspace without the fork runs the built-in.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 11 ────────────────────────────────────────────────────────── -->
+<section id="limits">
+  <h2 class="sec"><span class="n">11</span>What this doesn't fix <span class="prov read">Our read</span></h2>
+  <ul>
+    <li><b>Behaviour imported by other plugins still reaches the original.</b> Five plugins import <code>getOrCreateDailyNote</code> directly. A fork of daily-notes that changes it gets split-brain: its own calls use the new code, theirs the old. The fix is #289's stage 2: move those entry points behind string-keyed seams, which are mutators, queries, actions and, now, verbs (<code>src/facets/verbFacet.ts</code>). Eject can name the affected importers up front, because they are statically known.</li>
+    <li><b>Deep forks</b> need cross-block imports (#253). Until then, a fork stays one block and pulls in the original's other modules.</li>
+    <li><b>Types and properties can't be forked as code.</b> They're identity (rule 1). Editing a built-in type is a separate design. #289 §8's "shadow it with a block" no longer works, because the registry is declaration-authoritative.</li>
+    <li><b>No sandbox.</b> A fork runs in the page with full authority, like every user extension. Forking a built-in doesn't widen that, but "edit a built-in" will bring more people to the approval prompt, so its wording carries weight. Enforcement is #1425.</li>
+    <li><b>Toggle ids become stored references.</b> <code>replaces</code> stores <code>system:&lt;name&gt;</code>, so renaming a built-in breaks the forks of it. Pin the set of toggle ids with a test, the way the seed-identity ledger pins seeds, so a rename is a deliberate step.</li>
+    <li><b>Slightly slower renders.</b> Forks skip the build-time react-compiler pass. That's cosmetic at plugin scale.</li>
+  </ul>
+</section>
+
+<!-- 12 ────────────────────────────────────────────────────────── -->
+<section id="plan">
+  <h2 class="sec"><span class="n">12</span>Plan</h2>
+  <p>Seven pieces, each its own PR. The numbers in brackets are the costs from §1 that a piece removes.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 880 250" role="img" aria-labelledby="f6t f6d">
+        <title id="f6t">Order of the pieces</title>
+        <desc id="f6d">P1 source provider leads to P2 eject and lineage, which leads to P3 slot substitution, then P4 boot loading. P2 also leads to P5 review content and P6 upstream check. P7 owner attribution and inspector is independent.</desc>
+        <defs><marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+        <rect x="10"  y="30" width="170" height="64" rx="6" class="b-fork"/><text x="95"  y="56" text-anchor="middle" class="t-title">P1 Source provider</text><text x="95" y="76" text-anchor="middle" class="t-sub">#1435 · [4]</text>
+        <line x1="180" y1="62" x2="216" y2="62" class="ln" marker-end="url(#a6)"/>
+        <rect x="220" y="30" width="170" height="64" rx="6" class="b-n"/><text x="305" y="56" text-anchor="middle" class="t-title">P2 Eject + lineage</text><text x="305" y="76" text-anchor="middle" class="t-sub">records the source · [3, half]</text>
+        <line x1="390" y1="62" x2="426" y2="62" class="ln" marker-end="url(#a6)"/>
+        <rect x="430" y="30" width="200" height="64" rx="6" class="b-n"/><text x="530" y="56" text-anchor="middle" class="t-title">P3 Replaces + take the slot</text><text x="530" y="76" text-anchor="middle" class="t-sub">rules 1–4, settings row · [1, 2 order]</text>
+        <line x1="630" y1="62" x2="666" y2="62" class="ln" marker-end="url(#a6)"/>
+        <rect x="670" y="30" width="200" height="64" rx="6" class="b-n"/><text x="770" y="56" text-anchor="middle" class="t-title">P4 Load before paint</text><text x="770" y="76" text-anchor="middle" class="t-sub">boot step · [2 timing]</text>
+
+        <line x1="305" y1="94" x2="305" y2="140" class="ln" marker-end="url(#a6)"/>
+        <rect x="220" y="144" width="200" height="64" rx="6" class="b-n"/><text x="320" y="170" text-anchor="middle" class="t-title">P5 Review content</text><text x="320" y="190" text-anchor="middle" class="t-sub">diff, contributions, verify</text>
+        <path d="M330,94 C330,120 530,120 530,140" class="ln" marker-end="url(#a6)"/>
+        <rect x="440" y="144" width="200" height="64" rx="6" class="b-n"/><text x="540" y="170" text-anchor="middle" class="t-title">P6 Upstream check</text><text x="540" y="190" text-anchor="middle" class="t-sub">with #1427 · [3]</text>
+
+        <rect x="670" y="144" width="200" height="64" rx="6" class="b-off"/><text x="770" y="170" text-anchor="middle" class="t-title">P7 Owners + inspector</text><text x="770" y="190" text-anchor="middle" class="t-sub">independent · feeds #1431, #1432</text>
+        <text x="10" y="236" class="t-sub">Green: first. Dashed: can start any time.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.</b> P1 is useful alone: with it, a graph-only run can do today's copy-and-disable. P3 and P4 together remove the cross-device and ordering costs.</figcaption>
+  </figure>
+
+  <ol>
+    <li><b>P1 · Source provider (#1435).</b> The build plugin and dev middleware for <code>plugin-sources/&lt;name&gt;.json</code>, <code>src/extensions/pluginSources.ts</code> (files, version check, import rewrite), the bridge command, and the <code>plugin_source</code> row in <code>GRAPH_READ_TOOLS</code>. Tests: the rewrite over every plugin's entry (each rewritten import resolves), the version mismatch, the bounded response.</li>
+    <li><b>P2 · Eject and lineage.</b> The <code>extension:replaces</code>, <code>extension-upstream</code> and <code>extension-base</code> seeds, with ledger entries. The eject action (menu, palette, CLI, and an MCP write tool through the existing write guard), which approves only on a user gesture.</li>
+    <li><b>P3 · Replaces and taking the slot.</b> <code>substituteReplacements</code>, <code>identity: true</code> on the identity facets, the <code>ownedBy</code> mark on the four composed data extensions, the loader passing through a replaced built-in's own identity objects, the warm-reload path, and the "replaced by" settings row. Tests: position kept for an order-sensitive facet, unapproved device keeps the built-in, a failed load keeps the built-in, a bundled original doesn't come back, identity stays.</li>
+    <li><b>P4 · Load before paint.</b> The step in <code>resolveInitialLayout</code>, passing loaded forks to <code>AppRuntimeProvider</code>, and a <code>markStartup</code> measurement. Tests: a fork's data contribution is visible to bootstrap, and safe mode boots static-only.</li>
+    <li><b>P5 · Review content.</b> Diff against the base, the contribution summary against the built-in, and the post-assembly winner check, all inside the existing approval prompt.</li>
+    <li><b>P6 · Upstream check</b>, shared with #1427: the per-version check, Update (fast-forward), and Merge with agent.</li>
+    <li><b>P7 · Owners and inspector.</b> Owner attribution in the resolver, the inspector, and the per-plugin <code>describe-runtime</code> listing.</li>
+  </ol>
+</section>
+
+<!-- 13 ────────────────────────────────────────────────────────── -->
+<section id="open">
+  <h2 class="sec"><span class="n">13</span>Open questions</h2>
+  <ul>
+    <li><b>Where the base text lives.</b> Leaning toward one child block per copied file, as sketched in §4: visible, editable, consistent with end-to-end encryption. The alternative is a hash only, with the text fetched from a versioned asset, which Pages' deploy-time cleanup rules out unless the build starts keeping old source files.</li>
+    <li><b>The built-in is gone.</b> Leaning toward not running the fork, with a "Run it on its own" button (§9). Running it alongside whatever replaced the built-in could double up decorators.</li>
+    <li><b>Additive extensions before paint.</b> Not in this design. Move them only if a user extension needs a type that bootstrap can see, and measure first.</li>
+    <li><b>Everywhere or per workspace.</b> Forks are workspace blocks, like every extension. "Replace daily-notes in all my workspaces" can wait for kits (#1430).</li>
+    <li><b>How much of <code>@/</code> a fork may rely on.</b> Leaning toward accepting drift, as #289 did: a wrapper's breakage is shallow, a failed load falls back to the built-in, and P6 flags it.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2 class="sec"><span class="n">·</span>Sources</h2>
+  <ul class="sources">
+    <li>Knowledge Medium, master at <code>1b3fbb2093c</code>: <code>vite.config.ts</code>, <code>scripts/precache-assets.ts</code>, <code>.github/workflows/deploy-pages.yml</code>, <code>src/context/repo.tsx</code>, <code>src/data/repoProvider.ts</code>, <code>src/bootstrap/initialLayout.ts</code>, <code>src/extensions/AppRuntimeProvider.tsx</code>, <code>dynamicExtensions.ts</code>, <code>dynamicExtensionSeeds.ts</code>, <code>compileExtensionModule.ts</code>, <code>staticAppExtensions.ts</code>, <code>staticDataExtensions.ts</code>, <code>src/facets/facet.ts</code>, <code>togglable.ts</code>, <code>resolveAppRuntime.ts</code>, <code>src/data/facets.ts</code>, <code>typeDefinitionRegistry.ts</code>, <code>definitionSeeds.ts</code>, <code>seedIdentityLedger.ts</code>, <code>src/plugins/todo/</code>, <code>src/plugins/agent-runtime/commands.ts</code>, <code>packages/agent-cli/src/readTools.ts</code>, <code>mcpServer.ts</code>.</li>
+    <li>A local production build from 2026-10-23, for the map sizes and the shape of the re-export files.</li>
+    <li><code>docs/plugin-materialization.md</code> on PR #289's branch: the design this one succeeds for stage 1.</li>
+    <li><code>docs/landscape/imbue-studio.html</code> and <code>docs/landscape/cloudflare-os.html</code> (PR #1428), and the issues filed from them: #1425, #1426, #1427, #1430, #1431, #1432, #1433, #1434, #1435.</li>
+    <li>The malleable-systems experiment catalog in #365 (<code>docs/malleable-experiments.html</code> on that PR): §1 block inspector, §5 capability manifests, and the notes on lithification, Model 1 and Model 2, and keeping the dependency graph a tree.</li>
+    <li>#481, the original question; #67, the per-device approval model; #253, cross-block imports.</li>
+  </ul>
+</section>
+
+<footer>Facts about Knowledge Medium were checked against master at <code>1b3fbb2093c</code> on 24 October 2026. Map and file sizes come from a local build and will drift. Facts about Imbue Studio and Cloudflare OS are the landscape pages' and are dated there.</footer>
+
+</div>
+</body>
+</html>
