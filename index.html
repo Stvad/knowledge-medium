@@ -39,16 +39,23 @@
         }
       })()
     </script>
-    <!-- Extensions import React and the app's own modules by bare specifier; both resolve to same-origin modules the build emits (src/vendor/react.js says why React needs its own facades). Each React entry is spelled out: a specifier missing here does not resolve. -->
+    <!-- Extensions import React and the app's own modules by bare specifier; both resolve to same-origin modules the build emits (src/vendor/react.js says why React needs its own facades). The React entries are every subpath React's packages export that runs in a browser, except react-dom/profiling (a second renderer); src/vendor/vendorEntries.test.ts derives that set. A specifier missing here does not resolve. -->
     <script type="importmap">
       {
         "imports": {
           "react": "./src/vendor/react.js",
           "react/jsx-runtime": "./src/vendor/react-jsx-runtime.js",
+          "react/jsx-dev-runtime": "./src/vendor/react-jsx-dev-runtime.js",
           "react/compiler-runtime": "./src/vendor/react-compiler-runtime.js",
           "react-dom": "./src/vendor/react-dom.js",
           "react-dom/client": "./src/vendor/react-dom-client.js",
           "react-dom/server": "./src/vendor/react-dom-server.js",
+          "react-dom/server.browser": "./src/vendor/react-dom-server.js",
+          "react-dom/server.edge": "./src/vendor/react-dom-server-edge.js",
+          "react-dom/static": "./src/vendor/react-dom-static.js",
+          "react-dom/static.browser": "./src/vendor/react-dom-static.js",
+          "react-dom/static.edge": "./src/vendor/react-dom-static-edge.js",
+          "react-dom/test-utils": "./src/vendor/react-dom-test-utils.js",
 
           "@/": "./src/"
         }
