@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, normalize, relative } from 'node:path'
@@ -9,8 +10,11 @@ import {
   FROZEN_INSTALL_ARGS,
   ensureDeps,
   readDepsState,
+  sessionRoot,
   staleDist,
 } from './ensure-deps.mjs'
+
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 // Every ensureDeps case spawns a PATH-fronted pnpm per step, ~50ms each alone
 // and several times that under the gate's load.
@@ -126,7 +130,6 @@ const BUILD = BUILD_ARGS.join(' ')
 describe('DIST_PACKAGES', () => {
   // The dist check assumes this layout; a moved build record or output dir
   // would otherwise read as stale on every session start.
-  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
   it.each(DIST_PACKAGES)('matches the real build of $dir', pkg => {
     const { compilerOptions } = JSON.parse(readFileSync(join(repoRoot, pkg.dir, 'tsconfig.json'), 'utf8'))
     expect(compilerOptions).toMatchObject({ rootDir: 'src', outDir: 'dist', declaration: true })
@@ -138,6 +141,12 @@ describe('DIST_PACKAGES', () => {
     const { compilerOptions } = JSON.parse(readFileSync(join(repoRoot, 'tsconfig.kernel-types.json'), 'utf8'))
     const cli = DIST_PACKAGES.find(p => p.dir === 'packages/agent-cli')!
     expect(cli.generated).toEqual([relative(cli.dir, normalize(compilerOptions.outDir))])
+  })
+})
+
+describe('sessionRoot', () => {
+  it("is this script's checkout when run by hand, without a hook payload", () => {
+    expect(sessionRoot('')).toBe(repoRoot)
   })
 })
 
@@ -314,5 +323,21 @@ describe('ensureDeps', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
     rmSync(join(root, 'pnpm-lock.yaml'))
     rmSync(join(root, DIST_PACKAGES[0].dir, 'dist'), { recursive: true })
     expect(run(root)).toEqual({ text: '', calls: [] })
+  })
+
+  it("as the hook, reconciles the checkout holding the session's cwd, not its own", () => {
+    const root = makeCheckout()
+    execFileSync('git', ['init', '-q', root])
+    writeInstallRecord(root, 'lock: v0\n')
+    const cwd = join(root, DIST_PACKAGES[0].dir, 'src')
+    const pnpm = fakePnpm()
+    const output = execFileSync(process.execPath, [join(repoRoot, 'scripts', 'ensure-deps.mjs')], {
+      input: JSON.stringify({ hook_event_name: 'SessionStart', cwd }),
+      env: pnpm.env,
+      encoding: 'utf8',
+    })
+    expect(pnpm.readCalls()).toEqual([INSTALL, BUILD])
+    expect(readDepsState(root)).toBe('fresh')
+    expect(JSON.parse(output).hookSpecificOutput.additionalContext).toContain(`Ran \`pnpm ${INSTALL}\`.`)
   })
 })
