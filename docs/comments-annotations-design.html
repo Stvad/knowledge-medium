@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comments and annotations</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; background: #fff; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.4rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  ol li, ul li { margin: .25rem 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .explain { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+             border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: .45rem .6rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  td:first-child { font-weight: 600; }
+  .tblwrap { overflow-x: auto; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+  figure { margin: 1.4rem 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: #57606a; font-size: 12.5px; margin-top: .45rem; }
+  .mock { border: 1px solid #d0d7de; border-radius: 8px; padding: .75rem 1rem; background: #fff; margin: 1rem 0; }
+  .blk { display: flex; gap: .5rem; align-items: baseline; padding: .15rem 0; }
+  .blk .dot { color: #8c959f; }
+  .blk .txt { flex: 1; }
+  .blk .pills { white-space: nowrap; }
+  mark { background: #fff1a8; border-bottom: 2px solid #d4a72c; padding: 0 1px; }
+  mark.other { background: none; border-bottom: 2px dotted #8c959f; }
+  mark.sugg { background: #ffebe9; border-bottom: 2px dashed #cf222e; }
+  .pill { display: inline-block; font-size: 11.5px; border: 1px solid #d0d7de; border-radius: 999px;
+          padding: 0 .45rem; color: #57606a; background: #f6f8fa; margin-left: .25rem; }
+  .card { border: 1px solid #d0d7de; border-radius: 8px; padding: .6rem .75rem; max-width: 380px;
+          background: #fff; box-shadow: 0 1px 2px rgba(31,35,40,.06); }
+  .card .quote { font-size: 12px; color: #57606a; border-left: 3px solid #d4a72c; padding-left: .5rem; margin-bottom: .45rem; }
+  .card .c { margin: .4rem 0; }
+  .chip { font-size: 11.5px; font-weight: 600; }
+  .chip .kind { font-weight: 400; color: #57606a; }
+  .av { display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: #eaeef2;
+        font-size: 9.5px; align-items: center; justify-content: center; margin-right: .3rem; vertical-align: middle; }
+  .diff del { background: #ffebe9; color: #82071e; }
+  .diff ins { background: #dafbe1; color: #116329; text-decoration: none; }
+  .btn { display: inline-block; font-size: 12px; border: 1px solid #d0d7de; border-radius: 6px;
+         padding: .05rem .5rem; background: #f6f8fa; margin-right: .3rem; }
+  .btn.primary { background: #1f883d; color: #fff; border-color: #1a7f37; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+  .step { display: inline-block; background: #0969da; color: #fff; border-radius: 50%; width: 1.35em; height: 1.35em;
+          text-align: center; font-size: 12px; line-height: 1.35em; margin-right: .35rem; }
+</style>
+</head>
+<body>
+
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: proposed</strong> &middot; design only, nothing built. Supersedes the earlier markdown draft of this doc on the same PR. An earlier design for the same feature is open as PR #332 (<code>docs/block-range-annotations-design.html</code> on its branch); the last section compares them. <strong>Last verified against code:</strong> 2026-10-28.
+</aside>
+
+<h1>Comments and annotations</h1>
+<small>Comments, highlights and edit suggestions on notes, as blocks — 2026-10-28</small>
+
+<h2 id="requirements">What has to be true</h2>
+<ol>
+  <li>Comments and annotations are blocks in the workspace, with everything blocks get: sync, undo, search, references, hand-editing, E2EE.</li>
+  <li>A separate side surface shows them beside the notes, and can be turned on and off.</li>
+  <li>A comment can point at part of a block: select some text, comment on that.</li>
+  <li>They sit sensibly next to references. A block already shows how many blocks reference it; comments are the adjacent idea, "what is being said about this block", and the UI shows the two side by side without counting one as the other.</li>
+  <li>Something outside the UI (an agent) can subscribe to comments in a scope (a page, a subtree, one block), read them, and reply.</li>
+  <li>Every comment shows who wrote it, human or agent.</li>
+  <li>Edit suggestions ("replace this with that", accept or reject) fit the same model.</li>
+</ol>
+
+<h2 id="picture">The idea in one picture</h2>
+
+<figure>
+<svg viewBox="0 0 900 330" role="img" aria-label="A note page with a highlighted word, and a Comments page holding the thread that points at it">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <!-- left: the note -->
+  <rect x="20" y="40" width="380" height="270" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="36" y="66" font-size="13" font-weight="600" fill="#1f2328">Project notes</text>
+  <text x="36" y="84" font-size="11" fill="#57606a">an ordinary page; nothing here is written to</text>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#1f2328">
+    <text x="40" y="112">•</text><text x="52" y="112">Launch plan</text>
+    <rect x="216" y="128" width="59" height="17" fill="#fff1a8" stroke="#d4a72c" stroke-width="1"/>
+    <text x="40" y="141">•</text><text x="52" y="141">We moved the launch to Thursday</text>
+    <text x="52" y="159">because the vendor slipped.</text>
+    <text x="40" y="190">•</text><text x="52" y="190">Budget</text>
+  </g>
+  <text x="52" y="174" font-size="10.5" fill="#8c959f">block B</text>
+  <rect x="300" y="129" width="24" height="16" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="312" y="141" font-size="10.5" text-anchor="middle" fill="#57606a">2</text>
+  <rect x="330" y="129" width="40" height="16" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="350" y="141" font-size="10.5" text-anchor="middle" fill="#57606a">💬 1</text>
+  <line x1="245" y1="146" x2="245" y2="236" stroke="#d4a72c" stroke-dasharray="3 3"/>
+  <text x="52" y="252" font-size="11" fill="#57606a">the quote resolves to this range,</text>
+  <text x="52" y="267" font-size="11" fill="#57606a">recomputed on every render</text>
+  <text x="300" y="168" font-size="10.5" fill="#57606a">refs</text><text x="336" y="168" font-size="10.5" fill="#57606a">threads</text>
+
+  <!-- arrow -->
+  <path d="M536,124 C470,124 450,137 404,137" fill="none" stroke="#0969da" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="468" y="112" font-size="11" text-anchor="middle" fill="#0969da">annotation:target</text>
+  <text x="468" y="154" font-size="10.5" text-anchor="middle" fill="#0969da">a ref, by block id</text>
+
+  <!-- right: the comments page -->
+  <rect x="520" y="40" width="360" height="270" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="536" y="66" font-size="13" font-weight="600" fill="#1f2328">Comments (km)</text>
+  <text x="536" y="84" font-size="11" fill="#57606a">kernel page, one per workspace</text>
+  <rect x="536" y="96" width="328" height="98" rx="6" fill="#f6f8fa" stroke="#8c959f" stroke-dasharray="4 3"/>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#1f2328">
+    <text x="548" y="114" font-weight="600">thread root   (content "")</text>
+    <text x="548" y="132">annotation:target     ((B))</text>
+    <text x="548" y="148">annotation:quote      "Thursday"</text>
+    <text x="548" y="164">annotation:quoteStart 23</text>
+    <text x="548" y="180">annotation:status     open</text>
+  </g>
+  <rect x="564" y="206" width="300" height="40" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="576" y="222" font-size="11" font-weight="600" fill="#1f2328">Alex <tspan font-weight="400" fill="#57606a">· human</tspan></text>
+  <text x="576" y="238" font-size="11.5" fill="#1f2328">Is Thursday confirmed?</text>
+  <rect x="564" y="254" width="300" height="40" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="576" y="270" font-size="11" font-weight="600" fill="#1f2328">Claude <tspan font-weight="400" fill="#57606a">· agent</tspan></text>
+  <text x="576" y="286" font-size="11.5" fill="#1f2328">The vendor confirmed Thursday 9am.</text>
+  <path d="M548,194 L548,274 L564,274 M548,226 L564,226" fill="none" stroke="#8c959f"/>
+</svg>
+<figcaption>The thread lives on its own page and points at block B through a ref property. Block B never changes. The comments are ordinary child blocks of the thread root. Only the gutter pills and the highlight are computed from the thread.</figcaption>
+</figure>
+
+<ul>
+  <li><strong>The target block is never written to.</strong> Everything about the annotation lives on the thread root.</li>
+  <li><strong>A thread with no comments is a highlight; a thread with comments is a discussion;</strong> a thread with an <code>annotation:replacement</code> is an edit suggestion. They are all the same record.</li>
+  <li><strong>The target's block id lives in exactly one place</strong>, the <code>annotation:target</code> ref. Everything else about the anchor is text.</li>
+  <li><strong>Discovery runs through the references index:</strong> <code>block_references</code> rows with <code>source_field = 'annotation:target'</code>.</li>
+</ul>
+
+<div class="explain"><strong>Explainer — <code>block_references</code>.</strong> A local, trigger-maintained index with one row per edge: <code>(source_id, target_id, alias, source_field)</code>. Content references (<code>[[Page]]</code>, <code>((id))</code>) have an empty <code>source_field</code>. A <code>ref</code>-typed property projects a row whose <code>source_field</code> is the property name. It is indexed on <code>(target_id, workspace_id)</code>, so "which threads point at B" is an index lookup. (<span class="filepath">src/plugins/references/localSchema.ts</span>)</div>
+
+<h2 id="example">A comment, end to end</h2>
+
+<p><span class="step">1</span>Alex is editing block B, <em>"We moved the launch to Thursday because the vendor slipped."</em> They select <code>Thursday</code>, run <strong>Comment</strong>, and type <em>"Is Thursday confirmed?"</em>.</p>
+
+<p><span class="step">2</span>One transaction writes two blocks and nothing else:</p>
+<pre><code>Comments (km)
+└─ (thread root)                 types: annotation:thread
+     annotation:target    ((B))
+     annotation:quote     Thursday
+     annotation:quoteStart 23
+     annotation:status    open
+   └─ Is Thursday confirmed?     attribution:creators → Alex's profile
+
+block_references:  (source = thread root, target = B, source_field = 'annotation:target')</code></pre>
+
+<p><span class="step">3</span>Later Alex rewrites B as <em>"Because the vendor slipped, we moved the launch to Thursday."</em> The text at offset 23 is no longer <code>Thursday</code>, so the resolver takes the occurrence nearest 23, which is at 51. The highlight follows the word. Nothing is written.</p>
+
+<p><span class="step">4</span>An agent watching the page is woken. It reads the thread together with block B and replies <em>"The vendor confirmed Thursday 9am."</em> The reply is written as a new child of the thread root and attributed to the agent's contributor profile.</p>
+
+<p><span class="step">5</span>The agent also <strong>suggests an edit</strong>: replace <code>Thursday</code> with <code>Thursday 9am</code>. That is a second thread with <code>annotation:replacement = "Thursday 9am"</code>. Alex clicks <strong>Accept</strong>. One transaction rewrites B's text and sets that thread's status to <code>accepted</code>, and a single undo reverts both.</p>
+
+<h2 id="today">What exists today</h2>
+<div class="tblwrap"><table>
+<tr><th>Need</th><th>Existing seam</th><th>Where</th></tr>
+<tr><td>Typed records</td><td><code>seedType</code> / <code>seedProperty</code>. <code>createTypedChild</code> takes <code>references</code>, so a new thread is discoverable in the transaction that creates it.</td><td><code>src/data/typedRecords.ts</code></td></tr>
+<tr><td>Workspace container</td><td><code>getOrCreateKernelPage</code>: deterministic id, restores a tombstone, requires an alias.</td><td><code>src/data/kernelPage.ts</code></td></tr>
+<tr><td>Pointer to the target</td><td><code>ref</code> property, projected into <code>block_references</code> with <code>source_field</code>.</td><td><code>src/plugins/references/referenceProjection.ts</code></td></tr>
+<tr><td>Merges</td><td>The generic merge retargeter rewrites ref-property <em>values</em> as well as their entries.</td><td><code>src/plugins/references/mergeRetargetProcessor.ts:217-275</code></td></tr>
+<tr><td>Target deletion</td><td><code>((id))</code> marks in referrers get inlined. Property values are exempt and keep the ref.</td><td><code>src/plugins/references/inlineDeletedBlockRefsProcessor.ts</code></td></tr>
+<tr><td>Reference count pill</td><td>A <code>blockContentDecoratorsFacet</code> gutter pill. Clicking it expands backlinks under the block through <code>blockChildrenFooterFacet</code>.</td><td><code>src/plugins/backlinks/inline-counts/</code></td></tr>
+<tr><td>Backlink count and list</td><td>One batched SQL over <code>block_references</code>, with no <code>source_field</code> filter today.</td><td><code>src/plugins/backlinks/sourceBatch.ts</code></td></tr>
+<tr><td>Authorship</td><td><code>attribution:creators</code> / <code>attribution:editors</code>: refLists to <code>contributor:profile</code> pages (kind human, agent or automation), recorded by a same-transaction processor.</td><td><code>src/plugins/contributors/</code></td></tr>
+<tr><td>Edit mode</td><td>CodeMirror 6, extended through <code>codeMirrorExtensionsFacet</code>. The selection is raw content offsets. <code>flushEditorContent(view)</code> forces the debounced write.</td><td><code>src/editor/</code></td></tr>
+<tr><td>Read mode</td><td>react-markdown, with remark/rehype plugins added through <code>markdownExtensionsFacet</code>.</td><td><code>src/markdown/extensions.ts</code></td></tr>
+<tr><td>Live queries</td><td><code>defineQuery</code> handles, read with <code>useHandle</code>.</td><td><code>src/data/api/query.ts</code></td></tr>
+<tr><td>Agent wake-ups</td><td>Bridge <code>watch-events</code> (<code>sql</code> and <code>backlinks</code> watchers pushed from the tab). agent-dispatch <code>backlinks</code> and <code>query</code> watchers, with claims stored in <code>agent:*</code> properties.</td><td><code>src/plugins/agent-runtime/watchEvents.ts</code>, <code>packages/agent-dispatch/</code></td></tr>
+</table></div>
+<p>Missing today, and supplied here:</p>
+<ul>
+  <li>any mapping from a rendered DOM selection back to raw offsets (none exists);</li>
+  <li>a <code>Decoration.mark</code> anywhere in the editor (none exists);</li>
+  <li>a way to keep one edge field out of the backlink count.</li>
+</ul>
+
+<h2 id="model">Data model</h2>
+
+<h3>A thread is a metadata block, and its children are the comments</h3>
+<p>The thread root has empty content and holds the anchor and the status. Each comment is a child block, and a reply to a comment is a further child. So a thread is just an outline:</p>
+<ul>
+  <li>Enter at the end of a comment starts the next one.</li>
+  <li>A nested reply is an indented block.</li>
+  <li><code>[[links]]</code>, <code>((refs))</code> and formatting work inside comments, because a comment is not special in any way.</li>
+</ul>
+<p>Putting the first comment's text on the root would save one block per thread. That is rejected for two reasons:</p>
+<ul>
+  <li><strong>Attribution.</strong> Contributors attribute any meaningful write to the block it lands on (<code>src/plugins/contributors/processor.ts:21-29</code>). If the root were also the first comment, three kinds of write would list someone as an editor of that comment: resolving the thread, repairing its anchor, and an agent claiming it. With a separate root, those writes land on the metadata block. A comment's authors are then exactly the people who wrote it.</li>
+  <li><strong>Uniform rendering.</strong> Every comment is a sibling under the root, so the side surface renders one list rather than "the root" plus "the rest".</li>
+</ul>
+<p>Comment blocks carry no type: a comment is simply a visible descendant of a thread root. A second marker would be a second source of truth, and hand-typed replies would not carry it.</p>
+
+<h3>Where threads live</h3>
+<p>Threads live as children of one workspace kernel page, <code>Comments (km)</code>, which <code>getOrCreateKernelPage</code> creates at the first comment. The alias is deliberately ugly, as with <code>System Migrations (km)</code>. Aliases are unique per workspace, so a plain <code>Comments</code> alias would make comment creation abort in any workspace where the user already has a page of that name.</p>
+
+<div class="tblwrap"><table>
+<tr><th>Placement</th><th>Good</th><th>Why not</th></tr>
+<tr><td>Children of the target</td><td>Local: comments move with the block.</td><td>Every structural operation would have to step around them: indent, outdent, move, merge, child counts, the collapse arrow, keyboard navigation. The properties-as-blocks work measured that tax: of about 30 sites that opt property rows out of child handling, roughly two thirds are structural, not rendering. Comments would be a second class of rows to step around.</td></tr>
+<tr><td>Property values on the target</td><td>"Comments" reads like a property of the block.</td><td>Field rows hold a set of values deduplicated by content, so two "+1" comments would merge into one. Their values are codec-encoded scalars, not records with children.</td></tr>
+<tr><td><strong>Workspace kernel page</strong> (chosen)</td><td>The target is untouched, there is no structural tax, and it reads as a sensible outline even if the plugin is uninstalled.</td><td>A future subtree share would not include the threads anchored into it (see <a href="#not-handled">Deliberately not handled</a>).</td></tr>
+</table></div>
+<p>Where a thread lives is incidental, because the ref is what makes it a thread. A thread root that someone moves elsewhere by hand still works, since discovery never looks at the container.</p>
+
+<h3>The anchor</h3>
+<ul>
+  <li><strong><code>annotation:quote</code></strong> is a substring of the target's raw markdown. That is the same text an agent reads through the API, so an agent can annotate a range just by quoting it, and edit mode can decorate the range without any translation.</li>
+  <li><strong><code>annotation:quoteStart</code></strong> records where the quote began when it was made. It is used only to choose between repeated occurrences.</li>
+  <li><strong>No quote</strong> means the thread annotates the whole block.</li>
+  <li><strong>A quote never splits a reference span</strong> (<code>[[…]]</code>, <code>((…))</code>, <code>[label](((…)))</code>). Creation widens the selection to cover whole spans, so the reference plugins always see complete spans inside a highlight.</li>
+</ul>
+
+<h3>Seeds</h3>
+<p>All of these are declared by a new <code>annotations</code> plugin with <code>ChangeScope.BlockDefault</code>, and each adds one line to the ledger (<code>src/data/seedIdentityLedger.ts</code>).</p>
+<div class="tblwrap"><table>
+<tr><th>Seed</th><th>Preset</th><th>Notes</th></tr>
+<tr><td>type <code>annotation:thread</code></td><td>—</td><td><code>hideFromCompletion</code></td></tr>
+<tr><td><code>annotation:target</code></td><td><code>ref</code></td><td>Hidden. No <code>targetTypes</code> restriction.</td></tr>
+<tr><td><code>annotation:quote</code></td><td><code>optional-string</code></td><td>Hidden.</td></tr>
+<tr><td><code>annotation:quoteStart</code></td><td><code>optional-number</code></td><td>Hidden.</td></tr>
+<tr><td><code>annotation:replacement</code></td><td><code>optional-string</code></td><td>Hidden. Its presence makes the thread an edit suggestion. No separate "kind" field: the shape says what the record is.</td></tr>
+<tr><td><code>annotation:status</code></td><td><code>strict-enum</code></td><td><code>open</code>, <code>resolved</code>, <code>accepted</code>, <code>rejected</code>. The last two apply only to suggestions. A strict enum's config can widen later. A boolean <code>resolved</code> could not, because changing the codec is a frozen-identity break.</td></tr>
+</table></div>
+<p>On a workspace that stores properties as child blocks, each property becomes a field row under the root, and <code>visibleChildrenOf</code> already hides those. Every "descendants of a thread" query therefore uses the visible subtree (<code>VISIBLE_SUBTREE_SQL</code>), so field rows are never taken for comments.</p>
+<p>A <code>blockContentRendererFacet</code> contribution renders the empty root as "comment on ⟨target excerpt⟩ · “quote”" wherever the root itself appears, for example on the container page or in a block ref.</p>
+
+<h2 id="anchoring">Anchoring against changing text</h2>
+<p>Resolution is a pure, synchronous function of <code>(content, quote, quoteStart)</code>. It is recomputed at render time and never persisted.</p>
+<ol>
+  <li><strong>No quote:</strong> anchor the whole block.</li>
+  <li><strong>Offset check:</strong> if <code>content.slice(quoteStart, quoteStart + quote.length) === quote</code>, anchor there.</li>
+  <li><strong>Nearest occurrence:</strong> otherwise, anchor at the occurrence of <code>quote</code> nearest <code>quoteStart</code>.</li>
+  <li><strong>No occurrence: stale.</strong> The thread stays on the block, and its card shows the original quote marked as changed. The user can select new text to re-anchor, or anchor the thread to the whole block.</li>
+</ol>
+
+<div class="example">
+<strong>Repeated text.</strong> The block was <code>Ship the fix, then test the fix.</code> and the second <code>the fix</code> was quoted at <code>quoteStart = 24</code>. Then someone edits the block:
+<div class="mock" style="margin:.6rem 0 .2rem"><div class="blk"><span class="dot">•</span><span class="txt">Please ship <mark class="other">the fix</mark>, then test <mark>the fix</mark>.</span></div></div>
+The offset check fails, because the text at 24 is now <code>en test</code>. There are two occurrences, at 12 and at 31. 31 is nearer to 24, so the anchor stays on the second one, which is the one quoted.
+</div>
+
+<p><strong>Why the start hint, and not prefix and suffix context?</strong> Repeated occurrences are settled by whichever is nearest the hint. Blocks are short (on a large real graph they average under 100 characters), so ties are rare. Each extra property also costs two more rows on a children-stored workspace. Fuzzy matching, for small edits inside the quote, can be added later inside step 3 without changing storage.</p>
+
+<p><strong>Re-anchoring</strong> is an explicit user action, done in one transaction. Inside that transaction it re-finds the confirmed text in the content as of that transaction and computes the offsets from that same snapshot. If the text no longer matches, the transaction refuses, rather than storing whatever now sits at the old offsets.</p>
+
+<div class="tblwrap"><table>
+<tr><th>What happens to the target</th><th>Result</th></tr>
+<tr><td>Text edited outside the quote</td><td>Still found; the hint picks the occurrence.</td></tr>
+<tr><td>Text inside the quote edited</td><td>Stale. Re-anchor, or anchor to the whole block.</td></tr>
+<tr><td>Moved, indented, reordered, or moved to another page</td><td>Nothing changes, because the ref is by id.</td></tr>
+<tr><td>Merged into another block</td><td>The generic retargeter rewrites <code>annotation:target</code>, both value and entry. The quote then resolves in the merged text.</td></tr>
+<tr><td>Split, with the quote ending up in the new block</td><td>Stale in v1. Later, the split gesture can retarget, in the same transaction, the threads whose quote lies after the split point.</td></tr>
+<tr><td>Deleted</td><td>The thread is kept and so is its ref. It is hidden from the margin and listed as "on a deleted block". Restoring the target brings it back.</td></tr>
+<tr><td>An edit is undone</td><td>The thread simply re-resolves; nothing was persisted.</td></tr>
+<tr><td>A page named in the quote is renamed (<code>[[Old]]</code> → <code>[[New]]</code>)</td><td>On children-stored workspaces, the same rename rewrites the quote's value row, so the quote still resolves (reasoned, not measured). On cell-stored workspaces it goes stale, which is accepted.</td></tr>
+</table></div>
+<p>Comments never write the target row, so commenting cannot conflict with someone editing the note. The one exception, deliberately, is accepting a suggestion (see <a href="#suggestions">Edit suggestions</a>).</p>
+
+<h2 id="references">Comments and references</h2>
+<p>The anchor is a real reference: <code>annotation:target</code> projects into <code>block_references</code> like any ref property. That is what makes discovery cheap. It also means that, as things stand, a comment would be counted and listed as a backlink.</p>
+
+<div class="mock">
+  <div class="blk"><span class="dot">•</span><span class="txt">We moved the launch to <mark>Thursday</mark> because the vendor slipped.</span><span class="pills"><span class="pill">2</span><span class="pill">💬 1</span></span></div>
+</div>
+
+<ul>
+  <li><strong>Two pills, with counts that never overlap.</strong> The gutter shows references, then open threads.
+    <ul>
+      <li>Clicking the reference pill expands backlinks under the block, as it does now.</li>
+      <li>Clicking the comment pill focuses the block's threads in the margin. When the margin is off, it expands them inline under the block, using the same footer mechanism as the backlinks expansion.</li>
+    </ul>
+  </li>
+  <li><strong>One exclusion, owned by the backlinks plugin.</strong> The backlinks plugin declares a facet listing edge fields that have their own surface. The pill count, the inline expansion and Linked References (flat and grouped) all skip those fields, in <code>sourceBatch.ts</code> and the grouped query. <code>annotation:target</code> is the first entry. The <code>attribution:*</code> edges on contributor pages are the obvious second candidate. Changing those is out of scope here, but the same rule applies to them.</li>
+  <li><strong>References inside a comment are ordinary mentions.</strong> A comment saying "see [[Paper X]]" shows up in Paper X's backlinks, with a breadcrumb through the container and the thread. That is correct: the comment does mention Paper X.</li>
+  <li><strong>Mentions reach agents.</strong> A comment containing a dispatch watcher's target page (<code>[[claude]]</code>) is a backlink to that page, so the existing backlinks watcher fires (see <a href="#agents">Agents</a>).</li>
+</ul>
+<p>Later, the margin could also show a block's plain backlinks as "mentions" beside its threads. A note elsewhere that references this block is commentary that happens to live somewhere else. That would be a display toggle on top of this model, not part of it.</p>
+
+<h2 id="ui">UI</h2>
+
+<h3>Highlights</h3>
+<ul>
+  <li><strong>Edit mode.</strong> A CodeMirror extension, added through <code>codeMirrorExtensionsFacet</code>, turns resolved ranges into mark decorations. The offsets are exact, because the quote is raw content. Suggestions get a distinct style.</li>
+  <li><strong>Read mode.</strong> A remark plugin, ordered before the reference plugins, splits positioned text nodes at the range boundaries and wraps the pieces in an <code>annotation-mark</code> node.
+    <ul>
+      <li>The risk is ordering: text slices that other plugins split out lose their positions, as <code>src/markdown/blockSeparators.ts</code> notes.</li>
+      <li>Spike this first. If it can't be made exact, read mode shows the pill but no inline highlight.</li>
+    </ul>
+  </li>
+  <li><strong>Where highlights render.</strong> Inline highlights appear only in a panel's primary outline and in the focused editor. Nested surfaces show none: backlinks, embeds, block refs and breadcrumbs. The comment pill follows the reference pill's rule (<code>inline-counts/applies.ts</code>).</li>
+</ul>
+
+<h3>The side margin</h3>
+<figure>
+<svg viewBox="0 0 900 370" role="img" aria-label="A panel with a comment margin: cards aligned to their blocks and stacked to avoid overlap">
+  <rect x="20" y="20" width="860" height="330" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <rect x="20" y="20" width="860" height="30" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="36" y="40" font-size="12" font-weight="600" fill="#1f2328">Project notes</text>
+  <text x="864" y="40" font-size="11" text-anchor="end" fill="#0969da">💬 margin on</text>
+  <line x1="610" y1="50" x2="610" y2="350" stroke="#eaeef2"/>
+  <!-- rows -->
+  <g fill="#d8dee4">
+    <circle cx="44" cy="75" r="2.5" fill="#8c959f"/><rect x="56" y="70" width="420" height="9" rx="3"/>
+    <circle cx="44" cy="105" r="2.5" fill="#8c959f"/><rect x="56" y="100" width="380" height="9" rx="3"/>
+    <circle cx="44" cy="135" r="2.5" fill="#8c959f"/><rect x="56" y="130" width="300" height="9" rx="3"/>
+    <circle cx="44" cy="175" r="2.5" fill="#8c959f"/><rect x="56" y="170" width="440" height="9" rx="3"/>
+    <rect x="56" y="186" width="200" height="9" rx="3"/>
+    <rect x="56" y="216" width="260" height="9" rx="3"/>
+    <circle cx="44" cy="265" r="2.5" fill="#8c959f"/><rect x="56" y="260" width="400" height="9" rx="3"/>
+    <circle cx="44" cy="305" r="2.5" fill="#8c959f"/><rect x="56" y="300" width="350" height="9" rx="3"/>
+  </g>
+  <text x="40" y="225" font-size="11" fill="#57606a">▸</text>
+  <rect x="236" y="98" width="60" height="13" fill="#fff1a8" stroke="#d4a72c"/>
+  <rect x="150" y="128" width="50" height="13" fill="#fff1a8" stroke="#d4a72c"/>
+  <rect x="190" y="258" width="80" height="13" fill="#ffebe9" stroke="#cf222e" stroke-dasharray="3 2"/>
+  <!-- cards -->
+  <rect x="624" y="92" width="240" height="56" rx="6" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
+  <text x="636" y="110" font-size="11" font-weight="600" fill="#1f2328">Alex <tspan font-weight="400" fill="#57606a">· 2h</tspan></text>
+  <text x="636" y="126" font-size="11" fill="#1f2328">Is Thursday confirmed?</text>
+  <text x="636" y="141" font-size="10.5" fill="#57606a">1 reply · Resolve</text>
+  <line x1="296" y1="104" x2="624" y2="104" stroke="#0969da" stroke-dasharray="2 3"/>
+
+  <rect x="624" y="156" width="240" height="42" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="636" y="174" font-size="11" font-weight="600" fill="#1f2328">Claude <tspan font-weight="400" fill="#57606a">· agent · 1h</tspan></text>
+  <text x="636" y="190" font-size="11" fill="#1f2328">This contradicts the budget note.</text>
+  <path d="M200,134 L590,134 L624,162" fill="none" stroke="#8c959f" stroke-dasharray="2 3"/>
+
+  <rect x="624" y="206" width="240" height="26" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="636" y="223" font-size="11" fill="#57606a">3 comments inside</text>
+  <line x1="320" y1="220" x2="624" y2="220" stroke="#8c959f" stroke-dasharray="2 3"/>
+
+  <rect x="624" y="250" width="240" height="60" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="636" y="268" font-size="11" font-weight="600" fill="#1f2328">Claude <tspan font-weight="400" fill="#57606a">· suggestion</tspan></text>
+  <text x="636" y="284" font-size="11" fill="#82071e">Thursday <tspan fill="#116329">→ Thursday 9am</tspan></text>
+  <rect x="636" y="291" width="46" height="14" rx="3" fill="#1f883d"/><text x="659" y="302" font-size="9.5" text-anchor="middle" fill="#fff">Accept</text>
+  <rect x="688" y="291" width="46" height="14" rx="3" fill="#f6f8fa" stroke="#d0d7de"/><text x="711" y="302" font-size="9.5" text-anchor="middle" fill="#1f2328">Reject</text>
+  <line x1="270" y1="264" x2="624" y2="264" stroke="#8c959f" stroke-dasharray="2 3"/>
+
+  <!-- labels -->
+  <text x="500" y="88" font-size="10.5" fill="#0969da">focused: pinned to its anchor</text>
+  <text x="430" y="152" font-size="10.5" fill="#57606a">pushed below the card above</text>
+  <text x="330" y="212" font-size="10.5" fill="#57606a">threads inside a collapsed block</text>
+</svg>
+<figcaption>Cards sit in a right column inside the panel's own scroll container, at the height of their target's row, in document order. A card that would overlap the one above is pushed down. The focused card stays pinned to its anchor and pushes the others instead.</figcaption>
+</figure>
+<ul>
+  <li><strong>Toggle.</strong> The margin is per panel. It is switched by the action <code>annotations.toggleMargin</code> or a header item. The flag is stored on the panel's UI-state block, so it survives a reload.</li>
+  <li><strong>Layout.</strong> A <code>blockLayoutFacet</code> contribution on the panel's top-level block adds the right column inside the same scroll container, so the cards scroll with the text.</li>
+  <li><strong>Placement.</strong> Each card goes at the measured top of its target's row in that panel's primary render scope. The order is by target position, then by quote start. A card's top is its anchor's height or just below the previous card, whichever is lower.</li>
+  <li><strong>Collapsed blocks.</strong> Threads anchored inside a collapsed subtree are shown as a single stub on the nearest rendered ancestor.</li>
+  <li><strong>The card.</strong> A card renders the thread root through <code>BlockComponent</code> in a nested surface, so its comments are normal editable blocks. The header shows the quote ("whole block" when there is none), a stale badge, and Resolve. Suggestion cards also show the diff, with Accept and Reject. The footer has Reply.</li>
+  <li><strong>Closed threads</strong> (resolved, accepted or rejected) are hidden behind "show closed".</li>
+  <li><strong>Narrow panels and mobile</strong> have no margin. There, the comment pill expands the threads inline under the block.</li>
+  <li><strong>"All comments"</strong> is an action that opens the container page, where the thread renderer shows each target. A filtered query view (open threads, by author, by scope) comes later.</li>
+</ul>
+
+<h3>Creating, replying, resolving</h3>
+
+<h4>Comment on a selection</h4>
+<p>The action is <code>annotations.commentOnSelection</code>, in the edit-mode context. Its default binding is chosen against the shortcut-conflict check. It has an icon, so it also appears in the mobile keyboard toolbar.</p>
+<ol>
+  <li>Call <code>flushEditorContent(view)</code>. The stored row lags the editor by its debounce, and the anchor must be checked against what the user sees.</li>
+  <li>Read the selection and widen it to whole reference spans.</li>
+  <li>Open a composer, in the margin or inline. The draft lives in UI state and is written only on submit, so an abandoned comment leaves no empty thread behind.</li>
+  <li>Ensure the container exists, before the transaction.</li>
+  <li>On submit, run one <code>repo.tx</code>. It creates the root with <code>createTypedChild</code>, passing its <code>references</code>, then the first comment. Inside that transaction it re-checks that the quote still sits at its offsets, falling back to the nearest occurrence.</li>
+</ol>
+
+<h4>Other gestures</h4>
+<ul>
+  <li><strong>Block-level comment:</strong> the same action in normal mode, or the bullet context menu.</li>
+  <li><strong>Highlight:</strong> the same flow without the composer, giving a thread with no comments.</li>
+  <li><strong>Suggest edit:</strong> the composer opens with a replacement field prefilled with the selected text, plus an optional comment (see <a href="#suggestions">Edit suggestions</a>).</li>
+  <li><strong>Reply:</strong> creates an empty child of the root and focuses it. From there it is ordinary block editing.</li>
+  <li><strong>Resolve and reopen:</strong> set <code>annotation:status</code>.</li>
+  <li><strong>Delete:</strong>
+    <ul>
+      <li>Deleting a thread deletes the root's subtree.</li>
+      <li>Deleting the last comment from its card also deletes the thread. That is a UI rule only.</li>
+      <li>A root with no comments that arises any other way (sync, an agent, hand-editing) is simply a highlight, which is a valid state.</li>
+    </ul>
+  </li>
+</ul>
+
+<h4>Not in v1</h4>
+<ul>
+  <li><strong>Commenting on a read-mode selection.</strong> It needs a mapping from the DOM selection to raw offsets, and none exists. It also needs a guard so that a drag-select does not end in the click that enters edit mode (<code>plain-outliner/clickToEditAction.ts</code>). That guard would decorate the action through the action-dispatch seam, the way vim-normal-mode does.</li>
+  <li><strong>A selection spanning several blocks.</strong> One thread has one target.</li>
+</ul>
+
+<h3>Authorship</h3>
+<div class="two">
+<div>
+<ul>
+  <li><strong>Author:</strong> the comment's first <code>attribution:creators</code> entry, resolved to its contributor profile. The name is the profile's content, and the kind (human, agent or automation) is shown as a glyph.</li>
+  <li><strong>Time:</strong> relative, taken from <code>created_at</code>.</li>
+  <li><strong>"Edited":</strong> shown when the comment has editors other than its creator.</li>
+</ul>
+<p><strong>Not <code>created_by</code>.</strong> Bridge and MCP writes run inside the tab and stamp the tab's human user id, so an agent's comment would show as the person's.</p>
+<p>Nothing in the app has avatars or per-user colours yet, so the chip is initials plus the kind glyph.</p>
+</div>
+<div class="card">
+  <div class="quote">“Thursday”</div>
+  <div class="c"><span class="chip"><span class="av">A</span>Alex <span class="kind">· 2h</span></span><div>Is Thursday confirmed?</div></div>
+  <div class="c"><span class="chip"><span class="av">🤖</span>Claude <span class="kind">· agent · 1h · edited</span></span><div>The vendor confirmed Thursday 9am, see [[Vendor call]].</div></div>
+  <div><span class="btn">Reply</span><span class="btn">Resolve</span></div>
+</div>
+</div>
+
+<h2 id="suggestions">Edit suggestions</h2>
+<p>A suggestion is a thread whose root carries <code>annotation:replacement</code>: "replace the quoted text with this". Everything else is shared with comments: the anchor, the resolver, the card, the discussion underneath, and the agent tools. The additions are one property, two status values, and one accept transaction.</p>
+
+<div class="two">
+<div class="card">
+  <div class="quote">Suggested edit</div>
+  <div class="diff">We moved the launch to <del>Thursday</del><ins>Thursday 9am</ins></div>
+  <div class="c"><span class="chip"><span class="av">🤖</span>Claude <span class="kind">· agent · 5m</span></span><div>Matches the vendor's email.</div></div>
+  <div><span class="btn primary">Accept</span><span class="btn">Reject</span><span class="btn">Reply</span></div>
+</div>
+<div>
+<p><strong>Accept</strong> is one transaction, so it is one undo step:</p>
+<ol>
+  <li>Re-resolve the anchor against the target's content as of this transaction.</li>
+  <li>Require <code>quote</code> to sit exactly at the resolved range. If it is stale, refuse with "the text changed since this was suggested". Never apply a blind replacement.</li>
+  <li>Splice <code>replacement</code> into the content, and set <code>annotation:status = accepted</code>.</li>
+</ol>
+<p><strong>Reject</strong> only sets <code>rejected</code>.</p>
+</div>
+</div>
+
+<ul>
+  <li><strong>The editor guard.</strong> If the target is open in an editor on this client, a pending debounced write could later flush stale text over the accepted change.
+    <ul>
+      <li>A click on the card already blurs the editor, and blurring flushes it. Accept then runs after that.</li>
+      <li>A programmatic accept (an agent tool) refuses while the target is being edited on this client. The refusal is checked before anything is dispatched, as the gesture-guard checklist requires.</li>
+    </ul>
+  </li>
+  <li><strong>No anchor rewrite on accept.</strong> Accepted and rejected threads are closed and hidden. Their card in "show closed" reads "replaced “quote” with “replacement”" directly from the properties. #332 rewrote the anchor to the inserted text, so it could flag an accepted suggestion that no longer applies. That is declined: a closed suggestion needs no highlight.</li>
+  <li><strong>Non-empty replacement.</strong> v1 requires the replacement to be non-empty, so telling an empty value from an absent one never decides whether a thread is a suggestion. To suggest a deletion, replace a slightly wider span (<code>very large</code> → <code>large</code>).</li>
+  <li><strong>Attribution.</strong> The accepted text is attributed to whoever accepts it. The suggestion's own author stays on the thread.</li>
+  <li><strong>Concurrent edits elsewhere.</strong> Another client editing the same block can still overwrite the accepted text with its next write. Ordinary content last-writer-wins applies, and the status stays <code>accepted</code>. This is accepted.</li>
+  <li><strong>Not in scope.</strong> A "suggesting mode", where typing itself produces suggestions as in Google Docs, and suggestions spanning several blocks.</li>
+</ul>
+
+<h2 id="queries">Queries and subscriptions</h2>
+
+<h3>In the app</h3>
+<p>These are <code>defineQuery</code> handles, read with <code>useHandle</code>.</p>
+<ul>
+  <li><strong><code>annotations.threadsForBlocks({workspaceId, ids, includeClosed})</code></strong> returns thread roots grouped by target. It is batched over the rendered blocks the way the backlink count is, and it drives the pills, the highlights and the margin.</li>
+  <li><strong><code>annotations.threadsInScope({workspaceId, rootId, includeClosed})</code></strong> returns every thread anchored to a block under a scope:
+<pre><code>WITH RECURSIVE scope(id) AS ( -- VISIBLE_SUBTREE_SQL from :rootId, rootId included
+  ...
+)
+SELECT br.source_id AS thread_id, br.target_id
+  FROM scope s
+  JOIN block_references br ON br.target_id = s.id
+                          AND br.workspace_id = :ws
+                          AND br.source_field = 'annotation:target'
+  JOIN block_types bt      ON bt.block_id = br.source_id AND bt.type = 'annotation:thread'
+  JOIN blocks t            ON t.id = br.source_id AND t.deleted = 0</code></pre></li>
+  <li><strong><code>annotations.thread({id})</code></strong> returns the root, its visible descendants, and their attribution.</li>
+</ul>
+<p>The typed query language cannot express "the target lies under X". Its <code>target</code> operator matches the target's properties, not its ancestry (<code>src/data/api/typedBlockQuery.ts</code>). So scope gets a dedicated query rather than an extension of the compiler.</p>
+
+<h3 id="agents">For agents: tools</h3>
+<p>These are km MCP tools, with matching bridge verbs.</p>
+<ul>
+  <li><strong><code>comments({scope | block, includeClosed})</code></strong> returns the threads. Each comes with its resolved or stale anchor, the quote, any replacement, an excerpt of the target, and the comments with author names and kinds.</li>
+  <li><strong><code>add_comment({target, quote?, occurrence?, content})</code></strong> creates a thread.</li>
+  <li><strong><code>suggest_edit({target, quote, occurrence?, replacement, comment?})</code></strong> creates a suggestion.</li>
+  <li><strong><code>reply_comment({thread, content})</code></strong> adds a comment to a thread.</li>
+  <li><strong><code>set_comment_status({thread, status})</code></strong> changes a thread's status. <code>accepted</code> runs the same accept transaction as the UI, guard included.</li>
+</ul>
+<pre><code>// an agent reviewing a page proposes a change
+suggest_edit({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am",
+              comment: "Matches the vendor's email."})</code></pre>
+<p>Writes go through the bridge, so contributor attribution records the agent automatically. Writing an anchor correctly is exactly what a dedicated tool should own: the exact raw substring, widened to whole reference spans, with the start hint. The agent-facing guide gets a <code>comments</code> topic.</p>
+
+<h3>For agents: being woken</h3>
+<figure>
+<svg viewBox="0 0 900 340" role="img" aria-label="Sequence: a comment is written, the tab pushes a watcher event, the daemon claims the thread root, the agent replies">
+  <defs>
+    <marker id="seq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <g font-size="11.5" font-weight="600" fill="#1f2328" text-anchor="middle">
+    <rect x="40" y="16" width="140" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/><text x="110" y="35">Person (app tab)</text>
+    <rect x="270" y="16" width="140" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/><text x="340" y="35">Tab: watch-events</text>
+    <rect x="500" y="16" width="140" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/><text x="570" y="35">dispatch daemon</text>
+    <rect x="720" y="16" width="140" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/><text x="790" y="35">agent run</text>
+  </g>
+  <g stroke="#d0d7de" stroke-dasharray="3 3">
+    <line x1="110" y1="44" x2="110" y2="325"/><line x1="340" y1="44" x2="340" y2="325"/>
+    <line x1="570" y1="44" x2="570" y2="325"/><line x1="790" y1="44" x2="790" y2="325"/>
+  </g>
+  <g stroke="#57606a" stroke-width="1.3" fill="none" marker-end="url(#seq)">
+    <line x1="110" y1="80" x2="336" y2="80"/>
+    <line x1="340" y1="115" x2="566" y2="115"/>
+    <line x1="570" y1="195" x2="344" y2="195"/>
+    <line x1="570" y1="230" x2="786" y2="230"/>
+    <line x1="790" y1="265" x2="344" y2="265"/>
+    <line x1="340" y1="300" x2="114" y2="300"/>
+  </g>
+  <g font-size="11" fill="#1f2328" text-anchor="middle">
+    <text x="225" y="73">writes a comment in thread T</text>
+    <text x="455" y="108">scope query changed → watcher-settled</text>
+    <text x="455" y="188">claim on T's ROOT: agent:status</text>
+    <text x="680" y="223">prompt: thread + target + quote</text>
+    <text x="567" y="258">reply_comment → child of T's root (agent:reply)</text>
+    <text x="225" y="293">reply appears in the margin</text>
+  </g>
+  <rect x="470" y="135" width="200" height="40" rx="5" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="570" y="152" font-size="10.5" text-anchor="middle" fill="#1f2328">T is pending: its latest comment</text>
+  <text x="570" y="166" font-size="10.5" text-anchor="middle" fill="#1f2328">is not by this watcher's contributor</text>
+</svg>
+<figcaption>The <code>comments</code> watcher path. After the reply, T's latest comment is the agent's own, so T is no longer pending. That is the loop guard, and nothing extra is needed for it.</figcaption>
+</figure>
+<p>There are two wake paths. Both follow one rule: <strong>a dispatch task that starts inside a thread is hosted on the thread root.</strong> The claim, session and completion state (<code>agent:status</code>, <code>agent:session</code> and the rest) are written to the root, and the reply becomes a child of the root.</p>
+<p>The rule matters because today's engine writes all of that state to the source block (<code>packages/agent-dispatch/src/engine.ts</code>, the <code>setTaskProps(sourceId, …)</code> calls). <code>agent:*</code> properties are <code>BlockDefault</code>, and the attribution processor counts them as meaningful edits. A claim written onto a person's comment would therefore list the agent as one of its editors.</p>
+<p>So the engine resolves a <em>task host</em> once: the nearest thread-root ancestor of the source, or the source itself. Every state write and reply then goes through that host. Session resume needs no change, because it already looks for the nearest ancestor <code>agent:session</code>, and that is now the root.</p>
+<ol>
+  <li><strong>A mention inside a thread.</strong> <code>[[claude]] can you check this?</code> in a comment is a backlink to the watcher's target page, so today's backlinks watcher picks it up.
+    <ul>
+      <li>The source's own <code>agent:status</code> can no longer say whether it was handled. Inside a thread, the mention is pending when it was edited after the root's last completed run.</li>
+      <li>The prompt builder adds the anchor context: the target block's content, the quote, the page path, and the thread so far with its authors. Without that, the agent would see only the container and the thread.</li>
+    </ul>
+  </li>
+  <li><strong>A <code>comments</code> watcher kind</strong>, for monitoring a scope without being mentioned. It is configured as <code>{kind: 'comments', name, scope: &lt;page alias or block id&gt;, quietMs}</code>.
+    <ul>
+      <li><strong>Pending</strong> means an open thread in scope whose latest comment is by someone other than the watcher's contributor and was written after the baseline. This is derived from the graph on every tick, so it needs no cursor and it survives restarts.</li>
+      <li><strong>Detection</strong> is pushed through a <code>watch-events</code> <code>sql</code> watcher running the scope query. The poll stays as the backstop, as it does for the other watchers.</li>
+    </ul>
+  </li>
+</ol>
+
+<h2 id="not-handled">Deliberately not handled</h2>
+<div class="tblwrap"><table>
+<tr><th>Case</th><th>Why it is acceptable</th></tr>
+<tr><td>Read-only workspace viewers cannot comment</td><td>A viewer's writes stay local. A "commenter" role would be a server-side RLS change, and under E2EE the server cannot tell a comment from any other block.</td></tr>
+<tr><td>Concurrent writes to one thread root's metadata</td><td>Cell-stored workspaces merge <code>properties_json</code> last-writer-wins, the same as every block. Thread roots get little traffic. Children-stored workspaces keep one row per property.</td></tr>
+<tr><td>Sync can land <code>references_json</code> from one writer and properties from another</td><td>Projection runs only in <code>repo.tx</code>. Discovery tolerates a stale edge, and the next local write to the root re-projects it.</td></tr>
+<tr><td>Comments don't follow a copied or duplicated target</td><td>They annotate that particular block, not its text.</td></tr>
+<tr><td>A future subtree share would not include the threads anchored into it</td><td>Subtree sharing is designed but not built. Its row scope will need to include "threads targeting blocks in the share". This is the one real cost of not storing threads under their target.</td></tr>
+<tr><td>Search and recents show comments, agent replies included</td><td>Decided: comments are blocks (see <a href="#decisions">Decisions</a>).</td></tr>
+</table></div>
+
+<h2 id="slices">Slices</h2>
+<figure>
+<svg viewBox="0 0 900 190" role="img" aria-label="Slice dependencies: data first, then agents, margin and suggestions in any order, then later work">
+  <defs>
+    <marker id="dep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <g font-size="12" fill="#1f2328">
+    <rect x="20" y="70" width="240" height="50" rx="6" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="34" y="92" font-weight="600">1 · Data + edit-mode comments</text>
+    <text x="34" y="110" font-size="10.5" fill="#57606a">seeds, writes, resolver, queries, pills</text>
+    <rect x="340" y="10" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="30" font-weight="600">2 · Agents</text>
+    <text x="354" y="46" font-size="10.5" fill="#57606a">tools, task host, comments watcher</text>
+    <rect x="340" y="72" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="92" font-weight="600">3 · Side margin</text>
+    <text x="354" y="108" font-size="10.5" fill="#57606a">margin, read-mode highlight spike</text>
+    <rect x="340" y="134" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="154" font-weight="600">4 · Edit suggestions</text>
+    <text x="354" y="170" font-size="10.5" fill="#57606a">accept tx, diff card, suggest_edit</text>
+    <rect x="650" y="70" width="230" height="50" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="664" y="92" font-weight="600">5 · Later</text>
+    <text x="664" y="110" font-size="10.5" fill="#57606a">read-mode selection, split retarget, …</text>
+  </g>
+  <g stroke="#57606a" fill="none" marker-end="url(#dep)">
+    <path d="M260,88 C300,88 300,33 336,33"/>
+    <path d="M260,95 L336,95"/>
+    <path d="M260,102 C300,102 300,157 336,157"/>
+    <path d="M570,33 C610,33 610,88 646,88"/>
+    <path d="M570,95 L646,95"/>
+    <path d="M570,157 C610,157 610,102 646,102"/>
+  </g>
+</svg>
+<figcaption>Slices 2, 3 and 4 each depend on 1 and not on each other.</figcaption>
+</figure>
+<ol>
+  <li><strong>Data and edit-mode comments.</strong>
+    <ul>
+      <li>All seeds and their ledger lines, including <code>annotation:replacement</code> and the full status enum, so that suggestions need no seed change later.</li>
+      <li>The container.</li>
+      <li>The writes: create, reply, resolve, re-anchor.</li>
+      <li>The resolver, as a pure function with unit tests.</li>
+      <li>The three queries.</li>
+      <li>The backlinks edge-field exclusion.</li>
+      <li>The comment pill and inline expansion.</li>
+      <li>CodeMirror highlights.</li>
+      <li>Comment on a selection, block-level comments and highlights.</li>
+      <li>Author chips.</li>
+    </ul>
+  </li>
+  <li><strong>Agents.</strong> The MCP tools and bridge verbs, the guide topic, the task-host rule, anchor context in the mention prompt, and the <code>comments</code> watcher kind.</li>
+  <li><strong>Side margin.</strong> The margin itself, read-mode highlights (spike first), and the stale and re-anchor UI.</li>
+  <li><strong>Edit suggestions.</strong> The suggest gesture and composer, the accept and reject transactions with the editor guard, the diff card, the suggestion highlight style, and <code>suggest_edit</code>. If slice 2 comes first, it lands without that tool.</li>
+  <li><strong>Later.</strong> Read-mode selection, split retargeting, fuzzy repair, the filtered "all comments" view, mentions in the margin, and an inline diff widget for suggestions.</li>
+</ol>
+
+<h3>Tests</h3>
+<p>These follow the repo's testing rules.</p>
+<ul>
+  <li><strong>Resolver:</strong> unchanged text, shifted text, repeated text, missing text, non-ASCII text, and widening to whole reference spans.</li>
+  <li><strong>Flush before anchoring:</strong> an edit still waiting in the editor's debounce is anchored against what the editor shows, not against the stale row.</li>
+  <li><strong>Backlinks exclusion:</strong> delete the clause, and a named count test and a named list test both fail.</li>
+  <li><strong>Merge:</strong> a merge run through the production processor order moves the thread.</li>
+  <li><strong>Target deletion:</strong> delete and restore the target.</li>
+  <li><strong>Accept:</strong>
+    <ul>
+      <li>refuses when the quote is stale;</li>
+      <li>is one undo step;</li>
+      <li>refuses while the target is being edited on this client;</li>
+      <li>does not apply when the quote occurs elsewhere but not at the resolved range.</li>
+    </ul>
+  </li>
+  <li><strong>Dispatch:</strong>
+    <ul>
+      <li>the agent's own reply clears pending;</li>
+      <li>a mention inside a thread claims the root;</li>
+      <li>no claim makes the agent an editor of a person's comment;</li>
+      <li>a resumed mention finds the root's session.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2 id="decisions">Decisions</h2>
+<ol>
+  <li><strong>Comments appear in search and recents.</strong> Decided 2026-10-28.
+    <ul>
+      <li>#332 hid threads from those surfaces instead, through an ancestor-based filter that each list of blocks routes through. That was rejected: it is a seam that every future list has to remember, and it leaks wherever one forgets it.</li>
+      <li>Showing them means a search for "fix the intro" finds the comment that says it, and a comment just written is one recents click away.</li>
+      <li>The accepted cost is agent replies in recents.</li>
+    </ul>
+  </li>
+  <li><strong>Edit suggestions are in.</strong> Decided 2026-10-28. They are slice 4, and their data model ships with slice 1.</li>
+  <li><strong>Open: agents before the margin, or the margin first?</strong> The two slices are independent. My pick is agents first: the mention path needs little beyond the task-host rule and prompt context, while the margin waits on the read-mode spike.</li>
+  <li><strong>Open: the container alias.</strong> <code>Comments (km)</code> is unique but visible and ugly. The alternative, which #332 proposed, is a kernel-page variant with no alias. That is cleaner, but it is one more page mechanism to keep. My pick is the alias.</li>
+</ol>
+
+<h2 id="compare">Compared with the earlier design (#332)</h2>
+<p>This design was drafted before reading #332.</p>
+
+<h3>Where they agree</h3>
+<ul>
+  <li>Threads are blocks under a workspace container.</li>
+  <li>The anchor is stored as properties on the thread root, never as markers in the content.</li>
+  <li>Threads are found through a ref property and <code>source_field</code>.</li>
+  <li>Anchors resolve lazily, fall back to stale, and are never rewritten automatically.</li>
+  <li>Creation starts from an edit-mode selection.</li>
+  <li>Deleting the target orphans the thread, and restoring the target brings it back.</li>
+  <li>There is no synced annotations table.</li>
+  <li>Suggestions share the thread and anchor model.</li>
+</ul>
+
+<h3>Taken from #332</h3>
+<ul>
+  <li><strong>A metadata root with the comments as its children.</strong> This design first had the root double as the first comment. Attribution settled it.</li>
+  <li>Flushing the debounced editor write before anchoring.</li>
+  <li>Re-validating an anchor inside the transaction that saves it.</li>
+  <li>Showing highlights only on primary surfaces.</li>
+  <li>A status enum that can widen.</li>
+  <li>A container alias that cannot collide.</li>
+  <li>A suggestion accept that re-resolves and refuses on mismatch, inside one transaction.</li>
+</ul>
+
+<h3>Where this one differs</h3>
+<ul>
+  <li><strong>Storage of the anchor.</strong> One <code>ref</code> target plus scalar quote properties, instead of a <code>refList</code> mirror plus a JSON segments payload.
+    <ul>
+      <li>The generic merge retargeter rewrites ref-property values as well as their entries (<code>mergeRetargetProcessor.ts:217-275</code>, since 9d93fd9bfe8). So a block id that lives only in a ref property follows a merge with no help.</li>
+      <li>What the retargeter cannot see is a block id inside a JSON payload. That copy of the id is what forced #332's dedicated annotation merge processor, its mirror invariant, and the tests for both.</li>
+      <li>The cost: a comment spanning several blocks would need a new property, because changing <code>ref</code> to <code>refList</code> is a frozen codec change. But no model for selecting across blocks exists yet to need one.</li>
+    </ul>
+  </li>
+  <li><strong>No hiding seam.</strong> Comments are blocks, and search and recents show them (decision 1). The only special case is the anchor edge in the generic backlink surfaces, and that is one exclusion owned by the backlinks plugin.</li>
+  <li><strong>Suggestions, simplified.</strong>
+    <ul>
+      <li>A replacement property instead of a kind property plus a patch payload.</li>
+      <li>No anchor rewrite on accept, because closed suggestions are not highlighted.</li>
+      <li>The editor coordination reduced to "accept runs after a blur, and a programmatic accept refuses while the target is being edited". #332 instead proposed dispatching into the mounted editor or an awaited editor-commit API.</li>
+    </ul>
+  </li>
+  <li><strong>A lazy container</strong> through the existing <code>getOrCreateKernelPage</code>, instead of an eager <code>systemPagesFacet</code> ensure that writes a page into every workspace on open.</li>
+  <li><strong>Disambiguating repeated text</strong> by the nearest occurrence to the start hint, instead of by prefix and suffix context.</li>
+  <li><strong>Added:</strong> the side margin, authorship, the queries, the agent tools, the task-host rule with the watcher kind, and mentions.</li>
+</ul>
+
+</body>
+</html>
