@@ -275,11 +275,13 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<h1>T</h1><p><code>a</code><code></code><code>b</code> c</p>')).toEqual(['# T', '  `ab` c'])
   })
 
-  it('keeps the character beside emphasis that markdown has to spell as a reference', () => {
+  it('keeps the character beside emphasis or strikethrough that markdown has to spell as a reference', () => {
     // Bold opening or closing on punctuation can't touch a letter, so the letter is written `&#x…;`.
     expect(convert('<b>Done!</b>🎉')).toEqual({kind: 'inline', markdown: '**Done!**&#x1F389;'})
     // `a\\&#x62;*(c)*`, which reads back as `a\b` and an emphasized `(c)`.
     expect(convert('a\\b<i>(c)</i>')).toEqual({kind: 'inline', markdown: 'a\\\\&#x62;*(c)*'})
+    // `\\&#x41;~~!~~`, which reads back as `\A` and a struck `!`.
+    expect(convert('\\A<del>!</del>')).toEqual({kind: 'inline', markdown: '\\\\&#x41;~~!~~'})
   })
 
   it('lifts blocks out of the paragraph or inline markup that holds them', () => {
