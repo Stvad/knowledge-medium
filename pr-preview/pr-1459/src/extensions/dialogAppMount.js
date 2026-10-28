@@ -1,0 +1,1 @@
+export{WA as DialogHost,GA as dialogAppMountExtension}from"../../chunks/app-DlLmZYfz.js";

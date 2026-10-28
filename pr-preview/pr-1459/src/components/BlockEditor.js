@@ -1,0 +1,1 @@
+export{CN as BlockEditor}from"../../chunks/app-DlLmZYfz.js";

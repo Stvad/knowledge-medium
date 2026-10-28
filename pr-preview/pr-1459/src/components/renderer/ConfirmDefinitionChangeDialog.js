@@ -1,0 +1,1 @@
+export{QA as ConfirmDefinitionChangeDialog}from"../../../chunks/app-DlLmZYfz.js";

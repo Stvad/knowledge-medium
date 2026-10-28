@@ -1,0 +1,1 @@
+export{kA as LazyBlockComponent}from"../../chunks/app-DlLmZYfz.js";

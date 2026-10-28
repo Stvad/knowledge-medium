@@ -1,0 +1,1 @@
+export{Nw as Label}from"../../../chunks/app-DlLmZYfz.js";

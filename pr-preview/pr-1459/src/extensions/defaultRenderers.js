@@ -1,0 +1,1 @@
+export{FA as defaultRegistry,IA as defaultRendererContributions,LA as defaultRenderersExtension}from"../../chunks/app-DlLmZYfz.js";

@@ -1,0 +1,1 @@
+export{oz as propertyShapeLabel}from"../../../chunks/app-DlLmZYfz.js";

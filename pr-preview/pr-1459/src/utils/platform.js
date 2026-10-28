@@ -1,0 +1,1 @@
+export{UL as isIOS,WL as isMacPlatform}from"../../chunks/app-DlLmZYfz.js";

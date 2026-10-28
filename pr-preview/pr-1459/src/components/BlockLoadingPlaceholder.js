@@ -1,0 +1,1 @@
+export{MA as BlockLoadingPlaceholder}from"../../chunks/app-DlLmZYfz.js";

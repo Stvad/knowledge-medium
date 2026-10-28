@@ -1,0 +1,1 @@
+export{Zb as plainOutlinerPlugin}from"../../../chunks/app-DlLmZYfz.js";

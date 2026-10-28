@@ -1,0 +1,1 @@
+export{Jk as dynamicExtensionsExtension}from"../../chunks/app-DlLmZYfz.js";
