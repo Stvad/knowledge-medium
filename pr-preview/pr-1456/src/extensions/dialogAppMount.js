@@ -1,0 +1,1 @@
+export{GA as DialogHost,KA as dialogAppMountExtension}from"../../chunks/app-BLe2B3I9.js";

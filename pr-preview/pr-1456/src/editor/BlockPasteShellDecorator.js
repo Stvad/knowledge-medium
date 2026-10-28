@@ -1,0 +1,1 @@
+export{HO as BlockPasteShellDecorator,UO as blockPasteShellDecorator}from"../../chunks/app-BLe2B3I9.js";

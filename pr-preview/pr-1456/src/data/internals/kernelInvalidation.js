@@ -1,0 +1,1 @@
+export{vZ as emitKernelInvalidations,yZ as kernelInvalidationRule}from"../../../chunks/app-BLe2B3I9.js";

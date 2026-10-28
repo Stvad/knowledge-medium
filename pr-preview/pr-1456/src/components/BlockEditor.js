@@ -1,0 +1,1 @@
+export{wN as BlockEditor}from"../../chunks/app-BLe2B3I9.js";

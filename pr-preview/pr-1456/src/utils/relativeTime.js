@@ -1,0 +1,1 @@
+export{wC as formatAbsoluteDateTime,TC as formatRelativeTime}from"../../chunks/app-BLe2B3I9.js";
