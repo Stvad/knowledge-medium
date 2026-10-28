@@ -1,1 +1,0 @@
-export{WL as isIOS,GL as isMacPlatform}from"../../chunks/app-BLe2B3I9.js";

@@ -1,1 +1,0 @@
-export{pC as DEFAULT_THEME_ID_DARK,mC as DEFAULT_THEME_ID_LIGHT,QS as defaultThemeContributions,ZS as defaultThemesPlugin}from"../../../chunks/app-BLe2B3I9.js";

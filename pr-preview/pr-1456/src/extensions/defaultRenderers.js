@@ -1,1 +1,0 @@
-export{IA as defaultRegistry,LA as defaultRendererContributions,RA as defaultRenderersExtension}from"../../chunks/app-BLe2B3I9.js";

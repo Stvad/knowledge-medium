@@ -1,1 +1,0 @@
-export{PS as usePendingInvitations}from"../../chunks/app-BLe2B3I9.js";

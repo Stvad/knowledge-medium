@@ -1,1 +1,0 @@
-export{MO as resolveStructuralEditPolicy,NO as structuralEditPolicyForBlock}from"../../chunks/app-BLe2B3I9.js";
