@@ -4,10 +4,10 @@
  * multi-selection. The action opens a picker (structurally a clone of
  * merge-blocks' `MergePicker`) that searches link targets in the
  * current workspace; on selection, `moveBlocksTo` relocates every
- * chosen block to the picked destination as one undo-grouped batch.
+ * chosen block to the picked destination in one transaction.
  *
  * Composition:
- *   - `moveBlocks.ts`             — core: pruning + grouped `core.move` calls
+ *   - `moveBlocks.ts`             — core: pruning + one tx of `core.move` calls
  *   - `MoveDestinationPicker.tsx` — modal opened on demand via `openDialog`
  *   - `moveAction.ts`             — block/multi-select actions that open the picker
  */

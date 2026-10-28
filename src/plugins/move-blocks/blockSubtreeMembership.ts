@@ -1,16 +1,8 @@
 /**
- * Shared "is this id inside one of these root ids' subtrees?" walk, used by
- * two independent move-blocks call sites that both need to attribute an
- * arbitrary block id to a set of ROOT ids:
- *
- *  - `pasteAsMoveImpl` — is a paste destination inside (or one of) the
- *    blocks currently being cut? Falling through to a text paste there
- *    would duplicate the un-deleted originals, so it has to refuse instead.
- *  - `moveAction` — after a `PartialMoveError`, which of the ORIGINALLY
- *    requested ids (before `moveBlocksTo`'s internal descendant pruning)
- *    ended up covered by the roots that actually committed? Those need the
- *    same ui-state-selection bookkeeping a full success gets; the roots
- *    that didn't move (and their descendants) must stay selected.
+ * Shared "is this id inside one of these root ids' subtrees?" walk: after
+ * a move, `moveAction` uses it to find every selected id the moved roots
+ * carried along (the roots themselves and any descendant riding inside
+ * them), so those leave the ui-state selection.
  */
 import type { Repo } from '@/data/repo.js'
 
