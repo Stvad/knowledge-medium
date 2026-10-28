@@ -28,7 +28,10 @@ is the nightly tier's job; on failure it uploads both passes' vitest
 logs as an artifact and files (or appends to) an issue labeled
 `fuzz-failure`. The failing seed is always in the uploaded artifact;
 the issue body itself carries a best-effort excerpt of the failure
-(only from the pass(es) that actually failed), not a guarantee.
+(only from the pass(es) that actually failed), not a guarantee. The
+workflow then fires the fuzz-triage cloud routine over its API trigger
+(repo secrets `FUZZ_TRIAGE_FIRE_URL` / `FUZZ_TRIAGE_FIRE_TOKEN`), which
+reproduces the failure and opens a fix PR against the issue.
 
 ## Reproducing a failure
 
