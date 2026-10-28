@@ -21,6 +21,8 @@ import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { suppressNextClick } from '@/extensions/continuousGestures.js'
 import { focusBlock } from '@/data/properties.js'
 import { getSelectionStateSnapshot, getUIStateBlock } from '@/data/stateBlocks.js'
+import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
+import { activatePanelRow } from '@/utils/panelLayoutProjection.js'
 import { showError } from '@/utils/toast.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
 import { isWithinSubtreeOfAny, moveBlocksTo, unselectMovedBlocks } from '@/plugins/move-blocks'
@@ -64,8 +66,14 @@ interface Session {
   /** The bullet's own block until the payload resolves. */
   draggedIds: Set<string>
   frame: number | null
-  /** Data-ancestry answers per surface root — see `isSurfaceAllowed`. */
-  readonly surfaceAllowed: Map<string, boolean>
+  /** Data-ancestry checks per surface root — see `surfaceCheck`. */
+  readonly surfaceChecks: Map<string, SurfaceCheck>
+}
+
+interface SurfaceCheck {
+  readonly ready: Promise<boolean>
+  /** Set once `ready` settles. */
+  allowed?: boolean
 }
 
 export interface BlockDragController {
@@ -97,7 +105,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     const blockId = row?.dataset.blockId
     if (!row || !blockId) return
 
-    const payload = resolvePayload(repo, blockId, row.closest<HTMLElement>('[data-panel-id]'))
+    const payload = resolvePayload(repo, blockId, row)
     // Read only once the press becomes a drag; a click must not surface
     // its rejection as unhandled.
     payload.catch(() => {})
@@ -111,7 +119,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
       phase: 'pending',
       draggedIds: new Set([blockId]),
       frame: null,
-      surfaceAllowed: new Map(),
+      surfaceChecks: new Map(),
     }
     window.addEventListener('pointermove', onPointerMove, true)
     window.addEventListener('pointerup', onPointerUp, true)
@@ -159,28 +167,55 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     })
   }
 
-  const targetAt = (current: Session): DropTarget | null => resolveDropTarget(
-    document.elementFromPoint(current.x, current.y),
-    current.x,
-    current.y,
-    {draggedIds: current.draggedIds, isSurfaceAllowed: rootId => isSurfaceAllowed(current, rootId)},
-  )
+  /** A hover frame's target: a surface whose check hasn't answered yet
+   *  takes no drop, and the answer schedules another frame. */
+  const targetAt = (current: Session): DropTarget | null =>
+    resolveAt(current, rootId => surfaceCheck(current, rootId).allowed ?? false)
+
+  const resolveAt = (current: Session, isSurfaceAllowed: (rootId: string) => boolean) =>
+    resolveDropTarget(
+      document.elementFromPoint(current.x, current.y),
+      current.x,
+      current.y,
+      {draggedIds: current.draggedIds, isSurfaceAllowed},
+    )
 
   /** The DOM check in `resolveDropTarget` sees only rows rendered inside a
    *  dragged row. A panel zoomed into a descendant of a dragged block
-   *  renders none of them, so its root is checked against the data once
-   *  per drag; until the answer lands the surface takes no drop. */
-  const isSurfaceAllowed = (current: Session, rootId: string): boolean => {
-    const known = current.surfaceAllowed.get(rootId)
-    if (known !== undefined) return known
-    current.surfaceAllowed.set(rootId, false)
-    void current.payload
-      .then(payload => isWithinSubtreeOfAny(repo, rootId, new Set(payload.ids)))
-      .then(inside => {
-        current.surfaceAllowed.set(rootId, !inside)
-        if (!inside) scheduleFrame(current)
-      }, () => {})
-    return false
+   *  renders none of them, so its root is checked against the data, once
+   *  per drag. */
+  const surfaceCheck = (current: Session, rootId: string): SurfaceCheck => {
+    const known = current.surfaceChecks.get(rootId)
+    if (known) return known
+    const check: SurfaceCheck = {
+      ready: current.payload
+        .then(payload => isWithinSubtreeOfAny(repo, rootId, new Set(payload.ids)))
+        .then(inside => !inside, () => false),
+    }
+    current.surfaceChecks.set(rootId, check)
+    void check.ready.then(allowed => {
+      check.allowed = allowed
+      if (allowed) scheduleFrame(current)
+    })
+    return check
+  }
+
+  /** The target under the release point, once everything it depends on
+   *  has resolved — a quick drag can end before the selection or the
+   *  surface check has answered, and before any hover frame ran. */
+  const releaseTarget = async (current: Session): Promise<DropTarget | null> => {
+    const payload = await current.payload
+    current.draggedIds = new Set(payload.ids)
+    const pending: SurfaceCheck[] = []
+    const target = resolveAt(current, rootId => {
+      const check = surfaceCheck(current, rootId)
+      if (check.allowed === undefined) pending.push(check)
+      return check.allowed ?? false
+    })
+    if (target || pending.length === 0) return target
+    // `allowed` is set by the check's own first reaction, so it is known here.
+    await Promise.all(pending.map(check => check.ready))
+    return targetAt(current)
   }
 
   const onPointerUp = (event: PointerEvent) => {
@@ -188,13 +223,11 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     const ended = session
     // A press that never became a drag is a click: let it open the block.
     if (ended.phase !== 'pending') suppressNextClick(document.documentElement)
-    // Resolved at the release point, not read from the last frame: a
-    // quick drag can end before a frame has run.
+    const dropping = ended.phase === 'dragging'
     ended.x = event.clientX
     ended.y = event.clientY
-    const target = ended.phase === 'dragging' ? targetAt(ended) : null
     end()
-    if (target) void drop(repo, ended, target)
+    if (dropping) void drop(repo, ended, releaseTarget(ended))
   }
 
   const onPointerCancel = (event: PointerEvent) => {
@@ -258,30 +291,39 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
 const resolvePayload = async (
   repo: Repo,
   blockId: string,
-  sourcePanel: HTMLElement | null,
+  sourceRow: HTMLElement,
 ): Promise<Payload> => {
+  const sourcePanel = sourceRow.closest<HTMLElement>('[data-panel-id]')
   const panelId = sourcePanel?.dataset.panelId
   const uiStateBlock = await getUIStateBlock(
     repo, repo.activeWorkspaceId!, repo.user, panelId ? {panelId} : {},
   )
   const selected = getSelectionStateSnapshot(uiStateBlock).selectedBlockIds
   const ids = selected.includes(blockId)
-    ? inDocumentOrder(selected, sourcePanel ?? document)
+    ? inDocumentOrder(selected, sourcePanel ?? document, sourceRow.dataset.renderScopeId!)
     : [blockId]
   return {ids, uiStateBlock}
 }
 
 /** Sort by where each block renders in `container` (a deferred row's
- *  placeholder counts); ids with nowhere to render keep their relative
- *  order at the end. */
-const inDocumentOrder = (ids: readonly string[], container: ParentNode): string[] => {
+ *  placeholder counts), preferring its occurrence in `renderScopeId` —
+ *  the outline the drag started in — over an embed of it rendered
+ *  earlier. Ids with nowhere to render keep their relative order at the
+ *  end. */
+const inDocumentOrder = (ids: readonly string[], container: ParentNode, renderScopeId: string): string[] => {
+  const scope = CSS.escape(renderScopeId)
+  // Rows only: a block reference to `id` carries `data-block-id` too.
+  const occurrence = (id: string, scoped: boolean): Element | null => {
+    const block = CSS.escape(id)
+    return container.querySelector(scoped
+      ? `${ROW_SELECTOR}[data-block-id="${block}"][data-render-scope-id="${scope}"], `
+        + `[data-lazy-block-id="${block}"][data-lazy-render-scope-id="${scope}"]`
+      : `${ROW_SELECTOR}[data-block-id="${block}"], [data-lazy-block-id="${block}"]`)
+  }
   const located = ids.map((id, index) => ({
     id,
     index,
-    // Rows only: a block reference to `id` carries `data-block-id` too.
-    element: container.querySelector(
-      `${ROW_SELECTOR}[data-block-id="${CSS.escape(id)}"], [data-lazy-block-id="${CSS.escape(id)}"]`,
-    ),
+    element: occurrence(id, true) ?? occurrence(id, false),
   }))
   return located
     .sort((a, b) => {
@@ -293,14 +335,19 @@ const inDocumentOrder = (ids: readonly string[], container: ParentNode): string[
 }
 
 /** One `moveBlocksTo` (one transaction, one undo entry); then the moved
- *  blocks leave the selection and the first one takes focus where it
- *  landed. */
-const drop = async (repo: Repo, session: Session, target: DropTarget): Promise<void> => {
+ *  blocks leave the selection and the first one takes focus in the panel
+ *  it landed in, which becomes the active one — a release doesn't
+ *  activate a panel the way a press does. */
+const drop = async (repo: Repo, session: Session, resolvedTarget: Promise<DropTarget | null>): Promise<void> => {
   try {
+    const target = await resolvedTarget
+    if (!target) return
     const payload = await session.payload
     const result = await moveBlocksTo(repo, payload.ids, target.move)
     if (result.moved === 0) return
     await unselectMovedBlocks(repo, payload.uiStateBlock, result.movedIds)
+    const layoutSessionId = activeLayoutSessionElement()?.dataset.layoutSessionId
+    if (target.panelId && layoutSessionId) await activatePanelRow(repo, layoutSessionId, target.panelId)
     const targetUiState = await getUIStateBlock(
       repo, repo.activeWorkspaceId!, repo.user, target.panelId ? {panelId: target.panelId} : {},
     )

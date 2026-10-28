@@ -138,6 +138,20 @@ describe('resolveDropTarget', () => {
       .toEqual({parentId: 'root', position: {kind: 'after', siblingId: 'b'}})
   })
 
+  // A layout that renders the root's children in the panel's scope but
+  // not the root's own shell (the video-notes layout): its first row is a
+  // child, not the root, so the depths read off the DOM would be wrong.
+  it('has no target on a surface that does not render its root', () => {
+    document.body.innerHTML = ''
+    rows.clear()
+    panel = document.createElement('div')
+    panel.dataset.panelId = 'p1'
+    document.body.append(panel)
+    layout(panel, [['n1'], ['n2']], 1, 0)
+    expect(resolveDropTarget(rows.get('n2')!, column(1), lowerHalf('n2'), context())).toBeNull()
+    expect(resolveDropTarget(rows.get('n1')!, column(1), lowerHalf('n1'), context())).toBeNull()
+  })
+
   it('ignores a deferred row placeholder', () => {
     // A placeholder carries the shell attribute but no block id; a pointer
     // over it belongs to the rows around it.

@@ -47,7 +47,9 @@ export interface DropContext {
  * dragged row, or on a surface that isn't a panel's own outline.
  *
  * v1: drops land only in a panel's own outline, never inside an embed,
- * a backlink entry or another nested surface.
+ * a backlink entry or another nested surface — and only in one that
+ * renders its root row, since depths are read off the DOM (the
+ * video-notes layout renders the root's children without it).
  */
 export const resolveDropTarget = (
   hit: Element | null,
@@ -64,7 +66,7 @@ export const resolveDropTarget = (
   const panel = hovered.closest<HTMLElement>(PANEL_SELECTOR)
   const surface = surfaceRows(panel ?? hovered.ownerDocument, renderScopeId, context)
   const rootId = surface.rowId(0)
-  if (!rootId || !context.isSurfaceAllowed(rootId)) return null
+  if (!rootId || !surface.rendersRoot || !context.isSurfaceAllowed(rootId)) return null
 
   const slot = findSlot(surface, y)
   if (!slot) return null
@@ -88,6 +90,8 @@ export const resolveDropTarget = (
 
 interface SurfaceRows extends SlotRows {
   rowId(index: number): string | undefined
+  /** The first row is the surface root: it contains every other row. */
+  readonly rendersRoot: boolean
   dropRow(index: number): DropRow
   /** Right edge of the surface root, where the drop line ends. */
   readonly right: number
@@ -126,6 +130,7 @@ const surfaceRows = (
     isExcluded: i => context.draggedIds.has(rows[i].dataset.blockId!)
       || chain(i).some(id => context.draggedIds.has(id)),
     rowId: i => rows[i]?.dataset.blockId,
+    rendersRoot: rows.length > 0 && rows[0].contains(rows[rows.length - 1]),
     dropRow: i => ({
       id: rows[i].dataset.blockId!,
       depth: chain(i).length,

@@ -7,21 +7,24 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo.js'
-import type { DropTarget } from './dropTarget.ts'
+import type { DropContext, DropTarget } from './dropTarget.ts'
 
 const mocks = vi.hoisted(() => ({
   moveBlocksTo: vi.fn(async (_repo: unknown, ids: readonly string[]) => ({moved: ids.length, movedIds: ids})),
   unselectMovedBlocks: vi.fn(async () => {}),
   focusBlock: vi.fn(async () => {}),
   resolveDropTarget: vi.fn(),
+  activatePanelRow: vi.fn(async () => true),
+  isWithinSubtreeOfAny: vi.fn(async () => false),
   selected: {current: [] as string[]},
 }))
 
 vi.mock('@/plugins/move-blocks', () => ({
   moveBlocksTo: mocks.moveBlocksTo,
   unselectMovedBlocks: mocks.unselectMovedBlocks,
-  isWithinSubtreeOfAny: vi.fn(async () => false),
+  isWithinSubtreeOfAny: mocks.isWithinSubtreeOfAny,
 }))
+vi.mock('@/utils/panelLayoutProjection.js', () => ({activatePanelRow: mocks.activatePanelRow}))
 vi.mock('@/data/stateBlocks.js', () => ({
   getUIStateBlock: vi.fn(async (_repo: unknown, _ws: unknown, _user: unknown, context: {panelId?: string}) =>
     ({id: `ui:${context.panelId ?? 'root'}`})),
@@ -47,22 +50,27 @@ const repo = {isReadOnly: false, activeWorkspaceId: 'ws', user: {id: 'u'}} as un
 let uninstall: () => void
 
 /** A panel rendering rows `ids` in this order, each with its bullet. */
+const renderRow = (parent: HTMLElement, id: string, scope: string): HTMLElement => {
+  const row = document.createElement('div')
+  row.setAttribute('data-block-shell', 'true')
+  row.dataset.blockId = id
+  row.dataset.renderScopeId = scope
+  const bullet = document.createElement('a')
+  bullet.setAttribute('data-block-bullet', 'true')
+  if (scope.startsWith('panel:')) bullet.dataset.testBullet = id
+  row.append(bullet)
+  parent.append(row)
+  return row
+}
 const renderPanel = (ids: readonly string[]) => {
   document.body.innerHTML = ''
+  const session = document.createElement('div')
+  session.dataset.layoutSessionId = 'session-1'
   const panel = document.createElement('div')
   panel.dataset.panelId = 'p1'
-  for (const id of ids) {
-    const row = document.createElement('div')
-    row.setAttribute('data-block-shell', 'true')
-    row.dataset.blockId = id
-    row.dataset.renderScopeId = 'panel:p1:root'
-    const bullet = document.createElement('a')
-    bullet.setAttribute('data-block-bullet', 'true')
-    bullet.dataset.testBullet = id
-    row.append(bullet)
-    panel.append(row)
-  }
-  document.body.append(panel)
+  for (const id of ids) renderRow(panel, id, 'panel:p1:root')
+  session.append(panel)
+  document.body.append(session)
 }
 const bullet = (id: string) => document.querySelector<HTMLElement>(`[data-test-bullet="${id}"]`)!
 
@@ -134,6 +142,42 @@ describe('block drag controller', () => {
     // in the panel it landed in.
     expect(mocks.unselectMovedBlocks).toHaveBeenCalledWith(repo, {id: 'ui:p1'}, ['b'])
     expect(mocks.focusBlock).toHaveBeenCalledWith({id: 'ui:p2'}, 'b', {renderScopeId: TARGET.renderScopeId})
+    // …and that panel becomes the active one, so its focus highlight and
+    // keyboard routing follow the moved block.
+    expect(mocks.activatePanelRow).toHaveBeenCalledWith(repo, 'session-1', 'p2')
+    expect(mocks.activatePanelRow.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.focusBlock.mock.invocationCallOrder[0])
+  })
+
+  describe('a release before any hover frame ran', () => {
+    // The stubbed rAF never runs, so the release is the first lookup: the
+    // surface's data check hasn't answered and the selection may not have
+    // resolved yet.
+    beforeEach(() => {
+      mocks.resolveDropTarget.mockImplementation((_hit, _x, _y, context: DropContext) =>
+        context.isSurfaceAllowed('root') ? TARGET : null)
+    })
+
+    it('waits for the surface check, then drops', async () => {
+      drag('b')
+      await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['b'], TARGET.move))
+    })
+
+    it('still refuses a surface inside a dragged block', async () => {
+      mocks.isWithinSubtreeOfAny.mockResolvedValueOnce(true)
+      drag('b')
+      await vi.waitFor(() => expect(mocks.isWithinSubtreeOfAny).toHaveBeenCalled())
+      await settled()
+      expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+    })
+
+    it('excludes the whole selection, not just the grabbed block', async () => {
+      mocks.selected.current = ['a', 'c']
+      drag('a')
+      await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalled())
+      const [, , , context] = mocks.resolveDropTarget.mock.calls.at(-1)! as [unknown, number, number, DropContext]
+      expect([...context.draggedIds].sort()).toEqual(['a', 'c'])
+    })
   })
 
   it('dragging a selected bullet moves the whole selection, in document order', async () => {
@@ -151,6 +195,15 @@ describe('block drag controller', () => {
     drag('a')
     await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalled())
     expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['a', 'c'], TARGET.move)
+  })
+
+  it('orders the selection by the dragged outline, not by an embed of one of its blocks', async () => {
+    // a embeds c, so c's first occurrence in the panel is inside a.
+    renderRow(document.querySelector<HTMLElement>('[data-block-id="a"]')!, 'c', 'embed:a:occ:c:panel:p1:root')
+    mocks.selected.current = ['b', 'c']
+    drag('b')
+    await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalled())
+    expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['b', 'c'], TARGET.move)
   })
 
   it('dragging an unselected bullet moves just that block', async () => {
