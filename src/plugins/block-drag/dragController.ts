@@ -26,7 +26,7 @@ import { activatePanelRow } from '@/utils/panelLayoutProjection.js'
 import { showError } from '@/utils/toast.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
 import { isWithinSubtreeOfAny, moveBlocksTo, unselectMovedBlocks } from '@/plugins/move-blocks'
-import { resolveDropTarget, ROW_SELECTOR, type DropLine, type DropTarget } from './dropTarget.ts'
+import { PANEL_SELECTOR, resolveDropTarget, ROW_SELECTOR, type DropLine, type DropTarget } from './dropTarget.ts'
 
 /** Movement before a press on the bullet becomes a drag; below it the
  *  press stays a click that opens the block. */
@@ -66,6 +66,9 @@ interface Session {
   /** The bullet's own block until the payload resolves. */
   draggedIds: Set<string>
   frame: number | null
+  /** The container the last frame auto-scrolled, kept while the pointer
+   *  overshoots its edge (onto a header, out of the window). */
+  scroller: HTMLElement | null
   /** Data-ancestry checks per surface root — see `surfaceCheck`. */
   readonly surfaceChecks: Map<string, SurfaceCheck>
 }
@@ -94,10 +97,11 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
   let session: Session | null = null
 
   const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== 'mouse') return
     // A drag whose release never reached us (let go outside the window)
     // ends here; left live, the next click anywhere would drop it.
     end()
-    if (event.pointerType !== 'mouse' || event.button !== 0) return
+    if (event.button !== 0) return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
     if (repo.isReadOnly) return
     const bullet = (event.target as Element | null)?.closest?.(`[${BLOCK_BULLET_ATTRIBUTE}]`)
@@ -119,6 +123,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
       phase: 'pending',
       draggedIds: new Set([blockId]),
       frame: null,
+      scroller: null,
       surfaceChecks: new Map(),
     }
     window.addEventListener('pointermove', onPointerMove, true)
@@ -126,10 +131,17 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     window.addEventListener('pointercancel', onPointerCancel, true)
     window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('blur', onWindowBlur)
+    // Scroll events don't bubble; capture sees every container's.
+    document.addEventListener('scroll', onScroll, {capture: true, passive: true})
   }
 
   const onPointerMove = (event: PointerEvent) => {
     if (!session || event.pointerId !== session.pointerId) return
+    // The button came up where we couldn't see it.
+    if ((event.buttons & 1) === 0) {
+      end()
+      return
+    }
     session.x = event.clientX
     session.y = event.clientY
     if (session.phase === 'pending') {
@@ -159,7 +171,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     current.frame = requestAnimationFrame(() => {
       current.frame = null
       if (session !== current || current.phase !== 'dragging') return
-      const scrolled = autoScroll(current.x, current.y)
+      const scrolled = autoScroll(current)
       publish({active: true, line: targetAt(current)?.line ?? null})
       // Keep ticking while the edge auto-scroll runs: the pointer is still,
       // but the rows under it keep moving.
@@ -241,8 +253,17 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     cancel(session)
   }
 
+  /** The rows moved under a still pointer (a wheel scroll): refresh the
+   *  line, which the release would otherwise contradict. */
+  const onScroll = () => {
+    if (session?.phase === 'dragging') scheduleFrame(session)
+  }
+
+  /** A drag cancels, so the release that may still reach us is swallowed;
+   *  a press that never became one just ends. */
   const onWindowBlur = () => {
-    if (session) end()
+    if (session?.phase === 'dragging') cancel(session)
+    else end()
   }
 
   /** Escape: drop the visuals now, but keep listening until the button
@@ -261,6 +282,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     window.removeEventListener('pointercancel', onPointerCancel, true)
     window.removeEventListener('keydown', onKeyDown, true)
     window.removeEventListener('blur', onWindowBlur)
+    document.removeEventListener('scroll', onScroll, {capture: true})
     clearVisuals()
   }
 
@@ -293,7 +315,7 @@ const resolvePayload = async (
   blockId: string,
   sourceRow: HTMLElement,
 ): Promise<Payload> => {
-  const sourcePanel = sourceRow.closest<HTMLElement>('[data-panel-id]')
+  const sourcePanel = sourceRow.closest<HTMLElement>(PANEL_SELECTOR)
   const panelId = sourcePanel?.dataset.panelId
   const uiStateBlock = await getUIStateBlock(
     repo, repo.activeWorkspaceId!, repo.user, panelId ? {panelId} : {},
@@ -365,10 +387,14 @@ const markDragged = (ids: ReadonlySet<string>) => {
   }
 }
 
-/** Scroll the container under the pointer when the pointer is near its
- *  top or bottom edge. Returns whether it moved. */
-const autoScroll = (x: number, y: number): boolean => {
-  const scroller = scrollContainerAt(document.elementFromPoint(x, y))
+/** Scroll the container under the pointer when the pointer is near, or
+ *  past, its top or bottom edge. Returns whether it moved. */
+const autoScroll = (current: Session): boolean => {
+  const {x, y} = current
+  const hit = scrollContainerAt(document.elementFromPoint(x, y))
+  const last = current.scroller?.isConnected ? current.scroller : null
+  const scroller = hit ?? (last && withinColumn(last, x) ? last : null)
+  current.scroller = scroller
   if (!scroller) return false
   const rect = scroller.getBoundingClientRect()
   const speed = (distance: number) =>
@@ -380,6 +406,11 @@ const autoScroll = (x: number, y: number): boolean => {
   const before = scroller.scrollTop
   scroller.scrollTop = before + delta
   return scroller.scrollTop !== before
+}
+
+const withinColumn = (el: HTMLElement, x: number): boolean => {
+  const rect = el.getBoundingClientRect()
+  return x >= rect.left && x <= rect.right
 }
 
 const scrollContainerAt = (start: Element | null): HTMLElement | null => {

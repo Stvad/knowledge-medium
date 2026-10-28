@@ -103,12 +103,17 @@ describe('projectDrop', () => {
 /** Rows laid out top to bottom, `height` px each own line; `nested[i]`
  *  marks row i+1 as row i's descendant (so i's own line ends where i+1
  *  starts, which is the same here). `excluded` marks dragged rows. */
-const rowsOf = (count: number, excluded: readonly number[] = [], height = 20): SlotRows => ({
+const rowsOf = (
+  count: number,
+  excluded: readonly number[] = [],
+  {height = 20, deferred = [] as readonly number[]} = {},
+): SlotRows => ({
   count,
   top: i => i * height,
   ownBottom: i => (i + 1) * height,
   bottom: i => (i + 1) * height,
   isExcluded: i => excluded.includes(i),
+  isDeferred: i => deferred.includes(i),
 })
 
 describe('findSlot', () => {
@@ -152,6 +157,7 @@ describe('findSlot', () => {
       ownBottom: i => [10, 20, 30][i],
       bottom: i => [10, 30, 30][i],
       isExcluded: () => false,
+      isDeferred: () => false,
     }
     expect(findSlot(rows, 14)).toEqual({above: 0, below: 1})
     expect(findSlot(rows, 16)).toEqual({above: 1, below: 2})
@@ -162,6 +168,20 @@ describe('findSlot', () => {
   it('below a dragged last row is the gap after its predecessor', () => {
     expect(findSlot(rowsOf(4, [3]), 90)).toEqual({above: 2, below: null})
     expect(findSlot(rowsOf(4, [2, 3]), 90)).toEqual({above: 1, below: null})
+  })
+
+  // A deferred row hasn't mounted, so what it holds (and how deep) is
+  // unknown: a gap beside one could be rows away from where it looks.
+  it('has no slot beside a deferred row', () => {
+    const rows = rowsOf(5, [], {deferred: [2]})
+    expect(findSlot(rows, 35)).toBeNull() // row 1, lower half: below is deferred
+    expect(findSlot(rows, 45)).toBeNull() // over the deferred row
+    expect(findSlot(rows, 65)).toBeNull() // row 3, upper half: above is deferred
+    expect(findSlot(rows, 75)).toEqual({above: 3, below: 4})
+  })
+
+  it('skips a deferred row inside a dragged block like any dragged row', () => {
+    expect(findSlot(rowsOf(5, [2, 3], {deferred: [3]}), 35)).toEqual({above: 1, below: 4})
   })
 
   it('has no slot when the surface has no rows', () => {

@@ -13,7 +13,7 @@ import { findSlot, projectDrop, type DropRow, type SlotRows } from './projection
 /** A mounted row. Deferred rows' placeholders carry the shell attribute
  *  but no `data-block-id`, so they never match. */
 export const ROW_SELECTOR = `[${BLOCK_SHELL_ATTRIBUTE}][data-block-id][data-render-scope-id]`
-const PANEL_SELECTOR = '[data-panel-id]'
+export const PANEL_SELECTOR = '[data-panel-id]'
 
 /** The default layout's per-level indent, for a surface with no nested
  *  row to measure it from. */
@@ -104,7 +104,13 @@ const surfaceRows = (
   renderScopeId: string,
   context: DropContext,
 ): SurfaceRows => {
-  const rows = Array.from(container.querySelectorAll<HTMLElement>(scopedRowSelector(renderScopeId)))
+  // Deferred rows of this scope too, in document order: the projection
+  // must know where a gap borders one.
+  const scope = CSS.escape(renderScopeId)
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(
+    `${scopedRowSelector(renderScopeId)}, [data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`,
+  ))
+  const blockIdOf = (i: number): string => rows[i].dataset.blockId ?? rows[i].dataset.lazyBlockId!
   const rects = new Map<number, DOMRect>()
   const rect = (i: number): DOMRect => {
     let cached = rects.get(i)
@@ -127,8 +133,9 @@ const surfaceRows = (
     ownBottom,
     bottom: i => rect(i).bottom,
     // DOM containment: the row is a dragged block, or rendered inside one.
-    isExcluded: i => context.draggedIds.has(rows[i].dataset.blockId!)
+    isExcluded: i => context.draggedIds.has(blockIdOf(i))
       || chain(i).some(id => context.draggedIds.has(id)),
+    isDeferred: i => rows[i].dataset.blockId === undefined,
     rowId: i => rows[i]?.dataset.blockId,
     rendersRoot: rows.length > 0 && rows[0].contains(rows[rows.length - 1]),
     dropRow: i => ({

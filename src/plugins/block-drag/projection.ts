@@ -73,6 +73,9 @@ export interface SlotRows {
   bottom(index: number): number
   /** The row is a dragged block or inside one. */
   isExcluded(index: number): boolean
+  /** The row hasn't mounted (a lazy placeholder), so what it holds is
+   *  unknown. */
+  isDeferred(index: number): boolean
 }
 
 export interface Slot {
@@ -85,9 +88,18 @@ export interface Slot {
  * line's midpoint into the gap above it and the gap below it. Dragged
  * rows are skipped when picking the neighbours, and a pointer over one
  * has no slot at all, so no drop indicator shows inside a dragged
- * subtree. The gap above the root is never offered.
+ * subtree. The gap above the root is never offered, and neither is a gap
+ * beside a deferred row: it could stand for any number of rows at any
+ * depth, so the drop could land far from the gap the pointer shows.
  */
 export const findSlot = (rows: SlotRows, y: number): Slot | null => {
+  const slot = gapAt(rows, y)
+  if (!slot) return null
+  if (rows.isDeferred(slot.above) || (slot.below !== null && rows.isDeferred(slot.below))) return null
+  return slot
+}
+
+const gapAt = (rows: SlotRows, y: number): Slot | null => {
   if (rows.count === 0) return null
   const index = lastRowStartingAtOrAbove(rows, y)
   if (rows.isExcluded(index)) {

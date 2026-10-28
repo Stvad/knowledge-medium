@@ -152,16 +152,38 @@ describe('resolveDropTarget', () => {
     expect(resolveDropTarget(rows.get('n1')!, column(1), lowerHalf('n1'), context())).toBeNull()
   })
 
-  it('ignores a deferred row placeholder', () => {
-    // A placeholder carries the shell attribute but no block id; a pointer
-    // over it belongs to the rows around it.
-    const placeholder = document.createElement('div')
-    placeholder.setAttribute('data-block-shell', 'true')
-    placeholder.dataset.lazyBlockId = 'later'
-    rows.get('root')!.append(placeholder)
-    const top = rects.get(rows.get('b')!)!.bottom
-    rects.set(placeholder, rectOf(0, top, 500, ROW_HEIGHT))
-    expect(resolveDropTarget(placeholder, column(1), top + 5, context())?.move)
-      .toEqual({parentId: 'root', position: {kind: 'after', siblingId: 'b'}})
+  describe('deferred rows', () => {
+    // A not-yet-mounted row is a placeholder: the shell attribute and
+    // `data-lazy-*`, no `data-block-id`. What it holds is unknown, so the
+    // gaps beside it take no drop rather than land rows away from the line.
+    const deferBefore = (id: string, beforeId: string) => {
+      const placeholder = document.createElement('div')
+      placeholder.setAttribute('data-block-shell', 'true')
+      placeholder.dataset.lazyBlockId = id
+      placeholder.dataset.lazyRenderScopeId = SCOPE
+      const before = rows.get(beforeId)!
+      before.before(placeholder)
+      const top = rects.get(before)!.top
+      rects.set(placeholder, rectOf(0, top - ROW_HEIGHT / 2, 500, ROW_HEIGHT / 2))
+      return placeholder
+    }
+
+    it('has no target beside one', () => {
+      const placeholder = deferBefore('later', 'b')
+      const bTop = rects.get(rows.get('b')!)!.top
+      expect(resolveDropTarget(rows.get('b')!, column(1), bTop + 2, context())).toBeNull()
+      expect(resolveDropTarget(placeholder, column(1), bTop - 4, context())).toBeNull()
+      // The gap below b, away from it, still takes the drop.
+      expect(resolveDropTarget(rows.get('b')!, column(1), lowerHalf('b'), context())?.move)
+        .toEqual({parentId: 'root', position: {kind: 'after', siblingId: 'b'}})
+    })
+
+    it('ignores one that belongs to another scope', () => {
+      const placeholder = deferBefore('elsewhere', 'b')
+      placeholder.dataset.lazyRenderScopeId = 'backlink:occ:panel:p1:root'
+      const bTop = rects.get(rows.get('b')!)!.top
+      expect(resolveDropTarget(rows.get('b')!, column(1), bTop + 2, context())?.move)
+        .toEqual({parentId: 'root', position: {kind: 'after', siblingId: 'a'}})
+    })
   })
 })

@@ -74,10 +74,23 @@ const renderPanel = (ids: readonly string[]) => {
 }
 const bullet = (id: string) => document.querySelector<HTMLElement>(`[data-test-bullet="${id}"]`)!
 
-const pointer = (type: string, target: EventTarget, x: number, y: number, pointerType = 'mouse') =>
+/** A pointer event as a mouse with the primary button down sends it, unless
+ *  `buttons` says otherwise (a release reports none). */
+const pointer = (
+  type: string, target: EventTarget, x: number, y: number,
+  pointerType = 'mouse', buttons = type === 'pointerup' ? 0 : 1,
+) =>
   target.dispatchEvent(new PointerEvent(type, {
-    bubbles: true, cancelable: true, pointerId: 1, pointerType, button: 0, clientX: x, clientY: y,
+    bubbles: true, cancelable: true, pointerId: 1, pointerType, button: 0, buttons, clientX: x, clientY: y,
   }))
+
+/** Animation frames, run on demand. */
+let frames: FrameRequestCallback[] = []
+const runFrames = () => {
+  const due = frames
+  frames = []
+  for (const frame of due) frame(0)
+}
 
 /** Click the bullet the way the browser does after a release; true when
  *  the click reached the page (was not swallowed). */
@@ -103,7 +116,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.selected.current = []
   mocks.resolveDropTarget.mockReturnValue(TARGET)
-  vi.stubGlobal('requestAnimationFrame', () => 0)
+  frames = []
+  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => frames.push(frame))
   vi.stubGlobal('cancelAnimationFrame', () => {})
   document.elementFromPoint = () => null
   renderPanel(['a', 'b', 'c'])
@@ -255,6 +269,42 @@ describe('block drag controller', () => {
     await settled()
     expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
     expect(document.querySelectorAll(`[${DRAGGING_ROW_ATTRIBUTE}]`)).toHaveLength(0)
+  })
+
+  it('refreshes the target when the page scrolls under a still pointer', () => {
+    drag('a', {release: false})
+    runFrames()
+    mocks.resolveDropTarget.mockClear()
+    document.querySelector('[data-panel-id]')!.dispatchEvent(new Event('scroll'))
+    runFrames()
+    expect(mocks.resolveDropTarget).toHaveBeenCalledTimes(1)
+    pointer('pointerup', window, 40, 60)
+  })
+
+  it('ends, without dropping, at the first move with the button no longer down', async () => {
+    drag('a', {release: false}) // let go outside the window
+    pointer('pointermove', window, 50, 70, 'mouse', 0)
+    expect(document.querySelectorAll(`[${DRAGGING_ROW_ATTRIBUTE}]`)).toHaveLength(0)
+    pointer('pointerup', window, 50, 70)
+    await settled()
+    expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+  })
+
+  it('losing window focus cancels the drag but still swallows its release click', async () => {
+    drag('a', {release: false})
+    window.dispatchEvent(new Event('blur'))
+    expect(document.querySelectorAll(`[${DRAGGING_ROW_ATTRIBUTE}]`)).toHaveLength(0)
+    pointer('pointerup', window, 40, 60)
+    expect(clickReaches('a')).toBe(false)
+    await settled()
+    expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+  })
+
+  it('a touch on the screen does not end a mouse drag', async () => {
+    drag('a', {release: false})
+    pointer('pointerdown', document.body, 300, 300, 'touch')
+    pointer('pointerup', window, 40, 60)
+    await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['a'], TARGET.move))
   })
 
   it('a touch press does not start a drag (v1 is mouse only)', () => {
