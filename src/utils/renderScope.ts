@@ -18,6 +18,11 @@ export const outlineRenderScopeId = (topLevelBlockId: string): string =>
 export const panelRenderScopeId = (panelId: string, topLevelBlockId: string): string =>
   joinScope('panel', [panelId, topLevelBlockId])
 
+/** Is `renderScopeId` a panel's own outline (not an embed, backlink or other
+ *  nested surface inside it)? */
+export const isPanelRenderScopeId = (renderScopeId: string): boolean =>
+  renderScopeId.startsWith('panel:')
+
 export const embedRenderScopeId = (
   parentRenderScopeId: string,
   sourceBlockId: string,

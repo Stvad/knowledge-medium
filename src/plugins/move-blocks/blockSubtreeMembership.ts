@@ -1,8 +1,8 @@
 /**
- * Shared "is this id inside one of these root ids' subtrees?" walk: after
- * a move, `moveAction` uses it to find every selected id the moved roots
- * carried along (the roots themselves and any descendant riding inside
- * them), so those leave the ui-state selection.
+ * Shared "is this id inside one of these root ids' subtrees?" walk. After
+ * a move, `selectionAfterMove` uses it to find every selected id the moved
+ * roots carried along; block-drag uses it to refuse a panel whose root
+ * sits inside a dragged block.
  */
 import type { Repo } from '@/data/repo.js'
 

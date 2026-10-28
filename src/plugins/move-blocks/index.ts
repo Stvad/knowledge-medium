@@ -10,6 +10,7 @@
  *   - `moveBlocks.ts`             — core: pruning + one tx of `core.move` calls
  *   - `MoveDestinationPicker.tsx` — modal opened on demand via `openDialog`
  *   - `moveAction.ts`             — block/multi-select actions that open the picker
+ *   - `selectionAfterMove.ts`     — moved blocks leave the selection (shared with block-drag)
  */
 import { actionsFacet } from '@/extensions/core.js'
 import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
@@ -25,7 +26,9 @@ export {
   moveBlockAction,
   moveBlocksAction,
 } from './moveAction.ts'
-export { moveBlocksTo, type MoveBlocksResult } from './moveBlocks.ts'
+export { moveBlocksTo, type MoveBlocksResult, type MoveTarget } from './moveBlocks.ts'
+export { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
+export { unselectMovedBlocks } from './selectionAfterMove.ts'
 export {
   MoveDestinationPicker,
   type MoveDestinationPickerProps,
