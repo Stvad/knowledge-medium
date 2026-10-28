@@ -359,7 +359,8 @@ const inDocumentOrder = (ids: readonly string[], container: ParentNode, renderSc
 /** One `moveBlocksTo` (one transaction, one undo entry); then the moved
  *  blocks leave the selection and the first one takes focus in the panel
  *  it landed in, which becomes the active one — a release doesn't
- *  activate a panel the way a press does. */
+ *  activate a panel the way a press does. Accepted: a click landing in
+ *  the few ms between the move and the focus write loses its focus. */
 const drop = async (repo: Repo, session: Session, resolvedTarget: Promise<DropTarget | null>): Promise<void> => {
   try {
     const target = await resolvedTarget

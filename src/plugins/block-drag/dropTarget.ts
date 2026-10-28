@@ -78,6 +78,8 @@ export const resolveDropTarget = (
 
   // The line starts at the projected depth's column. The root has no
   // bullet, so its column is read off the row below it when it is above.
+  // Accepted: under a root with no rows, the line sits at the root's
+  // bottom, below any footer it renders.
   const reference = slot.above === 0 && below ? below : above
   const lineX = reference.x + (projection.depth - reference.depth) * indent
   return {
