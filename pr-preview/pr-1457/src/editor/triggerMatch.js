@@ -1,1 +1,0 @@
-export{HH as matchCharTrigger}from"../../chunks/app-DHaIXe-9.js";

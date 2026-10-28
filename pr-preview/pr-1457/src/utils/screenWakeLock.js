@@ -1,1 +1,0 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-DHaIXe-9.js";

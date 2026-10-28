@@ -1,1 +1,0 @@
-export{NW as pluginPrefsExtension,PW as pluginUIStateExtension}from"../../chunks/app-DHaIXe-9.js";

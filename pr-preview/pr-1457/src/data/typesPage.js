@@ -1,1 +1,0 @@
-export{v8 as getOrCreateTypesPage,y8 as typesPageBlockId}from"../../chunks/app-DHaIXe-9.js";
