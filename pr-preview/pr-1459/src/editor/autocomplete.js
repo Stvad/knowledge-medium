@@ -1,1 +1,1 @@
-export{XO as editorAutocompleteExtension}from"../../chunks/app-DlLmZYfz.js";
+export{ok as editorAutocompleteExtension}from"../../chunks/app-v7cdvCK-.js";

@@ -1,1 +1,1 @@
-export{pk as appUpdatePromptExtension}from"../../../chunks/app-DlLmZYfz.js";
+export{Ck as appUpdatePromptExtension}from"../../../chunks/app-v7cdvCK-.js";
