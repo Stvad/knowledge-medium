@@ -1,0 +1,1 @@
+export{rz as usePropertySchemas}from"../../chunks/app-CvDXRetX.js";

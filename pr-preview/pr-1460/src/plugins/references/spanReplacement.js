@@ -1,0 +1,1 @@
+export{rV as preferredSpanReplacement}from"../../../chunks/app-CvDXRetX.js";

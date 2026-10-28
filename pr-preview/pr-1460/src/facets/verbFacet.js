@@ -1,0 +1,1 @@
+export{FG as defineVerbFacet}from"../../chunks/app-CvDXRetX.js";

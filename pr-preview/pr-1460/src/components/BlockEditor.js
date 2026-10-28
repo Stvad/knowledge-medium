@@ -1,0 +1,1 @@
+export{wN as BlockEditor}from"../../chunks/app-CvDXRetX.js";

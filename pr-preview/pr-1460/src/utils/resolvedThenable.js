@@ -1,0 +1,1 @@
+export{tG as resolvedThenable,nG as stampFulfilled}from"../../chunks/app-CvDXRetX.js";

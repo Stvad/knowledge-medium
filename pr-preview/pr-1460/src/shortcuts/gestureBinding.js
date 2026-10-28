@@ -1,0 +1,1 @@
+export{Mk as gestureBindingDescriptor,Nk as matchesGestureEvent}from"../../chunks/app-CvDXRetX.js";

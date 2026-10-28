@@ -1,0 +1,1 @@
+export{cK as omnilinerNamespace}from"../../chunks/app-CvDXRetX.js";

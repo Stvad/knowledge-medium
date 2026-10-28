@@ -1,0 +1,1 @@
+export{aq as instrumentAdapter}from"../../../chunks/app-CvDXRetX.js";
