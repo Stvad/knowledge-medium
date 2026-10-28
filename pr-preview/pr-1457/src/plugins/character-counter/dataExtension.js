@@ -1,0 +1,1 @@
+export{$U as characterCounterDataExtension}from"../../../chunks/app-DHaIXe-9.js";

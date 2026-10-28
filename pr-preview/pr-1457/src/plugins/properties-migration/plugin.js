@@ -1,0 +1,1 @@
+export{oa as propertiesMigrationPlugin}from"../../../chunks/app-DHaIXe-9.js";

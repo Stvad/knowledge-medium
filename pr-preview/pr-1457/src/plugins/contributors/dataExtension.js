@@ -1,0 +1,1 @@
+export{LU as contributorsDataExtension}from"../../../chunks/app-DHaIXe-9.js";

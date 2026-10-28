@@ -1,0 +1,1 @@
+export{Kb as usePromotableBreadcrumb}from"../../../chunks/app-DHaIXe-9.js";

@@ -1,0 +1,1 @@
+export{Yk as dynamicExtensionsExtension}from"../../chunks/app-DHaIXe-9.js";

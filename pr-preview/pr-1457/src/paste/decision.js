@@ -1,0 +1,1 @@
+export{vN as defaultPasteDecision,yN as pasteDecisionVerb}from"../../chunks/app-DHaIXe-9.js";

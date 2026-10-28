@@ -1,0 +1,1 @@
+export{ek as ExtensionPromptSurface,tk as extensionPromptsExtension}from"../../../chunks/app-DHaIXe-9.js";

@@ -1,0 +1,1 @@
+export{WL as isIOS,GL as isMacPlatform}from"../../chunks/app-DHaIXe-9.js";

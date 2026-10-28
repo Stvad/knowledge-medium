@@ -1,0 +1,1 @@
+export{im as backlinksViewPlugin}from"../../../chunks/app-DHaIXe-9.js";

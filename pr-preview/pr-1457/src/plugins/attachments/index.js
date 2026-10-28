@@ -1,0 +1,1 @@
+export{Qh as attachmentsPlugin}from"../../../chunks/app-DHaIXe-9.js";

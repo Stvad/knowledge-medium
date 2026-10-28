@@ -1,0 +1,1 @@
+export{GA as DialogHost,KA as dialogAppMountExtension}from"../../chunks/app-DHaIXe-9.js";

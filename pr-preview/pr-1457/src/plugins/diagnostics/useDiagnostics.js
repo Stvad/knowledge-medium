@@ -1,0 +1,1 @@
+export{is as aggregateDiagnostics,as as useDiagnostics}from"../../../chunks/app-DHaIXe-9.js";

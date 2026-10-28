@@ -1,0 +1,1 @@
+export{Sd as extensionsOverridesProp,Cd as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DHaIXe-9.js";

@@ -1,0 +1,1 @@
+export{Vb as mobileBottomNavItemsFacet}from"../../../chunks/app-DHaIXe-9.js";

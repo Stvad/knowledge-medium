@@ -1,0 +1,1 @@
+export{Ct as installIdleCallbackPolyfill}from"../../chunks/app-DHaIXe-9.js";

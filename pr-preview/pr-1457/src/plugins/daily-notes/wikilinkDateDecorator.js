@@ -1,0 +1,1 @@
+export{_T as dailyDateWikilinkDecorator}from"../../../chunks/app-DHaIXe-9.js";

@@ -1,0 +1,1 @@
+export{Tk as appUpdate,Ek as useAppUpdateAvailable}from"../chunks/app-DHaIXe-9.js";

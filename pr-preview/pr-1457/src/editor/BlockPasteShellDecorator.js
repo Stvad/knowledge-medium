@@ -1,0 +1,1 @@
+export{HO as BlockPasteShellDecorator,UO as blockPasteShellDecorator}from"../../chunks/app-DHaIXe-9.js";

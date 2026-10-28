@@ -1,0 +1,1 @@
+export{oB as staticDataExtensions}from"../../chunks/app-DHaIXe-9.js";
