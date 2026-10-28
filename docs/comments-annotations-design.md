@@ -250,14 +250,11 @@ Tests follow the repo's rules:
 - **Target lifecycle:** delete and restore the target.
 - **Watcher:** an agent's own reply clears pending, and a root claim does not make the agent an editor of anyone's comment.
 
-## Decisions to make
+## Decisions
 
-1. **Should comments appear in search and recents?** This design says yes. #332 hides threads from those surfaces through an ancestor-based filter that each enumerating surface routes through.
-   - Showing them: searching for "fix the intro" finds the comment that says it, and a comment just written is one recents click away. The cost is agent replies in recents.
-   - Hiding them: those surfaces stay about notes. The cost is a seam that every future enumerating surface has to remember, and that leaks wherever one forgets it.
-   - Pick: show them.
-2. **Margin before agents, or agents before margin?** The two slices are independent. The pick is agents first, because the mention path needs only prompt context, and the margin needs the read-mode spike.
-3. **The container alias.** `Comments (km)` is unique, but visible and ugly. The alternative is a kernel-page variant with no alias, as #332 proposed: cleaner, and one more page mechanism to keep. Pick: the alias.
+1. **Comments appear in search and recents.** Decided 2026-10-28. #332 instead hid threads from those surfaces, through an ancestor-based filter that each enumerating surface routes through. That was rejected: it is a seam every future enumerating surface has to remember, and it leaks wherever one forgets it. With comments shown, searching for "fix the intro" finds the comment that says it, and a comment just written is one recents click away. The accepted cost is agent replies in recents.
+2. **Open: margin before agents, or agents before margin?** The two slices are independent. The pick is agents first, because the mention path needs only prompt context, and the margin needs the read-mode spike.
+3. **Open: the container alias.** `Comments (km)` is unique, but visible and ugly. The alternative is a kernel-page variant with no alias, as #332 proposed: cleaner, and one more page mechanism to keep. Pick: the alias.
 
 ## Compared with the earlier design (#332)
 
