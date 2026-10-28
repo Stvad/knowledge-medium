@@ -18,7 +18,8 @@
 # list of failing test files, then a static triage note (no suite is
 # known-red — the deep tier is expected green), then a best-effort
 # seed/repro excerpt; the full logs are always in the artifact. Report
-# building lives in `node scripts/fuzz.mjs --report`.
+# building lives in `node scripts/fuzz.mjs --report`. Then the fuzz-triage
+# cloud routine is started on that issue (the last step of the job).
 name: Nightly Fuzz
 
 on:
@@ -150,6 +151,28 @@ jobs:
               --label bug,fuzz-failure,P2,ci \
               --body "$body"
           fi
+
+      # Starts the fuzz-triage cloud routine (it reads the open fuzz-failure
+      # issues and opens a fix PR), so it must run after the issue step. It
+      # is fired from here rather than by a clock because GitHub starts this
+      # scheduled run hours after its cron time. No retry: each fire is a new
+      # session, so a retried fire is a duplicate triage. The response (a
+      # private session link) stays out of this public run log; an HTTP error
+      # still fails the step with its status. The URL and the per-routine
+      # token come from the routine's API trigger.
+      - name: Start fuzz triage routine
+        if: failure()
+        shell: bash
+        env:
+          ROUTINE_FIRE_URL: ${{ secrets.FUZZ_TRIAGE_FIRE_URL }}
+          ROUTINE_FIRE_TOKEN: ${{ secrets.FUZZ_TRIAGE_FIRE_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl --fail -sS -o /dev/null -X POST "$ROUTINE_FIRE_URL" \
+            -H "Authorization: Bearer $ROUTINE_FIRE_TOKEN" \
+            -H "anthropic-version: 2026-10-21" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \"Nightly fuzz run failed: $RUN_URL\"}"
 
   # Separate dependent job: a job-timeout CANCELS the fuzz job, and
   # post-cancel steps inside it aren't guaranteed to run — this job is
