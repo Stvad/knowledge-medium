@@ -28,7 +28,7 @@ import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
@@ -76,6 +76,8 @@ vi.mock('@/data/globalState.ts', async () => {
 })
 
 vi.mock('@/paste/operations.ts', () => ({
+  // Not the armed cut unless a test says so: fall through to the text paste.
+  pasteArmedCut: vi.fn(async () => null),
   pasteResolvedDecision: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
   // The renderer resolves the decision (+ any media capture) through this; for a
@@ -249,6 +251,23 @@ describe('DefaultBlockRenderer paste handling', () => {
       repo,
       {scopeRootId: 'root'},
     )
+  })
+
+  it('completes an armed cut on the focused block shell instead of pasting its text', async () => {
+    vi.mocked(pasteArmedCut).mockResolvedValueOnce({kind: 'moved', blocks: [repo.block('block-1')]})
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    act(() => {
+      dispatchPaste(shell!, '- cut text')
+    })
+
+    await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root'})
+    // A cut leaves the originals in place, so a text paste here would duplicate them.
+    await Promise.resolve()
+    expect(resolvePasteWithMediaCapture).not.toHaveBeenCalled()
+    expect(pasteResolvedDecision).not.toHaveBeenCalled()
   })
 
   it('pastes an html-only clipboard on the focused block shell', async () => {

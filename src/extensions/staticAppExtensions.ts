@@ -2,6 +2,7 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
+import { armedCutAppMountExtension } from '@/extensions/armedCutAppMount.js'
 import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
 import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
@@ -89,6 +90,8 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
+  // Dims the blocks of a pending cut; cut itself is core (`@/paste/armedCut.js`).
+  armedCutAppMountExtension,
   appUpdatePromptExtension,
   // Surfaces extension trust prompts (needs-approval / update-available)
   // globally — a per-extension toast + a status-chip indicator — instead of

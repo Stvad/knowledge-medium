@@ -7,6 +7,7 @@ import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
 import {
+  pasteArmedCut,
   pasteChordIntent,
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
@@ -71,11 +72,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     pasteIntentRef.current = 'split'
     e.preventDefault()
 
-    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
-    // so it resolves before any `await` below and the caret it keys on can't
-    // move between this read and the dispatch. (When the decision was async this
-    // had to be split into a pre-decision caret snapshot + a post-decision
-    // re-read, because an override could await and move the caret mid-flight.)
+    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)
+    // and keys on this snapshot. Anything that awaits before the insertion (the
+    // cut check, a media capture) is followed by a re-read of the live caret
+    // below, so text lands where the caret is when it is inserted.
     const editorView = editorRef.current?.view
     if (!editorView) return
     const selection = editorView.state.selection.main
@@ -84,6 +84,23 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       lineCount: editorView.state.doc.lines,
       from: selection.from,
       to: selection.to,
+    }
+    const renderScopeId = typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined
+
+    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
+    if (intent === 'split') {
+      const cutPaste = await pasteArmedCut(content.text, block, repo, {
+        scopeRootId: blockContext.scopeRootId,
+      })
+      if (cutPaste) {
+        if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
+          void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
+        }
+        return
+      }
+      if (!editorRef.current?.view) return
     }
 
     // The paste verb decides how the clipboard lands; with no plugin
@@ -134,9 +151,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const result = await pasteEditModeMultilineText(plan, block, repo, {
       scopeRootId: blockContext.scopeRootId,
     })
-    const renderScopeId = typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined
     if (!result) return
 
     await uiStateBlock.set(editorSelection, {

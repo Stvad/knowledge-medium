@@ -2,6 +2,7 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
+import { armCut, disarmCut } from '@/paste/armedCut.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '
@@ -54,8 +55,16 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
   navigator.clipboard.write([createClipboardItem(data)])
 
+/** Copy: the clipboard no longer holds a cut, so a paste must not move one.
+ *  Disarmed only once the write RESOLVED; a refused write leaves the cut on
+ *  the clipboard. */
+const copyToClipboard = async (data: ClipboardData): Promise<void> => {
+  await writeToClipboard(data)
+  disarmCut()
+}
+
 export const copyBlockToClipboard = async (block: Block): Promise<void> =>
-  writeToClipboard(await serializeBlock(block))
+  copyToClipboard(await serializeBlock(block))
 
 const getSelectionState = (uiStateBlock: Block) =>
   uiStateBlock.peekProperty(selectionStateProp)
@@ -117,5 +126,25 @@ export const copyBlockIdsToClipboard = async (
     console.log('No blocks selected to copy')
     return
   }
-  await writeToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+  await copyToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+}
+
+/** Cut `blockIds` (roots, in document order): put them on the clipboard and
+ *  arm them to MOVE on the next paste in the app (`@/paste/armedCut.js`).
+ *  Deletes nothing: the blocks stay where they are until that paste.
+ *
+ *  Armed only after the write resolved. A refused write throws, and the
+ *  clipboard still holds whatever it held before, which the cut must not
+ *  claim. */
+export const cutBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+): Promise<void> => {
+  if (!blockIds.length) return
+  const first = repo.block(blockIds[0])
+  const workspaceId = (first.peek() ?? await first.load())?.workspaceId
+  if (!workspaceId) throw new Error(`Cannot cut: block ${blockIds[0]} not found`)
+  const data = await serializeSelectedBlocks([...blockIds], repo)
+  await writeToClipboard(data)
+  await armCut(data.markdown, {workspaceId, rootIds: blockIds})
 }

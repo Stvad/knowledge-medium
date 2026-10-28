@@ -57,8 +57,8 @@ export interface DeleteThroughUiOptions {
    *  callback renders under the frozen page snapshot, where it cannot be
    *  clicked, and the gesture waits on a promise nobody can resolve. */
   animate?: boolean
-  /** Work that must happen while the blocks still exist — a cut's clipboard
-   *  write, a focus target read out of the subtree about to vanish. Runs after
+  /** Work that must happen while the blocks still exist — a focus target
+   *  read out of the subtree about to vanish. Runs after
    *  the guards and the confirmation, so a refused or cancelled gesture never
    *  reaches it, and before the write, which is the only window in which it is
    *  correct. Callers used to sequence this themselves and each had to
@@ -110,10 +110,9 @@ export const deleteBlocksThroughUi = async (
   if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
     await beforeWrite()
-    // Caller work of unbounded duration — the cut path serializes every
-    // selected subtree and awaits the clipboard API — so the guards are
-    // resolved again rather than writing on a decision taken before it. Gated
-    // on there being such work: without it this is the pass above.
+    // Caller work awaits (it walks the tree), so the guards are resolved
+    // again rather than writing on a decision taken before it. Gated on there
+    // being such work: without it this is the pass above.
     if (!await ensureDeletableThroughUi(targets)) return false
   }
   const write = async (): Promise<void> => {
