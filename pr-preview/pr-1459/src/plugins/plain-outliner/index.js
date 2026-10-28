@@ -1,1 +1,1 @@
-export{sx as plainOutlinerPlugin}from"../../../chunks/app-v7cdvCK-.js";
+export{sx as plainOutlinerPlugin}from"../../../chunks/app-CATcIZWB.js";

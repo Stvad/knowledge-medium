@@ -1,1 +1,1 @@
-export{XA as rehypeTrimBlockSeparators}from"../../chunks/app-v7cdvCK-.js";
+export{XA as rehypeTrimBlockSeparators}from"../../chunks/app-CATcIZWB.js";

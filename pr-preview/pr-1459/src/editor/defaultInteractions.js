@@ -1,1 +1,1 @@
-export{GO as BlockSelectionShellDecorator,KO as blockContentPointerGestures,qO as blockSelectionShellDecorator,JO as codeMirrorEditModeActivation,YO as createBlockSelectionShellState,XO as defaultEditorInteractionExtension}from"../../chunks/app-v7cdvCK-.js";
+export{GO as BlockSelectionShellDecorator,KO as blockContentPointerGestures,qO as blockSelectionShellDecorator,JO as codeMirrorEditModeActivation,YO as createBlockSelectionShellState,XO as defaultEditorInteractionExtension}from"../../chunks/app-CATcIZWB.js";

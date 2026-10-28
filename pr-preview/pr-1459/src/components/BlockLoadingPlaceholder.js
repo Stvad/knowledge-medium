@@ -1,1 +1,1 @@
-export{HA as BlockLoadingPlaceholder}from"../../chunks/app-v7cdvCK-.js";
+export{HA as BlockLoadingPlaceholder}from"../../chunks/app-CATcIZWB.js";

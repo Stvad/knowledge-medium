@@ -1,1 +1,1 @@
-export{NG as aliasDataExtension}from"../../../chunks/app-v7cdvCK-.js";
+export{NG as aliasDataExtension}from"../../../chunks/app-CATcIZWB.js";

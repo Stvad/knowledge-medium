@@ -1,1 +1,1 @@
-export{KL as applyKeybindingOverrides}from"../../chunks/app-v7cdvCK-.js";
+export{KL as applyKeybindingOverrides}from"../../chunks/app-CATcIZWB.js";

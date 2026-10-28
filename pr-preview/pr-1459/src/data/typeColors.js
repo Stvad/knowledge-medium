@@ -1,1 +1,1 @@
-export{lO as DEFAULT_TYPE_COLORS,uO as defaultTypeColor,dO as pickLeastUsedTypeColor}from"../../chunks/app-v7cdvCK-.js";
+export{lO as DEFAULT_TYPE_COLORS,uO as defaultTypeColor,dO as pickLeastUsedTypeColor}from"../../chunks/app-CATcIZWB.js";

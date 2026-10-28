@@ -1,1 +1,1 @@
-export{RE as CommandPalette}from"../../../chunks/app-v7cdvCK-.js";
+export{RE as CommandPalette}from"../../../chunks/app-CATcIZWB.js";

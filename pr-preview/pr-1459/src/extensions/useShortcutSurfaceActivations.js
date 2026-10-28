@@ -1,1 +1,1 @@
-export{VN as useShortcutSurfaceActivations}from"../../chunks/app-v7cdvCK-.js";
+export{VN as useShortcutSurfaceActivations}from"../../chunks/app-CATcIZWB.js";
