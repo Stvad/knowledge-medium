@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SessionStart hook: reinstall node_modules and rebuild the agent packages
-// when they no longer match this checkout.
+// when they no longer match the session's checkout.
 //
 // Agent worktree directories are reused: a new session checks its branch out
 // in a directory an earlier session used, git rewrites the tracked files, and
@@ -11,7 +11,7 @@
 // Prints nothing when nothing is stale, and never fails session start. Two
 // sessions starting in one checkout at the same moment can both install;
 // accepted as rare.
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -162,6 +162,17 @@ const UNFORMATTED_LOCKFILE_NOTE =
   `${LOCKFILE} still differs from the install record after a clean install: it is not in the form pnpm writes, ` +
   `so this reinstall repeats at every session start. \`pnpm install --lockfile-only --force\` rewrites it; commit that to stop it.`
 
+/**
+ * The checkout to reconcile: the one holding the cwd in the hook payload. Not
+ * this file's own: the hook runs the project directory's copy, which in a
+ * worktree session is the main checkout's. Run by hand, with no payload, it is
+ * this file's checkout.
+ */
+export const sessionRoot = hookInput => {
+  const cwd = hookInput.trim() ? JSON.parse(hookInput).cwd : undefined
+  return cwd ? execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim() : ROOT
+}
+
 /** Reconciles `root`; returns the context for the session, '' when nothing was stale. */
 export const ensureDeps = ({ root, env = process.env }) => {
   const deps = readDepsState(root)
@@ -189,7 +200,7 @@ export const ensureDeps = ({ root, env = process.env }) => {
 
 if (isMainModule(import.meta.url)) {
   try {
-    const text = ensureDeps({ root: ROOT })
+    const text = ensureDeps({ root: sessionRoot(process.stdin.isTTY ? '' : readFileSync(0, 'utf8')) })
     if (text) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
   } catch (error) {
     console.error(`[ensure-deps] ${error?.message ?? error}`)
