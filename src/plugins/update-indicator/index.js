@@ -1,1 +1,1 @@
-export{Zp as updateIndicatorPlugin}from"../../../chunks/app-CPMUtAoJ.js";
+export{Zp as updateIndicatorPlugin}from"../../../chunks/app-3raixw71.js";

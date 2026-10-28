@@ -1,1 +1,1 @@
-export{Vb as mobileBottomNavItemsFacet}from"../../../chunks/app-CPMUtAoJ.js";
+export{Vb as mobileBottomNavItemsFacet}from"../../../chunks/app-3raixw71.js";
