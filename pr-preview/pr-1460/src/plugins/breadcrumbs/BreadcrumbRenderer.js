@@ -1,1 +1,1 @@
-export{Jb as BreadcrumbRenderer}from"../../../chunks/app-CvDXRetX.js";
+export{Jb as BreadcrumbRenderer}from"../../../chunks/app-B2vZFaV0.js";

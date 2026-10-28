@@ -1,1 +1,1 @@
-export{gO as ensureMetricsConsoleHook}from"../../chunks/app-CvDXRetX.js";
+export{gO as ensureMetricsConsoleHook}from"../../chunks/app-B2vZFaV0.js";

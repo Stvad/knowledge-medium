@@ -1,1 +1,1 @@
-export{GC as aliasResultItems,KC as blockResultItems,qC as recentResultItems}from"../../../chunks/app-CvDXRetX.js";
+export{GC as aliasResultItems,KC as blockResultItems,qC as recentResultItems}from"../../../chunks/app-B2vZFaV0.js";

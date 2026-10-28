@@ -1,1 +1,1 @@
-export{GD as BlockRefAncestorsProvider}from"../../../chunks/app-CvDXRetX.js";
+export{GD as BlockRefAncestorsProvider}from"../../../chunks/app-B2vZFaV0.js";

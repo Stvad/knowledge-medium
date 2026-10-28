@@ -1,1 +1,1 @@
-export{XA as Header}from"../../chunks/app-CvDXRetX.js";
+export{XA as Header}from"../../chunks/app-B2vZFaV0.js";

@@ -1,1 +1,1 @@
-export{Qm as usePlaceSearch}from"../../../chunks/app-CvDXRetX.js";
+export{Qm as usePlaceSearch}from"../../../chunks/app-B2vZFaV0.js";

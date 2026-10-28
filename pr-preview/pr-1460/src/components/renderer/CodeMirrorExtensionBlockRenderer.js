@@ -1,1 +1,1 @@
-export{xj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-CvDXRetX.js";
+export{xj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-B2vZFaV0.js";

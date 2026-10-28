@@ -1,1 +1,1 @@
-export{CS as mintCanary,wS as validateCanary}from"../../../chunks/app-CvDXRetX.js";
+export{CS as mintCanary,wS as validateCanary}from"../../../chunks/app-B2vZFaV0.js";

@@ -1,1 +1,1 @@
-export{AX as applySyncInvalidation}from"../../../../chunks/app-CvDXRetX.js";
+export{AX as applySyncInvalidation}from"../../../../chunks/app-B2vZFaV0.js";
