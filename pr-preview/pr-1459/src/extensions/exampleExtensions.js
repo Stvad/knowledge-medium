@@ -1,1 +1,1 @@
-export{zO as exampleExtensions,BO as insertExampleExtensionsUnder}from"../../chunks/app-CATcIZWB.js";
+export{BO as exampleExtensions,VO as insertExampleExtensionsUnder}from"../../chunks/app-C9at7SIF.js";

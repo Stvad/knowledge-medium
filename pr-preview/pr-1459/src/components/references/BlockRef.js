@@ -1,1 +1,1 @@
-export{FC as BlockRef}from"../../../chunks/app-CATcIZWB.js";
+export{IC as BlockRef}from"../../../chunks/app-C9at7SIF.js";
