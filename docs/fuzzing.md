@@ -836,7 +836,10 @@ pinned test:
   emoji beside that emphasis lost half its surrogate pair to the
   reference. Fixed upstream in 2.1.3; the dependency is now on 2.2.0.
   The arbitrary now draws a non-ASCII and an astral letter as well, and
-  finds it on 2.1.2 within a second.
+  finds it on 2.1.2 within a second. The nightly later found the same
+  loss beside strikethrough (`\A<del>!</del>`, issue #1454): the
+  serializer encodes beside every attention marker, GFM's `~` included,
+  and the escape listed only `*` and `_`.
 
 The oracle reads each block's markdown back rather than matching the raw
 string, because the serializer spells a letter beside such emphasis as a
