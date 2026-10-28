@@ -1,1 +1,1 @@
-export{Gx as createEncryptedWorkspace}from"../../../../chunks/app-bu9wg7-j.js";
+export{Gx as createEncryptedWorkspace}from"../../../../chunks/app-CPMUtAoJ.js";
