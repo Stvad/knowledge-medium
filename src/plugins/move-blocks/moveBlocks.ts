@@ -32,6 +32,7 @@ import type { Repo } from '@/data/repo.js'
 import { ChangeScope } from '@/data/api'
 import { move, revealChildren, type InsertPosition } from '@/data/mutators.js'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
+import { pluralize } from '@/utils/pluralize.js'
 
 /** Where a batch should land: a parent (`null` = workspace root) plus
  *  the placement of the FIRST block within that parent's child list.
@@ -42,11 +43,8 @@ export interface MoveTarget {
 }
 
 export interface MoveBlocksResult {
-  /** Count of blocks actually moved, after descendant pruning. */
-  moved: number
-  /** The ids that actually moved, in the order they were placed.
-   *  Callers need these (not just the count) to subtract them from the
-   *  ui-state selection — see `moveAction`. */
+  /** The roots that moved (descendants pruned), in the order they were
+   *  placed. Never empty for a non-empty input. */
   movedIds: readonly string[]
 }
 
@@ -80,7 +78,7 @@ export const moveBlocksTo = async (
   target: MoveTarget,
 ): Promise<MoveBlocksResult> => {
   const prunedIds = await validateSelectionHierarchy([...blockIds], repo)
-  if (prunedIds.length === 0) return { moved: 0, movedIds: [] }
+  if (prunedIds.length === 0) return { movedIds: [] }
 
   await repo.tx(async tx => {
     // Chain each block after the previous one — see the ordering rule.
@@ -92,7 +90,7 @@ export const moveBlocksTo = async (
     if (target.parentId !== null) await revealChildren(tx, target.parentId)
   }, {
     scope: ChangeScope.BlockDefault,
-    description: `move ${prunedIds.length} block${prunedIds.length === 1 ? '' : 's'}`,
+    description: `move ${pluralize(prunedIds.length, 'block')}`,
   })
-  return { moved: prunedIds.length, movedIds: prunedIds }
+  return { movedIds: prunedIds }
 }

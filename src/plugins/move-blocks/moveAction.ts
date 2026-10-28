@@ -14,6 +14,7 @@ import type { Block } from '@/data/block'
 import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
 import { openDialog } from '@/utils/dialogs.js'
+import { pluralize } from '@/utils/pluralize.js'
 import { MoveDestinationPicker } from './MoveDestinationPicker.tsx'
 import { moveBlocksTo } from './moveBlocks.ts'
 import { unselectMovedBlocks } from './selectionAfterMove.ts'
@@ -52,19 +53,8 @@ export const runMoveFlow = async (
       parentId: choice.destinationId,
       position: { kind: 'last' },
     })
-    if (result.moved > 0) {
-      // Every SELECTED id covered by a committed root — not just the ones
-      // we asked to move. `moveBlocksTo` prunes descendants, so a set
-      // holding both a block and its own descendant reports only the
-      // ancestor as moved, but the descendant relocated too, riding along
-      // inside the subtree; the same is true of a selected descendant that
-      // was never itself requested (a context-menu move on the ancestor
-      // alone). See `unselectMovedBlocks`.
-      if (context) await unselectMovedBlocks(repo, context.uiStateBlock, result.movedIds)
-      showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
-    } else {
-      showError('No blocks were moved')
-    }
+    if (context) await unselectMovedBlocks(repo, context.uiStateBlock, result.movedIds)
+    showSuccess(`Moved ${pluralize(result.movedIds.length, 'block')}`)
   } catch (error) {
     showError(
       error instanceof Error ? error.message : 'Failed to move blocks',

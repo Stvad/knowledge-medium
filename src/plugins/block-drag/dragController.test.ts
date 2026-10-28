@@ -10,7 +10,7 @@ import type { Repo } from '@/data/repo.js'
 import type { DropContext, DropTarget } from './dropTarget.ts'
 
 const mocks = vi.hoisted(() => ({
-  moveBlocksTo: vi.fn(async (_repo: unknown, ids: readonly string[]) => ({moved: ids.length, movedIds: ids})),
+  moveBlocksTo: vi.fn(async (_repo: unknown, ids: readonly string[]) => ({movedIds: ids})),
   unselectMovedBlocks: vi.fn(async () => {}),
   focusBlock: vi.fn(async () => {}),
   resolveDropTarget: vi.fn(),

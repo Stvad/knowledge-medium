@@ -83,7 +83,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'] })
+    expect(result).toEqual({ movedIds: ['c2', 'c1', 'c3'] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -97,7 +97,7 @@ describe('moveBlocksTo', () => {
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
-    expect(result).toEqual({ moved: 1, movedIds: ['a'] })
+    expect(result).toEqual({ movedIds: ['a'] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -269,6 +269,6 @@ describe('moveBlocksTo', () => {
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0, movedIds: [] })
+    expect(result).toEqual({ movedIds: [] })
   })
 })

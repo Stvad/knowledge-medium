@@ -1,6 +1,5 @@
 /**
- * Selection bookkeeping after a move: every selected block the move
- * carried leaves the ui-state selection. Shared by the move command and
+ * Selection bookkeeping after a move. Shared by the move command and
  * drag-and-drop.
  */
 import type { Block } from '@/data/block'
@@ -9,53 +8,38 @@ import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { selectionStateProp } from '@/data/properties.js'
 import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 
-/** Take every selected id covered by `movedRoots` (see
- *  `selectedIdsCoveredByMove`) out of the selection on `uiStateBlock`. */
+/**
+ * Take every selected block that `movedRoots` carried — a root itself, or
+ * a descendant riding inside one — out of the ui-state selection on
+ * `uiStateBlock`.
+ *
+ * `PanelMultiSelectActionContext` activates multi-select from a non-empty
+ * `selectedBlockIds` alone, never checking those blocks are still in the
+ * panel, so a relocated id left in there keeps `Delete` and the other
+ * multi-select shortcuts acting on it at its new home.
+ *
+ * Covered, not requested: a single-block move passes just the ancestor,
+ * and a block independently selected inside its subtree moved too.
+ * Subtracting rather than clearing keeps a selection the move didn't
+ * touch — a context-menu move on one bullet inside a live selection
+ * removes just that one.
+ */
 export const unselectMovedBlocks = async (
   repo: Repo,
   uiStateBlock: Block,
   movedRoots: readonly string[],
 ): Promise<void> => {
-  await dropMovedFromSelection(
-    uiStateBlock,
-    await selectedIdsCoveredByMove(repo, uiStateBlock, new Set(movedRoots)),
-  )
-}
+  const roots = new Set(movedRoots)
+  const covered = new Set<string>()
+  await Promise.all(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds.map(async id => {
+    if (await isWithinSubtreeOfAny(repo, id, roots)) covered.add(id)
+  }))
+  if (covered.size === 0) return
 
-/**
- * Take `idsToRemove` out of the ui-state selection.
- *
- * The selection is ui-state, and `PanelMultiSelectActionContext`
- * activates multi-select from a non-empty `selectedBlockIds` ALONE — it
- * never checks those blocks are still in the panel. Leave a relocated id
- * in there and the pane shows nothing (or only the un-moved remainder)
- * highlighted while `Delete` and the other multi-select shortcuts still
- * act on the block at its new home.
- *
- * Subtracting ids — rather than clearing outright when the dispatch came
- * from multi-select — is what makes the two entry points behave the
- * same. A multi-select move takes out every selected id and so empties
- * the selection anyway, while a context-menu move on one bullet that
- * happens to sit inside a live selection removes just that one and
- * leaves the rest intact. A selection with nothing moved in it is
- * untouched, which is the behaviour a normal-mode move on an unrelated
- * block needs.
- *
- * Callers pass whatever set of ids actually needs to come out — see
- * `selectedIdsCoveredByMove` below for how that set is computed — so this
- * stays a plain, self-contained subtraction.
- */
-const dropMovedFromSelection = async (
-  uiStateBlock: Block,
-  idsToRemove: readonly string[],
-): Promise<void> => {
+  // Re-read after the awaits: subtract from the selection as it is now.
   const current = getSelectionStateSnapshot(uiStateBlock)
-  if (!current.selectedBlockIds.length) return
-
-  const toRemove = new Set(idsToRemove)
-  const remaining = current.selectedBlockIds.filter(id => !toRemove.has(id))
+  const remaining = current.selectedBlockIds.filter(id => !covered.has(id))
   if (remaining.length === current.selectedBlockIds.length) return
-
   await uiStateBlock.set(selectionStateProp, {
     selectedBlockIds: remaining,
     // The anchor is only meaningful while it's still selected; a moved
@@ -65,36 +49,4 @@ const dropMovedFromSelection = async (
         ? current.anchorBlockId
         : remaining[0] ?? null,
   })
-}
-
-/**
- * Every currently-selected id that ended up covered by one of `movedRoots`
- * (the root itself, or a descendant riding along inside its subtree) — the
- * ids that need to come OUT of the ui-state selection after a move.
- *
- * Subtracting only the ORIGINALLY REQUESTED ids (the old behaviour here)
- * misses a selected descendant that was never itself requested: a
- * single-block or context-menu move passes just the ancestor, so a block
- * that happens to be independently selected inside the moved subtree stays
- * selected at its new, possibly off-panel home, where `Delete` and the
- * other multi-select shortcuts still reach it. Checking every selected id
- * against the roots that actually committed catches that case, while still
- * covering every requested id that moved: whether it committed as a root
- * itself or was pruned as one root's descendant, it is by construction
- * within one of `movedRoots`' subtrees (`isWithinSubtreeOfAny` treats a
- * root as covering itself).
- */
-const selectedIdsCoveredByMove = async (
-  repo: Repo,
-  uiStateBlock: Block,
-  movedRoots: ReadonlySet<string>,
-): Promise<string[]> => {
-  const current = getSelectionStateSnapshot(uiStateBlock)
-  if (!current.selectedBlockIds.length) return []
-
-  const covered = await Promise.all(
-    current.selectedBlockIds.map(async id =>
-      (await isWithinSubtreeOfAny(repo, id, movedRoots)) ? id : null),
-  )
-  return covered.filter((id): id is string => id !== null)
 }

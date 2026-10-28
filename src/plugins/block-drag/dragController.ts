@@ -366,7 +366,6 @@ const drop = async (repo: Repo, session: Session, resolvedTarget: Promise<DropTa
     if (!target) return
     const payload = await session.payload
     const result = await moveBlocksTo(repo, payload.ids, target.move)
-    if (result.moved === 0) return
     await unselectMovedBlocks(repo, payload.uiStateBlock, result.movedIds)
     const layoutSessionId = activeLayoutSessionElement()?.dataset.layoutSessionId
     if (target.panelId && layoutSessionId) await activatePanelRow(repo, layoutSessionId, target.panelId)
