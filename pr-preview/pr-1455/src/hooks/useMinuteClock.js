@@ -1,0 +1,1 @@
+export{kC as useMinuteClock}from"../../chunks/app-D5n84AZG.js";

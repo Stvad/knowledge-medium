@@ -1,0 +1,1 @@
+export{RG as agentDispatchCompanionDataExtension}from"../../../chunks/app-D5n84AZG.js";

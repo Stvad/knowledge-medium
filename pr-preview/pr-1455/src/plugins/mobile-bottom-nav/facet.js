@@ -1,0 +1,1 @@
+export{Vb as mobileBottomNavItemsFacet}from"../../../chunks/app-D5n84AZG.js";

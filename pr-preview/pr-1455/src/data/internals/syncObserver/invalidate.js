@@ -1,0 +1,1 @@
+export{AX as applySyncInvalidation}from"../../../../chunks/app-D5n84AZG.js";

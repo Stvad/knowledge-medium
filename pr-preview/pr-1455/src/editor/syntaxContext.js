@@ -1,0 +1,1 @@
+export{GH as isInsideLiteralMarkdown}from"../../chunks/app-D5n84AZG.js";

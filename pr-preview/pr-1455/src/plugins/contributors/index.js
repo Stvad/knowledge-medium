@@ -1,0 +1,1 @@
+export{ju as contributorsPlugin}from"../../../chunks/app-D5n84AZG.js";
