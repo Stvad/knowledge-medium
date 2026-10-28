@@ -1,1 +1,1 @@
-export{rV as preferredSpanReplacement}from"../../../chunks/app-B2vZFaV0.js";
+export{rV as preferredSpanReplacement}from"../../../chunks/app-IRRvvGXg.js";
