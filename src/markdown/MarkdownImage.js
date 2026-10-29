@@ -1,1 +1,1 @@
-export{QA as MarkdownImage}from"../../chunks/app-x6j2LOVP.js";
+export{XA as MarkdownImage}from"../../chunks/app-B6v8xjnJ.js";
