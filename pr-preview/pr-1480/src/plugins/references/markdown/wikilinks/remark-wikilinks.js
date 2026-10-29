@@ -1,0 +1,1 @@
+export{sg as remarkWikilinks}from"../../../../../chunks/app-jJA1W0_U.js";

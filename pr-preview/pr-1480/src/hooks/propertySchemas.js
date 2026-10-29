@@ -1,0 +1,1 @@
+export{kB as usePropertySchemas}from"../../chunks/app-jJA1W0_U.js";

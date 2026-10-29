@@ -1,0 +1,1 @@
+export{My as hmsToSeconds}from"../../chunks/app-jJA1W0_U.js";
