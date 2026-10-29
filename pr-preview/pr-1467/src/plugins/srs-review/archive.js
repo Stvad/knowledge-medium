@@ -1,1 +1,0 @@
-export{Ls as archiveSrsCard}from"../../../chunks/app-D3oFspql.js";

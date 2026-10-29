@@ -1,1 +1,0 @@
-export{ig as referencesPlugin}from"../../../chunks/app-D3oFspql.js";

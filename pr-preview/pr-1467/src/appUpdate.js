@@ -1,1 +1,0 @@
-export{AA as appUpdate,jA as useAppUpdateAvailable}from"../chunks/app-D3oFspql.js";

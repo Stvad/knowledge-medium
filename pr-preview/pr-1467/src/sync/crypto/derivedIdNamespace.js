@@ -1,1 +1,0 @@
-export{Z7 as deriveWorkspaceIdNamespace}from"../../../chunks/app-D3oFspql.js";

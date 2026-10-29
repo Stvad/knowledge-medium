@@ -1,1 +1,0 @@
-export{UM as ConfirmBulkDeleteDialog}from"../../chunks/app-D3oFspql.js";

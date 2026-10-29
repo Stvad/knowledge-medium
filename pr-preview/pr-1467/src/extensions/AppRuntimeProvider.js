@@ -1,1 +1,0 @@
-export{qt as AppRuntimeProvider}from"../../chunks/app-D3oFspql.js";

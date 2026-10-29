@@ -1,1 +1,0 @@
-export{cO as CommandPaletteHeaderItem}from"../../../chunks/app-D3oFspql.js";

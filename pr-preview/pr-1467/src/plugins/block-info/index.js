@@ -1,1 +1,0 @@
-export{Km as blockInfoPlugin}from"../../../chunks/app-D3oFspql.js";

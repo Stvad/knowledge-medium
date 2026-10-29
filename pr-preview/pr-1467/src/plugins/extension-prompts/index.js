@@ -1,1 +1,0 @@
-export{aA as ExtensionPromptSurface,oA as extensionPromptsExtension}from"../../../chunks/app-D3oFspql.js";

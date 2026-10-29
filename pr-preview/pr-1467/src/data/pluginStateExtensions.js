@@ -1,1 +1,0 @@
-export{kK as pluginPrefsExtension,AK as pluginUIStateExtension}from"../../chunks/app-D3oFspql.js";

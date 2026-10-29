@@ -1,1 +1,0 @@
-export{sg as remarkWikilinks}from"../../../../../chunks/app-D3oFspql.js";

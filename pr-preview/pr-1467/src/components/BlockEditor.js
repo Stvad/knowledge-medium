@@ -1,1 +1,0 @@
-export{FP as BlockEditor}from"../../chunks/app-D3oFspql.js";

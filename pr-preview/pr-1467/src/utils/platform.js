@@ -1,1 +1,0 @@
-export{gz as isIOS,_z as isMacPlatform}from"../../chunks/app-D3oFspql.js";

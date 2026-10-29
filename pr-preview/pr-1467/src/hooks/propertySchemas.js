@@ -1,1 +1,0 @@
-export{kB as usePropertySchemas}from"../../chunks/app-D3oFspql.js";

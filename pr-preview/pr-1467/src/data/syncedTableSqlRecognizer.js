@@ -1,1 +1,0 @@
-export{Yq as SYNCED_TABLES,Xq as syncedWriteTarget,Zq as writeTargets}from"../../chunks/app-D3oFspql.js";

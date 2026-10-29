@@ -1,1 +1,0 @@
-export{_G as THREAD_TYPE,vG as annotationPropertySeeds,yG as annotationQuotePrefixProp,bG as annotationQuoteStartProp,xG as annotationQuoteSuffixProp,SG as annotationStatusProp,CG as annotationTargetProp,wG as annotationThreadType,TG as threadAnchorOf,EG as threadIsOpen,DG as threadStatusOf,OG as threadTargetIdOf}from"../../../chunks/app-D3oFspql.js";

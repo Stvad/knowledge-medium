@@ -1,1 +1,0 @@
-export{yO as SWIPE_QUICK_ACTIONS_GESTURE_ID,zO as SWIPE_RIGHT_BLOCK_ACTION_ID,vO as SwipeActionMenu,VO as quickActionItemsFacet,pO as swipeQuickActionsPlugin}from"../../../chunks/app-D3oFspql.js";

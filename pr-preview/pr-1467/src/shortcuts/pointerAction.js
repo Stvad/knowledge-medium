@@ -1,1 +1,0 @@
-export{HA as dispatchPointerAction,UA as setPointerActionDispatcher}from"../../chunks/app-D3oFspql.js";

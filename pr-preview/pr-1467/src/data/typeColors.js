@@ -1,1 +1,0 @@
-export{uk as DEFAULT_TYPE_COLORS,dk as defaultTypeColor,fk as pickLeastUsedTypeColor}from"../../chunks/app-D3oFspql.js";

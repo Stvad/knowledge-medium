@@ -1,1 +1,0 @@
-export{GW as dailyNotesLocalSchema}from"../../../chunks/app-D3oFspql.js";

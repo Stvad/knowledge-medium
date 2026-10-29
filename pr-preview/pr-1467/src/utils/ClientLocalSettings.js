@@ -1,1 +1,0 @@
-export{$A as ClientLocalSettings,ej as clientLocalSettings}from"../../chunks/app-D3oFspql.js";

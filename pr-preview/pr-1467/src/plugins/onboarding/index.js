@@ -1,1 +1,0 @@
-export{gb as EXTENSIONS_PAGE_TITLE,_b as TUTORIAL_DEFAULT_TITLE,vb as TUTORIAL_VIM_TITLE,rb as onboardingPlugin,hb as seedTutorial}from"../../../chunks/app-D3oFspql.js";

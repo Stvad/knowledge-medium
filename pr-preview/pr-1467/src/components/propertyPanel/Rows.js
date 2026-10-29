@@ -1,1 +1,0 @@
-export{fI as MetadataRow,pI as PropertySectionLabel}from"../../../chunks/app-D3oFspql.js";

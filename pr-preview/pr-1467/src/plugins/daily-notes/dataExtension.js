@@ -1,1 +1,0 @@
-export{WW as dailyNotesDataExtension}from"../../../chunks/app-D3oFspql.js";

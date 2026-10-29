@@ -1,1 +1,0 @@
-export{tY as instrumentAdapter}from"../../../chunks/app-D3oFspql.js";

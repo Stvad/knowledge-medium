@@ -1,1 +1,0 @@
-export{nA as editorAutocompleteExtension}from"../../chunks/app-D3oFspql.js";

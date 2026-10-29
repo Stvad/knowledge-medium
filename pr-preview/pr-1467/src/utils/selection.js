@@ -1,1 +1,0 @@
-export{rR as blockAfterSubtreeRemoval,iR as blockIdsInOrderedSelectionRange,aR as commitSelectionRange,oR as extendSelection,sR as findBestSelectionAnchorIndex,cR as getBlocksInRange,lR as getLastVisibleDescendant,uR as getRootBlock,dR as nextVisibleBlock,fR as previousVisibleBlock,pR as validateSelectionHierarchy}from"../../chunks/app-D3oFspql.js";

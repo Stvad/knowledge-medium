@@ -1,1 +1,0 @@
-export{VU as geoDataExtension}from"../../../chunks/app-D3oFspql.js";

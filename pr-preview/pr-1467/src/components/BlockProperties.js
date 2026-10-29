@@ -1,1 +1,0 @@
-export{dI as BlockProperties}from"../../chunks/app-D3oFspql.js";

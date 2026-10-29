@@ -1,1 +1,0 @@
-export{$O as BlockEmbed}from"../../../chunks/app-D3oFspql.js";

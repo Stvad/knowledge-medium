@@ -1,1 +1,0 @@
-export{lG as annotationsDataExtension}from"../../../chunks/app-D3oFspql.js";

@@ -1,1 +1,0 @@
-export{GG as characterCounterDataExtension}from"../../../chunks/app-D3oFspql.js";

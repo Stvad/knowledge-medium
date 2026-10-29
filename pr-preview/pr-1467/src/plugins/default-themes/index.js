@@ -1,1 +1,0 @@
-export{Cw as DEFAULT_THEME_ID_DARK,ww as DEFAULT_THEME_ID_LIGHT,cw as defaultThemeContributions,sw as defaultThemesPlugin}from"../../../chunks/app-D3oFspql.js";

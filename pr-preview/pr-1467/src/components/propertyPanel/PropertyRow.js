@@ -1,1 +1,0 @@
-export{_I as PropertyRow}from"../../../chunks/app-D3oFspql.js";

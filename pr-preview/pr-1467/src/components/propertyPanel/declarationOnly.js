@@ -1,1 +1,0 @@
-export{LI as declarationOnlyDefinitionForName,RI as declarationOnlyStatusText}from"../../../chunks/app-D3oFspql.js";

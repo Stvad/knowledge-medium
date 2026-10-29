@@ -1,1 +1,0 @@
-export{TN as useIsMobile,EN as usePointerCoarse}from"../../chunks/app-D3oFspql.js";

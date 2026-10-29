@@ -1,1 +1,0 @@
-export{BD as useCommandPaletteActions}from"../../../chunks/app-D3oFspql.js";

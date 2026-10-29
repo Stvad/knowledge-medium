@@ -1,1 +1,0 @@
-export{qm as BlockMetaCard}from"../../../chunks/app-D3oFspql.js";

@@ -1,1 +1,0 @@
-export{Rj as LazyBlockComponent}from"../../chunks/app-D3oFspql.js";

@@ -1,1 +1,0 @@
-export{kg as useIsReadOnly}from"../../chunks/app-D3oFspql.js";

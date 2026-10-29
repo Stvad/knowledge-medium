@@ -1,1 +1,0 @@
-export{lk as chipStyle}from"../../../chunks/app-D3oFspql.js";

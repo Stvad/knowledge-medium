@@ -1,1 +1,0 @@
-export{UP as useShortcutSurfaceActivations}from"../../chunks/app-D3oFspql.js";

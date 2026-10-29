@@ -1,1 +1,0 @@
-export{Jm as updateIndicatorPlugin}from"../../../chunks/app-D3oFspql.js";

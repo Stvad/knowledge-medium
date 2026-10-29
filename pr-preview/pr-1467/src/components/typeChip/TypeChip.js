@@ -1,1 +1,0 @@
-export{ck as TypeChip}from"../../../chunks/app-D3oFspql.js";

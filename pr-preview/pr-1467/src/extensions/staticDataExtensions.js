@@ -1,1 +1,0 @@
-export{MV as staticDataExtensions}from"../../chunks/app-D3oFspql.js";

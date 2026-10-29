@@ -1,1 +1,0 @@
-export{kG as contributorsDataExtension}from"../../../chunks/app-D3oFspql.js";

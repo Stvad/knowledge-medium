@@ -1,1 +1,0 @@
-export{sS as BreadcrumbList}from"../../../chunks/app-D3oFspql.js";

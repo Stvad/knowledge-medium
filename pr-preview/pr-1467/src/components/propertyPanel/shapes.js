@@ -1,1 +1,0 @@
-export{NB as propertyShapeLabel}from"../../../chunks/app-D3oFspql.js";

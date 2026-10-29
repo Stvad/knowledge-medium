@@ -1,1 +1,0 @@
-export{OA as checkForAppUpdate,kA as registerServiceWorker}from"../chunks/app-D3oFspql.js";

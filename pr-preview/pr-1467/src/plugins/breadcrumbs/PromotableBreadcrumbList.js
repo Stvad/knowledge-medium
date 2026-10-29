@@ -1,1 +1,0 @@
-export{rS as PromotableBreadcrumbList}from"../../../chunks/app-D3oFspql.js";
