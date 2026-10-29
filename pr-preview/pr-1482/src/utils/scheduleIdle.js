@@ -1,1 +1,1 @@
-export{OX as CATCHUP_DEEP_IDLE,kX as LAZY_DEEP_IDLE,AX as scheduleDeepIdle,jX as scheduleIdle}from"../../chunks/app-Bqu722ZP.js";
+export{kX as CATCHUP_DEEP_IDLE,AX as LAZY_DEEP_IDLE,jX as scheduleDeepIdle,MX as scheduleIdle}from"../../chunks/app-CwYg2Q4y.js";

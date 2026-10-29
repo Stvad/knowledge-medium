@@ -1,1 +1,1 @@
-export{tg as geoPlugin}from"../../../chunks/app-Bqu722ZP.js";
+export{ng as geoPlugin}from"../../../chunks/app-CwYg2Q4y.js";

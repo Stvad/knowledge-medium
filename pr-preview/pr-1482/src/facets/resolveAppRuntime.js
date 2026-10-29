@@ -1,1 +1,1 @@
-export{uj as resolveAppRuntime,dj as resolveAppRuntimeSync}from"../../chunks/app-Bqu722ZP.js";
+export{dj as resolveAppRuntime,fj as resolveAppRuntimeSync}from"../../chunks/app-CwYg2Q4y.js";
