@@ -1,1 +1,0 @@
-export{zA as checkForAppUpdate,BA as registerServiceWorker}from"../chunks/app-DSA74MUh.js";

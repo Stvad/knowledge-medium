@@ -1,1 +1,0 @@
-export{nK as characterCounterDataExtension}from"../../../chunks/app-DSA74MUh.js";

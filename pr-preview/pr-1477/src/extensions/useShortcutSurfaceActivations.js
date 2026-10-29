@@ -1,1 +1,0 @@
-export{WP as useShortcutSurfaceActivations}from"../../chunks/app-CJ0dIIvH.js";

@@ -1,1 +1,0 @@
-export{gA as ExtensionPromptSurface,_A as extensionPromptsExtension}from"../../../chunks/app-DSA74MUh.js";

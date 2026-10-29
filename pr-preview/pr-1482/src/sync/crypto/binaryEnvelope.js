@@ -1,1 +1,0 @@
-export{kC as BINARY_ENVELOPE_MAGIC,AC as BINARY_ENVELOPE_MIN_BYTES,jC as BINARY_ENVELOPE_OVERHEAD_BYTES,MC as BINARY_MAGIC_BYTES,NC as decodeBinaryEnvelope,PC as encodeBinaryEnvelope,FC as hasBinaryEnvelopeMagic}from"../../../chunks/app-DSA74MUh.js";

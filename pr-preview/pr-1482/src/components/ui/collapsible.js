@@ -1,1 +1,0 @@
-"use client";export{vI as Collapsible,yI as CollapsibleContent,bI as CollapsibleTrigger}from"../../../chunks/app-DSA74MUh.js";

@@ -1,1 +1,0 @@
-export{gg as wikilinkMarkdownExtension}from"../../../../../chunks/app-DSA74MUh.js";

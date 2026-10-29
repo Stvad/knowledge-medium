@@ -1,1 +1,0 @@
-export{CI as MetadataRow,wI as PropertySectionLabel}from"../../../chunks/app-DSA74MUh.js";

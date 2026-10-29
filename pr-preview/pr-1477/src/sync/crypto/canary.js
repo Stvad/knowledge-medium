@@ -1,1 +1,0 @@
-export{PC as mintCanary,FC as validateCanary}from"../../../chunks/app-CJ0dIIvH.js";

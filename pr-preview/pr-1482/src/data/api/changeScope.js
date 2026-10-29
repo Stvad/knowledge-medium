@@ -1,1 +1,0 @@
-export{_rt as CHANGE_SCOPE_POLICIES,vrt as ChangeScope,yrt as isChangeScope,brt as policyForScope,xrt as scopeAllowedInReadOnly,Srt as scopeIsUndoable,Crt as scopePoliciesEquivalent,wrt as scopeUploadsToServer,Trt as sourceForScope}from"../../../chunks/app-DSA74MUh.js";

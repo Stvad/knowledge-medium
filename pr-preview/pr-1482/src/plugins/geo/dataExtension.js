@@ -1,1 +1,0 @@
-export{QU as geoDataExtension}from"../../../chunks/app-DSA74MUh.js";

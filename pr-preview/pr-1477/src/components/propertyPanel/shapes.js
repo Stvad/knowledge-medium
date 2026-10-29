@@ -1,1 +1,0 @@
-export{PB as propertyShapeLabel}from"../../../chunks/app-CJ0dIIvH.js";

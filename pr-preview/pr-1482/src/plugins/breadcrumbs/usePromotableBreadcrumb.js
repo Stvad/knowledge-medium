@@ -1,1 +1,0 @@
-export{pS as usePromotableBreadcrumb}from"../../../chunks/app-DSA74MUh.js";

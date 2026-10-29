@@ -1,1 +1,0 @@
-export{AO as SWIPE_QUICK_ACTIONS_GESTURE_ID,XO as SWIPE_RIGHT_BLOCK_ACTION_ID,kO as SwipeActionMenu,QO as quickActionItemsFacet,wO as swipeQuickActionsPlugin}from"../../../chunks/app-DSA74MUh.js";

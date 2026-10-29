@@ -1,1 +1,0 @@
-export{AG as contributorsDataExtension}from"../../../chunks/app-CJ0dIIvH.js";

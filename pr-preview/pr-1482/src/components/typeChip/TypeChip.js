@@ -1,1 +1,0 @@
-export{yk as TypeChip}from"../../../chunks/app-DSA74MUh.js";

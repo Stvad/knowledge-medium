@@ -1,1 +1,0 @@
-export{Yj as LazyBlockComponent}from"../../chunks/app-DSA74MUh.js";

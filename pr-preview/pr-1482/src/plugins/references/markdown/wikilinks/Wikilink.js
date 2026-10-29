@@ -1,1 +1,0 @@
-export{_g as Wikilink}from"../../../../../chunks/app-DSA74MUh.js";

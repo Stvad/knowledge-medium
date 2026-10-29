@@ -1,1 +1,0 @@
-export{i5 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,a5 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,o5 as __resetLayoutSessionIdForTesting,s5 as getLayoutSessionId,c5 as isInstalledAppDisplayMode,l5 as readOrCreateLayoutSessionId}from"../../chunks/app-DSA74MUh.js";

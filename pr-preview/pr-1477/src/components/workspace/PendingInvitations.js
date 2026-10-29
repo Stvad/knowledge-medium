@@ -1,1 +1,0 @@
-export{WC as PendingInvitations}from"../../../chunks/app-CJ0dIIvH.js";

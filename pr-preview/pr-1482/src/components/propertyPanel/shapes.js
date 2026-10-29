@@ -1,1 +1,0 @@
-export{WB as propertyShapeLabel}from"../../../chunks/app-DSA74MUh.js";

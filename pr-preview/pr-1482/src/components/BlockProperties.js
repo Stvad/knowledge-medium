@@ -1,1 +1,0 @@
-export{SI as BlockProperties}from"../../chunks/app-DSA74MUh.js";

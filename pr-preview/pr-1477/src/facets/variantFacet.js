@@ -1,1 +1,0 @@
-export{tI as defineVariant,nI as defineVariantFacet}from"../../chunks/app-CJ0dIIvH.js";

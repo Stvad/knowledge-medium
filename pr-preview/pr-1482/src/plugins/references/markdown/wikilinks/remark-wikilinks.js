@@ -1,1 +1,0 @@
-export{vg as remarkWikilinks}from"../../../../../chunks/app-DSA74MUh.js";

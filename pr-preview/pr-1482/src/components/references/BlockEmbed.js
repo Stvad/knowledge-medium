@@ -1,1 +1,0 @@
-export{uk as BlockEmbed}from"../../../chunks/app-DSA74MUh.js";

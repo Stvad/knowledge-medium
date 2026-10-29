@@ -1,1 +1,0 @@
-export{VA as appUpdate,HA as useAppUpdateAvailable}from"../chunks/app-DSA74MUh.js";

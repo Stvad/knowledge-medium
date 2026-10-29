@@ -1,1 +1,0 @@
-export{OG as THREAD_TYPE,kG as annotationPropertySeeds,AG as annotationQuotePrefixProp,jG as annotationQuoteStartProp,MG as annotationQuoteSuffixProp,NG as annotationStatusProp,PG as annotationTargetProp,FG as annotationThreadType,IG as threadAnchorOf,LG as threadIsOpen,RG as threadStatusOf,zG as threadTargetIdOf}from"../../../chunks/app-DSA74MUh.js";

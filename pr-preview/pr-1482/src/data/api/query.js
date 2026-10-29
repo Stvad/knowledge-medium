@@ -1,1 +1,0 @@
-export{Tnt as defineQuery}from"../../../chunks/app-DSA74MUh.js";

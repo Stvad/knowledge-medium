@@ -1,1 +1,0 @@
-export{BG as contributorsDataExtension}from"../../../chunks/app-DSA74MUh.js";

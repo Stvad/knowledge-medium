@@ -1,1 +1,0 @@
-export{BB as usePropertySchemas}from"../../chunks/app-DSA74MUh.js";

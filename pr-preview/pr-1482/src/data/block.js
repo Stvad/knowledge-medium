@@ -1,1 +1,0 @@
-export{KQ as Block,qQ as requireLoadedBlock}from"../../chunks/app-DSA74MUh.js";

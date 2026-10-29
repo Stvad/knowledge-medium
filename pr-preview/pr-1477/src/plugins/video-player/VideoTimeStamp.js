@@ -1,1 +1,0 @@
-export{My as default}from"../../../chunks/app-CJ0dIIvH.js";

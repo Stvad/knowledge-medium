@@ -1,1 +1,0 @@
-export{WN as ExtensionRenderBoundary}from"../../chunks/app-DSA74MUh.js";

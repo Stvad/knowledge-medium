@@ -1,1 +1,0 @@
-export{UA as dispatchPointerAction,WA as setPointerActionDispatcher}from"../../chunks/app-CJ0dIIvH.js";
