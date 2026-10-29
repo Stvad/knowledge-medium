@@ -265,7 +265,9 @@ describe('DefaultBlockRenderer paste handling', () => {
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
     expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root'})
     // A cut leaves the originals in place, so a text paste here would duplicate them.
-    await Promise.resolve()
+    // Every mock here is already resolved, so one macrotask runs the handler's
+    // whole continuation; the absence checks below can't run before it.
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(resolvePasteWithMediaCapture).not.toHaveBeenCalled()
     expect(pasteResolvedDecision).not.toHaveBeenCalled()
   })
