@@ -14,8 +14,10 @@ export const typesPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, TYPES_PAGE_NS)
 
 export const getOrCreateTypesPage = (repo: Repo, workspaceId: string): Promise<Block> =>
+  // A container of definitions, so its create never joins an undo step (see
+  // `getOrCreateKernelPage`).
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: TYPES_PAGE_NS,
     alias: TYPES_ALIAS,
     markerType: TYPES_PAGE_TYPE,
-  })
+  }, {skipUndo: true})

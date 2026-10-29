@@ -151,6 +151,16 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
   })
 
+  it('is one undo step that leaves the Assets container, which other devices file assets under', async () => {
+    const before = env.repo.undoManager.depths(ChangeScope.BlockDefault).undo
+    const result = await captureMedia({ workspaceId: WS, source: { bytes: bytesOf(21), mime: 'image/png' } }, deps())
+    expect(result.ok).toBe(true)
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(before + 1)
+    expect(await env.repo.undo()).toBe(true)
+    if (result.ok) expect(await env.repo.load(result.assetBlockId)).toBeNull()
+    expect(await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))).not.toBeNull()
+  })
+
   it('mints a UUID-shaped asset id, so the renderer’s ((id)) reference parses — not literal text', async () => {
     // The block-ref grammar only matches UUID-shaped targets, so the asset id MUST
     // be a UUID or the `((id))` reference renders as literal text, not the media block.
