@@ -1,1 +1,1 @@
-export{Ok as checkForAppUpdate,kk as registerServiceWorker}from"../chunks/app-DXxNVL6z.js";
+export{Ok as checkForAppUpdate,kk as registerServiceWorker}from"../chunks/app-D1qjnAUM.js";

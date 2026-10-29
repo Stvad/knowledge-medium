@@ -1,1 +1,1 @@
-export{AI as MOBILE_BREAKPOINT_QUERY,jI as isMobileViewport}from"../../chunks/app-DXxNVL6z.js";
+export{AI as MOBILE_BREAKPOINT_QUERY,jI as isMobileViewport}from"../../chunks/app-D1qjnAUM.js";

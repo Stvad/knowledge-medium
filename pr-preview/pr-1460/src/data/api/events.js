@@ -1,1 +1,1 @@
-export{Qet as CORE_BLOCK_DELETED_EVENT,$et as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DXxNVL6z.js";
+export{Qet as CORE_BLOCK_DELETED_EVENT,$et as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-D1qjnAUM.js";
