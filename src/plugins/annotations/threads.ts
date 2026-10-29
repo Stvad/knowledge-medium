@@ -85,14 +85,12 @@ export interface CreatedThread {
   commentId: string | null
 }
 
-/** One undo step: the container (on a workspace's first comment), the thread
- *  root and its first comment.
+/** One undo step: the thread root and its first comment. A workspace's first
+ *  comment also creates the container, outside the undo step.
  *
  *  The anchor must still resolve exact against the target as of the creating
  *  transaction, so a target that changed under the user refuses with
- *  `AnchorChangedError` rather than anchoring to the wrong text. A refusal on a
- *  workspace's very first comment leaves the container it just created: an
- *  empty page the next comment uses. */
+ *  `AnchorChangedError` rather than anchoring to the wrong text. */
 export const createThread = async (
   repo: Repo,
   {targetId, anchor, comment}: CreateThreadArgs,
@@ -101,49 +99,44 @@ export const createThread = async (
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
 
-  return repo.undoGroup(async repo => {
-    // Accepted: undoing a workspace's first comment also tombstones the
-    // container, under which another device may have filed threads since;
-    // those stay live under it until the next comment restores it.
-    const container = await getOrCreateCommentsPage(repo, target.workspaceId)
-    return repo.tx(async tx => {
-      const current = await tx.get(targetId)
-      // DEFENCE IN DEPTH: the load above already refuses a missing or deleted
-      // target; this catches a delete that lands between it and this tx.
-      if (!current || current.deleted) throw missingTarget(targetId)
-      if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
-        throw new UnannotatableTargetError('A property row can’t be commented on.')
-      }
-      if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
-        throw new AnchorChangedError()
-      }
+  const container = await getOrCreateCommentsPage(repo, target.workspaceId)
+  return repo.tx(async tx => {
+    const current = await tx.get(targetId)
+    // DEFENCE IN DEPTH: the load above already refuses a missing or deleted
+    // target; this catches a delete that lands between it and this tx.
+    if (!current || current.deleted) throw missingTarget(targetId)
+    if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
+      throw new UnannotatableTargetError('A property row can’t be commented on.')
+    }
+    if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
+      throw new AnchorChangedError()
+    }
 
-      // Passed so the thread is discoverable as soon as this commits, without
-      // waiting on the post-commit reference projection.
-      const targetEdge: BlockReference = {
-        id: targetId, alias: targetId, sourceField: annotationTargetProp.name,
-      }
-      const threadId = await createTypedChild(repo, tx, {
-        parentId: container.id,
-        content: anchor?.quote ?? '',
-        types: [THREAD_TYPE],
-        properties: [
-          propertyValue(annotationTargetProp, targetId),
-          propertyValue(annotationStatusProp, 'open'),
-          ...(anchor ? [
-            propertyValue(annotationQuoteStartProp, anchor.quoteStart),
-            propertyValue(annotationQuotePrefixProp, anchor.prefix),
-            propertyValue(annotationQuoteSuffixProp, anchor.suffix),
-          ] : []),
-        ],
-        references: [targetEdge],
-      })
-      const commentId = comment
-        ? await tx.run(createChild, {parentId: threadId, content: comment})
-        : null
-      return {threadId, commentId}
-    }, {scope: ChangeScope.BlockDefault, description: anchor ? 'comment on selection' : 'comment on block'})
-  })
+    // Passed so the thread is discoverable as soon as this commits, without
+    // waiting on the post-commit reference projection.
+    const targetEdge: BlockReference = {
+      id: targetId, alias: targetId, sourceField: annotationTargetProp.name,
+    }
+    const threadId = await createTypedChild(repo, tx, {
+      parentId: container.id,
+      content: anchor?.quote ?? '',
+      types: [THREAD_TYPE],
+      properties: [
+        propertyValue(annotationTargetProp, targetId),
+        propertyValue(annotationStatusProp, 'open'),
+        ...(anchor ? [
+          propertyValue(annotationQuoteStartProp, anchor.quoteStart),
+          propertyValue(annotationQuotePrefixProp, anchor.prefix),
+          propertyValue(annotationQuoteSuffixProp, anchor.suffix),
+        ] : []),
+      ],
+      references: [targetEdge],
+    })
+    const commentId = comment
+      ? await tx.run(createChild, {parentId: threadId, content: comment})
+      : null
+    return {threadId, commentId}
+  }, {scope: ChangeScope.BlockDefault, description: anchor ? 'comment on selection' : 'comment on block'})
 }
 
 /** An empty reply under the comment being answered (or under the root, for a
