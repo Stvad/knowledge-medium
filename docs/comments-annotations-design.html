@@ -838,10 +838,17 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   </li>
   <li><strong>Edit suggestions are in.</strong> Decided 2026-10-28, as slice 4.</li>
   <li><strong>The container is <code>Comments (km)</code>.</strong> The precedent is <code>System Migrations (km)</code>. A kernel-page variant with no alias, which #332 proposed, would be new machinery for a cosmetic difference.</li>
-  <li><strong>Open: does a quote of B count in B's reference pill?</strong>
+  <li><strong>A quote of B does not count in B's reference pill.</strong> Decided 2026-10-29.
     <ul>
-      <li><strong>No (my pick):</strong> X references the excerpt, and it shows up where you asked for it, as an annotation on B's card. The two pills stay disjoint.</li>
-      <li><strong>Yes:</strong> the backlinks sources helper also selects blocks that reference a thread anchored to B. That is one more join in the single owner, and X then shows up both in B's backlinks and on B's card.</li>
+      <li>X references the excerpt, and it shows up as an annotation on B's card. The two pills stay disjoint.</li>
+      <li>Counting it would take one more join in the backlinks sources owner, and would show X twice: once in B's backlinks and again on B's card.</li>
+    </ul>
+  </li>
+  <li><strong>A thread with no comments shows as a highlight.</strong> Decided 2026-10-29, "for now".
+    <ul>
+      <li>The rejected alternative showed a thread only when something is attached to it: comments, quoters or a replacement. That would have made a copied-but-never-pasted range reference invisible.</li>
+      <li>Keeping highlights accepts that stray instead, as listed under <a href="#range-refs">Quoting part of a block</a>.</li>
+      <li>Visibility stays behind one predicate, so switching later is a one-line change.</li>
     </ul>
   </li>
   <li><strong>Open: agents before the margin, or the margin first?</strong> The two slices are independent. My pick is agents first: the mention path needs only unattributed bookkeeping and prompt context, while the margin waits on the read-mode spike.</li>
