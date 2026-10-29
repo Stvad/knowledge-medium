@@ -179,9 +179,8 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     }
     session.x = event.clientX
     session.y = event.clientY
-    const distance = Math.hypot(session.x - session.startX, session.y - session.startY)
     if (session.phase === 'pending') {
-      if (distance < (session.touch ? TOUCH_SLOP_PX : DRAG_THRESHOLD_PX)) return
+      if (travel(session) < (session.touch ? TOUCH_SLOP_PX : DRAG_THRESHOLD_PX)) return
       // A touch that moves before the hold is a swipe, not a drag. Cancelled
       // rather than ended: iOS still clicks the bullet after a short one,
       // and that click must not open the block.
@@ -189,23 +188,17 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
         cancel(session)
         return
       }
-      begin(session)
+      // A mouse press-drag may have selected text on its way. A touch on the
+      // bullet selects none (`user-select: none`), and clearing would strand
+      // a focused editor's caret.
+      window.getSelection()?.removeAllRanges()
+      session.phase = 'dragging'
+      lift(session)
     } else if (session.phase === 'held') {
-      if (distance < TOUCH_SLOP_PX) return
-      begin(session)
+      if (travel(session) < TOUCH_SLOP_PX) return
+      session.phase = 'dragging'
     }
     if (session.phase === 'dragging') scheduleFrame(session)
-  }
-
-  const begin = (current: Session) => {
-    const lifted = current.phase === 'held'
-    current.phase = 'dragging'
-    if (lifted) return
-    // A mouse press-drag may have selected text on its way. A touch on the
-    // bullet selects none (`user-select: none`), and clearing would strand
-    // a focused editor's caret.
-    window.getSelection()?.removeAllRanges()
-    lift(current)
   }
 
   /** Dim the dragged rows — the bullet's block at once, the whole
@@ -458,6 +451,10 @@ const openContextMenu = (session: Session) => {
     clientY: session.startY,
   }))
 }
+
+/** How far the pointer is from where it pressed. */
+const travel = (session: Session): number =>
+  Math.hypot(session.x - session.startX, session.y - session.startY)
 
 const markDragged = (ids: ReadonlySet<string>) => {
   for (const id of ids) {

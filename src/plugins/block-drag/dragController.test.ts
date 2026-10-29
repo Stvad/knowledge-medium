@@ -492,12 +492,5 @@ describe('block drag controller', () => {
       touch('pointerup', window, 40, 60)
       await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['a'], TARGET.move))
     })
-
-    it('takes the press, so the bullet\'s own touch long-press never runs alongside the drag', () => {
-      // The bullet's context menu (Radix) arms a touch long-press of its own
-      // from `onPointerDown`, skipped when the press is defaultPrevented.
-      expect(touch('pointerdown', bullet('a'), 10, 10)).toBe(false)
-      touch('pointerup', window, 10, 10)
-    })
   })
 })

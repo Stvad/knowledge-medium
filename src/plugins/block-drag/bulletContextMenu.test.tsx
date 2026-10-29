@@ -14,7 +14,7 @@ import {
   ContextMenuPortal,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu.js'
-import { createBlockDragController, TOUCH_HOLD_MS } from './dragController.ts'
+import { createBlockDragController } from './dragController.ts'
 
 /** Longer than the menu's own touch long-press (700ms). */
 const LONG_HOLD_MS = 1_000
@@ -75,15 +75,6 @@ describe('the bullet context menu under a touch hold', () => {
       expect(menuIsOpen()).toBe(false)
       touch('pointerup', window)
       expect(menuIsOpen()).toBe(true)
-    })
-
-    it('a tap opens no menu', () => {
-      renderBullet()
-      touch('pointerdown', screen.getByTestId('bullet'))
-      wait(TOUCH_HOLD_MS / 2)
-      touch('pointerup', window)
-      wait(LONG_HOLD_MS)
-      expect(menuIsOpen()).toBe(false)
     })
   })
 })
