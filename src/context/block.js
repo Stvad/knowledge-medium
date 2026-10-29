@@ -1,1 +1,1 @@
-export{DB as BlockContext,OB as BlockContextProvider,kB as NestedBlockContextProvider,AB as useBlockContext}from"../../chunks/app-14blRB6G.js";
+export{UB as BlockContext,WB as BlockContextProvider,GB as NestedBlockContextProvider,KB as useBlockContext}from"../../chunks/app-DOH0WDlZ.js";

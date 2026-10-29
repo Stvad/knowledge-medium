@@ -1,1 +1,1 @@
-export{DR as useTypes}from"../../chunks/app-14blRB6G.js";
+export{UR as useTypes}from"../../chunks/app-DOH0WDlZ.js";

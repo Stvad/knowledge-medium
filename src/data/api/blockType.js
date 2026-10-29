@@ -1,1 +1,1 @@
-export{Ort as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-14blRB6G.js";
+export{Krt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-DOH0WDlZ.js";
