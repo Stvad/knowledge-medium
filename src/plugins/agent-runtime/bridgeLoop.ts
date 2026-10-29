@@ -196,6 +196,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
           }, baseUrl)
         }
 
+        if (abortController.signal.aborted) return
         retryMs = retryBaseMs
         attempts = 0
         if (loggedUnavailableReason !== null) {

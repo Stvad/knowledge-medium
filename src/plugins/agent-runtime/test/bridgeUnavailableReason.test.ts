@@ -203,4 +203,42 @@ describe('bridge unavailable reason', () => {
     expect(info).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
   })
+
+  it.each(['poll decode', 'result report'])(
+    'stays silent when an in-flight %s fulfills after stop', async request => {
+      let recover = false
+      let finishRequest!: () => void
+      loop = startBridgeLoop(makeOptions({fetch: vi.fn<typeof fetch>(async input => {
+        if (!recover) throw new TypeError('ERROR_SECRET_MARKER')
+        if (isPoll(input)) {
+          if (request === 'poll decode') {
+            const response = jsonResponse(null)
+            vi.spyOn(response, 'json').mockImplementation(() => new Promise(resolve => {
+              finishRequest = () => resolve(null)
+            }))
+            return response
+          }
+          return jsonResponse({type: 'unknown', commandId: 'test-command'})
+        }
+        if (String(input).endsWith('/result')) {
+          return new Promise<Response>(resolve => {
+            finishRequest = () => resolve(jsonResponse({ok: true}))
+          })
+        }
+        return jsonResponse({ok: true})
+      })}))
+
+      await reachQuietThreshold()
+      recover = true
+      await vi.advanceTimersByTimeAsync(60_000)
+      await vi.waitFor(() => expect(finishRequest).toBeTypeOf('function'))
+      info.mockClear()
+      loop.stop()
+      finishRequest()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(info).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
+    },
+  )
 })
