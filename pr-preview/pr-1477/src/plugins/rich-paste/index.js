@@ -1,0 +1,1 @@
+export{i_ as richPastePlugin}from"../../../chunks/app-BGNME_dp.js";

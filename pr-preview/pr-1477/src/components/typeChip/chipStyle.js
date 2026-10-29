@@ -1,0 +1,1 @@
+export{lk as chipStyle}from"../../../chunks/app-BGNME_dp.js";

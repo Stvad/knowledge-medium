@@ -1,0 +1,1 @@
+export{cg as blockrefMarkdownExtension}from"../../../../../chunks/app-BGNME_dp.js";

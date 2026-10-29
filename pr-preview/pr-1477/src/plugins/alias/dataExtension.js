@@ -1,0 +1,1 @@
+export{yq as aliasDataExtension}from"../../../chunks/app-BGNME_dp.js";

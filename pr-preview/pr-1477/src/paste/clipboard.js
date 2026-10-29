@@ -1,0 +1,1 @@
+export{yP as readClipboardContent}from"../../chunks/app-BGNME_dp.js";

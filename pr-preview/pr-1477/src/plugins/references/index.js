@@ -1,0 +1,1 @@
+export{ig as referencesPlugin}from"../../../chunks/app-BGNME_dp.js";

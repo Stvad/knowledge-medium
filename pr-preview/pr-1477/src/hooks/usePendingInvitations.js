@@ -1,0 +1,1 @@
+export{WC as usePendingInvitations}from"../../chunks/app-BGNME_dp.js";

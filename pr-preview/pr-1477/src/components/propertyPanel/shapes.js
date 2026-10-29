@@ -1,0 +1,1 @@
+export{NB as propertyShapeLabel}from"../../../chunks/app-BGNME_dp.js";

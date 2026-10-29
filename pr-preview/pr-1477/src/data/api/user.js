@@ -1,0 +1,1 @@
+export{cnt as SYSTEM_AUTHOR_PREFIX,lnt as isSystemAuthor,unt as systemAuthor}from"../../../chunks/app-BGNME_dp.js";

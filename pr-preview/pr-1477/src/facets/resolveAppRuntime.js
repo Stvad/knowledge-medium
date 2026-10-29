@@ -1,0 +1,1 @@
+export{tj as resolveAppRuntime,nj as resolveAppRuntimeSync}from"../../chunks/app-BGNME_dp.js";

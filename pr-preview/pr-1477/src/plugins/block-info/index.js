@@ -1,0 +1,1 @@
+export{Km as blockInfoPlugin}from"../../../chunks/app-BGNME_dp.js";

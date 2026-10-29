@@ -1,0 +1,1 @@
+export{_g as blockDragPlugin}from"../../../chunks/app-BGNME_dp.js";

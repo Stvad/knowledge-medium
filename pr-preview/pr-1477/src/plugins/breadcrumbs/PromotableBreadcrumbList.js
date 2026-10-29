@@ -1,0 +1,1 @@
+export{rS as PromotableBreadcrumbList}from"../../../chunks/app-BGNME_dp.js";

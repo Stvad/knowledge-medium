@@ -1,0 +1,1 @@
+export{eI as defineVariant,tI as defineVariantFacet}from"../../chunks/app-BGNME_dp.js";

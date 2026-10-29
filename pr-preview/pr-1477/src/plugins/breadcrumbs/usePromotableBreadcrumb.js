@@ -1,0 +1,1 @@
+export{nS as usePromotableBreadcrumb}from"../../../chunks/app-BGNME_dp.js";

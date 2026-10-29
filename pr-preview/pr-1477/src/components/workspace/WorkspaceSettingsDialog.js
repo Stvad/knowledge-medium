@@ -1,0 +1,1 @@
+export{IS as WorkspaceSettingsDialog}from"../../../chunks/app-BGNME_dp.js";

@@ -1,0 +1,1 @@
+export{yA as appUpdatePromptExtension}from"../../../chunks/app-BGNME_dp.js";

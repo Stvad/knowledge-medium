@@ -1,0 +1,1 @@
+export{Z7 as deriveWorkspaceIdNamespace}from"../../../chunks/app-BGNME_dp.js";

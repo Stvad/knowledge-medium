@@ -1,0 +1,1 @@
+export{dI as BlockProperties}from"../../chunks/app-BGNME_dp.js";

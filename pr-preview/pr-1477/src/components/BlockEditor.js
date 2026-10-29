@@ -1,0 +1,1 @@
+export{FP as BlockEditor}from"../../chunks/app-BGNME_dp.js";

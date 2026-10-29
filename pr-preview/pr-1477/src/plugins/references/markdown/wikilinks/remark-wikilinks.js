@@ -1,0 +1,1 @@
+export{sg as remarkWikilinks}from"../../../../../chunks/app-BGNME_dp.js";

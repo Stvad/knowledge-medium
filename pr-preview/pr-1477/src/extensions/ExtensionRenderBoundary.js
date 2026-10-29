@@ -1,0 +1,1 @@
+export{NN as ExtensionRenderBoundary}from"../../chunks/app-BGNME_dp.js";

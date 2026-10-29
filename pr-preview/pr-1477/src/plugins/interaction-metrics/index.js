@@ -1,0 +1,1 @@
+export{pi as interactionMetricsPlugin}from"../../../chunks/app-BGNME_dp.js";

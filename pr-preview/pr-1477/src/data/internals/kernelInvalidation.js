@@ -1,0 +1,1 @@
+export{m$ as emitKernelInvalidations,h$ as kernelInvalidationRule}from"../../../chunks/app-BGNME_dp.js";

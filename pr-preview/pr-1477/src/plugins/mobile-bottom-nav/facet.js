@@ -1,0 +1,1 @@
+export{Zx as mobileBottomNavItemsFacet}from"../../../chunks/app-BGNME_dp.js";

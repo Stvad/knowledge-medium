@@ -1,0 +1,1 @@
+export{MG as contributorAttributionProcessor}from"../../../chunks/app-BGNME_dp.js";

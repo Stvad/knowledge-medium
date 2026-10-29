@@ -1,0 +1,1 @@
+export{$O as BlockEmbed}from"../../../chunks/app-BGNME_dp.js";

@@ -1,0 +1,1 @@
+export{Yx as MobileBottomNav}from"../../../chunks/app-BGNME_dp.js";

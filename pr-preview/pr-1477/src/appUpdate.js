@@ -1,0 +1,1 @@
+export{AA as appUpdate,jA as useAppUpdateAvailable}from"../chunks/app-BGNME_dp.js";

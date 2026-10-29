@@ -1,0 +1,1 @@
+export{kB as usePropertySchemas}from"../../chunks/app-BGNME_dp.js";

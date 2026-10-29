@@ -1,0 +1,1 @@
+export{pg as backlinkCompletionSource,mg as createBacklinkAutocomplete,hg as isInsideBacklinkBrackets}from"../../chunks/app-BGNME_dp.js";

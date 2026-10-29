@@ -1,0 +1,1 @@
+export{A$ as KERNEL_PROCESSORS}from"../../../chunks/app-BGNME_dp.js";

@@ -1,0 +1,1 @@
+export{uV as SuspenseFallback}from"../../../chunks/app-BGNME_dp.js";

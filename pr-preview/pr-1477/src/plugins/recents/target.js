@@ -1,0 +1,1 @@
+export{Vw as openRecentsPage}from"../../../chunks/app-BGNME_dp.js";

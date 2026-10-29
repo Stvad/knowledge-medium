@@ -1,0 +1,1 @@
+export{sl as blockTaggingDataExtension}from"../../../chunks/app-BGNME_dp.js";

@@ -1,0 +1,1 @@
+export{UP as useShortcutSurfaceActivations}from"../../chunks/app-BGNME_dp.js";

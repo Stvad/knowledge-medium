@@ -1,0 +1,1 @@
+export{Yq as SYNCED_TABLES,Xq as syncedWriteTarget,Zq as writeTargets}from"../../chunks/app-BGNME_dp.js";

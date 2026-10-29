@@ -1,0 +1,1 @@
+export{rj as dynamicExtensionsExtension}from"../../chunks/app-BGNME_dp.js";

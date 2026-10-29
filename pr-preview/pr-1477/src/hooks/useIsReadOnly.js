@@ -1,0 +1,1 @@
+export{kg as useIsReadOnly}from"../../chunks/app-BGNME_dp.js";

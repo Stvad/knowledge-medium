@@ -1,0 +1,1 @@
+export{FQ as Block,IQ as requireLoadedBlock}from"../../chunks/app-BGNME_dp.js";

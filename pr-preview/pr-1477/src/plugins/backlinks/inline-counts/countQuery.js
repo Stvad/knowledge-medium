@@ -1,0 +1,1 @@
+export{fK as BACKLINKS_COUNT_FOR_BLOCK_QUERY,pK as backlinksCountForBlockQuery}from"../../../../chunks/app-BGNME_dp.js";

@@ -1,0 +1,1 @@
+export{ag as wikilinkMarkdownExtension}from"../../../../../chunks/app-BGNME_dp.js";

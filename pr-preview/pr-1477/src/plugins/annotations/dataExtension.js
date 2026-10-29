@@ -1,0 +1,1 @@
+export{lG as annotationsDataExtension}from"../../../chunks/app-BGNME_dp.js";

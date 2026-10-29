@@ -1,0 +1,1 @@
+export{fg as blockrefCompletionSource}from"../../chunks/app-BGNME_dp.js";

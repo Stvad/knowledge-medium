@@ -1,0 +1,1 @@
+export{zw as useMinuteClock}from"../../chunks/app-BGNME_dp.js";

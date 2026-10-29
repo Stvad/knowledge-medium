@@ -1,0 +1,1 @@
+export{VU as geoDataExtension}from"../../../chunks/app-BGNME_dp.js";
