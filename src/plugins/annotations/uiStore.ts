@@ -1,8 +1,9 @@
 /**
  * Per-tab view state for comments: which blocks have their threads expanded
  * inline, which show resolved threads too, and the open composers with their
- * drafts. Deliberately ephemeral module state, never block data: a draft is
- * written only on submit, so an abandoned comment leaves nothing behind.
+ * drafts. Module state like the toggle sets (`createKeyedToggleSet`), never
+ * block data: a draft is written only on submit, so an abandoned comment
+ * leaves nothing behind.
  *
  * Keyed by `viewKey`, one block as shown in one render scope, so expanding or
  * commenting on a block in one panel leaves the same block in another alone.
@@ -10,6 +11,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
+import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
 export const viewKey = (renderScopeId: string | undefined, blockId: string): string =>
@@ -25,26 +27,18 @@ export interface ComposerState {
   submitting: boolean
 }
 
-const expanded = new Set<string>()
-const showingResolved = new Set<string>()
+const expanded = createKeyedToggleSet('annotations-expanded')
+const showingResolved = createKeyedToggleSet('annotations-show-resolved')
 const composers = new Map<string, ComposerState>()
-const listeners = new CallbackSet('annotations-ui')
+const listeners = new CallbackSet('annotations-composers')
 
 const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
 
-const toggle = (set: Set<string>, key: string): void => {
-  if (set.has(key)) set.delete(key)
-  else set.add(key)
-  listeners.notify()
-}
+export const toggleThreadsExpanded = expanded.toggle
+export const toggleShowResolved = showingResolved.toggle
 
-export const toggleThreadsExpanded = (key: string): void => toggle(expanded, key)
-export const toggleShowResolved = (key: string): void => toggle(showingResolved, key)
-
-export const useThreadsExpanded = (key: string): boolean =>
-  useSyncExternalStore(subscribe, () => expanded.has(key))
-export const useShowResolved = (key: string): boolean =>
-  useSyncExternalStore(subscribe, () => showingResolved.has(key))
+export const useThreadsExpanded = expanded.useHas
+export const useShowResolved = showingResolved.useHas
 
 /** Open (or re-aim) a composer, keeping a draft already typed there: a submit
  *  refused because the text changed keeps the draft, and the user's next

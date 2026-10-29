@@ -406,7 +406,6 @@ const sweepAliasBindings = async (
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -545,7 +544,6 @@ describe('references pipeline sequences', () => {
   // doesn't depend on WHICH non-BlockDefault scope a ref/refList field
   // declares.
   it('merge retargets non-BlockDefault-scoped ref/refList properties, not just BlockDefault ones', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const env = await buildEnv(ChangeScope.UiState, ChangeScope.Automation)
@@ -593,7 +591,6 @@ describe('references pipeline sequences', () => {
   // rewriting, delete inlining, and orphan cleanup all observably fire
   // under the harness (fake timers + flush) this suite uses.
   it('op set drives every pipeline stage', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const env = await buildEnv()
@@ -676,7 +673,6 @@ describe('references pipeline sequences', () => {
   // fuzz property) so the "at least one inspected binding" assertion is
   // pinned rather than probabilistic.
   it('alias-binding sweep inspects a live wikilink binding against its claimant', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const env = await buildEnv()
@@ -713,7 +709,6 @@ describe('references pipeline sequences', () => {
   // failing, not as a sweep finding (the sweep only catches it once a
   // second writer has actually raced in and won).
   it('date target claims its long-form literal spelling, blocking a later collision', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const {repo, flush} = await buildEnv()
@@ -771,7 +766,6 @@ describe('references pipeline sequences', () => {
   // retained residual, correct to leave alone — so `collectRestorePlans`
   // invalidates them at the restore instead.
   it('a restore under a different alias rebinds referrers to the real claimant', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const {repo, flush} = await buildEnv()
@@ -829,7 +823,6 @@ describe('references pipeline sequences', () => {
   // (measured) — only the write itself witnesses the churn, and
   // `skipMetadata` still ratchets `updated_at`, so it sees every write.
   it('a restore under the same alias leaves referrer bindings alone', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const {repo, flush} = await buildEnv()
@@ -890,7 +883,6 @@ describe('references pipeline sequences', () => {
   // can't steal it, (c) the sweep stays green. Before the fix (a) and (b)
   // both fail (seat stays alias-less; the steal succeeds).
   it('daily-note seat reclaims its ISO alias after a live release, blocking a later collision', async () => {
-    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const {repo, flush} = await buildEnv()

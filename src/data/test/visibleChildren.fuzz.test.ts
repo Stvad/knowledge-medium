@@ -491,7 +491,6 @@ const sweep = async (u: Universe): Promise<void> => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -577,7 +576,6 @@ describe('visible-children view', () => {
   // exists for), a pruned nested subtree, a definition from a peer, and a
   // tagged definition the registry cannot parse (the veto).
   it('the op vocabulary reaches every recognition leg', async () => {
-    await guard.barrier()
     const u = await openUniverse()
     try {
       const root = {kind: 'node', idx: 0} as const

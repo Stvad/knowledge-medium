@@ -212,7 +212,6 @@ beforeAll(async () => {
   dbB = await createTestDb()
 })
 afterAll(async () => {
-  await guard.barrier()
   await dbA.cleanup()
   await dbB.cleanup()
 })
@@ -453,9 +452,7 @@ describe('two-repo sync convergence — a peer write landing on a stamp the serv
       expect(cached!.userUpdatedAt, "A's cached ROOT shows the server's display stamp")
         .toBe(rootOf(server.rows()).user_updated_at)
     })
-    // The barrier inside `guard.run` awaits any case the property above
-    // abandoned, which is the wait `fuzzTestTimeout` reserves its budget for.
-  }, fuzzTestTimeout())
+  })
 })
 
 // Non-fuzz pin: in the convergence universe above, per-device id generators

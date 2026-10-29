@@ -812,7 +812,6 @@ class QueryModel {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 

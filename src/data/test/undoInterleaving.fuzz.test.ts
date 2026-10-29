@@ -176,7 +176,6 @@ beforeAll(async () => {
     })
 })
 afterAll(async () => {
-  await guard.barrier()
   vi.restoreAllMocks()
   await sharedDb.cleanup()
 })

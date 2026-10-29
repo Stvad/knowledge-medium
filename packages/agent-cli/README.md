@@ -35,6 +35,20 @@ kmagent ping
 
 After step 2, the token is saved at `~/.config/knowledge-medium/agent-token.json` and reused for every subsequent invocation.
 
+## When the app cannot reach the bridge
+
+The app tab's console prints an unavailable reason after six failed attempts,
+when the loop starts retrying quietly every 60 seconds. The reason names the
+request (`registration`, `poll`, or `result`) and error kind; unchanged reasons
+are logged once until reconnection.
+
+From that tab's DevTools console, run `fetch('<bridge url>/health')` with the
+bridge URL the CLI uses (`AGENT_RUNTIME_URL`, default `http://127.0.0.1:8787`).
+If `kmagent status` can reach the same bridge but this fetch rejects from the
+hosted HTTPS origin,
+check Chrome's site permissions for
+[local network access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access).
+
 ## What you can do
 
 The CLI exposes both *local* commands (pairing, profile management) and *bridge* commands (forwarded to the running app):

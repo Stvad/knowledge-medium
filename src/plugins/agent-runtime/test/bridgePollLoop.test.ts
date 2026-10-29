@@ -104,12 +104,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup?.()
   cleanup = null
+  vi.useRealTimers()
   window.localStorage.clear()
   window.sessionStorage.clear()
   vi.restoreAllMocks()
 })
 
 const resultFor = (commandId: string) => resultPosts.find(post => post.commandId === commandId)
+
+describe('bridge pairing diagnostics', () => {
+  it('reports the app tab as not paired at the quiet threshold without fetching', async () => {
+    vi.useFakeTimers()
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    window.localStorage.removeItem('agent-runtime:bridge-secret')
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(info).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(16_000)
+    await vi.waitFor(() => expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('(registration: not paired); retrying quietly every 60 seconds.'),
+    ))
+    expect(window.fetch).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+})
 
 describe('bridge poll loop — command concurrency', () => {
   it('a hung command does not stall later commands', async () => {

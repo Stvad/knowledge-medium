@@ -12,6 +12,7 @@
  * external callers reach a surface through its action id
  * (`runActionById`), never by importing the store.
  */
+import { useSyncExternalStore } from 'react'
 import { CallbackSet } from '@/utils/callbackSet'
 
 export interface ToggleStore {
@@ -41,5 +42,35 @@ export const createToggleStore = (label?: string): ToggleStore => {
     open: () => set(true),
     close: () => set(false),
     toggle: () => set(!open),
+  }
+}
+
+/**
+ * The keyed sibling of `ToggleStore`: a set of keys, each on or off, such as
+ * which blocks have an inline section expanded. Deliberately ephemeral, per-tab
+ * module state and never block data: expanding is a transient view action, and
+ * writing it to blocks would put every peek into history and sync traffic.
+ */
+export interface KeyedToggleSet {
+  /** Reactive: is `key` on? */
+  useHas(key: string): boolean
+  toggle(key: string): void
+  add(key: string): void
+}
+
+export const createKeyedToggleSet = (label?: string): KeyedToggleSet => {
+  const keys = new Set<string>()
+  const subscribers = new CallbackSet(label)
+  const subscribe = (callback: () => void): (() => void) => subscribers.add(callback)
+  return {
+    useHas: key => useSyncExternalStore(subscribe, () => keys.has(key)),
+    toggle: key => {
+      if (!keys.delete(key)) keys.add(key)
+      subscribers.notify()
+    },
+    add: key => {
+      keys.add(key)
+      subscribers.notify()
+    },
   }
 }
