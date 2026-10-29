@@ -1,1 +1,1 @@
-export{wK as releasePowerSyncConnection}from"../../chunks/app-UYYBe2Aw.js";
+export{wK as releasePowerSyncConnection}from"../../chunks/app-DRyAuV32.js";

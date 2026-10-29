@@ -1,1 +1,1 @@
-export{xF as BlockProperties}from"../../chunks/app-UYYBe2Aw.js";
+export{xF as BlockProperties}from"../../chunks/app-DRyAuV32.js";

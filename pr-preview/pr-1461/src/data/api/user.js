@@ -1,1 +1,1 @@
-export{Net as SYSTEM_AUTHOR_PREFIX,Pet as isSystemAuthor,Fet as systemAuthor}from"../../../chunks/app-UYYBe2Aw.js";
+export{Net as SYSTEM_AUTHOR_PREFIX,Pet as isSystemAuthor,Fet as systemAuthor}from"../../../chunks/app-DRyAuV32.js";

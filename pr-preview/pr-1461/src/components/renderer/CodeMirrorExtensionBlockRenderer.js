@@ -1,1 +1,1 @@
-export{Fj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-UYYBe2Aw.js";
+export{Fj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-DRyAuV32.js";

@@ -1,1 +1,1 @@
-export{TV as preferredSpanReplacement}from"../../../chunks/app-UYYBe2Aw.js";
+export{TV as preferredSpanReplacement}from"../../../chunks/app-DRyAuV32.js";

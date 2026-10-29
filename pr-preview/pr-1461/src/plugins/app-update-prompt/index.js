@@ -1,1 +1,1 @@
-export{Tk as appUpdatePromptExtension}from"../../../chunks/app-UYYBe2Aw.js";
+export{Tk as appUpdatePromptExtension}from"../../../chunks/app-DRyAuV32.js";

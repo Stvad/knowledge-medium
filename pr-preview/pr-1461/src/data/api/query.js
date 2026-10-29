@@ -1,1 +1,1 @@
-export{zet as defineQuery}from"../../../chunks/app-UYYBe2Aw.js";
+export{zet as defineQuery}from"../../../chunks/app-DRyAuV32.js";
