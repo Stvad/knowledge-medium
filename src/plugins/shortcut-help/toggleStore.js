@@ -1,1 +1,1 @@
-export{pD as shortcutHelpToggle}from"../../../chunks/app-BpNtW6Zs.js";
+export{pD as shortcutHelpToggle}from"../../../chunks/app-C4PXEW-q.js";

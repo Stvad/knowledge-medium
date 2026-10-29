@@ -1,1 +1,1 @@
-export{Jm as updateIndicatorPlugin}from"../../../chunks/app-BpNtW6Zs.js";
+export{Jm as updateIndicatorPlugin}from"../../../chunks/app-C4PXEW-q.js";
