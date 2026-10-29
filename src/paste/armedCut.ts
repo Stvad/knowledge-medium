@@ -1,4 +1,4 @@
-/**
+/*
  * The armed cut: the one cut whose blocks a paste should MOVE rather than
  * copy. Cut no longer deletes, so this record is the whole difference
  * between "cut" and "copy".
@@ -15,6 +15,8 @@
  * for. Inherent limit: plain text from elsewhere that is IDENTICAL to the
  * cut's text matches it.
  */
+
+import { CallbackSet } from '@/utils/callbackSet.js'
 
 /** The record. `rootIds` are the cut roots in document order (descendants
  *  ride along inside them). */
@@ -39,7 +41,7 @@ const STORAGE_KEY = 'knowledge-medium:armed-cut'
 
 let memoryRaw: string | null = null
 let snapshot: {raw: string | null; cut: ArmedCut | null} = {raw: null, cut: null}
-const listeners = new Set<() => void>()
+const listeners = new CallbackSet('armed-cut')
 
 const storage = (): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null => {
   try {
@@ -72,7 +74,7 @@ const writeRaw = (raw: string | null): void => {
       // Blocked storage: the cut stays armed in this tab only.
     }
   }
-  for (const listener of listeners) listener()
+  listeners.notify()
 }
 
 const isStringArray = (value: unknown): value is string[] =>
@@ -110,13 +112,13 @@ export const getArmedCut = (): ArmedCut | null => {
 /** Fires on every change in this tab, and on another tab's change via the
  *  `storage` event. */
 export const subscribeArmedCut = (listener: () => void): (() => void) => {
-  listeners.add(listener)
+  const off = listeners.add(listener)
   const onStorage = (event: StorageEvent) => {
     if (event.key === STORAGE_KEY || event.key === null) listener()
   }
   if (typeof window !== 'undefined') window.addEventListener('storage', onStorage)
   return () => {
-    listeners.delete(listener)
+    off()
     if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage)
   }
 }
