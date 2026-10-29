@@ -1,1 +1,1 @@
-export{FQ as applySyncInvalidation}from"../../../../chunks/app-C9oOwIeB.js";
+export{IQ as applySyncInvalidation}from"../../../../chunks/app-Ctq6YglB.js";

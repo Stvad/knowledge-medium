@@ -1,1 +1,1 @@
-export{_g as blockrefMarkdownExtension}from"../../../../../chunks/app-C9oOwIeB.js";
+export{vg as blockrefMarkdownExtension}from"../../../../../chunks/app-Ctq6YglB.js";

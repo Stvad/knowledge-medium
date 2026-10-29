@@ -1,1 +1,1 @@
-export{WP as BlockEditor}from"../../chunks/app-C9oOwIeB.js";
+export{GP as BlockEditor}from"../../chunks/app-Ctq6YglB.js";

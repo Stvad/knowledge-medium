@@ -1,1 +1,1 @@
-export{Zd as extensionApiCatalog,Qd as extensionApiRuntimeExports}from"../../chunks/app-C9oOwIeB.js";
+export{Zd as extensionApiCatalog,Qd as extensionApiRuntimeExports}from"../../chunks/app-Ctq6YglB.js";

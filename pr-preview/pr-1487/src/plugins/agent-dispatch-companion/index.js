@@ -1,1 +1,1 @@
-export{dd as agentDispatchCompanionPlugin}from"../../../chunks/app-C9oOwIeB.js";
+export{dd as agentDispatchCompanionPlugin}from"../../../chunks/app-Ctq6YglB.js";

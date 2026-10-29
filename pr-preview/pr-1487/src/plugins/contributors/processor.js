@@ -1,1 +1,1 @@
-export{VG as contributorAttributionProcessor}from"../../../chunks/app-C9oOwIeB.js";
+export{HG as contributorAttributionProcessor}from"../../../chunks/app-Ctq6YglB.js";

@@ -1,1 +1,1 @@
-export{YC as forgetRememberedWorkspace,XC as recallRememberedWorkspace,ZC as rememberWorkspace}from"../../chunks/app-C9oOwIeB.js";
+export{XC as forgetRememberedWorkspace,ZC as recallRememberedWorkspace,QC as rememberWorkspace}from"../../chunks/app-Ctq6YglB.js";
