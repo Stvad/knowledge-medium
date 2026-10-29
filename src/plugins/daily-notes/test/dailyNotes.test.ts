@@ -494,13 +494,14 @@ describe('undo grouping (issue #306)', () => {
     const iso = '2026-04-28'
     const note = await getOrCreateDailyNote(repo, WS, iso)
 
-    // Fresh workspace: journal bootstrap + note creation are separate txs, and
-    // #306 is that one cmd-Z undoes opening the day — so, one entry.
+    // #306 is that one cmd-Z undoes opening the day — so, one entry. The
+    // Journal is a container of every device's notes, so undoing the day
+    // leaves it.
     expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
 
     expect(await repo.undo()).toBe(true)
     expect(await isBlockDeleted(repo, note.id)).toBe(true)
-    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(true)
+    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(false)
   })
 
   it('warm-path getOrCreateDailyNote (note exists, no repair) records nothing', async () => {
