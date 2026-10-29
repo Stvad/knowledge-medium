@@ -123,11 +123,8 @@ export const copySelectedBlocksToClipboard = async (
   await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo)
 }
 
-/** Copy an explicit set of blocks. `cut` needs this: it deletes the blocks its
- *  DEPS name, and re-deriving the copy set from the ui-state selection means
- *  the two can disagree — an action dispatched with supplied deps (a group
- *  header button, the agent bridge) has no ui-state selection at all, so the
- *  copy silently no-ops while the delete still runs. Cut what you delete. */
+/** Copy an explicit set of blocks, for callers whose deps name them rather
+ *  than the ui-state selection (a group-header button, the agent bridge). */
 export const copyBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,

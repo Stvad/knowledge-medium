@@ -921,7 +921,7 @@ describe('default CodeMirror shortcuts', () => {
   })
 
   it('cut deletes nothing: it writes the clipboard and arms the blocks to move, guarded ones too', async () => {
-    // `cut_selected_blocks` (`$mod+x`, `d`) no longer deletes, so the deletion
+    // `cut_selected_blocks` (`$mod+x`, `d`) deletes nothing, so the deletion
     // guards and the bulk-delete confirmation don't apply to it.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})

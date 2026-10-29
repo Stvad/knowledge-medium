@@ -271,9 +271,9 @@ describe('bulk-delete confirmation', () => {
     await deleting
   })
 
-  // `beforeWrite` exists so a gesture's interstitial work (a cut's clipboard
-  // write, a focus target read out of the doomed subtree) sits in the one
-  // window where it is correct. Both edges are load-bearing.
+  // `beforeWrite` exists so a gesture's interstitial work (a focus target read
+  // out of the doomed subtree) sits in the one window where it is correct.
+  // Both edges are load-bearing.
   describe('beforeWrite', () => {
     it('runs after the question and before the write', async () => {
       const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
@@ -307,8 +307,7 @@ describe('bulk-delete confirmation', () => {
     })
 
     it('re-resolves the guards after it, not just before it', async () => {
-      // The cut path writes the clipboard in here: unbounded caller work, and
-      // the pass this consolidation replaced used to sit after it.
+      // Caller work awaits, so a guard can change its answer meanwhile.
       const ids = await seedChildren('root', 3, 'few')
 
       const deleted = await deleteBlocksThroughUi(ids.map(id => repo.block(id)), {

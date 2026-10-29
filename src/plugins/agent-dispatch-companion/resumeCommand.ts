@@ -92,9 +92,6 @@ export const copyAgentResumeCommand = async (block: Block): Promise<void> => {
   }
 
   try {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) {
-      throw new Error('Clipboard API is unavailable')
-    }
     await writeTextToClipboard(command)
     showSuccess('Agent resume command copied.')
   } catch {

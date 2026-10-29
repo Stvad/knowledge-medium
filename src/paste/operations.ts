@@ -172,19 +172,23 @@ const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): b
  *  `target`'s own child list (its first-child slot) rather than beside it.
  *  Shared by the text paste and by a paste that completes a cut, so the two
  *  can't put the same paste in different places. */
-const rootsLandAsChildren = (
+const rootsLandAsChildren = async (
+  tx: Tx,
   target: BlockData,
-  targetHasVisibleChildren: boolean,
   {position, placement, scopeRootId}: {
     position: PastePosition
     placement: PastePlacement
     scopeRootId: string | undefined
   },
-): boolean =>
+): Promise<{asChildren: boolean; visibleChildren: BlockData[]}> => {
+  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
+  const hasVisibleChildren = visibleChildren.length > 0 && !isCollapsed(target.properties)
   // With no sibling slot, roots land in the target's child list whatever
   // `placement` says.
-  hasNoSiblingSlot(target, scopeRootId) ||
-  (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  const asChildren = hasNoSiblingSlot(target, scopeRootId) ||
+    (placement === 'visible' && position === 'after' && hasVisibleChildren)
+  return {asChildren, visibleChildren}
+}
 
 /** Pasted root a blank target absorbs (it BECOMES that root). The run is
  *  contiguous with the target, so the target takes whichever end it sits at:
@@ -228,13 +232,11 @@ const resolveRootDestination = async (
     parsed.some(block => block.parentId === absorbedRootId)
   const effectivePlacement = absorbedRootHasChildren ? 'sibling' : placement
 
-  const targetChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
-  const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
   // With no sibling slot, roots #2..N land in the target's child list even
   // when absorption forced `sibling` — a nested clipboard still merges there.
   // Accepted: the alternative is to stop absorbing into a zoomed title, which
   // is a bigger behaviour change than this guard.
-  const rootsAsChildren = rootsLandAsChildren(target, targetHasVisibleChildren, {
+  const {asChildren: rootsAsChildren, visibleChildren: targetChildren} = await rootsLandAsChildren(tx, target, {
     position,
     placement: effectivePlacement,
     scopeRootId,
@@ -562,33 +564,26 @@ const cutDestination = async (
   tx: Tx,
   target: BlockData,
   options: {position: PastePosition; placement: PastePlacement; scopeRootId: string | undefined},
-): Promise<{move: MoveTarget; revealTarget: boolean; replacesTarget: boolean}> => {
+): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
   const children = await tx.childrenOf(target.id, target.workspaceId)
   const replaceable = isBlankContent(target.content) && children.length === 0 &&
     Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId)
   if (replaceable) {
-    return {
-      move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}},
-      revealTarget: false,
-      replacesTarget: true,
-    }
+    return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
   }
 
-  const visible = await visibleChildrenOf(tx, target.id, target.workspaceId)
-  const hasVisibleChildren = visible.length > 0 && !isCollapsed(target.properties)
-  if (rootsLandAsChildren(target, hasVisibleChildren, options)) {
+  const {asChildren, visibleChildren: visible} = await rootsLandAsChildren(tx, target, options)
+  if (asChildren) {
     return {
       move: {
         parentId: target.id,
         position: visible[0] ? {kind: 'before', siblingId: visible[0].id} : {kind: 'last'},
       },
-      revealTarget: true,
       replacesTarget: false,
     }
   }
   return {
     move: {parentId: target.parentId, position: {kind: options.position, siblingId: target.id}},
-    revealTarget: false,
     replacesTarget: false,
   }
 }
@@ -597,7 +592,7 @@ const cutDestination = async (
  * Complete the armed cut (`./armedCut.ts`) as a MOVE when `text`, the
  * clipboard text this paste would insert, is what the cut put there.
  *
- * Cut no longer deletes, so EVERY paste surface calls this before its text
+ * Cut deletes nothing, so EVERY paste surface calls this before its text
  * paste; one that skipped it would paste copies beside the originals. The
  * callers: the block-shell paste, the editor's paste, and
  * {@link pasteFromClipboard} (vim and multi-select `p`).
@@ -660,7 +655,7 @@ export async function pasteArmedCut(
 
       const destination = await cutDestination(tx, target, {position, placement, scopeRootId})
       await moveBlocksInTx(tx, roots, destination.move)
-      if (destination.revealTarget) await revealChildren(tx, target.id)
+      if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
       if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})
       disarmCut(cut.cutId)
       return {kind: 'moved', rootIds: roots, missing: cut.rootIds.length - live.length}

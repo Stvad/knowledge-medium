@@ -26,7 +26,7 @@ export {
   moveBlockAction,
   moveBlocksAction,
 } from './moveAction.ts'
-export { moveBlocksTo, type MoveBlocksResult, type MoveTarget } from './moveBlocks.ts'
+export { moveBlocksTo, type MoveBlocksResult } from './moveBlocks.ts'
 export { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 export { unselectMovedBlocks } from './selectionAfterMove.ts'
 export {

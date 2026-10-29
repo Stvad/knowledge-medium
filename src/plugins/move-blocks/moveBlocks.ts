@@ -11,8 +11,6 @@ import { moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators
 import { validateSelectionHierarchy } from '@/utils/selection.js'
 import { pluralize } from '@/utils/pluralize.js'
 
-export type { MoveTarget }
-
 export interface MoveBlocksResult {
   /** The roots that moved (descendants pruned), in the order they were
    *  placed. Never empty for a non-empty input. */

@@ -111,8 +111,6 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
-      // Throws synchronously in an insecure context / older webview where
-      // `navigator.clipboard` is undefined — caught below.
       await writeTextToClipboard(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)

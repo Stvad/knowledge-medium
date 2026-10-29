@@ -1,6 +1,6 @@
 /*
  * The armed cut: the one cut whose blocks a paste should MOVE rather than
- * copy. Cut no longer deletes, so this record is the whole difference
+ * copy. Cut deletes nothing, so this record is the whole difference
  * between "cut" and "copy".
  *
  * There is exactly one record, shared by every tab of this origin

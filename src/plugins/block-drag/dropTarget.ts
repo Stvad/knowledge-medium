@@ -7,7 +7,7 @@
  */
 import { BLOCK_BULLET_ATTRIBUTE, BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { isPanelRenderScopeId } from '@/utils/renderScope.js'
-import type { MoveTarget } from '@/plugins/move-blocks'
+import type { MoveTarget } from '@/data/mutators.js'
 import { findSlot, projectDrop, type DropRow, type SlotRows } from './projection.ts'
 
 /** A mounted row. Deferred rows' placeholders carry the shell attribute

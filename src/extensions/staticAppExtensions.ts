@@ -90,7 +90,9 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
-  // Dims the blocks of a pending cut; cut itself is core (`@/paste/armedCut.js`).
+  // The pending cut's page surface: dims its blocks, and a native copy or cut
+  // disarms it (`@/paste/armedCut.js`). Not cosmetic: without it a copied
+  // editor selection identical to the cut's text would move the cut.
   armedCutAppMountExtension,
   appUpdatePromptExtension,
   // Surfaces extension trust prompts (needs-approval / update-available)
