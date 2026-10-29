@@ -1,1 +1,1 @@
-export{Rg as insertImageAction,zg as insertImageNormalModeAction,Bg as insertImageToolbarItem}from"../../../chunks/app-obwVBp6H.js";
+export{Rg as insertImageAction,zg as insertImageNormalModeAction,Bg as insertImageToolbarItem}from"../../../chunks/app-DXxNVL6z.js";

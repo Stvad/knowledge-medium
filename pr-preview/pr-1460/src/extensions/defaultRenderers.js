@@ -1,1 +1,1 @@
-export{WA as defaultRegistry,GA as defaultRendererContributions,KA as defaultRenderersExtension}from"../../chunks/app-obwVBp6H.js";
+export{WA as defaultRegistry,GA as defaultRendererContributions,KA as defaultRenderersExtension}from"../../chunks/app-DXxNVL6z.js";

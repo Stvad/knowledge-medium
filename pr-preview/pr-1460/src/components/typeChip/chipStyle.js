@@ -1,1 +1,1 @@
-export{lO as chipStyle}from"../../../chunks/app-obwVBp6H.js";
+export{lO as chipStyle}from"../../../chunks/app-DXxNVL6z.js";
