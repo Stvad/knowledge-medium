@@ -3,7 +3,8 @@
  *
  * - a comment pill in the gutter, after the reference pill, on every
  *   non-nested surface, the focal block included (nothing else shows a focal
- *   block's comments);
+ *   block's comments). It also hands the block's threads to the read-mode
+ *   highlights (`readHighlights.ts`);
  * - its inline expansion under the block, holding the composer and a card per
  *   thread;
  * - each card renders the thread root through `BlockComponent` in a nested
@@ -12,7 +13,7 @@
  *   Delete (`CommentActions`).
  */
 
-import {useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
@@ -42,6 +43,7 @@ import {showError} from '@/utils/toast.js'
 import {resolveAnchor} from './anchor.ts'
 import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {THREAD_HIGHLIGHTS_KEY, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -103,9 +105,14 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const expanded = useThreadsExpanded(key)
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
+  const highlights = useMemo((): ThreadHighlightsFeed => ({blockId: block.id, threads}), [block.id, threads])
   return (
     <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1"><Inner block={block}/></div>
+      <div className="min-w-0 flex-1">
+        <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
+          <Inner block={block}/>
+        </NestedBlockContextProvider>
+      </div>
       {(count !== null || expanded) && (
         <button
           type="button"

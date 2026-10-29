@@ -3,7 +3,8 @@
  *
  * Resolved against the editor's live doc on every change, not the stored row,
  * which lags the editor by its debounce; the offsets are exact because the
- * quote is raw content. Read mode draws no highlights yet.
+ * quote is raw content. Read mode marks the same ranges in the rendered
+ * markdown (`readHighlights.ts`).
  */
 
 import {StateEffect, StateField, type Extension} from '@codemirror/state'
