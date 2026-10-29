@@ -1,1 +1,1 @@
-export{B2 as collapseWhitespace,V2 as firstLine,H2 as hasLoneSurrogate,U2 as truncate,W2 as truncateMiddle}from"../../chunks/app-CwYg2Q4y.js";
+export{V2 as collapseWhitespace,H2 as firstLine,U2 as hasLoneSurrogate,W2 as truncate,G2 as truncateMiddle}from"../../chunks/app-YMyworpJ.js";

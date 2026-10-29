@@ -1,1 +1,1 @@
-export{JA as cancelArmedHolds,YA as registerArmedHold}from"../../chunks/app-CwYg2Q4y.js";
+export{YA as cancelArmedHolds,XA as registerArmedHold}from"../../chunks/app-YMyworpJ.js";

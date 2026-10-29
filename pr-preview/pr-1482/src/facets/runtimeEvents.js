@@ -1,1 +1,1 @@
-export{KB as appRuntimeUpdateEvent,qB as refreshAppRuntime}from"../../chunks/app-CwYg2Q4y.js";
+export{qB as appRuntimeUpdateEvent,JB as refreshAppRuntime}from"../../chunks/app-YMyworpJ.js";

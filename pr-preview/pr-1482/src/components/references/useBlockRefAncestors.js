@@ -1,1 +1,1 @@
-export{uk as useBlockRefAncestors}from"../../../chunks/app-CwYg2Q4y.js";
+export{dk as useBlockRefAncestors}from"../../../chunks/app-YMyworpJ.js";
