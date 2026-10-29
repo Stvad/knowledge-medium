@@ -317,6 +317,25 @@ export const editBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Start a comment thread on a block: on `quote` (text of the block, the
+ *  `occurrence`th appearance when it appears more than once), or on the
+ *  whole block. No `content` makes a highlight, a thread with no comments. */
+export const addCommentCommandSchema = z.looseObject({
+  type: z.literal('add-comment'),
+  target: z.string().describe('The block to comment on: a full id or a printed ^shortid'),
+  quote: z.string().optional().describe(
+    'Text of the block to anchor to, as it reads now; omit to comment on the whole block. '
+    + 'A quote that cuts a [[link]] or ((ref)) is widened to the whole of it',
+  ),
+  occurrence: z.number().int().positive().optional().describe(
+    'Which appearance of the quote, from 1; required when it appears more than once',
+  ),
+  content: z.string().optional().describe('The first comment; omit for a highlight with no comments'),
+  ...exactIdsField,
+  ...contributorField,
+  ...commandIdField,
+})
+
 /** Get-or-create a page by `name` (as a `[[name]]` wikilink would), or a daily
  *  note by `date` expression. Exactly one of the two. */
 export const createPageCommandSchema = z.looseObject({
@@ -524,7 +543,7 @@ export const groupedBacklinksCommandSchema = z.looseObject({
  *  tags each of its sections with one, and a test holds the two lists equal. */
 export const DATA_MODEL_TOPICS = [
   'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'writing',
-  'sql',
+  'comments', 'sql',
 ] as const
 export type DataModelTopic = typeof DATA_MODEL_TOPICS[number]
 
@@ -709,6 +728,24 @@ export const viewSearchCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Comment threads, each with its anchor (block, exact, moved or stale), the
+ *  quoted text, an excerpt and path of its target, and its comments nested as
+ *  replied, each with its author's name and kind. */
+export const commentsCommandSchema = z.looseObject({
+  type: z.literal('comments'),
+  scope: z.string().optional().describe(
+    'Threads on any block under this block or page, and threads on their comments (same forms as a block ref)',
+  ),
+  block: z.string().optional().describe('Threads on this one block (same forms as a block ref)'),
+  thread: z.string().optional().describe("One thread, by its root's id, whatever its status"),
+  includeClosed: z.boolean().optional().describe('Include resolved threads (default: open only)'),
+  limit: viewLimitField('threads', 20),
+  offset: viewOffsetField('threads'),
+  workspaceId: viewFields.workspaceId,
+  ...contributorField,
+  ...commandIdField,
+})
+
 // ----- read-only SQL guard --------------------------------------------
 
 /** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite
@@ -868,6 +905,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   viewBacklinksCommandSchema,
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
+  commentsCommandSchema,
+  addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
 
@@ -927,6 +966,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   viewBacklinksCommandSchema,
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
+  commentsCommandSchema,
+  addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
@@ -1209,6 +1250,24 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent search <query> [--limit <n>] [--offset <n>] [--types <type>…] [--under <ref>] [--include-extensions] [--json]',
     description: 'Full-text search over block content. Each hit: a snippet around the match, its breadcrumb and types; identical blocks are folded into one hit. Extension source is excluded unless asked for.',
     readOnly: true,
+  },
+  'comments': {
+    usage: 'kmagent comments (--scope <ref> | --block <ref> | --thread <id>) [--include-closed] [--limit <n>] [--offset <n>]',
+    description: 'Comment threads of a scope, a block, or one thread. As JSON: with --scope, those on any block under '
+      + 'it and, recursively, on their comments. Each has its status; its anchor (block for a whole-block thread, else exact, moved or '
+      + 'stale against the target as it reads now); the quote; the target\'s id, path and an excerpt; and its comments '
+      + 'nested as replied, each with its author\'s name and kind (human, agent or automation). Open threads only unless '
+      + '--include-closed. Reply with append-markdown under the comment being answered; resolve or reopen with '
+      + 'update-block on the root\'s annotation:status (open | resolved). See `kmagent data-model comments`.',
+    readOnly: true,
+  },
+  'add-comment': {
+    usage: "kmagent add-comment '<json>'   ({target, quote?, occurrence?, content?})",
+    description: 'Start a comment thread on a block. It anchors to quoted text of the block, or to the whole block, '
+      + 'and returns the thread\'s root id (write ((id)) to quote that range elsewhere). The quote is found in the block\'s current text, and '
+      + 'refused when absent, or when it appears more than once without occurrence. A quote that cuts a [[link]] or '
+      + '((ref)) is widened to the whole of it. No content makes a highlight. Refuses property field and value rows.',
+    readOnly: false,
   },
   'watch-events': {
     usage: 'kmagent raw \'{"type":"watch-events","consumer":"...","watchers":[...]}\'',
