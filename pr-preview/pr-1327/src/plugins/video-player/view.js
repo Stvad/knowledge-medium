@@ -1,1 +1,0 @@
-import{Bg as e,Vg as t,zg as n}from"../../../chunks/app-wtxbeeMc.js";export{n as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,t as videoNotesPaneRatioProp};

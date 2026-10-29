@@ -1,1 +1,0 @@
-import{_L as e,bL as t,fL as n,gL as r,hL as i,mL as a,pL as o,vL as s,xL as c,yL as l}from"../../chunks/app-wtxbeeMc.js";export{n as BATCH_SENTINEL_SQL,o as closePowerSyncDbIfOpen,a as ensurePowerSyncReady,i as getActiveSyncResolver,r as getActiveUserId,e as getPowerSyncDb,s as initializeClientSchema,l as isRemoteSyncActive,t as syncObserverDepsFor,c as syncResolverForUser};

@@ -1,1 +1,0 @@
-import{cE as e,lE as t}from"../../chunks/app-wtxbeeMc.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

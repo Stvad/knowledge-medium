@@ -1,1 +1,0 @@
-import{FD as e,ID as t,LD as n,RD as r}from"../../chunks/app-wtxbeeMc.js";export{e as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,r as userExtensionToggle};

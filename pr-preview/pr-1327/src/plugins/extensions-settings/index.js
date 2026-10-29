@@ -1,1 +1,0 @@
-import{DE as e,OE as t,St as n}from"../../../chunks/app-wtxbeeMc.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

@@ -1,1 +1,0 @@
-import{Aw as e,jw as t,kw as n}from"../../../chunks/app-wtxbeeMc.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_TRIGGER_PX,t as swipeRecognizer};

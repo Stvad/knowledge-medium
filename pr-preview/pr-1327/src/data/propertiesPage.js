@@ -1,1 +1,0 @@
-import{c4 as e,s4 as t}from"../../chunks/app-wtxbeeMc.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

@@ -1,1 +1,0 @@
-import{Hl as e,Ul as t,Vl as n,Wl as r}from"../../../chunks/app-wtxbeeMc.js";export{n as PROVENANCE_BLOCKS_PER_KEY,e as PROVENANCE_KEY_LIMIT,t as auditPropertyRegistration,r as describeUnregisteredProperty};

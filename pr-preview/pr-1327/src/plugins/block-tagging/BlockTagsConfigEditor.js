@@ -1,1 +1,0 @@
-import{Ds as e}from"../../../chunks/app-wtxbeeMc.js";export{e as BlockTagsConfigEditor};

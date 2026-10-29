@@ -1,1 +1,0 @@
-import{LS as e}from"../../../chunks/app-wtxbeeMc.js";export{e as dailyDateWikilinkDecorator};

@@ -1,1 +1,0 @@
-import{Gf as e,Hf as t,Uf as n,Vf as r,Wf as i}from"../../../chunks/app-wtxbeeMc.js";export{r as DEFAULT_BACKLINKS_VIEW_ID,t as FLAT_BACKLINKS_VIEW_ID,n as GROUPED_BACKLINKS_VIEW_ID,i as backlinksViewProp,e as defaultBacklinksViewIdForBlock};

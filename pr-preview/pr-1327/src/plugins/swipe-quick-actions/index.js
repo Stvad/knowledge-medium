@@ -1,1 +1,0 @@
-import{Cw as e,Ow as t,Yw as n,Zw as r,kw as i}from"../../../chunks/app-wtxbeeMc.js";export{i as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_RIGHT_BLOCK_ACTION_ID,t as SwipeActionMenu,r as quickActionItemsFacet,e as swipeQuickActionsPlugin};

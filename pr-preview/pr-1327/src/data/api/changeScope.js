@@ -1,1 +1,0 @@
-import{G8 as e,J8 as t,K8 as n,Q8 as r,W8 as i,X8 as a,Y8 as o,Z8 as s,q8 as c}from"../../../chunks/app-wtxbeeMc.js";export{i as CHANGE_SCOPE_POLICIES,e as ChangeScope,n as isChangeScope,c as policyForScope,t as scopeAllowedInReadOnly,o as scopeIsUndoable,a as scopePoliciesEquivalent,s as scopeUploadsToServer,r as sourceForScope};

@@ -1,1 +1,0 @@
-import{AY as e,kY as t}from"../../chunks/app-wtxbeeMc.js";export{t as agree,e as pluralize};

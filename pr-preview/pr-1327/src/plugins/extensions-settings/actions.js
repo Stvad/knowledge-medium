@@ -1,1 +1,0 @@
-import{TE as e,wE as t}from"../../../chunks/app-wtxbeeMc.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

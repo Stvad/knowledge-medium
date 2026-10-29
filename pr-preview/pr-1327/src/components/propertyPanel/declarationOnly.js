@@ -1,1 +1,0 @@
-import{HM as e,VM as t}from"../../../chunks/app-wtxbeeMc.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

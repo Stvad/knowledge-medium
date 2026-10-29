@@ -1,1 +1,0 @@
-import{$h as e,Qh as t,Zh as n,eg as r,ng as i,rg as a,tg as o}from"../../../chunks/app-wtxbeeMc.js";export{n as BINARY_ENVELOPE_MAGIC,t as BINARY_ENVELOPE_MIN_BYTES,e as BINARY_ENVELOPE_OVERHEAD_BYTES,r as BINARY_MAGIC_BYTES,o as decodeBinaryEnvelope,i as encodeBinaryEnvelope,a as hasBinaryEnvelopeMagic};

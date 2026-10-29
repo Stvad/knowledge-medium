@@ -1,1 +1,0 @@
-import{Cy as e,Sy as t}from"../../../chunks/app-wtxbeeMc.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

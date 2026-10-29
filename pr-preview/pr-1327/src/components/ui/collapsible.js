@@ -1,1 +1,0 @@
-"use client";import{dM as e,fM as t,pM as n}from"../../../chunks/app-wtxbeeMc.js";export{e as Collapsible,t as CollapsibleContent,n as CollapsibleTrigger};

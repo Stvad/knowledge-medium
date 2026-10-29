@@ -1,1 +1,0 @@
-import{XE as e,YE as t}from"../chunks/app-wtxbeeMc.js";export{t as checkForAppUpdate,e as registerServiceWorker};

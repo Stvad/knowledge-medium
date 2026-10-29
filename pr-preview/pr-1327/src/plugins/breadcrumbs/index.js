@@ -1,1 +1,0 @@
-import{Gv as e,Jv as t,Kv as n,Wv as r,Xv as i,Yv as a,Zv as o,qv as s}from"../../../chunks/app-wtxbeeMc.js";export{o as BreadcrumbList,t as BreadcrumbRenderer,i as Breadcrumbs,s as PromotableBreadcrumbList,r as breadcrumbRendererContribution,e as breadcrumbsPlugin,a as getBreadcrumbContentPreview,n as usePromotableBreadcrumb};

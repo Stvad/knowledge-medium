@@ -1,1 +1,0 @@
-import{aL as e,cL as t,iL as n,lL as r,nL as i,oL as a,rL as o,sL as s,tL as c}from"../../chunks/app-wtxbeeMc.js";export{c as getLastLongTaskEndMs,i as getStartupTimeline,o as hasStartupMark,n as longTasksSupported,e as markStartup,a as markStartupAt,s as onLongTask,t as resetStartupTimeline,r as startStartupObservers};

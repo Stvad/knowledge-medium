@@ -1,1 +1,0 @@
-import{vI as e,yI as t}from"../../../chunks/app-wtxbeeMc.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

@@ -1,1 +1,0 @@
-import{c_ as e,l_ as t,o_ as n,s_ as r,u_ as i}from"../../../chunks/app-wtxbeeMc.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,i as tutorialOutline};
