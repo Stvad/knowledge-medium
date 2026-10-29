@@ -1,1 +1,1 @@
-export{Py as PanelCursorFollowsScroll}from"../../../chunks/app-CgT1vg2g.js";
+export{Py as PanelCursorFollowsScroll}from"../../../chunks/app--QdOzxsk.js";

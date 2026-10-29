@@ -1,1 +1,1 @@
-export{Kd as findExtensionBlock}from"../../chunks/app-CgT1vg2g.js";
+export{Kd as findExtensionBlock}from"../../chunks/app--QdOzxsk.js";

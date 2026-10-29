@@ -1,1 +1,1 @@
-export{J8 as AliasSeatNamespaceUnavailableError,Y8 as aliasSeatNamespacesInTx,X8 as resolveAliasSeatNamespaces}from"../../chunks/app-CgT1vg2g.js";
+export{J8 as AliasSeatNamespaceUnavailableError,Y8 as aliasSeatNamespacesInTx,X8 as resolveAliasSeatNamespaces}from"../../chunks/app--QdOzxsk.js";
