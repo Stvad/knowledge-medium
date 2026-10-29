@@ -1,1 +1,1 @@
-export{Lg as moveBlocksTo}from"../../../chunks/app-9keSdHGw.js";
+export{Bg as moveBlocksTo}from"../../../chunks/app-BtQ3xnFX.js";

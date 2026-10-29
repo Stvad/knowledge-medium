@@ -1,1 +1,1 @@
-export{ID as CommandPalette}from"../../../chunks/app-9keSdHGw.js";
+export{zD as CommandPalette}from"../../../chunks/app-BtQ3xnFX.js";

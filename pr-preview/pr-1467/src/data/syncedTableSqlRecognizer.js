@@ -1,1 +1,1 @@
-export{Kq as SYNCED_TABLES,qq as syncedWriteTarget,Jq as writeTargets}from"../../chunks/app-9keSdHGw.js";
+export{Yq as SYNCED_TABLES,Xq as syncedWriteTarget,Zq as writeTargets}from"../../chunks/app-BtQ3xnFX.js";

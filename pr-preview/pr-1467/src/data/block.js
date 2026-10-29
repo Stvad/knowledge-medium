@@ -1,1 +1,1 @@
-export{MQ as Block,NQ as requireLoadedBlock}from"../../chunks/app-9keSdHGw.js";
+export{FQ as Block,IQ as requireLoadedBlock}from"../../chunks/app-BtQ3xnFX.js";

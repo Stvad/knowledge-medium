@@ -1,0 +1,1 @@
+export{kg as useIsReadOnly}from"../../chunks/app-BtQ3xnFX.js";
