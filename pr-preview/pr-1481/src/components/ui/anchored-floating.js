@@ -1,1 +1,0 @@
-export{WB as floatingAnchorFromRect,GB as useAnchoredFloating}from"../../../chunks/app-D4ygSi7D.js";

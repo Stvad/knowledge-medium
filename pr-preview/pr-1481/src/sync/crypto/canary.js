@@ -1,1 +1,0 @@
-export{UC as mintCanary,WC as validateCanary}from"../../../chunks/app-D4ygSi7D.js";

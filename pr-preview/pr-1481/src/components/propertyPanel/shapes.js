@@ -1,1 +1,0 @@
-export{XB as propertyShapeLabel}from"../../../chunks/app-D4ygSi7D.js";

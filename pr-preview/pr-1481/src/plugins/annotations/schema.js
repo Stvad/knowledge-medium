@@ -1,1 +1,0 @@
-export{PG as THREAD_TYPE,FG as annotationPropertySeeds,IG as annotationQuotePrefixProp,LG as annotationQuoteStartProp,RG as annotationQuoteSuffixProp,zG as annotationStatusProp,BG as annotationTargetProp,VG as annotationThreadType,HG as threadAnchorOf,UG as threadIsOpen,WG as threadStatusOf,GG as threadTargetIdOf}from"../../../chunks/app-D4ygSi7D.js";

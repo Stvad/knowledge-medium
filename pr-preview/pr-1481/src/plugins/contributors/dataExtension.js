@@ -1,1 +1,0 @@
-export{KG as contributorsDataExtension}from"../../../chunks/app-D4ygSi7D.js";

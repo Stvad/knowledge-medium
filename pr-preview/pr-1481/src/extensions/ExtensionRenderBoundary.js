@@ -1,1 +1,0 @@
-export{KN as ExtensionRenderBoundary}from"../../chunks/app-D4ygSi7D.js";
