@@ -60,6 +60,7 @@ import {
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
+import { disarmCut, getArmedCut, undoOrTakeBackCut } from '@/paste/armedCut.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -391,7 +392,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Undo',
       context: ActionContextTypes.GLOBAL,
       icon: Undo2,
-      handler: async () => { await repo.undo() },
+      handler: async () => { await undoOrTakeBackCut(repo) },
       defaultBinding: {
         keys: '$mod+z',
         eventOptions: {preventDefault: true},
@@ -1266,13 +1267,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * Cut on a selection (`$mod+x`, `d`). Deletes nothing: the blocks go on the
    * clipboard and are armed to MOVE on the next paste in the app, staying
    * where they are, dimmed, until then. So it consults no deletion guard,
-   * like the move command and drag-and-drop.
+   * like the move command and drag-and-drop. Taken back by the toast's
+   * Cancel, or by undo before anything else is edited (`undoOrTakeBackCut`).
    *
    * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
    * selection: with supplied deps the two can differ.
    */
   const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
-    const {uiStateBlock, selectedBlocks} = deps
+    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
     let outcome: 'cut' | 'empty'
     try {
@@ -1288,7 +1290,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       return
     }
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-    showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`)
+    // Focus past the cut, as a delete does: a paste right here (vim `d` then
+    // `p` is a move down) would otherwise land inside the cut and be refused.
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+      : null
+    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id)
+
+    const cutId = getArmedCut()?.cutId
+    showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {
+      action: {label: 'Cancel', onClick: () => { if (cutId) disarmCut(cutId) }},
+    })
   }
 
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [

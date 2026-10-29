@@ -60,17 +60,18 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     e.stopPropagation()
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
+    // Latch + reset the chord intent — the paste event can't see modifiers,
+    // so the keydown handler latched it. Reset before any early return, or a
+    // stale ⌘⇧V intent would skip the cut check on the next paste.
+    const intent = pasteIntentRef.current
+    pasteIntentRef.current = 'split'
     if (repo.isReadOnly) return
     // Nothing to paste → leave it to the browser.
     const content = readClipboardContent(e.clipboardData)
     if (!content) return
 
-    // Latch + reset the chord intent — the paste event can't see modifiers,
-    // so the keydown handler latched it. `preventDefault` MUST run
-    // synchronously or the browser's native paste fires first; the editor
-    // always takes over the paste.
-    const intent = pasteIntentRef.current
-    pasteIntentRef.current = 'split'
+    // `preventDefault` MUST run synchronously or the browser's native paste
+    // fires first; the editor always takes over the paste.
     e.preventDefault()
 
     // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)

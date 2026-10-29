@@ -17,7 +17,10 @@
  * text from elsewhere that is IDENTICAL to the cut's text matches it.
  */
 
+import { ChangeScope } from '@/data/api'
+import type { Repo } from '@/data/repo.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
+import { showInfo } from '@/utils/toast.js'
 
 /** The record. `rootIds` are the cut roots in document order (descendants
  *  ride along inside them). */
@@ -28,6 +31,11 @@ export interface ArmedCut {
   /** SHA-256 of the clipboard text the cut wrote — never the text itself,
    *  so cut content doesn't sit in localStorage. */
   readonly textDigest: string
+  /** A paste has moved the blocks. The cut stays armed while the clipboard
+   *  holds it, so the next paste moves them again rather than copying them
+   *  (after an undo the originals are back in place, and a copy would
+   *  duplicate them); it just stops dimming blocks the user has placed. */
+  readonly pasted: boolean
 }
 
 export type ArmedCutMatch =
@@ -101,6 +109,7 @@ const parse = (raw: string | null): ArmedCut | null => {
       workspaceId: value.workspaceId,
       rootIds: value.rootIds,
       textDigest: value.textDigest,
+      pasted: value.pasted === true,
     }
   } catch {
     return null
@@ -143,14 +152,22 @@ const digest = async (text: string): Promise<string> => {
  *  clipboard content, which this record must not claim. */
 export const armCut = async (
   text: string,
-  {workspaceId, rootIds}: {workspaceId: string; rootIds: readonly string[]},
+  {workspaceId, rootIds, undoTop}: {
+    workspaceId: string
+    rootIds: readonly string[]
+    /** The cut workspace's top undo entry as the cut is armed; see
+     *  {@link undoOrTakeBackCut}. */
+    undoTop?: object | null
+  },
 ): Promise<void> => {
   const cut: ArmedCut = {
     cutId: crypto.randomUUID(),
     workspaceId,
     rootIds: [...rootIds],
     textDigest: await digest(text),
+    pasted: false,
   }
+  armedUndoTop = undoTop === undefined ? null : {cutId: cut.cutId, entry: undoTop}
   writeRaw(JSON.stringify(cut))
 }
 
@@ -160,7 +177,34 @@ export const disarmCut = (cutId?: string): void => {
   const current = getArmedCut()
   if (cutId !== undefined && current?.cutId !== cutId) return
   if (current === null && readRaw() === null) return
+  armedUndoTop = null
   writeRaw(null)
+}
+
+/** Record that a paste moved `cutId`'s blocks (see `ArmedCut.pasted`). */
+export const markCutPasted = (cutId: string): void => {
+  const current = getArmedCut()
+  if (current?.cutId !== cutId || current.pasted) return
+  writeRaw(JSON.stringify({...current, pasted: true}))
+}
+
+/** Tab-local: the undo entry on top when this tab armed the cut. */
+let armedUndoTop: {cutId: string; entry: object | null} | null = null
+
+/** Undo, except right after a cut. A cut writes no undo entry (it deletes
+ *  nothing), so the undo the user reaches for to take a cut back would
+ *  otherwise revert their PREVIOUS edit. While the entry that was on top when
+ *  this tab armed the cut is on top again (nothing edited since, or a paste
+ *  of it undone), undo disarms the cut instead. */
+export const undoOrTakeBackCut = async (repo: Repo): Promise<boolean> => {
+  const cut = getArmedCut()
+  if (cut && armedUndoTop?.cutId === cut.cutId &&
+    armedUndoTop.entry === repo.undoManager.peekUndo(ChangeScope.BlockDefault)) {
+    disarmCut(cut.cutId)
+    showInfo('Cut cancelled')
+    return true
+  }
+  return repo.undo()
 }
 
 /** How a paste of `text` in `workspaceId` relates to the armed cut; null when

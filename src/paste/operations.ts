@@ -6,7 +6,7 @@ import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
 import { showError, showInfo } from '@/utils/toast.js'
-import { disarmCut, getArmedCut, matchArmedCut } from './armedCut.js'
+import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import {
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
@@ -537,9 +537,9 @@ export type CutPasteOutcome =
 
 type CutMoveResult =
   | {kind: 'moved'; rootIds: string[]; missing: number}
-  /** Consumed by an overlapping paste, or every cut block was deleted since:
-   *  either way the text pastes as usual, and nothing is left to duplicate. */
-  | {kind: 'not-a-cut'}
+  /** Every cut block was deleted since the cut: nothing is left to
+   *  duplicate, so the text pastes as usual. */
+  | {kind: 'cut-gone'}
   | {kind: 'refused'; message: string}
 
 /** Is `id` strictly inside one of `rootIds`' subtrees? Walks `parentId`
@@ -566,8 +566,11 @@ const cutDestination = async (
   options: {position: PastePosition; placement: PastePlacement; scopeRootId: string | undefined},
 ): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
   const children = await tx.childrenOf(target.id, target.workspaceId)
+  // A referenced target is never replaced: deleting it would rewrite every
+  // `((ref))` to it into its (empty) text.
   const replaceable = isBlankContent(target.content) && children.length === 0 &&
-    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId)
+    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId) &&
+    !await tx.hasLiveReferrer(target.id, target.workspaceId)
   if (replaceable) {
     return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
   }
@@ -599,6 +602,8 @@ const cutDestination = async (
  *
  * One transaction, one undo step. Liveness, descendant pruning and the
  * "inside the cut" refusal are decided inside it, against the rows it moves.
+ * A move doesn't consume the cut (`ArmedCut.pasted`): pasting it again moves
+ * the same blocks, and never copies them.
  */
 export async function pasteArmedCut(
   text: string,
@@ -625,11 +630,6 @@ export async function pasteArmedCut(
   let result: CutMoveResult
   try {
     result = await repo.tx(async (tx): Promise<CutMoveResult> => {
-      // The cut is checked and consumed INSIDE the tx: the write lock orders
-      // overlapping pastes, so a second one finds it spent and pastes text, as
-      // a second ⌘V does. Should the commit fail after the disarm, the cut is
-      // lost but nothing moved, so the user can cut again.
-      if (getArmedCut()?.cutId !== cut.cutId) return {kind: 'not-a-cut'}
       const target = await tx.get(pasteTarget.id)
       if (!target || target.deleted) {
         return {kind: 'refused', message: 'The block you pasted at no longer exists'}
@@ -639,10 +639,7 @@ export async function pasteArmedCut(
         const row = await tx.get(id)
         if (row && !row.deleted) live.push(id)
       }
-      if (live.length === 0) {
-        disarmCut(cut.cutId)
-        return {kind: 'not-a-cut'}
-      }
+      if (live.length === 0) return {kind: 'cut-gone'}
 
       const liveSet = new Set(live)
       if (liveSet.has(target.id) || await isInsideAny(tx, target.id, liveSet)) {
@@ -657,7 +654,6 @@ export async function pasteArmedCut(
       await moveBlocksInTx(tx, roots, destination.move)
       if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
       if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})
-      disarmCut(cut.cutId)
       return {kind: 'moved', rootIds: roots, missing: cut.rootIds.length - live.length}
     }, {scope: ChangeScope.BlockDefault, description: 'paste cut blocks'})
   } catch (error) {
@@ -668,11 +664,16 @@ export async function pasteArmedCut(
     return {kind: 'refused'}
   }
 
-  if (result.kind === 'not-a-cut') return null
+  if (result.kind === 'cut-gone') {
+    disarmCut(cut.cutId)
+    return null
+  }
   if (result.kind === 'refused') {
     showError(result.message)
     return {kind: 'refused'}
   }
+  // Not consumed: see `ArmedCut.pasted`.
+  markCutPasted(cut.cutId)
   if (result.missing > 0) {
     showInfo(`${pluralize(result.missing, 'cut block')} no longer existed; moved the rest`)
   }

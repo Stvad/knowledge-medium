@@ -966,6 +966,33 @@ describe('default CodeMirror shortcuts', () => {
     vi.unstubAllGlobals()
   })
 
+  it('cut moves focus past the cut blocks, so a paste there is not inside the cut', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'cut-me', id: 'cut-child', content: 'child'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+    disarmCut()
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-me')],
+      anchorBlock: null,
+      scopeRootId: 'root',
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() =>
+      expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('next'))
+    disarmCut()
+    vi.unstubAllGlobals()
+  })
+
   it('a cut whose clipboard write is refused arms nothing and keeps the selection', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})

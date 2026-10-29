@@ -230,4 +230,16 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
 
     await vi.waitFor(() => expect(storedWhenMoveRan).toBe('Block typed'))
   })
+
+  it('a plain-text chord on an empty clipboard does not leave the next paste on plain text', async () => {
+    const {content} = renderEditor()
+
+    act(() => {
+      content.dispatchEvent(new KeyboardEvent('keydown', {key: 'V', metaKey: true, shiftKey: true, bubbles: true}))
+      dispatchPaste(content, '')
+    })
+    act(() => { dispatchPaste(content, '- cut text') })
+
+    await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
+  })
 })

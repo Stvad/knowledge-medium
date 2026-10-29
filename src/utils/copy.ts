@@ -2,6 +2,7 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
+import { ChangeScope } from '@/data/api'
 import { armCut, disarmCut } from '@/paste/armedCut.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
@@ -158,6 +159,10 @@ export const cutBlockIdsToClipboard = async (
   const data = await serializeSelectedBlocks([...blockIds], repo)
   if (data.markdown === '') return 'empty'
   await writeToClipboard(data)
-  await armCut(data.markdown, {workspaceId, rootIds: blockIds})
+  await armCut(data.markdown, {
+    workspaceId,
+    rootIds: blockIds,
+    undoTop: repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault),
+  })
   return 'cut'
 }

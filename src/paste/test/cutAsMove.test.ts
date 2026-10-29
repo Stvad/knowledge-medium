@@ -5,7 +5,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { armCut, disarmCut, getArmedCut } from '../armedCut'
+import { armCut, disarmCut, getArmedCut, undoOrTakeBackCut } from '../armedCut'
 import { pasteArmedCut, pasteFromClipboard } from '../operations'
 
 const WS = 'ws-1'
@@ -75,27 +75,31 @@ describe('pasteArmedCut', () => {
     expect(await childIds('page')).toEqual(['a', 'b', 'x', 'y'])
   })
 
-  it('is spent once it moved: the next paste of the same text is an ordinary one', async () => {
+  it('stays armed after a move: after an undo, pasting again moves the originals, never copies them', async () => {
     await seedPage()
     await arm(['a'])
     await pasteArmedCut(CUT_TEXT, repo.block('y'), repo, {scopeRootId: 'page'})
+    expect(await repo.undo()).toBe(true)
+    expect(await childIds('page')).toEqual(['a', 'b', 'x', 'y'])
 
-    expect(getArmedCut()).toBeNull()
-    expect(await pasteArmedCut(CUT_TEXT, repo.block('b'), repo, {scopeRootId: 'page'})).toBeNull()
+    const again = await pasteArmedCut(CUT_TEXT, repo.block('x'), repo, {scopeRootId: 'page', placement: 'sibling'})
+
+    expect(again?.kind).toBe('moved')
+    expect(await childIds('page')).toEqual(['b', 'x', 'a', 'y'])
+    expect(getArmedCut()?.pasted).toBe(true)
   })
 
-  it('moves once when two pastes overlap: the second pastes text, as a second paste does', async () => {
+  it('never duplicates when two pastes overlap', async () => {
     await seedPage()
     await arm(['a'])
 
-    const [first, second] = await Promise.all([
+    await Promise.all([
       pasteArmedCut(CUT_TEXT, repo.block('y'), repo, {scopeRootId: 'page'}),
       pasteArmedCut(CUT_TEXT, repo.block('b'), repo, {scopeRootId: 'page', placement: 'sibling'}),
     ])
 
-    expect(first?.kind).toBe('moved')
-    expect(second).toBeNull()
-    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'a'])
+    const ids = await childIds('page')
+    expect([...ids].sort()).toEqual(['a', 'b', 'x', 'y'])
   })
 
   it('is not a cut when the clipboard holds other text, and disarms', async () => {
@@ -171,6 +175,21 @@ describe('pasteArmedCut', () => {
     expect(row?.deleted).toBe(1)
   })
 
+  it('never replaces a blank target that other blocks reference', async () => {
+    await seedPage()
+    await createBlock('blank', '', 'page', 'a4')
+    await repo.tx(tx => tx.create({
+      id: 'referrer', workspaceId: WS, parentId: 'page', orderKey: 'a5',
+      content: 'see ((blank))', references: [{id: 'blank', alias: 'blank'}],
+    }), {scope: ChangeScope.BlockDefault})
+    await arm(['a'])
+
+    await pasteArmedCut(CUT_TEXT, repo.block('blank'), repo, {scopeRootId: 'page'})
+
+    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'blank', 'a', 'referrer'])
+    expect((await repo.block('referrer').load())?.content).toBe('see ((blank))')
+  })
+
   it('keeps a blank target that carries properties', async () => {
     await seedPage()
     await createBlock('blank', '', 'page', 'a4', {[isCollapsedProp.name]: true})
@@ -209,6 +228,46 @@ describe('pasteArmedCut', () => {
 
     expect(await childIds('x')).toEqual(['a', 'x1'])
     expect((await repo.block('x').load())?.properties[isCollapsedProp.name]).toBe(false)
+  })
+})
+
+describe('undoOrTakeBackCut', () => {
+  const armWithUndoTop = () =>
+    armCut(CUT_TEXT, {workspaceId: WS, rootIds: ['a'], undoTop: repo.undoManager.peekUndo(ChangeScope.BlockDefault)})
+
+  it('right after a cut, takes the cut back instead of undoing the edit before it', async () => {
+    await seedPage()
+    await repo.mutate.setContent({id: 'b', content: 'B edited'})
+    await armWithUndoTop()
+
+    expect(await undoOrTakeBackCut(repo)).toBe(true)
+
+    expect(getArmedCut()).toBeNull()
+    expect((await repo.block('b').load())?.content).toBe('B edited')
+  })
+
+  it('undoes as usual once something was edited after the cut', async () => {
+    await seedPage()
+    await armWithUndoTop()
+    await repo.mutate.setContent({id: 'b', content: 'B edited'})
+
+    await undoOrTakeBackCut(repo)
+
+    expect((await repo.block('b').load())?.content).toBe('B')
+    expect(getArmedCut()).not.toBeNull()
+  })
+
+  it('undoes a paste of the cut first, then takes the cut back', async () => {
+    await seedPage()
+    await armWithUndoTop()
+    await pasteArmedCut(CUT_TEXT, repo.block('y'), repo, {scopeRootId: 'page'})
+
+    await undoOrTakeBackCut(repo)
+    expect(await childIds('page')).toEqual(['a', 'b', 'x', 'y'])
+    expect(getArmedCut()).not.toBeNull()
+
+    await undoOrTakeBackCut(repo)
+    expect(getArmedCut()).toBeNull()
   })
 })
 
