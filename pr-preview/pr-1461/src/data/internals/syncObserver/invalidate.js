@@ -1,0 +1,1 @@
+export{QX as applySyncInvalidation}from"../../../../chunks/app-UYYBe2Aw.js";

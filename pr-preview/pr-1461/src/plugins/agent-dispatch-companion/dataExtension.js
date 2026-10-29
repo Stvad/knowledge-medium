@@ -1,0 +1,1 @@
+export{oK as agentDispatchCompanionDataExtension}from"../../../chunks/app-UYYBe2Aw.js";

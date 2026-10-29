@@ -1,0 +1,1 @@
+export{RM as ExtensionRenderBoundary}from"../../chunks/app-UYYBe2Aw.js";

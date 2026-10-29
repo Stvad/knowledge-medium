@@ -1,0 +1,1 @@
+export{OB as staticDataExtensions}from"../../chunks/app-UYYBe2Aw.js";

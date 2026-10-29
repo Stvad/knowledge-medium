@@ -1,0 +1,1 @@
+export{wJ as FacetBridge}from"../../chunks/app-UYYBe2Aw.js";

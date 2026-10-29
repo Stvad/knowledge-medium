@@ -1,0 +1,1 @@
+export{Vn as keybindingsSettingsDataExtension}from"../../../chunks/app-UYYBe2Aw.js";

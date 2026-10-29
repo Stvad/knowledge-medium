@@ -1,0 +1,1 @@
+export{qF as declarationOnlyDefinitionForName,JF as declarationOnlyStatusText}from"../../../chunks/app-UYYBe2Aw.js";

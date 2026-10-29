@@ -1,0 +1,1 @@
+export{lA as dynamicExtensionsExtension}from"../../chunks/app-UYYBe2Aw.js";

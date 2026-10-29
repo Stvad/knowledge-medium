@@ -1,0 +1,1 @@
+export{nQ as KERNEL_PROCESSORS}from"../../../chunks/app-UYYBe2Aw.js";

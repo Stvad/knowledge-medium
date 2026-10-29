@@ -1,0 +1,1 @@
+export{wW as charLimitProp,TW as charProfileProp,EW as charScopeProp}from"../../../chunks/app-UYYBe2Aw.js";

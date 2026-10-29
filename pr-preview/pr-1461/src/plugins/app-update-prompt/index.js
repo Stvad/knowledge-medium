@@ -1,0 +1,1 @@
+export{Tk as appUpdatePromptExtension}from"../../../chunks/app-UYYBe2Aw.js";

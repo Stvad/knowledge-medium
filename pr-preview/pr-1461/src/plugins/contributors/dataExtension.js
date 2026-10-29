@@ -1,0 +1,1 @@
+export{aW as contributorsDataExtension}from"../../../chunks/app-UYYBe2Aw.js";

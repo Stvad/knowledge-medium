@@ -1,0 +1,1 @@
+export{fx as blockEditingContentRenderer}from"../../../chunks/app-UYYBe2Aw.js";

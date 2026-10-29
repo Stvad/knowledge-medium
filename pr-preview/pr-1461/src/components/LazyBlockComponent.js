@@ -1,0 +1,1 @@
+export{WA as LazyBlockComponent}from"../../chunks/app-UYYBe2Aw.js";

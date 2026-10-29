@@ -1,0 +1,1 @@
+export{C5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-UYYBe2Aw.js";

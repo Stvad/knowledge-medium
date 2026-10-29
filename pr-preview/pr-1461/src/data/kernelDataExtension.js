@@ -1,0 +1,1 @@
+export{uZ as kernelDataExtension}from"../../chunks/app-UYYBe2Aw.js";

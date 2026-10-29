@@ -1,0 +1,1 @@
+export{xF as BlockProperties}from"../../chunks/app-UYYBe2Aw.js";

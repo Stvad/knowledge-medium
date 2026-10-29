@@ -1,0 +1,1 @@
+export{AK as omnilinerNamespace}from"../../chunks/app-UYYBe2Aw.js";
