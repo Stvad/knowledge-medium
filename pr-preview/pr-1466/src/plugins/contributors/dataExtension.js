@@ -1,0 +1,1 @@
+export{DW as contributorsDataExtension}from"../../../chunks/app-DtlIjLW-.js";

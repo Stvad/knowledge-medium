@@ -1,0 +1,1 @@
+export{kK as agentRuntimeDataExtension}from"../../../chunks/app-DtlIjLW-.js";

@@ -1,0 +1,1 @@
+export{jK as agentDispatchCompanionDataExtension}from"../../../chunks/app-DtlIjLW-.js";

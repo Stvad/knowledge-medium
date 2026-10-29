@@ -1,0 +1,1 @@
+export{iO as BlockEmbed}from"../../../chunks/app-DtlIjLW-.js";

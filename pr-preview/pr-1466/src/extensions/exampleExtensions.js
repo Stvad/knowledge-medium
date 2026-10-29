@@ -1,0 +1,1 @@
+export{BO as exampleExtensions,VO as insertExampleExtensionsUnder}from"../../chunks/app-DtlIjLW-.js";

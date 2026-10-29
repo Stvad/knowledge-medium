@@ -1,0 +1,1 @@
+export{wk as appUpdatePromptExtension}from"../../../chunks/app-DtlIjLW-.js";

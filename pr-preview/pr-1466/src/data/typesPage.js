@@ -1,0 +1,1 @@
+export{f5 as getOrCreateTypesPage,p5 as typesPageBlockId}from"../../chunks/app-DtlIjLW-.js";

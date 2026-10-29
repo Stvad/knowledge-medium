@@ -1,0 +1,1 @@
+export{px as plainOutlinerPlugin}from"../../../chunks/app-DtlIjLW-.js";

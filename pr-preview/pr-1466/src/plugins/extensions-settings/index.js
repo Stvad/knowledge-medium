@@ -1,0 +1,1 @@
+export{Dd as extensionsOverridesProp,Od as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DtlIjLW-.js";

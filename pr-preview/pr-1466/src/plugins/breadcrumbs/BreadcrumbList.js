@@ -1,0 +1,1 @@
+export{fx as BreadcrumbList}from"../../../chunks/app-DtlIjLW-.js";

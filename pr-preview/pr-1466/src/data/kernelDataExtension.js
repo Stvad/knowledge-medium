@@ -1,0 +1,1 @@
+export{FZ as kernelDataExtension}from"../../chunks/app-DtlIjLW-.js";

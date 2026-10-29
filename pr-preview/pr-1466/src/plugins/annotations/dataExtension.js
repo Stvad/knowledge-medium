@@ -1,0 +1,1 @@
+export{pW as annotationsDataExtension}from"../../../chunks/app-DtlIjLW-.js";

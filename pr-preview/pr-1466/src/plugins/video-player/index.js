@@ -1,0 +1,1 @@
+export{Mv as videoPlayerPlugin}from"../../../chunks/app-DtlIjLW-.js";

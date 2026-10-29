@@ -1,0 +1,1 @@
+export{tq as omnilinerNamespace}from"../../chunks/app-DtlIjLW-.js";

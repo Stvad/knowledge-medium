@@ -1,0 +1,1 @@
+export{IB as staticDataExtensions}from"../../chunks/app-DtlIjLW-.js";

@@ -1,0 +1,1 @@
+export{gK as aliasDataExtension}from"../../../chunks/app-DtlIjLW-.js";

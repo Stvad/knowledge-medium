@@ -1,0 +1,1 @@
+export{kM as useIsMobile,AM as usePointerCoarse}from"../../chunks/app-DtlIjLW-.js";
