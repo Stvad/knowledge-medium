@@ -100,12 +100,12 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
-    // Default (false): exclude property-machinery sources — a `[[Foo]]`
+    // Default (false): exclude property-machinery sources, and the edges
+    // another surface owns (`edgeExclusions.ts`). Machinery: a `[[Foo]]`
     // property VALUE mints its backlink through the owning block's cell
     // reprojection, so surfacing the hidden value row too would double it and
-    // attribute one copy to invisible machinery — and the edges another surface
-    // owns (`edgeExclusions.ts`). `true` returns EVERY source (the raw
-    // `block_references` view), for inspection / debugging. Reference
+    // attribute one copy to invisible machinery. `true` returns EVERY source
+    // (the raw `block_references` view), for inspection / debugging. Reference
     // maintenance never goes through this query — it reads `block_references`
     // directly — so filtering here is display-only, never a correctness risk.
     rawSources: z.boolean().optional(),

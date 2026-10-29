@@ -1,4 +1,5 @@
 import {ChangeScope, seedProperty, seedType, type BlockData} from '@/data/api'
+import {decodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
 /** A comment thread's root. Its content is the quoted text of the target (empty
@@ -64,6 +65,11 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   changeScope: ChangeScope.BlockDefault,
 })
 
+export const annotationPropertySeeds = [
+  annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
+  annotationQuoteSuffixProp, annotationStatusProp,
+] as const
+
 export const annotationThreadType = seedType({
   seedKey: 'system:annotations/type/thread',
   revision: 1,
@@ -72,39 +78,28 @@ export const annotationThreadType = seedType({
   hideFromCompletion: true,
   // The root already renders as a thread; a chip would say it twice.
   hideFromBlockDisplay: true,
-  properties: [
-    annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-    annotationQuoteSuffixProp, annotationStatusProp,
-  ],
+  properties: [...annotationPropertySeeds],
 })
-
-export const annotationPropertySeeds = [
-  annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-  annotationQuoteSuffixProp, annotationStatusProp,
-] as const
 
 export type ThreadAnchor = {kind: 'block'} | ({kind: 'range'} & RangeAnchor)
 
-const decoded = <T,>(data: BlockData, schema: {name: string; codec: {decode: (value: unknown) => T}; defaultValue: T}): T => {
-  const value = data.properties[schema.name]
-  return value === undefined ? schema.defaultValue : schema.codec.decode(value)
-}
+type RootRow = Pick<BlockData, 'content' | 'properties'>
 
-const readAnchor = (root: BlockData): ThreadAnchor =>
+const readAnchor = (root: RootRow): ThreadAnchor =>
   root.content === ''
     ? {kind: 'block'}
     : {
       kind: 'range',
       quote: root.content,
-      quoteStart: decoded(root, annotationQuoteStartProp),
-      prefix: decoded(root, annotationQuotePrefixProp) ?? '',
-      suffix: decoded(root, annotationQuoteSuffixProp) ?? '',
+      quoteStart: decodeRowProperty(root, annotationQuoteStartProp),
+      prefix: decodeRowProperty(root, annotationQuotePrefixProp) ?? '',
+      suffix: decodeRowProperty(root, annotationQuoteSuffixProp) ?? '',
     }
 
 /** A thread root's anchor, read from its content and anchor properties. A
  *  hand-edited property that no longer decodes leaves the quote with no
  *  position, which resolves as moved or stale rather than failing the read. */
-export const threadAnchorOf = (root: BlockData): ThreadAnchor => {
+export const threadAnchorOf = (root: RootRow): ThreadAnchor => {
   try {
     return readAnchor(root)
   } catch {
@@ -112,19 +107,19 @@ export const threadAnchorOf = (root: BlockData): ThreadAnchor => {
   }
 }
 
-export const threadTargetIdOf = (root: BlockData): string | undefined => {
+export const threadTargetIdOf = (root: RootRow): string | undefined => {
   try {
-    return decoded(root, annotationTargetProp) || undefined
+    return decodeRowProperty(root, annotationTargetProp) || undefined
   } catch {
     return undefined
   }
 }
 
-export const threadStatusOf = (root: BlockData): ThreadStatus => decoded(root, annotationStatusProp)
+export const threadStatusOf = (root: RootRow): ThreadStatus => decodeRowProperty(root, annotationStatusProp)
 
 /** False for resolved, and for a status this build cannot decode, such as a
  *  later build's closed states. */
-export const threadIsOpen = (root: BlockData): boolean => {
+export const threadIsOpen = (root: RootRow): boolean => {
   try {
     return threadStatusOf(root) === 'open'
   } catch {
