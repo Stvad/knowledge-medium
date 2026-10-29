@@ -1,1 +1,1 @@
-export{UG as contributorAttributionProcessor}from"../../../chunks/app-YMyworpJ.js";
+export{UG as contributorAttributionProcessor}from"../../../chunks/app-DSA74MUh.js";

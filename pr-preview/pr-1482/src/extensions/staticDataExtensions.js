@@ -1,1 +1,1 @@
-export{UV as staticDataExtensions}from"../../chunks/app-YMyworpJ.js";
+export{UV as staticDataExtensions}from"../../chunks/app-DSA74MUh.js";

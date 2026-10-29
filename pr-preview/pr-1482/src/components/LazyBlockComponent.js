@@ -1,1 +1,1 @@
-export{Yj as LazyBlockComponent}from"../../chunks/app-YMyworpJ.js";
+export{Yj as LazyBlockComponent}from"../../chunks/app-DSA74MUh.js";

@@ -1,1 +1,1 @@
-export{BK as pluginPrefsExtension,VK as pluginUIStateExtension}from"../../chunks/app-YMyworpJ.js";
+export{BK as pluginPrefsExtension,VK as pluginUIStateExtension}from"../../chunks/app-DSA74MUh.js";

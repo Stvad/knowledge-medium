@@ -1,1 +1,1 @@
-export{KM as BlockTypeBlockRenderer,qM as BlockTypeContentRenderer,JM as writeBlockTypeLabel}from"../../../chunks/app-YMyworpJ.js";
+export{KM as BlockTypeBlockRenderer,qM as BlockTypeContentRenderer,JM as writeBlockTypeLabel}from"../../../chunks/app-DSA74MUh.js";

@@ -1,1 +1,1 @@
-export{gA as ExtensionPromptSurface,_A as extensionPromptsExtension}from"../../../chunks/app-YMyworpJ.js";
+export{gA as ExtensionPromptSurface,_A as extensionPromptsExtension}from"../../../chunks/app-DSA74MUh.js";

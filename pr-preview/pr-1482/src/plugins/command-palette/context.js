@@ -1,1 +1,1 @@
-export{eO as COMMAND_PALETTE_ACTION_ID,tO as COMMAND_PALETTE_CONTEXT,nO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,rO as commandPaletteActionContext}from"../../../chunks/app-YMyworpJ.js";
+export{eO as COMMAND_PALETTE_ACTION_ID,tO as COMMAND_PALETTE_CONTEXT,nO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,rO as commandPaletteActionContext}from"../../../chunks/app-DSA74MUh.js";
