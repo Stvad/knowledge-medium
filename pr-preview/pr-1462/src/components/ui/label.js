@@ -1,1 +1,1 @@
-export{Kw as Label}from"../../../chunks/app-Bi6lC3j8.js";
+export{Kw as Label}from"../../../chunks/app-CLF_eqaC.js";

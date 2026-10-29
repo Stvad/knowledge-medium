@@ -1,1 +1,1 @@
-export{ik as editorAutocompleteExtension}from"../../chunks/app-Bi6lC3j8.js";
+export{ik as editorAutocompleteExtension}from"../../chunks/app-CLF_eqaC.js";

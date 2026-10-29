@@ -1,1 +1,1 @@
-export{K8 as getOrCreateTypesPage,q8 as typesPageBlockId}from"../../chunks/app-Bi6lC3j8.js";
+export{K8 as getOrCreateTypesPage,q8 as typesPageBlockId}from"../../chunks/app-CLF_eqaC.js";

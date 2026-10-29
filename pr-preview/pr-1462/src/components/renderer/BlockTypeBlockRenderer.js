@@ -1,1 +1,1 @@
-export{Lj as BlockTypeBlockRenderer,Rj as BlockTypeContentRenderer,zj as writeBlockTypeLabel}from"../../../chunks/app-Bi6lC3j8.js";
+export{Lj as BlockTypeBlockRenderer,Rj as BlockTypeContentRenderer,zj as writeBlockTypeLabel}from"../../../chunks/app-CLF_eqaC.js";
