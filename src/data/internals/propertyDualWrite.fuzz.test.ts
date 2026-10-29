@@ -423,7 +423,6 @@ beforeAll(async () => {
 })
 const guard = statefulFuzzGuard()
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -1571,7 +1570,6 @@ const runSequence = async (repo: Repo, mode: Mode, txs: TxSpec[]): Promise<void>
 
 describe('properties-as-blocks dual representation under mixed writer sequences', () => {
   it('cell and children agree after every tx; cell writes land; processors stay quiescent', async () => {
-    await guard.barrier()
     resetStats()
     await fc.assert(
       fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
