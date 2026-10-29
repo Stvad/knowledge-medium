@@ -356,6 +356,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
+    {
+      id: 'cut_block',
+      description: 'Cut focused block to move it',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: ({uiStateBlock, block, scopeRootId}: BlockShortcutDependencies) =>
+        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId}),
+      defaultBinding: {
+        keys: '$mod+x',
+        eventOptions: {preventDefault: true},
+      },
+    },
     // Promoted out of the vim plugin, like the copy actions above it: an action
     // has to be IN THE REGISTRY to be dispatchable at all, and the block/swipe
     // menu and command palette dispatch by id with supplied deps rather than
@@ -1264,7 +1275,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   /**
-   * Cut on a selection (`$mod+x`, `d`). Deletes nothing: the blocks go on the
+   * Cut the supplied blocks. Deletes nothing: the blocks go on the
    * clipboard and are armed to MOVE on the next paste in the app, staying
    * where they are, dimmed, until then. So it consults no deletion guard,
    * like the move command and drag-and-drop. Taken back by the toast's
@@ -1273,7 +1284,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
    * selection: with supplied deps the two can differ.
    */
-  const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
+  const cutBlocks = async (deps: Pick<MultiSelectModeDependencies, 'uiStateBlock' | 'selectedBlocks' | 'scopeRootId'>): Promise<void> => {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
     let outcome: 'cut' | 'empty'
@@ -1344,7 +1355,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: cutSelectedBlocks,
+      handler: cutBlocks,
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {

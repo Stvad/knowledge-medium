@@ -1047,6 +1047,30 @@ describe('default CodeMirror shortcuts', () => {
     vi.unstubAllGlobals()
   })
 
+  it('normal-mode cut that the clipboard refuses leaves the focused block and data intact', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'cut-me')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    disarmCut()
+
+    const action = findNormalModeAction(env.repo, 'cut_block')
+    await action.handler({uiStateBlock, block: env.repo.block('cut-me'), scopeRootId: 'root'} satisfies BlockShortcutDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(getArmedCut()).toBeNull()
+    expect(await isBlockDeleted(env.repo, 'cut-me')).toBe(false)
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('cut-me')
+    vi.unstubAllGlobals()
+  })
+
   it("merges a first child with children into its parent when it is the parent's only child", async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
