@@ -110,6 +110,13 @@ export const GESTURE_IDLE: GesturePhaseResult = {status: 'idle'}
 export const GESTURE_ACTIVE: GesturePhaseResult = {status: 'active'}
 export const GESTURE_CANCEL: GesturePhaseResult = {status: 'cancel'}
 
+/** How long a touch must rest to count as a hold, and how far it may wander
+ *  meanwhile: UIKit's long-press defaults. Every touch hold in the app (a
+ *  block's content, its bullet) uses these, so one press feels the same
+ *  wherever it lands. */
+export const TOUCH_HOLD_MS = 500
+export const TOUCH_SLOP_PX = 10
+
 /**
  * A continuous-gesture recognizer. `onPointerCancel` is effectively required:
  * the browser can cancel a gesture mid-stream (a `touch-action: pan-y` surface
@@ -141,6 +148,14 @@ export interface GestureRecognizer {
   onPointerDown?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerMove?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerUp?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
+  /** A long-press: the loop runs `onHold` once a pointer has been down for
+   *  `holdMs` (timed from each pointerdown) while this recognizer is still
+   *  eligible and enabled, with the latest session and event. Its verdict is
+   *  applied like any other; a handled `commit` consumes the session (see
+   *  `createBlockGestureController`), so the held press's release can't also
+   *  click. Both or neither. */
+  readonly holdMs?: number
+  onHold?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   /** The browser cancelled a pointer mid-stream (a `pan-y` surface scrolled past
    *  the lock, an OS interrupt). Drop in-flight state. May RETURN a verdict the
    *  loop applies: `cancel` settles this recognizer's in-flight preview NOW (and
@@ -261,6 +276,13 @@ export const createBlockGestureController = ({
   // filter) on every pointer-move tick of an unpreviewed gesture. `progress`
   // itself is null only when nothing is streaming.
   let progress: { readonly recognizerId: string; readonly dispatch: GestureProgressDispatch | null } | null = null
+  // A handled commit spends the pointer session: its remaining events are
+  // prevented and reach no recognizer, so a gesture that commits before the
+  // release (a hold) isn't also read as a swipe or a click by what follows.
+  let consumed = false
+  // Armed hold timers by recognizer id, and the event a firing hold reports.
+  const holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  let lastSample: PointerSample | null = null
 
   // Settle an in-flight preview back to rest and forget it. Called on every
   // non-committing end (cancel verdict, pointercancel, release without commit).
@@ -275,6 +297,10 @@ export const createBlockGestureController = ({
     settleProgress()
     activeId = null
     out.clear()
+    consumed = false
+    for (const timer of holdTimers.values()) clearTimeout(timer)
+    holdTimers.clear()
+    lastSample = null
   }
 
   const toPointer = (sample: PointerSample): GesturePointer => ({
@@ -377,6 +403,12 @@ export const createBlockGestureController = ({
           if (committed) progress = null
           else settleProgress()
         }
+        if (committed) {
+          consumed = true
+          // Nothing else will see this session, so let the rest drop what they
+          // were tracking now rather than at their next gesture.
+          evictRivals(recognizer.id, session, ctx)
+        }
         out.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         // The recognizer DID commit, so it's out and no other recognizer should
@@ -422,6 +454,7 @@ export const createBlockGestureController = ({
     phase: 'down' | 'move' | 'up',
     sample: PointerSample,
   ): boolean => {
+    lastSample = sample
     const changed = toPointer(sample)
     const session = sessionWith(changed)
     const ctx: GestureEventContext = {element, event: sample.event}
@@ -443,6 +476,25 @@ export const createBlockGestureController = ({
     return prevent
   }
 
+  // A hold's timer elapsed: run it only if it could still act on this session
+  // — unspent, and neither a rival nor its own gate has taken the block since
+  // the pointerdown armed it.
+  const fireHold = (recognizer: GestureRecognizer): void => {
+    holdTimers.delete(recognizer.id)
+    if (consumed || !lastSample || !isEligible(recognizer) || !enabled(recognizer)) return
+    const session = sessionWith(toPointer(lastSample))
+    const ctx: GestureEventContext = {element, event: lastSample.event}
+    applyVerdict(recognizer, recognizer.onHold?.(session, ctx) ?? GESTURE_IDLE, session, ctx)
+  }
+
+  const armHolds = (): void => {
+    for (const recognizer of recognizers) {
+      if (!recognizer.holdMs || !isEligible(recognizer) || !enabled(recognizer)) continue
+      clearTimeout(holdTimers.get(recognizer.id))
+      holdTimers.set(recognizer.id, setTimeout(() => fireHold(recognizer), recognizer.holdMs))
+    }
+  }
+
   return {
     handlePointerDown(sample) {
       // A pointer that went down on a NESTED block's surface belongs to that
@@ -450,12 +502,16 @@ export const createBlockGestureController = ({
       // rest of its session: every later phase is gated on `pointers`.
       if (!ownsGestureTarget(element, sample.target)) return false
       pointers.set(sample.pointerId, toPointer(sample))
-      return run('down', sample)
+      if (consumed) return false
+      const prevent = run('down', sample)
+      armHolds()
+      return prevent
     },
     handlePointerMove(sample) {
       // A move for a pointer we never saw go down isn't part of any session.
       if (!pointers.has(sample.pointerId)) return false
       pointers.set(sample.pointerId, toPointer(sample))
+      if (consumed) return true
       return run('move', sample)
     },
     handlePointerUp(sample) {
@@ -463,7 +519,7 @@ export const createBlockGestureController = ({
       // down before these listeners existed) is not part of any session here.
       if (!pointers.has(sample.pointerId)) return false
       // Run BEFORE removing the pointer so the session still includes it.
-      const prevent = run('up', sample)
+      const prevent = consumed || run('up', sample)
       pointers.delete(sample.pointerId)
       if (pointers.size === 0) resetSession()
       return prevent

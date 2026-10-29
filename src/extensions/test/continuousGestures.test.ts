@@ -447,6 +447,194 @@ describe('enablement (isEnabled)', () => {
   })
 })
 
+describe('holds (holdMs / onHold)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const holdCommit = () => ({status: 'commit', gesture: 'hold', deps}) as const
+
+  it('runs onHold once the pointer has stayed down for holdMs, and dispatches its commit', () => {
+    vi.useFakeTimers()
+    const dispatch = makeDispatch()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      element,
+      dispatch,
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(499)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+    expect(dispatch.mock.calls[0]?.[0]).toBe('hold')
+  })
+
+  it('sees the latest position of the held pointer', () => {
+    vi.useFakeTimers()
+    let heldAt: number | undefined
+    const controller = createBlockGestureController({
+      recognizers: [{
+        id: 'hold',
+        holdMs: 500,
+        onHold: (session: GestureSession) => {
+          heldAt = session.changed.x
+          return GESTURE_IDLE
+        },
+      }],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerMove(sample(1, 4, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(heldAt).toBe(4)
+  })
+
+  it('never runs onHold for a press released before holdMs', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(200)
+    controller.handlePointerUp(sample(1, 0, 0))
+    vi.advanceTimersByTime(1000)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('never runs onHold while a rival owns the block', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: () => GESTURE_ACTIVE},
+        {id: 'hold', holdMs: 500, onHold},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerMove(sample(1, 20, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('never runs onHold for a recognizer whose gate is off when the hold elapses', () => {
+    vi.useFakeTimers()
+    let enabled = true
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, isEnabled: () => enabled, onHold}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    enabled = false
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('a handled commit consumes the session: later moves and the release are prevented and reach no recognizer', () => {
+    vi.useFakeTimers()
+    const rivalMove = vi.fn(() => GESTURE_ACTIVE)
+    const rivalUp = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: rivalMove, onPointerUp: rivalUp},
+        {id: 'hold', holdMs: 500, onHold: holdCommit},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    // The held press is spent: its moves don't become a swipe, and its
+    // release asks for preventDefault, which also swallows its click.
+    expect(controller.handlePointerMove(sample(1, 40, 0))).toBe(true)
+    expect(controller.handlePointerUp(sample(1, 40, 0))).toBe(true)
+    expect(rivalMove).not.toHaveBeenCalled()
+    expect(rivalUp).not.toHaveBeenCalled()
+
+    // The next press is a fresh session.
+    controller.handlePointerDown(sample(2, 0, 0))
+    expect(controller.handlePointerUp(sample(2, 0, 0))).toBe(false)
+    expect(rivalUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs no further hold once one has consumed the session', () => {
+    vi.useFakeTimers()
+    const laterHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'hold', holdMs: 500, onHold: holdCommit},
+        {id: 'later-hold', holdMs: 500, onHold: laterHold},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(laterHold).not.toHaveBeenCalled()
+  })
+
+  it('evicts the other recognizers when a commit consumes the session, so they drop what they tracked', () => {
+    vi.useFakeTimers()
+    const rivalCancel = vi.fn()
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerCancel: rivalCancel},
+        {id: 'hold', holdMs: 500, onHold: holdCommit},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(rivalCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unhandled hold commit leaves the rest of the session to the other recognizers', () => {
+    vi.useFakeTimers()
+    const rivalMove = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: rivalMove},
+        {id: 'hold', holdMs: 500, onHold: holdCommit},
+      ],
+      element,
+      dispatch: vi.fn(() => false),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(controller.handlePointerMove(sample(1, 40, 0))).toBe(false)
+    expect(rivalMove).toHaveBeenCalledTimes(1)
+    expect(controller.handlePointerUp(sample(1, 40, 0))).toBe(false)
+  })
+})
+
 describe('unionTouchAction', () => {
   it('collapses identical requirements and lets none dominate; differing requirements fall back to none', () => {
     expect(unionTouchAction(['pan-y', 'pan-y'])).toBe('pan-y')

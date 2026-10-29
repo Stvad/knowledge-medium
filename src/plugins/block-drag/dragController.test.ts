@@ -40,9 +40,8 @@ vi.mock('./dropTarget.ts', async importOriginal => ({
 const {
   createBlockDragController,
   DRAGGING_ROW_ATTRIBUTE,
-  TOUCH_HOLD_MS,
-  TOUCH_SLOP_PX,
 } = await import('./dragController.ts')
+const {TOUCH_HOLD_MS, TOUCH_SLOP_PX} = await import('@/extensions/continuousGestures.js')
 
 const TARGET: DropTarget = {
   move: {parentId: 'dest', position: {kind: 'first'}},
