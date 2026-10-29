@@ -1,5 +1,6 @@
 /**
- * block-drag plugin — drag a block by its bullet to move it. Dragging a
+ * block-drag plugin — drag a block by its bullet to move it: with a mouse,
+ * press and move; on touch, hold the bullet still, then move. Dragging a
  * bullet that is part of the multi-selection drags the whole selection.
  * The drop is one `moveBlocksTo` call from move-blocks: one transaction,
  * one undo entry.
@@ -10,8 +11,8 @@
  *   - `dragController.ts`  — the drag session: start, hover, auto-scroll, drop
  *   - `BlockDragLayer.tsx` — app mount: installs the controller, draws the line
  *
- * v1: mouse only; drops land only in a panel's own outline (no embeds,
- * backlink entries or other nested surfaces); same workspace only, which
+ * v1: drops land only in a panel's own outline (no embeds, backlink
+ * entries or other nested surfaces); same workspace only, which
  * `core.move` enforces.
  */
 import { appMountsFacet } from '@/extensions/core.js'
@@ -22,7 +23,7 @@ import { BlockDragLayer } from './BlockDragLayer.tsx'
 export const blockDragPlugin: AppExtension = systemToggle({
   id: 'system:block-drag',
   name: 'Drag and drop blocks',
-  description: 'Drag a block by its bullet to move it (the whole selection when the bullet is in it).',
+  description: 'Drag a block by its bullet to move it (the whole selection when the bullet is in it). On touch, hold the bullet, then drag.',
 }).of([
   appMountsFacet.of({id: 'block-drag.layer', component: BlockDragLayer}, {source: 'block-drag'}),
 ])

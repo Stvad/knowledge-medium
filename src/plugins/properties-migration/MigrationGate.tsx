@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { useRepo } from '@/context/repo.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { useHandle } from '@/hooks/block.js'
 import type { Repo } from '@/data/repo'
@@ -53,10 +54,7 @@ const WorkspaceMigrationGate = ({workspaceId}: {workspaceId: string}): ReactNode
   })
   const readLocal = useCallback(() => localMigrationRunFor(workspaceId), [workspaceId])
   const localRun = useSyncExternalStore(subscribeLocalMigrationRun, readLocal, readLocal)
-  const readOnly = useSyncExternalStore(
-    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
-    () => repo.isReadOnly,
-  )
+  const readOnly = useIsReadOnly(repo)
 
   const holder = holderOf(claim, localRun)
   // The pause follows the DIALOG rather than the claim, which makes them one
