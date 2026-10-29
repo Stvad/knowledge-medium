@@ -1,1 +1,0 @@
-export{gF as PropertyRow}from"../../../chunks/app-B3rAb2xY.js";

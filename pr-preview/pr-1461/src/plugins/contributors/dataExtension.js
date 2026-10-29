@@ -1,1 +1,0 @@
-export{cW as contributorsDataExtension}from"../../../chunks/app-B3rAb2xY.js";

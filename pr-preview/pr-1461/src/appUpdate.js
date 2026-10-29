@@ -1,1 +1,0 @@
-export{Ak as appUpdate,jk as useAppUpdateAvailable}from"../chunks/app-B3rAb2xY.js";

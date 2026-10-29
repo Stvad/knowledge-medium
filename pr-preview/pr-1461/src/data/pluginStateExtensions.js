@@ -1,1 +1,0 @@
-export{iG as pluginPrefsExtension,aG as pluginUIStateExtension}from"../../chunks/app-B3rAb2xY.js";
