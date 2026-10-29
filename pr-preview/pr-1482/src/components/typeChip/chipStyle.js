@@ -1,0 +1,1 @@
+export{vk as chipStyle}from"../../../chunks/app-Cwv6auK3.js";

@@ -1,0 +1,1 @@
+export{Iy as videoPlayerPlugin}from"../../../chunks/app-Cwv6auK3.js";

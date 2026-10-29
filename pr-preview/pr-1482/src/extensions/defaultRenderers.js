@@ -1,0 +1,1 @@
+export{$j as defaultRegistry,eM as defaultRendererContributions,tM as defaultRenderersExtension}from"../../chunks/app-Cwv6auK3.js";

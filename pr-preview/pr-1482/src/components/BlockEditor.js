@@ -1,0 +1,1 @@
+export{WP as BlockEditor}from"../../chunks/app-Cwv6auK3.js";

@@ -1,0 +1,1 @@
+export{Tb as EXTENSIONS_PAGE_TITLE,Eb as TUTORIAL_DEFAULT_TITLE,Db as TUTORIAL_VIM_TITLE,fb as onboardingPlugin,wb as seedTutorial}from"../../../chunks/app-Cwv6auK3.js";

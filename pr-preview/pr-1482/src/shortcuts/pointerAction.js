@@ -1,0 +1,1 @@
+export{ZA as dispatchPointerAction,QA as setPointerActionDispatcher}from"../../chunks/app-Cwv6auK3.js";
