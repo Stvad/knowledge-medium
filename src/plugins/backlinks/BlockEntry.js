@@ -1,1 +1,1 @@
-export{km as LazyBlockEntry}from"../../../chunks/app-BuAewSec.js";
+export{Pm as LazyBlockEntry}from"../../../chunks/app-DclA3_xk.js";

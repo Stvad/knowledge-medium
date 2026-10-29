@@ -1,0 +1,1 @@
+export{ju as annotationsPlugin}from"../../../chunks/app-DclA3_xk.js";

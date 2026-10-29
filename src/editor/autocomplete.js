@@ -1,1 +1,1 @@
-export{ak as editorAutocompleteExtension}from"../../chunks/app-BuAewSec.js";
+export{uk as editorAutocompleteExtension}from"../../chunks/app-DclA3_xk.js";

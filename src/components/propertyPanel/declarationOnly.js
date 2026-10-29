@@ -1,1 +1,1 @@
-export{zF as declarationOnlyDefinitionForName,BF as declarationOnlyStatusText}from"../../../chunks/app-BuAewSec.js";
+export{WF as declarationOnlyDefinitionForName,GF as declarationOnlyStatusText}from"../../../chunks/app-DclA3_xk.js";

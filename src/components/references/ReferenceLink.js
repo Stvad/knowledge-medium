@@ -1,1 +1,1 @@
-export{BC as ReferenceLink,VC as classifyReferenceClick}from"../../../chunks/app-BuAewSec.js";
+export{GC as ReferenceLink,KC as classifyReferenceClick}from"../../../chunks/app-DclA3_xk.js";

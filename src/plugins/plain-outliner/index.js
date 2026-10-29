@@ -1,1 +1,1 @@
-export{dx as plainOutlinerPlugin}from"../../../chunks/app-BuAewSec.js";
+export{gx as plainOutlinerPlugin}from"../../../chunks/app-DclA3_xk.js";

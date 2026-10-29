@@ -1,0 +1,1 @@
+export{_W as THREAD_TYPE,vW as annotationPropertySeeds,yW as annotationQuotePrefixProp,bW as annotationQuoteStartProp,xW as annotationQuoteSuffixProp,SW as annotationStatusProp,CW as annotationTargetProp,wW as annotationThreadType,TW as threadAnchorOf,EW as threadStatusOf,DW as threadTargetIdOf}from"../../../chunks/app-DclA3_xk.js";

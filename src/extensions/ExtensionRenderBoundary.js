@@ -1,1 +1,1 @@
-export{FM as ExtensionRenderBoundary}from"../../chunks/app-BuAewSec.js";
+export{BM as ExtensionRenderBoundary}from"../../chunks/app-DclA3_xk.js";

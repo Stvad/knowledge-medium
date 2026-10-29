@@ -1,1 +1,1 @@
-export{dQ as getOrCreateRecentsPage,fQ as recentsPageBlockId}from"../../chunks/app-BuAewSec.js";
+export{OQ as getOrCreateRecentsPage,kQ as recentsPageBlockId}from"../../chunks/app-DclA3_xk.js";
