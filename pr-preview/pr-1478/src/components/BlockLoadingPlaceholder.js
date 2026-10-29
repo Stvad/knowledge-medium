@@ -1,0 +1,1 @@
+export{Uj as BlockLoadingPlaceholder}from"../../chunks/app-BqKMVLCy.js";

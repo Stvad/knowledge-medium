@@ -1,0 +1,1 @@
+export{DN as useIsMobile,ON as usePointerCoarse}from"../../chunks/app-BqKMVLCy.js";

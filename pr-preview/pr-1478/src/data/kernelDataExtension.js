@@ -1,0 +1,1 @@
+export{BQ as kernelDataExtension}from"../../chunks/app-BqKMVLCy.js";

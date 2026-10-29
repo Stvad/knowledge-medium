@@ -1,0 +1,1 @@
+export{FB as propertyShapeLabel}from"../../../chunks/app-BqKMVLCy.js";

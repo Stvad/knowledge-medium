@@ -1,0 +1,1 @@
+export{Bj as LazyBlockComponent}from"../../chunks/app-BqKMVLCy.js";

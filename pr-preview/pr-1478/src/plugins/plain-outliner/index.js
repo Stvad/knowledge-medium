@@ -1,0 +1,1 @@
+export{lS as plainOutlinerPlugin}from"../../../chunks/app-BqKMVLCy.js";

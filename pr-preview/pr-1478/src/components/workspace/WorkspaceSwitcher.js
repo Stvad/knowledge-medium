@@ -1,0 +1,1 @@
+export{IS as WorkspaceSwitcher}from"../../../chunks/app-BqKMVLCy.js";

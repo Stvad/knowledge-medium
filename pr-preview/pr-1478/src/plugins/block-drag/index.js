@@ -1,0 +1,1 @@
+export{vg as blockDragPlugin}from"../../../chunks/app-BqKMVLCy.js";

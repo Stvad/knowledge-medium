@@ -1,0 +1,1 @@
+export{iA as editorAutocompleteExtension}from"../../chunks/app-BqKMVLCy.js";
