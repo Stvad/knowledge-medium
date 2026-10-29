@@ -1,0 +1,1 @@
+export{tS as mobileBottomNavItemsFacet}from"../../../chunks/app-CU-XOSSx.js";

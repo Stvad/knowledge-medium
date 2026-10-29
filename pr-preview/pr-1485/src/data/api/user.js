@@ -1,0 +1,1 @@
+export{mnt as SYSTEM_AUTHOR_PREFIX,hnt as isSystemAuthor,gnt as systemAuthor}from"../../../chunks/app-CU-XOSSx.js";

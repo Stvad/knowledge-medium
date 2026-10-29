@@ -1,0 +1,1 @@
+export{iI as defineVariant,aI as defineVariantFacet}from"../../chunks/app-CU-XOSSx.js";

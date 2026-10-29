@@ -1,0 +1,1 @@
+export{hI as BlockProperties}from"../../chunks/app-CU-XOSSx.js";

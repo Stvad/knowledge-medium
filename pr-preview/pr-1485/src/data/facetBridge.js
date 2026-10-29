@@ -1,0 +1,1 @@
+export{iX as FacetBridge}from"../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{bz as isIOS,xz as isMacPlatform}from"../../chunks/app-CU-XOSSx.js";

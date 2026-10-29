@@ -1,0 +1,1 @@
+export{Yb as spatialNavigationShellDecorator}from"../../../chunks/app-CU-XOSSx.js";

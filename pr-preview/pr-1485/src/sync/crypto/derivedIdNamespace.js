@@ -1,0 +1,1 @@
+export{r9 as deriveWorkspaceIdNamespace}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{KA as dispatchPointerAction,qA as setPointerActionDispatcher}from"../../chunks/app-CU-XOSSx.js";

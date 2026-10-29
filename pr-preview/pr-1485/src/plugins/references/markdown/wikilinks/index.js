@@ -1,0 +1,1 @@
+export{lg as wikilinkMarkdownExtension}from"../../../../../chunks/app-CU-XOSSx.js";

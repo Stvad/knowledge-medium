@@ -1,0 +1,1 @@
+export{ug as Wikilink}from"../../../../../chunks/app-CU-XOSSx.js";

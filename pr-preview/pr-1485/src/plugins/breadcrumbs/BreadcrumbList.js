@@ -1,0 +1,1 @@
+export{dS as BreadcrumbList}from"../../../chunks/app-CU-XOSSx.js";

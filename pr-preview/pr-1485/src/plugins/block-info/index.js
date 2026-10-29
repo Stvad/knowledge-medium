@@ -1,0 +1,1 @@
+export{Xm as blockInfoPlugin}from"../../../chunks/app-CU-XOSSx.js";

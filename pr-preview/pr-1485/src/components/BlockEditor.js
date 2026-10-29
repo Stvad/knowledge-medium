@@ -1,0 +1,1 @@
+export{zP as BlockEditor}from"../../chunks/app-CU-XOSSx.js";

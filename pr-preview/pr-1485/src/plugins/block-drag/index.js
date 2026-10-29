@@ -1,0 +1,1 @@
+export{xg as blockDragPlugin}from"../../../chunks/app-CU-XOSSx.js";

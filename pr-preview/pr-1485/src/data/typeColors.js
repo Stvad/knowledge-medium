@@ -1,0 +1,1 @@
+export{mk as DEFAULT_TYPE_COLORS,hk as defaultTypeColor,gk as pickLeastUsedTypeColor}from"../../chunks/app-CU-XOSSx.js";

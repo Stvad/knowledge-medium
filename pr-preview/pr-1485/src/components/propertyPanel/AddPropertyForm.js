@@ -1,0 +1,1 @@
+export{UI as AddPropertyForm}from"../../../chunks/app-CU-XOSSx.js";

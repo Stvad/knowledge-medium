@@ -1,0 +1,1 @@
+export{CA as appUpdatePromptExtension}from"../../../chunks/app-CU-XOSSx.js";

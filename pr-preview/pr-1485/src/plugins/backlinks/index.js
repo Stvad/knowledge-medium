@@ -1,0 +1,1 @@
+export{fh as backlinksPlugin}from"../../../chunks/app-CU-XOSSx.js";

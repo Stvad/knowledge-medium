@@ -1,0 +1,1 @@
+export{qM as ConfirmBulkDeleteDialog}from"../../chunks/app-CU-XOSSx.js";

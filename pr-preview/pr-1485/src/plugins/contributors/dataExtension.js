@@ -1,0 +1,1 @@
+export{FG as contributorsDataExtension}from"../../../chunks/app-CU-XOSSx.js";

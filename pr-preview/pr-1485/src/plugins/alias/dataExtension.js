@@ -1,0 +1,1 @@
+export{Tq as aliasDataExtension}from"../../../chunks/app-CU-XOSSx.js";

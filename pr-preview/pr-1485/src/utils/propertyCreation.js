@@ -1,0 +1,1 @@
+export{xP as canConvertEmptyChildBlockToProperty,SP as convertEmptyChildBlockToProperty}from"../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{k9 as isChildBackedPropertiesWorkspace}from"../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{Xu as COMMENT_ON_BLOCK_ACTION_ID,Zu as COMMENT_ON_SELECTION_ACTION_ID,Qu as HIGHLIGHT_SELECTION_ACTION_ID,$u as anchorFromEditor,ed as annotationActions,td as submitComposer}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{ZG as characterCounterDataExtension}from"../../../chunks/app-CU-XOSSx.js";

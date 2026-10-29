@@ -1,0 +1,1 @@
+export{$V as REFERENCES_TARGET_INVALIDATION_CHANNEL,eH as referencesInvalidationRule}from"../../../chunks/app-CU-XOSSx.js";

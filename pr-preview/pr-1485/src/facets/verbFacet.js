@@ -1,0 +1,1 @@
+export{Lq as defineVerbFacet}from"../../chunks/app-CU-XOSSx.js";

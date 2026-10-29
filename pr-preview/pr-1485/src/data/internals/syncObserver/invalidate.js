@@ -1,0 +1,1 @@
+export{MQ as applySyncInvalidation}from"../../../../chunks/app-CU-XOSSx.js";

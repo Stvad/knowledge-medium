@@ -1,0 +1,1 @@
+export{jE as dailyDateWikilinkDecorator}from"../../../chunks/app-CU-XOSSx.js";

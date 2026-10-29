@@ -1,0 +1,1 @@
+export{oS as usePromotableBreadcrumb}from"../../../chunks/app-CU-XOSSx.js";

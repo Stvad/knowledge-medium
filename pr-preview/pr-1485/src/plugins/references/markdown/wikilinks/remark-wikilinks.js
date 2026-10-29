@@ -1,0 +1,1 @@
+export{dg as remarkWikilinks}from"../../../../../chunks/app-CU-XOSSx.js";

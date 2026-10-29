@@ -1,0 +1,1 @@
+export{f_ as attachmentsPlugin}from"../../../chunks/app-CU-XOSSx.js";

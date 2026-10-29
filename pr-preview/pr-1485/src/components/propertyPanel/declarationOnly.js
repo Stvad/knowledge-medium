@@ -1,0 +1,1 @@
+export{VI as declarationOnlyDefinitionForName,HI as declarationOnlyStatusText}from"../../../chunks/app-CU-XOSSx.js";

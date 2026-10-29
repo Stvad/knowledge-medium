@@ -1,0 +1,1 @@
+export{oA as editorAutocompleteExtension}from"../../chunks/app-CU-XOSSx.js";

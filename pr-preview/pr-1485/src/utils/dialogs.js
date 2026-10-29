@@ -1,0 +1,1 @@
+export{jN as __resetDialogsForTests,MN as getDialogQueue,NN as isDialogOpenForWorkspace,PN as openDialog,FN as subscribeDialogs}from"../../chunks/app-CU-XOSSx.js";

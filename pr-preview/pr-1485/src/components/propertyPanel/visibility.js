@@ -1,0 +1,1 @@
+export{IR as isPropertyPanelHiddenProperty,LR as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-CU-XOSSx.js";

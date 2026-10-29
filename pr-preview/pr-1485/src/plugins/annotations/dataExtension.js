@@ -1,0 +1,1 @@
+export{pG as annotationsDataExtension}from"../../../chunks/app-CU-XOSSx.js";

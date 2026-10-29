@@ -1,0 +1,1 @@
+export{QG as CHAR_COUNTER_TYPE,$G as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-CU-XOSSx.js";

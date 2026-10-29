@@ -1,0 +1,1 @@
+export{tg as geoContentDecoratorContribution}from"../../../chunks/app-CU-XOSSx.js";

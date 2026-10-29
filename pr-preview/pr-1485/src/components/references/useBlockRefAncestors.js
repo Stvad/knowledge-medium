@@ -1,0 +1,1 @@
+export{ik as useBlockRefAncestors}from"../../../chunks/app-CU-XOSSx.js";

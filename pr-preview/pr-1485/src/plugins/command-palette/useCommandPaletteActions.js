@@ -1,0 +1,1 @@
+export{WD as useCommandPaletteActions}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{aj as resolveAppRuntime,oj as resolveAppRuntimeSync}from"../../chunks/app-CU-XOSSx.js";

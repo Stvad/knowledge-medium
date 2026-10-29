@@ -1,0 +1,1 @@
+export{Vk as resolveStructuralEditPolicy,Hk as structuralEditPolicyForBlock}from"../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{sk as kernelPropertyUiExtension,ck as typesPropertyUi,lk as typesPropertyUiExtension}from"../../../chunks/app-CU-XOSSx.js";

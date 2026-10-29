@@ -1,0 +1,1 @@
+"use client";export{dI as Collapsible,fI as CollapsibleContent,pI as CollapsibleTrigger}from"../../../chunks/app-CU-XOSSx.js";

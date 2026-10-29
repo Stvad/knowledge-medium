@@ -1,0 +1,1 @@
+export{tx as extendSelectionToSpatialTarget,nx as getSpatialNavigationActionTransforms,rx as getSpatialNavigationActions,ix as getSpatialNavigationDispatchDecorators,ax as spatialNavigationActionDecoratorsExtension,ox as spatialNavigationActionsExtension,sx as spatialSelectionClickDecorator}from"../../../chunks/app-CU-XOSSx.js";

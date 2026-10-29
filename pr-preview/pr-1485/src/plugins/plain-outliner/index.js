@@ -1,0 +1,1 @@
+export{fS as plainOutlinerPlugin}from"../../../chunks/app-CU-XOSSx.js";

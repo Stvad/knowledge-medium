@@ -1,0 +1,1 @@
+export{Uw as useMinuteClock}from"../../chunks/app-CU-XOSSx.js";

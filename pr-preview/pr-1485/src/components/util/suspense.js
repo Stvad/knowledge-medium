@@ -1,0 +1,1 @@
+export{mV as SuspenseFallback}from"../../../chunks/app-CU-XOSSx.js";

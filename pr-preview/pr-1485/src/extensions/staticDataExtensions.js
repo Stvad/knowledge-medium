@@ -1,0 +1,1 @@
+export{IV as staticDataExtensions}from"../../chunks/app-CU-XOSSx.js";

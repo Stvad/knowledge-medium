@@ -1,0 +1,1 @@
+export{CP as readClipboardContent}from"../../chunks/app-CU-XOSSx.js";

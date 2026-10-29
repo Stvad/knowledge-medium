@@ -1,0 +1,1 @@
+export{My as videoPlayerMarkdownExtension}from"../../../chunks/app-CU-XOSSx.js";

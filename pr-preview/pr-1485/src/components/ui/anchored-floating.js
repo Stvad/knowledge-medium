@@ -1,0 +1,1 @@
+export{jB as floatingAnchorFromRect,MB as useAnchoredFloating}from"../../../chunks/app-CU-XOSSx.js";

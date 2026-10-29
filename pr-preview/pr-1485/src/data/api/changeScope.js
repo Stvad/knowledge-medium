@@ -1,0 +1,1 @@
+export{frt as CHANGE_SCOPE_POLICIES,prt as ChangeScope,mrt as isChangeScope,hrt as policyForScope,grt as scopeAllowedInReadOnly,_rt as scopeIsUndoable,vrt as scopePoliciesEquivalent,yrt as scopeUploadsToServer,brt as sourceForScope}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{qP as useShortcutSurfaceActivations}from"../../chunks/app-CU-XOSSx.js";

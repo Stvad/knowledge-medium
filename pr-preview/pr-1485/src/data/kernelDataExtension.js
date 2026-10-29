@@ -1,0 +1,1 @@
+export{WQ as kernelDataExtension}from"../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{Ont as definePostCommitProcessor}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{QM as GESTURE_ACTIVE,$M as GESTURE_CANCEL,eN as GESTURE_IDLE,tN as continuousGestureRecognizersFacet,nN as createBlockGestureController,rN as enabledTouchAction,iN as suppressNextClick,aN as unionTouchAction,oN as useContinuousGestures}from"../../chunks/app-CU-XOSSx.js";

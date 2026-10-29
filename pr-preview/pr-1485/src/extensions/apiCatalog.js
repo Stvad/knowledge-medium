@@ -1,0 +1,1 @@
+export{bf as extensionApiCatalog,xf as extensionApiRuntimeExports}from"../../chunks/app-CU-XOSSx.js";

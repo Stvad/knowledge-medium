@@ -1,0 +1,1 @@
+export{Bq as agentDispatchCompanionDataExtension}from"../../../chunks/app-CU-XOSSx.js";

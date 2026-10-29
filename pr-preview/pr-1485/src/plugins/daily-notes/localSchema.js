@@ -1,0 +1,1 @@
+export{YW as dailyNotesLocalSchema}from"../../../chunks/app-CU-XOSSx.js";

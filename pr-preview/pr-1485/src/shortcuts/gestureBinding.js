@@ -1,0 +1,1 @@
+export{WA as gestureBindingDescriptor,GA as matchesGestureEvent}from"../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{tJ as SYNCED_TABLES,nJ as syncedWriteTarget,rJ as writeTargets}from"../../chunks/app-CU-XOSSx.js";

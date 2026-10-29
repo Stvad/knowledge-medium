@@ -1,0 +1,1 @@
+export{fn as charCountDisplay}from"../../../chunks/app-CU-XOSSx.js";

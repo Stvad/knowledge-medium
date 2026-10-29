@@ -1,0 +1,1 @@
+export{pk as chipStyle}from"../../../chunks/app-CU-XOSSx.js";

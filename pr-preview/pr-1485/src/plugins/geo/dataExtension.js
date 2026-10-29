@@ -1,0 +1,1 @@
+export{GU as geoDataExtension}from"../../../chunks/app-CU-XOSSx.js";

@@ -1,0 +1,1 @@
+export{Pb as COLEMAK_KEYBINDINGS_PLUGIN_ID,Fb as colemakKeybindingsPlugin,Ib as colemakMovementKeybindingOverrides}from"../../../chunks/app-CU-XOSSx.js";

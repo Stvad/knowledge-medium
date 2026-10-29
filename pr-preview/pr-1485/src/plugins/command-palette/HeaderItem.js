@@ -1,0 +1,1 @@
+export{fO as CommandPaletteHeaderItem}from"../../../chunks/app-CU-XOSSx.js";

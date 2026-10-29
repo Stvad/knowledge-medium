@@ -1,0 +1,1 @@
+export{Ng as useIsReadOnly}from"../../chunks/app-CU-XOSSx.js";

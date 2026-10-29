@@ -1,0 +1,1 @@
+export{fk as TypeChip}from"../../../chunks/app-CU-XOSSx.js";

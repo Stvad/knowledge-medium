@@ -1,0 +1,1 @@
+export{Pd as agentDispatchCompanionPlugin}from"../../../chunks/app-CU-XOSSx.js";

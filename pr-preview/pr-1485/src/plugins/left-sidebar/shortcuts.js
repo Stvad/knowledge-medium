@@ -1,0 +1,1 @@
+export{NS as getOrCreateShortcutsBlock,PS as journalShortcutBlockId,FS as shortcutsBlockId}from"../../../chunks/app-CU-XOSSx.js";

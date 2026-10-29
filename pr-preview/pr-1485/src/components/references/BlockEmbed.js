@@ -1,0 +1,1 @@
+export{rk as BlockEmbed}from"../../../chunks/app-CU-XOSSx.js";

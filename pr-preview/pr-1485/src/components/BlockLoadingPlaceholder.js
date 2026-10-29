@@ -1,0 +1,1 @@
+export{Gj as BlockLoadingPlaceholder}from"../../chunks/app-CU-XOSSx.js";

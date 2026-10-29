@@ -1,0 +1,1 @@
+export{Kf as lintExtensionSource}from"../../../chunks/app-CU-XOSSx.js";

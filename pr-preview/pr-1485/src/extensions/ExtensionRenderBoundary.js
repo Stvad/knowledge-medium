@@ -1,0 +1,1 @@
+export{LN as ExtensionRenderBoundary}from"../../chunks/app-CU-XOSSx.js";
