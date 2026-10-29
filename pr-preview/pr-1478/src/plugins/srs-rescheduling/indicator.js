@@ -1,1 +1,0 @@
-export{Bc as srsBarClass,Vc as srsIndicatorTitle}from"../../../chunks/app-BqKMVLCy.js";

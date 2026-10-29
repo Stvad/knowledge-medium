@@ -1,1 +1,0 @@
-export{uk as TypeChip}from"../../../chunks/app-BqKMVLCy.js";

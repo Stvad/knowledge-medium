@@ -1,1 +1,0 @@
-export{KW as dailyNotesDataExtension}from"../../../chunks/app-BqKMVLCy.js";

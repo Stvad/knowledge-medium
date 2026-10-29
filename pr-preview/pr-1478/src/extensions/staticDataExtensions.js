@@ -1,1 +1,0 @@
-export{PV as staticDataExtensions}from"../../chunks/app-BqKMVLCy.js";

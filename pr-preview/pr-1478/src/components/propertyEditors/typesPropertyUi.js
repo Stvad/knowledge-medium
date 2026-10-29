@@ -1,1 +1,0 @@
-export{ak as kernelPropertyUiExtension,ok as typesPropertyUi,sk as typesPropertyUiExtension}from"../../../chunks/app-BqKMVLCy.js";

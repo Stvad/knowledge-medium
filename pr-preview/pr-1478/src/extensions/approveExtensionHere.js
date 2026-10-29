@@ -1,1 +1,0 @@
-export{gA as approveExtensionHere}from"../../chunks/app-BqKMVLCy.js";

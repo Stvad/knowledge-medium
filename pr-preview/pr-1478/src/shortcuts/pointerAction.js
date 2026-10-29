@@ -1,1 +1,0 @@
-export{WA as dispatchPointerAction,GA as setPointerActionDispatcher}from"../../chunks/app-BqKMVLCy.js";

@@ -1,1 +1,0 @@
-export{xq as aliasDataExtension}from"../../../chunks/app-BqKMVLCy.js";

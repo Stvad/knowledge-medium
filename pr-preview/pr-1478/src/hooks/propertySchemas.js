@@ -1,1 +1,0 @@
-export{jB as usePropertySchemas}from"../../chunks/app-BqKMVLCy.js";

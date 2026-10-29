@@ -1,1 +1,0 @@
-export{pI as BlockProperties}from"../../chunks/app-BqKMVLCy.js";
