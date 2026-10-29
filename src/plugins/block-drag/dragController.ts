@@ -112,8 +112,9 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
 
   const onPointerDown = (event: PointerEvent) => {
     const touch = event.pointerType !== 'mouse'
-    // A second finger leaves the running session alone.
-    if (touch && session) return
+    // A second finger leaves a live session alone; a cancelled one only
+    // waits to swallow its release, which a fresh press supersedes.
+    if (touch && session && session.phase !== 'cancelled') return
     // A mouse drag whose release never reached us (let go outside the
     // window) ends here; left live, the next click anywhere would drop it.
     end()

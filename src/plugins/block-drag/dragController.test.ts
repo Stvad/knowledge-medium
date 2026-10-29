@@ -441,6 +441,18 @@ describe('block drag controller', () => {
       expect(menus).toHaveLength(0)
     })
 
+    it('a fresh press recovers a hold cancelled by blur whose release never came', async () => {
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      window.dispatchEvent(new Event('blur')) // let go while the window was away
+      bullet('b').dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 2, pointerType: 'touch', button: 0, buttons: 1,
+        clientX: 10, clientY: 10,
+      }))
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      expect(isDimmed('b')).toBe(true)
+    })
+
     it('a pointercancel during the hold ends it', () => {
       touch('pointerdown', bullet('a'), 10, 10)
       touch('pointercancel', window, 10, 10)
