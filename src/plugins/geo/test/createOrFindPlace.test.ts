@@ -233,12 +233,12 @@ describe('addPlaceToExistingBlock', () => {
 })
 
 describe('undo grouping (issue #306)', () => {
-  it('Locations-page bootstrap + place creation record ONE undo entry', async () => {
+  it('place creation records ONE undo entry, which leaves the Locations container', async () => {
     const block = await create(DANDELION)
     expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
 
     expect(await env.repo.undo()).toBe(true)
     expect(await isBlockDeleted(env.repo, block.id)).toBe(true)
-    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(true)
+    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(false)
   })
 })

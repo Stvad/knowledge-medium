@@ -107,6 +107,11 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/updated-at', 'agent:updated-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/watcher', 'agent:watcher', 'string', 'string'],
   ['system:agent-runtime/property/subtree-key', 'agent:subtreeKey', 'string', 'string'],
+  ['system:annotations/property/quote-prefix', 'annotation:quotePrefix', 'optional-string', 'string'],
+  ['system:annotations/property/quote-start', 'annotation:quoteStart', 'optional-number', 'number'],
+  ['system:annotations/property/quote-suffix', 'annotation:quoteSuffix', 'optional-string', 'string'],
+  ['system:annotations/property/status', 'annotation:status', 'strict-enum', 'enum'],
+  ['system:annotations/property/target', 'annotation:target', 'ref', 'ref'],
   ['system:attachments/property/media-filename', 'media:filename', 'optional-string', 'string'],
   ['system:attachments/property/media-hash', 'media:hash', 'string', 'string'],
   ['system:attachments/property/media-mime', 'media:mime', 'string', 'string'],
@@ -199,6 +204,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
 ]
 
 export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
+  ['system:annotations/type/thread', 'annotation:thread'],
   ['system:attachments/type/assets', 'assets'],
   ['system:attachments/type/media', 'media'],
   ['system:backlinks/type/backlinks-prefs', 'backlinks-prefs'],

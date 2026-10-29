@@ -34,6 +34,11 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 
 describe('getOrCreatePropertiesPage', () => {
+  it('creates the container outside the undo history', async () => {
+    await getOrCreatePropertiesPage(env.repo, WS)
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
   it('creates the singleton as both a page and properties page', async () => {
     const block = await getOrCreatePropertiesPage(env.repo, WS)
 

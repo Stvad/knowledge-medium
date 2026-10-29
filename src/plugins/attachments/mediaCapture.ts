@@ -174,9 +174,9 @@ export const captureMedia = async (
     contentKey,
   })
 
-  // (4) Mint the asset under the workspace ASSETS container (idempotent ensure
-  // first, its own tx), then the asset block in one tx — one undo entry for the
-  // pair. The `((assetBlockId))` EMBED is NOT minted here — the caller
+  // (4) Mint the asset under the workspace ASSETS container, then the asset
+  // block in one tx. The container's ensure skips undo (a container, see
+  // `getOrCreateKernelPage`), so the asset block is the paste's undo entry. The `((assetBlockId))` EMBED is NOT minted here — the caller
   // (renderer) places it via the text-paste path, so a pasted attachment lands
   // at the caret per the text policy.
   let inserted = false
@@ -185,7 +185,7 @@ export const captureMedia = async (
       namespace: ASSETS_NS,
       alias: ASSETS_ALIAS,
       markerType: ASSETS_TYPE,
-    })
+    }, {skipUndo: true})
     const containerId = kernelPageBlockId(workspaceId, ASSETS_NS)
     const typeSnapshot = repo.snapshotTypeRegistries()
 

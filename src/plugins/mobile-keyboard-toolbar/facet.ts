@@ -14,7 +14,12 @@ export const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
  *  presentation lives on the action (a button with no resolved icon is skipped).
  *  Add an icon to an action to give it a button. The shape is shared with the
  *  bottom nav ({@link ActionRefContribution}). */
-export type MobileKeyboardToolbarItem = ActionRefContribution
+export interface MobileKeyboardToolbarItem extends ActionRefContribution {
+  /** The action moves focus out of the editor, such as into a composer it
+   *  opens. The toolbar then neither holds edit mode open across it nor puts
+   *  focus back in the editor afterwards. */
+  movesFocus?: boolean
+}
 
 // Rendered once per contribution keyed by `id` — dedup by `id` (last-wins),
 // like mobile-bottom-nav. Ordering is by contribution `precedence` (ascending),

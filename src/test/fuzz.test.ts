@@ -18,12 +18,16 @@
  *    and clobber, the new case's pin.
  *  - **`seed: null`**: skips the pin entirely (`Math.random` untouched)
  *    but the case still participates in the barrier chain.
+ *  - **per-test barrier**: a case its test abandoned settles before the
+ *    end-of-test Repo release (`testRepoScope.ts`).
  *
  * Plain deferred promises stand in for "a case that's still running" —
  * no fake timers, no `fc`, so these tests are fast and fully
  * deterministic.
  */
 import { describe, expect, it } from 'vitest'
+import type { Repo } from '@/data/repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 import { statefulFuzzGuard } from '@/test/fuzz'
 
 interface Deferred<T> {
@@ -47,8 +51,15 @@ const flush = async (times = 5): Promise<void> => {
 }
 
 describe('statefulFuzzGuard', () => {
+  // One guard per test, built at collection time as a suite builds its own:
+  // the guard registers an afterEach, which belongs to a suite, not a running
+  // test.
+  const registrationGuard = statefulFuzzGuard()
+  const pinGuard = statefulFuzzGuard()
+  const nullSeedGuard = statefulFuzzGuard()
+
   it('a case abandoned while awaiting its predecessor is still awaited by a later barrier() (synchronous registration)', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = registrationGuard
     const a = createDeferred<void>()
     const b = createDeferred<void>()
 
@@ -80,7 +91,7 @@ describe('statefulFuzzGuard', () => {
   })
 
   it('a new pin is installed only after the predecessor\'s body AND finally have both completed (barrier-before-pin)', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = pinGuard
     const nativeRandom = Math.random
     const a = createDeferred<void>()
     const b = createDeferred<void>()
@@ -133,7 +144,7 @@ describe('statefulFuzzGuard', () => {
   })
 
   it('seed: null skips the Math.random pin but the case still barriers behind its predecessor', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = nullSeedGuard
     const nativeRandom = Math.random
     const a = createDeferred<void>()
     const b = createDeferred<void>()
@@ -163,8 +174,37 @@ describe('statefulFuzzGuard', () => {
     expect(Math.random, 'restored once B settles').toBe(nativeRandom)
 
     // Sanity: barrier() itself resolves promptly once every case (pinned
-    // or not) has settled — the exact pattern every suite's `afterAll`
-    // relies on.
+    // or not) has settled — what the guard's own `afterEach` relies on.
     await guard.barrier()
+  })
+})
+
+describe('statefulFuzzGuard per-test barrier', () => {
+  // Built at collection time, as every suite builds its guard.
+  const guard = statefulFuzzGuard()
+  /** How long the abandoned case keeps running after its test returns —
+   *  far longer than the end-of-test hooks take to reach the release. */
+  const ABANDONED_CASE_MS = 50
+  let releasedWhileCaseRan: boolean | undefined
+
+  it('a case still running when its test returns', () => {
+    let released = false
+    // Only the calls `releaseTestRepos` makes; it records when the release
+    // reaches this Repo.
+    trackTestRepo({
+      flushSyncObserver: async () => {},
+      stopSyncObserver: () => {},
+      setActiveWorkspaceId: () => { released = true },
+      awaitDeferredWork: async () => {},
+    } as unknown as Repo)
+    // Not awaited: fast-check's time budget abandons the case the same way.
+    void guard.run(null, async () => {
+      await new Promise(resolve => setTimeout(resolve, ABANDONED_CASE_MS))
+      releasedWhileCaseRan = released
+    })
+  })
+
+  it('settles before that test\'s Repos are released', () => {
+    expect(releasedWhileCaseRan, 'the abandoned case finished before its test\'s Repo release').toBe(false)
   })
 })

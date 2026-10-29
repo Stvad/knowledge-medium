@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { BlockData, TypedBlockQuery } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { useBlockQuery, useHandle } from '@/hooks/block.js'
+import { contentCopyTypes } from '@/plugins/backlinks/edgeExclusions.js'
 import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import {
   UNRESOLVED_TAG_ID,
@@ -135,6 +136,7 @@ export const useReviewDeckCards = (
   // Going through `useDueCards` + a separate ready hook would re-run
   // `useDueCardsQuery` per call — three `aliasLookup` subscriptions and two
   // identical 60s midnight timers for one screen's worth of state.
+  const repo = useRepo()
   const {tagBlockId, resolved: tagResolved} = useTagBlockId(workspaceId, tagName)
   const startOfToday = useStartOfToday()
 
@@ -159,11 +161,11 @@ export const useReviewDeckCards = (
     // for a block the other already sees post-grade. Subtracting the due
     // ids keeps that window from queueing the same block twice.
     const dueIds = new Set(dueCards.map(c => c.id))
-    const newCards = selectNewCards(candidates).filter(c => !dueIds.has(c.id))
+    const newCards = selectNewCards(candidates, contentCopyTypes(repo)).filter(c => !dueIds.has(c.id))
     return {
       cards: [...dueCards, ...newCards],
       newIds: newCards.length === 0 ? EMPTY_IDS : new Set(newCards.map(c => c.id)),
       ready: tagResolved && dueReady && candidatesReady,
     }
-  }, [dueCards, candidates, tagResolved, dueReady, candidatesReady])
+  }, [repo, dueCards, candidates, tagResolved, dueReady, candidatesReady])
 }

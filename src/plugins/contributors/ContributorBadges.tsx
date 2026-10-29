@@ -2,7 +2,10 @@ import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import {useHandle} from '@/hooks/block.js'
+import {useMinuteClock} from '@/hooks/useMinuteClock.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
+import {useUserPage} from '@/data/globalState.js'
+import {formatAbsoluteDateTime, formatRelativeTime} from '@/utils/relativeTime.js'
 import {useOpenBlock} from '@/utils/navigation.js'
 import {
   cachedContentDecorator,
@@ -48,7 +51,7 @@ const ProfileLink = ({profile, workspaceId}: {profile: Profile; workspaceId: str
   )
 }
 
-const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+const useContributorProfiles = (block: Block): {attribution: Attribution | undefined; profiles: Map<string, Profile>} => {
   const attribution = useAttribution(block)
   const allIds = useMemo(() => [...new Set([...(attribution?.creators ?? []), ...(attribution?.editors ?? [])])], [attribution?.creators, attribution?.editors])
   const profileRows = useHandle(
@@ -75,6 +78,11 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
     })
     return byId
   }, [profileRows])
+  return {attribution, profiles}
+}
+
+const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const {attribution, profiles} = useContributorProfiles(block)
 
   const uniqueProfiles = (ids: readonly string[]): Profile[] =>
     [...new Map(ids.map(id => profiles.get(id)).filter((p): p is Profile => Boolean(p)).map(profile => [profile.id, profile])).values()]
@@ -125,6 +133,54 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   )
 }
 
-const decorate = cachedContentDecorator(ContributorBadgesView, 'WithContributorBadges')
+/** A surface that wants every block's author shown, humans included (a comment
+ *  card), sets this to its scope root's id in its `NestedBlockContextProvider`
+ *  overrides. Card mode covers the blocks under that root, not the root itself
+ *  (the card's header), and stops at any nested surface inside the card, which
+ *  resets the scope root. */
+export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
 
-export const contributorBadgesDecoratorContribution: BlockContentDecoratorContribution = () => decorate
+/** The author line of a card: the first recorded creator, which every agent
+ *  write has, else the `created_by` user, because human-only writes record no
+ *  attribution. `created_by` alone would be wrong for agents: bridge and MCP
+ *  writes run in the tab and stamp its human user. */
+const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const {attribution, profiles} = useContributorProfiles(block)
+  const meta = useHandle(block, {
+    selector: data => data ? {createdBy: data.createdBy, createdAt: data.createdAt, workspaceId: data.workspaceId} : undefined,
+  })
+  const userPage = useUserPage(meta?.createdBy ?? '', meta?.workspaceId)
+  const now = useMinuteClock()
+  // A recorded creator wins even before its profile row loads (or syncs), so
+  // an agent's comment never shows the tab's human as its author.
+  const creatorId = attribution?.creators[0]
+  const creator = creatorId ? profiles.get(creatorId) : undefined
+  const authorId = creatorId ?? userPage.blockId
+  const authorName = creatorId ? creator?.name ?? 'Contributor' : userPage.name
+  const open = useOpenBlock({blockId: authorId ?? '', workspaceId: meta?.workspaceId ?? ''})
+  const href = useAppHashInContext(meta?.workspaceId ?? '', authorId ?? '')
+  if (!meta) return <Inner block={block}/>
+  return (
+    <div className="w-full">
+      <div className="flex items-baseline gap-1 text-xs leading-5 text-muted-foreground">
+        {authorId
+          ? <a href={href} onClick={open} className="font-medium text-foreground hover:underline">{authorName}</a>
+          : <span className="font-medium text-foreground">{authorName}</span>}
+        {creator && creator.kind !== 'human' && <span>· {creator.kind}</span>}
+        <span title={formatAbsoluteDateTime(meta.createdAt)}>· {formatRelativeTime(meta.createdAt, now)}</span>
+      </div>
+      <Inner block={block}/>
+    </div>
+  )
+}
+
+const decorate = cachedContentDecorator(ContributorBadgesView, 'WithContributorBadges')
+const decorateCard = cachedContentDecorator(ContributorCardView, 'WithContributorCard')
+
+const inCardBody = ({block, blockContext}: Parameters<BlockContentDecoratorContribution>[0]): boolean => {
+  const root = blockContext?.[CONTRIBUTOR_CARD_MODE_KEY]
+  return typeof root === 'string' && root === blockContext?.scopeRootId && block.id !== root
+}
+
+export const contributorBadgesDecoratorContribution: BlockContentDecoratorContribution = ctx =>
+  inCardBody(ctx) ? decorateCard : decorate
