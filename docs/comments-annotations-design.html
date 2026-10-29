@@ -70,7 +70,7 @@
   <li>moved the margin to a panel mount;</li>
   <li>cut the MCP tools and queries down.</li>
 </ul>
-<p style="margin:.4rem 0 0">A later revision added <a href="#range-refs">range references</a> (quoting part of a block from other text). It also moved the quote into the thread root's content.</p>
+<p style="margin:.4rem 0 0">A later revision added <a href="#range-refs">range references</a> (quoting part of a block from other text). It also moved the quote into the thread root's content. The rules now hold for <a href="#nested">nested threads</a> at any depth.</p>
 <p style="margin:.4rem 0 0">An earlier design for the same feature is open as PR #332 (<code>docs/block-range-annotations-design.html</code> on its branch); the last section compares them. <strong>Last verified against code:</strong> 2026-10-28.</p>
 </aside>
 
@@ -226,7 +226,7 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 <p>Putting the first comment's text on the root would save one block per thread. That is rejected for two reasons:</p>
 <ul>
   <li><strong>Agent writes to the metadata.</strong> When an agent resolves a thread, re-anchors it, or answers a suggestion, the contributors processor attributes that write to the block it lands on. With a separate root it lands on the metadata block, not on somebody's comment. (Human-only writes record no attribution either way, so this is about agent writes.)</li>
-  <li><strong>Uniform rendering.</strong> Every comment is a sibling under the root, so the side surface renders one list rather than "the root" plus "the rest".</li>
+  <li><strong>Uniform rendering.</strong> The card renders the root's subtree, so every comment is a comment at whatever depth it sits, rather than "the root" plus "the rest". Nested replies need nothing extra (see <a href="#nested">Nested threads</a>).</li>
 </ul>
 <p>Comment blocks carry no type: a comment is simply a visible descendant of a thread root. A second marker would be a second source of truth, and hand-typed replies would not carry it.</p>
 
@@ -383,7 +383,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
     <ul>
       <li>When B is edited, the quote follows (moved).</li>
       <li>When the quoted text is gone (stale), X shows the stored quote, marked as changed.</li>
-      <li>Clicking the quote goes to B, with T's card focused. A <code>navigationVerb</code> contribution redirects navigation to a thread root onto its target, which also covers search results that hit a root.</li>
+      <li>Clicking the quote goes to B, with T's card focused. A <code>navigationVerb</code> contribution redirects navigation to a thread root, or to any comment in its thread, onto the target, with the card focused and that comment in view. It also covers search results that hit a root or a comment.</li>
     </ul>
   </li>
   <li><strong>Annotate.</strong> In B's margin, T's card lists X under "Quoted in", rendered like a backlink entry (breadcrumb, editable in place). So quoting B shows up on B as an annotation, beside any discussion of the same range. Replying in the card turns the quote into a discussion.</li>
@@ -481,7 +481,8 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
   </li>
   <li><strong>Placement.</strong> Each card goes at its target row's top in the panel's primary render scope. Rows mount lazily (<code>LazyBlockComponent</code>), so a row that has not mounted yet is placed from its placeholder's estimated position, and its card moves once the row mounts. The order is by target position, then by quote start. A card's top is its anchor's height or just below the previous card, whichever is lower.</li>
   <li><strong>Collapsed blocks.</strong> Threads anchored inside a collapsed subtree are shown as a single stub on the nearest rendered ancestor.</li>
-  <li><strong>The card.</strong> A card renders the thread root through <code>BlockComponent</code> in a nested surface, so its comments are normal editable blocks. The header shows the quote ("whole block" when there is none), a moved or stale badge when it applies, and Resolve. Suggestion cards also show the diff, with Accept and Reject. Below the comments, "Quoted in" lists the blocks that quote this range. The footer has Reply.</li>
+  <li><strong>The card.</strong> A card renders the thread root through <code>BlockComponent</code> in a nested surface, so its comments are normal editable blocks. The header shows the quote ("whole block" when there is none), a moved or stale badge when it applies, and Resolve. Suggestion cards also show the diff, with Accept and Reject. Below the comments, "Quoted in" lists the blocks that quote this range. Each comment has its own Reply.</li>
+  <li><strong>Threads on comments.</strong> A thread anchored to a comment, such as a quote-reply or an embellishment on a phrase in a comment, renders inside that comment's card, as a highlight with its attachment. It never gets a margin card of its own.</li>
   <li><strong>Closed threads</strong> (resolved, accepted or rejected) are hidden behind "show closed".</li>
   <li><strong>Narrow panels and mobile.</strong> When the panel is too narrow for text plus margin, the margin turns off, and the comment pill expands the threads inline under the block.</li>
   <li><strong>"All comments"</strong> is an action that opens the container page, where the thread renderer shows each target. A filtered query view (open threads, by author, by scope) comes later.</li>
@@ -502,12 +503,13 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
 <ul>
   <li><strong>Block-level comment:</strong> the same action in normal mode, or the bullet context menu.</li>
   <li><strong>Highlight:</strong> the same flow without the composer, giving a thread with no comments.</li>
-  <li><strong>Reply:</strong> creates an empty child of the root and focuses it. From there it is ordinary block editing.</li>
+  <li><strong>Reply:</strong> creates an empty child of the comment being answered (or of the root, for a reply to the thread) and focuses it. From there it is ordinary block editing.</li>
   <li><strong>Resolve and reopen:</strong> set <code>annotation:status</code>.</li>
   <li><strong>Delete:</strong>
     <ul>
       <li>Deleting a thread deletes the root's subtree.</li>
       <li>Deleting the last comment from its card also deletes the thread. That is a UI rule only.</li>
+      <li>Deleting a comment that has replies, from its card, blanks it to "[deleted]" instead of removing it. Deleting a block deletes its children, and those replies may be someone else's, for example an agent's. Deleting in the outline still removes the subtree, and undo restores it.</li>
       <li>A root with no comments that arises any other way (sync, an agent, hand-editing) is simply a highlight, which is a valid state.</li>
     </ul>
   </li>
@@ -518,6 +520,36 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
   <li><strong>Commenting on a read-mode selection.</strong> It needs a mapping from the DOM selection to raw offsets, and none exists. It also needs a guard so that a drag-select does not end in the click that enters edit mode (<code>plain-outliner/clickToEditAction.ts</code>). That guard would decorate the action through the action-dispatch seam, the way vim-normal-mode does.</li>
   <li><strong>A selection spanning several blocks.</strong> One thread has one target.</li>
 </ul>
+
+<h3 id="nested">Nested threads</h3>
+<p>Replies are children of the comment they answer, so a thread is already a tree. Nested, LessWrong-style threads need no data change, only these rules, which the sections above already follow:</p>
+<ol>
+  <li><strong>Replies go under the comment they answer:</strong> one Reply per comment, and agent replies land under the comment the agent is answering.</li>
+  <li><strong>Agent context is a chain,</strong> from the thread root down to the comment being answered, plus the anchor, never the whole tree.</li>
+  <li><strong>Scope is recursive:</strong> threads anchored to comments of in-scope threads are in scope too.</li>
+  <li><strong>A comment with replies is blanked, not removed,</strong> when deleted from its card.</li>
+  <li><strong>Navigating to any comment</strong> lands on the target, with the card focused and that comment in view.</li>
+  <li><strong>A thread anchored to a comment renders inside that comment's card.</strong></li>
+</ol>
+<p>Two sources shaped these, and point at what a later nested UI could add.</p>
+<ul>
+  <li><strong>LessWrong:</strong> nested replies with collapse, sorting and permalinks; "[deleted]" placeholders that keep replies alive; quote-replies; and side-comments in the margin, which is the margin design here.</li>
+  <li><strong>Max Krieger's <a href="https://a9.io/glue-comic/">Chatting with Glue</a>:</strong> conversation as an outline of atomic messages, where a tangent nests under its parent instead of moving to a side panel. That is this thread model. Its other ideas map onto pieces that already exist:
+    <ul>
+      <li>Its "highlight as a bidirectional reply" is a range reference: a child comment containing <code>((T))</code>, where T anchors the span in the parent comment.</li>
+      <li>Its "embellishments" (a reaction, a pointer, a reminder with a checkbox) are threads whose root also carries another type, such as <code>todo</code>. The root may compose other types.</li>
+      <li>Its "edits as messages, marked accepted" are edit suggestions.</li>
+    </ul>
+  </li>
+</ul>
+<p>Not adopted yet, though nothing here blocks them:</p>
+<ul>
+  <li>splitting a comment into bullets to reply to each part (Glue's "expand", which is an ordinary block split);</li>
+  <li>hand-written summaries on collapsed branches;</li>
+  <li>a "what's new, each with a little context" view;</li>
+  <li>per-message unread markers.</li>
+</ul>
+<p>Per-reader state, meaning unread markers and per-reader collapse, belongs in each user's UI state, never on comment blocks. Today's collapse is a synced block property, so collapsing a branch collapses it on every device. That is fine for one reader.</p>
 
 <h3>Authorship</h3>
 <div class="two">
@@ -586,7 +618,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
   <li><strong>The pill count:</strong> the backlink batcher with the <code>annotation:target</code> edge field (see <a href="#references">Comments and references</a>), batched over the rendered blocks like the reference count.</li>
   <li><strong>One block's threads</strong> (inline expansion, highlights): <code>core.typedBlockIds({types: ['annotation:thread'], referencedBy: {id, sourceField: 'annotation:target'}})</code>, filtered by status.</li>
   <li><strong>One thread:</strong> the card renders the root through <code>BlockComponent</code>. Any non-UI read uses <code>core.subtree({id, hidePropertyChildren: true})</code>, with authors resolved through <code>contributors.profilesByIds</code>.</li>
-  <li><strong>Every thread anchored under a scope</strong> is the one genuinely new read. Its consumers are agents, so it lands in slice 2. The typed query language can't express it, because its <code>target</code> operator matches the target's properties, not its ancestry (<code>src/data/api/typedBlockQuery.ts</code>).</li>
+  <li><strong>Every thread anchored under a scope</strong> is the one genuinely new read. Its consumers are agents, so it lands in slice 2. Scope is recursive. It covers threads anchored to blocks under the scope, and also threads anchored to the comments of those threads, such as quote-replies and annotations on a comment. Those live under <code>Comments (km)</code>, not under the page, so a plain subtree walk would miss them. The typed query language can't express it, because its <code>target</code> operator matches the target's properties, not its ancestry (<code>src/data/api/typedBlockQuery.ts</code>).</li>
 </ul>
 
 <h3 id="agents">For agents: tools</h3>
@@ -617,17 +649,17 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>A mention inside a thread.</strong> <code>[[claude]] can you check this?</code> in a comment is a backlink to the watcher's target page, so today's backlinks watcher claims it and replies under it. That is a nested reply in the thread, with the existing per-mention semantics unchanged: claim, attempts, stale sweep, cancel, chips and session resume. Two changes:
     <ul>
       <li><strong>Bookkeeping writes are unattributed.</strong> The daemon sends <code>setTaskProps</code> and <code>clearCancel</code> through a client with <code>contributorId: null</code>, and the contributors processor records nothing for those (<code>processor.ts:113</code>). Today those writes list the agent as an editor of <em>any</em> block that mentions it. With this change a person's comment, or note, keeps exactly the authors who wrote it. This is about three lines in <code>packages/agent-dispatch/src/graph.ts</code>. The reply itself stays attributed to the agent.</li>
-      <li><strong>Prompt context.</strong> When the mention sits inside a thread, the prompt builder adds the target block's content, the quote, the page path, and the thread so far with its authors. Without that, the agent would see only the container and the thread.</li>
+      <li><strong>Prompt context.</strong> When the mention sits inside a thread, the prompt builder adds the target block's content, the quote, the page path, and the chain from the thread root down to the mentioning comment, with authors. Without that, the agent would see only the container and the thread. A chain rather than the whole tree keeps the prompt bounded on long threads; siblings can be fetched on demand through the tools.</li>
     </ul>
   </li>
   <li><strong>Monitoring a scope without being mentioned</strong> is a <code>query</code> watcher running a comments recipe. That watcher already exists: it fires once per batch of new ids, sets a first-run baseline so old comments are not replayed, and keeps a seen-ids cursor that advances before the run, so it survives restarts and never re-bills a failed prompt. It already pushes through a <code>watch-events</code> <code>sql</code> watcher, whose fingerprint changes whenever a new id appears. The recipe, shipped in the guide's <code>comments</code> topic, selects comment ids in the scope that are:
     <ul>
-      <li>visible descendants of open threads anchored under the scope;</li>
+      <li>visible descendants, at any depth, of open threads in the (recursive) scope;</li>
       <li>non-empty, so a freshly created empty reply waits until it has text;</li>
       <li>not created by an agent or automation contributor, which is the loop guard, and also stops two agents on one scope from ping-ponging;</li>
       <li>not mentioning a dispatch target page, so a <code>[[claude]]</code> comment is answered once, by the mention watcher.</li>
     </ul>
-    The run replies with <code>append_markdown</code> under the thread root, as the agent's contributor.
+    The run replies with <code>append_markdown</code> under the comment it is answering, as the agent's contributor, with the same root-to-comment chain as its context.
   </li>
 </ol>
 
@@ -659,7 +691,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
     <text x="225" y="73">writes a comment in the scope</text>
     <text x="455" y="108">recipe rows changed → watcher-settled</text>
     <text x="680" y="188">prompt: thread + target + quote</text>
-    <text x="567" y="223">append_markdown under the thread root (as the agent)</text>
+    <text x="567" y="223">append_markdown under the answered comment (as the agent)</text>
     <text x="225" y="258">reply appears in the margin</text>
   </g>
   <rect x="470" y="135" width="200" height="40" rx="5" fill="#ddf4ff" stroke="#0969da"/>
@@ -667,7 +699,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <text x="570" y="166" font-size="10.5" text-anchor="middle" fill="#1f2328">the cursor advances first</text>
   <text x="570" y="286" font-size="10.5" text-anchor="middle" fill="#57606a">the agent's reply is agent-authored, so the recipe never selects it</text>
 </svg>
-<figcaption>Monitoring a scope with the existing <code>query</code> watcher. What is lost compared with a dedicated kind: no per-thread session resume, since each run starts fresh. The prompt carries the thread so far instead.</figcaption>
+<figcaption>Monitoring a scope with the existing <code>query</code> watcher. What is lost compared with a dedicated kind: no per-thread session resume, since each run starts fresh. The prompt carries the chain from the thread root down to the comment instead.</figcaption>
 </figure>
 
 <h2 id="not-handled">Deliberately not handled</h2>
@@ -743,7 +775,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>Agents.</strong> Unattributed bookkeeping writes in the daemon, thread context in the mention prompt, the scope read, the comments recipe in the guide, and the <code>comments</code> and <code>add_comment</code> tools.</li>
   <li><strong>Side margin.</strong> The panel mount, the re-anchor write and its UI ("confirm position", reselect), and read-mode highlights (spike first).</li>
   <li><strong>Edit suggestions.</strong> The <code>annotation:replacement</code> seed and the status widening; the suggest gesture and composer; the accept and reject transactions; the diff card and the suggestion highlight style; and <code>add_comment</code>'s <code>replacement</code> argument.</li>
-  <li><strong>Range references.</strong> Copy reference to selection (with reuse of an exact existing thread), the thread renderer's inline reference form, the <code>navigationVerb</code> redirect from a thread root to its target, and "Quoted in" on the card.</li>
+  <li><strong>Range references.</strong> Copy reference to selection (with reuse of an exact existing thread), the thread renderer's inline reference form, the <code>navigationVerb</code> redirect from a thread root, or any comment in it, to its target, and "Quoted in" on the card.</li>
   <li><strong>Later.</strong> Read-mode selection, split retargeting, the filtered "all comments" view, mentions in the margin, an inline diff widget for suggestions, and a dedicated watcher kind if per-thread sessions turn out to matter.</li>
 </ol>
 
@@ -768,6 +800,13 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
       <li>refuses on stale, moved or deleted targets;</li>
       <li>is one undo step;</li>
       <li>refuses a duplicate of an applied suggestion, both mid-block and with the quote at the very start or the very end of the block, where the stored context is shorter than 16 characters or empty.</li>
+    </ul>
+  </li>
+  <li><strong>Nested threads:</strong>
+    <ul>
+      <li>the scope read returns a thread anchored to a comment of an in-scope thread;</li>
+      <li>deleting a comment with replies from its card keeps the replies;</li>
+      <li>navigating to a deep comment lands on the target with that comment in view.</li>
     </ul>
   </li>
   <li><strong>Range references:</strong>
