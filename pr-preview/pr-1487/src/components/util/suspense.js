@@ -1,0 +1,1 @@
+export{yV as SuspenseFallback}from"../../../chunks/app-C9oOwIeB.js";

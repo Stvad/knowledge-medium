@@ -1,0 +1,1 @@
+export{Ck as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,wk as OPEN_PREFERENCES_ACTION_ID,Tk as RELOAD_IN_SAFE_MODE_ACTION_ID,Ek as defaultActionContextsExtension,Dk as defaultActionsExtension,Ok as getDefaultActionGroups,kk as getDefaultActions}from"../../chunks/app-C9oOwIeB.js";

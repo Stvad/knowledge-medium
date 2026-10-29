@@ -1,0 +1,1 @@
+export{XU as geoDataExtension}from"../../../chunks/app-C9oOwIeB.js";

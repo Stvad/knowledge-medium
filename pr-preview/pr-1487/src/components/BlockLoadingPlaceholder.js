@@ -1,0 +1,1 @@
+export{Xj as BlockLoadingPlaceholder}from"../../chunks/app-C9oOwIeB.js";

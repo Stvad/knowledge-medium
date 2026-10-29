@@ -1,0 +1,1 @@
+export{Iv as useAssetObjectUrl}from"../../../chunks/app-C9oOwIeB.js";

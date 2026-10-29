@@ -1,0 +1,1 @@
+export{fp as assertActiveWorkspace}from"../../../chunks/app-C9oOwIeB.js";

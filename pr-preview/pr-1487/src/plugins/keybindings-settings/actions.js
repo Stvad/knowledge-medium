@@ -1,0 +1,1 @@
+export{ID as openKeybindingsSettingsAction}from"../../../chunks/app-C9oOwIeB.js";

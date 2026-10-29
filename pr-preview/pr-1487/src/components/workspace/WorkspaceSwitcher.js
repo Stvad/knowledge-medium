@@ -1,0 +1,1 @@
+export{WS as WorkspaceSwitcher}from"../../../chunks/app-C9oOwIeB.js";

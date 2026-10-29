@@ -1,0 +1,1 @@
+export{KI as declarationOnlyDefinitionForName,qI as declarationOnlyStatusText}from"../../../chunks/app-C9oOwIeB.js";

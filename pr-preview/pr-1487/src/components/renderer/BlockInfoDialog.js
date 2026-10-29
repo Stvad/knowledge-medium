@@ -1,0 +1,1 @@
+export{VN as BlockInfoDialog}from"../../../chunks/app-C9oOwIeB.js";

@@ -1,0 +1,1 @@
+export{OA as appUpdatePromptExtension}from"../../../chunks/app-C9oOwIeB.js";

@@ -1,0 +1,1 @@
+export{YD as useCommandPaletteActions}from"../../../chunks/app-C9oOwIeB.js";
