@@ -135,16 +135,22 @@ export const copyBlockIdsToClipboard = async (
  *
  *  Armed only after the write resolved. A refused write throws, and the
  *  clipboard still holds whatever it held before, which the cut must not
- *  claim. */
+ *  claim.
+ *
+ *  `'empty'`: the blocks serialize to no text (one blank, childless block),
+ *  and a paste of no text never reaches the paste handlers, so nothing could
+ *  complete the cut. Nothing is written or armed. */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
-): Promise<void> => {
-  if (!blockIds.length) return
+): Promise<'cut' | 'empty'> => {
+  if (!blockIds.length) return 'empty'
   const first = repo.block(blockIds[0])
   const workspaceId = (first.peek() ?? await first.load())?.workspaceId
   if (!workspaceId) throw new Error(`Cannot cut: block ${blockIds[0]} not found`)
   const data = await serializeSelectedBlocks([...blockIds], repo)
+  if (data.markdown === '') return 'empty'
   await writeToClipboard(data)
   await armCut(data.markdown, {workspaceId, rootIds: blockIds})
+  return 'cut'
 }

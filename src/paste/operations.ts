@@ -6,7 +6,7 @@ import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
 import { showError, showInfo } from '@/utils/toast.js'
-import { disarmCut, matchArmedCut } from './armedCut.js'
+import { disarmCut, getArmedCut, matchArmedCut } from './armedCut.js'
 import {
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
@@ -535,7 +535,9 @@ export type CutPasteOutcome =
 
 type CutMoveResult =
   | {kind: 'moved'; rootIds: string[]; missing: number}
-  | {kind: 'cut-gone'}
+  /** Consumed by an overlapping paste, or every cut block was deleted since:
+   *  either way the text pastes as usual, and nothing is left to duplicate. */
+  | {kind: 'not-a-cut'}
   | {kind: 'refused'; message: string}
 
 /** Is `id` strictly inside one of `rootIds`' subtrees? Walks `parentId`
@@ -628,6 +630,11 @@ export async function pasteArmedCut(
   let result: CutMoveResult
   try {
     result = await repo.tx(async (tx): Promise<CutMoveResult> => {
+      // The cut is checked and consumed INSIDE the tx: the write lock orders
+      // overlapping pastes, so a second one finds it spent and pastes text, as
+      // a second ⌘V does. Should the commit fail after the disarm, the cut is
+      // lost but nothing moved, so the user can cut again.
+      if (getArmedCut()?.cutId !== cut.cutId) return {kind: 'not-a-cut'}
       const target = await tx.get(pasteTarget.id)
       if (!target || target.deleted) {
         return {kind: 'refused', message: 'The block you pasted at no longer exists'}
@@ -637,7 +644,10 @@ export async function pasteArmedCut(
         const row = await tx.get(id)
         if (row && !row.deleted) live.push(id)
       }
-      if (live.length === 0) return {kind: 'cut-gone'}
+      if (live.length === 0) {
+        disarmCut(cut.cutId)
+        return {kind: 'not-a-cut'}
+      }
 
       const liveSet = new Set(live)
       if (liveSet.has(target.id) || await isInsideAny(tx, target.id, liveSet)) {
@@ -652,6 +662,7 @@ export async function pasteArmedCut(
       await moveBlocksInTx(tx, roots, destination.move)
       if (destination.revealTarget) await revealChildren(tx, target.id)
       if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})
+      disarmCut(cut.cutId)
       return {kind: 'moved', rootIds: roots, missing: cut.rootIds.length - live.length}
     }, {scope: ChangeScope.BlockDefault, description: 'paste cut blocks'})
   } catch (error) {
@@ -662,17 +673,11 @@ export async function pasteArmedCut(
     return {kind: 'refused'}
   }
 
-  if (result.kind === 'cut-gone') {
-    // Every cut block was deleted since the cut: nothing is left to
-    // duplicate, so the text pastes as usual.
-    disarmCut(cut.cutId)
-    return null
-  }
+  if (result.kind === 'not-a-cut') return null
   if (result.kind === 'refused') {
     showError(result.message)
     return {kind: 'refused'}
   }
-  disarmCut(cut.cutId)
   if (result.missing > 0) {
     showInfo(`${pluralize(result.missing, 'cut block')} no longer existed; moved the rest`)
   }
@@ -757,10 +762,9 @@ export async function pasteFromClipboard(
   options: PasteOptions = {},
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
-  // Before the empty-text bail: a cut of a blank block leaves empty text.
+  if (!text) return []
   const cutPaste = await pasteArmedCut(text, pasteTarget, repo, options)
   if (cutPaste) return cutPaste.kind === 'moved' ? cutPaste.blocks : []
-  if (!text) return []
 
   const runtime = repo.facetRuntime
   if (!runtime) return pasteMultilineText(text, pasteTarget, repo, options)

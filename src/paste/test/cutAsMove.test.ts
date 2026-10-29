@@ -84,6 +84,20 @@ describe('pasteArmedCut', () => {
     expect(await pasteArmedCut(CUT_TEXT, repo.block('b'), repo, {scopeRootId: 'page'})).toBeNull()
   })
 
+  it('moves once when two pastes overlap: the second pastes text, as a second paste does', async () => {
+    await seedPage()
+    await arm(['a'])
+
+    const [first, second] = await Promise.all([
+      pasteArmedCut(CUT_TEXT, repo.block('y'), repo, {scopeRootId: 'page'}),
+      pasteArmedCut(CUT_TEXT, repo.block('b'), repo, {scopeRootId: 'page', placement: 'sibling'}),
+    ])
+
+    expect(first?.kind).toBe('moved')
+    expect(second).toBeNull()
+    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'a'])
+  })
+
   it('is not a cut when the clipboard holds other text, and disarms', async () => {
     await seedPage()
     await arm(['a'])

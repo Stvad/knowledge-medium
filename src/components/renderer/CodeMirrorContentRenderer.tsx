@@ -15,6 +15,7 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
 import { readClipboardContent } from '@/paste/clipboard.js'
+import { flushEditorContent } from '@/editor/contentFlush.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -91,6 +92,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
+      // The stored row lags the view by the content debounce. The move reads
+      // the stored row (a blank target is replaced), so persist the live text
+      // first: the flush takes the write lock ahead of the move's tx.
+      flushEditorContent(editorView)
       const cutPaste = await pasteArmedCut(content.text, block, repo, {
         scopeRootId: blockContext.scopeRootId,
       })

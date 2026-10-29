@@ -1274,12 +1274,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks} = deps
     if (!selectedBlocks.length) return
+    let outcome: 'cut' | 'empty'
     try {
-      await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
     } catch (error) {
       // A refused clipboard write armed nothing; keep the selection to retry.
       console.error('[cut] clipboard write failed', error)
       showError("Couldn't write to the clipboard, so nothing was cut")
+      return
+    }
+    if (outcome === 'empty') {
+      showInfo('Nothing to cut: the block is empty. Drag it or use Move to… instead')
       return
     }
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)

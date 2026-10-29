@@ -210,4 +210,24 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     expect(pasteArmedCut).not.toHaveBeenCalled()
     expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1)
   })
+
+  it('persists text typed within the content debounce before completing a cut', async () => {
+    // The move replaces a blank target, judged on the STORED row, so unflushed
+    // typing in an empty block would be deleted with it.
+    let storedWhenMoveRan: string | undefined
+    vi.mocked(pasteArmedCut).mockImplementationOnce(async (_text, target) => {
+      // Queued behind any flushed write, as the real move's tx is.
+      await repo.tx(async tx => { storedWhenMoveRan = (await tx.get(target.id))?.content },
+        {scope: ChangeScope.BlockDefault, description: 'read the stored target'})
+      return {kind: 'refused'}
+    })
+    const {content, editorView} = renderEditor()
+
+    act(() => {
+      editorView.dispatch({changes: {from: editorView.state.doc.length, insert: ' typed'}})
+      dispatchPaste(content, '- cut text')
+    })
+
+    await vi.waitFor(() => expect(storedWhenMoveRan).toBe('Block typed'))
+  })
 })

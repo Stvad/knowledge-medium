@@ -47,6 +47,15 @@ describe('cutBlockIdsToClipboard', () => {
     expect((await repo.block('a').load())?.deleted).toBe(false)
   })
 
+  it('refuses an empty cut: nothing written, nothing armed', async () => {
+    await repo.tx(tx => tx.create({id: 'blank', workspaceId: WS, parentId: 'page', orderKey: 'a2', content: ''}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cutBlockIdsToClipboard(['blank'], repo)).toBe('empty')
+    expect(clipboardText).toBeNull()
+    expect(getArmedCut()).toBeNull()
+  })
+
   it('arms nothing when the clipboard refuses the write', async () => {
     vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
 

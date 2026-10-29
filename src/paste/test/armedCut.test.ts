@@ -82,6 +82,21 @@ describe('armed cut across tabs (shared localStorage)', () => {
     expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('match')
   })
 
+  it('keeps the cut in memory when storage reads work but writes fail', async () => {
+    // A full quota: reads still return whatever was stored before.
+    store.set('knowledge-medium:armed-cut', 'stale')
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: () => { throw new Error('QuotaExceededError') },
+      removeItem: (key: string) => { store.delete(key) },
+    })
+
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
+
+    expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('match')
+    expect(getArmedCut()?.rootIds).toEqual(['a'])
+  })
+
   it('ignores a malformed record rather than acting on it', async () => {
     await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
     for (const key of store.keys()) store.set(key, '{"rootIds": 3}')

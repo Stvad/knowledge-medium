@@ -10,10 +10,11 @@
  * stale but never wrong: if the user copied something else since, the paste
  * text no longer matches and the paste is an ordinary one.
  *
- * Every in-app clipboard write updates it: a cut arms, any other copy
- * disarms. Writes from other apps can't, which is what the digest check is
- * for. Inherent limit: plain text from elsewhere that is IDENTICAL to the
- * cut's text matches it.
+ * A cut arms it; the block copy helpers and any native copy or cut in the
+ * page (`@/extensions/armedCutAppMount.js`) disarm it. Writes from other apps
+ * can't, which is what the digest check is for. Inherent limit: plain text
+ * from elsewhere that is IDENTICAL to the cut's text matches it. (The app's
+ * other clipboard writers, a token or a JSON dump, can't produce block text.)
  */
 
 import { CallbackSet } from '@/utils/callbackSet.js'
@@ -40,6 +41,9 @@ export type ArmedCutMatch =
 const STORAGE_KEY = 'knowledge-medium:armed-cut'
 
 let memoryRaw: string | null = null
+/** Set while localStorage takes reads but refuses writes (a full quota):
+ *  what it holds then is stale, so this tab reads its in-memory copy. */
+let storageWriteFailed = false
 let snapshot: {raw: string | null; cut: ArmedCut | null} = {raw: null, cut: null}
 const listeners = new CallbackSet('armed-cut')
 
@@ -52,7 +56,7 @@ const storage = (): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null =
 }
 
 const readRaw = (): string | null => {
-  const store = storage()
+  const store = storageWriteFailed ? null : storage()
   if (store) {
     try {
       return store.getItem(STORAGE_KEY)
@@ -70,8 +74,10 @@ const writeRaw = (raw: string | null): void => {
     try {
       if (raw === null) store.removeItem(STORAGE_KEY)
       else store.setItem(STORAGE_KEY, raw)
+      storageWriteFailed = false
     } catch {
-      // Blocked storage: the cut stays armed in this tab only.
+      // The cut stays armed in this tab only.
+      storageWriteFailed = true
     }
   }
   listeners.notify()

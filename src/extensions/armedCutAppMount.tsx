@@ -1,7 +1,7 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { appMountsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
-import { getArmedCut, subscribeArmedCut } from '@/paste/armedCut.js'
+import { disarmCut, getArmedCut, subscribeArmedCut } from '@/paste/armedCut.js'
 
 /** Block ids are generated (uuids, deterministic hashes); anything else is
  *  left undimmed rather than spliced into a selector. */
@@ -17,12 +17,24 @@ export const armedCutStyles = (rootIds: readonly string[]): string => {
   return selectors.length ? `${selectors.join(',\n')} { opacity: 0.45; }` : ''
 }
 
-/** Dims the blocks of the armed cut (`@/paste/armedCut.js`) until a paste
- *  moves them or another copy disarms them. Can outlive the cut when the
- *  user copies something in another app (the app can't see that) — cosmetic
- *  only: whether a paste moves is decided by the clipboard text, and the next
- *  paste in the app clears it. */
-export function ArmedCutDim() {
+/** The armed cut's page-level surface (`@/paste/armedCut.js`):
+ *  - a native copy or cut anywhere in the page (selected editor text) puts
+ *    new content on the clipboard, so it disarms. Block cut and copy go
+ *    through the async clipboard API, which fires no such event;
+ *  - the cut's blocks are dimmed until a paste moves them or a copy disarms
+ *    them. The dim can outlive the cut when the user copies in another app,
+ *    which the page can't see: cosmetic only, since whether a paste moves is
+ *    decided by the clipboard text, and the next paste in the app clears it. */
+export function ArmedCutMount() {
+  useEffect(() => {
+    const onClipboardWrite = () => disarmCut()
+    document.addEventListener('copy', onClipboardWrite, true)
+    document.addEventListener('cut', onClipboardWrite, true)
+    return () => {
+      document.removeEventListener('copy', onClipboardWrite, true)
+      document.removeEventListener('cut', onClipboardWrite, true)
+    }
+  }, [])
   const cut = useSyncExternalStore(subscribeArmedCut, getArmedCut, () => null)
   const css = cut ? armedCutStyles(cut.rootIds) : ''
   return css ? <style>{css}</style> : null
@@ -30,7 +42,7 @@ export function ArmedCutDim() {
 
 export const armedCutAppMountExtension: AppExtension = [
   appMountsFacet.of(
-    {id: 'core.armed-cut-dim', component: ArmedCutDim},
+    {id: 'core.armed-cut', component: ArmedCutMount},
     {source: 'core'},
   ),
 ]
