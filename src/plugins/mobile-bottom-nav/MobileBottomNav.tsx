@@ -6,39 +6,33 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import { MobileBottomNavButton } from './Button.tsx'
 
-function MobileBottomNavActionButton({
+/** A bar button for an action ref: drawn from the action's icon and
+ *  description, enabled while the action's context is active, and dispatched
+ *  with that context's deps through the supplied-deps path (deps validation,
+ *  `canDispatch`, error logging). `trigger` names the synthesized event. */
+export function ActionRefBarButton({
   action,
   activeContexts,
-  disabled,
+  trigger,
 }: {
   action: ActionConfig
   activeContexts: ActiveContextsMap
-  disabled: boolean
+  trigger: string
 }) {
-  const handleClick = () => {
-    const deps = activeContexts.get(action.context)
-    if (!deps) return
-    // Route through the supplied-deps dispatch (resolveDeps validation +
-    // canDispatch gate + error logging) rather than invoking the handler
-    // directly. The button is disabled unless its context is active, so `deps`
-    // is the active context's set; handing it in as supplied keeps the dispatch
-    // path uniform without requiring the resolver to treat the context as
-    // keyboard-active.
-    dispatchActionWithDeps(
-      action.id,
-      deps,
-      new CustomEvent('mobile-bottom-nav-action', {detail: {actionId: action.id}}),
-    )
-  }
-
+  const deps = activeContexts.get(action.context)
   if (!action.icon) return null
+
+  const handleClick = () => {
+    if (!deps) return
+    dispatchActionWithDeps(action.id, deps, new CustomEvent(trigger, {detail: {actionId: action.id}}))
+  }
 
   return (
     <MobileBottomNavButton
       label={action.description}
       icon={action.icon}
       onClick={handleClick}
-      disabled={disabled}
+      disabled={!deps}
     />
   )
 }
@@ -59,11 +53,11 @@ function MobileBottomNavSurface() {
       <div className="mx-auto flex h-16 max-w-md items-center justify-around">
         {resolved.map(({item, action}) =>
           action ? (
-            <MobileBottomNavActionButton
+            <ActionRefBarButton
               key={item.id}
               action={action}
               activeContexts={activeContexts}
-              disabled={!activeContexts.has(action.context)}
+              trigger="mobile-bottom-nav-action"
             />
           ) : null,
         )}

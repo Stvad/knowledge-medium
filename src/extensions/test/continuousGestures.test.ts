@@ -459,7 +459,7 @@ describe('holds (holdMs / onHold)', () => {
     const dispatch = makeDispatch()
     const onHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
       element,
       dispatch,
     })
@@ -479,10 +479,12 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [{
         id: 'hold',
-        holdMs: 500,
-        onHold: (session: GestureSession) => {
-          heldAt = session.changed.x
-          return GESTURE_IDLE
+        hold: {
+          ms: 500,
+          onHold: (session: GestureSession) => {
+            heldAt = session.changed.x
+            return GESTURE_IDLE
+          },
         },
       }],
       element,
@@ -500,7 +502,7 @@ describe('holds (holdMs / onHold)', () => {
     vi.useFakeTimers()
     const onHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
       element,
       dispatch: makeDispatch(),
     })
@@ -519,7 +521,7 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [
         {id: 'swipe', onPointerMove: () => GESTURE_ACTIVE},
-        {id: 'hold', holdMs: 500, onHold},
+        {id: 'hold', hold: {ms: 500, onHold}},
       ],
       element,
       dispatch: makeDispatch(),
@@ -537,7 +539,7 @@ describe('holds (holdMs / onHold)', () => {
     let enabled = true
     const onHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, isEnabled: () => enabled, onHold}],
+      recognizers: [{id: 'hold', isEnabled: () => enabled, hold: {ms: 500, onHold}}],
       element,
       dispatch: makeDispatch(),
     })
@@ -556,7 +558,7 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [
         {id: 'swipe', onPointerMove: rivalMove, onPointerUp: rivalUp},
-        {id: 'hold', holdMs: 500, onHold: holdCommit},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
       ],
       element,
       dispatch: makeDispatch(),
@@ -582,7 +584,7 @@ describe('holds (holdMs / onHold)', () => {
     vi.useFakeTimers()
     const onHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
       element,
       dispatch: makeDispatch(),
     })
@@ -599,8 +601,8 @@ describe('holds (holdMs / onHold)', () => {
     const laterHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
       recognizers: [
-        {id: 'hold', holdMs: 500, onHold: holdCommit},
-        {id: 'later-hold', holdMs: 500, onHold: laterHold},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+        {id: 'later-hold', hold: {ms: 500, onHold: laterHold}},
       ],
       element,
       dispatch: makeDispatch(),
@@ -618,7 +620,7 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [
         {id: 'swipe', onPointerCancel: rivalCancel},
-        {id: 'hold', holdMs: 500, onHold: holdCommit},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
       ],
       element,
       dispatch: makeDispatch(),
@@ -634,7 +636,7 @@ describe('holds (holdMs / onHold)', () => {
     vi.useFakeTimers()
     const onHold = vi.fn(() => GESTURE_IDLE)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
       element,
       dispatch: makeDispatch(),
     })
@@ -653,7 +655,7 @@ describe('holds (holdMs / onHold)', () => {
     vi.useFakeTimers()
     const onHold = vi.fn(holdCommit)
     const controller = createBlockGestureController({
-      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
       element,
       dispatch: makeDispatch(),
     })
@@ -676,7 +678,7 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [
         {id: 'scrub', onPointerDown: rivalDown},
-        {id: 'hold', holdMs: 500, onHold: holdCommit},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
       ],
       element,
       dispatch: makeDispatch(),
@@ -695,7 +697,7 @@ describe('holds (holdMs / onHold)', () => {
     const controller = createBlockGestureController({
       recognizers: [
         {id: 'swipe', onPointerMove: rivalMove},
-        {id: 'hold', holdMs: 500, onHold: holdCommit},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
       ],
       element,
       dispatch: vi.fn(() => false),

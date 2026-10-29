@@ -23,10 +23,9 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { blockPointerDepsFrom, isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
 import { isEditingBlock } from '@/data/properties.js'
 import { hasBlockSelection } from '@/data/stateBlocks.js'
-import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { swipeProgressTickEvent } from './events.ts'
 import { isMobileViewport } from '@/utils/viewport.js'
 
@@ -48,28 +47,6 @@ interface SwipeStart {
   readonly pointerId: number
   decided: 'horizontal' | 'vertical' | null
   previewed: boolean
-}
-
-/**
- * Build the swiped block's deps. `BlockPointerDependencies` (block + the surface
- * element + render scope) so the gesture-bound actions can dispatch the menu's
- * DOM events on `targetElement` and run with the right block.
- */
-const dependenciesFor = (
-  context: Parameters<BlockGestureRecognizerContribution>[0],
-  ctx: GestureEventContext,
-): BlockPointerDependencies => {
-  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
-    ? context.blockContext.renderScopeId
-    : undefined
-  return {
-    block: context.block,
-    uiStateBlock: context.uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: ctx.element,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
 }
 
 export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
@@ -136,7 +113,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // action and needs no intermediate feedback, but still claims the block.
       if (dx < 0) {
         start.previewed = true
-        return {status: 'progress', gesture: 'swipe-left', deps: dependenciesFor(context, ctx), event: swipeProgressTickEvent(dx)}
+        return {status: 'progress', gesture: 'swipe-left', deps: blockPointerDepsFrom(context, ctx.element), event: swipeProgressTickEvent(dx)}
       }
       return {status: 'active'}
     },
@@ -152,10 +129,10 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // Horizontal-only — vertical scrolls and taps are someone else's job.
       if (Math.abs(dx) > Math.abs(dy)) {
         if (dx <= -SWIPE_TRIGGER_PX) {
-          return {status: 'commit', gesture: 'swipe-left', deps: dependenciesFor(context, ctx)}
+          return {status: 'commit', gesture: 'swipe-left', deps: blockPointerDepsFrom(context, ctx.element)}
         }
         if (dx >= SWIPE_TRIGGER_PX) {
-          return {status: 'commit', gesture: 'swipe-right', deps: dependenciesFor(context, ctx)}
+          return {status: 'commit', gesture: 'swipe-right', deps: blockPointerDepsFrom(context, ctx.element)}
         }
       }
       // Released without committing — `cancel` settles an in-flight preview back.

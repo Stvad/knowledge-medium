@@ -69,7 +69,7 @@ export const createBlockSelectionShellState = (
       // block-pointer context's pointerTargetFilter keeps interactive descendants
       // native (no candidate matches). Fall back to any residual facet click
       // handler only when nothing claims the gesture.
-      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event))) {
+      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event.currentTarget))) {
         state.shellProps.onClick?.(event)
       }
     },
@@ -132,7 +132,7 @@ const isTap = (start: ContentTouchStart, end: ContentTouchStart): boolean =>
  */
 export const blockContentPointerGestures: BlockContentSurfaceContribution = context => {
   const dispatchGesture = (event: PointerGestureEvent): void => {
-    dispatchPointerAction(event, blockPointerDepsFrom(context, event))
+    dispatchPointerAction(event, blockPointerDepsFrom(context, event.currentTarget))
   }
 
   /** Events on a nested block's surface belong to that block, not to us (see

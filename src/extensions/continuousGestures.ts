@@ -119,6 +119,16 @@ export const GESTURE_CANCEL: GesturePhaseResult = {status: 'cancel'}
 export const TOUCH_HOLD_MS = 500
 export const TOUCH_SLOP_PX = 10
 
+/** A long-press: the loop runs `onHold` once the latest pointer to go down has
+ *  stayed down `ms` while its recognizer is still eligible and enabled. Its
+ *  verdict is applied like any other; a handled `commit` consumes the session
+ *  (see `createBlockGestureController`), so the held press's release can't
+ *  also click. */
+export interface GestureHold {
+  readonly ms: number
+  onHold(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
+}
+
 /**
  * A continuous-gesture recognizer. `onPointerCancel` is effectively required:
  * the browser can cancel a gesture mid-stream (a `touch-action: pan-y` surface
@@ -150,14 +160,7 @@ export interface GestureRecognizer {
   onPointerDown?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerMove?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerUp?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
-  /** A long-press: the loop runs `onHold` once a pointer has been down for
-   *  `holdMs` (timed from each pointerdown) while this recognizer is still
-   *  eligible and enabled, with the latest session and event. Its verdict is
-   *  applied like any other; a handled `commit` consumes the session (see
-   *  `createBlockGestureController`), so the held press's release can't also
-   *  click. Both or neither. */
-  readonly holdMs?: number
-  onHold?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
+  readonly hold?: GestureHold
   /** The browser cancelled a pointer mid-stream (a `pan-y` surface scrolled past
    *  the lock, an OS interrupt). Drop in-flight state. May RETURN a verdict the
    *  loop applies: `cancel` settles this recognizer's in-flight preview NOW (and
@@ -285,9 +288,8 @@ export const createBlockGestureController = ({
   // prevented and reach no recognizer, so a gesture that commits before the
   // release (a hold) isn't also read as a swipe or a click by what follows.
   let consumed = false
-  // Armed hold timers by recognizer id, and the event a firing hold reports.
+  // Armed hold timers by recognizer id.
   const holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  let lastSample: PointerSample | null = null
 
   // Settle an in-flight preview back to rest and forget it. Called on every
   // non-committing end (cancel verdict, pointercancel, release without commit).
@@ -309,7 +311,6 @@ export const createBlockGestureController = ({
     out.clear()
     consumed = false
     clearHolds()
-    lastSample = null
   }
 
   const toPointer = (sample: PointerSample): GesturePointer => ({
@@ -463,7 +464,6 @@ export const createBlockGestureController = ({
     phase: 'down' | 'move' | 'up',
     sample: PointerSample,
   ): boolean => {
-    lastSample = sample
     const changed = toPointer(sample)
     const session = sessionWith(changed)
     const ctx: GestureEventContext = {element, event: sample.event}
@@ -488,19 +488,21 @@ export const createBlockGestureController = ({
   // A hold's timer elapsed: run it only if it could still act on this session
   // — unspent, and neither a rival nor its own gate has taken the block since
   // the pointerdown armed it.
-  const fireHold = (recognizer: GestureRecognizer): void => {
+  const fireHold = (recognizer: GestureRecognizer, hold: GestureHold, armedBy: PointerSample): void => {
     holdTimers.delete(recognizer.id)
-    if (consumed || !lastSample || !isEligible(recognizer) || !enabled(recognizer)) return
-    const session = sessionWith(toPointer(lastSample))
-    const ctx: GestureEventContext = {element, event: lastSample.event}
-    applyVerdict(recognizer, recognizer.onHold?.(session, ctx) ?? GESTURE_IDLE, session, ctx)
+    const held = pointers.get(armedBy.pointerId)
+    if (consumed || !held || !isEligible(recognizer) || !enabled(recognizer)) return
+    const session = sessionWith(held)
+    const ctx: GestureEventContext = {element, event: armedBy.event}
+    applyVerdict(recognizer, hold.onHold(session, ctx), session, ctx)
   }
 
-  const armHolds = (): void => {
+  const armHolds = (armedBy: PointerSample): void => {
     for (const recognizer of recognizers) {
-      if (!recognizer.holdMs) continue
+      const {hold} = recognizer
+      if (!hold) continue
       clearTimeout(holdTimers.get(recognizer.id))
-      holdTimers.set(recognizer.id, setTimeout(() => fireHold(recognizer), recognizer.holdMs))
+      holdTimers.set(recognizer.id, setTimeout(() => fireHold(recognizer, hold, armedBy), hold.ms))
     }
   }
 
@@ -513,7 +515,7 @@ export const createBlockGestureController = ({
       pointers.set(sample.pointerId, toPointer(sample))
       if (consumed) return false
       const prevent = run('down', sample)
-      armHolds()
+      armHolds(sample)
       return prevent
     },
     handlePointerMove(sample) {

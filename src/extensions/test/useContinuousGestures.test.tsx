@@ -35,7 +35,10 @@ const firePointerDown = (el: HTMLElement): void => {
   })
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 describe('useContinuousGestures', () => {
   it('reattaches listeners to the new node when the content surface remounts', () => {
@@ -72,7 +75,7 @@ describe('useContinuousGestures', () => {
     vi.useFakeTimers()
     const onHold = vi.fn(() => GESTURE_IDLE)
     const runtime = resolveFacetRuntimeSync([
-      continuousGestureRecognizersFacet.of(() => ({id: 'hold', holdMs: 500, onHold})),
+      continuousGestureRecognizersFacet.of(() => ({id: 'hold', hold: {ms: 500, onHold}})),
     ])
     const {getByTestId, unmount} = render(
       <AppRuntimeContextProvider value={runtime}>
@@ -85,7 +88,6 @@ describe('useContinuousGestures', () => {
     vi.advanceTimersByTime(500)
 
     expect(onHold).not.toHaveBeenCalled()
-    vi.useRealTimers()
   })
 
   it('re-applies touch-action when the viewport crosses a recognizer breakpoint', () => {

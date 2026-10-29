@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
@@ -86,10 +86,8 @@ describe('toggleBlockSelectionAction', () => {
 
   it('adds and removes the clicked block from the selection, tracking the anchor', async () => {
     const panel = repo.block('panel')
-    // The handler fire-and-forgets the selection-state set, and each toggle
-    // reads the prior committed state — so wait for each commit before the next.
     const expectSelection = (state: {selectedBlockIds: string[]; anchorBlockId: string | null}) =>
-      vi.waitFor(() => expect(panel.peekProperty(selectionStateProp)).toEqual(state))
+      expect(panel.peekProperty(selectionStateProp)).toEqual(state)
 
     await toggle('A')
     await expectSelection({selectedBlockIds: ['A'], anchorBlockId: 'A'})

@@ -1,9 +1,9 @@
 import { useRepo } from '@/context/repo.js'
 import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
-import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
-import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
+import { ActionRefBarButton } from '@/plugins/mobile-bottom-nav'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { usePointerCoarse } from '@/utils/react.js'
 import { POINTER_COARSE_QUERY } from '@/utils/viewport.js'
 import { PANEL_BOTTOM_CLEARANCE } from '@/utils/panelClearance.js'
@@ -22,42 +22,6 @@ const HOLD_STYLES = `
   }
 }
 `
-
-function ToolbarButton({
-  action,
-  activeContexts,
-}: {
-  action: ActionConfig
-  activeContexts: ActiveContextsMap
-}) {
-  const deps = activeContexts.get(action.context)
-  const Icon = action.icon
-  if (!Icon) return null
-
-  // Dispatched with the active context's deps, as the bottom nav does, so
-  // the dispatch path validates them and runs canDispatch.
-  const handleClick = () => {
-    if (!deps) return
-    dispatchActionWithDeps(
-      action.id,
-      deps,
-      new CustomEvent('touch-selection-toolbar-action', {detail: {actionId: action.id}}),
-    )
-  }
-
-  return (
-    <button
-      type="button"
-      className="flex h-14 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-foreground disabled:pointer-events-none disabled:opacity-35"
-      onClick={handleClick}
-      disabled={!deps}
-      title={action.description}
-      aria-label={action.description}
-    >
-      <Icon className="h-6 w-6 stroke-[1.6]"/>
-    </button>
-  )
-}
 
 /** The toolbar's height: its h-16 row over the safe-area inset. */
 const TOOLBAR_CLEARANCE = 'calc(env(safe-area-inset-bottom) + 4rem)'
@@ -93,7 +57,9 @@ function SelectionToolbar() {
       >
         <div className="mx-auto flex h-16 max-w-md items-center justify-around">
           {resolved.map(({item, action}) =>
-            action ? <ToolbarButton key={item.id} action={action} activeContexts={activeContexts}/> : null,
+            action
+              ? <ActionRefBarButton key={item.id} action={action} activeContexts={activeContexts} trigger="touch-selection-toolbar-action"/>
+              : null,
           )}
         </div>
       </div>

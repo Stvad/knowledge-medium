@@ -19,9 +19,8 @@ import {
   type BlockGestureRecognizerContribution,
   type GestureRecognizer,
 } from '@/extensions/continuousGestures.js'
-import { isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { blockPointerDepsFrom, isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
 import { isEditingBlock } from '@/data/properties.js'
-import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { isPointerCoarse } from '@/utils/viewport.js'
 
 export const BLOCK_HOLD_GESTURE = 'block-hold'
@@ -41,7 +40,6 @@ export const blockHoldRecognizer: BlockGestureRecognizerContribution = context =
 
   const recognizer: GestureRecognizer = {
     id: BLOCK_HOLD_RECOGNIZER_ID,
-    holdMs: TOUCH_HOLD_MS,
     // Where the hold is ours rather than the browser's text selection: a
     // touch-primary device (the read-mode content styles in
     // TouchSelectionLayer apply on the same query), a block that isn't being
@@ -72,18 +70,13 @@ export const blockHoldRecognizer: BlockGestureRecognizerContribution = context =
       return GESTURE_CANCEL
     },
 
-    onHold(_session, ctx) {
-      if (!press) return GESTURE_IDLE
-      press = null
-      const deps: BlockPointerDependencies = {
-        block,
-        uiStateBlock,
-        scopeRootId: context.scopeRootId,
-        scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-        targetElement: ctx.element,
-        ...(renderScopeId ? {renderScopeId} : {}),
-      }
-      return {status: 'commit', gesture: BLOCK_HOLD_GESTURE, deps}
+    hold: {
+      ms: TOUCH_HOLD_MS,
+      onHold(_session, ctx) {
+        if (!press) return GESTURE_IDLE
+        press = null
+        return {status: 'commit', gesture: BLOCK_HOLD_GESTURE, deps: blockPointerDepsFrom(context, ctx.element)}
+      },
     },
 
     onPointerCancel() {

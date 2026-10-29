@@ -29,9 +29,8 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { blockPointerDepsFrom, isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
 import { isEditingBlock } from '@/data/properties.js'
-import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   computeDeltaDays,
@@ -85,19 +84,6 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   // button/editor can't be half of the pair.
   const isTouch = (ctx: GestureEventContext): boolean => ctx.event.pointerType === 'touch'
 
-  // The swiped/scrubbed block's deps for the gesture-bound actions: a
-  // `block-pointer` action validates `BlockPointerDependencies`. The actions
-  // drive the module-singleton overlay, so they only read `block`, but the full
-  // shape keeps the deps valid for dispatch (mirrors the swipe recognizer).
-  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies => ({
-    block,
-    uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: ctx.element,
-    ...(renderScopeId ? { renderScopeId } : {}),
-  })
-
   const progressTick = (
     dx: number,
     dy: number,
@@ -106,7 +92,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   ): GesturePhaseResult => ({
     status: 'progress',
     gesture: DATE_SCRUB_GESTURE,
-    deps: depsFor(ctx),
+    deps: blockPointerDepsFrom(context, ctx.element),
     event: dateScrubProgressTickEvent({
       deltaDays: computeDeltaDays(dx),
       cancelIntent: Math.abs(dy) > VERTICAL_CANCEL_PX,
@@ -217,7 +203,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       // commit also lets the loop swallow the trailing synthesized click.
       return cancel
         ? GESTURE_CANCEL
-        : { status: 'commit', gesture: DATE_SCRUB_COMMIT_GESTURE, deps: depsFor(ctx) }
+        : { status: 'commit', gesture: DATE_SCRUB_COMMIT_GESTURE, deps: blockPointerDepsFrom(context, ctx.element) }
     },
 
     onPointerCancel(session) {

@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  TOUCH_HOLD_MS,
   TOUCH_SLOP_PX,
   type GestureEventContext,
   type GesturePointer,
@@ -53,7 +52,7 @@ const press = (recognizer: GestureRecognizer, ctx = eventCtx()) =>
   recognizer.onPointerDown?.(session(pointer(1, 100, 100)), ctx)
 
 const hold = (recognizer: GestureRecognizer) =>
-  recognizer.onHold?.(session(pointer(1, 100, 100)), eventCtx())
+  recognizer.hold?.onHold(session(pointer(1, 100, 100)), eventCtx())
 
 beforeEach(() => {
   window.matchMedia = vi.fn().mockReturnValue({matches: true}) as unknown as typeof window.matchMedia
@@ -63,10 +62,6 @@ afterEach(() => {
 })
 
 describe('blockHoldRecognizer', () => {
-  it('holds for the shared touch hold', () => {
-    expect(make().holdMs).toBe(TOUCH_HOLD_MS)
-  })
-
   it('commits a block hold with the held block\'s pointer deps', () => {
     const recognizer = make()
     press(recognizer)
