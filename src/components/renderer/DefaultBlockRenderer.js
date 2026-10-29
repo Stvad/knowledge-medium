@@ -1,1 +1,1 @@
-export{Wj as BulletDot,Gj as DefaultBlockLayout,Kj as DefaultBlockRenderer}from"../../../chunks/app-B6v8xjnJ.js";
+export{Wj as BulletDot,Gj as DefaultBlockLayout,Kj as DefaultBlockRenderer}from"../../../chunks/app-JP2tfA96.js";

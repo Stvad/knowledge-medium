@@ -1,1 +1,1 @@
-export{CC as DEFAULT_THEME_ID_DARK,wC as DEFAULT_THEME_ID_LIGHT,TC as THEME_STORAGE_KEY}from"../chunks/app-B6v8xjnJ.js";
+export{CC as DEFAULT_THEME_ID_DARK,wC as DEFAULT_THEME_ID_LIGHT,TC as THEME_STORAGE_KEY}from"../chunks/app-JP2tfA96.js";

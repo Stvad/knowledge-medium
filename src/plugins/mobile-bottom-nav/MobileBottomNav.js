@@ -1,1 +1,1 @@
-export{Yb as MobileBottomNav}from"../../../chunks/app-B6v8xjnJ.js";
+export{Yb as MobileBottomNav}from"../../../chunks/app-JP2tfA96.js";

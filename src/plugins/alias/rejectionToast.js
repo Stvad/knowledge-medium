@@ -1,1 +1,1 @@
-export{$h as aliasCollisionRejectionToast}from"../../../chunks/app-B6v8xjnJ.js";
+export{$h as aliasCollisionRejectionToast}from"../../../chunks/app-JP2tfA96.js";
