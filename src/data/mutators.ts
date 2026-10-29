@@ -480,6 +480,50 @@ export const move = defineMutator<MoveArgs, void>({
   },
 })
 
+/** Where a batch of moved blocks lands: a parent (`null` = workspace root)
+ *  plus the placement of the FIRST block within that parent's child list.
+ *  Later blocks chain after it — see {@link moveBlocksInTx}. */
+export interface MoveTarget {
+  parentId: string | null
+  position: InsertPosition
+}
+
+/**
+ * Move `ids` to `target` inside `tx`, keeping their order. `ids` must be
+ * roots: none may be a descendant of another, or it is pulled out of its
+ * ancestor. Every user-facing move (the move command, drag-and-drop, a cut
+ * completed by paste) lands through here, inside the caller's one tx.
+ *
+ * ## The ordering rule
+ *
+ * Only the FIRST block goes to the requested position; every later block
+ * is placed `{kind: 'after'}` its predecessor. Reusing the requested
+ * position for all N is the obvious loop and it is WRONG for two of the
+ * four position kinds — it silently reverses the batch:
+ *
+ * | position          | naive loop (A,B,C) | chained (A,B,C) |
+ * |-------------------|--------------------|-----------------|
+ * | `last`            | A,B,C ✓            | A,B,C ✓         |
+ * | `before X`        | A,B,C,X ✓          | A,B,C,X ✓       |
+ * | `first`           | **C,B,A** ✗        | A,B,C ✓         |
+ * | `after X`         | X,**C,B,A** ✗      | X,A,B,C ✓       |
+ *
+ * `first` and `after X` re-target the same slot every iteration and stack
+ * up backwards; chaining is uniform, so no caller has to know which kind
+ * is order-safe.
+ */
+export const moveBlocksInTx = async (
+  tx: Tx,
+  ids: readonly string[],
+  target: MoveTarget,
+): Promise<void> => {
+  let position = target.position
+  for (const id of ids) {
+    await tx.run(move, {id, parentId: target.parentId, position})
+    position = {kind: 'after', siblingId: id}
+  }
+}
+
 // ──── setOrderKey (direct) ────
 
 export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({

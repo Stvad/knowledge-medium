@@ -115,12 +115,17 @@ export const previousVisibleBlock = async (
  *  meaningful target, the surface is about to be empty), or when the
  *  block is detached from the tree.
  *
+ *  `leaving`: the rest of a multi-selection going with `current` (a delete or
+ *  a cut of several blocks). Siblings in it are passed over, so the last two
+ *  siblings of a list fall back to an earlier one rather than to each other.
+ *
  *  Mirrors `walker.findRecoveryAnchor`'s sibling-then-ancestor order
  *  on the data side so the post-delete jump matches the proactive
  *  recovery's choice for the disappear-from-DOM case. */
 export const blockAfterSubtreeRemoval = async (
   current: Block,
   scopeRootId: string,
+  leaving: ReadonlySet<string> = new Set(),
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
@@ -134,8 +139,10 @@ export const blockAfterSubtreeRemoval = async (
   const idx = siblingIds.indexOf(current.id)
   if (idx === -1) return parent
 
-  if (idx + 1 < siblingIds.length) return repo.block(siblingIds[idx + 1])
-  if (idx - 1 >= 0) return repo.block(siblingIds[idx - 1])
+  const next = siblingIds.slice(idx + 1).find(id => !leaving.has(id))
+  if (next !== undefined) return repo.block(next)
+  const previous = siblingIds.slice(0, idx).reverse().find(id => !leaving.has(id))
+  if (previous !== undefined) return repo.block(previous)
   return parent
 }
 

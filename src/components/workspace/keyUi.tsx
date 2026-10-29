@@ -3,6 +3,7 @@
  * flow, creating an encrypted workspace — so they read as one surface.
  */
 
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -80,7 +81,7 @@ export function WorkspaceKeyDisplay({workspaceKey}: {workspaceKey: string}) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(workspaceKey)
+      await writeTextToClipboard(workspaceKey)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch (err) {

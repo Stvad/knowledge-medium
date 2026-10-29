@@ -2,8 +2,11 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
-import { revealChildren } from '@/data/mutators'
+import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { pluralize } from '@/utils/pluralize.js'
+import { showError, showInfo } from '@/utils/toast.js'
+import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import {
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
@@ -165,6 +168,28 @@ const insertionForSiblingRun = (
 const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): boolean =>
   scopeRootId === target.id || target.parentId === null
 
+/** THE placement rule for a run of pasted roots: whether they land in
+ *  `target`'s own child list (its first-child slot) rather than beside it.
+ *  Shared by the text paste and by a paste that completes a cut, so the two
+ *  can't put the same paste in different places. */
+const rootsLandAsChildren = async (
+  tx: Tx,
+  target: BlockData,
+  {position, placement, scopeRootId}: {
+    position: PastePosition
+    placement: PastePlacement
+    scopeRootId: string | undefined
+  },
+): Promise<{asChildren: boolean; visibleChildren: BlockData[]}> => {
+  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
+  const hasVisibleChildren = visibleChildren.length > 0 && !isCollapsed(target.properties)
+  // With no sibling slot, roots land in the target's child list whatever
+  // `placement` says.
+  const asChildren = hasNoSiblingSlot(target, scopeRootId) ||
+    (placement === 'visible' && position === 'after' && hasVisibleChildren)
+  return {asChildren, visibleChildren}
+}
+
 /** Pasted root a blank target absorbs (it BECOMES that root). The run is
  *  contiguous with the target, so the target takes whichever end it sits at:
  *  the head for `after`, the TAIL when the run lands strictly before it.
@@ -207,14 +232,15 @@ const resolveRootDestination = async (
     parsed.some(block => block.parentId === absorbedRootId)
   const effectivePlacement = absorbedRootHasChildren ? 'sibling' : placement
 
-  const targetChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
-  const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
-  // With no sibling slot, roots #2..N land in the target's child list whatever
-  // `effectivePlacement` says — a nested clipboard still merges there.
+  // With no sibling slot, roots #2..N land in the target's child list even
+  // when absorption forced `sibling` — a nested clipboard still merges there.
   // Accepted: the alternative is to stop absorbing into a zoomed title, which
   // is a bigger behaviour change than this guard.
-  const rootsAsChildren = hasNoSiblingSlot(target, scopeRootId) ||
-    (effectivePlacement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  const {asChildren: rootsAsChildren, visibleChildren: targetChildren} = await rootsLandAsChildren(tx, target, {
+    position,
+    placement: effectivePlacement,
+    scopeRootId,
+  })
   // Type guard, not a live check: a parentless target always takes the branch
   // above, so the sibling branch always has a parent.
   const rootParentId = rootsAsChildren ? target.id : target.parentId
@@ -497,6 +523,163 @@ export async function pasteEditModeMultilineText(
   return {pasted: rootBlocks, focusBlock, focusOffset}
 }
 
+// ──── a paste that completes a cut ────
+
+/** What a paste of the armed cut did. {@link pasteArmedCut} returns `null`
+ *  instead when the paste is not the cut: paste its text as usual. */
+export type CutPasteOutcome =
+  /** The cut blocks themselves now sit at the paste destination. */
+  | {kind: 'moved'; blocks: Block[]}
+  /** Recognised as the cut but declined, with a toast. Nothing changed, and
+   *  the caller must NOT paste the text instead: the originals are still in
+   *  place, so that would duplicate them. */
+  | {kind: 'refused'}
+
+type CutMoveResult =
+  | {kind: 'moved'; rootIds: string[]; missing: number}
+  /** Every cut block was deleted since the cut: nothing is left to
+   *  duplicate, so the text pastes as usual. */
+  | {kind: 'cut-gone'}
+  | {kind: 'refused'; message: string}
+
+/** Is `id` strictly inside one of `rootIds`' subtrees? Walks `parentId`
+ *  through the tx, with a `seen` guard against a corrupt cycle. */
+const isInsideAny = async (tx: Tx, id: string, rootIds: ReadonlySet<string>): Promise<boolean> => {
+  const seen = new Set<string>([id])
+  let current = (await tx.get(id))?.parentId ?? null
+  while (current !== null && !seen.has(current)) {
+    if (rootIds.has(current)) return true
+    seen.add(current)
+    current = (await tx.get(current))?.parentId ?? null
+  }
+  return false
+}
+
+/** Where the cut roots go for a paste at `target`: wherever this paste's
+ *  text roots would ({@link rootsLandAsChildren}), except that nothing
+ *  absorbs. A moved block can't BECOME the target the way pasted text does,
+ *  so a blank target with no children and no properties is replaced
+ *  instead: the roots take its slot and it is deleted. */
+const cutDestination = async (
+  tx: Tx,
+  target: BlockData,
+  options: {position: PastePosition; placement: PastePlacement; scopeRootId: string | undefined},
+): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
+  const children = await tx.childrenOf(target.id, target.workspaceId)
+  // A referenced target is never replaced: deleting it would rewrite every
+  // `((ref))` to it into its (empty) text.
+  const replaceable = isBlankContent(target.content) && children.length === 0 &&
+    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId) &&
+    !await tx.hasLiveReferrer(target.id, target.workspaceId)
+  if (replaceable) {
+    return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
+  }
+
+  const {asChildren, visibleChildren: visible} = await rootsLandAsChildren(tx, target, options)
+  if (asChildren) {
+    return {
+      move: {
+        parentId: target.id,
+        position: visible[0] ? {kind: 'before', siblingId: visible[0].id} : {kind: 'last'},
+      },
+      replacesTarget: false,
+    }
+  }
+  return {
+    move: {parentId: target.parentId, position: {kind: options.position, siblingId: target.id}},
+    replacesTarget: false,
+  }
+}
+
+/**
+ * Complete the armed cut (`./armedCut.ts`) as a MOVE when `text`, the
+ * clipboard text this paste would insert, is what the cut put there.
+ *
+ * Cut deletes nothing, so EVERY paste surface calls this before its text
+ * paste; one that skipped it would paste copies beside the originals. The
+ * callers: the block-shell paste, the editor's paste, and
+ * {@link pasteFromClipboard} (vim and multi-select `p`).
+ *
+ * One transaction, one undo step. Liveness, descendant pruning and the
+ * "inside the cut" refusal are decided inside it, against the rows it moves.
+ * A move doesn't consume the cut (`ArmedCut.pasted`): pasting it again moves
+ * the same blocks, and never copies them.
+ */
+export async function pasteArmedCut(
+  text: string,
+  pasteTarget: Block,
+  repo: Repo,
+  {position = 'after', placement = 'visible', scopeRootId}: PasteOptions = {},
+): Promise<CutPasteOutcome | null> {
+  const targetData = pasteTarget.peek() ?? await pasteTarget.load()
+  if (!targetData) return null
+  const match = await matchArmedCut(text, targetData.workspaceId)
+  if (!match) return null
+  if (match.kind === 'mismatch') {
+    // The clipboard has moved on, so this cut can't be pasted any more;
+    // dropping it also clears its dim.
+    disarmCut(match.cut.cutId)
+    return null
+  }
+  if (match.kind === 'other-workspace') {
+    showInfo("Blocks can't move between workspaces, so this pasted a copy")
+    return null
+  }
+  const {cut} = match
+
+  let result: CutMoveResult
+  try {
+    result = await repo.tx(async (tx): Promise<CutMoveResult> => {
+      const target = await tx.get(pasteTarget.id)
+      if (!target || target.deleted) {
+        return {kind: 'refused', message: 'The block you pasted at no longer exists'}
+      }
+      const live: string[] = []
+      for (const id of cut.rootIds) {
+        const row = await tx.get(id)
+        if (row && !row.deleted) live.push(id)
+      }
+      if (live.length === 0) return {kind: 'cut-gone'}
+
+      const liveSet = new Set(live)
+      if (liveSet.has(target.id) || await isInsideAny(tx, target.id, liveSet)) {
+        return {kind: 'refused', message: "Can't paste cut blocks inside themselves"}
+      }
+      const roots: string[] = []
+      for (const id of live) {
+        if (!await isInsideAny(tx, id, liveSet)) roots.push(id)
+      }
+
+      const destination = await cutDestination(tx, target, {position, placement, scopeRootId})
+      await moveBlocksInTx(tx, roots, destination.move)
+      if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
+      if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})
+      return {kind: 'moved', rootIds: roots, missing: cut.rootIds.length - live.length}
+    }, {scope: ChangeScope.BlockDefault, description: 'paste cut blocks'})
+  } catch (error) {
+    // DOM paste handlers `void` this after `preventDefault`, so a throw would
+    // drop the paste silently, and falling back to the text would duplicate.
+    console.error('[paste] completing the cut failed', error)
+    showError("Couldn't move the cut blocks. Nothing changed.")
+    return {kind: 'refused'}
+  }
+
+  if (result.kind === 'cut-gone') {
+    disarmCut(cut.cutId)
+    return null
+  }
+  if (result.kind === 'refused') {
+    showError(result.message)
+    return {kind: 'refused'}
+  }
+  // Not consumed: see `ArmedCut.pasted`.
+  markCutPasted(cut.cutId)
+  if (result.missing > 0) {
+    showInfo(`${pluralize(result.missing, 'cut block')} no longer existed; moved the rest`)
+  }
+  return {kind: 'moved', blocks: result.rootIds.map(id => repo.block(id))}
+}
+
 /** The applied paste once any media capture is done: a non-`media` decision plus
  *  the final text to paste (the decision's own rewrite, else the source text with
  *  the captured references spliced in). */
@@ -576,6 +759,8 @@ export async function pasteFromClipboard(
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
   if (!text) return []
+  const cutPaste = await pasteArmedCut(text, pasteTarget, repo, options)
+  if (cutPaste) return cutPaste.kind === 'moved' ? cutPaste.blocks : []
 
   const runtime = repo.facetRuntime
   if (!runtime) return pasteMultilineText(text, pasteTarget, repo, options)

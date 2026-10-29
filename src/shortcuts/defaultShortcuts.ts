@@ -53,13 +53,14 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
+import { disarmCut, getArmedCut, undoOrTakeBackCut } from '@/paste/armedCut.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -77,7 +78,8 @@ import {
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
-import { showProgress } from '@/utils/toast.js'
+import { showError, showInfo, showProgress } from '@/utils/toast.js'
+import { pluralize } from '@/utils/pluralize.js'
 import {
   chooseRawSqliteExportFile,
   downloadBlob,
@@ -390,7 +392,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Undo',
       context: ActionContextTypes.GLOBAL,
       icon: Undo2,
-      handler: async () => { await repo.undo() },
+      handler: async () => { await undoOrTakeBackCut(repo) },
       defaultBinding: {
         keys: '$mod+z',
         eventOptions: {preventDefault: true},
@@ -1224,26 +1226,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   /**
-   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
-   * only in whether the selection reaches the clipboard on its way out, so they
-   * share everything else rather than each re-deriving it — the divergence is
-   * what let `d` destroy a daily note that `Delete` refused, and later let
-   * `Delete` leave the pane in multi-select over tombstones that `d` exited
-   * cleanly.
+   * `Delete` on a selection.
    *
-   * Order is load-bearing:
-   *  - guards and the bulk-delete confirmation BEFORE the clipboard write, so
-   *    neither a refused nor a cancelled cut leaves the user believing the
-   *    content was copied — or with their clipboard silently replaced by a cut
-   *    they called off;
-   *  - the copy while the blocks still exist, in SELECTION order (the delete
-   *    runs leaf-first so each removal can't disturb the next, which is not the
-   *    order the markdown should come out in);
-   *  - the selection reset only after a delete actually HAPPENED, so a refusal
-   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
-   *    the guards immediately before writing, and a guard is not contracted to
-   *    answer the same way twice — an answer that flips during the clipboard
-   *    write would otherwise clear the selection having deleted nothing.
+   * The selection reset happens only after a delete actually HAPPENED, so a
+   * refusal leaves it intact to narrow and retry. `deleteBlocksThroughUi`
+   * re-asks the guards immediately before writing, and a guard is not
+   * contracted to answer the same way twice.
    *
    * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
    * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
@@ -1253,10 +1241,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * if that lands back inside the selection there is no sensible target and we
    * leave focus alone.
    */
-  const deleteSelectedBlocks = async (
-    deps: MultiSelectModeDependencies,
-    {copyFirst}: {copyFirst: boolean},
-  ): Promise<void> => {
+  const deleteSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
@@ -1264,20 +1249,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const deleted = await deleteBlocksThroughUi(selectedBlocks, {
       animate: true,
       beforeWrite: async () => {
-        // Copy exactly the set we're about to delete rather than re-reading the
-        // ui-state selection: with supplied deps the two can differ, and the copy
-        // would quietly no-op while the delete went ahead.
-        //
-        // Stays BEFORE the write, unlike the focus move in the Backspace path,
-        // even though a late guard refusal can then leave the clipboard holding
-        // blocks that survived. Deferring it until after would mean a failed
-        // clipboard write costs the blocks as well: a cut degrading to a copy
-        // is benign, a cut degrading to a delete is not.
-        if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
         const after = scopeRootId
-          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
           : null
         focus.target = after && !selectedIds.has(after.id) ? after : null
       },
@@ -1289,6 +1263,47 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     }
   }
 
+  /**
+   * Cut on a selection (`$mod+x`, `d`). Deletes nothing: the blocks go on the
+   * clipboard and are armed to MOVE on the next paste in the app, staying
+   * where they are, dimmed, until then. So it consults no deletion guard,
+   * like the move command and drag-and-drop. Taken back by the toast's
+   * Cancel, or by undo before anything else is edited (`undoOrTakeBackCut`).
+   *
+   * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
+   * selection: with supplied deps the two can differ.
+   */
+  const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
+    if (!selectedBlocks.length) return
+    let outcome: 'cut' | 'empty'
+    try {
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    } catch (error) {
+      // A refused clipboard write armed nothing; keep the selection to retry.
+      console.error('[cut] clipboard write failed', error)
+      showError("Couldn't write to the clipboard, so nothing was cut")
+      return
+    }
+    if (outcome === 'empty') {
+      showInfo('Nothing to cut: the block is empty. Drag it or use Move to… instead')
+      return
+    }
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    // Focus past the cut, as a delete does: a paste right here (vim `d` then
+    // `p` is a move down) would otherwise land inside the cut and be refused.
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
+      : null
+    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id)
+
+    const cutId = getArmedCut()?.cutId
+    showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {
+      action: {label: 'Cancel', onClick: () => { if (cutId) disarmCut(cutId) }},
+    })
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -1296,12 +1311,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
-    // clipboard, so both run the same batch below rather than converging on it
-    // by having two code paths remember the same rules.
+    // Not a per-block fan-out: one guarded, confirmed batch delete.
     {
       ...makeMultiSelect(deleteBlockAction),
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+      handler: deleteSelectedBlocks,
     },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
@@ -1331,7 +1344,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
+      handler: cutSelectedBlocks,
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {

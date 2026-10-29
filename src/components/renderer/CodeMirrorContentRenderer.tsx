@@ -7,6 +7,7 @@ import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
 import {
+  pasteArmedCut,
   pasteChordIntent,
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
@@ -14,6 +15,7 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
 import { readClipboardContent } from '@/paste/clipboard.js'
+import { flushEditorContent } from '@/editor/contentFlush.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -58,24 +60,24 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     e.stopPropagation()
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
+    // Latch + reset the chord intent — the paste event can't see modifiers,
+    // so the keydown handler latched it. Reset before any early return, or a
+    // stale ⌘⇧V intent would skip the cut check on the next paste.
+    const intent = pasteIntentRef.current
+    pasteIntentRef.current = 'split'
     if (repo.isReadOnly) return
     // Nothing to paste → leave it to the browser.
     const content = readClipboardContent(e.clipboardData)
     if (!content) return
 
-    // Latch + reset the chord intent — the paste event can't see modifiers,
-    // so the keydown handler latched it. `preventDefault` MUST run
-    // synchronously or the browser's native paste fires first; the editor
-    // always takes over the paste.
-    const intent = pasteIntentRef.current
-    pasteIntentRef.current = 'split'
+    // `preventDefault` MUST run synchronously or the browser's native paste
+    // fires first; the editor always takes over the paste.
     e.preventDefault()
 
-    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
-    // so it resolves before any `await` below and the caret it keys on can't
-    // move between this read and the dispatch. (When the decision was async this
-    // had to be split into a pre-decision caret snapshot + a post-decision
-    // re-read, because an override could await and move the caret mid-flight.)
+    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)
+    // and keys on this snapshot. Anything that awaits before the insertion (the
+    // cut check, a media capture) is followed by a re-read of the live caret
+    // below, so text lands where the caret is when it is inserted.
     const editorView = editorRef.current?.view
     if (!editorView) return
     const selection = editorView.state.selection.main
@@ -84,6 +86,27 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       lineCount: editorView.state.doc.lines,
       from: selection.from,
       to: selection.to,
+    }
+    const renderScopeId = typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined
+
+    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
+    if (intent === 'split') {
+      // The stored row lags the view by the content debounce. The move reads
+      // the stored row (a blank target is replaced), so persist the live text
+      // first: the flush takes the write lock ahead of the move's tx.
+      flushEditorContent(editorView)
+      const cutPaste = await pasteArmedCut(content.text, block, repo, {
+        scopeRootId: blockContext.scopeRootId,
+      })
+      if (cutPaste) {
+        if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
+          void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
+        }
+        return
+      }
+      if (!editorRef.current?.view) return
     }
 
     // The paste verb decides how the clipboard lands; with no plugin
@@ -134,9 +157,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const result = await pasteEditModeMultilineText(plan, block, repo, {
       scopeRootId: blockContext.scopeRootId,
     })
-    const renderScopeId = typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined
     if (!result) return
 
     await uiStateBlock.set(editorSelection, {

@@ -138,6 +138,18 @@ describe('blockAfterSubtreeRemoval', () => {
     expect(result?.id).toBe('a')
   })
 
+  it('passes over the siblings leaving with it', async () => {
+    // top > [a, b, c]; remove b and c together → not c, not b: a
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+      {id: 'c', parentId: 'top', orderKey: 'd'},
+    ])
+    const result = await blockAfterSubtreeRemoval(env.repo.block('c'), 'top', new Set(['b', 'c']))
+    expect(result?.id).toBe('a')
+  })
+
   it('returns the parent when the block is the sole child', async () => {
     // top > [parent > [only]]; remove only → parent
     await seedOutline(env.repo, [

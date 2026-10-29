@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
-import { copyBlockToClipboard } from '@/utils/copy.js'
+import { copyBlockToClipboard, writeTextToClipboard } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { withRowSlide } from '@/utils/flipSlide.js'
@@ -80,7 +80,7 @@ export const bindBlockActionContext = <T extends ActionContextType>(
  *  unit tests can invoke handlers without setting up a clipboard mock. */
 const writeToClipboard = (text: string): void => {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return
-  void navigator.clipboard.writeText(text)
+  void writeTextToClipboard(text)
 }
 
 /** Move `block` one step up (-1) or down (+1) in the visible outline,

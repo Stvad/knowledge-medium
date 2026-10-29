@@ -1,3 +1,4 @@
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { cn } from '@/lib/utils'
 import { BlockProperties } from '../BlockProperties.tsx'
@@ -93,15 +94,15 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
  */
 
 const copyBlockId = (block: Block) => {
-  navigator.clipboard.writeText(block.id)
+  void writeTextToClipboard(block.id)
 }
 
 const copyBlockRef = (block: Block) => {
-  navigator.clipboard.writeText(`((${block.id}))`)
+  void writeTextToClipboard(`((${block.id}))`)
 }
 
 const copyBlockEmbed = (block: Block) => {
-  navigator.clipboard.writeText(`!((${block.id}))`)
+  void writeTextToClipboard(`!((${block.id}))`)
 }
 
 const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {

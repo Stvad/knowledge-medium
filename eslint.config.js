@@ -119,6 +119,15 @@ const derivedIdDynamicImportRestriction = {
   message: derivedIdMessage,
 }
 
+// Every in-app clipboard write goes through `@/utils/copy.js`: writing the
+// clipboard replaces a cut that was on it, and only that module disarms the cut
+// (`@/paste/armedCut.js`), so a write that bypasses it can make the next paste
+// move the old cut's blocks instead of pasting what was just copied.
+const clipboardWriteRestriction = {
+  selector: "MemberExpression[object.property.name='clipboard'][property.name=/^(write|writeText)$/]",
+  message: 'Write the clipboard through `writeTextToClipboard` (@/utils/copy), which disarms a pending cut once the write resolves.',
+}
+
 const uiDeleteSubtreeRestriction = {
   selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
@@ -269,6 +278,7 @@ export default tseslint.config(
         uiDeleteRestriction,
         uiMutateDeleteRestriction,
         derivedIdDynamicImportRestriction,
+        clipboardWriteRestriction,
       ],
     },
   },
@@ -292,6 +302,7 @@ export default tseslint.config(
         uiTxDeleteRestriction,
         uiDeleteSubtreeRestriction,
         derivedIdDynamicImportRestriction,
+        clipboardWriteRestriction,
       ],
     },
   },
