@@ -37,7 +37,12 @@ vi.mock('./dropTarget.ts', async importOriginal => ({
   resolveDropTarget: mocks.resolveDropTarget,
 }))
 
-const { createBlockDragController, DRAGGING_ROW_ATTRIBUTE } = await import('./dragController.ts')
+const {
+  createBlockDragController,
+  DRAGGING_ROW_ATTRIBUTE,
+  TOUCH_HOLD_MS,
+  TOUCH_SLOP_PX,
+} = await import('./dragController.ts')
 
 const TARGET: DropTarget = {
   move: {parentId: 'dest', position: {kind: 'first'}},
@@ -262,6 +267,15 @@ describe('block drag controller', () => {
     expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
   })
 
+  it('Escape before the selection resolves leaves no row dimmed once it does', async () => {
+    mocks.selected.current = ['a', 'c']
+    drag('a', {release: false})
+    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}))
+    await settled()
+    expect(document.querySelectorAll(`[${DRAGGING_ROW_ATTRIBUTE}]`)).toHaveLength(0)
+    pointer('pointerup', window, 40, 60)
+  })
+
   it('a drag whose release was lost ends at the next press, without dropping', async () => {
     drag('a', {release: false}) // let go outside the window
     pointer('pointerdown', document.body, 300, 300)
@@ -307,11 +321,149 @@ describe('block drag controller', () => {
     await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['a'], TARGET.move))
   })
 
-  it('a touch press does not start a drag (v1 is mouse only)', () => {
-    pointer('pointerdown', bullet('a'), 10, 10, 'touch')
-    pointer('pointermove', window, 40, 60, 'touch')
-    pointer('pointerup', window, 40, 60, 'touch')
-    expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
-    expect(clickReaches('a')).toBe(true)
+  describe('touch: a hold on the bullet picks the block up', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']})
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const touch = (type: string, target: EventTarget, x: number, y: number) =>
+      pointer(type, target, x, y, 'touch')
+    const isDimmed = (id: string) =>
+      document.querySelector(`[data-block-id="${id}"]`)!.hasAttribute(DRAGGING_ROW_ATTRIBUTE)
+    /** Past the hold: let a release's drop, if any, run to the end. */
+    const settle = () => {
+      vi.useRealTimers()
+      return settled()
+    }
+    /** Every `contextmenu` event that reaches the page. */
+    const contextMenus = () => {
+      const seen: MouseEvent[] = []
+      document.body.addEventListener('contextmenu', event => seen.push(event))
+      return seen
+    }
+
+    it('a tap stays a click that opens the block', () => {
+      const menus = contextMenus()
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS - 100)
+      touch('pointerup', window, 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+
+      expect(isDimmed('a')).toBe(false)
+      expect(clickReaches('a')).toBe(true)
+      expect(menus).toHaveLength(0)
+    })
+
+    it('held, then moved, drags and drops at the release point', async () => {
+      touch('pointerdown', bullet('b'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      expect(isDimmed('b')).toBe(true)
+      touch('pointermove', window, 40, 60)
+      touch('pointerup', window, 40, 60)
+
+      expect(clickReaches('b')).toBe(false)
+      await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['b'], TARGET.move))
+      const [, x, y] = mocks.resolveDropTarget.mock.calls.at(-1)!
+      expect([x, y]).toEqual([40, 60])
+    })
+
+    it('a hold on a selected bullet lifts the whole selection', async () => {
+      mocks.selected.current = ['a', 'c']
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      await vi.waitFor(() => expect(isDimmed('c')).toBe(true))
+      expect(isDimmed('b')).toBe(false)
+      touch('pointerup', window, 10, 10)
+    })
+
+    it('a touch that moves before the hold elapses is not a drag', async () => {
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(100)
+      touch('pointermove', window, 10, 10 + TOUCH_SLOP_PX + 1)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      touch('pointermove', window, 40, 60)
+      expect(isDimmed('a')).toBe(false)
+      touch('pointerup', window, 40, 60)
+
+      await settle()
+      expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
+      expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+    })
+
+    it('jitter within the slop neither cancels the hold nor starts the drag', () => {
+      touch('pointerdown', bullet('a'), 10, 10)
+      touch('pointermove', window, 14, 16)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      expect(isDimmed('a')).toBe(true)
+      touch('pointermove', window, 16, 14)
+      runFrames()
+      expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
+      touch('pointerup', window, 16, 14)
+    })
+
+    it('held and let go in place opens the context menu at the press, not the block', async () => {
+      const menus = contextMenus()
+      touch('pointerdown', bullet('a'), 10, 12)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      touch('pointerup', window, 13, 14)
+
+      expect(menus).toHaveLength(1)
+      expect(menus[0].target).toBe(bullet('a'))
+      expect([menus[0].clientX, menus[0].clientY]).toEqual([10, 12])
+      expect(isDimmed('a')).toBe(false)
+      expect(clickReaches('a')).toBe(false)
+      await settle()
+      expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+    })
+
+    it('a native context menu during the hold is held back for the release to decide', () => {
+      const menus = contextMenus()
+      touch('pointerdown', bullet('a'), 10, 10)
+      bullet('a').dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))
+      expect(menus).toHaveLength(0)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      touch('pointermove', window, 40, 60)
+      touch('pointerup', window, 40, 60)
+      expect(menus).toHaveLength(0)
+    })
+
+    it('losing window focus while held cancels, and swallows the release click', () => {
+      const menus = contextMenus()
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      window.dispatchEvent(new Event('blur'))
+      expect(isDimmed('a')).toBe(false)
+      touch('pointerup', window, 10, 10)
+      expect(clickReaches('a')).toBe(false)
+      expect(menus).toHaveLength(0)
+    })
+
+    it('a pointercancel during the hold ends it', () => {
+      touch('pointerdown', bullet('a'), 10, 10)
+      touch('pointercancel', window, 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      expect(isDimmed('a')).toBe(false)
+    })
+
+    it('a second finger does not end a touch drag', async () => {
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      touch('pointermove', window, 40, 60)
+      document.body.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, pointerId: 2, pointerType: 'touch', button: 0, buttons: 1, clientX: 300, clientY: 300,
+      }))
+      touch('pointerup', window, 40, 60)
+      await vi.waitFor(() => expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['a'], TARGET.move))
+    })
+
+    it('takes the press, so the bullet\'s own touch long-press never runs alongside the drag', () => {
+      // The bullet's context menu (Radix) arms a touch long-press of its own
+      // from `onPointerDown`, skipped when the press is defaultPrevented.
+      expect(touch('pointerdown', bullet('a'), 10, 10)).toBe(false)
+      touch('pointerup', window, 10, 10)
+    })
   })
 })

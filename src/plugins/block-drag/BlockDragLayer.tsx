@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { BULLET_HOVER_CARD_ATTRIBUTE } from '@/components/renderer/BulletHoverCard.js'
+import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
   createBlockDragController,
   DRAG_ACTIVE_ATTRIBUTE,
@@ -23,6 +24,14 @@ html[${DRAG_ACTIVE_ATTRIBUTE}] :is(iframe, object, embed) { pointer-events: none
 html[${DRAG_ACTIVE_ATTRIBUTE}] [${BULLET_HOVER_CARD_ATTRIBUTE}] { display: none !important; }
 `
 
+/** Always on: the browser reads `touch-action` when a touch starts, so a
+ *  bullet must refuse to pan before the hold that may pick it up — a
+ *  touch that starts there never scrolls the page. Nor does a hold on it
+ *  select the text beside it. */
+const BULLET_STYLES = `
+[${BLOCK_BULLET_ATTRIBUTE}] { touch-action: none; -webkit-user-select: none; user-select: none; }
+`
+
 /** App mount for block drag-and-drop: installs the document-level start
  *  listener and draws the drop line. The only component that re-renders
  *  while a drag is in flight. */
@@ -31,10 +40,11 @@ export function BlockDragLayer() {
   const controller = useMemo(() => createBlockDragController(repo), [repo])
   useEffect(() => controller.install(), [controller])
   const {active, line} = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
-  if (!active) return null
+  if (!active) return <style>{BULLET_STYLES}</style>
 
   return (
     <>
+      <style>{BULLET_STYLES}</style>
       <style>{DRAG_STYLES}</style>
       {line && (
         <div
