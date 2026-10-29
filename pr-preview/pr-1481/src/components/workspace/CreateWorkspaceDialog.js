@@ -1,1 +1,1 @@
-export{sC as CreateWorkspaceDialog}from"../../../chunks/app-BEHGIkVx.js";
+export{cC as CreateWorkspaceDialog}from"../../../chunks/app-Bae36abn.js";

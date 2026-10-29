@@ -1,1 +1,1 @@
-export{GI as addProperty,KI as deleteProperty,qI as writeProperty}from"../../../chunks/app-BEHGIkVx.js";
+export{KI as addProperty,qI as deleteProperty,JI as writeProperty}from"../../../chunks/app-Bae36abn.js";

@@ -1,1 +1,1 @@
-export{Uy as VideoPlayerContentRenderer,Wy as VideoPlayerRenderer,Gy as isPlayableVideoBlock}from"../../../chunks/app-BEHGIkVx.js";
+export{Wy as VideoPlayerContentRenderer,Gy as VideoPlayerRenderer,Ky as isPlayableVideoBlock}from"../../../chunks/app-Bae36abn.js";

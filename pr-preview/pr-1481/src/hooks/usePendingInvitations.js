@@ -1,1 +1,1 @@
-export{ZC as usePendingInvitations}from"../../chunks/app-BEHGIkVx.js";
+export{QC as usePendingInvitations}from"../../chunks/app-Bae36abn.js";

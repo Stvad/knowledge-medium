@@ -1,1 +1,1 @@
-export{Py as videoPlayerPlugin}from"../../../chunks/app-BEHGIkVx.js";
+export{Fy as videoPlayerPlugin}from"../../../chunks/app-Bae36abn.js";
