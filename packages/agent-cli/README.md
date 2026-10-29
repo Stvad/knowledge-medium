@@ -43,9 +43,9 @@ request (`registration`, `poll`, or `result`) and error kind; unchanged reasons
 are logged once until reconnection.
 
 From that tab's DevTools console, run `fetch('<bridge url>/health')` with the
-configured bridge URL. The default is defined in
-[`bridge.ts`](../../src/plugins/agent-runtime/bridge.ts). If `kmagent status`
-can reach the same bridge but this fetch rejects from the hosted HTTPS origin,
+bridge URL the CLI uses (`AGENT_RUNTIME_URL`, default `http://127.0.0.1:8787`).
+If `kmagent status` can reach the same bridge but this fetch rejects from the
+hosted HTTPS origin,
 check Chrome's site permissions for
 [local network access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access).
 
