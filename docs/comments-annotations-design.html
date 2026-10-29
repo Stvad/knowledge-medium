@@ -255,7 +255,7 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
       <li><strong>Without the plugin,</strong> the thread reads as the quoted text with comments under it, the way an imported highlight with notes does.</li>
       <li><strong>Rewrites.</strong> The reference processors rewrite every referrer's content, and the root's content is now one of them. A page rename (<code>[[Old]]</code> → <code>[[New]]</code>), a merge retarget, or the inlining of a deleted <code>((x))</code> therefore changes the quote in step with the target, on every workspace.</li>
     </ul>
-    The cost is that a quote mentioning <code>[[Page]]</code> makes the root a real mention of that page, and the root appears in its backlinks. That is accepted: the quoted text does mention it.
+    <strong>A quote is a copy, not a mention.</strong> The root's content is parsed like any block's, and that has to stay: the processors above find referrers through <code>block_references</code>. But a quote containing <code>[[Page]]</code> or <code>[[claude]]</code> is not the thread mentioning anything. If it counted as a mention, it would duplicate the target's backlink, and highlighting text with a watched page in it would launch a billed agent run. So the backlinks sources owner excludes content edges whose source is an <code>annotation:thread</code> root (see <a href="#references">Comments and references</a>). The exclusion is at display level, never at parse level.
   </li>
   <li><strong><code>annotation:quoteStart</code></strong> records where the quote began when it was made.</li>
   <li><strong><code>annotation:quotePrefix</code> and <code>annotation:quoteSuffix</code></strong> hold up to 16 characters of text on either side of the quote, as it was when the anchor was made.</li>
@@ -348,6 +348,8 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
       <li>The backlinks plugin declares a facet listing edge fields that have their own surface. <code>annotation:target</code> is the first entry.</li>
       <li>Today, though, backlink sources are resolved in three places (see <a href="#today">What exists today</a>). So the first step is to extract one sources helper in the backlinks plugin, used by the filtered <code>forBlock</code> route and by grouped backlinks, next to the batch SQL. The exclusion then lives in the batch SQL plus that helper, and the MCP <code>backlinks</code> command inherits it.</li>
       <li>The batcher itself gains an edge-field parameter. It counts <code>source_field = 'annotation:target'</code> for the comment pill, and <code>NOT IN</code> the excluded fields for everything else. That one change produces both the thread count and the exclusion. Filtering to open threads happens on the hydrated rows; check that this stays cheap at the batch sizes the pill uses.</li>
+      <li>The same owner holds the second rule: <strong>content edges from a thread root are skipped</strong>, because the root's content is a quote of the target, not the thread's own text.</li>
+      <li>Every consumer of backlinks inherits both rules. That covers the pills, Linked References, the MCP <code>backlinks</code> command, and the dispatch daemon's mention sources. The daemon reads those through the bridge <code>backlinks</code> command, which runs <code>backlinks.forBlock</code> (<code>packages/agent-cli/src/graph.ts:104-107</code>). So a quoted <code>[[claude]]</code> never becomes a dispatch task, while a <em>comment</em> mentioning it still does.</li>
       <li>The <code>attribution:*</code> edges on contributor pages are the obvious next entry, and would land in the same place. Changing them is out of scope here.</li>
     </ul>
   </li>
@@ -673,6 +675,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
 <tr><th>Case</th><th>Why it is acceptable</th></tr>
 <tr><td>Read-only workspace viewers cannot comment</td><td>Their writes are refused (<code>BlockDefault</code> is <code>readOnly: 'reject'</code>). A "commenter" role would be a server-side RLS change, and under E2EE the server cannot tell a comment from any other block.</td></tr>
 <tr><td>A scope-monitoring daemon with contributor <code>none</code></td><td>Its replies carry no attribution, so the recipe takes them for human comments and fires again. This is bounded by <code>runsPerHour</code>. The guide says the recipe needs a contributor; <code>none</code> is an explicit opt-out.</td></tr>
+<tr><td>The push watcher still sees a quoted mention</td><td>The tab's <code>backlinks</code> push watcher is raw SQL over <code>block_references</code> (<code>BACKLINKS_WATCH_SQL</code> in <code>watchEvents.ts</code>). A highlight quoting <code>[[claude]]</code> can therefore wake the daemon. The tick then re-derives its sources through <code>backlinks.forBlock</code>, finds nothing to claim, and bills nothing. Push events are accelerators only, so this costs one cheap tick.</td></tr>
 <tr><td>Dispatch bookkeeping stamps <code>user_updated_at</code></td><td>A mention comment moves up recents while its run reports progress. That is existing behaviour for every mention, not something this design adds.</td></tr>
 <tr><td>Concurrent writes to one thread root's metadata</td><td>Cell-stored workspaces merge <code>properties_json</code> last-writer-wins, the same as every block. Roots get little traffic: only status, re-anchor and accept write them, and dispatch never does. Children-stored workspaces keep one row per property.</td></tr>
 <tr><td>Sync can land <code>references_json</code> from one writer and properties from another</td><td>Projection runs only in <code>repo.tx</code>. Discovery tolerates a stale edge, and the next local write to the root re-projects it.</td></tr>
@@ -757,7 +760,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
     </ul>
   </li>
   <li><strong>Creation:</strong> an edit still waiting in the editor's debounce is anchored against what the editor shows, and a target changed under the user refuses with the draft kept.</li>
-  <li><strong>Backlinks:</strong> delete the exclusion clause, and a named test fails on each route (batch count, batch list, filtered <code>forBlock</code>, grouped).</li>
+  <li><strong>Backlinks:</strong> for each of the two exclusions (the anchor edge, and content edges from a thread root), delete the clause and a named test fails on each route: batch count, batch list, filtered <code>forBlock</code>, grouped. Also, a highlight whose quote contains <code>[[claude]]</code> creates no dispatch task, while a comment with the same text does.</li>
   <li><strong>Merge:</strong> a merge run through the production processor order moves the thread, and the anchor resolves as moved.</li>
   <li><strong>Lifecycle:</strong> delete and restore the target; deleting the container is refused while it has live threads.</li>
   <li><strong>Accept:</strong>
