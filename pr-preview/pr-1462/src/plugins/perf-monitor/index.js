@@ -1,0 +1,1 @@
+export{sr as perfMonitorPlugin}from"../../../chunks/app-Bi6lC3j8.js";

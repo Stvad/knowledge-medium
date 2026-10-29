@@ -1,0 +1,1 @@
+export{MW as backlinksDataExtension}from"../../../chunks/app-Bi6lC3j8.js";

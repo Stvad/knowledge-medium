@@ -1,0 +1,1 @@
+export{k_ as useAssetObjectUrl}from"../../../chunks/app-Bi6lC3j8.js";

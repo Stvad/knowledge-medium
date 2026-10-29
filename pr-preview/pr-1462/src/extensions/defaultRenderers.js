@@ -1,0 +1,1 @@
+export{KA as defaultRegistry,qA as defaultRendererContributions,JA as defaultRenderersExtension}from"../../chunks/app-Bi6lC3j8.js";

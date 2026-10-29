@@ -1,0 +1,1 @@
+export{IC as formatAbsoluteDateTime,LC as formatRelativeTime}from"../../chunks/app-Bi6lC3j8.js";

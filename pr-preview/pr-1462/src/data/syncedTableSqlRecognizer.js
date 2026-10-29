@@ -1,0 +1,1 @@
+export{EK as SYNCED_TABLES,DK as syncedWriteTarget,OK as writeTargets}from"../../chunks/app-Bi6lC3j8.js";

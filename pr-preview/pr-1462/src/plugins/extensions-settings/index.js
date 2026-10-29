@@ -1,0 +1,1 @@
+export{Sd as extensionsOverridesProp,Cd as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Bi6lC3j8.js";
