@@ -10,10 +10,7 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
-import {
-  propertyMachinerySourceIds,
-  workspaceHasPropertyMachinery,
-} from '@/plugins/backlinks/machinery.js'
+import { filteredBacklinkSourceIds } from '@/plugins/backlinks/sources.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -25,7 +22,6 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -122,33 +118,6 @@ const dependOnGroupLabel = (
   })
 }
 
-const resolveBacklinkSourceIds = async (
-  ctx: QueryCtx,
-  workspaceId: string,
-  id: string,
-  filter?: Required<BacklinksFilter>,
-): Promise<string[]> => {
-  const ids = (await ctx.run('core.typedBlockIds', {
-    workspaceId,
-    referencedBy: {id},
-    match: filter?.include,
-    exclude: filter?.exclude,
-    order: 'created-desc',
-  })).filter(sourceId => sourceId !== id)
-  // Same property-machinery exclusion `backlinks.forBlock` applies: grouped
-  // backlinks resolve their own sources rather than routing through that
-  // query, so without this a hidden value row's `[[Target]]`
-  // disappears from Linked References and the inline count but still shows up
-  // here — duplicating the owner's projected property backlink on the one
-  // surface that didn't filter. Un-gated for the reason given there: the
-  // backfill mints value rows before the flip. It carries that filter's
-  // undeclared-ancestry-dependency residual too (km-nc46).
-  if (ids.length === 0) return ids
-  if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
-  return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
-}
-
 const resolveSourceParents = async (
   ctx: QueryCtx,
   workspaceId: string,
@@ -183,7 +152,7 @@ const SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`
 
 /** Hydrate the member (source/backlink) rows by id. Grouping consumes the
  *  members' *references* (via `block_references`) and their parent edges, but
- *  never the members' own rows — `resolveBacklinkSourceIds` returns ids only.
+ *  never the members' own rows — `filteredBacklinkSourceIds` returns ids only.
  *  Group-header actions (e.g. daily-notes "spread") gate visibility on each
  *  member's content through the action's `isVisible` (`block.peek()`), so this
  *  primes those rows into the cache. One JSON-array bind (same trick as
@@ -394,9 +363,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const unfilteredSourceIds = await resolveBacklinkSourceIds(ctx, workspaceId, id)
+    const unfilteredSourceIds = await filteredBacklinkSourceIds(ctx, workspaceId, id)
     const sourceIds = hasBacklinksFilter(normalizedFilter)
-      ? await resolveBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
+      ? await filteredBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
       : unfilteredSourceIds
     if (sourceIds.length === 0) {
       return {groups: [], total: 0, unfilteredSourceIds, sourceParents: []}

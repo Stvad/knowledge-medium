@@ -22,6 +22,7 @@ import { dependOnRecognitionParams, registryRecognitionParams } from '@/data/int
 import { MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
 import { contentionFor } from '@/data/internals/timingMetrics'
 import type { RecognitionParams } from '@/data/internals/treeQueries'
+import { edgePredicate, type BacklinkEdges, type EdgePredicate } from './edgeExclusions.ts'
 import { machineryInteriorCtes, workspaceHasPropertyMachinery } from './machinery.ts'
 
 type Projection = 'ids' | 'count'
@@ -42,6 +43,7 @@ const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
   excludeMachinery: boolean,
+  edges: EdgePredicate,
 ): string => {
   const ctes = [`pairs(target_id, id) AS (
     SELECT DISTINCT br.target_id, b.id
@@ -51,6 +53,7 @@ const backlinkSourcesSql = (
        AND br.target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
        AND b.deleted = 0
        AND b.id != br.target_id
+       AND (${edges.sql})
   )`]
   if (excludeMachinery) ctes.push(machineryInteriorCtes('SELECT id FROM pairs'))
   const where = excludeMachinery ? 'WHERE p.id NOT IN (SELECT id FROM machinery)' : ''
@@ -76,15 +79,19 @@ interface Pending {
   callers: number
 }
 
-/** Requests one statement can answer: same workspace, projection and
+/** Requests one statement can answer: same workspace, projection, edges and
  *  recognition snapshot (`registryRecognitionParams` is cached per snapshot,
  *  so identity is the comparison). */
 interface Group {
   workspaceId: string
   projection: Projection
   recognitionParams: RecognitionParams
+  edges: EdgePredicate
+  edgesKey: string
   targets: Map<string, Pending>
 }
+
+const edgesKeyOf = (edges: EdgePredicate): string => JSON.stringify([edges.sql, edges.params])
 
 const pending = (): Pending => {
   let resolve!: Pending['resolve']
@@ -111,12 +118,14 @@ export class BacklinkSourceBatcher {
     targetId: string,
     projection: P,
     recognitionParams: RecognitionParams,
+    edges: EdgePredicate,
   ): Promise<Resolved<P>> {
+    const edgesKey = edgesKeyOf(edges)
     let group = this.groups.find(g =>
       g.workspaceId === workspaceId && g.projection === projection &&
-      g.recognitionParams === recognitionParams)
+      g.recognitionParams === recognitionParams && g.edgesKey === edgesKey)
     if (!group) {
-      group = {workspaceId, projection, recognitionParams, targets: new Map()}
+      group = {workspaceId, projection, recognitionParams, edges, edgesKey, targets: new Map()}
       this.groups.push(group)
     }
     const existing = group.targets.get(targetId)
@@ -158,8 +167,8 @@ export class BacklinkSourceBatcher {
       if (callers > 1) this.pool?.noteSharedWork()
       try {
         const rows = await this.db.getAll<{target_id: string; id?: string; count?: number}>(
-          backlinkSourcesSql(chunk.length, group.projection, machinery),
-          [group.workspaceId, ...chunk, ...(machinery ? group.recognitionParams : [])],
+          backlinkSourcesSql(chunk.length, group.projection, machinery, group.edges),
+          [group.workspaceId, ...chunk, ...group.edges.params, ...(machinery ? group.recognitionParams : [])],
         )
         const answers = new Map<string, string[] | number>()
         for (const row of rows) {
@@ -202,6 +211,7 @@ const resolveSources = async <P extends Projection>(
   workspaceId: string,
   targetId: string,
   projection: P,
+  edges: BacklinkEdges,
 ): Promise<Answer<P>> => {
   ctx.depend({
     kind: 'plugin',
@@ -209,22 +219,25 @@ const resolveSources = async <P extends Projection>(
     key: typedBlocksReferenceKey(workspaceId, targetId),
   })
   const {value, machinery} = await batcherFor(ctx.db).request(
-    workspaceId, targetId, projection, registryRecognitionParams(ctx.repo),
+    workspaceId, targetId, projection, registryRecognitionParams(ctx.repo), edgePredicate(ctx.repo, edges),
   )
   if (machinery) dependOnRecognitionParams(ctx)
   return value
 }
 
-/** Sources of `targetId`, newest first, self and property machinery excluded. */
+/** Sources of `targetId` over `edges` (default: mentions), newest first, self
+ *  and property machinery excluded. */
 export const backlinkSourceIds = async (
   ctx: QueryCtx,
   workspaceId: string,
   targetId: string,
-): Promise<string[]> => [...await resolveSources(ctx, workspaceId, targetId, 'ids')]
+  edges: BacklinkEdges = 'mentions',
+): Promise<string[]> => [...await resolveSources(ctx, workspaceId, targetId, 'ids', edges)]
 
 /** How many `backlinkSourceIds` would return, without marshalling them. */
 export const backlinkSourceCount = (
   ctx: QueryCtx,
   workspaceId: string,
   targetId: string,
-): Promise<number> => resolveSources(ctx, workspaceId, targetId, 'count')
+  edges: BacklinkEdges = 'mentions',
+): Promise<number> => resolveSources(ctx, workspaceId, targetId, 'count', edges)

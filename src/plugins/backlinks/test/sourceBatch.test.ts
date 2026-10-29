@@ -20,8 +20,10 @@ const fakeDb = (counts: Record<string, number>, failReads: number[] = []) => {
   }
 }
 
+const ALL_EDGES = {sql: '1', params: [], admitsAll: true}
+
 const countOf = (batcher: BacklinkSourceBatcher, target: string) =>
-  batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS).then(r => r.value)
+  batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES).then(r => r.value)
 
 describe('BacklinkSourceBatcher', () => {
   it('answers each target from its own chunk when a wave exceeds the bind ceiling', async () => {
