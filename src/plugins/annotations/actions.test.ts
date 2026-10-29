@@ -114,6 +114,15 @@ describe('commenting on an editor selection', () => {
     expect(await threadsOnB()).toHaveLength(1)
   })
 
+  it('keeps the draft as submitted while the submit is in flight', async () => {
+    openComposer(KEY, 'B', null)
+    updateComposer(KEY, {draft: 'Once'})
+    const submitted = submitComposer(repo, KEY)
+    updateComposer(KEY, {draft: 'Once, and more typed meanwhile'})
+    expect(peekComposer(KEY)?.draft).toBe('Once')
+    expect(await submitted).toBe(true)
+  })
+
   it('writes nothing for an empty draft', async () => {
     openComposer(KEY, 'B', null)
     updateComposer(KEY, {draft: '   '})

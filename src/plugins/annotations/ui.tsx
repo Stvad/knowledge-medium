@@ -163,6 +163,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
         ref={input}
         aria-label="New comment"
         rows={2}
+        readOnly={composer.submitting}
         value={composer.draft}
         onChange={event => updateComposer(composerKey, {draft: event.target.value, error: null})}
         onKeyDown={event => {

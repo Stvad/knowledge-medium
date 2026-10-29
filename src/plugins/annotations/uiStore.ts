@@ -55,9 +55,13 @@ export const openComposer = (key: string, targetId: string, anchor: RangeAnchor 
   listeners.notify()
 }
 
+/** The draft is frozen while a submit is in flight: the submit already took
+ *  the text, and closes the composer when it lands, so later typing would be
+ *  dropped unsaved. */
 export const updateComposer = (key: string, patch: Partial<Omit<ComposerState, 'targetId'>>): void => {
   const current = composers.get(key)
   if (!current) return
+  if (current.submitting && patch.draft !== undefined) return
   composers.set(key, {...current, ...patch})
   listeners.notify()
 }
