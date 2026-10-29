@@ -287,7 +287,7 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 <h2 id="anchoring">Anchoring against changing text</h2>
 <p>Resolution is a pure, synchronous function of the target's content, the quote (the root's content) and the three anchor properties. It is recomputed at render time and never persisted. It returns one of three states.</p>
 <ul>
-  <li><strong>exact:</strong> the quote sits at <code>quoteStart</code>, with the stored prefix and suffix still around it.</li>
+  <li><strong>exact:</strong> the quote sits at <code>quoteStart</code>, and the text on each side of it, taken over the same 16-character window, <em>equals</em> the stored prefix and suffix. It is equality, not "starts with". So a stored context shorter than 16 characters, which means the quote was near the block's start or end, must still reach that boundary. A quote that ended the block must still end it.</li>
   <li><strong>moved:</strong> the quote occurs elsewhere and its surrounding text still agrees with the stored context. The occurrence picked is the one with the most context agreement; ties go to whichever is nearest <code>quoteStart</code>. "Agrees" means at least 4 matching characters of context. If the stored context is shorter than 4 characters, all of it must match. When the stored context is empty (the quote was the whole block), any occurrence qualifies.</li>
   <li><strong>stale:</strong> no occurrence qualifies. The thread stays on the block, and its card shows the original quote marked as changed. The user can select new text to re-anchor, or anchor the thread to the whole block.</li>
 </ul>
@@ -554,7 +554,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
 <p><strong>Accept</strong> is one transaction, so it is one undo step:</p>
 <ol>
   <li>Refuse if the target is deleted.</li>
-  <li>Resolve the anchor against the target's content as of this transaction, and require <strong>exact</strong>: the quote is at <code>quoteStart</code> with its prefix and suffix intact. Anything else refuses with "the text changed since this was suggested" and offers "confirm position", which re-anchors.</li>
+  <li>Resolve the anchor against the target's content as of this transaction, and require <strong>exact</strong>: the quote is at <code>quoteStart</code>, and the windows on either side equal the stored prefix and suffix. Anything else refuses with "the text changed since this was suggested" and offers "confirm position", which re-anchors.</li>
   <li>Splice <code>replacement</code> into the content, and set <code>annotation:status = accepted</code>.</li>
 </ol>
 <p><strong>Reject</strong> only sets <code>rejected</code>.</p>
@@ -562,7 +562,12 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
 </div>
 
 <ul>
-  <li><strong>Exact also stops a second application.</strong> Suppose <code>Thursday</code> has become <code>Thursday 9am</code>. A duplicate of that suggestion, or the same one reopened, still finds <code>Thursday</code> at its offset. But the suffix is now <code>" 9am because…"</code>, not <code>" because…"</code>. So the anchor is moved rather than exact, and accept refuses instead of writing <code>Thursday 9am 9am</code>.</li>
+  <li><strong>Exact also stops a second application.</strong> Suppose <code>Thursday</code> has become <code>Thursday 9am</code>. A duplicate of that suggestion, or the same one reopened, still finds <code>Thursday</code> at its offset. But the suffix is now <code>" 9am because…"</code>, not <code>" because…"</code>. So the anchor is moved rather than exact, and accept refuses instead of writing <code>Thursday 9am 9am</code>.
+    <ul>
+      <li><strong>The same holds at the end of a block.</strong> Take <code>Meet Thursday</code>: its stored suffix is empty. After accepting, the window after <code>Thursday</code> is <code>" 9am"</code>, not empty, so the anchor is not exact.</li>
+      <li><strong>And at the start.</strong> A stored prefix shorter than 16 characters must still begin the block.</li>
+    </ul>
+  </li>
   <li><strong>The editor.</strong> A pending debounced write in the target's editor could flush stale text over an accepted change. But Accept is a click in the card, which blurs the editor. Blur flushes the pending write (<code>BlockEditor.tsx:306-307</code>), and that write is queued on the write lock ahead of the accept's transaction. v1 has no programmatic accept, so nothing else can accept while the target is open. An agent proposes changes; a person accepts them. An agent that should change text directly uses <code>edit_block</code>.</li>
   <li><strong>No anchor rewrite on accept.</strong> Closed suggestions are hidden and not highlighted. In "show closed", their card reads "replaced “quote” with “replacement”" directly from the properties.</li>
   <li><strong>Non-empty replacement.</strong> v1 requires the replacement to be non-empty, so telling an empty value from an absent one never decides whether a thread is a suggestion. To suggest a deletion, replace a slightly wider span (<code>very large</code> → <code>large</code>).</li>
@@ -755,7 +760,13 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>Backlinks:</strong> delete the exclusion clause, and a named test fails on each route (batch count, batch list, filtered <code>forBlock</code>, grouped).</li>
   <li><strong>Merge:</strong> a merge run through the production processor order moves the thread, and the anchor resolves as moved.</li>
   <li><strong>Lifecycle:</strong> delete and restore the target; deleting the container is refused while it has live threads.</li>
-  <li><strong>Accept:</strong> it refuses on stale, moved or deleted targets; it is one undo step; and a duplicate of an applied suggestion refuses.</li>
+  <li><strong>Accept:</strong>
+    <ul>
+      <li>refuses on stale, moved or deleted targets;</li>
+      <li>is one undo step;</li>
+      <li>refuses a duplicate of an applied suggestion, both mid-block and with the quote at the very start or the very end of the block, where the stored context is shorter than 16 characters or empty.</li>
+    </ul>
+  </li>
   <li><strong>Range references:</strong>
     <ul>
       <li>a <code>((T))</code> renders the live range, then the stored quote once stale;</li>
