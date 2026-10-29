@@ -648,7 +648,13 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
 <ol>
   <li><strong>A mention inside a thread.</strong> <code>[[claude]] can you check this?</code> in a comment is a backlink to the watcher's target page, so today's backlinks watcher claims it and replies under it. That is a nested reply in the thread, with the existing per-mention semantics unchanged: claim, attempts, stale sweep, cancel, chips and session resume. Two changes:
     <ul>
-      <li><strong>Bookkeeping writes are unattributed.</strong> The daemon sends <code>setTaskProps</code> and <code>clearCancel</code> through a client with <code>contributorId: null</code>, and the contributors processor records nothing for those (<code>processor.ts:113</code>). Today those writes list the agent as an editor of <em>any</em> block that mentions it. With this change a person's comment, or note, keeps exactly the authors who wrote it. This is about three lines in <code>packages/agent-dispatch/src/graph.ts</code>. The reply itself stays attributed to the agent.</li>
+      <li><strong>Bookkeeping writes are unattributed.</strong>
+        <ul>
+          <li><strong>Every <code>agent:*</code> write to the source</strong> goes through a client with <code>contributorId: null</code>, for which the contributors processor records nothing (<code>processor.ts:113</code>). In <code>packages/agent-dispatch/src/graph.ts</code> that is <code>setTaskProps</code> and <code>clearCancel</code>, plus <code>setActivity</code> and <code>setSession</code>, which the engine calls on every progress and session event (<code>engine.ts:414,447</code>).</li>
+          <li><strong>The split:</strong> the daemon gets two graph handles. An unattributed one carries all bookkeeping. An attributed one exposes only <code>createReply</code> and <code>reconcileReplyTree</code>. A bookkeeping method added later then cannot end up attributed by accident.</li>
+          <li><strong>The effect:</strong> today those writes list the agent as an editor of <em>any</em> block that mentions it. With the split, a person's comment, or note, keeps exactly the authors who wrote it, and the reply itself stays attributed to the agent.</li>
+        </ul>
+      </li>
       <li><strong>Prompt context.</strong> When the mention sits inside a thread, the prompt builder adds the target block's content, the quote, the page path, and the chain from the thread root down to the mentioning comment, with authors. Without that, the agent would see only the container and the thread. A chain rather than the whole tree keeps the prompt bounded on long threads; siblings can be fetched on demand through the tools.</li>
     </ul>
   </li>
@@ -824,7 +830,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
       <li>B's reference pill does not count X.</li>
     </ul>
   </li>
-  <li><strong>Dispatch:</strong> bookkeeping writes leave a mentioning block's attribution untouched. The recipe excludes agent-authored, empty and mentioning comments. It also excludes a comment edited within the quiet period, which is selected once it goes quiet, with its finished text.</li>
+  <li><strong>Dispatch:</strong> a full mention run (claim, activity events, session, completion, cancel) leaves the mentioning block's attribution untouched, while the reply is attributed to the agent. The recipe excludes agent-authored, empty and mentioning comments. It also excludes a comment edited within the quiet period, which is selected once it goes quiet, with its finished text.</li>
 </ul>
 
 <h2 id="decisions">Decisions</h2>
