@@ -630,6 +630,16 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
+/** Whether `blockId` (in `renderScopeId`, when given) is the block being
+ *  text-edited — focused, with edit mode on. */
+export const isEditingBlock = (
+  uiStateBlock: Block,
+  blockId: string,
+  renderScopeId?: string,
+): boolean =>
+  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
+  Boolean(uiStateBlock.peekProperty(isEditingProp))
+
 export const sameFocusedBlockLocation = (
   a: FocusedBlockLocation | undefined,
   b: FocusedBlockLocation | undefined,
