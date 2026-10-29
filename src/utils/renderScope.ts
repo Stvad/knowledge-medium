@@ -45,3 +45,12 @@ export const breadcrumbRenderScopeId = (
   blockId: string,
   occurrenceId: string,
 ): string => joinScope('breadcrumb', [blockId, occurrenceId, parentRenderScopeId])
+
+/** Scope of a block a plugin renders as its own nested surface, such as a
+ *  comment card under its target. `surface` names the plugin's surface and
+ *  must be unique to it, so two surfaces never share a scope. */
+export const surfaceRenderScopeId = (
+  surface: string,
+  parentRenderScopeId: string,
+  occurrenceId: string,
+): string => joinScope(`surface.${surface}`, [occurrenceId, parentRenderScopeId])

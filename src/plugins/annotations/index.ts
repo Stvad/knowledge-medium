@@ -5,9 +5,26 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {blockDeletionGuardsFacet} from '@/extensions/core.js'
+import {actionsFacet, blockDeletionGuardsFacet} from '@/extensions/core.js'
+import {
+  blockChildrenFooterFacet,
+  blockContentDecoratorsFacet,
+  blockContentRendererFacet,
+  blockContextMenuItemsFacet,
+} from '@/extensions/blockInteraction.js'
+import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
+import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
+import {annotationActions, COMMENT_ON_SELECTION_ACTION_ID} from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {commentsPageDeletionGuard} from './container.ts'
+import {threadHighlightsContribution} from './highlights.ts'
+import {
+  commentActionsContribution,
+  commentContextMenuItem,
+  commentPillContribution,
+  commentsFooterContribution,
+  threadRootContentContribution,
+} from './ui.tsx'
 
 const SOURCE = 'annotations'
 
@@ -18,4 +35,14 @@ export const annotationsPlugin: AppExtension = systemToggle({
 }).of([
   annotationsDataExtension,
   blockDeletionGuardsFacet.of(commentsPageDeletionGuard, {source: SOURCE}),
+  annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
+  blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
+  blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
+  blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
+  blockContentRendererFacet.of(threadRootContentContribution, {source: SOURCE}),
+  blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
+  mobileKeyboardToolbarItemsFacet.of(
+    {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
+    {source: SOURCE, precedence: 60}),
 ])

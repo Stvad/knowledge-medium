@@ -1,0 +1,76 @@
+/**
+ * Per-tab view state for comments: which blocks have their threads expanded
+ * inline, which show resolved threads too, and the open composers with their
+ * drafts. Deliberately ephemeral module state, never block data: a draft is
+ * written only on submit, so an abandoned comment leaves nothing behind.
+ *
+ * Keyed by `viewKey`, one block as shown in one render scope, so expanding or
+ * commenting on a block in one panel leaves the same block in another alone.
+ */
+
+import {useSyncExternalStore} from 'react'
+import {CallbackSet} from '@/utils/callbackSet'
+import type {RangeAnchor} from './anchor.ts'
+
+export const viewKey = (renderScopeId: string | undefined, blockId: string): string =>
+  `${renderScopeId ?? ''}\u0000${blockId}`
+
+export interface ComposerState {
+  targetId: string
+  /** null comments on the whole block. */
+  anchor: RangeAnchor | null
+  draft: string
+  error: string | null
+  /** A submit is in flight; another one would write the same draft twice. */
+  submitting: boolean
+}
+
+const expanded = new Set<string>()
+const showingResolved = new Set<string>()
+const composers = new Map<string, ComposerState>()
+const listeners = new CallbackSet('annotations-ui')
+
+const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
+
+const toggle = (set: Set<string>, key: string): void => {
+  if (set.has(key)) set.delete(key)
+  else set.add(key)
+  listeners.notify()
+}
+
+export const toggleThreadsExpanded = (key: string): void => toggle(expanded, key)
+export const toggleShowResolved = (key: string): void => toggle(showingResolved, key)
+
+export const useThreadsExpanded = (key: string): boolean =>
+  useSyncExternalStore(subscribe, () => expanded.has(key))
+export const useShowResolved = (key: string): boolean =>
+  useSyncExternalStore(subscribe, () => showingResolved.has(key))
+
+/** Open (or re-aim) a composer, keeping a draft already typed there: a submit
+ *  refused because the text changed keeps the draft, and the user's next
+ *  selection re-aims it. Expands the block's threads. */
+export const openComposer = (key: string, targetId: string, anchor: RangeAnchor | null): void => {
+  composers.set(key, {targetId, anchor, draft: composers.get(key)?.draft ?? '', error: null, submitting: false})
+  expanded.add(key)
+  listeners.notify()
+}
+
+/** The draft is frozen while a submit is in flight: the submit already took
+ *  the text, and closes the composer when it lands, so later typing would be
+ *  dropped unsaved. */
+export const updateComposer = (key: string, patch: Partial<Omit<ComposerState, 'targetId'>>): void => {
+  const current = composers.get(key)
+  if (!current) return
+  if (current.submitting && patch.draft !== undefined) return
+  composers.set(key, {...current, ...patch})
+  listeners.notify()
+}
+
+export const closeComposer = (key: string): void => {
+  if (composers.delete(key)) listeners.notify()
+}
+
+export const peekComposer = (key: string): ComposerState | undefined => composers.get(key)
+
+export const useComposer = (key: string): ComposerState | undefined =>
+  useSyncExternalStore(subscribe, () => composers.get(key))
