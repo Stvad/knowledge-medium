@@ -204,7 +204,6 @@ const verifyModel = async (db: TestDb['db'], model: readonly SeedModel[]): Promi
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -555,7 +554,6 @@ describe('seed materialization + write-guard interleavings', () => {
   // one legal structural op for both `repo.mutate.delete` (subtree) and
   // `repo.mutate.merge` (both merge directions).
   it('op set reaches create, reject, tombstone, restore, poison-abort, and structural reject/accept', async () => {
-    await guard.barrier()
     await runCase([
       {op: 'forgeCreate', idx: 0},
       {op: 'materialize', mask: [0, 1]},

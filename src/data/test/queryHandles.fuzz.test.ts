@@ -328,7 +328,6 @@ const settleAndVerify = async (handles: readonly Handle<unknown>[], probes: read
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -409,7 +408,6 @@ describe('query handle soundness', () => {
   // dependency axis is already touched by one of them (documented
   // inline below).
   it('every probed query value provably changes across a deterministic sequence', async () => {
-    await guard.barrier()
     await resetTestDb(sharedDb.db)
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
     repo.setActiveWorkspaceId(WS)
