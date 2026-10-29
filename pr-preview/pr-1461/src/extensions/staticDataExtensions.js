@@ -1,1 +1,1 @@
-export{OB as staticDataExtensions}from"../../chunks/app-DRyAuV32.js";
+export{kB as staticDataExtensions}from"../../chunks/app-CPxCv6_r.js";

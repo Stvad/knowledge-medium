@@ -1,1 +1,1 @@
-export{lA as dynamicExtensionsExtension}from"../../chunks/app-DRyAuV32.js";
+export{rA as dynamicExtensionsExtension}from"../../chunks/app-CPxCv6_r.js";

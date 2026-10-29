@@ -1,1 +1,1 @@
-export{AK as omnilinerNamespace}from"../../chunks/app-DRyAuV32.js";
+export{jK as omnilinerNamespace}from"../../chunks/app-CPxCv6_r.js";

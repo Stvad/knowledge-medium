@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-DRyAuV32.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-CPxCv6_r.js";

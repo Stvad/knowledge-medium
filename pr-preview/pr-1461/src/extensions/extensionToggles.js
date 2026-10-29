@@ -1,1 +1,1 @@
-export{hA as extensionDisplayName,gA as extensionName,_A as userExtensionShellToggle,vA as userExtensionToggle}from"../../chunks/app-DRyAuV32.js";
+export{lA as extensionDisplayName,uA as extensionName,dA as userExtensionShellToggle,fA as userExtensionToggle}from"../../chunks/app-CPxCv6_r.js";

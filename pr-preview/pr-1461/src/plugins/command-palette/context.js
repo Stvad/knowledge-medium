@@ -1,1 +1,1 @@
-export{UE as COMMAND_PALETTE_ACTION_ID,WE as COMMAND_PALETTE_CONTEXT,GE as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,KE as commandPaletteActionContext}from"../../../chunks/app-DRyAuV32.js";
+export{UE as COMMAND_PALETTE_ACTION_ID,WE as COMMAND_PALETTE_CONTEXT,GE as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,KE as commandPaletteActionContext}from"../../../chunks/app-CPxCv6_r.js";

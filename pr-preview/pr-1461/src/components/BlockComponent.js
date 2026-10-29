@@ -1,1 +1,1 @@
-export{HA as BlockChildren,UA as BlockComponent}from"../../chunks/app-DRyAuV32.js";
+export{IA as BlockChildren,LA as BlockComponent}from"../../chunks/app-CPxCv6_r.js";

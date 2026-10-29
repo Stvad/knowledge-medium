@@ -1,1 +1,1 @@
-export{BE as useCommandPaletteActions}from"../../../chunks/app-DRyAuV32.js";
+export{BE as useCommandPaletteActions}from"../../../chunks/app-CPxCv6_r.js";

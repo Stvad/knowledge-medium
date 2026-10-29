@@ -1,1 +1,1 @@
-export{Ik as appUpdate,Lk as useAppUpdateAvailable}from"../chunks/app-DRyAuV32.js";
+export{Ak as appUpdate,jk as useAppUpdateAvailable}from"../chunks/app-CPxCv6_r.js";

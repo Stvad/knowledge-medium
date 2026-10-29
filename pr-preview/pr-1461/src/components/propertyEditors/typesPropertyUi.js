@@ -1,1 +1,1 @@
-export{rO as kernelPropertyUiExtension,iO as typesPropertyUi,aO as typesPropertyUiExtension}from"../../../chunks/app-DRyAuV32.js";
+export{rO as kernelPropertyUiExtension,iO as typesPropertyUi,aO as typesPropertyUiExtension}from"../../../chunks/app-CPxCv6_r.js";

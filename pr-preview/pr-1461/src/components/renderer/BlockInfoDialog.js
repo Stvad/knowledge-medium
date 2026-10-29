@@ -1,1 +1,1 @@
-export{LM as BlockInfoDialog}from"../../../chunks/app-DRyAuV32.js";
+export{jM as BlockInfoDialog}from"../../../chunks/app-CPxCv6_r.js";

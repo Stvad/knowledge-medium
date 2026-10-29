@@ -1,1 +1,1 @@
-export{dk as ExtensionPromptSurface,fk as extensionPromptsExtension}from"../../../chunks/app-DRyAuV32.js";
+export{ak as ExtensionPromptSurface,ok as extensionPromptsExtension}from"../../../chunks/app-CPxCv6_r.js";

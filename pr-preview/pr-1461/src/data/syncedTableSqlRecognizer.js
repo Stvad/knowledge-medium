@@ -1,1 +1,1 @@
-export{xK as SYNCED_TABLES,SK as syncedWriteTarget,CK as writeTargets}from"../../chunks/app-DRyAuV32.js";
+export{SK as SYNCED_TABLES,CK as syncedWriteTarget,wK as writeTargets}from"../../chunks/app-CPxCv6_r.js";

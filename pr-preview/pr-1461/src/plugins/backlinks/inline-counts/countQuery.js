@@ -1,1 +1,1 @@
-export{HW as BACKLINKS_COUNT_FOR_BLOCK_QUERY,UW as backlinksCountForBlockQuery}from"../../../../chunks/app-DRyAuV32.js";
+export{UW as BACKLINKS_COUNT_FOR_BLOCK_QUERY,WW as backlinksCountForBlockQuery}from"../../../../chunks/app-CPxCv6_r.js";

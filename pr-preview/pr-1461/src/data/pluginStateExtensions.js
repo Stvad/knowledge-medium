@@ -1,1 +1,1 @@
-export{tG as pluginPrefsExtension,nG as pluginUIStateExtension}from"../../chunks/app-DRyAuV32.js";
+export{nG as pluginPrefsExtension,rG as pluginUIStateExtension}from"../../chunks/app-CPxCv6_r.js";

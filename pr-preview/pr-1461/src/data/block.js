@@ -1,1 +1,1 @@
-export{sZ as Block,cZ as requireLoadedBlock}from"../../chunks/app-DRyAuV32.js";
+export{cZ as Block,lZ as requireLoadedBlock}from"../../chunks/app-CPxCv6_r.js";

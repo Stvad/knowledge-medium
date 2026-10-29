@@ -1,1 +1,1 @@
-export{Vj as BlockTypeBlockRenderer,Hj as BlockTypeContentRenderer,Uj as writeBlockTypeLabel}from"../../../chunks/app-DRyAuV32.js";
+export{Fj as BlockTypeBlockRenderer,Ij as BlockTypeContentRenderer,Lj as writeBlockTypeLabel}from"../../../chunks/app-CPxCv6_r.js";

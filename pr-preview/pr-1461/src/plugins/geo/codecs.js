@@ -1,2 +1,2 @@
-import{$et as e}from"../../../chunks/app-DRyAuV32.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{ett as e}from"../../../chunks/app-CPxCv6_r.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

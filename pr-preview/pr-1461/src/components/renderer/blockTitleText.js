@@ -1,1 +1,1 @@
-export{FP as BLOCK_TITLE_TEXT_CLASS,IP as useBlockTitleTextClass}from"../../../chunks/app-DRyAuV32.js";
+export{wP as BLOCK_TITLE_TEXT_CLASS,TP as useBlockTitleTextClass}from"../../../chunks/app-CPxCv6_r.js";

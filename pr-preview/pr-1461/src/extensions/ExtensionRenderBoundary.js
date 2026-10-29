@@ -1,1 +1,1 @@
-export{RM as ExtensionRenderBoundary}from"../../chunks/app-DRyAuV32.js";
+export{MM as ExtensionRenderBoundary}from"../../chunks/app-CPxCv6_r.js";

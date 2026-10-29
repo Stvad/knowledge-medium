@@ -1,1 +1,1 @@
-export{gy as EXTENSIONS_PAGE_TITLE,_y as TUTORIAL_DEFAULT_TITLE,vy as TUTORIAL_VIM_TITLE,ry as onboardingPlugin,hy as seedTutorial}from"../../../chunks/app-DRyAuV32.js";
+export{gy as EXTENSIONS_PAGE_TITLE,_y as TUTORIAL_DEFAULT_TITLE,vy as TUTORIAL_VIM_TITLE,ry as onboardingPlugin,hy as seedTutorial}from"../../../chunks/app-CPxCv6_r.js";

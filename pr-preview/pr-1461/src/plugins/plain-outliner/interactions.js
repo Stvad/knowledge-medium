@@ -1,1 +1,1 @@
-export{fx as blockEditingContentRenderer}from"../../../chunks/app-DRyAuV32.js";
+export{fx as blockEditingContentRenderer}from"../../../chunks/app-CPxCv6_r.js";

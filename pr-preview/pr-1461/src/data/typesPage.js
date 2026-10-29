@@ -1,1 +1,1 @@
-export{V8 as getOrCreateTypesPage,H8 as typesPageBlockId}from"../../chunks/app-DRyAuV32.js";
+export{H8 as getOrCreateTypesPage,U8 as typesPageBlockId}from"../../chunks/app-CPxCv6_r.js";

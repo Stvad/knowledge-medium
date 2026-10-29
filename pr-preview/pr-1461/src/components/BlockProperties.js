@@ -1,1 +1,1 @@
-export{xF as BlockProperties}from"../../chunks/app-DRyAuV32.js";
+export{uF as BlockProperties}from"../../chunks/app-CPxCv6_r.js";

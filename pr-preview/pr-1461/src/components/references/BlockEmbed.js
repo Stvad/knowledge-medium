@@ -1,1 +1,1 @@
-export{$D as BlockEmbed}from"../../../chunks/app-DRyAuV32.js";
+export{$D as BlockEmbed}from"../../../chunks/app-CPxCv6_r.js";

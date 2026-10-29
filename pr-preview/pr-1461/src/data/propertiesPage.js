@@ -1,1 +1,1 @@
-export{U8 as getOrCreatePropertiesPage,W8 as propertiesPageBlockId}from"../../chunks/app-DRyAuV32.js";
+export{W8 as getOrCreatePropertiesPage,G8 as propertiesPageBlockId}from"../../chunks/app-CPxCv6_r.js";

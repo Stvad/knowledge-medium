@@ -1,1 +1,1 @@
-export{qA as BlockLoadingPlaceholder}from"../../chunks/app-DRyAuV32.js";
+export{VA as BlockLoadingPlaceholder}from"../../chunks/app-CPxCv6_r.js";

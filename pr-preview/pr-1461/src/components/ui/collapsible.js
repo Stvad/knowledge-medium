@@ -1,1 +1,1 @@
-"use client";export{_F as Collapsible,vF as CollapsibleContent,yF as CollapsibleTrigger}from"../../../chunks/app-DRyAuV32.js";
+"use client";export{oF as Collapsible,sF as CollapsibleContent,cF as CollapsibleTrigger}from"../../../chunks/app-CPxCv6_r.js";

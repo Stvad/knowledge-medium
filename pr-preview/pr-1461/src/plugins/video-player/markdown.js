@@ -1,1 +1,1 @@
-export{Ov as videoPlayerMarkdownExtension}from"../../../chunks/app-DRyAuV32.js";
+export{Ov as videoPlayerMarkdownExtension}from"../../../chunks/app-CPxCv6_r.js";

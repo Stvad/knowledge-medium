@@ -1,1 +1,1 @@
-export{kz as propertyShapeLabel}from"../../../chunks/app-DRyAuV32.js";
+export{Az as propertyShapeLabel}from"../../../chunks/app-CPxCv6_r.js";

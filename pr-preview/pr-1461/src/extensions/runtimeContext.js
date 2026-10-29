@@ -1,1 +1,1 @@
-export{Az as AppRuntimeContextProvider,jz as useAppRuntime}from"../../chunks/app-DRyAuV32.js";
+export{jz as AppRuntimeContextProvider,Mz as useAppRuntime}from"../../chunks/app-CPxCv6_r.js";

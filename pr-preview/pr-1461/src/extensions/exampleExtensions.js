@@ -1,1 +1,1 @@
-export{VO as exampleExtensions,HO as insertExampleExtensionsUnder}from"../../chunks/app-DRyAuV32.js";
+export{FO as exampleExtensions,IO as insertExampleExtensionsUnder}from"../../chunks/app-CPxCv6_r.js";

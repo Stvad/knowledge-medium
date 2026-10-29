@@ -1,1 +1,1 @@
-export{ju as contributorsPlugin}from"../../../chunks/app-DRyAuV32.js";
+export{ju as contributorsPlugin}from"../../../chunks/app-CPxCv6_r.js";

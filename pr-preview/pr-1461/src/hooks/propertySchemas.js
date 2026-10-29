@@ -1,1 +1,1 @@
-export{Tz as usePropertySchemas}from"../../chunks/app-DRyAuV32.js";
+export{Ez as usePropertySchemas}from"../../chunks/app-CPxCv6_r.js";

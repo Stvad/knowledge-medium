@@ -1,1 +1,1 @@
-export{xW as characterCounterDataExtension}from"../../../chunks/app-DRyAuV32.js";
+export{SW as characterCounterDataExtension}from"../../../chunks/app-CPxCv6_r.js";

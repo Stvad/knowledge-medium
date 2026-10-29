@@ -1,1 +1,1 @@
-export{GB as REFERENCES_TARGET_INVALIDATION_CHANNEL,KB as referencesInvalidationRule}from"../../../chunks/app-DRyAuV32.js";
+export{KB as REFERENCES_TARGET_INVALIDATION_CHANNEL,qB as referencesInvalidationRule}from"../../../chunks/app-CPxCv6_r.js";

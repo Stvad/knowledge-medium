@@ -1,1 +1,1 @@
-export{_k as ExtensionPromptDismissalStore,vk as extensionPromptDismissals,yk as useExtensionPromptDismissals}from"../../../chunks/app-DRyAuV32.js";
+export{dk as ExtensionPromptDismissalStore,fk as extensionPromptDismissals,pk as useExtensionPromptDismissals}from"../../../chunks/app-CPxCv6_r.js";

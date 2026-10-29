@@ -1,1 +1,1 @@
-export{DF as PropertyRow}from"../../../chunks/app-DRyAuV32.js";
+export{gF as PropertyRow}from"../../../chunks/app-CPxCv6_r.js";
