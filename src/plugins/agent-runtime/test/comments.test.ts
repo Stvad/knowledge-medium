@@ -104,6 +104,14 @@ describe('comments', () => {
     }])
   })
 
+  it('never names the tab\'s user as the author of an agent\'s comment', async () => {
+    const {commentId} = await asAgent({type: 'add-comment', target: BLOCK, content: 'From the agent'}) as {commentId: string}
+    // The agent's profile page, left untitled.
+    await context.repo.tx(tx => tx.update(agentId, {content: ''}), opts)
+    const [comment] = (await comments({block: BLOCK})).threads[0].comments
+    expect(comment).toMatchObject({id: commentId, author: {id: agentId, name: 'Contributor', kind: 'agent'}})
+  })
+
   it('resolves the anchor against the target as it reads now', async () => {
     const {threadId} = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday'}) as {threadId: string}
     await context.repo.tx(tx => tx.update(BLOCK, {content: `Note: ${TEXT}`}), opts)

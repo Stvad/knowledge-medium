@@ -150,13 +150,15 @@ const authorsOf = async (repo: Repo, comments: readonly BlockData[]): Promise<Ma
   for (const comment of comments) {
     const id = pageIds.get(comment.id)
     const page = id ? pages.get(id) : null
+    // A user's page may not exist yet, and a user's name is its id until it
+    // does; a creator never falls back to `created_by`, the tab's human.
     const byCreator = creatorsOf(comment).length > 0
+    const fallbackName = byCreator ? 'Contributor' : comment.createdBy
     byComment.set(comment.id, !id
       ? {id: null, name: 'System', kind: null}
       : page
-        ? {id, name: page.content || comment.createdBy, kind: contributorKindOf(page)}
-        // A user's page may not exist yet; a creator's always did once.
-        : {id, name: byCreator ? 'Contributor' : comment.createdBy, kind: byCreator ? null : 'human'})
+        ? {id, name: page.content || fallbackName, kind: contributorKindOf(page)}
+        : {id, name: fallbackName, kind: byCreator ? null : 'human'})
   }
   return byComment
 }
