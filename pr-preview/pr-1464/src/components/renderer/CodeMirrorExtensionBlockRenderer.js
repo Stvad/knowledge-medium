@@ -1,1 +1,1 @@
-export{kj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BlfD7uf-.js";
+export{kj as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-C72L0xf5.js";

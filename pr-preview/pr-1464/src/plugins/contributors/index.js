@@ -1,1 +1,1 @@
-export{ju as contributorsPlugin}from"../../../chunks/app-BlfD7uf-.js";
+export{ju as contributorsPlugin}from"../../../chunks/app-C72L0xf5.js";
