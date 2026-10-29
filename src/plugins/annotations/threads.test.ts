@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
@@ -23,7 +23,7 @@ import {
   threadStatusOf,
   threadTargetIdOf,
 } from './schema'
-import {AnchorChangedError, createThread, replyTo, setThreadStatus, UnannotatableTargetError} from './threads'
+import {AnchorChangedError, createThread, InvalidQuoteError, replyTo, setThreadStatus, UnannotatableTargetError} from './threads'
 
 const WS = 'ws'
 const TARGET_TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -133,6 +133,37 @@ describe('createThread', () => {
     expect(await threadsOf('B')).toHaveLength(1)
   })
 
+  it('refuses a target deleted between the first read and the creating tx', async () => {
+    const load = repo.load.bind(repo)
+    vi.spyOn(repo, 'load').mockImplementationOnce(async id => {
+      const row = await load(id)
+      await repo.tx(tx => tx.delete('B'), opts)
+      return row
+    })
+    await expect(createThread(repo, {targetId: 'B', anchor: null, comment: 'x'}))
+      .rejects.toBeInstanceOf(UnannotatableTargetError)
+    vi.restoreAllMocks()
+    await repo.tx(tx => tx.restore('B'), opts)
+    expect(await threadsOf('B')).toEqual([])
+  })
+
+  it('refuses a quote that is a property field marker, which would make the root a field row', async () => {
+    const marker = '::((3f2a9c1d-0000-4000-8000-00000000f1e1))'
+    await repo.tx(tx => tx.update('B', {content: `Field rows look like ${marker} in raw text`}), opts)
+    const content = (await repo.load('B'))!.content
+    await expect(createThread(repo, {targetId: 'B', anchor: anchorFor(content, marker), comment: 'c'}))
+      .rejects.toBeInstanceOf(InvalidQuoteError)
+    expect(await threadsOf('B')).toEqual([])
+  })
+
+  it.each([
+    ['an empty quote', {quote: '', quoteStart: 0, prefix: '', suffix: ''}],
+    ['a fractional start', {quote: 'Thursday', quoteStart: 23.5, prefix: 'd the launch to ', suffix: ' because the ven'}],
+    ['half a surrogate pair', {quote: 'Thursday\ud83d', quoteStart: 23, prefix: '', suffix: ''}],
+  ])('refuses a hand-built anchor with %s', async (_, anchor) => {
+    await expect(createThread(repo, {targetId: 'B', anchor, comment: 'x'})).rejects.toBeInstanceOf(InvalidQuoteError)
+  })
+
   it('refuses a missing or deleted target', async () => {
     await expect(createThread(repo, {targetId: 'nope', anchor: null, comment: 'x'}))
       .rejects.toBeInstanceOf(UnannotatableTargetError)
@@ -237,12 +268,26 @@ describe('the container', () => {
     expect(await resolveDeletionRefusal(repo, container)).toBeNull()
   })
 
+  it('refuses deletion while threads sit under a block of the user\u2019s own on the page', async () => {
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
+    const containerId = commentsPageBlockId(WS)
+    const archive = await repo.mutate.createChild({parentId: containerId, content: 'Archive', position: {kind: 'first'}})
+    await repo.mutate.move({id: threadId, parentId: archive, position: {kind: 'last'}})
+    const container = repo.block(containerId)
+    await container.load()
+    expect(await resolveDeletionRefusal(repo, container)).toMatch(/comment threads/)
+  })
+
   it('leaves other pages alone, even one a thread root was moved under by hand', async () => {
     const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
     await repo.mutate.move({id: threadId, parentId: 'page', position: {kind: 'last'}})
     const page = repo.block('page')
     await page.load()
     expect(await resolveDeletionRefusal(repo, page)).toBeNull()
+    // And the container, its last thread filed elsewhere, holds none.
+    const container = repo.block(commentsPageBlockId(WS))
+    await container.load()
+    expect(await resolveDeletionRefusal(repo, container)).toBeNull()
   })
 })
 

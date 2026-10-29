@@ -9,7 +9,6 @@
 
 import type {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'
-import {hasBlockType} from '@/data/properties'
 import {getOrCreateKernelPage, kernelPageBlockId} from '@/data/kernelPage'
 import type {BlockDeletionGuard} from '@/extensions/core.js'
 import {THREAD_TYPE} from './schema.ts'
@@ -34,11 +33,17 @@ export const getOrCreateCommentsPage = (repo: Repo, workspaceId: string): Promis
 
 /** Deleting a page deletes its subtree, so one stray delete of the container
  *  would hide every comment in the workspace, and restoring the page alone
- *  brings none of them back. Undo or a subtree restore is the recovery. */
+ *  brings none of them back. Undo or a subtree restore is the recovery. Counts
+ *  threads anywhere under the page, not only its direct children, since a user
+ *  may file them under blocks of their own. */
 export const commentsPageDeletionGuard: BlockDeletionGuard = async block => {
   const data = block.peek()
   if (!data || block.id !== commentsPageBlockId(data.workspaceId)) return null
-  const children = await block.children.load()
-  if (!children.some(child => hasBlockType(child, THREAD_TYPE))) return null
-  return 'Comments (km) holds the workspace’s comment threads and can’t be deleted while it has any. Delete the threads first.'
+  const threads = await block.repo.query['core.typedBlockCount']({
+    workspaceId: data.workspaceId,
+    types: [THREAD_TYPE],
+    match: [{scope: 'ancestor', id: block.id}],
+  }).load()
+  if (threads === 0) return null
+  return `${COMMENTS_PAGE_ALIAS} holds the workspace’s comment threads and can’t be deleted while it has any. Delete the threads first.`
 }
