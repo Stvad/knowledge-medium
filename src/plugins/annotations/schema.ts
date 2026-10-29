@@ -1,4 +1,5 @@
 import {ChangeScope, seedProperty, seedType, type BlockData} from '@/data/api'
+import {decodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
 /** A comment thread's root. Its content is the quoted text of the target (empty
@@ -64,29 +65,21 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   changeScope: ChangeScope.BlockDefault,
 })
 
+export const annotationPropertySeeds = [
+  annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
+  annotationQuoteSuffixProp, annotationStatusProp,
+] as const
+
 export const annotationThreadType = seedType({
   seedKey: 'system:annotations/type/thread',
   revision: 1,
   id: THREAD_TYPE,
   label: 'Comment thread',
   hideFromCompletion: true,
-  properties: [
-    annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-    annotationQuoteSuffixProp, annotationStatusProp,
-  ],
+  properties: [...annotationPropertySeeds],
 })
 
-export const annotationPropertySeeds = [
-  annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-  annotationQuoteSuffixProp, annotationStatusProp,
-] as const
-
 export type ThreadAnchor = {kind: 'block'} | ({kind: 'range'} & RangeAnchor)
-
-const decoded = <T,>(data: BlockData, schema: {name: string; codec: {decode: (value: unknown) => T}; defaultValue: T}): T => {
-  const value = data.properties[schema.name]
-  return value === undefined ? schema.defaultValue : schema.codec.decode(value)
-}
 
 /** A thread root's anchor, read from its content and anchor properties. */
 export const threadAnchorOf = (root: BlockData): ThreadAnchor =>
@@ -95,12 +88,12 @@ export const threadAnchorOf = (root: BlockData): ThreadAnchor =>
     : {
       kind: 'range',
       quote: root.content,
-      quoteStart: decoded(root, annotationQuoteStartProp),
-      prefix: decoded(root, annotationQuotePrefixProp) ?? '',
-      suffix: decoded(root, annotationQuoteSuffixProp) ?? '',
+      quoteStart: decodeRowProperty(root, annotationQuoteStartProp),
+      prefix: decodeRowProperty(root, annotationQuotePrefixProp) ?? '',
+      suffix: decodeRowProperty(root, annotationQuoteSuffixProp) ?? '',
     }
 
 export const threadTargetIdOf = (root: BlockData): string | undefined =>
-  decoded(root, annotationTargetProp) || undefined
+  decodeRowProperty(root, annotationTargetProp) || undefined
 
-export const threadStatusOf = (root: BlockData): ThreadStatus => decoded(root, annotationStatusProp)
+export const threadStatusOf = (root: BlockData): ThreadStatus => decodeRowProperty(root, annotationStatusProp)

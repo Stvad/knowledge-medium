@@ -6,8 +6,10 @@
 import {ChangeScope, propertyValue, type BlockReference} from '@/data/api'
 import {createChild} from '@/data/mutators'
 import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
+import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
 import {createTypedChild} from '@/data/typedRecords'
+import {hasLoneSurrogate} from '@/utils/string'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {getOrCreateCommentsPage} from './container.ts'
 import {
@@ -40,6 +42,35 @@ export class UnannotatableTargetError extends Error {
   }
 }
 
+/** The selection can't be a thread's quote. The quote becomes the root's
+ *  content, so it must be text a block can hold as its own: never a `::` field
+ *  marker, which would make the root a property field row of the container. */
+export class InvalidQuoteError extends Error {
+  constructor(reason: string) {
+    super(reason)
+    this.name = 'InvalidQuoteError'
+  }
+}
+
+/** A refusal `createThread` makes before writing, for a caller to show. */
+export const isThreadRefusal = (error: unknown): error is Error =>
+  error instanceof AnchorChangedError || error instanceof UnannotatableTargetError || error instanceof InvalidQuoteError
+
+const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+
+/** Anchors come from `captureAnchor` in the app, but agents and the bridge
+ *  build their own. */
+const assertQuotable = (anchor: RangeAnchor): void => {
+  if (anchor.quote === '') throw new InvalidQuoteError('The quote is empty.')
+  if (anchor.quoteStart !== undefined && !(Number.isInteger(anchor.quoteStart) && anchor.quoteStart >= 0)) {
+    throw new InvalidQuoteError(`quoteStart ${anchor.quoteStart} is not a position in the text.`)
+  }
+  if (hasLoneSurrogate(anchor.quote)) throw new InvalidQuoteError('The quote cuts a character in half.')
+  if (parseExactReferenceBlockContent(anchor.quote)?.fieldForm) {
+    throw new InvalidQuoteError('A property field marker can\u2019t be quoted on its own.')
+  }
+}
+
 export interface CreateThreadArgs {
   targetId: string
   /** null comments on the whole block. */
@@ -66,18 +97,20 @@ export const createThread = async (
   repo: Repo,
   {targetId, anchor, comment}: CreateThreadArgs,
 ): Promise<CreatedThread> => {
+  if (anchor) assertQuotable(anchor)
   const target = await repo.load(targetId)
-  if (!target) throw new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+  if (!target) throw missingTarget(targetId)
 
   return repo.undoGroup(async repo => {
+    // Accepted: undoing a workspace's first comment also tombstones the
+    // container, under which another device may have filed threads since;
+    // those stay live under it until the next comment restores it.
     const container = await getOrCreateCommentsPage(repo, target.workspaceId)
     return repo.tx(async tx => {
       const current = await tx.get(targetId)
       // DEFENCE IN DEPTH: the load above already refuses a missing or deleted
       // target; this catches a delete that lands between it and this tx.
-      if (!current || current.deleted) {
-        throw new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
-      }
+      if (!current || current.deleted) throw missingTarget(targetId)
       if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
         throw new UnannotatableTargetError('A property row can’t be commented on.')
       }

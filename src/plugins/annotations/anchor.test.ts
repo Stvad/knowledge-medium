@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import {parseReferences} from '@/plugins/references/referenceParser.js'
 import {captureAnchor, resolveAnchor, widenToReferenceSpans, widenToSpans, type RangeAnchor} from './anchor'
 
 const captureQuote = (content: string, quote: string, occurrence = 0): RangeAnchor => {
@@ -54,7 +55,7 @@ describe('resolveAnchor', () => {
     expect(resolveAnchor(rewritten, anchor)).toEqual({state: 'moved', from: 51, to: 59})
   })
 
-  // The case that made context part of the anchor: nearest-to-hint picks 19.
+  // Nearest-to-hint would pick 19.
   it('after a prepend, picks the occurrence with the most context agreement, not the nearest one', () => {
     const anchor = captureQuote('Ship the fix, then test the fix.', 'the fix', 1)
     expect(anchor).toEqual({quote: 'the fix', quoteStart: 24, prefix: ' fix, then test ', suffix: '.'})
@@ -154,6 +155,10 @@ describe('resolveAnchor', () => {
       .toEqual({state: 'moved', from: 4, to: 6})
   })
 
+  it('treats an empty quote as stale instead of looping', () => {
+    expect(resolveAnchor('abc', {quote: '', quoteStart: 9, prefix: 'zz', suffix: ''})).toEqual({state: 'stale'})
+  })
+
   it('without a start hint is never exact, and ties go to the first occurrence', () => {
     const anchor: RangeAnchor = {quote: 'ab', quoteStart: undefined, prefix: '1234', suffix: '5678'}
     expect(resolveAnchor('1234ab5678 1234ab5678', anchor)).toEqual({state: 'moved', from: 4, to: 6})
@@ -165,6 +170,11 @@ describe('resolveAnchor', () => {
       const anchor = captureQuote(content, '星期四')
       expect(resolveAnchor(content, anchor)).toEqual({state: 'exact', from: anchor.quoteStart, to: anchor.quoteStart! + 3})
       expect(resolveAnchor(`备注：${content}`, anchor).state).toBe('moved')
+    })
+
+    it('never cuts a surrogate pair at the edge of the quote', () => {
+      expect(captureAnchor('a😀b', 0, 2)?.quote).toBe('a😀')
+      expect(captureAnchor('a😀b', 2, 4)?.quote).toBe('😀b')
     })
 
     it('never cuts a surrogate pair at the edge of a context window', () => {
@@ -214,6 +224,41 @@ describe('widenToReferenceSpans', () => {
 
   it('leaves an empty selection inside a span empty', () => {
     expect(widenToReferenceSpans('a [[Page]] b', 5, 5)).toEqual({from: 5, to: 5})
+  })
+})
+
+describe('widening keeps the quote parsing as the target does', () => {
+  // The root's content is the quote, and it is parsed like any block's. A cut
+  // inside a run of brackets parses differently on its own (`[[[Page]]` is
+  // `[Page`), which would mint a page for an alias nobody wrote.
+  const aliasesOf = (text: string) => parseReferences(text).map(r => r.alias)
+
+  it('holds for every selection of every short bracket string', () => {
+    const alphabet = ['[', ']', 'a']
+    const strings: string[] = ['']
+    for (let length = 0; length < 7; length++) {
+      for (const prefix of strings.filter(s => s.length === length)) for (const c of alphabet) strings.push(prefix + c)
+    }
+    const divergent: string[] = []
+    for (const content of strings) {
+      const spans = parseReferences(content)
+      for (let from = 0; from <= content.length; from++) {
+        for (let to = from + 1; to <= content.length; to++) {
+          const anchor = captureAnchor(content, from, to)!
+          const end = anchor.quoteStart! + anchor.quote.length
+          const inside = spans.filter(s => s.startIndex >= anchor.quoteStart! && s.endIndex <= end).map(s => s.alias)
+          if (JSON.stringify(aliasesOf(anchor.quote)) !== JSON.stringify(inside)) divergent.push(`${content} [${from},${to})`)
+        }
+      }
+    }
+    expect(divergent).toEqual([])
+  })
+
+  it('takes the ! of a page embed and the wrapper of a link-form wikilink', () => {
+    const embed = 'see ![[Bee]] here'
+    expect(captureAnchor(embed, 6, 9)?.quote).toBe('![[Bee]]')
+    const linkForm = 'see [shown]([[Bee]]) here'
+    expect(captureAnchor(linkForm, 14, 17)?.quote).toBe('[shown]([[Bee]])')
   })
 })
 
