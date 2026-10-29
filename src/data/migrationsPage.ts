@@ -23,13 +23,11 @@ import { MIGRATIONS_PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreateKernelPage, kernelPageBlockId } from './kernelPage'
 
 const MIGRATIONS_PAGE_NS = 'f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73'
-/** Deliberately not `Migrations`. The alias-uniqueness trigger aborts the
- *  creating transaction if any live block already holds the name, and this
- *  alias is reserved on mature graphs that already have years of content —
- *  unlike Properties / Types / Recents, which claimed theirs when graphs were
- *  empty. Since creation is lazy (see above), a collision now fails the
- *  operator's migration rather than the workspace open; still worth not
- *  provoking, so the name is one nobody types. */
+/** Deliberately not `Migrations`: on mature graphs with years of content that
+ *  name is often taken — unlike Properties / Types / Recents, which claimed
+ *  theirs when graphs were empty. `getOrCreateKernelPage` yields an alias
+ *  another live block holds, so a collision would leave this page alias-less
+ *  beside the user's own `Migrations` page; the name is one nobody types. */
 export const MIGRATIONS_PAGE_ALIAS = 'System Migrations (km)'
 
 export const migrationsPageBlockId = (workspaceId: string): string =>
