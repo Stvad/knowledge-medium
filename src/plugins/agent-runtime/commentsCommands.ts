@@ -84,7 +84,7 @@ const selectThreadIds = async (repo: Repo, workspaceId: string, params: Comments
   const {root} = await loadRoot(repo, params[key]!, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
   if (key === 'scope') return threadIdsInScope(repo, root.id)
   if (key === 'block') return repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId, id: root.id}).load()
-  if (!isThreadRoot(root)) throw new Error(`Block ${oneLine(root.id)} is not a comment thread's root.`)
+  if (!hasBlockType(root, THREAD_TYPE)) throw new Error(`Block ${oneLine(root.id)} is not a comment thread's root.`)
   return [root.id]
 }
 
