@@ -1,1 +1,1 @@
-export{Hj as BlockLoadingPlaceholder}from"../../chunks/app-lMOq0JpP.js";
+export{Wj as BlockLoadingPlaceholder}from"../../chunks/app-KQ8Lumc4.js";

@@ -1,1 +1,1 @@
-export{Tnt as CORE_BLOCK_DELETED_EVENT,Ent as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-lMOq0JpP.js";
+export{Dnt as CORE_BLOCK_DELETED_EVENT,Ont as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-KQ8Lumc4.js";

@@ -1,1 +1,1 @@
-export{vu as getExtraRoamProps}from"../../../chunks/app-lMOq0JpP.js";
+export{vu as getExtraRoamProps}from"../../../chunks/app-KQ8Lumc4.js";

@@ -1,1 +1,1 @@
-export{v7 as getOrCreatePropertiesPage,y7 as propertiesPageBlockId}from"../../chunks/app-lMOq0JpP.js";
+export{b7 as getOrCreatePropertiesPage,x7 as propertiesPageBlockId}from"../../chunks/app-KQ8Lumc4.js";

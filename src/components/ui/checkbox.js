@@ -1,1 +1,1 @@
-export{MI as Checkbox}from"../../../chunks/app-lMOq0JpP.js";
+export{PI as Checkbox}from"../../../chunks/app-KQ8Lumc4.js";
