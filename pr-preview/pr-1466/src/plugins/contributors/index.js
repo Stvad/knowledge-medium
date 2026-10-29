@@ -1,1 +1,0 @@
-export{Iu as contributorsPlugin}from"../../../chunks/app-B7DkhrGA.js";

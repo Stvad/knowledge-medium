@@ -1,1 +1,0 @@
-export{WC as openRecentsPage}from"../../../chunks/app-b7t3_JT2.js";

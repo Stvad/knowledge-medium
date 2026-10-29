@@ -1,1 +1,0 @@
-export{XN as useShortcutSurfaceActivations}from"../../chunks/app-B7DkhrGA.js";

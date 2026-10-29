@@ -1,1 +1,0 @@
-export{CR as isIOS,wR as isMacPlatform}from"../../chunks/app-B7DkhrGA.js";

@@ -1,1 +1,0 @@
-export{YC as openRecentsPage}from"../../../chunks/app-B7DkhrGA.js";

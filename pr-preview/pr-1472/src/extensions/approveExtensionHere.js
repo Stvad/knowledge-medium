@@ -1,1 +1,0 @@
-export{_k as approveExtensionHere}from"../../chunks/app-b7t3_JT2.js";

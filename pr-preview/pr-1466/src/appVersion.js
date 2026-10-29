@@ -1,1 +1,0 @@
-export{ps as appVersion}from"../chunks/app-B7DkhrGA.js";

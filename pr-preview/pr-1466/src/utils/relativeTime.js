@@ -1,1 +1,0 @@
-export{HC as formatAbsoluteDateTime,UC as formatRelativeTime}from"../../chunks/app-B7DkhrGA.js";

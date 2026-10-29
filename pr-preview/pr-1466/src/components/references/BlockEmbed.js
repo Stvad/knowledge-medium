@@ -1,1 +1,0 @@
-export{sO as BlockEmbed}from"../../../chunks/app-B7DkhrGA.js";

@@ -1,1 +1,0 @@
-export{em as blockInfoPlugin}from"../../../chunks/app-B7DkhrGA.js";

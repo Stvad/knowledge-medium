@@ -1,1 +1,0 @@
-export{_A as extensionDisplayName,vA as extensionName,yA as userExtensionShellToggle,bA as userExtensionToggle}from"../../chunks/app-B7DkhrGA.js";

@@ -1,1 +1,0 @@
-export{h_ as DEFAULT_MAX_CAPTURE_BYTES,g_ as captureMedia,__ as mediaBlockId}from"../../../chunks/app-b7t3_JT2.js";

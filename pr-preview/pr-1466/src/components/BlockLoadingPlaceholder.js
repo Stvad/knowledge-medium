@@ -1,1 +1,0 @@
-export{YA as BlockLoadingPlaceholder}from"../../chunks/app-B7DkhrGA.js";

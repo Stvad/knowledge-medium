@@ -1,1 +1,0 @@
-export{Fx as isLeftSidebarSectionContribution,Ix as leftSidebarSectionsFacet}from"../../../chunks/app-b7t3_JT2.js";

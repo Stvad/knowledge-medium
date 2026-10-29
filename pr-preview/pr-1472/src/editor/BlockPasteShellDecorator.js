@@ -1,1 +1,0 @@
-export{XO as BlockPasteShellDecorator,ZO as blockPasteShellDecorator}from"../../chunks/app-b7t3_JT2.js";

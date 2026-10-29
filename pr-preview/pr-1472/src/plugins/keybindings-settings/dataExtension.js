@@ -1,1 +1,0 @@
-export{Vn as keybindingsSettingsDataExtension}from"../../../chunks/app-b7t3_JT2.js";

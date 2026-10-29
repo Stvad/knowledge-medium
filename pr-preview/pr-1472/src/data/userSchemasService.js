@@ -1,1 +1,0 @@
-export{$Q as USER_SCHEMAS_PROJECTOR_ID,e$ as UserSchemasService,t$ as buildSchemaOrNull,n$ as decodePresetConfig,r$ as definitionSchema,i$ as isRegistrablePropertyName,a$ as propertySchemaNameRejection,o$ as tryBuildSchema,s$ as userSchemasProjector}from"../../chunks/app-b7t3_JT2.js";

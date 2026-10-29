@@ -1,1 +1,0 @@
-export{Qw as Label}from"../../../chunks/app-B7DkhrGA.js";

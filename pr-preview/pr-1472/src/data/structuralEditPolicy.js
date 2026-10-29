@@ -1,1 +1,0 @@
-export{BO as resolveStructuralEditPolicy,VO as structuralEditPolicyForBlock}from"../../chunks/app-b7t3_JT2.js";

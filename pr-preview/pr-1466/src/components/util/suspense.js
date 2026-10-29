@@ -1,1 +1,0 @@
-export{_B as SuspenseFallback}from"../../../chunks/app-B7DkhrGA.js";

@@ -1,1 +1,0 @@
-export{fg as richPastePlugin}from"../../../chunks/app-B7DkhrGA.js";

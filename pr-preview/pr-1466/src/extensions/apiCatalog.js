@@ -1,1 +1,0 @@
-export{wd as extensionApiCatalog,Td as extensionApiRuntimeExports}from"../../chunks/app-B7DkhrGA.js";

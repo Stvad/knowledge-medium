@@ -1,1 +1,0 @@
-export{zB as staticDataExtensions}from"../../chunks/app-B7DkhrGA.js";

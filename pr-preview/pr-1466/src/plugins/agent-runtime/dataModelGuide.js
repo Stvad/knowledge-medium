@@ -1,1 +1,0 @@
-export{Fp as DATA_MODEL_GUIDE,Ip as dataModelGuide}from"../../../chunks/app-B7DkhrGA.js";
