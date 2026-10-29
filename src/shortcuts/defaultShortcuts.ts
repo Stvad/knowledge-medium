@@ -77,7 +77,7 @@ import {
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
-import { showInfo, showProgress } from '@/utils/toast.js'
+import { showError, showInfo, showProgress } from '@/utils/toast.js'
 import { pluralize } from '@/utils/pluralize.js'
 import {
   chooseRawSqliteExportFile,
@@ -1274,7 +1274,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const cutSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks} = deps
     if (!selectedBlocks.length) return
-    await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    try {
+      await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    } catch (error) {
+      // A refused clipboard write armed nothing; keep the selection to retry.
+      console.error('[cut] clipboard write failed', error)
+      showError("Couldn't write to the clipboard, so nothing was cut")
+      return
+    }
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
     showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`)
   }

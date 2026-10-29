@@ -5,6 +5,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { armCut, disarmCut, getArmedCut, matchArmedCut } from '@/paste/armedCut'
+import { createSharedBlockActions } from '@/shortcuts/blockActions'
+import type { BlockShortcutDependencies } from '@/shortcuts/types'
 import { copyBlockIdsToClipboard, cutBlockIdsToClipboard } from './copy'
 
 const WS = 'ws-1'
@@ -70,5 +72,19 @@ describe('copyBlockIdsToClipboard', () => {
 
     await expect(copyBlockIdsToClipboard(['b'], repo)).rejects.toThrow('NotAllowedError')
     expect(getArmedCut()?.rootIds).toEqual(['a'])
+  })
+})
+
+describe('block copy actions (copy ref, embed, link, content)', () => {
+  it('disarm a cut once their text is on the clipboard', async () => {
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', {clipboard: {writeText}})
+    await armCut('- A', {workspaceId: WS, rootIds: ['a']})
+    const {copyBlockRef} = createSharedBlockActions({repo})
+
+    await copyBlockRef.handler({block: repo.block('a')} as BlockShortcutDependencies, {} as never)
+
+    expect(writeText).toHaveBeenCalledWith('((a))')
+    await vi.waitFor(() => expect(getArmedCut()).toBeNull())
   })
 })

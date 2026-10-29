@@ -982,11 +982,11 @@ describe('default CodeMirror shortcuts', () => {
     disarmCut()
 
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
-    await expect(action.handler({
+    await action.handler({
       uiStateBlock,
       selectedBlocks: [env.repo.block('ordinary')],
       anchorBlock: null,
-    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)).rejects.toThrow()
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(getArmedCut()).toBeNull()
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['ordinary'])
