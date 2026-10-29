@@ -1,1 +1,1 @@
-export{Pg as aliasCompletions,Fg as referencesCodeMirrorExtensions}from"../../../chunks/app-BVUOksrq.js";
+export{Ig as aliasCompletions,Lg as referencesCodeMirrorExtensions}from"../../../chunks/app-DDaj0bNS.js";

@@ -1,1 +1,1 @@
-export{UP as readClipboardContent}from"../../chunks/app-BVUOksrq.js";
+export{GP as readClipboardContent}from"../../chunks/app-DDaj0bNS.js";

@@ -1,1 +1,1 @@
-export{Ng as remarkBlockrefs}from"../../../../../chunks/app-BVUOksrq.js";
+export{Fg as remarkBlockrefs}from"../../../../../chunks/app-DDaj0bNS.js";

@@ -1,1 +1,1 @@
-export{NG as annotationsDataExtension}from"../../../chunks/app-BVUOksrq.js";
+export{FG as annotationsDataExtension}from"../../../chunks/app-DDaj0bNS.js";

@@ -1,1 +1,1 @@
-export{Yu as HIGHLIGHT_CLASS,Xu as MOVED_HIGHLIGHT_CLASS,Zu as highlightField,Qu as highlightRanges,$u as threadHighlights,ed as threadHighlightsContribution}from"../../../chunks/app-BVUOksrq.js";
+export{Xu as HIGHLIGHT_CLASS,Zu as MOVED_HIGHLIGHT_CLASS,Qu as highlightField,$u as highlightRanges,ed as threadHighlights,td as threadHighlightsContribution}from"../../../chunks/app-DDaj0bNS.js";
