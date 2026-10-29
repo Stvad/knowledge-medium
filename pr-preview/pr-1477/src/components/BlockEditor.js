@@ -1,1 +1,1 @@
-export{FP as BlockEditor}from"../../chunks/app-DnSHGFdg.js";
+export{IP as BlockEditor}from"../../chunks/app-CJ0dIIvH.js";

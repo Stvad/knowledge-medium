@@ -1,1 +1,1 @@
-export{MV as staticDataExtensions}from"../../chunks/app-DnSHGFdg.js";
+export{NV as staticDataExtensions}from"../../chunks/app-CJ0dIIvH.js";

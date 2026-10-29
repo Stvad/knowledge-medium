@@ -1,1 +1,1 @@
-export{KG as CHAR_COUNTER_TYPE,qG as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-DnSHGFdg.js";
+export{qG as CHAR_COUNTER_TYPE,JG as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-CJ0dIIvH.js";

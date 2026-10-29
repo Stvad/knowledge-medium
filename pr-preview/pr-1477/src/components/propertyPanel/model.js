@@ -1,1 +1,1 @@
-export{vI as HIDDEN_SECTION,yI as buildPropertyPanelModel}from"../../../chunks/app-DnSHGFdg.js";
+export{yI as HIDDEN_SECTION,bI as buildPropertyPanelModel}from"../../../chunks/app-CJ0dIIvH.js";
