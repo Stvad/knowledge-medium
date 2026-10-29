@@ -84,15 +84,20 @@ describe('createThread', () => {
     expect(await repo.load('B')).toEqual(before)
   })
 
-  it('is one undo step, the container included', async () => {
-    const {threadId} = await createThread(repo, {
+  it('is one undo step that leaves the container, which other devices file threads under', async () => {
+    const {threadId, commentId} = await createThread(repo, {
       targetId: 'B', anchor: anchorFor(TARGET_TEXT, 'Thursday'), comment: 'Is Thursday confirmed?',
     })
     expect(await repo.undo()).toBe(true)
     expect(await repo.load(threadId)).toBeNull()
-    expect(await repo.load(commentsPageBlockId(WS))).toBeNull()
-    // The setup tx before it is still in place: one step took exactly the group.
+    expect(await repo.load(commentId!)).toBeNull()
+    expect((await repo.load(commentsPageBlockId(WS)))!.content).toBe(COMMENTS_PAGE_ALIAS)
+    // The setup tx before it is still in place: one step took exactly the thread.
     expect((await repo.load('B'))!.content).toBe(TARGET_TEXT)
+    // And no later step takes the container either: the next one is the setup.
+    expect(await repo.undo()).toBe(true)
+    expect(await repo.load('B')).toBeNull()
+    expect(await repo.load(commentsPageBlockId(WS))).not.toBeNull()
   })
 
   it('is discoverable through the target edge as soon as it commits', async () => {
