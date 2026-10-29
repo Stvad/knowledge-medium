@@ -1,0 +1,1 @@
+export{lS as mobileBottomNavItemsFacet}from"../../../chunks/app-CKNkR-er.js";

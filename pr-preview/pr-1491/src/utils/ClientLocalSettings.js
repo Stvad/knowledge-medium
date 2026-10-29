@@ -1,0 +1,1 @@
+export{fj as ClientLocalSettings,pj as clientLocalSettings}from"../../chunks/app-CKNkR-er.js";

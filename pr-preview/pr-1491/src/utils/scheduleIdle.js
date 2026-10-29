@@ -1,0 +1,1 @@
+export{MX as CATCHUP_DEEP_IDLE,NX as LAZY_DEEP_IDLE,PX as scheduleDeepIdle,FX as scheduleIdle}from"../../chunks/app-CKNkR-er.js";

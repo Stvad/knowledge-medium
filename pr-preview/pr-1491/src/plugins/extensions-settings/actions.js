@@ -1,0 +1,1 @@
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{tO as COMMAND_PALETTE_ACTION_ID,nO as COMMAND_PALETTE_CONTEXT,rO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,iO as commandPaletteActionContext}from"../../../chunks/app-CKNkR-er.js";

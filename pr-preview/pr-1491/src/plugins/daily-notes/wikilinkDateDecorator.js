@@ -1,0 +1,1 @@
+export{zE as dailyDateWikilinkDecorator}from"../../../chunks/app-CKNkR-er.js";

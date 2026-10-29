@@ -1,0 +1,1 @@
+export{Fw as DEFAULT_THEME_ID_DARK,Iw as DEFAULT_THEME_ID_LIGHT,bw as defaultThemeContributions,yw as defaultThemesPlugin}from"../../../chunks/app-CKNkR-er.js";

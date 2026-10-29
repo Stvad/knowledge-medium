@@ -1,0 +1,1 @@
+export{Zj as LazyBlockComponent}from"../../chunks/app-CKNkR-er.js";

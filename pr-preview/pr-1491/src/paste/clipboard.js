@@ -1,0 +1,1 @@
+export{MP as readClipboardContent}from"../../chunks/app-CKNkR-er.js";

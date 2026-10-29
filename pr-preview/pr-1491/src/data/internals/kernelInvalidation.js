@@ -1,0 +1,1 @@
+export{D$ as emitKernelInvalidations,O$ as kernelInvalidationRule}from"../../../chunks/app-CKNkR-er.js";

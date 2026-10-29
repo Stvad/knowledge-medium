@@ -1,0 +1,1 @@
+export{zv as useAssetObjectUrl}from"../../../chunks/app-CKNkR-er.js";

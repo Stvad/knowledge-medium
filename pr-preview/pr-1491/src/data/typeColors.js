@@ -1,0 +1,1 @@
+export{Ck as DEFAULT_TYPE_COLORS,wk as defaultTypeColor,Tk as pickLeastUsedTypeColor}from"../../chunks/app-CKNkR-er.js";

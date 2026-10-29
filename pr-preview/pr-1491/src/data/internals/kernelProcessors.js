@@ -1,0 +1,1 @@
+export{U$ as KERNEL_PROCESSORS}from"../../../chunks/app-CKNkR-er.js";

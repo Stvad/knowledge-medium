@@ -1,0 +1,1 @@
+export{bh as inlineBacklinkCountsExtension}from"../../../../chunks/app-CKNkR-er.js";

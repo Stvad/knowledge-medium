@@ -1,0 +1,1 @@
+export{$A as gestureBindingDescriptor,ej as matchesGestureEvent}from"../../chunks/app-CKNkR-er.js";

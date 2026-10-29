@@ -1,0 +1,1 @@
+export{RN as useIsMobile,zN as usePointerCoarse}from"../../chunks/app-CKNkR-er.js";

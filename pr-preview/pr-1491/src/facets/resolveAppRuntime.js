@@ -1,0 +1,1 @@
+export{mj as resolveAppRuntime,hj as resolveAppRuntimeSync}from"../../chunks/app-CKNkR-er.js";

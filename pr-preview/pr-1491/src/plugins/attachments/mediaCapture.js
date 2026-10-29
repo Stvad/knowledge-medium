@@ -1,0 +1,1 @@
+export{wv as DEFAULT_MAX_CAPTURE_BYTES,Tv as captureMedia,Ev as mediaBlockId}from"../../../chunks/app-CKNkR-er.js";

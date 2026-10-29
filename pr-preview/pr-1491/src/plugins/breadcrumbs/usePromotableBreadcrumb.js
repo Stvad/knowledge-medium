@@ -1,0 +1,1 @@
+export{mS as usePromotableBreadcrumb}from"../../../chunks/app-CKNkR-er.js";

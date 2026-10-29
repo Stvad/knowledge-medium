@@ -1,0 +1,1 @@
+export{ah as updateIndicatorPlugin}from"../../../chunks/app-CKNkR-er.js";

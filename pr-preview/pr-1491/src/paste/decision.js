@@ -1,0 +1,1 @@
+export{HP as defaultPasteDecision,UP as pasteDecisionVerb}from"../../chunks/app-CKNkR-er.js";

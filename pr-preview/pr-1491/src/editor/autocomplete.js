@@ -1,0 +1,1 @@
+export{hA as editorAutocompleteExtension}from"../../chunks/app-CKNkR-er.js";

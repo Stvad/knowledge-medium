@@ -1,0 +1,1 @@
+export{VE as isWikilinkDisplayParts,HE as resolveWikilinkDisplay,UE as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-CKNkR-er.js";

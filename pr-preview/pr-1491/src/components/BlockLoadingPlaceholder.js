@@ -1,0 +1,1 @@
+export{eM as BlockLoadingPlaceholder}from"../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{gk as kernelPropertyUiExtension,_k as typesPropertyUi,vk as typesPropertyUiExtension}from"../../../chunks/app-CKNkR-er.js";

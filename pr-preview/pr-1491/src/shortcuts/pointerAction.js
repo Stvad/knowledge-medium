@@ -1,0 +1,1 @@
+export{tj as dispatchPointerAction,nj as setPointerActionDispatcher}from"../../chunks/app-CKNkR-er.js";

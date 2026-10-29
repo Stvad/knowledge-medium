@@ -1,0 +1,1 @@
+export{gj as dynamicExtensionsExtension}from"../../chunks/app-CKNkR-er.js";

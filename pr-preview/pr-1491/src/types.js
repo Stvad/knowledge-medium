@@ -1,0 +1,1 @@
+export{I9 as isChildBackedPropertiesWorkspace}from"../chunks/app-CKNkR-er.js";

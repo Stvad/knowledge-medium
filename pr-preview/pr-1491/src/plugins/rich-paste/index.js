@@ -1,0 +1,1 @@
+export{g_ as richPastePlugin}from"../../../chunks/app-CKNkR-er.js";

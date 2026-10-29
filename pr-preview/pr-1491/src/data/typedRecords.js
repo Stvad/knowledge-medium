@@ -1,0 +1,1 @@
+export{Zf as adoptTypedBlock,Qf as createTypedChild,R9 as derivedBlockId,$f as getOrCreateTypedChild}from"../../chunks/app-CKNkR-er.js";

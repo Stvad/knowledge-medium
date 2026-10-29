@@ -1,0 +1,1 @@
+export{JP as BlockEditor}from"../../chunks/app-CKNkR-er.js";

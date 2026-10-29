@@ -1,0 +1,1 @@
+export{MO as SWIPE_QUICK_ACTIONS_GESTURE_ID,QO as SWIPE_RIGHT_BLOCK_ACTION_ID,jO as SwipeActionMenu,ek as quickActionItemsFacet,EO as swipeQuickActionsPlugin}from"../../../chunks/app-CKNkR-er.js";

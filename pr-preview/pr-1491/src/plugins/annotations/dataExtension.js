@@ -1,0 +1,1 @@
+export{SG as annotationsDataExtension}from"../../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{iG as dailyNotesLocalSchema}from"../../../chunks/app-CKNkR-er.js";

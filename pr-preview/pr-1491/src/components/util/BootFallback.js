@@ -1,0 +1,1 @@
+export{SV as BootFallback}from"../../../chunks/app-CKNkR-er.js";

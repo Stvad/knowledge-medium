@@ -1,0 +1,1 @@
+export{u9 as deriveWorkspaceIdNamespace}from"../../../chunks/app-CKNkR-er.js";

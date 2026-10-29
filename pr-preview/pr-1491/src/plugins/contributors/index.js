@@ -1,0 +1,1 @@
+export{cd as contributorsPlugin}from"../../../chunks/app-CKNkR-er.js";

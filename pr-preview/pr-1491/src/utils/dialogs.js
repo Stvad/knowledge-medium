@@ -1,0 +1,1 @@
+export{BN as __resetDialogsForTests,VN as getDialogQueue,HN as isDialogOpenForWorkspace,UN as openDialog,WN as subscribeDialogs}from"../../chunks/app-CKNkR-er.js";

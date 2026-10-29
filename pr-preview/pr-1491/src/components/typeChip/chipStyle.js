@@ -1,0 +1,1 @@
+export{Sk as chipStyle}from"../../../chunks/app-CKNkR-er.js";

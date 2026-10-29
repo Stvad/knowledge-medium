@@ -1,0 +1,1 @@
+export{kz as isIOS,Az as isMacPlatform}from"../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{KN as ExtensionRenderBoundary}from"../../chunks/app-CKNkR-er.js";

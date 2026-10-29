@@ -1,0 +1,1 @@
+export{kg as blockDragPlugin}from"../../../chunks/app-CKNkR-er.js";

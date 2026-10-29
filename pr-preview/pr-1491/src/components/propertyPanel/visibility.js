@@ -1,0 +1,1 @@
+export{GR as isPropertyPanelHiddenProperty,KR as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-CKNkR-er.js";

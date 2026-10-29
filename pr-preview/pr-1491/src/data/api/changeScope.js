@@ -1,0 +1,1 @@
+export{yrt as CHANGE_SCOPE_POLICIES,brt as ChangeScope,xrt as isChangeScope,Srt as policyForScope,Crt as scopeAllowedInReadOnly,wrt as scopeIsUndoable,Trt as scopePoliciesEquivalent,Ert as scopeUploadsToServer,Drt as sourceForScope}from"../../../chunks/app-CKNkR-er.js";

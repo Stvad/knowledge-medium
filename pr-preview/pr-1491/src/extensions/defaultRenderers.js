@@ -1,0 +1,1 @@
+export{rM as defaultRegistry,iM as defaultRendererContributions,aM as defaultRenderersExtension}from"../../chunks/app-CKNkR-er.js";

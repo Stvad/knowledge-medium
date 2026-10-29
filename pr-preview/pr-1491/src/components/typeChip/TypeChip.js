@@ -1,0 +1,1 @@
+export{xk as TypeChip}from"../../../chunks/app-CKNkR-er.js";

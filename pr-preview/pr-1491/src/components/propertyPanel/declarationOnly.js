@@ -1,0 +1,1 @@
+export{XI as declarationOnlyDefinitionForName,ZI as declarationOnlyStatusText}from"../../../chunks/app-CKNkR-er.js";

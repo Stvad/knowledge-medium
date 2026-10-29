@@ -1,0 +1,1 @@
+export{vg as Wikilink}from"../../../../../chunks/app-CKNkR-er.js";

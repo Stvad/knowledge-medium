@@ -1,0 +1,1 @@
+export{EV as BATCH_SENTINEL_SQL,DV as closePowerSyncDbIfOpen,OV as ensurePowerSyncReady,kV as getActiveSyncResolver,AV as getActiveUserId,jV as getPowerSyncDb,MV as initializeClientSchema,NV as isRemoteSyncActive,PV as syncObserverDepsFor,FV as syncResolverForUser,IV as webDatabaseOptions}from"../../chunks/app-CKNkR-er.js";

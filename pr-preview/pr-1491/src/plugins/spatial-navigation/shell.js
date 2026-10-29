@@ -1,0 +1,1 @@
+export{rx as spatialNavigationShellDecorator}from"../../../chunks/app-CKNkR-er.js";

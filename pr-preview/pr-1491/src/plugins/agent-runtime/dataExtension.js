@@ -1,0 +1,1 @@
+export{Gq as agentRuntimeDataExtension}from"../../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{QD as useCommandPaletteActions}from"../../../chunks/app-CKNkR-er.js";

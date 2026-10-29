@@ -1,0 +1,1 @@
+export{MO as SWIPE_QUICK_ACTIONS_GESTURE_ID,NO as SWIPE_TRIGGER_PX,PO as swipeRecognizer}from"../../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{JQ as Block,YQ as requireLoadedBlock}from"../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{wS as blockEditingContentRenderer}from"../../../chunks/app-CKNkR-er.js";

@@ -1,0 +1,1 @@
+export{HG as contributorsDataExtension}from"../../../chunks/app-CKNkR-er.js";
