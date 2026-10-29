@@ -1,1 +1,1 @@
-export{gf as extensionApiCatalog,_f as extensionApiRuntimeExports}from"../../chunks/app-IRp4F-qQ.js";
+export{gf as extensionApiCatalog,_f as extensionApiRuntimeExports}from"../../chunks/app-CpTQzY9u.js";

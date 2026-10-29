@@ -1,1 +1,1 @@
-export{KG as characterCounterDataExtension}from"../../../chunks/app-IRp4F-qQ.js";
+export{KG as characterCounterDataExtension}from"../../../chunks/app-CpTQzY9u.js";

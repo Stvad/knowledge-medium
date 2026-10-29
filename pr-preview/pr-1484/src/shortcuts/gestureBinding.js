@@ -1,1 +1,1 @@
-export{VA as gestureBindingDescriptor,HA as matchesGestureEvent}from"../../chunks/app-IRp4F-qQ.js";
+export{VA as gestureBindingDescriptor,HA as matchesGestureEvent}from"../../chunks/app-CpTQzY9u.js";

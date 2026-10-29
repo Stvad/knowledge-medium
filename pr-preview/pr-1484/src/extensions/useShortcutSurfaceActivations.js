@@ -1,1 +1,1 @@
-export{WP as useShortcutSurfaceActivations}from"../../chunks/app-IRp4F-qQ.js";
+export{WP as useShortcutSurfaceActivations}from"../../chunks/app-CpTQzY9u.js";

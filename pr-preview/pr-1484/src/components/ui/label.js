@@ -1,1 +1,1 @@
-export{GT as Label}from"../../../chunks/app-IRp4F-qQ.js";
+export{GT as Label}from"../../../chunks/app-CpTQzY9u.js";
