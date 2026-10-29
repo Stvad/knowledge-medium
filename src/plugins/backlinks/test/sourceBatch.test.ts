@@ -20,8 +20,10 @@ const fakeDb = (counts: Record<string, number>, failReads: number[] = []) => {
   }
 }
 
+const ALL_EDGES = {sql: '1', params: []}
+
 const countOf = (batcher: BacklinkSourceBatcher, target: string) =>
-  batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS).then(r => r.value)
+  batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES).then(r => r.value)
 
 describe('BacklinkSourceBatcher', () => {
   it('answers each target from its own chunk when a wave exceeds the bind ceiling', async () => {
@@ -30,6 +32,17 @@ describe('BacklinkSourceBatcher', () => {
     const answers = await Promise.all(['a', 'b', 'c', 'b'].map(t => countOf(batcher, t)))
     expect(answers).toEqual([1, 2, 3, 2])
     expect(db.statements).toEqual([['a', 'b'], ['c']])
+  })
+
+  it('answers requests for different edges from separate statements', async () => {
+    const db = fakeDb({a: 1})
+    const batcher = new BacklinkSourceBatcher(db)
+    const fieldEdges = {sql: 'br.source_field = ?', params: ['annotation:target']}
+    await Promise.all([
+      batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES),
+      batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, fieldEdges),
+    ])
+    expect(db.statements).toEqual([['a'], ['a', 'annotation:target']])
   })
 
   it('rejects only the chunk whose read failed, and reads again for the next wave', async () => {
