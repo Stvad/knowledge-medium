@@ -1,1 +1,1 @@
-export{Mtt as CHANGE_SCOPE_POLICIES,Ntt as ChangeScope,Ptt as isChangeScope,Ftt as policyForScope,Itt as scopeAllowedInReadOnly,Ltt as scopeIsUndoable,Rtt as scopePoliciesEquivalent,ztt as scopeUploadsToServer,Btt as sourceForScope}from"../../../chunks/app-CPxCv6_r.js";
+export{Ptt as CHANGE_SCOPE_POLICIES,Ftt as ChangeScope,Itt as isChangeScope,Ltt as policyForScope,Rtt as scopeAllowedInReadOnly,ztt as scopeIsUndoable,Btt as scopePoliciesEquivalent,Vtt as scopeUploadsToServer,Htt as sourceForScope}from"../../../chunks/app-gX-t5P6B.js";

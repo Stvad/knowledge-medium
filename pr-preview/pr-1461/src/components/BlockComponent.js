@@ -1,1 +1,1 @@
-export{IA as BlockChildren,LA as BlockComponent}from"../../chunks/app-CPxCv6_r.js";
+export{IA as BlockChildren,LA as BlockComponent}from"../../chunks/app-gX-t5P6B.js";

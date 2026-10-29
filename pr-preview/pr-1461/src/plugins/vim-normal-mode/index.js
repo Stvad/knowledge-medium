@@ -1,1 +1,1 @@
-export{xy as vimNormalModeInteractionExtension,Sy as vimNormalModePlugin}from"../../../chunks/app-CPxCv6_r.js";
+export{xy as vimNormalModeInteractionExtension,Sy as vimNormalModePlugin}from"../../../chunks/app-gX-t5P6B.js";

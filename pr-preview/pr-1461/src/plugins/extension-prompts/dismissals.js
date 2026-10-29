@@ -1,1 +1,1 @@
-export{dk as ExtensionPromptDismissalStore,fk as extensionPromptDismissals,pk as useExtensionPromptDismissals}from"../../../chunks/app-CPxCv6_r.js";
+export{dk as ExtensionPromptDismissalStore,fk as extensionPromptDismissals,pk as useExtensionPromptDismissals}from"../../../chunks/app-gX-t5P6B.js";
