@@ -1,5 +1,5 @@
 // @vitest-environment node
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {aliasesProp, typesProp} from '@/data/properties'
@@ -12,6 +12,8 @@ import {BACKLINKS_FOR_BLOCK_QUERY} from '@/plugins/backlinks/query.js'
 import {groupedBacklinksDataExtension} from '@/plugins/grouped-backlinks/dataExtension.js'
 import {GROUPED_BACKLINKS_FOR_BLOCK_QUERY} from '@/plugins/grouped-backlinks/query.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
+import {contentCopyTypes} from '@/plugins/backlinks/edgeExclusions.js'
+import {buildTaggedCandidatesQuery, selectNewCards} from '@/plugins/srs-review/dueQuery.js'
 import {captureAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
@@ -72,6 +74,9 @@ const exclude = {exclude: [{scope: 'self' as const, id: 'no-such-block'}]}
 /** Each route, answering the set of backlink sources of `id`. */
 const ROUTES: Record<string, (id: string) => Promise<readonly string[] | number>> = {
   'batch count': id => repo.query[BACKLINKS_COUNT_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load(),
+  // The bridge `backlinks` command runs this route, and through it the dispatch
+  // daemon's mention sources (packages/agent-cli/src/graph.ts): a highlight
+  // quoting [[claude]] gives the daemon no task, a comment saying it does.
   'batch list': id => repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load(),
   'filtered forBlock': id => repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id, filter: exclude}).load(),
   'grouped': async id =>
@@ -102,16 +107,6 @@ describe('raw sources', () => {
   })
 })
 
-describe('the dispatch daemon’s mention sources', () => {
-  // The daemon claims tasks from the bridge `backlinks` command, which runs
-  // the unfiltered `backlinks.forBlock` (packages/agent-cli/src/graph.ts).
-  it('get no task from a highlight quoting [[claude]], and one from a comment saying it', async () => {
-    const sources = await repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: CLAUDE}).load()
-    expect(sources).not.toContain(graph.highlight)
-    expect(sources).toContain(graph.comment)
-  })
-})
-
 describe('annotations.threadIdsForBlock', () => {
   it('answers the threads anchored to a block from the target edge alone', async () => {
     const threads = await repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: B}).load()
@@ -121,10 +116,28 @@ describe('annotations.threadIdsForBlock', () => {
     expect(await repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'mention'}).load()).toEqual([])
   })
 
+  it('re-resolves a mounted handle when a thread is added', async () => {
+    const handle = repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: B})
+    const unsubscribe = handle.subscribe(() => {})
+    expect(await handle.load()).toHaveLength(2)
+    await createThread(repo, {targetId: B, anchor: null, comment: 'third'})
+    await vi.waitFor(() => expect(handle.peek()).toHaveLength(3))
+    unsubscribe()
+  })
+
   it('drops a deleted thread', async () => {
     await repo.tx(tx => tx.delete(graph.highlight), opts)
-    const threads = await repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: B}).load()
-    expect(threads).not.toContain(graph.highlight)
-    expect(threads).toHaveLength(1)
+    const commentThread = (await repo.load(graph.comment))!.parentId!
+    expect(await repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: B}).load()).toEqual([commentThread])
+  })
+})
+
+describe('other readers of content references', () => {
+  it('do not enrol a highlight quoting a deck tag as a new review card', async () => {
+    // B's text tags it for the `claude` deck, and so does the comment's; the
+    // highlight only quotes B's tag.
+    const candidates = await repo.query['core.typedBlocks'](buildTaggedCandidatesQuery({workspaceId: WS, tagBlockId: CLAUDE})).load()
+    expect(candidates.map(c => c.id)).toContain(graph.highlight)
+    expect(selectNewCards(candidates, contentCopyTypes(repo)).map(c => c.id).sort()).toEqual([B, graph.comment].sort())
   })
 })

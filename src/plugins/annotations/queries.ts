@@ -10,7 +10,7 @@ const stringArraySchema: Schema<string[]> = {parse: input => input as string[]}
 
 /** Thread roots anchored to `id`, newest first. The target-edge projection of
  *  the backlinks batch, so every block in a render wave is answered by one
- *  statement; status and comments are read off the hydrated roots. */
+ *  statement. */
 export const threadIdsForBlockQuery = defineQuery<{workspaceId: string; id: string}, string[]>({
   name: THREAD_IDS_FOR_BLOCK_QUERY,
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),

@@ -10,6 +10,7 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import { backlinkSourceIds } from '@/plugins/backlinks/sourceBatch.js'
 import { filteredBacklinkSourceIds } from '@/plugins/backlinks/sources.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
@@ -363,7 +364,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const unfilteredSourceIds = await filteredBacklinkSourceIds(ctx, workspaceId, id)
+    const unfilteredSourceIds = await backlinkSourceIds(ctx, workspaceId, id)
     const sourceIds = hasBacklinksFilter(normalizedFilter)
       ? await filteredBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
       : unfilteredSourceIds
