@@ -489,7 +489,7 @@ export const createBlockGestureController = ({
 
   const armHolds = (): void => {
     for (const recognizer of recognizers) {
-      if (!recognizer.holdMs || !isEligible(recognizer) || !enabled(recognizer)) continue
+      if (!recognizer.holdMs) continue
       clearTimeout(holdTimers.get(recognizer.id))
       holdTimers.set(recognizer.id, setTimeout(() => fireHold(recognizer), recognizer.holdMs))
     }

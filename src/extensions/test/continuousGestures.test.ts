@@ -614,6 +614,65 @@ describe('holds (holdMs / onHold)', () => {
     expect(rivalCancel).toHaveBeenCalledTimes(1)
   })
 
+  it('times a hold from the latest pointerdown, and runs it once', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(300)
+    controller.handlePointerDown(sample(2, 50, 0))
+    vi.advanceTimersByTime(300)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a released press\'s hold, so a quick next press waits its own full hold', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(200)
+    controller.handlePointerUp(sample(1, 0, 0))
+    vi.advanceTimersByTime(100)
+    controller.handlePointerDown(sample(2, 0, 0))
+    vi.advanceTimersByTime(300)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+  })
+
+  it('a finger landing on a consumed session reaches no recognizer', () => {
+    vi.useFakeTimers()
+    const rivalDown = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'scrub', onPointerDown: rivalDown},
+        {id: 'hold', holdMs: 500, onHold: holdCommit},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+    controller.handlePointerDown(sample(2, 50, 0))
+
+    expect(rivalDown).toHaveBeenCalledTimes(1)
+  })
+
   it('an unhandled hold commit leaves the rest of the session to the other recognizers', () => {
     vi.useFakeTimers()
     const rivalMove = vi.fn(() => GESTURE_IDLE)

@@ -223,6 +223,7 @@ const pathFromRoot = (repo: Repo, id: string): BlockData[] | null => {
   const seen = new Set<string>()
   let current = repo.cache.getSnapshot(id)
   while (current) {
+    // Defence in depth: a parent cycle (corrupt rows) would loop forever.
     if (seen.has(current.id)) return null
     seen.add(current.id)
     path.unshift(current)

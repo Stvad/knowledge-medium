@@ -28,7 +28,6 @@ export const BLOCK_HOLD_GESTURE = 'block-hold'
 export const BLOCK_HOLD_RECOGNIZER_ID = 'touch-selection.hold'
 
 interface Press {
-  readonly pointerId: number
   readonly x: number
   readonly y: number
 }
@@ -53,20 +52,20 @@ export const blockHoldRecognizer: BlockGestureRecognizerContribution = context =
       !uiStateBlock.repo.isReadOnly &&
       !isEditingBlock(uiStateBlock, block.id, renderScopeId),
 
+    // Every pointerdown starts over, so no press outlives its session.
     onPointerDown(session, ctx) {
-      if (session.pointers.length > 1) {
-        press = null
-        return GESTURE_CANCEL
-      }
+      press = null
+      if (session.pointers.length > 1) return GESTURE_CANCEL
       if (ctx.event.pointerType !== 'touch' || !isGestureSurfaceTarget(ctx.event.target)) {
         return GESTURE_IDLE
       }
-      press = {pointerId: session.changed.pointerId, x: session.changed.x, y: session.changed.y}
+      press = {x: session.changed.x, y: session.changed.y}
       return GESTURE_IDLE
     },
 
+    // Only the pressing finger can move here: a second one cancels on landing.
     onPointerMove(session) {
-      if (!press || session.changed.pointerId !== press.pointerId) return GESTURE_IDLE
+      if (!press) return GESTURE_IDLE
       const travel = Math.hypot(session.changed.x - press.x, session.changed.y - press.y)
       if (travel <= TOUCH_SLOP_PX) return GESTURE_IDLE
       press = null
@@ -85,11 +84,6 @@ export const blockHoldRecognizer: BlockGestureRecognizerContribution = context =
         ...(renderScopeId ? {renderScopeId} : {}),
       }
       return {status: 'commit', gesture: BLOCK_HOLD_GESTURE, deps}
-    },
-
-    onPointerUp() {
-      press = null
-      return GESTURE_IDLE
     },
 
     onPointerCancel() {

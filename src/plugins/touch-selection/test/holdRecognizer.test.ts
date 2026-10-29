@@ -126,6 +126,13 @@ describe('blockHoldRecognizer', () => {
     expect(hold(onLink)?.status).toBe('commit')
   })
 
+  it('starts every press over: one on a button after a tap on text holds nothing', () => {
+    const recognizer = make()
+    press(recognizer)
+    press(recognizer, eventCtx({target: document.createElement('button')}))
+    expect(hold(recognizer)?.status).toBe('idle')
+  })
+
   it('forgets the press when the loop cancels it (a rival claimed the block, or iOS took the touch)', () => {
     const recognizer = make()
     press(recognizer)
