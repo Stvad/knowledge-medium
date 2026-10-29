@@ -67,21 +67,29 @@ const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
 
 const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
 
+/** The thread waiting for new text in this block (Reselect on its card), if
+ *  any. It takes the selection wherever the block is edited, a comment's
+ *  editor inside a card included, since no composer opens for it. */
+const pendingReanchorIn = ({block}: {block: {id: string}}) => {
+  const pending = peekPendingReanchor()
+  return pending?.targetId === block.id ? pending : null
+}
+
 const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   id: COMMENT_ON_SELECTION_ACTION_ID,
   description: 'Comment on selection',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MessageSquarePlus,
   defaultBinding: {keys: '$mod+Alt+m'},
-  isVisible: onOutline,
+  isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
   handler: async deps => {
-    if (!onOutline(deps)) {
-      showInfo(NOT_ON_OUTLINE)
+    const pending = pendingReanchorIn(deps)
+    if (pending) {
+      await reanchorToSelection(deps.block.repo, pending.threadId, deps.editorView)
       return
     }
-    const pending = peekPendingReanchor()
-    if (pending?.targetId === deps.block.id) {
-      await reanchorToSelection(deps.block.repo, pending.threadId, deps.editorView)
+    if (!onOutline(deps)) {
+      showInfo(NOT_ON_OUTLINE)
       return
     }
     openComposer(viewKey(deps.renderScopeId, deps.block.id), deps.block.id, anchorFromEditor(deps.editorView))

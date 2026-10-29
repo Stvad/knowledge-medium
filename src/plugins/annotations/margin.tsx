@@ -131,12 +131,16 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       scrollport.style.paddingBottom = px > 0 ? `${px}px` : ''
     }
 
-    const measure = (): ColumnFrame | null => {
+    const topRowSelector =
+      `[data-block-shell][data-block-id="${CSS.escape(topLevelBlockId)}"][data-render-scope-id="${CSS.escape(scope)}"]`
+    /** The focal block's row spans the whole outline, so its size changes
+     *  whenever any row's does, an image that finished loading included. It
+     *  is re-found each pass, since the row can remount. */
+    let observedTopRow: Element | null = null
+
+    const measure = (top: Element | null): ColumnFrame | null => {
       const panelRect = panelEl.getBoundingClientRect()
       const portRect = scrollport.getBoundingClientRect()
-      const top = scrollport.querySelector(
-        `[data-block-shell][data-block-id="${CSS.escape(topLevelBlockId)}"][data-render-scope-id="${CSS.escape(scope)}"]`,
-      )
       const textRight = top ? top.getBoundingClientRect().right : portRect.right
       const width = Math.min(MAX_COLUMN_PX, Math.floor(portRect.right - textRight - 2 * EDGE_PX))
       return width < MIN_COLUMN_PX ? null : {
@@ -149,7 +153,13 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 
     const run = () => {
       pending = 0
-      const nextFrame = measure()
+      const topRow = scrollport.querySelector(topRowSelector)
+      if (topRow !== observedTopRow) {
+        if (observedTopRow) resize.unobserve(observedTopRow)
+        if (topRow) resize.observe(topRow)
+        observedTopRow = topRow
+      }
+      const nextFrame = measure(topRow)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll(selector)) {
@@ -201,11 +211,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     resize.observe(scrollport)
     cardObserver.current = resize
     for (const entry of cards.current.values()) resize.observe(entry.el)
-    // Rows mounting, unmounting, expanding or growing all mutate the subtree;
-    // a text edit that wraps to a new line resizes a row without one, which
-    // the scrollport's own resize does not see either, hence the characters.
+    // Rows mounting or unmounting, which can leave the outline's height as it
+    // was (a placeholder swapped for its row).
     const mutations = new MutationObserver(schedule)
-    mutations.observe(scrollport, {childList: true, subtree: true, characterData: true})
+    mutations.observe(scrollport, {childList: true, subtree: true})
     scrollport.addEventListener('scroll', schedule, {passive: true})
     const unsubscribe = onUiStoreChange(schedule)
     schedule()

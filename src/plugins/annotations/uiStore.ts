@@ -106,6 +106,12 @@ export const useActiveThread = (panelId: string): string | undefined =>
   useSyncExternalStore(subscribe, () => activeThreads.get(panelId))
 
 export const toggleShowClosed = (panelId: string): void => toggle(showingClosed, panelId)
+
+export const showClosedThreads = (panelId: string): void => {
+  if (showingClosed.has(panelId)) return
+  showingClosed.add(panelId)
+  listeners.notify()
+}
 export const useShowClosed = (panelId: string): boolean =>
   useSyncExternalStore(subscribe, () => showingClosed.has(panelId))
 

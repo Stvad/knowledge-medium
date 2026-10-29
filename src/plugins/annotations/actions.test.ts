@@ -8,14 +8,15 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {editorContentFlushFacet} from '@/editor/contentFlush.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
-import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope.js'
+import {backlinkRenderScopeId, panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
 import {anchorFromEditor, annotationActions, COMMENT_ON_BLOCK_ACTION_ID, COMMENT_ON_SELECTION_ACTION_ID, submitComposer} from './actions'
 import {resolveAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
-import {closeComposer, openComposer, peekComposer, updateComposer, viewKey} from './uiStore'
+import {createThread} from './threads'
+import {closeComposer, openComposer, peekComposer, peekPendingReanchor, startReanchor, updateComposer, viewKey} from './uiStore'
 
 const WS = 'ws'
 const TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -37,6 +38,7 @@ beforeEach(async () => {
 afterEach(() => {
   view?.destroy()
   view = null
+  startReanchor(null)
   closeComposer(KEY)
   closeComposer(viewKey(PANEL, 'B'))
 })
@@ -152,6 +154,21 @@ describe('commenting on an editor selection', () => {
     await commentOnSelection.handler({block: repo.block('B'), uiStateBlock: repo.block('ui'), renderScopeId: PANEL, editorView: editor} as never, new CustomEvent('test'))
     expect(peekComposer(viewKey(PANEL, 'B'))?.anchor?.quote).toBe('Thursday')
     await vi.waitFor(async () => expect((await repo.load('ui'))!.properties[isEditingProp.name]).toBe(false))
+  })
+
+  it('re-anchors a pending thread from the editor of its target in a card, where no composer opens', async () => {
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
+    const commentOnSelection = annotationActions.find(action => action.id === COMMENT_ON_SELECTION_ACTION_ID)!
+    const editor = editorOnB()
+    select(editor, 'Thursday')
+    const inCard = {block: repo.block('B'), uiStateBlock: repo.block('B'), renderScopeId: surfaceRenderScopeId('margin', PANEL, 'T'), editorView: editor}
+    expect(commentOnSelection.isVisible!(inCard as never)).toBe(false)
+
+    startReanchor({threadId, targetId: 'B'})
+    expect(commentOnSelection.isVisible!(inCard as never)).toBe(true)
+    await commentOnSelection.handler(inCard as never, new CustomEvent('test'))
+    expect((await repo.load(threadId))!.content).toBe('Thursday')
+    expect(peekPendingReanchor()).toBeNull()
   })
 
   it('comments on the whole block when nothing is selected', () => {

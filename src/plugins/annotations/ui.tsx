@@ -58,6 +58,7 @@ import {
   activateThread,
   closeComposer,
   openComposer,
+  showClosedThreads,
   startReanchor,
   toggleShowResolved,
   toggleThreadsExpanded,
@@ -105,6 +106,20 @@ const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
 
 // ──── Pill ────
 
+export type PillClick =
+  | {kind: 'expand-inline'}
+  | {kind: 'activate'; threadId: string; revealClosed: boolean}
+
+/** What a click on the pill does. With the margin drawn it pins the block's
+ *  first open thread's card, or, for a block whose threads are all resolved,
+ *  the first one's, revealing closed threads so the card is there to pin. */
+export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean): PillClick => {
+  const first = threads.find(thread => thread.open) ?? threads[0]
+  return inMargin && first
+    ? {kind: 'activate', threadId: first.id, revealClosed: !first.open}
+    : {kind: 'expand-inline'}
+}
+
 const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
@@ -117,9 +132,13 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
   const onPill = () => {
-    const first = threads.find(thread => thread.open) ?? threads[0]
-    if (inMargin && panelId && first) activateThread(panelId, first.id)
-    else toggleThreadsExpanded(key)
+    const click = pillClick(threads, inMargin && panelId !== undefined)
+    if (click.kind === 'expand-inline') {
+      toggleThreadsExpanded(key)
+      return
+    }
+    if (click.revealClosed) showClosedThreads(panelId!)
+    activateThread(panelId!, click.threadId)
   }
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'

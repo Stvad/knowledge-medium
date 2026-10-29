@@ -9,6 +9,7 @@ import {
   commentContextMenuItem,
   commentPillContribution,
   commentsFooterContribution,
+  pillClick,
   threadsUnderComment,
 } from './ui'
 
@@ -48,5 +49,12 @@ describe('where the comments UI attaches', () => {
     // A thread anchored to a comment of itself would otherwise render itself
     // inside its own card, forever.
     expect(threadsUnderComment(onComment, ['T']).map(t => t.id)).toEqual(['U'])
+  })
+
+  it('pins a card from the pill when the margin is drawn, revealing closed threads when they are all there is', () => {
+    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
+    expect(pillClick([thread('R', false), thread('O')], true)).toEqual({kind: 'activate', threadId: 'O', revealClosed: false})
+    expect(pillClick([thread('R', false)], true)).toEqual({kind: 'activate', threadId: 'R', revealClosed: true})
+    expect(pillClick([thread('O')], false)).toEqual({kind: 'expand-inline'})
   })
 })
