@@ -1,1 +1,1 @@
-export{Nw as DEFAULT_THEME_ID_DARK,Pw as DEFAULT_THEME_ID_LIGHT,vw as defaultThemeContributions,_w as defaultThemesPlugin}from"../../../chunks/app-Ctq6YglB.js";
+export{Nw as DEFAULT_THEME_ID_DARK,Pw as DEFAULT_THEME_ID_LIGHT,vw as defaultThemeContributions,_w as defaultThemesPlugin}from"../../../chunks/app-CbW2DZLO.js";

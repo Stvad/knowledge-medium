@@ -1,1 +1,1 @@
-export{JQ as kernelDataExtension}from"../../chunks/app-Ctq6YglB.js";
+export{JQ as kernelDataExtension}from"../../chunks/app-CbW2DZLO.js";
