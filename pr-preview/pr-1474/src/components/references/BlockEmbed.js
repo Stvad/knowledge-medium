@@ -1,0 +1,1 @@
+export{sO as BlockEmbed}from"../../../chunks/app-COBdvV8I.js";

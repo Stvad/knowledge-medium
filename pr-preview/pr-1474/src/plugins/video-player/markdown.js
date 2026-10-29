@@ -1,0 +1,1 @@
+export{Iv as videoPlayerMarkdownExtension}from"../../../chunks/app-COBdvV8I.js";

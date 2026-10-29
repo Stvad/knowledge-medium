@@ -1,0 +1,1 @@
+export{bx as blockEditingContentRenderer}from"../../../chunks/app-COBdvV8I.js";

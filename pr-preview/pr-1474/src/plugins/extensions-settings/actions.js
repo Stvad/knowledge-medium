@@ -1,0 +1,1 @@
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-COBdvV8I.js";

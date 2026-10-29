@@ -1,0 +1,1 @@
+export{Yn as extensionsDataExtension}from"../../../chunks/app-COBdvV8I.js";

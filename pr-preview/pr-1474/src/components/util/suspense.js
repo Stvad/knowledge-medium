@@ -1,0 +1,1 @@
+export{_B as SuspenseFallback}from"../../../chunks/app-COBdvV8I.js";

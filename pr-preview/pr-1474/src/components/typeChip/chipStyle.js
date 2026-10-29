@@ -1,0 +1,1 @@
+export{_O as chipStyle}from"../../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{Rk as appUpdate,zk as useAppUpdateAvailable}from"../chunks/app-COBdvV8I.js";

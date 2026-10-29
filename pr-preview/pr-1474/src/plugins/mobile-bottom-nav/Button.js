@@ -1,0 +1,1 @@
+export{ix as MobileBottomNavButton}from"../../../chunks/app-COBdvV8I.js";

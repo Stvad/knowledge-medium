@@ -1,0 +1,1 @@
+export{H6 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,U6 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,W6 as __resetLayoutSessionIdForTesting,G6 as getLayoutSessionId,K6 as isInstalledAppDisplayMode,q6 as readOrCreateLayoutSessionId}from"../../chunks/app-COBdvV8I.js";

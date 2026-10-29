@@ -1,0 +1,1 @@
+export{PC as OPEN_RECENTS_ACTION_ID,FC as openRecentsAction,IC as recentsHeaderItem,LC as recentsPlugin}from"../../../chunks/app-COBdvV8I.js";

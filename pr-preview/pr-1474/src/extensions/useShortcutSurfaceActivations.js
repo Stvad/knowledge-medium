@@ -1,0 +1,1 @@
+export{XN as useShortcutSurfaceActivations}from"../../chunks/app-COBdvV8I.js";

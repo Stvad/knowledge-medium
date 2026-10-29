@@ -1,0 +1,1 @@
+export{gg as attachmentsPlugin}from"../../../chunks/app-COBdvV8I.js";

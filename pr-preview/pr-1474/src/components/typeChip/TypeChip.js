@@ -1,0 +1,1 @@
+export{gO as TypeChip}from"../../../chunks/app-COBdvV8I.js";

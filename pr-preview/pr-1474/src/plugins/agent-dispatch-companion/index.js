@@ -1,0 +1,1 @@
+export{Ru as agentDispatchCompanionPlugin}from"../../../chunks/app-COBdvV8I.js";

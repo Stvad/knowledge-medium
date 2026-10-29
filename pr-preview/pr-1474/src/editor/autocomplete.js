@@ -1,0 +1,1 @@
+export{uk as editorAutocompleteExtension}from"../../chunks/app-COBdvV8I.js";

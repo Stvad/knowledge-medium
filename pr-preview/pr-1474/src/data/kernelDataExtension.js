@@ -1,0 +1,1 @@
+export{NZ as kernelDataExtension}from"../../chunks/app-COBdvV8I.js";

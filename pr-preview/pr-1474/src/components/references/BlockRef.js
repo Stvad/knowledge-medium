@@ -1,0 +1,1 @@
+export{WC as BlockRef}from"../../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{rx as MobileBottomNav}from"../../../chunks/app-COBdvV8I.js";

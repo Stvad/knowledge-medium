@@ -1,0 +1,1 @@
+export{sF as defineVariant,cF as defineVariantFacet}from"../../chunks/app-COBdvV8I.js";

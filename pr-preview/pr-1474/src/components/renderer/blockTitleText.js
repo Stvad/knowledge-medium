@@ -1,0 +1,1 @@
+export{MP as BLOCK_TITLE_TEXT_CLASS,NP as useBlockTitleTextClass}from"../../../chunks/app-COBdvV8I.js";

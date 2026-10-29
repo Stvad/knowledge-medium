@@ -1,0 +1,1 @@
+export{YC as openRecentsPage}from"../../../chunks/app-COBdvV8I.js";

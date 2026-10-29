@@ -1,0 +1,1 @@
+export{BM as ExtensionRenderBoundary}from"../../chunks/app-COBdvV8I.js";

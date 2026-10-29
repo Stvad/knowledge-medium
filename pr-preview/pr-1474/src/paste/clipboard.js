@@ -1,0 +1,1 @@
+export{EN as readClipboardContent}from"../../chunks/app-COBdvV8I.js";

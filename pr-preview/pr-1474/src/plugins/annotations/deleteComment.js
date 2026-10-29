@@ -1,0 +1,2 @@
+import{Jj as e,Y$ as t,tnt as n}from"../../../chunks/app-COBdvV8I.js";var r=`[deleted]`,i=async r=>{if(await r.repo.tx(async e=>(await t(e,r.id)).length!==0&&(await e.update(r.id,{content:`[deleted]`}),!0),{scope:n.BlockDefault,description:`delete comment`}))return`blanked`;await r.load();let i=r.parent;return i&&await i.load()&&i.hasType(`annotation:thread`)&&(await i.children.load()).length===1?await e(i)?`deleted-thread`:`refused`:await e(r)?`deleted`:`refused`};export{r as DELETED_COMMENT_CONTENT,i as deleteCommentFromCard};
+//# sourceMappingURL=deleteComment.js.map

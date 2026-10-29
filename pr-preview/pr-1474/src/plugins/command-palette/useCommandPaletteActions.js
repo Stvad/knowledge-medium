@@ -1,0 +1,1 @@
+export{JE as useCommandPaletteActions}from"../../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{kR as withMoveTransition}from"../../chunks/app-COBdvV8I.js";

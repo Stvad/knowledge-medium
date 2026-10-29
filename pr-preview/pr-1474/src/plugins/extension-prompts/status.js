@@ -1,0 +1,1 @@
+export{hk as extensionPromptDiagnosticContribution,gk as extensionPromptDiagnosticSource}from"../../../chunks/app-COBdvV8I.js";

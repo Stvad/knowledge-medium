@@ -1,0 +1,1 @@
+export{OW as contributorsDataExtension}from"../../../chunks/app-COBdvV8I.js";

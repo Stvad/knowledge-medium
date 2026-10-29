@@ -1,0 +1,1 @@
+export{fg as richPastePlugin}from"../../../chunks/app-COBdvV8I.js";

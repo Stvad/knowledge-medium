@@ -1,0 +1,1 @@
+export{eb as SpatialNavigationShellDecorator}from"../../../chunks/app-COBdvV8I.js";

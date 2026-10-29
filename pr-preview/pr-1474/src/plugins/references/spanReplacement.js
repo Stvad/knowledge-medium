@@ -1,0 +1,1 @@
+export{IV as preferredSpanReplacement}from"../../../chunks/app-COBdvV8I.js";

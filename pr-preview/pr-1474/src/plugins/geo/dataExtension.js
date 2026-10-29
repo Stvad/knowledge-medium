@@ -1,0 +1,1 @@
+export{JH as geoDataExtension}from"../../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{YA as BlockLoadingPlaceholder}from"../../chunks/app-COBdvV8I.js";

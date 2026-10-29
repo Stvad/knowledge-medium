@@ -1,0 +1,1 @@
+export{pk as ExtensionPromptSurface,mk as extensionPromptsExtension}from"../../../chunks/app-COBdvV8I.js";

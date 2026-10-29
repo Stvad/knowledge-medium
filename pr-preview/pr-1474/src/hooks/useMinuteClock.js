@@ -1,0 +1,1 @@
+export{qC as useMinuteClock}from"../../chunks/app-COBdvV8I.js";

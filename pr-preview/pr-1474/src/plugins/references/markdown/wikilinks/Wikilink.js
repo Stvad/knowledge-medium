@@ -1,0 +1,1 @@
+export{mh as Wikilink}from"../../../../../chunks/app-COBdvV8I.js";

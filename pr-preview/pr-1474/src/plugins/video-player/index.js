@@ -1,0 +1,1 @@
+export{Fv as videoPlayerPlugin}from"../../../chunks/app-COBdvV8I.js";

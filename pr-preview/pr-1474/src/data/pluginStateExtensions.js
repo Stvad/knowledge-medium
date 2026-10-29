@@ -1,0 +1,1 @@
+export{wG as pluginPrefsExtension,TG as pluginUIStateExtension}from"../../chunks/app-COBdvV8I.js";

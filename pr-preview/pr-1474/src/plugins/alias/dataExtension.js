@@ -1,0 +1,1 @@
+export{mK as aliasDataExtension}from"../../../chunks/app-COBdvV8I.js";

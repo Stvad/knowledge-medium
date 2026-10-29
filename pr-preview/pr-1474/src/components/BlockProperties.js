@@ -1,0 +1,1 @@
+export{vF as BlockProperties}from"../../chunks/app-COBdvV8I.js";

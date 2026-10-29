@@ -1,0 +1,1 @@
+export{xw as useAncestorCrumbs}from"../../chunks/app-COBdvV8I.js";

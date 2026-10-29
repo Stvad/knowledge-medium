@@ -1,0 +1,1 @@
+export{CR as isIOS,wR as isMacPlatform}from"../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{gD as CommandPaletteHeaderItem}from"../../../chunks/app-COBdvV8I.js";

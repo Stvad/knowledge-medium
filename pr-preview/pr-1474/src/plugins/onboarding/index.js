@@ -1,0 +1,1 @@
+export{wy as EXTENSIONS_PAGE_TITLE,Ty as TUTORIAL_DEFAULT_TITLE,Ey as TUTORIAL_VIM_TITLE,dy as onboardingPlugin,Cy as seedTutorial}from"../../../chunks/app-COBdvV8I.js";

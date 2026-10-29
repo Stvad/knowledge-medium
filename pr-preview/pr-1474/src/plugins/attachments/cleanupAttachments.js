@@ -1,0 +1,1 @@
+export{_g as CLEANUP_ATTACHMENTS_ACTION_ID,vg as cleanupAttachmentsAction,yg as prepareCleanup}from"../../../chunks/app-COBdvV8I.js";

@@ -1,0 +1,1 @@
+export{gx as plainOutlinerPlugin}from"../../../chunks/app-COBdvV8I.js";

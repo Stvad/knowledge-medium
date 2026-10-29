@@ -1,0 +1,1 @@
+"use client";export{mF as Collapsible,hF as CollapsibleContent,gF as CollapsibleTrigger}from"../../../chunks/app-COBdvV8I.js";

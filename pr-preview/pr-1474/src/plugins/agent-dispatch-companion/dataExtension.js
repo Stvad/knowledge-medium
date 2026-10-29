@@ -1,0 +1,1 @@
+export{kK as agentDispatchCompanionDataExtension}from"../../../chunks/app-COBdvV8I.js";

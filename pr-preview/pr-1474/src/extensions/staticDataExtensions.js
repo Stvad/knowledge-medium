@@ -1,0 +1,1 @@
+export{zB as staticDataExtensions}from"../../chunks/app-COBdvV8I.js";
