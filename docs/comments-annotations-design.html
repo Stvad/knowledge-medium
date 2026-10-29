@@ -70,6 +70,7 @@
   <li>moved the margin to a panel mount;</li>
   <li>cut the MCP tools and queries down.</li>
 </ul>
+<p style="margin:.4rem 0 0">A later revision added <a href="#range-refs">range references</a> (quoting part of a block from other text). It also moved the quote into the thread root's content.</p>
 <p style="margin:.4rem 0 0">An earlier design for the same feature is open as PR #332 (<code>docs/block-range-annotations-design.html</code> on its branch); the last section compares them. <strong>Last verified against code:</strong> 2026-10-28.</p>
 </aside>
 
@@ -85,6 +86,7 @@
   <li>Something outside the UI (an agent) can subscribe to comments in a scope (a page, a subtree, one block), read them, and reply.</li>
   <li>Every comment shows who wrote it, human or agent.</li>
   <li>Edit suggestions ("replace this with that", accept or reject) fit the same model.</li>
+  <li>Text elsewhere can quote part of a block, the way a block reference quotes a whole block. A quote shows up on the source block as an annotation.</li>
 </ol>
 
 <h2 id="picture">The idea in one picture</h2>
@@ -125,13 +127,13 @@
   <text x="536" y="84" font-size="11" fill="#57606a">kernel page, one per workspace</text>
   <rect x="536" y="96" width="328" height="130" rx="6" fill="#f6f8fa" stroke="#8c959f" stroke-dasharray="4 3"/>
   <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#1f2328">
-    <text x="548" y="114" font-weight="600">thread root   (content "")</text>
+    <text x="548" y="114" font-weight="600">thread root   content: Thursday</text>
     <text x="548" y="132">annotation:target      ((B))</text>
-    <text x="548" y="148">annotation:quote       "Thursday"</text>
-    <text x="548" y="164">annotation:quoteStart  23</text>
-    <text x="548" y="180">annotation:quotePrefix "d the launch to "</text>
-    <text x="548" y="196">annotation:quoteSuffix " because the ven"</text>
-    <text x="548" y="212">annotation:status      open</text>
+    <text x="548" y="148">annotation:quoteStart  23</text>
+    <text x="548" y="164">annotation:quotePrefix "d the launch to "</text>
+    <text x="548" y="180">annotation:quoteSuffix " because the ven"</text>
+    <text x="548" y="196">annotation:status      open</text>
+    <text x="548" y="214" fill="#57606a">(content = the quote; empty = whole block)</text>
   </g>
   <rect x="564" y="238" width="300" height="40" rx="6" fill="#ffffff" stroke="#d0d7de"/>
   <text x="576" y="254" font-size="11" font-weight="600" fill="#1f2328">Alex <tspan font-weight="400" fill="#57606a">· human</tspan></text>
@@ -147,7 +149,8 @@
 <ul>
   <li><strong>The target block is never written to</strong>, except when someone accepts an edit suggestion. Everything about the annotation lives on the thread root.</li>
   <li><strong>A thread with no comments is a highlight; a thread with comments is a discussion;</strong> a thread with an <code>annotation:replacement</code> is an edit suggestion. They are all the same record.</li>
-  <li><strong>The target's block id lives in exactly one place</strong>, the <code>annotation:target</code> ref. Everything else about the anchor is text: the quote, where it started, and a little context on each side.</li>
+  <li><strong>The target's block id lives in exactly one place</strong>, the <code>annotation:target</code> ref. Everything else about the anchor is text: the quote, which is the root's content, plus where it started and a little context on each side.</li>
+  <li><strong>Quoting part of a block from other text</strong> is an ordinary <code>((root))</code> reference to a thread root. The reference renders the quoted text live, and the quoting block shows up in the source's margin (see <a href="#range-refs">Quoting part of a block</a>).</li>
   <li><strong>Discovery runs through the references index:</strong> <code>block_references</code> rows with <code>source_field = 'annotation:target'</code>.</li>
 </ul>
 
@@ -159,9 +162,8 @@
 
 <p><span class="step">2</span>One undo step writes two blocks and nothing else:</p>
 <pre><code>Comments (km)
-└─ (thread root)                   types: annotation:thread
+└─ Thursday                        ← the root's content is the quote; types: annotation:thread
      annotation:target      ((B))
-     annotation:quote       Thursday
      annotation:quoteStart  23
      annotation:quotePrefix "d the launch to "     (up to 16 characters before the quote)
      annotation:quoteSuffix " because the ven"     (up to 16 characters after it)
@@ -183,7 +185,8 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 <tr><td>Workspace container</td><td><code>getOrCreateKernelPage</code>: deterministic id, restores a tombstone, undoable inside a caller's <code>undoGroup</code>. It claims its alias only when no other live block holds it, and otherwise creates the page without it.</td><td><code>src/data/kernelPage.ts</code>, <code>src/data/targets.ts</code> (<code>partitionClaimableAliases</code>)</td></tr>
 <tr><td>Pointer to the target</td><td><code>ref</code> property, projected into <code>block_references</code> with <code>source_field</code>.</td><td><code>src/plugins/references/referenceProjection.ts</code></td></tr>
 <tr><td>Merges</td><td>The generic merge retargeter rewrites ref-property <em>values</em> as well as their entries.</td><td><code>src/plugins/references/mergeRetargetProcessor.ts:217-275</code></td></tr>
-<tr><td>Target deletion</td><td><code>((id))</code> marks in referrers get inlined. Property values are exempt and keep the ref.</td><td><code>src/plugins/references/inlineDeletedBlockRefsProcessor.ts</code></td></tr>
+<tr><td>Target deletion</td><td><code>((id))</code> marks in referrers are inlined as the deleted block's content, and an aliased mark as its label. Property values are exempt and keep the ref.</td><td><code>src/plugins/references/inlineDeletedBlockRefsProcessor.ts</code></td></tr>
+<tr><td>Block references</td><td>A plain <code>((id))</code> mounts the target's <code>BlockComponent</code> with <code>isReference</code>, so the target's own renderer decides what the reference shows. <code>[label](((id)))</code> short-circuits to a link carrying the label and never mounts the target.</td><td><code>src/components/references/BlockRef.tsx:62-84</code></td></tr>
 <tr><td>Reference count pill</td><td>A <code>blockContentDecoratorsFacet</code> gutter pill. Clicking it expands backlinks under the block through <code>blockChildrenFooterFacet</code>.</td><td><code>src/plugins/backlinks/inline-counts/</code></td></tr>
 <tr><td>Backlink sources</td><td>Three routes, none of which filters on <code>source_field</code>:
   <ul>
@@ -214,7 +217,7 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 <h2 id="model">Data model</h2>
 
 <h3>A thread is a metadata block, and its children are the comments</h3>
-<p>The thread root has empty content and holds the anchor and the status. Each comment is a child block, and a reply to a comment is a further child. So a thread is just an outline:</p>
+<p>The thread root holds the anchor and the status. Its content is the quoted text, or empty for a whole-block thread. Each comment is a child block, and a reply to a comment is a further child. So a thread is just an outline:</p>
 <ul>
   <li>Enter at the end of a comment starts the next one.</li>
   <li>A nested reply is an indented block.</li>
@@ -245,7 +248,15 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 
 <h3>The anchor</h3>
 <ul>
-  <li><strong><code>annotation:quote</code></strong> is a substring of the target's raw markdown. That is the same text an agent reads through the API, so an agent can annotate a range just by quoting it, and edit mode can decorate the range without any translation.</li>
+  <li><strong>The quote is the root's content:</strong> a substring of the target's raw markdown. That is the same text an agent reads through the API, so an agent can annotate a range just by quoting it, and edit mode can decorate the range without any translation.</li>
+  <li><strong>Why content, not a property.</strong> Three things follow from it.
+    <ul>
+      <li><strong>Deletion.</strong> A <code>((root))</code> reference to a deleted thread is inlined as the root's content (<code>inlineDeletedBlockRefsProcessor</code>), so a quote someone embedded in their text survives as plain text instead of vanishing.</li>
+      <li><strong>Without the plugin,</strong> the thread reads as the quoted text with comments under it, the way an imported highlight with notes does.</li>
+      <li><strong>Rewrites.</strong> The reference processors rewrite every referrer's content, and the root's content is now one of them. A page rename (<code>[[Old]]</code> → <code>[[New]]</code>), a merge retarget, or the inlining of a deleted <code>((x))</code> therefore changes the quote in step with the target, on every workspace.</li>
+    </ul>
+    The cost is that a quote mentioning <code>[[Page]]</code> makes the root a real mention of that page, and the root appears in its backlinks. That is accepted: the quoted text does mention it.
+  </li>
   <li><strong><code>annotation:quoteStart</code></strong> records where the quote began when it was made.</li>
   <li><strong><code>annotation:quotePrefix</code> and <code>annotation:quoteSuffix</code></strong> hold up to 16 characters of text on either side of the quote, as it was when the anchor was made.</li>
   <li><strong>No quote</strong> means the thread annotates the whole block.</li>
@@ -259,16 +270,22 @@ block_references:  (source = thread root, target = B, source_field = 'annotation
 <tr><th>Seed</th><th>Preset</th><th>Slice</th><th>Notes</th></tr>
 <tr><td>type <code>annotation:thread</code></td><td>—</td><td>1</td><td><code>hideFromCompletion</code></td></tr>
 <tr><td><code>annotation:target</code></td><td><code>ref</code></td><td>1</td><td>Hidden. No <code>targetTypes</code> restriction; creation refuses property rows.</td></tr>
-<tr><td><code>annotation:quote</code>, <code>annotation:quotePrefix</code>, <code>annotation:quoteSuffix</code></td><td><code>optional-string</code></td><td>1</td><td>Hidden.</td></tr>
+<tr><td><code>annotation:quotePrefix</code>, <code>annotation:quoteSuffix</code></td><td><code>optional-string</code></td><td>1</td><td>Hidden. The quote itself is the root's content.</td></tr>
 <tr><td><code>annotation:quoteStart</code></td><td><code>optional-number</code></td><td>1</td><td>Hidden.</td></tr>
 <tr><td><code>annotation:status</code></td><td><code>strict-enum</code></td><td>1</td><td><code>open</code> and <code>resolved</code>. Slice 4 widens it with <code>accepted</code> and <code>rejected</code>; widening an enum's config is routine. Composing the built-in <code>todo</code> status instead is declined: threads would then show a checkbox and answer every todo query.</td></tr>
 <tr><td><code>annotation:replacement</code></td><td><code>optional-string</code></td><td>4</td><td>Hidden. Its presence makes the thread an edit suggestion. No separate "kind" field: the shape says what the record is.</td></tr>
 </table></div>
 <p>On a workspace that stores properties as child blocks, each property becomes a field row under the root, and <code>visibleChildrenOf</code> already hides those. Every "descendants of a thread" read therefore uses the visible subtree, so field rows are never taken for comments.</p>
-<p>A <code>blockContentRendererFacet</code> contribution renders the empty root as "comment on ⟨target excerpt⟩ · “quote”" wherever the root itself appears, for example on the container page or in a block ref.</p>
+<p>A <code>blockContentRendererFacet</code> contribution renders the root wherever it appears:</p>
+<ul>
+  <li><strong>As a reference</strong> (<code>isReference</code>): the <em>live</em> text of the resolved range in the target, linked to the target. That is what a <a href="#range-refs">range reference</a> shows.</li>
+  <li><strong>Elsewhere</strong>, for example on the container page or in a breadcrumb: "on ⟨target excerpt⟩ · “quote”".</li>
+  <li><strong>When the anchor is stale:</strong> the stored quote, marked as changed.</li>
+</ul>
+<p>The root's content is display-only in these renderings. Editing it would move the anchor, so that goes through re-anchoring.</p>
 
 <h2 id="anchoring">Anchoring against changing text</h2>
-<p>Resolution is a pure, synchronous function of the target's content and the four anchor fields. It is recomputed at render time and never persisted. It returns one of three states.</p>
+<p>Resolution is a pure, synchronous function of the target's content, the quote (the root's content) and the three anchor properties. It is recomputed at render time and never persisted. It returns one of three states.</p>
 <ul>
   <li><strong>exact:</strong> the quote sits at <code>quoteStart</code>, with the stored prefix and suffix still around it.</li>
   <li><strong>moved:</strong> the quote occurs elsewhere and its surrounding text still agrees with the stored context. The occurrence picked is the one with the most context agreement; ties go to whichever is nearest <code>quoteStart</code>. "Agrees" means at least 4 matching characters of context. If the stored context is shorter than 4 characters, all of it must match. When the stored context is empty (the quote was the whole block), any occurrence qualifies.</li>
@@ -308,7 +325,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
 <tr><td>Split mid-block</td><td><code>core.split</code> keeps the text <em>after</em> the cursor on the original id and moves the text <em>before</em> it to a new sibling. A scope-root split does the opposite. So, in v1, the threads that go stale are the ones quoting text that left the original id. Later, the split gesture can retarget those threads in the same transaction, branching on which split shape ran.</td></tr>
 <tr><td>Deleted</td><td>The thread is kept and so is its ref. It is hidden from the margin and listed as "on a deleted block". Restoring the target brings it back.</td></tr>
 <tr><td>An edit is undone</td><td>The thread simply re-resolves; nothing was persisted.</td></tr>
-<tr><td>A page named in the quote is renamed (<code>[[Old]]</code> → <code>[[New]]</code>)</td><td>On children-stored workspaces, the same rename rewrites the quote's value row, so the quote is still found (reasoned, not measured). On cell-stored workspaces it goes stale, which is accepted.</td></tr>
+<tr><td>A page named in the quote is renamed (<code>[[Old]]</code> → <code>[[New]]</code>)</td><td>The rename rewrites the root's content along with the target's, so the quote is still found (reasoned from the rename processor, not measured). The same holds for a merge retarget or the inlining of a deleted <code>((x))</code>.</td></tr>
 </table></div>
 
 <h2 id="references">Comments and references</h2>
@@ -338,6 +355,58 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
   <li><strong>Mentions reach agents.</strong> A comment containing a dispatch watcher's target page (<code>[[claude]]</code>) is a backlink to that page, so the existing backlinks watcher fires (see <a href="#agents">Agents</a>).</li>
 </ul>
 <p>Later, the margin could also show a block's plain backlinks as "mentions" beside its threads. A note elsewhere that references this block is commentary that happens to live somewhere else. That would be a display toggle on top of this model, not part of it.</p>
+
+<h2 id="range-refs">Quoting part of a block</h2>
+<p>A block reference <code>((B))</code> quotes a whole block. To quote <em>part</em> of one, reference a thread root: <code>((T))</code>, where T anchors that part of B.</p>
+<p>No new syntax is involved. It is an ordinary block reference, so the parser, backlinks, copy and paste, undo and the deletion inlining all apply unchanged. What is new is only how a thread root renders when it appears as a reference.</p>
+
+<div class="two">
+<div class="mock">
+  <small>Reading notes</small>
+  <div class="blk"><span class="dot">•</span><span class="txt">As the plan says, <span style="border-left:3px solid #d4a72c;padding:0 .35rem;background:#fffbe6">Thursday</span> is now fixed, so the demo moves too.</span></div>
+  <small style="display:block;margin-top:.4rem">raw content: <code>As the plan says, ((T)) is now fixed, so the demo moves too.</code></small>
+</div>
+<div class="card">
+  <div class="quote">“Thursday”</div>
+  <div class="c"><span class="chip"><span class="av">A</span>Alex <span class="kind">· 2h</span></span><div>Is Thursday confirmed?</div></div>
+  <div class="c" style="border-top:1px solid #eaeef2;padding-top:.4rem"><small>Quoted in · Reading notes</small><div>As the plan says, “Thursday” is now fixed, so the demo moves too.</div></div>
+  <div><span class="btn">Reply</span><span class="btn">Resolve</span></div>
+</div>
+</div>
+
+<ol>
+  <li><strong>Copy.</strong> Select text in B and run <strong>Copy reference to selection</strong>. Like Comment, it flushes the editor and widens the selection to whole reference spans. If B already has a thread anchored <em>exactly</em> to that range, it reuses it; otherwise it creates a new thread with no comments, which is a highlight. The clipboard gets <code>((T))</code>.</li>
+  <li><strong>Paste</strong> into any block X. That is an ordinary block reference.</li>
+  <li><strong>Read.</strong> X shows the <em>live</em> text of B's range inline, through the thread renderer's reference form.
+    <ul>
+      <li>When B is edited, the quote follows (moved).</li>
+      <li>When the quoted text is gone (stale), X shows the stored quote, marked as changed.</li>
+      <li>Clicking the quote goes to B, with T's card focused. A <code>navigationVerb</code> contribution redirects navigation to a thread root onto its target, which also covers search results that hit a root.</li>
+    </ul>
+  </li>
+  <li><strong>Annotate.</strong> In B's margin, T's card lists X under "Quoted in", rendered like a backlink entry (breadcrumb, editable in place). So quoting B shows up on B as an annotation, beside any discussion of the same range. Replying in the card turns the quote into a discussion.</li>
+  <li><strong>Embed.</strong> <code>!((T))</code> embeds the thread: the live excerpt with its comments under it, because an embed renders the block together with its children.</li>
+</ol>
+
+<p><strong>Why not new syntax,</strong> such as <code>((B "the quoted text"))</code>?</p>
+<ul>
+  <li>It would put a second copy of the anchor in X's content. Context, re-anchoring and merge retargeting maintain the thread root, but not that copy.</li>
+  <li>The quoted text would be parsed as X's own text, so a <code>[[Page]]</code> inside it would become X's mention.</li>
+  <li>References are edges without positions (<code>BlockReference = {id, alias, sourceField}</code>). Finding the range references to B would mean re-parsing the content of every backlink source.</li>
+</ul>
+<p>The cost of the chosen shape is that X's raw text holds an opaque <code>((id))</code>. In the app it renders as the quote. Without the plugin it renders as the quote snapshot, which is the root's content.</p>
+
+<div class="tblwrap"><table>
+<tr><th>Case</th><th>Result</th></tr>
+<tr><td>Counting</td><td>T counts in B's comment pill once it has comments or quoters; a pure highlight shows only as the highlight. X does <em>not</em> count in B's reference pill, because X references the excerpt, not B. B's card is where it shows (see <a href="#decisions">Decisions</a>).</td></tr>
+<tr><td>X deleted</td><td>T stays as a highlight, and "Quoted in" empties.</td></tr>
+<tr><td>T deleted</td><td>X's <code>((T))</code> is inlined as T's content, so the quote snapshot becomes plain text in X. Deleting from the card asks first when T has quoters.</td></tr>
+<tr><td>B deleted or merged</td><td>On deletion, T is orphaned, and X shows the stored quote marked "source deleted"; restoring B brings it back. On a merge, the retarget moves T and X keeps working.</td></tr>
+<tr><td>Copied but never pasted</td><td>A highlight is left on B. It is visible, deletable, and reused the next time the same range is copied. Creating the thread at paste time instead would avoid it, but needs a paste handler and a second write, and an undone paste would leave the same stray.</td></tr>
+<tr><td>Agents</td><td><code>add_comment</code> with a quote and no content returns T's id, so an agent quotes a range by writing <code>((T))</code>. The scope recipe can also select new quoters of threads anchored under the scope.</td></tr>
+</table></div>
+
+<p>One constraint carries over from the reference layout. A reference renders its target's content renderer inline, inside a link (<code>src/components/references/referenceLayout.tsx</code>, "KNOWN LIMITATION"). So the thread renderer must have a plain inline form, with no controls inside it.</p>
 
 <h2 id="ui">UI</h2>
 
@@ -410,7 +479,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
   </li>
   <li><strong>Placement.</strong> Each card goes at its target row's top in the panel's primary render scope. Rows mount lazily (<code>LazyBlockComponent</code>), so a row that has not mounted yet is placed from its placeholder's estimated position, and its card moves once the row mounts. The order is by target position, then by quote start. A card's top is its anchor's height or just below the previous card, whichever is lower.</li>
   <li><strong>Collapsed blocks.</strong> Threads anchored inside a collapsed subtree are shown as a single stub on the nearest rendered ancestor.</li>
-  <li><strong>The card.</strong> A card renders the thread root through <code>BlockComponent</code> in a nested surface, so its comments are normal editable blocks. The header shows the quote ("whole block" when there is none), a moved or stale badge when it applies, and Resolve. Suggestion cards also show the diff, with Accept and Reject. The footer has Reply.</li>
+  <li><strong>The card.</strong> A card renders the thread root through <code>BlockComponent</code> in a nested surface, so its comments are normal editable blocks. The header shows the quote ("whole block" when there is none), a moved or stale badge when it applies, and Resolve. Suggestion cards also show the diff, with Accept and Reject. Below the comments, "Quoted in" lists the blocks that quote this range. The footer has Reply.</li>
   <li><strong>Closed threads</strong> (resolved, accepted or rejected) are hidden behind "show closed".</li>
   <li><strong>Narrow panels and mobile.</strong> When the panel is too narrow for text plus margin, the margin turns off, and the comment pill expands the threads inline under the block.</li>
   <li><strong>"All comments"</strong> is an action that opens the container page, where the thread renderer shows each target. A filtered query view (open threads, by author, by scope) comes later.</li>
@@ -522,6 +591,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
       <li>It computes the start and the context from the target's current content.</li>
       <li>It refuses an ambiguous quote unless <code>occurrence</code> is given, and it refuses property-row targets.</li>
       <li>With a <code>replacement</code>, the thread is a suggestion (slice 4).</li>
+      <li>It returns the root's id, which is what a <code>((T))</code> quote references.</li>
     </ul>
   </li>
 </ul>
@@ -609,39 +679,44 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
 
 <h2 id="slices">Slices</h2>
 <figure>
-<svg viewBox="0 0 900 190" role="img" aria-label="Slice dependencies: data first, then agents, margin and suggestions in any order, then later work">
+<svg viewBox="0 0 900 240" role="img" aria-label="Slice dependencies: data first, then agents, margin, suggestions and range references in any order, then later work">
   <defs>
     <marker id="dep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
     </marker>
   </defs>
   <g font-size="12" fill="#1f2328">
-    <rect x="20" y="70" width="240" height="50" rx="6" fill="#ddf4ff" stroke="#0969da"/>
-    <text x="34" y="92" font-weight="600">1 · Data + edit-mode comments</text>
-    <text x="34" y="110" font-size="10.5" fill="#57606a">seeds, resolver, writes, pills</text>
+    <rect x="20" y="95" width="240" height="50" rx="6" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="34" y="117" font-weight="600">1 · Data + edit-mode comments</text>
+    <text x="34" y="135" font-size="10.5" fill="#57606a">seeds, resolver, writes, pills</text>
     <rect x="340" y="10" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
     <text x="354" y="30" font-weight="600">2 · Agents</text>
     <text x="354" y="46" font-size="10.5" fill="#57606a">bookkeeping, recipe, two tools</text>
-    <rect x="340" y="72" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-    <text x="354" y="92" font-weight="600">3 · Side margin</text>
-    <text x="354" y="108" font-size="10.5" fill="#57606a">margin, re-anchor, read-mode spike</text>
-    <rect x="340" y="134" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
-    <text x="354" y="154" font-weight="600">4 · Edit suggestions</text>
-    <text x="354" y="170" font-size="10.5" fill="#57606a">seeds, accept tx, diff card</text>
-    <rect x="650" y="70" width="230" height="50" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
-    <text x="664" y="92" font-weight="600">5 · Later</text>
-    <text x="664" y="110" font-size="10.5" fill="#57606a">read-mode selection, split retarget, …</text>
+    <rect x="340" y="66" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="86" font-weight="600">3 · Side margin</text>
+    <text x="354" y="102" font-size="10.5" fill="#57606a">margin, re-anchor, read-mode spike</text>
+    <rect x="340" y="122" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="142" font-weight="600">4 · Edit suggestions</text>
+    <text x="354" y="158" font-size="10.5" fill="#57606a">seeds, accept tx, diff card</text>
+    <rect x="340" y="178" width="230" height="46" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="354" y="198" font-weight="600">5 · Range references</text>
+    <text x="354" y="214" font-size="10.5" fill="#57606a">copy, inline excerpt, "Quoted in"</text>
+    <rect x="650" y="95" width="230" height="50" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="664" y="117" font-weight="600">6 · Later</text>
+    <text x="664" y="135" font-size="10.5" fill="#57606a">read-mode selection, split retarget, …</text>
   </g>
   <g stroke="#57606a" fill="none" marker-end="url(#dep)">
-    <path d="M260,88 C300,88 300,33 336,33"/>
-    <path d="M260,95 L336,95"/>
-    <path d="M260,102 C300,102 300,157 336,157"/>
-    <path d="M570,33 C610,33 610,88 646,88"/>
-    <path d="M570,95 L646,95"/>
-    <path d="M570,157 C610,157 610,102 646,102"/>
+    <path d="M260,108 C300,108 300,33 336,33"/>
+    <path d="M260,115 C300,115 300,89 336,89"/>
+    <path d="M260,125 C300,125 300,145 336,145"/>
+    <path d="M260,132 C300,132 300,201 336,201"/>
+    <path d="M570,33 C610,33 610,108 646,108"/>
+    <path d="M570,89 C610,89 610,115 646,115"/>
+    <path d="M570,145 C610,145 610,125 646,125"/>
+    <path d="M570,201 C610,201 610,132 646,132"/>
   </g>
 </svg>
-<figcaption>Slices 2, 3 and 4 each depend on 1 and not on each other. The re-anchor write lands with whichever of 3 and 4 comes first.</figcaption>
+<figcaption>Slices 2 to 5 each depend on 1 and not on each other. The re-anchor write lands with whichever of 3 and 4 comes first. Range references show "Quoted in" on the inline thread expansion from slice 1, and on the margin once slice 3 lands.</figcaption>
 </figure>
 <ol>
   <li><strong>Data and edit-mode comments.</strong>
@@ -660,6 +735,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>Agents.</strong> Unattributed bookkeeping writes in the daemon, thread context in the mention prompt, the scope read, the comments recipe in the guide, and the <code>comments</code> and <code>add_comment</code> tools.</li>
   <li><strong>Side margin.</strong> The panel mount, the re-anchor write and its UI ("confirm position", reselect), and read-mode highlights (spike first).</li>
   <li><strong>Edit suggestions.</strong> The <code>annotation:replacement</code> seed and the status widening; the suggest gesture and composer; the accept and reject transactions; the diff card and the suggestion highlight style; and <code>add_comment</code>'s <code>replacement</code> argument.</li>
+  <li><strong>Range references.</strong> Copy reference to selection (with reuse of an exact existing thread), the thread renderer's inline reference form, the <code>navigationVerb</code> redirect from a thread root to its target, and "Quoted in" on the card.</li>
   <li><strong>Later.</strong> Read-mode selection, split retargeting, the filtered "all comments" view, mentions in the margin, an inline diff widget for suggestions, and a dedicated watcher kind if per-thread sessions turn out to matter.</li>
 </ol>
 
@@ -680,6 +756,15 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>Merge:</strong> a merge run through the production processor order moves the thread, and the anchor resolves as moved.</li>
   <li><strong>Lifecycle:</strong> delete and restore the target; deleting the container is refused while it has live threads.</li>
   <li><strong>Accept:</strong> it refuses on stale, moved or deleted targets; it is one undo step; and a duplicate of an applied suggestion refuses.</li>
+  <li><strong>Range references:</strong>
+    <ul>
+      <li>a <code>((T))</code> renders the live range, then the stored quote once stale;</li>
+      <li>deleting T leaves the quote as plain text in X;</li>
+      <li>copying the same range twice reuses one thread;</li>
+      <li>clicking the quote lands on B;</li>
+      <li>B's reference pill does not count X.</li>
+    </ul>
+  </li>
   <li><strong>Dispatch:</strong> bookkeeping writes leave a mentioning block's attribution untouched. The recipe excludes agent-authored, empty and mentioning comments.</li>
 </ul>
 
@@ -694,6 +779,12 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   </li>
   <li><strong>Edit suggestions are in.</strong> Decided 2026-10-28, as slice 4.</li>
   <li><strong>The container is <code>Comments (km)</code>.</strong> The precedent is <code>System Migrations (km)</code>. A kernel-page variant with no alias, which #332 proposed, would be new machinery for a cosmetic difference.</li>
+  <li><strong>Open: does a quote of B count in B's reference pill?</strong>
+    <ul>
+      <li><strong>No (my pick):</strong> X references the excerpt, and it shows up where you asked for it, as an annotation on B's card. The two pills stay disjoint.</li>
+      <li><strong>Yes:</strong> the backlinks sources helper also selects blocks that reference a thread anchored to B. That is one more join in the single owner, and X then shows up both in B's backlinks and on B's card.</li>
+    </ul>
+  </li>
   <li><strong>Open: agents before the margin, or the margin first?</strong> The two slices are independent. My pick is agents first: the mention path needs only unattributed bookkeeping and prompt context, while the margin waits on the read-mode spike.</li>
 </ol>
 
@@ -741,7 +832,8 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
     </ul>
   </li>
   <li><strong>A lazy container</strong> through the existing <code>getOrCreateKernelPage</code>, with a deletion guard, instead of an eager <code>systemPagesFacet</code> ensure that writes a page into every workspace on open.</li>
-  <li><strong>Added:</strong> the side margin, authorship, agent tools and wake-ups through the existing watchers, and mentions.</li>
+  <li><strong>The quote is the root's content,</strong> not a property, so the reference processors keep it in step with the target, and a deleted quote leaves readable text behind.</li>
+  <li><strong>Added:</strong> the side margin, authorship, agent tools and wake-ups through the existing watchers, mentions, and range references. #332's non-goal still holds: references themselves never carry ranges. A range reference is a plain reference to an anchor record.</li>
 </ul>
 
 </body>
