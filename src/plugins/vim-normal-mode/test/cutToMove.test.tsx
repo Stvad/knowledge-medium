@@ -7,7 +7,7 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { focusBlock, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import { focusBlock, peekFocusedBlockLocation, selectionStateProp, topLevelBlockIdProp } from '@/data/properties'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -17,6 +17,7 @@ import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import { ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { disarmCut, getArmedCut } from '@/paste/armedCut'
+import { backlinkRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 import { getVimNormalModeActions } from '../actions'
 
 const WS = 'ws-1'
@@ -50,7 +51,10 @@ const NormalMode = ({deps, onReady}: {deps: BlockShortcutDependencies; onReady: 
   return null
 }
 
-it('the platform cut shortcut then p moves the focused subtree without selecting it', async () => {
+it.each([
+  {surface: 'panel', renderScopeId: panelRenderScopeId('ui', 'root')},
+  {surface: 'backlink', renderScopeId: backlinkRenderScopeId(panelRenderScopeId('ui', 'root'), 'entry')},
+])('the platform cut shortcut then p moves the focused subtree without selecting it in a $surface', async ({renderScopeId}) => {
   await repo.tx(async tx => {
     await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
     await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -59,7 +63,8 @@ it('the platform cut shortcut then p moves the focused subtree without selecting
   await repo.mutate.createChild({parentId: 'source', id: 'child', content: 'child'})
   await repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
   const uiStateBlock = repo.block('ui')
-  await focusBlock(uiStateBlock, 'source')
+  await uiStateBlock.set(topLevelBlockIdProp, 'root')
+  await focusBlock(uiStateBlock, 'source', {renderScopeId})
   expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds ?? []).toEqual([])
 
   let clipboardText = ''
@@ -83,7 +88,7 @@ it('the platform cut shortcut then p moves the focused subtree without selecting
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
-        <NormalMode deps={{block: repo.block(blockId), uiStateBlock, scopeRootId: 'root'}} onReady={onReady}/>
+        <NormalMode deps={{block: repo.block(blockId), uiStateBlock, scopeRootId: 'root', renderScopeId}} onReady={onReady}/>
       </ActiveContextsProvider>
     </AppRuntimeContextProvider>
   )
@@ -98,7 +103,7 @@ it('the platform cut shortcut then p moves the focused subtree without selecting
   expect(cut.defaultPrevented).toBe(true)
   await vi.waitFor(() => {
     expect(getArmedCut()?.rootIds).toEqual(['source'])
-    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('next')
+    expect(peekFocusedBlockLocation(uiStateBlock)).toEqual({blockId: 'next', renderScopeId})
   })
   expect(clipboardText).toBe('- source\n  - child')
   expect((await repo.query.children({id: 'root'}).load()).map(block => block.id))
@@ -112,7 +117,7 @@ it('the platform cut shortcut then p moves the focused subtree without selecting
   await vi.waitFor(async () => {
     expect((await repo.query.children({id: 'root'}).load()).map(block => block.id))
       .toEqual(['next', 'source'])
-    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('source')
+    expect(peekFocusedBlockLocation(uiStateBlock)).toEqual({blockId: 'source', renderScopeId})
   })
   expect((await repo.query.children({id: 'source'}).load()).map(block => block.id)).toEqual(['child'])
 })

@@ -360,8 +360,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_block',
       description: 'Cut focused block to move it',
       context: ActionContextTypes.NORMAL_MODE,
-      handler: ({uiStateBlock, block, scopeRootId}: BlockShortcutDependencies) =>
-        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId}),
+      handler: ({uiStateBlock, block, scopeRootId, renderScopeId}: BlockShortcutDependencies) =>
+        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId, renderScopeId}),
       defaultBinding: {
         keys: '$mod+x',
         eventOptions: {preventDefault: true},
@@ -1284,8 +1284,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
    * selection: with supplied deps the two can differ.
    */
-  const cutBlocks = async (deps: Pick<MultiSelectModeDependencies, 'uiStateBlock' | 'selectedBlocks' | 'scopeRootId'>): Promise<void> => {
-    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
+  const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'renderScopeId'> & {selectedBlocks: Block[]}): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId, renderScopeId} = deps
     if (!selectedBlocks.length) return
     let outcome: 'cut' | 'empty'
     try {
@@ -1307,7 +1307,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const after = scopeRootId
       ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
       : null
-    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id)
+    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id, {renderScopeId})
 
     const cutId = getArmedCut()?.cutId
     showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {
