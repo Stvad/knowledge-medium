@@ -1,1 +1,1 @@
-export{SF as BLOCK_TITLE_TEXT_CLASS,CF as useBlockTitleTextClass}from"../../../chunks/app-C-KD-Wd6.js";
+export{SF as BLOCK_TITLE_TEXT_CLASS,CF as useBlockTitleTextClass}from"../../../chunks/app-9keSdHGw.js";

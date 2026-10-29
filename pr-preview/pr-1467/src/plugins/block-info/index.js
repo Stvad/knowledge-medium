@@ -1,1 +1,1 @@
-export{Km as blockInfoPlugin}from"../../../chunks/app-C-KD-Wd6.js";
+export{Km as blockInfoPlugin}from"../../../chunks/app-9keSdHGw.js";

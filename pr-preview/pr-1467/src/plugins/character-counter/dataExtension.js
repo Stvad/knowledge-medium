@@ -1,1 +1,1 @@
-export{HG as characterCounterDataExtension}from"../../../chunks/app-C-KD-Wd6.js";
+export{HG as characterCounterDataExtension}from"../../../chunks/app-9keSdHGw.js";

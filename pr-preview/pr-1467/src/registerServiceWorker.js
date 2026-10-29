@@ -1,1 +1,1 @@
-export{TA as checkForAppUpdate,EA as registerServiceWorker}from"../chunks/app-C-KD-Wd6.js";
+export{TA as checkForAppUpdate,EA as registerServiceWorker}from"../chunks/app-9keSdHGw.js";

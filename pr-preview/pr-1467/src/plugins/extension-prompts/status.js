@@ -1,1 +1,1 @@
-export{iA as extensionPromptDiagnosticContribution,aA as extensionPromptDiagnosticSource}from"../../../chunks/app-C-KD-Wd6.js";
+export{iA as extensionPromptDiagnosticContribution,aA as extensionPromptDiagnosticSource}from"../../../chunks/app-9keSdHGw.js";

@@ -1,1 +1,1 @@
-export{VC as usePendingInvitations}from"../../chunks/app-C-KD-Wd6.js";
+export{VC as usePendingInvitations}from"../../chunks/app-9keSdHGw.js";

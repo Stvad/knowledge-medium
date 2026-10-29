@@ -1,1 +1,1 @@
-export{BP as useShortcutSurfaceActivations}from"../../chunks/app-C-KD-Wd6.js";
+export{BP as useShortcutSurfaceActivations}from"../../chunks/app-9keSdHGw.js";
