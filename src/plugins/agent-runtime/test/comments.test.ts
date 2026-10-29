@@ -56,7 +56,8 @@ describe('add-comment', () => {
     const created = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', content: 'Is it confirmed?'}) as {
       threadId: string, commentId: string, quote: string,
     }
-    expect(created.quote).toBe('Thursday')
+    expect(created).toMatchObject({quote: 'Thursday', quoteStart: TEXT.indexOf('Thursday')})
+    expect((created as unknown as {excerpt: string}).excerpt).toBe(TEXT)
     const comment = await context.repo.load(created.commentId)
     expect(comment?.parentId).toBe(created.threadId)
     expect(comment?.properties[attributionCreatorsProp.name]).toEqual([agentId])
@@ -129,6 +130,29 @@ describe('comments', () => {
     const all = await comments({block: BLOCK, includeClosed: true, limit: 1})
     expect(all).toMatchObject({total: 2, offset: 0, nextOffset: 1})
     expect((await comments({thread: first.threadId})).threads[0].status).toBe('resolved')
+  })
+
+  it('caps the comments shown per thread, and says how many it left out', async () => {
+    const {threadId} = await asAgent({type: 'add-comment', target: BLOCK, content: 'first'}) as {threadId: string}
+    await context.repo.tx(async tx => {
+      for (let i = 0; i < 55; i += 1) {
+        await tx.create({workspaceId: WS, parentId: threadId, orderKey: `b${String(i).padStart(3, '0')}`, content: `reply ${i}`})
+      }
+    }, opts)
+    const [thread] = (await comments({thread: threadId})).threads
+    expect(thread.comments).toHaveLength(50)
+    expect(thread.omittedComments).toBe(6)
+  })
+
+  it('ends a page early once it passes the views\' character budget', async () => {
+    for (let i = 0; i < 8; i += 1) {
+      await asAgent({type: 'add-comment', target: BLOCK, content: `${i} ${'x'.repeat(3_990)}`})
+    }
+    const page = await comments({block: BLOCK})
+    expect(page.total).toBe(8)
+    expect(page.threads.length).toBeLessThan(8)
+    expect(page.nextOffset).toBe(page.threads.length)
+    expect((await comments({block: BLOCK, offset: page.nextOffset!})).threads.length).toBeGreaterThan(0)
   })
 
   it('takes exactly one of scope, block and thread, and refuses a thread id that is no thread', async () => {

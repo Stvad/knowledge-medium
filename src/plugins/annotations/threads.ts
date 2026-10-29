@@ -6,12 +6,13 @@
 import {ChangeScope, propertyValue, type BlockReference} from '@/data/api'
 import {createChild} from '@/data/mutators'
 import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
+import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
 import {createTypedChild} from '@/data/typedRecords'
 import {hasLoneSurrogate} from '@/utils/string'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {getOrCreateCommentsPage} from './container.ts'
+import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
   annotationQuotePrefixProp,
   annotationQuoteStartProp,
@@ -113,6 +114,9 @@ export const createThread = async (
     if (!current || current.deleted) throw missingTarget(targetId)
     if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
       throw new UnannotatableTargetError('A property row can’t be commented on.')
+    }
+    if (hasBlockType(current, THREAD_TYPE) || current.id === commentsPageBlockId(current.workspaceId)) {
+      throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
     }
     if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
       throw new AnchorChangedError()

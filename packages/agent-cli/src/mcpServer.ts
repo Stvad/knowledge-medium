@@ -276,8 +276,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('add_comment' satisfies KmMcpToolName, {
     description: 'Start a comment thread on a block, on quoted text of it or on the whole block, and return its root id '
-    + '(write ((id)) to quote that range elsewhere). The quote is found in the block\'s current text; one that appears '
-    + 'more than once needs occurrence. No content makes a highlight. Reply to a comment with append_markdown under '
+    + '(write ((id)) to quote that range elsewhere). The quote is found in the block\'s current content, verbatim as '
+    + 'get_block returns it; one that appears more than once needs occurrence, and the result\'s quoteStart and excerpt '
+    + 'show which appearance was anchored. No content makes a highlight. Reply to a comment with append_markdown under '
     + 'that comment; resolve a thread with update_block on its root, properties {"annotation:status": "resolved"}. '
     + 'comments reads threads.',
     inputSchema: {

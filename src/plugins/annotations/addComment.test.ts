@@ -74,6 +74,14 @@ describe('addComment', () => {
     expect(highlight.commentId).toBeNull()
   })
 
+  it('refuses a thread root and the page that holds threads as targets', async () => {
+    const {threadId} = await addComment(repo, {targetId: 'B', comment: 'On B'})
+    const containerId = (await repo.load(threadId))!.parentId!
+    for (const targetId of [threadId, containerId]) {
+      await expect(addComment(repo, {targetId, comment: 'x'})).rejects.toThrow(/can’t be commented on/)
+    }
+  })
+
   it('refuses an occurrence without a quote, and a missing target', async () => {
     await expect(addComment(repo, {targetId: 'B', occurrence: 1})).rejects.toThrow(InvalidQuoteError)
     await expect(addComment(repo, {targetId: 'nope', quote: 'Ship'})).rejects.toThrow(UnannotatableTargetError)
