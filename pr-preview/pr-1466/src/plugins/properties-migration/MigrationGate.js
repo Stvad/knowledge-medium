@@ -1,1 +1,1 @@
-export{sa as MigrationGate}from"../../../chunks/app-DtlIjLW-.js";
+export{sa as MigrationGate}from"../../../chunks/app-DjgtAIrM.js";

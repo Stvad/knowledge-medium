@@ -1,1 +1,1 @@
-export{DW as contributorsDataExtension}from"../../../chunks/app-DtlIjLW-.js";
+export{DW as contributorsDataExtension}from"../../../chunks/app-DjgtAIrM.js";

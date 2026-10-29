@@ -1,1 +1,1 @@
-export{YA as defaultRegistry,XA as defaultRendererContributions,ZA as defaultRenderersExtension}from"../../chunks/app-DtlIjLW-.js";
+export{YA as defaultRegistry,XA as defaultRendererContributions,ZA as defaultRenderersExtension}from"../../chunks/app-DjgtAIrM.js";

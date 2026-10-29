@@ -1,1 +1,1 @@
-export{DQ as KERNEL_PROCESSORS}from"../../../chunks/app-DtlIjLW-.js";
+export{OQ as KERNEL_PROCESSORS}from"../../../chunks/app-DjgtAIrM.js";

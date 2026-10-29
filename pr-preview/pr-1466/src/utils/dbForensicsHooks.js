@@ -1,1 +1,1 @@
-export{XK as __resetDbForensicsHooksForTest,ZK as captureDbOpenCorruption,QK as installDbForensicsLifecycle,$K as recordForensicSessionStart,eq as watchForRuntimeCorruption}from"../../chunks/app-DtlIjLW-.js";
+export{ZK as __resetDbForensicsHooksForTest,QK as captureDbOpenCorruption,$K as installDbForensicsLifecycle,eq as recordForensicSessionStart,tq as watchForRuntimeCorruption}from"../../chunks/app-DjgtAIrM.js";

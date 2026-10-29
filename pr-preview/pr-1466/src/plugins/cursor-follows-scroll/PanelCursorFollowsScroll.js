@@ -1,1 +1,1 @@
-export{zy as PanelCursorFollowsScroll}from"../../../chunks/app-DtlIjLW-.js";
+export{zy as PanelCursorFollowsScroll}from"../../../chunks/app-DjgtAIrM.js";

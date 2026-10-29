@@ -1,1 +1,1 @@
-export{QB as referencesDataExtension}from"../../../chunks/app-DtlIjLW-.js";
+export{QB as referencesDataExtension}from"../../../chunks/app-DjgtAIrM.js";
