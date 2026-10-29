@@ -1,9 +1,10 @@
 import {z} from 'zod'
 import {defineQuery, type Query, type Schema} from '@/data/api'
-import {buildQualifiedBlockColumnsSql} from '@/data/blockSchema'
+import {dependOnRecognitionParams} from '@/data/internals/kernelQueries'
 import {hasBlockType} from '@/data/properties'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries.ts'
 import {THREAD_TYPE, threadAnchorOf, threadIsOpen, type ThreadAnchor} from './schema.ts'
+import {threadRootBatcherFor} from './summaryBatch.ts'
 
 export const THREADS_FOR_BLOCK_QUERY = 'annotations.threadsForBlock'
 
@@ -37,19 +38,14 @@ const byPosition = (a: ThreadSummary, b: ThreadSummary): number => {
   return start(a) - start(b) || a.createdAt - b.createdAt || a.id.localeCompare(b.id)
 }
 
-const SELECT_ROOTS_SQL = `
-  SELECT ${buildQualifiedBlockColumnsSql('b')}
-    FROM json_each(?) j
-    JOIN blocks b ON b.id = j.value
-   WHERE b.deleted = 0
-`
-
 const summariesSchema: Schema<ThreadSummary[]> = {parse: input => input as ThreadSummary[]}
 
 /** The threads anchored to a block, each with what the pill, the inline
  *  section and the highlights read off it. Re-resolves on a new or removed
  *  thread (the target edge), on a root's own edit (its row) and on a comment
- *  added or removed at the top of a thread (the root's children). */
+ *  added or removed at the top of a thread (the root's children). The roots
+ *  and their counts for a whole render wave are one statement
+ *  (`summaryBatch.ts`). */
 // Explicit type: `ctx.run` below resolves QueryRegistry, which this query
 // augments, so an inferred type would loop back through itself.
 export const threadsForBlockQuery: Query<{workspaceId: string; id: string}, ThreadSummary[]> =
@@ -60,15 +56,23 @@ export const threadsForBlockQuery: Query<{workspaceId: string; id: string}, Thre
   resolve: async ({workspaceId, id}, ctx) => {
     const ids = await ctx.run(THREAD_IDS_FOR_BLOCK_QUERY, {workspaceId, id})
     if (ids.length === 0) return []
-    const rows = await ctx.db.getAll<Record<string, unknown>>(SELECT_ROOTS_SQL, [JSON.stringify(ids)])
-    const roots = ctx.hydrateBlocks(rows).filter(root => hasBlockType(root, THREAD_TYPE))
-    const summaries = await Promise.all(roots.map(async root => ({
-      id: root.id,
-      open: threadIsOpen(root),
-      anchor: threadAnchorOf(root),
-      commentCount: (await ctx.run('core.childIds', {id: root.id, hidePropertyChildren: true})).length,
-      createdAt: root.createdAt,
-    })))
+    const recognitionParams = dependOnRecognitionParams(ctx)
+    for (const rootId of ids) ctx.depend({kind: 'parent-edge', parentId: rootId})
+    const batcher = threadRootBatcherFor(ctx.db)
+    const found = (await Promise.all(ids.map(rootId => batcher.request(rootId, recognitionParams))))
+      .filter(answer => answer !== null)
+    const roots = ctx.hydrateBlocks(found.map(answer => answer.row))
+    const summaries: ThreadSummary[] = []
+    for (const [i, root] of roots.entries()) {
+      if (!hasBlockType(root, THREAD_TYPE)) continue
+      summaries.push({
+        id: root.id,
+        open: threadIsOpen(root),
+        anchor: threadAnchorOf(root),
+        commentCount: found[i].commentCount,
+        createdAt: root.createdAt,
+      })
+    }
     return summaries.sort(byPosition)
   },
 })

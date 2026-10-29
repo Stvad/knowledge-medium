@@ -66,6 +66,50 @@ describe('annotations.threadsForBlock', () => {
   })
 })
 
+describe('annotations.threadsForBlock, batched over a render wave', () => {
+  const statementsDuring = async <T>(run: () => Promise<T>): Promise<{result: T; statements: number}> => {
+    const spies = (['getAll', 'getOptional', 'get'] as const).map(method => vi.spyOn(db.db, method))
+    try {
+      const result = await run()
+      return {result, statements: spies.reduce((n, spy) => n + spy.mock.calls.length, 0)}
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  }
+
+  const loadWave = (ids: readonly string[]) =>
+    statementsDuring(() => Promise.all(ids.map(id => repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load())))
+
+  it('reads every block in a wave with as many statements as one block costs', async () => {
+    const targets = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+    await repo.tx(async tx => {
+      for (const [i, id] of targets.entries()) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `b${i}`, content: TEXT})
+      }
+    }, opts)
+    const threads = []
+    for (const id of targets) threads.push(await createThread(repo, {targetId: id, anchor: null, comment: 'first'}))
+    await replyTo(repo, threads[3].threadId)
+    await repo.awaitProcessors()
+
+    const one = await loadWave(['T0'])
+    const many = await loadWave(targets.slice(1))
+    expect(many.result.map(summaries => summaries.map(s => s.commentCount))).toEqual([[1], [1], [2], [1], [1], [1], [1]])
+    expect(many.statements).toBe(one.statements)
+  })
+
+  it('counts comments only, not the property field rows of a workspace that stores properties as children', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: quoteAnchor('vendor'), comment: 'Which vendor?'})
+    await repo.awaitProcessors()
+    const children = await db.db.getAll('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [threadId])
+    expect(children.length).toBeGreaterThan(1)
+    expect((await summariesOfB()).map(s => s.commentCount)).toEqual([1])
+  })
+})
+
 describe('annotations.threadsForBlock, typed roots only', () => {
   it('ignores a plain block that merely carries an annotation:target', async () => {
     await repo.tx(async tx => {
