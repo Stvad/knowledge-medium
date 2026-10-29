@@ -1,1 +1,1 @@
-export{iC as importPastedWorkspaceKey,aC as openCanaryWithPastedKey}from"../../../../chunks/app-BtQ3xnFX.js";
+export{iC as importPastedWorkspaceKey,aC as openCanaryWithPastedKey}from"../../../../chunks/app-D3oFspql.js";

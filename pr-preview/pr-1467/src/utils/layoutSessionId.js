@@ -1,1 +1,1 @@
-export{q8 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,J8 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Y8 as __resetLayoutSessionIdForTesting,X8 as getLayoutSessionId,Z8 as isInstalledAppDisplayMode,Q8 as readOrCreateLayoutSessionId}from"../../chunks/app-BtQ3xnFX.js";
+export{q8 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,J8 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Y8 as __resetLayoutSessionIdForTesting,X8 as getLayoutSessionId,Z8 as isInstalledAppDisplayMode,Q8 as readOrCreateLayoutSessionId}from"../../chunks/app-D3oFspql.js";

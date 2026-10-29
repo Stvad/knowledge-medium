@@ -1,1 +1,1 @@
-export{Db as getVimNormalModeActions,Ob as jumpVisibleBlocks,kb as vimNormalModeActionsExtension}from"../../../chunks/app-BtQ3xnFX.js";
+export{Db as getVimNormalModeActions,Ob as jumpVisibleBlocks,kb as vimNormalModeActionsExtension}from"../../../chunks/app-D3oFspql.js";
