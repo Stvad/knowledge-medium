@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm'
 import type {PluggableList} from 'unified'
 import {remarkWikilinks} from '@/plugins/references/markdown/wikilinks/remark-wikilinks.js'
 import {remarkBlockrefs} from '@/plugins/references/markdown/blockrefs/remark-blockrefs.js'
+import {remarkTimestamps} from '@/plugins/video-player/remark-timestamps.js'
 import {rehypeTrimBlockSeparators} from '@/markdown/blockSeparators.js'
 import type {HighlightRange} from './highlights.ts'
 import {remarkAnnotationMarks} from './readHighlights.ts'
@@ -17,16 +18,18 @@ const show = (tag: string) => ({node, children}: Props) =>
 
 const components = {
   wikilink: show('wikilink'), pageembed: show('pageembed'), blockref: show('blockref'), blockembed: show('blockembed'),
+  'time-stamp': show('timestamp'),
 } as unknown as Components
 
-/** The production order: gfm's syntax, then the marks, then the reference
- *  plugins; plus the block-separator rehype pass that reads positions. */
+/** The production order: gfm, the reference and timestamp plugins, then the
+ *  marks; plus the block-separator rehype pass that reads positions. */
 const render = (content: string, ranges: readonly HighlightRange[] | null, resolvedAgainst = content): string => {
   const remarkPlugins: PluggableList = [
     remarkGfm,
-    ...(ranges ? [[remarkAnnotationMarks, {content: resolvedAgainst, ranges}]] as PluggableList : []),
     [remarkWikilinks, {resolveAlias: (alias: string) => `id-${alias}`}],
     remarkBlockrefs,
+    remarkTimestamps,
+    ...(ranges ? [[remarkAnnotationMarks, {content: resolvedAgainst, ranges}]] as PluggableList : []),
   ]
   return renderToStaticMarkup(createElement(Markdown, {
     remarkPlugins, rehypePlugins: [rehypeTrimBlockSeparators], components,
@@ -78,6 +81,30 @@ describe('read-mode marks', () => {
     const content = 'Ask [[alex@example.com]] today.'
     const [mark] = marked(content, [range(content, '[[alex@example.com]]')])
     expect(mark.html).toContain('<x-wikilink')
+  })
+
+  it('keeps two highlighted occurrences of the same page embed apart', () => {
+    const content = 'One ![[a@example.com]] and two ![[a@example.com]] here.'
+    const result = marked(content, [range(content, '![[a@example.com]]'), range(content, '![[a@example.com]]', false, 1)])
+    expect(result).toHaveLength(2)
+    const ids = result.map(m => /occurrenceId&quot;:&quot;([^&]*)&quot;/.exec(m.html)?.[1])
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('marks a timestamp whole, and draws nothing for a range that cuts one', () => {
+    const content = 'Watch 1:23:45 next.'
+    expect(marked(content, [range(content, '1:')])).toEqual([])
+    expect(marked(content, [range(content, '45 next')])).toEqual([])
+    const [mark] = marked(content, [range(content, 'Watch 1:23:45')])
+    expect(mark.html).toContain('<x-timestamp')
+  })
+
+  it('places text after a token whose source is not knowable, aligning back from the end', () => {
+    // A link-form wikilink keeps no raw source; the timestamp split leaves the
+    // text after it positionless too.
+    const content = '[the spec]([[Spec]]) then see 1:23 later.'
+    const [mark] = marked(content, [range(content, 'see 1:23')])
+    expect(mark.html).toBe('see <x-timestamp data-props="{&quot;hms&quot;:&quot;1:23&quot;}">1:23</x-timestamp>')
   })
 
   it('draws nothing for a range that cuts a reference span', () => {

@@ -45,9 +45,9 @@ export const annotationsPlugin: AppExtension = systemToggle({
   blockContentRendererFacet.of(threadRootContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
-  // Before the reference plugins (default precedence), which must see whole
-  // spans inside a mark.
-  markdownExtensionsFacet.of(threadMarksMarkdownExtension, {source: SOURCE, precedence: -10}),
+  // After every other markdown extension (default precedence), so its
+  // transform marks their nodes rather than splitting their tokens.
+  markdownExtensionsFacet.of(threadMarksMarkdownExtension, {source: SOURCE, precedence: 100}),
   // A panel mount, not a block layout: that facet is last-wins, and the video
   // notes and SRS review layouts already contribute to it.
   panelMountsFacet.of({id: 'annotations.margin', component: CommentMargin}, {source: SOURCE}),
