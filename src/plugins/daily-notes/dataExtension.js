@@ -1,1 +1,1 @@
-export{UU as dailyNotesDataExtension}from"../../../chunks/app-JP2tfA96.js";
+export{KU as dailyNotesDataExtension}from"../../../chunks/app-BuAewSec.js";

@@ -1,1 +1,1 @@
-export{sk as extensionPromptDiagnosticContribution,ck as extensionPromptDiagnosticSource}from"../../../chunks/app-JP2tfA96.js";
+export{uk as extensionPromptDiagnosticContribution,dk as extensionPromptDiagnosticSource}from"../../../chunks/app-BuAewSec.js";

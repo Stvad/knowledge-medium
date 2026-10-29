@@ -1,1 +1,1 @@
-export{cO as TypeChip}from"../../../chunks/app-JP2tfA96.js";
+export{dO as TypeChip}from"../../../chunks/app-BuAewSec.js";

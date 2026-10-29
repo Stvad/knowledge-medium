@@ -1,1 +1,1 @@
-export{my as onboardingLanding}from"../../../chunks/app-JP2tfA96.js";
+export{_y as onboardingLanding}from"../../../chunks/app-BuAewSec.js";

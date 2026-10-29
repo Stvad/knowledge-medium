@@ -1,1 +1,1 @@
-export{wM as useIsMobile,TM as usePointerCoarse}from"../../chunks/app-JP2tfA96.js";
+export{DM as useIsMobile,OM as usePointerCoarse}from"../../chunks/app-BuAewSec.js";

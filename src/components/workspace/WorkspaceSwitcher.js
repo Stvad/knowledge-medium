@@ -1,1 +1,1 @@
-export{Fx as WorkspaceSwitcher}from"../../../chunks/app-JP2tfA96.js";
+export{Rx as WorkspaceSwitcher}from"../../../chunks/app-BuAewSec.js";

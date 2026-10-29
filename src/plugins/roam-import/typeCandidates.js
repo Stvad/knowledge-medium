@@ -1,1 +1,1 @@
-export{wl as collectTypeCandidates,Tl as formatTypeCandidateReport}from"../../../chunks/app-JP2tfA96.js";
+export{wl as collectTypeCandidates,Tl as formatTypeCandidateReport}from"../../../chunks/app-BuAewSec.js";
