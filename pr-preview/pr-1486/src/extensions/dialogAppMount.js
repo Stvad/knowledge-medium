@@ -1,0 +1,1 @@
+export{CM as DialogHost,wM as dialogAppMountExtension}from"../../chunks/app-BVUOksrq.js";

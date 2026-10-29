@@ -1,0 +1,1 @@
+export{p$ as kernelDataExtension}from"../../chunks/app-BVUOksrq.js";

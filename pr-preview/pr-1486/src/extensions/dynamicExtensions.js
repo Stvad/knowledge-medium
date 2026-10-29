@@ -1,0 +1,1 @@
+export{Dj as dynamicExtensionsExtension}from"../../chunks/app-BVUOksrq.js";

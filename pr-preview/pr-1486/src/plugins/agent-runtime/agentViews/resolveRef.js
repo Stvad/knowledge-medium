@@ -1,0 +1,1 @@
+export{xm as BlockRefError,Sm as MIN_ID_PREFIX,Cm as resolveBlockRef,wm as shortIds}from"../../../../chunks/app-BVUOksrq.js";

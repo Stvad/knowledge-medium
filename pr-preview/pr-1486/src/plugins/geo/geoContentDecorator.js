@@ -1,0 +1,1 @@
+export{xg as geoContentDecoratorContribution}from"../../../chunks/app-BVUOksrq.js";

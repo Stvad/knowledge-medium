@@ -1,0 +1,1 @@
+export{EA as editorAutocompleteExtension}from"../../chunks/app-BVUOksrq.js";

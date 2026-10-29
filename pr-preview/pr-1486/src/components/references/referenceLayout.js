@@ -1,0 +1,1 @@
+export{Bg as referenceLayoutContribution}from"../../../chunks/app-BVUOksrq.js";

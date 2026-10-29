@@ -1,0 +1,1 @@
+export{uO as useCommandPaletteActions}from"../../../chunks/app-BVUOksrq.js";

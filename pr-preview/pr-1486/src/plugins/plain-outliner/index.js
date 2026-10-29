@@ -1,0 +1,1 @@
+export{MS as plainOutlinerPlugin}from"../../../chunks/app-BVUOksrq.js";

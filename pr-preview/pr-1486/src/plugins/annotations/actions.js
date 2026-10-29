@@ -1,0 +1,1 @@
+export{td as COMMENT_ON_BLOCK_ACTION_ID,nd as COMMENT_ON_SELECTION_ACTION_ID,rd as HIGHLIGHT_SELECTION_ACTION_ID,id as TOGGLE_MARGIN_ACTION_ID,ad as anchorFromEditor,od as annotationActions,sd as submitComposer}from"../../../chunks/app-BVUOksrq.js";

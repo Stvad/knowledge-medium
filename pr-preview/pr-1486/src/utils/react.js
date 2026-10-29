@@ -1,0 +1,1 @@
+export{YN as useIsMobile,XN as usePointerCoarse}from"../../chunks/app-BVUOksrq.js";

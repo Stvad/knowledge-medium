@@ -1,0 +1,1 @@
+export{Mg as blockrefMarkdownExtension}from"../../../../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{QA as checkForAppUpdate,$A as registerServiceWorker}from"../chunks/app-BVUOksrq.js";

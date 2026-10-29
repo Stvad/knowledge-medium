@@ -1,0 +1,1 @@
+export{gG as DAILY_NOTE_NS,_G as JOURNAL_NS,vG as addDaysIso,yG as dailyNoteBlockId,bG as dailyNoteCreatedAt,xG as dailyNoteDateValue,SG as dailyNoteIsoFromAliases,CG as ensureDailyNoteTarget,wG as getOrCreateDailyNote,TG as getOrCreateJournalBlock,EG as isDateAlias,DG as isValidDateAlias,OG as journalBlockId,kG as todayIso}from"../../../chunks/app-BVUOksrq.js";

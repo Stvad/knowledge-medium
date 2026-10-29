@@ -1,0 +1,1 @@
+export{fp as lintExtensionSource}from"../../../chunks/app-BVUOksrq.js";

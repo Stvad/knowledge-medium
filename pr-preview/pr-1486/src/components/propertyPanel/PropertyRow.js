@@ -1,0 +1,1 @@
+export{VI as PropertyRow}from"../../../chunks/app-BVUOksrq.js";

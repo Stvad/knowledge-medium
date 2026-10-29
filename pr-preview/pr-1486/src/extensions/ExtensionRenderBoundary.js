@@ -1,0 +1,1 @@
+export{rP as ExtensionRenderBoundary}from"../../chunks/app-BVUOksrq.js";

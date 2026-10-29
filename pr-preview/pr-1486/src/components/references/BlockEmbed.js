@@ -1,0 +1,1 @@
+export{Ck as BlockEmbed}from"../../../chunks/app-BVUOksrq.js";

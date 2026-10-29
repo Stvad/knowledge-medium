@@ -1,0 +1,1 @@
+export{pF as useShortcutSurfaceActivations}from"../../chunks/app-BVUOksrq.js";

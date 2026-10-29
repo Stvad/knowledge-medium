@@ -1,0 +1,1 @@
+export{dM as BlockLoadingPlaceholder}from"../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{Ig as blockrefCompletionSource}from"../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{Hh as DEFAULT_BACKLINKS_VIEW_ID,Uh as FLAT_BACKLINKS_VIEW_ID,Wh as GROUPED_BACKLINKS_VIEW_ID,Gh as backlinksViewProp,Kh as defaultBacklinksViewIdForBlock}from"../../../chunks/app-BVUOksrq.js";

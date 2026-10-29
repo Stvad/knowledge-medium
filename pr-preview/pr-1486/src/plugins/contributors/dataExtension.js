@@ -1,0 +1,1 @@
+export{iK as contributorsDataExtension}from"../../../chunks/app-BVUOksrq.js";

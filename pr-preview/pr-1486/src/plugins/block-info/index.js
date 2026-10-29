@@ -1,0 +1,1 @@
+export{gh as blockInfoPlugin}from"../../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{M_ as attachmentsPlugin}from"../../../chunks/app-BVUOksrq.js";

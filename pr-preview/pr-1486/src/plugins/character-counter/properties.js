@@ -1,0 +1,1 @@
+export{CK as charLimitProp,wK as charProfileProp,TK as charScopeProp}from"../../../chunks/app-BVUOksrq.js";

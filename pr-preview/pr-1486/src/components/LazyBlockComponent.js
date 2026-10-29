@@ -1,0 +1,1 @@
+export{cM as LazyBlockComponent}from"../../chunks/app-BVUOksrq.js";

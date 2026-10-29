@@ -1,0 +1,1 @@
+export{vg as LocationPropertyEditor}from"../../../chunks/app-BVUOksrq.js";

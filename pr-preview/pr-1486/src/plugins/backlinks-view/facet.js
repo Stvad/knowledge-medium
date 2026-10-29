@@ -1,0 +1,1 @@
+export{hg as backlinksViewFacet}from"../../../chunks/app-BVUOksrq.js";

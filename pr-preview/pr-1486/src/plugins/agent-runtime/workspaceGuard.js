@@ -1,0 +1,1 @@
+export{Pp as assertActiveWorkspace}from"../../../chunks/app-BVUOksrq.js";

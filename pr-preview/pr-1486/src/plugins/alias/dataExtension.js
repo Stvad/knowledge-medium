@@ -1,0 +1,1 @@
+export{Jq as aliasDataExtension}from"../../../chunks/app-BVUOksrq.js";

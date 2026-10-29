@@ -1,0 +1,1 @@
+export{nH as staticDataExtensions}from"../../chunks/app-BVUOksrq.js";

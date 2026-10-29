@@ -1,0 +1,1 @@
+export{gx as SpatialNavigationShellDecorator}from"../../../chunks/app-BVUOksrq.js";

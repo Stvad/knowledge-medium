@@ -1,0 +1,1 @@
+export{$B as usePropertySchemas}from"../../chunks/app-BVUOksrq.js";

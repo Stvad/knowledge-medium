@@ -1,0 +1,1 @@
+export{iq as pluginPrefsExtension,aq as pluginUIStateExtension}from"../../chunks/app-BVUOksrq.js";

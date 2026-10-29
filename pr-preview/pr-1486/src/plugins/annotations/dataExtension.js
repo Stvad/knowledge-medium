@@ -1,0 +1,1 @@
+export{NG as annotationsDataExtension}from"../../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{t_ as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,n_ as moveBlocksContextMenuItem}from"../../../chunks/app-BVUOksrq.js";

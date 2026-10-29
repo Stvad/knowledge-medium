@@ -1,0 +1,1 @@
+export{TC as createEncryptedWorkspace}from"../../../../chunks/app-BVUOksrq.js";

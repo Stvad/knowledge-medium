@@ -1,0 +1,1 @@
+export{ZE as dailyDateWikilinkDecorator}from"../../../chunks/app-BVUOksrq.js";

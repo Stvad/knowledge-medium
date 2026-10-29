@@ -1,0 +1,1 @@
+export{FI as BlockProperties}from"../../chunks/app-BVUOksrq.js";

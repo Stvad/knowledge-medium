@@ -1,0 +1,1 @@
+export{Zd as contributorsPlugin}from"../../../chunks/app-BVUOksrq.js";

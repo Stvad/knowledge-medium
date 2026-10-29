@@ -1,0 +1,1 @@
+export{$g as useIsReadOnly}from"../../chunks/app-BVUOksrq.js";

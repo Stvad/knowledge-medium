@@ -1,0 +1,1 @@
+export{MO as CommandPaletteHeaderItem}from"../../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{pO as COMMAND_PALETTE_ACTION_ID,mO as COMMAND_PALETTE_CONTEXT,hO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,gO as commandPaletteActionContext}from"../../../chunks/app-BVUOksrq.js";

@@ -1,0 +1,1 @@
+export{k_ as richPasteDecisionContribution}from"../../../chunks/app-BVUOksrq.js";
