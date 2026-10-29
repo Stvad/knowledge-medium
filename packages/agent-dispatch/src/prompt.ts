@@ -3,15 +3,19 @@
  * templating — deliberately not a template engine.
  */
 
+import { neutralizeDisplayText, type CommentAnchorState, type CommentAuthor } from '@knowledge-medium/agent-cli/protocol'
+import { renderSubtreeOutline } from '@knowledge-medium/agent-cli/subtreeOutline'
+
 /** A mention inside a comment thread (threadContext.ts). */
 export interface ThreadPromptContext {
   /** The annotated block; null when it is gone. */
   target: {content: string, path: string[]} | null
   /** The quoted text; null for a thread on the whole block. */
   quote: string | null
-  anchor: 'block' | 'exact' | 'moved' | 'stale'
-  /** From the thread's first comment down to the one that mentioned you. */
-  chain: Array<{author: string, kind: string | null, content: string}>
+  anchor: CommentAnchorState
+  /** From the thread's first comment down to the one that mentioned you;
+   *  `author` is null for a comment the thread view left out. */
+  chain: Array<{id: string, content: string, author: CommentAuthor | null}>
 }
 
 export interface MentionPromptContext {
@@ -88,15 +92,15 @@ Handle it now, then close the task out yourself:
 3. Mark the task finished with update_block on {{blockId}}: properties {"agent:status": "done"} (or "error" plus {"agent:error": "<why>"} if you could not complete it).
 Never write the literal token [[claude]] (or any watcher-target wikilink) anywhere — it re-triggers the watcher.`
 
-const ANCHOR_NOTES: Partial<Record<ThreadPromptContext['anchor'], string>> = {
-  moved: ' (the text around it has changed since)',
+const ANCHOR_NOTES: Partial<Record<CommentAnchorState, string>> = {
+  moved: ' (it has moved within the block since)',
   stale: ' (no longer in the block as quoted)',
 }
 
-/** Continuation lines of a multi-line comment, indented under its bullet. */
-const indentContinuation = (text: string, indent: string): string => text.split('\n').join(`\n${indent}`)
+const authorLabel = (author: CommentAuthor | null): string =>
+  !author ? '(author not shown)' : author.kind ? `${author.name} (${author.kind})` : author.name
 
-export const renderThreadContext = (thread: ThreadPromptContext): string => {
+const renderThreadContext = (thread: ThreadPromptContext): string => {
   const lines = ['The block that mentioned you is a comment in a thread on another block.', '']
   if (thread.target) {
     const path = thread.target.path.length > 0 ? thread.target.path.join(' › ') : '(top level)'
@@ -106,13 +110,14 @@ export const renderThreadContext = (thread: ThreadPromptContext): string => {
   }
   lines.push(thread.quote === null
     ? 'The thread is on the whole block.'
-    : `The thread quotes: "${thread.quote}"${ANCHOR_NOTES[thread.anchor] ?? ''}`, '')
-  lines.push('The thread, from its first comment down to the one that mentioned you:')
-  thread.chain.forEach((comment, depth) => {
-    const indent = '  '.repeat(depth)
-    const author = comment.kind ? `${comment.author} (${comment.kind})` : comment.author
-    lines.push(`${indent}- ${author}: ${indentContinuation(comment.content, `${indent}  `)}`)
-  })
+    : `The thread quotes: "${neutralizeDisplayText(thread.quote)}"${ANCHOR_NOTES[thread.anchor] ?? ''}`, '')
+  // One line per comment, as the subtree outline renders: a comment's text
+  // can't forge another comment or its author.
+  lines.push('The thread, from its first comment down to the one that mentioned you:', renderSubtreeOutline(
+    thread.chain.map((comment, depth) => ({
+      id: comment.id, parentId: null, depth, content: `${authorLabel(comment.author)}: ${comment.content}`,
+    })),
+  ))
   return lines.join('\n')
 }
 

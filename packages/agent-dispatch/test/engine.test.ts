@@ -169,30 +169,40 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   })
 
 describe('mention inside a comment thread', () => {
-  const comment = (id: string, author: string, content: string, replies: CommentThreadView['comments'] = []) => ({
-    id, shortId: id, content, cut: 0, author: {id: `p-${author}`, name: author, kind: 'human' as const}, createdAt: 1, replies,
+  const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
+  const comment = (id: string, by: ReturnType<typeof author>, content: string, replies: CommentThreadView['comments'] = []) => ({
+    id, shortId: id, content, cut: 0, author: by, createdAt: 1, replies,
   })
+  const alex = author('Alex', 'human')
+  const claude = author('Claude', 'agent')
   const threadSeed = (): FakeGraphSeed => ({
-    backlinks: [{id: 'c2'}],
+    backlinks: [{id: 'c3'}],
     blocks: {
       'target': {content: 'We moved the launch to Thursday because the vendor slipped.'},
       'container': {content: 'Comments (km)'},
       'root': {parentId: 'container', content: 'Thursday', properties: {types: ['annotation:thread']}},
       'c1': {parentId: 'root', content: 'Is Thursday confirmed?'},
-      'c2': {parentId: 'c1', content: '[[claude]] can you check the venue too?'},
+      'c2': {parentId: 'c1', content: 'Yes, 9am.'},
+      'c3': {parentId: 'c2', content: '[[claude]] can you check the venue too?'},
     },
     threads: {
       root: {
         id: 'root', shortId: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
         target: {id: 'target', shortId: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
         comments: [
-          comment('c1', 'Alex', 'Is Thursday confirmed?', [comment('c2', 'Alex', '[[claude]] can you check the venue too?')]),
-          comment('sibling', 'Sam', 'An unrelated sibling comment'),
+          comment('c1', alex, 'Is Thursday confirmed?', [
+            comment('c2', claude, 'Yes, 9am.', [comment('c3', alex, '[[claude]] can you check the venue too?')]),
+          ]),
+          comment('sibling', author('Sam', 'human'), 'An unrelated sibling comment'),
         ],
+        omittedComments: 0,
       },
     },
   })
-  const promptOf = (runTask: ReturnType<typeof vi.fn>) => (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => {
+    expect(runTask).toHaveBeenCalled()
+    return (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  }
 
   it('adds the annotated block, the quote, its path and the chain down to the mention, not the whole thread', async () => {
     const {graph} = fakeGraph(threadSeed())
@@ -205,7 +215,11 @@ describe('mention inside a comment thread', () => {
     expect(graph.comments).toHaveBeenCalledWith({thread: 'root'})
     expect(prompt).toContain('The annotated block (page path: Launch plan):\nWe moved the launch to Thursday because the vendor slipped.')
     expect(prompt).toContain('The thread quotes: "Thursday"')
-    expect(prompt).toContain('- Alex (human): Is Thursday confirmed?\n  - Alex (human): [[claude]] can you check the venue too?')
+    expect(prompt).toContain([
+      '- [c1] Alex (human): Is Thursday confirmed?',
+      '  - [c2] Claude (agent): Yes, 9am.',
+      '    - [c3] Alex (human): [[claude]] can you check the venue too?',
+    ].join('\n'))
     expect(prompt).not.toContain('unrelated sibling')
   })
 
@@ -219,18 +233,53 @@ describe('mention inside a comment thread', () => {
     await engine.drain()
 
     expect(promptOf(runTask)).not.toContain('comment in a thread')
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('no thread context for c2'))
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('no thread context for c3'))
   })
 
   it('reads no thread for a mention outside one', async () => {
     const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] summarize inbox'}}})
     const runTask = vi.fn(async () => okRun())
-    const engine = engineWith({graph, runTask})
+    const log = vi.fn()
+    const engine = engineWith({graph, runTask, log})
     await engine.tick()
     await engine.drain()
 
     expect(runTask).toHaveBeenCalled()
     expect(graph.comments).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('no thread context'))
+  })
+})
+
+describe('channel delivery', () => {
+  it('parks a task stopped before delivery as cancelled, and delivers nothing', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] x'}}})
+    let reading!: () => void
+    const reads = new Promise<void>(resolve => { reading = resolve })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const getSubtree = graph.getSubtree
+    graph.getSubtree = async id => {
+      reading()
+      await held
+      return getSubtree(id)
+    }
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}]}),
+    })
+
+    await engine.tick()
+    await reads
+    // The Stop chip's write, then the next tick's sweep.
+    blocks.get('b-1')!.properties = {...blocks.get('b-1')!.properties, [PROPS.cancel]: 'requested'}
+    await engine.tick()
+    release()
+    await engine.drain()
+
+    expect(deliverToChannel).not.toHaveBeenCalled()
+    expect(blocks.get('b-1')?.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: ''})
+    expect(reconciles.at(-1)?.markdown).toContain('cancelled')
   })
 })
 
