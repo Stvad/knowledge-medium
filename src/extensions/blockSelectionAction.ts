@@ -82,12 +82,12 @@ export const toggleBlockInSelection = async (
 
   const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
 
-  void uiStateBlock.set(selectionStateProp, {
+  await uiStateBlock.set(selectionStateProp, {
     selectedBlockIds: validatedIds,
     anchorBlockId: validatedIds.length > 0
       ? (selectionState.anchorBlockId || block.id)
       : null,
   })
 
-  void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
+  await focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
 }

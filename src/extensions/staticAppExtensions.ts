@@ -39,6 +39,7 @@ import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
 import { blockDragPlugin } from '@/plugins/block-drag'
+import { touchSelectionPlugin } from '@/plugins/touch-selection'
 import { referencesPlugin } from '@/plugins/references'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
@@ -150,6 +151,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   mergeBlocksPlugin,
   moveBlocksPlugin,
   blockDragPlugin,
+  touchSelectionPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
