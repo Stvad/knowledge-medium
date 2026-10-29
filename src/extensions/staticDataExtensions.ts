@@ -7,6 +7,7 @@ import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.js'
 import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension.js'
 import { contributorsDataExtension } from '@/plugins/contributors/dataExtension.js'
+import { annotationsDataExtension } from '@/plugins/annotations/dataExtension.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { findReplaceDataExtension } from '@/plugins/find-replace/dataExtension.js'
 import { geoDataExtension } from '@/plugins/geo/dataExtension.js'
@@ -39,4 +40,5 @@ export const staticDataExtensions: AppExtension[] = [
   agentRuntimeDataExtension,
   attachmentsDataExtension,
   contributorsDataExtension,
+  annotationsDataExtension,
 ]
