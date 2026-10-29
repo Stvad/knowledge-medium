@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-CLF_eqaC.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-Dx9GREdf.js";

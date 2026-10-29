@@ -1,1 +1,1 @@
-export{xk as appUpdatePromptExtension}from"../../../chunks/app-CLF_eqaC.js";
+export{xk as appUpdatePromptExtension}from"../../../chunks/app-Dx9GREdf.js";

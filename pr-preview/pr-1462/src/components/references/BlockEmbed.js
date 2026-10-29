@@ -1,1 +1,1 @@
-export{tO as BlockEmbed}from"../../../chunks/app-CLF_eqaC.js";
+export{tO as BlockEmbed}from"../../../chunks/app-Dx9GREdf.js";

@@ -1,1 +1,1 @@
-export{LO as exampleExtensions,RO as insertExampleExtensionsUnder}from"../../chunks/app-CLF_eqaC.js";
+export{LO as exampleExtensions,RO as insertExampleExtensionsUnder}from"../../chunks/app-Dx9GREdf.js";

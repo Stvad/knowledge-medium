@@ -1,1 +1,1 @@
-export{kv as videoPlayerPlugin}from"../../../chunks/app-CLF_eqaC.js";
+export{kv as videoPlayerPlugin}from"../../../chunks/app-Dx9GREdf.js";

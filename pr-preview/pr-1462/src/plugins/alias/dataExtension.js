@@ -1,1 +1,1 @@
-export{XG as aliasDataExtension}from"../../../chunks/app-CLF_eqaC.js";
+export{XG as aliasDataExtension}from"../../../chunks/app-Dx9GREdf.js";

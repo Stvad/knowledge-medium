@@ -1,1 +1,1 @@
-export{zO as resolveStructuralEditPolicy,BO as structuralEditPolicyForBlock}from"../../chunks/app-CLF_eqaC.js";
+export{zO as resolveStructuralEditPolicy,BO as structuralEditPolicyForBlock}from"../../chunks/app-Dx9GREdf.js";

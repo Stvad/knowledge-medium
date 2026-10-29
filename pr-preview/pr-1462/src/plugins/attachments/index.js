@@ -1,1 +1,1 @@
-export{ug as attachmentsPlugin}from"../../../chunks/app-CLF_eqaC.js";
+export{ug as attachmentsPlugin}from"../../../chunks/app-Dx9GREdf.js";

@@ -1,1 +1,1 @@
-export{Fv as VideoNotesLayout,Iv as VideoNotesRenderer,Lv as videoNotesLayoutContribution}from"../../../chunks/app-CLF_eqaC.js";
+export{Fv as VideoNotesLayout,Iv as VideoNotesRenderer,Lv as videoNotesLayoutContribution}from"../../../chunks/app-Dx9GREdf.js";

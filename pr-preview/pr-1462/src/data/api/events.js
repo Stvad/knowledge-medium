@@ -1,1 +1,1 @@
-export{ett as CORE_BLOCK_DELETED_EVENT,ttt as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-CLF_eqaC.js";
+export{ett as CORE_BLOCK_DELETED_EVENT,ttt as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-Dx9GREdf.js";

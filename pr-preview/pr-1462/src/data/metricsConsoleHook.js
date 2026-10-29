@@ -1,1 +1,1 @@
-export{OO as ensureMetricsConsoleHook}from"../../chunks/app-CLF_eqaC.js";
+export{OO as ensureMetricsConsoleHook}from"../../chunks/app-Dx9GREdf.js";

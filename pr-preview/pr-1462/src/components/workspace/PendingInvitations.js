@@ -1,1 +1,1 @@
-export{GS as PendingInvitations}from"../../../chunks/app-CLF_eqaC.js";
+export{GS as PendingInvitations}from"../../../chunks/app-Dx9GREdf.js";

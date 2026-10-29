@@ -1,1 +1,1 @@
-export{lk as extensionPromptDiagnosticContribution,uk as extensionPromptDiagnosticSource}from"../../../chunks/app-CLF_eqaC.js";
+export{lk as extensionPromptDiagnosticContribution,uk as extensionPromptDiagnosticSource}from"../../../chunks/app-Dx9GREdf.js";

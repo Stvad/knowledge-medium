@@ -1,1 +1,1 @@
-export{KU as dailyNotesLocalSchema}from"../../../chunks/app-CLF_eqaC.js";
+export{KU as dailyNotesLocalSchema}from"../../../chunks/app-Dx9GREdf.js";

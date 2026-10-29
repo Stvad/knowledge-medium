@@ -1,1 +1,1 @@
-export{og as richPastePlugin}from"../../../chunks/app-CLF_eqaC.js";
+export{og as richPastePlugin}from"../../../chunks/app-Dx9GREdf.js";

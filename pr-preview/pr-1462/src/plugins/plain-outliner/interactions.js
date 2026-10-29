@@ -1,1 +1,1 @@
-export{mx as blockEditingContentRenderer}from"../../../chunks/app-CLF_eqaC.js";
+export{mx as blockEditingContentRenderer}from"../../../chunks/app-Dx9GREdf.js";

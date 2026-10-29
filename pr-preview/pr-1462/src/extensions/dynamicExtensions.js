@@ -1,1 +1,1 @@
-export{aA as dynamicExtensionsExtension}from"../../chunks/app-CLF_eqaC.js";
+export{aA as dynamicExtensionsExtension}from"../../chunks/app-Dx9GREdf.js";

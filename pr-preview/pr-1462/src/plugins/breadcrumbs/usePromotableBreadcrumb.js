@@ -1,1 +1,1 @@
-export{ix as usePromotableBreadcrumb}from"../../../chunks/app-CLF_eqaC.js";
+export{ix as usePromotableBreadcrumb}from"../../../chunks/app-Dx9GREdf.js";

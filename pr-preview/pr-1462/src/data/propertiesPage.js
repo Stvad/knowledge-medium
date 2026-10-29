@@ -1,1 +1,1 @@
-export{J8 as getOrCreatePropertiesPage,Y8 as propertiesPageBlockId}from"../../chunks/app-CLF_eqaC.js";
+export{J8 as getOrCreatePropertiesPage,Y8 as propertiesPageBlockId}from"../../chunks/app-Dx9GREdf.js";

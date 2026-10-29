@@ -1,1 +1,1 @@
-export{KA as defaultRegistry,qA as defaultRendererContributions,JA as defaultRenderersExtension}from"../../chunks/app-CLF_eqaC.js";
+export{KA as defaultRegistry,qA as defaultRendererContributions,JA as defaultRenderersExtension}from"../../chunks/app-Dx9GREdf.js";

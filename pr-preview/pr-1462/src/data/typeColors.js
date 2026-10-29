@@ -1,1 +1,1 @@
-export{fO as DEFAULT_TYPE_COLORS,pO as defaultTypeColor,mO as pickLeastUsedTypeColor}from"../../chunks/app-CLF_eqaC.js";
+export{fO as DEFAULT_TYPE_COLORS,pO as defaultTypeColor,mO as pickLeastUsedTypeColor}from"../../chunks/app-Dx9GREdf.js";

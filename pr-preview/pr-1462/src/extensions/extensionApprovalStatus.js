@@ -1,1 +1,1 @@
-export{_k as ExtensionApprovalStatusProvider,vk as ExtensionApprovalStatusStore,yk as useExtensionApprovalStatus,bk as useExtensionApprovalStatuses}from"../../chunks/app-CLF_eqaC.js";
+export{_k as ExtensionApprovalStatusProvider,vk as ExtensionApprovalStatusStore,yk as useExtensionApprovalStatus,bk as useExtensionApprovalStatuses}from"../../chunks/app-Dx9GREdf.js";

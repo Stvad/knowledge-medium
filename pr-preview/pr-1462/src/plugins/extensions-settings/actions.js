@@ -1,1 +1,1 @@
-export{or as openExtensionsSettingsAction}from"../../../chunks/app-CLF_eqaC.js";
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-Dx9GREdf.js";

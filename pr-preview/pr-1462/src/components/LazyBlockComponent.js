@@ -1,1 +1,1 @@
-export{BA as LazyBlockComponent}from"../../chunks/app-CLF_eqaC.js";
+export{BA as LazyBlockComponent}from"../../chunks/app-Dx9GREdf.js";

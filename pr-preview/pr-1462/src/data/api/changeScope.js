@@ -1,1 +1,1 @@
-export{Itt as CHANGE_SCOPE_POLICIES,Ltt as ChangeScope,Rtt as isChangeScope,ztt as policyForScope,Btt as scopeAllowedInReadOnly,Vtt as scopeIsUndoable,Htt as scopePoliciesEquivalent,Utt as scopeUploadsToServer,Wtt as sourceForScope}from"../../../chunks/app-CLF_eqaC.js";
+export{Itt as CHANGE_SCOPE_POLICIES,Ltt as ChangeScope,Rtt as isChangeScope,ztt as policyForScope,Btt as scopeAllowedInReadOnly,Vtt as scopeIsUndoable,Htt as scopePoliciesEquivalent,Utt as scopeUploadsToServer,Wtt as sourceForScope}from"../../../chunks/app-Dx9GREdf.js";

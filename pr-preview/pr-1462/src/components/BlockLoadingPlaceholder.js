@@ -1,1 +1,1 @@
-export{UA as BlockLoadingPlaceholder}from"../../chunks/app-CLF_eqaC.js";
+export{UA as BlockLoadingPlaceholder}from"../../chunks/app-Dx9GREdf.js";

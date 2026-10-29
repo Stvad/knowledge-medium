@@ -1,1 +1,1 @@
-export{YO as BlockPasteShellDecorator,XO as blockPasteShellDecorator}from"../../chunks/app-CLF_eqaC.js";
+export{YO as BlockPasteShellDecorator,XO as blockPasteShellDecorator}from"../../chunks/app-Dx9GREdf.js";

@@ -1,1 +1,1 @@
-export{kW as charLimitProp,AW as charProfileProp,jW as charScopeProp}from"../../../chunks/app-CLF_eqaC.js";
+export{kW as charLimitProp,AW as charProfileProp,jW as charScopeProp}from"../../../chunks/app-Dx9GREdf.js";
