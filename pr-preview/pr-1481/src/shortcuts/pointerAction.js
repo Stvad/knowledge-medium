@@ -1,0 +1,1 @@
+export{XA as dispatchPointerAction,ZA as setPointerActionDispatcher}from"../../chunks/app-BBNVXogN.js";

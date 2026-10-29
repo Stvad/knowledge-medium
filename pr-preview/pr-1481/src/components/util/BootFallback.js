@@ -1,0 +1,1 @@
+export{CV as BootFallback}from"../../../chunks/app-BBNVXogN.js";

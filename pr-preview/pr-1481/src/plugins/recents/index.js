@@ -1,0 +1,1 @@
+export{Nw as OPEN_RECENTS_ACTION_ID,Pw as openRecentsAction,Fw as recentsHeaderItem,Iw as recentsPlugin}from"../../../chunks/app-BBNVXogN.js";

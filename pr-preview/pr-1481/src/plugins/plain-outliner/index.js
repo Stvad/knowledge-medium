@@ -1,0 +1,1 @@
+export{hS as plainOutlinerPlugin}from"../../../chunks/app-BBNVXogN.js";

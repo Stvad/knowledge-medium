@@ -1,0 +1,1 @@
+export{KV as staticDataExtensions}from"../../chunks/app-BBNVXogN.js";

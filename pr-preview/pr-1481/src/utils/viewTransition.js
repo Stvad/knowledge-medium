@@ -1,0 +1,1 @@
+export{Iz as withMoveTransition}from"../../chunks/app-BBNVXogN.js";

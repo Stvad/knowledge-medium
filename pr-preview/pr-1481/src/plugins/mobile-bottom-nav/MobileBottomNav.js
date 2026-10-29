@@ -1,0 +1,1 @@
+export{nS as MobileBottomNav}from"../../../chunks/app-BBNVXogN.js";

@@ -1,0 +1,1 @@
+export{KG as contributorAttributionProcessor}from"../../../chunks/app-BBNVXogN.js";

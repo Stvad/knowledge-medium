@@ -1,0 +1,1 @@
+export{Ig as useIsReadOnly}from"../../chunks/app-BBNVXogN.js";

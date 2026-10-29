@@ -1,0 +1,1 @@
+export{iG as dailyNotesDataExtension}from"../../../chunks/app-BBNVXogN.js";

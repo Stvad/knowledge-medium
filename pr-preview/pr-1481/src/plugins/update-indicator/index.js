@@ -1,0 +1,1 @@
+export{Jm as updateIndicatorPlugin}from"../../../chunks/app-BBNVXogN.js";

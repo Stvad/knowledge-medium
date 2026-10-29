@@ -1,0 +1,1 @@
+export{fS as getBreadcrumbContentPreview}from"../../../chunks/app-BBNVXogN.js";

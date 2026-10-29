@@ -1,0 +1,1 @@
+export{uk as kernelPropertyUiExtension,dk as typesPropertyUi,fk as typesPropertyUiExtension}from"../../../chunks/app-BBNVXogN.js";

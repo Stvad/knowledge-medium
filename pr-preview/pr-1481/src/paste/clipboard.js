@@ -1,0 +1,1 @@
+export{kP as readClipboardContent}from"../../chunks/app-BBNVXogN.js";

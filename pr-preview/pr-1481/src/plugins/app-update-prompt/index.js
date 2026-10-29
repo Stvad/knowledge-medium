@@ -1,0 +1,1 @@
+export{DA as appUpdatePromptExtension}from"../../../chunks/app-BBNVXogN.js";

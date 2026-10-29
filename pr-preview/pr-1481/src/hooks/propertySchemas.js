@@ -1,0 +1,1 @@
+export{UB as usePropertySchemas}from"../../chunks/app-BBNVXogN.js";

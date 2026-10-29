@@ -1,0 +1,1 @@
+export{$Q as kernelDataExtension}from"../../chunks/app-BBNVXogN.js";

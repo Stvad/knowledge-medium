@@ -1,0 +1,1 @@
+export{Rnt as definePostCommitProcessor}from"../../../chunks/app-BBNVXogN.js";

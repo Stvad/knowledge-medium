@@ -1,0 +1,1 @@
+export{UN as ExtensionRenderBoundary}from"../../chunks/app-BBNVXogN.js";

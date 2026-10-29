@@ -1,0 +1,1 @@
+export{SI as BlockProperties}from"../../chunks/app-BBNVXogN.js";

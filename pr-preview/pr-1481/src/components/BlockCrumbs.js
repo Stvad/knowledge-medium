@@ -1,0 +1,1 @@
+export{yT as BlockCrumbs}from"../../chunks/app-BBNVXogN.js";

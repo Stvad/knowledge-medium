@@ -1,0 +1,1 @@
+export{Py as videoPlayerPlugin}from"../../../chunks/app-BBNVXogN.js";

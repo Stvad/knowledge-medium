@@ -1,0 +1,2 @@
+import{i as e,t}from"../../chunks/rolldown-runtime-CNOWq4Kh.js";import{t as n}from"../../chunks/react-dom-server.browser.production-RCD_tVy-.js";var r=e(t((e=>{var t=n();e.version=t.version,e.prerender=t.prerender,e.resumeAndPrerender=t.resumeAndPrerender}))(),1),i=r.default,a=r.prerender,o=r.resumeAndPrerender,s=r.version;export{i as default,a as prerender,o as resumeAndPrerender,s as version};
+//# sourceMappingURL=react-dom-static.js.map

@@ -1,0 +1,1 @@
+export{aK as characterCounterDataExtension}from"../../../chunks/app-BBNVXogN.js";

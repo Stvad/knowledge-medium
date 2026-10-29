@@ -1,0 +1,1 @@
+export{tW as geoDataExtension}from"../../../chunks/app-BBNVXogN.js";

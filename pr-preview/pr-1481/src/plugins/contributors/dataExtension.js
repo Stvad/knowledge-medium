@@ -1,0 +1,1 @@
+export{UG as contributorsDataExtension}from"../../../chunks/app-BBNVXogN.js";

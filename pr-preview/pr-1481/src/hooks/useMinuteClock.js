@@ -1,0 +1,1 @@
+export{Kw as useMinuteClock}from"../../chunks/app-BBNVXogN.js";

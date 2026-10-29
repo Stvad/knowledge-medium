@@ -1,0 +1,1 @@
+export{VB as floatingAnchorFromRect,HB as useAnchoredFloating}from"../../../chunks/app-BBNVXogN.js";

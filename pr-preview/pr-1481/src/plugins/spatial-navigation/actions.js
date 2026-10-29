@@ -1,0 +1,1 @@
+export{ix as extendSelectionToSpatialTarget,ax as getSpatialNavigationActionTransforms,ox as getSpatialNavigationActions,sx as getSpatialNavigationDispatchDecorators,cx as spatialNavigationActionDecoratorsExtension,lx as spatialNavigationActionsExtension,ux as spatialSelectionClickDecorator}from"../../../chunks/app-BBNVXogN.js";

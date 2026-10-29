@@ -1,0 +1,1 @@
+export{mS as BreadcrumbList}from"../../../chunks/app-BBNVXogN.js";

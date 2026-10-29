@@ -1,0 +1,1 @@
+export{CG as annotationsDataExtension}from"../../../chunks/app-BBNVXogN.js";

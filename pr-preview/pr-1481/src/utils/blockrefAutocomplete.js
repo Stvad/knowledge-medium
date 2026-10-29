@@ -1,0 +1,1 @@
+export{fg as blockrefCompletionSource}from"../../chunks/app-BBNVXogN.js";

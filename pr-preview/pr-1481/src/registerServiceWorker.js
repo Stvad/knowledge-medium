@@ -1,0 +1,1 @@
+export{IA as checkForAppUpdate,LA as registerServiceWorker}from"../chunks/app-BBNVXogN.js";

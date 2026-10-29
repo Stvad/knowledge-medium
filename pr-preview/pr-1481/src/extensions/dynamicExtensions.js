@@ -1,0 +1,1 @@
+export{dj as dynamicExtensionsExtension}from"../../chunks/app-BBNVXogN.js";

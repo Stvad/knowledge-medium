@@ -1,0 +1,1 @@
+export{OW as matchCharTrigger}from"../../chunks/app-BBNVXogN.js";

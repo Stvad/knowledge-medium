@@ -1,0 +1,1 @@
+export{Ad as agentDispatchCompanionPlugin}from"../../../chunks/app-BBNVXogN.js";

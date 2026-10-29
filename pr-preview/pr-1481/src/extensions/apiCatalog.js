@@ -1,0 +1,1 @@
+export{gf as extensionApiCatalog,_f as extensionApiRuntimeExports}from"../../chunks/app-BBNVXogN.js";
