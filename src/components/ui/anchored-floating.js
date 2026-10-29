@@ -1,1 +1,1 @@
-export{DB as floatingAnchorFromRect,OB as useAnchoredFloating}from"../../../chunks/app-C4CXWwHy.js";
+export{OB as floatingAnchorFromRect,kB as useAnchoredFloating}from"../../../chunks/app-lMOq0JpP.js";
