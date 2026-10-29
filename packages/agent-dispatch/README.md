@@ -137,6 +137,8 @@ kmagent --profile agent-dispatch contributor create "Dispatch" --kind automation
 
 Creation selects the profile. To reuse one, run `contributor use <id>` with the same profile/workspace flags; `contributor use none` explicitly opts out. From a repo checkout, use `pnpm agent` in place of `kmagent`. The daemon and its spawned agents use this saved choice; restart the daemon after changing it. Without a choice, active dispatch stops with setup instructions before contacting the bridge. Disabling all watchers can still clear their registration without a contributor.
 
+The contributor is credited only with the agent's own writes: its replies, and whatever its run changes through the km tools. The daemon's `agent:*` bookkeeping on the block that mentioned it (claim, progress, session, completion, cancel) records no attribution, so a person's note keeps exactly the authors who wrote it.
+
 ## Install from npm
 
 If you only want to *run* the daemon (not hack on the repo), install the published packages instead of cloning. You need **both**: `agent-dispatch` (the daemon) and `agent-cli` (the `kmagent` bridge it reaches the live app through).
