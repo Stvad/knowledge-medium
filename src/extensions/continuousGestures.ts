@@ -8,7 +8,7 @@
  * NAME + the block's deps; the loop dispatches it via `dispatchGesture`, so the
  * recognizer never names the action. See `docs/continuous-gesture-triggers.md`.
  *
- * This module owns four cross-cutting concerns so recognizers don't each
+ * This module owns five cross-cutting concerns so recognizers don't each
  * re-implement them (the bespoke `swipeGesture.ts` / `dateScrubGesture.ts`
  * machinery this replaces did):
  *  - the per-block pointer SESSION (which pointers are down, where), built from
@@ -26,7 +26,9 @@
  *    of re-checking it in every handler. Per-event OWNERSHIP (pointer type,
  *    finger count, interactive target) is the separate concern that stays in the
  *    handlers;
- *  - the non-passive listener + `touch-action` SEAM for scroll suppression.
+ *  - the non-passive listener + `touch-action` SEAM for scroll suppression;
+ *  - HOLDS — a recognizer's `onHold` runs on a timer the loop arms and
+ *    drops, and a handled commit spends the rest of the pointer session.
  *
  * Recognition that the model can't express stays possible: a plugin can ignore
  * this facet, contribute raw `blockContentSurfacePropsFacet` handlers, and reach
