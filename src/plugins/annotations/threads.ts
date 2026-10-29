@@ -56,7 +56,7 @@ export class InvalidQuoteError extends Error {
 export const isThreadRefusal = (error: unknown): error is Error =>
   error instanceof AnchorChangedError || error instanceof UnannotatableTargetError || error instanceof InvalidQuoteError
 
-const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+export const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
 
 /** Anchors come from `captureAnchor` in the app, but agents and the bridge
  *  build their own. */
@@ -85,6 +85,11 @@ export interface CreatedThread {
   commentId: string | null
 }
 
+export interface CreateThreadOptions {
+  /** The transaction's description; an agent write names its own verb. */
+  description?: string
+}
+
 /** One undo step: the thread root and its first comment. A workspace's first
  *  comment also creates the container, outside the undo step.
  *
@@ -94,6 +99,7 @@ export interface CreatedThread {
 export const createThread = async (
   repo: Repo,
   {targetId, anchor, comment}: CreateThreadArgs,
+  options: CreateThreadOptions = {},
 ): Promise<CreatedThread> => {
   if (anchor) assertQuotable(anchor)
   const target = await repo.load(targetId)
@@ -136,7 +142,10 @@ export const createThread = async (
       ? await tx.run(createChild, {parentId: threadId, content: comment})
       : null
     return {threadId, commentId}
-  }, {scope: ChangeScope.BlockDefault, description: anchor ? 'comment on selection' : 'comment on block'})
+  }, {
+    scope: ChangeScope.BlockDefault,
+    description: options.description ?? (anchor ? 'comment on selection' : 'comment on block'),
+  })
 }
 
 /** An empty reply under the comment being answered (or under the root, for a
