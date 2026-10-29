@@ -35,8 +35,8 @@ import { PANEL_SELECTOR, resolveDropTarget, ROW_SELECTOR, type DropLine, type Dr
  *  the press stays a click that opens the block. */
 const DRAG_THRESHOLD_PX = 4
 /** How long a touch must rest on the bullet to pick its block up, and how
- *  far it may wander meanwhile (and after, before the drag starts):
- *  UIKit's long-press defaults. */
+ *  far it may wander meanwhile: UIKit's long-press defaults. The same
+ *  slop then separates a lifted block from a drag. */
 export const TOUCH_HOLD_MS = 500
 export const TOUCH_SLOP_PX = 10
 /** Distance from a scroll container's top/bottom edge where auto-scroll
@@ -74,7 +74,7 @@ interface Session {
   /** `held`: a touch rested through the hold and the block is lifted, but
    *  it hasn't moved yet. */
   phase: 'pending' | 'held' | 'dragging' | 'cancelled'
-  holdTimer: number | null
+  holdTimer: number | undefined
   x: number
   y: number
   /** The bullet's own block until the payload resolves. */
@@ -140,7 +140,7 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
       y: event.clientY,
       payload,
       phase: 'pending',
-      holdTimer: null,
+      holdTimer: undefined,
       draggedIds: new Set([blockId]),
       frame: null,
       scroller: null,
@@ -163,8 +163,8 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     document.addEventListener('scroll', onScroll, {capture: true, passive: true})
   }
 
-  /** Runs only for a live, still-pending press: `end` clears the timer, and
-   *  a touch that moves before it fires ends the session. */
+  /** Runs only for a live, still-pending press: every other way out of
+   *  `pending` (`end`, `cancel`) clears the timer. */
   const onHold = (current: Session) => {
     current.phase = 'held'
     lift(current)
@@ -182,9 +182,11 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     const distance = Math.hypot(session.x - session.startX, session.y - session.startY)
     if (session.phase === 'pending') {
       if (distance < (session.touch ? TOUCH_SLOP_PX : DRAG_THRESHOLD_PX)) return
-      // A touch that moves before the hold is a swipe, not a drag.
+      // A touch that moves before the hold is a swipe, not a drag. Cancelled
+      // rather than ended: iOS still clicks the bullet after a short one,
+      // and that click must not open the block.
       if (session.touch) {
-        end()
+        cancel(session)
         return
       }
       begin(session)
@@ -198,13 +200,17 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
   const begin = (current: Session) => {
     const lifted = current.phase === 'held'
     current.phase = 'dragging'
-    if (!lifted) lift(current)
+    if (lifted) return
+    // A mouse press-drag may have selected text on its way. A touch on the
+    // bullet selects none (`user-select: none`), and clearing would strand
+    // a focused editor's caret.
+    window.getSelection()?.removeAllRanges()
+    lift(current)
   }
 
   /** Dim the dragged rows — the bullet's block at once, the whole
    *  selection once it resolves. */
   const lift = (current: Session) => {
-    window.getSelection()?.removeAllRanges()
     document.documentElement.setAttribute(DRAG_ACTIVE_ATTRIBUTE, '')
     markDragged(current.draggedIds)
     publish({active: true, line: null})
@@ -325,17 +331,19 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     else end()
   }
 
-  /** Escape: drop the visuals now, but keep listening until the button
-   *  comes up so its click can be swallowed rather than open the block. */
+  /** Escape, a lost focus, or a touch that moved before its hold: drop the
+   *  visuals now, but keep listening until the button comes up so its click
+   *  can be swallowed rather than open the block. */
   const cancel = (current: Session) => {
     current.phase = 'cancelled'
+    clearTimeout(current.holdTimer)
     clearVisuals()
   }
 
   const end = () => {
     if (!session) return
     if (session.frame !== null) cancelAnimationFrame(session.frame)
-    if (session.holdTimer !== null) clearTimeout(session.holdTimer)
+    clearTimeout(session.holdTimer)
     session = null
     window.removeEventListener('contextmenu', onContextMenu, true)
     window.removeEventListener('pointermove', onPointerMove, true)

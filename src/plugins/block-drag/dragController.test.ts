@@ -232,6 +232,13 @@ describe('block drag controller', () => {
     expect(mocks.moveBlocksTo).toHaveBeenCalledWith(repo, ['b'], TARGET.move)
   })
 
+  it('a mouse drag clears the text selection its press may have started', () => {
+    window.getSelection()!.selectAllChildren(document.querySelector('[data-block-id="b"]')!)
+    drag('a', {release: false})
+    expect(window.getSelection()!.rangeCount).toBe(0)
+    pointer('pointerup', window, 40, 60)
+  })
+
   it('dims the dragged rows while the drag runs', () => {
     drag('a', {release: false})
     expect(document.querySelector(`[data-block-id="a"]`)!.hasAttribute(DRAGGING_ROW_ATTRIBUTE)).toBe(true)
@@ -379,7 +386,7 @@ describe('block drag controller', () => {
       touch('pointerup', window, 10, 10)
     })
 
-    it('a touch that moves before the hold elapses is not a drag', async () => {
+    it('a touch that moves before the hold is not a drag, and its click does not open the block', async () => {
       touch('pointerdown', bullet('a'), 10, 10)
       vi.advanceTimersByTime(100)
       touch('pointermove', window, 10, 10 + TOUCH_SLOP_PX + 1)
@@ -388,9 +395,23 @@ describe('block drag controller', () => {
       expect(isDimmed('a')).toBe(false)
       touch('pointerup', window, 40, 60)
 
+      // iOS still clicks the bullet after a short flick.
+      expect(clickReaches('a')).toBe(false)
       await settle()
       expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
       expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+    })
+
+    it('keeps the page\'s text selection, so a focused editor keeps its caret', () => {
+      const text = document.createElement('p')
+      text.textContent = 'being edited'
+      document.body.append(text)
+      window.getSelection()!.selectAllChildren(text)
+      touch('pointerdown', bullet('a'), 10, 10)
+      vi.advanceTimersByTime(TOUCH_HOLD_MS)
+      touch('pointermove', window, 40, 60)
+      expect(window.getSelection()!.rangeCount).toBe(1)
+      touch('pointerup', window, 40, 60)
     })
 
     it('jitter within the slop neither cancels the hold nor starts the drag', () => {
@@ -422,7 +443,8 @@ describe('block drag controller', () => {
     it('a native context menu during the hold is held back for the release to decide', () => {
       const menus = contextMenus()
       touch('pointerdown', bullet('a'), 10, 10)
-      bullet('a').dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))
+      const notPrevented = bullet('a').dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))
+      expect(notPrevented).toBe(false)
       expect(menus).toHaveLength(0)
       vi.advanceTimersByTime(TOUCH_HOLD_MS)
       touch('pointermove', window, 40, 60)
