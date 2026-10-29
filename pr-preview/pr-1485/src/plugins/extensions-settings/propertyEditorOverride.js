@@ -1,1 +1,1 @@
-export{Xn as extensionsOverridesUi}from"../../../chunks/app-CU-XOSSx.js";
+export{Xn as extensionsOverridesUi}from"../../../chunks/app-C1rsLWpp.js";

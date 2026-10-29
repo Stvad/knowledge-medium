@@ -1,1 +1,1 @@
-export{zM as BlockTypeBlockRenderer,BM as BlockTypeContentRenderer,VM as writeBlockTypeLabel}from"../../../chunks/app-CU-XOSSx.js";
+export{zM as BlockTypeBlockRenderer,BM as BlockTypeContentRenderer,VM as writeBlockTypeLabel}from"../../../chunks/app-C1rsLWpp.js";

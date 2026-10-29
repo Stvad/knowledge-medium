@@ -1,1 +1,1 @@
-export{pA as extensionPromptStore,mA as pendingExtensionPrompts}from"../../../chunks/app-CU-XOSSx.js";
+export{pA as extensionPromptStore,mA as pendingExtensionPrompts}from"../../../chunks/app-C1rsLWpp.js";

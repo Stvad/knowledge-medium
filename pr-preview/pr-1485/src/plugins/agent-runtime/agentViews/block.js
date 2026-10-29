@@ -1,1 +1,1 @@
-export{Np as buildBlockView,Pp as renderBlockView}from"../../../../chunks/app-CU-XOSSx.js";
+export{Np as buildBlockView,Pp as renderBlockView}from"../../../../chunks/app-C1rsLWpp.js";

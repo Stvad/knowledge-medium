@@ -1,1 +1,1 @@
-export{$m as UpdateIndicator}from"../../../chunks/app-CU-XOSSx.js";
+export{$m as UpdateIndicator}from"../../../chunks/app-C1rsLWpp.js";

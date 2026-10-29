@@ -1,1 +1,1 @@
-export{VQ as Block,HQ as requireLoadedBlock}from"../../chunks/app-CU-XOSSx.js";
+export{VQ as Block,HQ as requireLoadedBlock}from"../../chunks/app-C1rsLWpp.js";

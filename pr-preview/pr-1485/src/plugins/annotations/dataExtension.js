@@ -1,1 +1,1 @@
-export{pG as annotationsDataExtension}from"../../../chunks/app-CU-XOSSx.js";
+export{pG as annotationsDataExtension}from"../../../chunks/app-C1rsLWpp.js";

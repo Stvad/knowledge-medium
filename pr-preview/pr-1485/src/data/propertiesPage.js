@@ -1,1 +1,1 @@
-export{C7 as getOrCreatePropertiesPage,w7 as propertiesPageBlockId}from"../../chunks/app-CU-XOSSx.js";
+export{C7 as getOrCreatePropertiesPage,w7 as propertiesPageBlockId}from"../../chunks/app-C1rsLWpp.js";

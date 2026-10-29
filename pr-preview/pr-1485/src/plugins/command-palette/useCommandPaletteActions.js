@@ -1,1 +1,1 @@
-export{WD as useCommandPaletteActions}from"../../../chunks/app-CU-XOSSx.js";
+export{WD as useCommandPaletteActions}from"../../../chunks/app-C1rsLWpp.js";

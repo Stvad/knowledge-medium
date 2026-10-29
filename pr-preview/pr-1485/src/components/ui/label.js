@@ -1,1 +1,1 @@
-export{JT as Label}from"../../../chunks/app-CU-XOSSx.js";
+export{JT as Label}from"../../../chunks/app-C1rsLWpp.js";

@@ -1,1 +1,1 @@
-export{FB as PropertyShapeButton,IB as PropertyShapeGlyph}from"../../../chunks/app-CU-XOSSx.js";
+export{FB as PropertyShapeButton,IB as PropertyShapeGlyph}from"../../../chunks/app-C1rsLWpp.js";

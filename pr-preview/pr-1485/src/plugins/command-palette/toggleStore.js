@@ -1,1 +1,1 @@
-export{pO as commandPaletteToggle}from"../../../chunks/app-CU-XOSSx.js";
+export{pO as commandPaletteToggle}from"../../../chunks/app-C1rsLWpp.js";
