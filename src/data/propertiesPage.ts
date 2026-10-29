@@ -14,8 +14,10 @@ export const propertiesPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, PROPERTIES_PAGE_NS)
 
 export const getOrCreatePropertiesPage = (repo: Repo, workspaceId: string): Promise<Block> =>
+  // A container of definitions, so its create never joins an undo step (see
+  // `getOrCreateKernelPage`).
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: PROPERTIES_PAGE_NS,
     alias: PROPERTIES_ALIAS,
     markerType: PROPERTIES_PAGE_TYPE,
-  })
+  }, {skipUndo: true})

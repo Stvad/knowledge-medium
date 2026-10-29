@@ -20,6 +20,8 @@ export const locationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, LOCATIONS_PAGE_NS)
 
 export const getOrCreateLocationsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
+  // A container of places, so its create never joins an undo step (see
+  // `getOrCreateKernelPage`).
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: LOCATIONS_PAGE_NS,
     alias: LOCATIONS_ALIAS,
@@ -29,4 +31,4 @@ export const getOrCreateLocationsPage = (repo: Repo, workspaceId: string): Promi
     // automatically heals existing pages: kernelPage's repair path
     // sees the missing marker on next createOrFindPlace and adds it.
     markerType: MAP_TYPE,
-  })
+  }, {skipUndo: true})

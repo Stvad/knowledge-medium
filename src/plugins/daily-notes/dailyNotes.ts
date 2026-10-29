@@ -110,11 +110,14 @@ export const getOrCreateJournalBlock = async (
   repo: Repo,
   workspaceId: string,
 ): Promise<Block> =>
+  // A container of every device's daily notes, so its create never joins an
+  // undo step (see `getOrCreateKernelPage`): undoing a day's first note leaves
+  // the Journal.
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: JOURNAL_NS,
     alias: JOURNAL_ALIAS,
     markerType: null,
-  })
+  }, {skipUndo: true})
 
 /** Order key under the journal page. The tree uses normal ascending
  *  `(order_key, id)` ordering, so daily notes encode the date as its
