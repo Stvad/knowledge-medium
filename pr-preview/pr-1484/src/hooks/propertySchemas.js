@@ -1,0 +1,1 @@
+export{AB as usePropertySchemas}from"../../chunks/app-IRp4F-qQ.js";

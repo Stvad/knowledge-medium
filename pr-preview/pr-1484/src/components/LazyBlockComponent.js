@@ -1,0 +1,1 @@
+export{zj as LazyBlockComponent}from"../../chunks/app-IRp4F-qQ.js";

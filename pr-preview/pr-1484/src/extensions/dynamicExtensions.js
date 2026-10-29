@@ -1,0 +1,1 @@
+export{ij as dynamicExtensionsExtension}from"../../chunks/app-IRp4F-qQ.js";

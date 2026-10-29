@@ -1,0 +1,1 @@
+export{F4 as parsePropertyDefinitionMetadata,I4 as propertySchemaOriginForSeedKey}from"../../chunks/app-IRp4F-qQ.js";

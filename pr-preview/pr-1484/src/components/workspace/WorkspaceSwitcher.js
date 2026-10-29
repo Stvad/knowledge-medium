@@ -1,0 +1,1 @@
+export{IS as WorkspaceSwitcher}from"../../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{lM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,uM as openExtensionsSettings}from"../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{DQ as applySyncInvalidation}from"../../../../chunks/app-IRp4F-qQ.js";

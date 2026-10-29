@@ -1,0 +1,1 @@
+export{Q7 as deriveWorkspaceIdNamespace}from"../../../chunks/app-IRp4F-qQ.js";

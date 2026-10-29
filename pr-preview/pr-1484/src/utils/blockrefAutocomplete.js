@@ -1,0 +1,1 @@
+export{pg as blockrefCompletionSource}from"../../chunks/app-IRp4F-qQ.js";

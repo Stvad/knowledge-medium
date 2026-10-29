@@ -1,0 +1,1 @@
+export{AP as defaultPasteDecision,jP as pasteDecisionVerb}from"../../chunks/app-IRp4F-qQ.js";

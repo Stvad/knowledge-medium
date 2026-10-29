@@ -1,0 +1,1 @@
+export{WP as useShortcutSurfaceActivations}from"../../chunks/app-IRp4F-qQ.js";

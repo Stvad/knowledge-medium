@@ -1,0 +1,1 @@
+export{srt as CHANGE_SCOPE_POLICIES,crt as ChangeScope,lrt as isChangeScope,urt as policyForScope,drt as scopeAllowedInReadOnly,frt as scopeIsUndoable,prt as scopePoliciesEquivalent,mrt as scopeUploadsToServer,hrt as sourceForScope}from"../../../chunks/app-IRp4F-qQ.js";

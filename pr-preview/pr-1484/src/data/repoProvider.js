@@ -1,0 +1,1 @@
+export{mV as BATCH_SENTINEL_SQL,hV as closePowerSyncDbIfOpen,gV as ensurePowerSyncReady,_V as getActiveSyncResolver,vV as getActiveUserId,yV as getPowerSyncDb,bV as initializeClientSchema,xV as isRemoteSyncActive,SV as syncObserverDepsFor,CV as syncResolverForUser,wV as webDatabaseOptions}from"../../chunks/app-IRp4F-qQ.js";

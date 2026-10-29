@@ -1,0 +1,1 @@
+export{Jm as BlockMetaCard}from"../../../chunks/app-IRp4F-qQ.js";

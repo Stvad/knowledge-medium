@@ -1,0 +1,1 @@
+export{nj as resolveAppRuntime,rj as resolveAppRuntimeSync}from"../../chunks/app-IRp4F-qQ.js";

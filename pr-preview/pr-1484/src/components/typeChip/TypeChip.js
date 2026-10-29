@@ -1,0 +1,1 @@
+export{lk as TypeChip}from"../../../chunks/app-IRp4F-qQ.js";

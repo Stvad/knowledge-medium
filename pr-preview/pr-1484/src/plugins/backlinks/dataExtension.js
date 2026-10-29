@@ -1,0 +1,1 @@
+export{QG as backlinksDataExtension}from"../../../chunks/app-IRp4F-qQ.js";

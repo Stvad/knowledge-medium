@@ -1,0 +1,1 @@
+export{v7 as getOrCreatePropertiesPage,y7 as propertiesPageBlockId}from"../../chunks/app-IRp4F-qQ.js";

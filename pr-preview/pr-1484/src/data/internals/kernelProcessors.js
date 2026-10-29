@@ -1,0 +1,1 @@
+export{j$ as KERNEL_PROCESSORS}from"../../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{Bw as useMinuteClock}from"../../chunks/app-IRp4F-qQ.js";

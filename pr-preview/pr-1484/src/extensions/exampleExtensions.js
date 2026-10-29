@@ -1,0 +1,1 @@
+export{Ik as exampleExtensions,Lk as insertExampleExtensionsUnder}from"../../chunks/app-IRp4F-qQ.js";

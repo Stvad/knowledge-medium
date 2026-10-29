@@ -1,0 +1,1 @@
+export{MP as captureMediaVerb}from"../../chunks/app-IRp4F-qQ.js";

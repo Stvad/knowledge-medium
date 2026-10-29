@@ -1,0 +1,1 @@
+export{PN as ExtensionRenderBoundary}from"../../chunks/app-IRp4F-qQ.js";

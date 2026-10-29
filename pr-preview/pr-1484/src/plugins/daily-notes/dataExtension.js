@@ -1,0 +1,1 @@
+export{GW as dailyNotesDataExtension}from"../../../chunks/app-IRp4F-qQ.js";

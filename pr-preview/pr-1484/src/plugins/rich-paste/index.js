@@ -1,0 +1,1 @@
+export{a_ as richPastePlugin}from"../../../chunks/app-IRp4F-qQ.js";

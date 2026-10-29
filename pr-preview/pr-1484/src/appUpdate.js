@@ -1,0 +1,1 @@
+export{jA as appUpdate,MA as useAppUpdateAvailable}from"../chunks/app-IRp4F-qQ.js";

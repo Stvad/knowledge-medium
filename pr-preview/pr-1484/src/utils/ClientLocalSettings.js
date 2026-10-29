@@ -1,0 +1,1 @@
+export{ej as ClientLocalSettings,tj as clientLocalSettings}from"../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{OB as floatingAnchorFromRect,kB as useAnchoredFloating}from"../../../chunks/app-IRp4F-qQ.js";

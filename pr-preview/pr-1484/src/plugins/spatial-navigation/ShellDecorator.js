@@ -1,0 +1,1 @@
+export{qb as SpatialNavigationShellDecorator}from"../../../chunks/app-IRp4F-qQ.js";

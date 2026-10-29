@@ -1,0 +1,1 @@
+export{RG as CONTRIBUTOR_TYPE,zG as attributionCreatorsProp,BG as attributionEditorsProp,VG as contributorForProp,HG as contributorKindOf,UG as contributorKindProp,WG as contributorProfileType,GG as contributorRoleProp}from"../../../chunks/app-IRp4F-qQ.js";

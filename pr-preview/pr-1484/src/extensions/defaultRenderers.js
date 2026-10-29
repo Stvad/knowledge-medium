@@ -1,0 +1,1 @@
+export{Gj as defaultRegistry,Kj as defaultRendererContributions,qj as defaultRenderersExtension}from"../../chunks/app-IRp4F-qQ.js";

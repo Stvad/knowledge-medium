@@ -1,0 +1,1 @@
+export{gh as inlineBacklinksApplies}from"../../../../chunks/app-IRp4F-qQ.js";

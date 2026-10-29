@@ -1,0 +1,1 @@
+export{Fq as agentDispatchCompanionDataExtension}from"../../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{RI as declarationOnlyDefinitionForName,zI as declarationOnlyStatusText}from"../../../chunks/app-IRp4F-qQ.js";

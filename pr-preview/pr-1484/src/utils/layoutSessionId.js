@@ -1,0 +1,1 @@
+export{J8 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Y8 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,X8 as __resetLayoutSessionIdForTesting,Z8 as getLayoutSessionId,Q8 as isInstalledAppDisplayMode,$8 as readOrCreateLayoutSessionId}from"../../chunks/app-IRp4F-qQ.js";

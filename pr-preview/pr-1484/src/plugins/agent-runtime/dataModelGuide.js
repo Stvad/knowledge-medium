@@ -1,0 +1,1 @@
+export{Dm as DATA_MODEL_GUIDE,Om as dataModelGuide}from"../../../chunks/app-IRp4F-qQ.js";

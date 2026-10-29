@@ -1,0 +1,1 @@
+export{vu as getExtraRoamProps}from"../../../chunks/app-IRp4F-qQ.js";

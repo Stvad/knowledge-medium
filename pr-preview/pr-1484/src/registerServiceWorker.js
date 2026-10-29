@@ -1,0 +1,1 @@
+export{kA as checkForAppUpdate,AA as registerServiceWorker}from"../chunks/app-IRp4F-qQ.js";

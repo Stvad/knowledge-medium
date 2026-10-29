@@ -1,0 +1,1 @@
+export{qG as CHAR_COUNTER_TYPE,un as RAW_CHARACTER_COUNT_PROFILE_ID,fn as charCountDisplay,YG as charLimitProp,XG as charProfileProp,ZG as charScopeProp,dn as characterCountProfilesFacet,cn as characterCounterPlugin}from"../../../chunks/app-IRp4F-qQ.js";

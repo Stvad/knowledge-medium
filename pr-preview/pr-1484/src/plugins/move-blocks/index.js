@@ -1,0 +1,1 @@
+export{Pg as MOVE_BLOCKS_ACTION_ID,Fg as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Hg as MoveDestinationPicker,Bg as isWithinSubtreeOfAny,Ig as moveBlockAction,Lg as moveBlocksAction,jg as moveBlocksPlugin,Vg as moveBlocksTo,zg as unselectMovedBlocks}from"../../../chunks/app-IRp4F-qQ.js";

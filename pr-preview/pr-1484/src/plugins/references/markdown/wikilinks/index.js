@@ -1,0 +1,1 @@
+export{og as wikilinkMarkdownExtension}from"../../../../../chunks/app-IRp4F-qQ.js";

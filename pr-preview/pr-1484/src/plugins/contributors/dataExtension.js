@@ -1,0 +1,1 @@
+export{AG as contributorsDataExtension}from"../../../chunks/app-IRp4F-qQ.js";

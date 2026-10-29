@@ -1,0 +1,1 @@
+export{g7 as getOrCreateTypesPage,_7 as typesPageBlockId}from"../../chunks/app-IRp4F-qQ.js";

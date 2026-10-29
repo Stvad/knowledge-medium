@@ -1,0 +1,1 @@
+export{ek as BlockEmbed}from"../../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{PB as propertyShapeLabel}from"../../../chunks/app-IRp4F-qQ.js";

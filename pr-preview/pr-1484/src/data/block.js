@@ -1,0 +1,1 @@
+export{IQ as Block,LQ as requireLoadedBlock}from"../../chunks/app-IRp4F-qQ.js";

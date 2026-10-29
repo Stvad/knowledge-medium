@@ -1,0 +1,1 @@
+export{tI as defineVariant,nI as defineVariantFacet}from"../../chunks/app-IRp4F-qQ.js";

@@ -1,0 +1,1 @@
+export{yf as extensionsOverridesProp,bf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-IRp4F-qQ.js";

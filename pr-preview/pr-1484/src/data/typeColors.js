@@ -1,0 +1,1 @@
+export{dk as DEFAULT_TYPE_COLORS,fk as defaultTypeColor,pk as pickLeastUsedTypeColor}from"../../chunks/app-IRp4F-qQ.js";

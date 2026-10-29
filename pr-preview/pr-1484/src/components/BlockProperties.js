@@ -1,0 +1,1 @@
+export{fI as BlockProperties}from"../../chunks/app-IRp4F-qQ.js";

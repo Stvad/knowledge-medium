@@ -1,0 +1,1 @@
+export{ju as annotationsPlugin}from"../../../chunks/app-IRp4F-qQ.js";

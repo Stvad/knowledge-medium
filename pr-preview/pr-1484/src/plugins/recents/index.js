@@ -1,0 +1,1 @@
+export{Dw as OPEN_RECENTS_ACTION_ID,Ow as openRecentsAction,kw as recentsHeaderItem,Aw as recentsPlugin}from"../../../chunks/app-IRp4F-qQ.js";

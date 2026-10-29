@@ -1,0 +1,1 @@
+export{qm as blockInfoPlugin}from"../../../chunks/app-IRp4F-qQ.js";

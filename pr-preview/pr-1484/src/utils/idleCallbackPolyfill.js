@@ -1,0 +1,1 @@
+export{Ct as installIdleCallbackPolyfill}from"../../chunks/app-IRp4F-qQ.js";

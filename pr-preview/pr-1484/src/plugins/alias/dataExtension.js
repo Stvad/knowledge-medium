@@ -1,0 +1,1 @@
+export{bq as aliasDataExtension}from"../../../chunks/app-IRp4F-qQ.js";

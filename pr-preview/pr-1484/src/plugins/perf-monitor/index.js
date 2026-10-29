@@ -1,0 +1,1 @@
+export{sr as perfMonitorPlugin}from"../../../chunks/app-IRp4F-qQ.js";

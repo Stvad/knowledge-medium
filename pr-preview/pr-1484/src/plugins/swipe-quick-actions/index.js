@@ -1,0 +1,1 @@
+export{bO as SWIPE_QUICK_ACTIONS_GESTURE_ID,BO as SWIPE_RIGHT_BLOCK_ACTION_ID,yO as SwipeActionMenu,HO as quickActionItemsFacet,mO as swipeQuickActionsPlugin}from"../../../chunks/app-IRp4F-qQ.js";

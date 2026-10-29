@@ -1,0 +1,1 @@
+export{VD as useCommandPaletteActions}from"../../../chunks/app-IRp4F-qQ.js";
