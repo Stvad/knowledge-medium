@@ -1,1 +1,1 @@
-export{kb as getVimNormalModeActions,Ab as jumpVisibleBlocks,jb as vimNormalModeActionsExtension}from"../../../chunks/app-KQ8Lumc4.js";
+export{kb as getVimNormalModeActions,Ab as jumpVisibleBlocks,jb as vimNormalModeActionsExtension}from"../../../chunks/app-mmabgJ1G.js";

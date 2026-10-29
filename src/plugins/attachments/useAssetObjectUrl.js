@@ -1,1 +1,1 @@
-export{kv as useAssetObjectUrl}from"../../../chunks/app-KQ8Lumc4.js";
+export{kv as useAssetObjectUrl}from"../../../chunks/app-mmabgJ1G.js";

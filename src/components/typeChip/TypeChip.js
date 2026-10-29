@@ -1,1 +1,1 @@
-export{dk as TypeChip}from"../../../chunks/app-KQ8Lumc4.js";
+export{dk as TypeChip}from"../../../chunks/app-mmabgJ1G.js";

@@ -1,1 +1,1 @@
-export{GU as PLACES_UNDER_BLOCK_QUERY,KU as placesUnderBlockQuery}from"../../../chunks/app-KQ8Lumc4.js";
+export{GU as PLACES_UNDER_BLOCK_QUERY,KU as placesUnderBlockQuery}from"../../../chunks/app-mmabgJ1G.js";

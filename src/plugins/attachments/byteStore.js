@@ -1,1 +1,1 @@
-export{py as ASSETS_ROOT,my as InMemoryByteStore,hy as OpfsByteStore,gy as assetPathSegments,_y as createByteStore,vy as getByteStore}from"../../../chunks/app-KQ8Lumc4.js";
+export{py as ASSETS_ROOT,my as InMemoryByteStore,hy as OpfsByteStore,gy as assetPathSegments,_y as createByteStore,vy as getByteStore}from"../../../chunks/app-mmabgJ1G.js";
