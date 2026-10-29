@@ -1,1 +1,1 @@
-export{sk as editorAutocompleteExtension}from"../../chunks/app-DjgtAIrM.js";
+export{sk as editorAutocompleteExtension}from"../../chunks/app-CM7SCidV.js";

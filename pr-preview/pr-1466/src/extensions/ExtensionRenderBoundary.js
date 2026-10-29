@@ -1,1 +1,1 @@
-export{LM as ExtensionRenderBoundary}from"../../chunks/app-DjgtAIrM.js";
+export{LM as ExtensionRenderBoundary}from"../../chunks/app-CM7SCidV.js";

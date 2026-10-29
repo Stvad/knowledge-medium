@@ -1,1 +1,1 @@
-export{YA as defaultRegistry,qA as refreshRendererRegistry,JA as useRenderer}from"../../chunks/app-DjgtAIrM.js";
+export{YA as defaultRegistry,qA as refreshRendererRegistry,JA as useRenderer}from"../../chunks/app-CM7SCidV.js";

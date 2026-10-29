@@ -1,1 +1,1 @@
-export{iO as BlockEmbed}from"../../../chunks/app-DjgtAIrM.js";
+export{iO as BlockEmbed}from"../../../chunks/app-CM7SCidV.js";

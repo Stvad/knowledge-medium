@@ -1,1 +1,1 @@
-export{BO as exampleExtensions,VO as insertExampleExtensionsUnder}from"../../chunks/app-DjgtAIrM.js";
+export{BO as exampleExtensions,VO as insertExampleExtensionsUnder}from"../../chunks/app-CM7SCidV.js";

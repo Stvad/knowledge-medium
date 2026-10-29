@@ -1,1 +1,1 @@
-export{Y5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-DjgtAIrM.js";
+export{Y5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-CM7SCidV.js";

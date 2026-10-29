@@ -1,1 +1,1 @@
-export{uk as ExtensionPromptSurface,dk as extensionPromptsExtension}from"../../../chunks/app-DjgtAIrM.js";
+export{uk as ExtensionPromptSurface,dk as extensionPromptsExtension}from"../../../chunks/app-CM7SCidV.js";

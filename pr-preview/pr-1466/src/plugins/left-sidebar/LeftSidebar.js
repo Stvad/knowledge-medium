@@ -1,1 +1,1 @@
-export{jx as LeftSidebar,Mx as LeftSidebarCoreSection,Nx as LeftSidebarShortcutsSection}from"../../../chunks/app-DjgtAIrM.js";
+export{jx as LeftSidebar,Mx as LeftSidebarCoreSection,Nx as LeftSidebarShortcutsSection}from"../../../chunks/app-CM7SCidV.js";

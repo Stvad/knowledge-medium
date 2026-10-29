@@ -1,1 +1,1 @@
-export{jM as __resetDialogsForTests,MM as getDialogQueue,NM as isDialogOpenForWorkspace,PM as openDialog,FM as subscribeDialogs}from"../../chunks/app-DjgtAIrM.js";
+export{jM as __resetDialogsForTests,MM as getDialogQueue,NM as isDialogOpenForWorkspace,PM as openDialog,FM as subscribeDialogs}from"../../chunks/app-CM7SCidV.js";

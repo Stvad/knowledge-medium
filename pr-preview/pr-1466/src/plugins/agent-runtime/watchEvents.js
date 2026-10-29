@@ -1,1 +1,1 @@
-export{Sf as createWatchEventsRegistry,Cf as watchEventsRegistry}from"../../../chunks/app-DjgtAIrM.js";
+export{Sf as createWatchEventsRegistry,Cf as watchEventsRegistry}from"../../../chunks/app-CM7SCidV.js";

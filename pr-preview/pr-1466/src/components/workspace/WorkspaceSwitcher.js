@@ -1,1 +1,1 @@
-export{Bx as WorkspaceSwitcher}from"../../../chunks/app-DjgtAIrM.js";
+export{Bx as WorkspaceSwitcher}from"../../../chunks/app-CM7SCidV.js";

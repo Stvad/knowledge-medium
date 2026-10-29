@@ -1,1 +1,1 @@
-export{FC as RecentsList,IC as RecentsPageBlockRenderer}from"../../../chunks/app-DjgtAIrM.js";
+export{FC as RecentsList,IC as RecentsPageBlockRenderer}from"../../../chunks/app-CM7SCidV.js";
