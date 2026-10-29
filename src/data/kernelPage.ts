@@ -90,10 +90,19 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  an action handler into an empty page.
  *
  *  UNDOABLE by default (issue #306), so a create inside a caller's
- *  `repo.undoGroup` merges into the operation that needed it. Pass `skipUndo`
- *  only when there is no user operation to merge into: an unattended create
- *  lands alone on the stack, and `UndoManager.record` clears the redo branch
- *  on every push, so it silently discards a redo the user still wanted. */
+ *  `repo.undoGroup` merges into the operation that needed it.
+ *
+ *  A CONTAINER always passes `skipUndo`: a page that records are filed under
+ *  (comment threads, assets), whatever gesture first needs it. Other devices
+ *  file records under the same derived id, so undoing the create that happened
+ *  to come first would tombstone the page while their records still sit under
+ *  it. Left in place, an empty container costs nothing; the record the gesture
+ *  wrote stays undoable on its own.
+ *
+ *  Otherwise pass `skipUndo` only when there is no user operation to merge
+ *  into: an unattended create lands alone on the stack, and
+ *  `UndoManager.record` clears the redo branch on every push, so it silently
+ *  discards a redo the user still wanted. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
