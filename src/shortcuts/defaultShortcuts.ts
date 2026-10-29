@@ -1251,7 +1251,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       beforeWrite: async () => {
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
         const after = scopeRootId
-          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
           : null
         focus.target = after && !selectedIds.has(after.id) ? after : null
       },
@@ -1294,7 +1294,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     // `p` is a move down) would otherwise land inside the cut and be refused.
     const selectedIds = new Set(selectedBlocks.map(block => block.id))
     const after = scopeRootId
-      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
       : null
     if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id)
 
