@@ -1,1 +1,0 @@
-export{QG as backlinksDataExtension}from"../../../chunks/app-CpTQzY9u.js";
