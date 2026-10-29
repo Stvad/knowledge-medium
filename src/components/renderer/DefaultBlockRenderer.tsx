@@ -51,6 +51,7 @@ import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  BLOCK_BULLET_ATTRIBUTE,
   BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
   blockContextMenuItemsFacet,
@@ -189,6 +190,10 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
           <a
             href={bulletHref}
             className="bullet-link flex items-center justify-center h-6 w-5"
+            {...{[BLOCK_BULLET_ATTRIBUTE]: 'true'}}
+            // An `<a>` is draggable by default; a native link drag would
+            // hijack the press-drag that block drag-and-drop starts here.
+            draggable={false}
             onClick={(event) => {
               hover.close()
               onClick(event)

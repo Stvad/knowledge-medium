@@ -241,6 +241,12 @@ export type BlockBulletHoverResolver =
  *  handler resolving ownership can ask one question of both halves. */
 export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
 
+/** Marks a block's bullet — the handle plugins attach row-level pointer
+ *  gestures to (block drag-and-drop) by delegating from the document, so the
+ *  bullet needs no per-gesture handler props. Its block is the enclosing
+ *  {@link BLOCK_SHELL_ATTRIBUTE} element's. */
+export const BLOCK_BULLET_ATTRIBUTE = 'data-block-bullet'
+
 /** Marks a content slot that holds a VIEW — a review backlog, a review deck, a
  *  recents list — rather than the block's own text. Written by the slot, which
  *  is the only place that knows: it resolved the renderer. Callers reasoning
