@@ -1,0 +1,1 @@
+export{VC as BlockRef}from"../../../chunks/app-Dngenqvx.js";

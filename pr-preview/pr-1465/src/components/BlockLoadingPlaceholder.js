@@ -1,0 +1,1 @@
+export{KA as BlockLoadingPlaceholder}from"../../chunks/app-Dngenqvx.js";

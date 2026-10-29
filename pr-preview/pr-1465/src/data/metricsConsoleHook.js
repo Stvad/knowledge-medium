@@ -1,0 +1,1 @@
+export{jO as ensureMetricsConsoleHook}from"../../chunks/app-Dngenqvx.js";

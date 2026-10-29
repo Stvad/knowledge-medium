@@ -1,0 +1,1 @@
+export{G$ as mergeProperties}from"../../chunks/app-Dngenqvx.js";

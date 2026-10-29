@@ -1,0 +1,1 @@
+export{sx as usePromotableBreadcrumb}from"../../../chunks/app-Dngenqvx.js";

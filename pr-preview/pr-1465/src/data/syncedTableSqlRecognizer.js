@@ -1,0 +1,1 @@
+export{VK as SYNCED_TABLES,HK as syncedWriteTarget,UK as writeTargets}from"../../chunks/app-Dngenqvx.js";

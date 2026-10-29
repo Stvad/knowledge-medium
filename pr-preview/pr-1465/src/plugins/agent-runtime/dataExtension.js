@@ -1,0 +1,1 @@
+export{wK as agentRuntimeDataExtension}from"../../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{QB as referencesDataExtension}from"../../../chunks/app-Dngenqvx.js";

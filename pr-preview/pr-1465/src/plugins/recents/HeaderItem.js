@@ -1,0 +1,1 @@
+export{GC as RecentsHeaderItem}from"../../../chunks/app-Dngenqvx.js";

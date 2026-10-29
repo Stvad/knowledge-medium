@@ -1,0 +1,1 @@
+export{jC as OPEN_RECENTS_ACTION_ID,MC as openRecentsAction,NC as recentsHeaderItem,PC as recentsPlugin}from"../../../chunks/app-Dngenqvx.js";

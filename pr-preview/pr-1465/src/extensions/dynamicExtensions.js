@@ -1,0 +1,1 @@
+export{cA as dynamicExtensionsExtension}from"../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{GH as geoDataExtension}from"../../../chunks/app-Dngenqvx.js";

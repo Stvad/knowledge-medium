@@ -1,0 +1,1 @@
+export{EK as agentDispatchCompanionDataExtension}from"../../../chunks/app-Dngenqvx.js";

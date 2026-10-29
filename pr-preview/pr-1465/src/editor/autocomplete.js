@@ -1,0 +1,1 @@
+export{sk as editorAutocompleteExtension}from"../../chunks/app-Dngenqvx.js";

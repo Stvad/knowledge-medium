@@ -1,0 +1,1 @@
+export{Yw as Label}from"../../../chunks/app-Dngenqvx.js";

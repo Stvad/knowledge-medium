@@ -1,0 +1,1 @@
+export{dK as aliasDataExtension}from"../../../chunks/app-Dngenqvx.js";

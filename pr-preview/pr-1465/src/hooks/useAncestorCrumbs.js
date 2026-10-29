@@ -1,0 +1,1 @@
+export{vw as useAncestorCrumbs}from"../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{bR as isIOS,xR as isMacPlatform}from"../../chunks/app-Dngenqvx.js";

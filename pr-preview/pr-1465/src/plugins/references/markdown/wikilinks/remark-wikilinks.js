@@ -1,0 +1,1 @@
+export{hh as remarkWikilinks}from"../../../../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{ptt as definePostCommitProcessor}from"../../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{Iu as contributorsPlugin}from"../../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{hF as BlockProperties}from"../../chunks/app-Dngenqvx.js";

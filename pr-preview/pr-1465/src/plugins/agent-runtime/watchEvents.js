@@ -1,0 +1,1 @@
+export{Sf as createWatchEventsRegistry,Cf as watchEventsRegistry}from"../../../chunks/app-Dngenqvx.js";

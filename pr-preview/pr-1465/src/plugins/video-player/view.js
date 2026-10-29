@@ -1,0 +1,1 @@
+export{ey as DEFAULT_VIDEO_NOTES_PANE_RATIO,ty as VIDEO_NOTES_VIEW_MODE,ny as videoNotesPaneRatioProp}from"../../../chunks/app-Dngenqvx.js";

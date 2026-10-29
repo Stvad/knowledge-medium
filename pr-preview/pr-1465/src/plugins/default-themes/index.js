@@ -1,0 +1,1 @@
+export{OC as DEFAULT_THEME_ID_DARK,kC as DEFAULT_THEME_ID_LIGHT,pC as defaultThemeContributions,fC as defaultThemesPlugin}from"../../../chunks/app-Dngenqvx.js";

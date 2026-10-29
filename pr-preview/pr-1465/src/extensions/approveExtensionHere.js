@@ -1,0 +1,1 @@
+export{yk as approveExtensionHere}from"../../chunks/app-Dngenqvx.js";

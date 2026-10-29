@@ -1,0 +1,1 @@
+export{VF as declarationOnlyDefinitionForName,HF as declarationOnlyStatusText}from"../../../chunks/app-Dngenqvx.js";

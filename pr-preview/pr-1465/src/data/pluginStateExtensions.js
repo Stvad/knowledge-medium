@@ -1,0 +1,1 @@
+export{xG as pluginPrefsExtension,SG as pluginUIStateExtension}from"../../chunks/app-Dngenqvx.js";

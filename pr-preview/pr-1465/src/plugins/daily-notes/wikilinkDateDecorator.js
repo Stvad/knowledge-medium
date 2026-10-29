@@ -1,0 +1,1 @@
+export{MT as dailyDateWikilinkDecorator}from"../../../chunks/app-Dngenqvx.js";

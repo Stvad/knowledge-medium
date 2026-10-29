@@ -1,0 +1,1 @@
+export{VW as characterCounterDataExtension}from"../../../chunks/app-Dngenqvx.js";

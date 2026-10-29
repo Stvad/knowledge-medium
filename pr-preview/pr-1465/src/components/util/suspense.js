@@ -1,0 +1,1 @@
+export{mB as SuspenseFallback}from"../../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{l5 as getOrCreatePropertiesPage,u5 as propertiesPageBlockId}from"../../chunks/app-Dngenqvx.js";

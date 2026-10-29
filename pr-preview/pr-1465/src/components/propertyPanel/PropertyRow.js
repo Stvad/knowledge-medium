@@ -1,0 +1,1 @@
+export{xF as PropertyRow}from"../../../chunks/app-Dngenqvx.js";

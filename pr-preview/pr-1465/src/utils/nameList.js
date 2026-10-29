@@ -1,0 +1,1 @@
+export{$Q as NAMES_IN_A_SENTENCE,e$ as describeNames,t$ as firstFew}from"../../chunks/app-Dngenqvx.js";

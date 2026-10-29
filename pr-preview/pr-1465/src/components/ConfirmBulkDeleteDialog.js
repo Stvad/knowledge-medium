@@ -1,0 +1,1 @@
+export{Jj as ConfirmBulkDeleteDialog}from"../../chunks/app-Dngenqvx.js";

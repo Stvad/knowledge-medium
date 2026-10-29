@@ -1,0 +1,1 @@
+export{NV as preferredSpanReplacement}from"../../../chunks/app-Dngenqvx.js";

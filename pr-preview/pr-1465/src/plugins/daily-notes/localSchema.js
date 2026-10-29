@@ -1,0 +1,1 @@
+export{YU as dailyNotesLocalSchema}from"../../../chunks/app-Dngenqvx.js";

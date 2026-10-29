@@ -1,0 +1,1 @@
+export{lm as backlinksViewPlugin}from"../../../chunks/app-Dngenqvx.js";

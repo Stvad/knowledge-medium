@@ -1,0 +1,1 @@
+export{uk as ExtensionPromptSurface,dk as extensionPromptsExtension}from"../../../chunks/app-Dngenqvx.js";

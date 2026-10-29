@@ -1,0 +1,1 @@
+export{nx as mobileBottomNavItemsFacet}from"../../../chunks/app-Dngenqvx.js";

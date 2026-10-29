@@ -1,0 +1,1 @@
+export{ZJ as TypeTagger,QJ as applyTypeTagInTx}from"../../chunks/app-Dngenqvx.js";

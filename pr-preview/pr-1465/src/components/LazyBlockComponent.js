@@ -1,0 +1,1 @@
+export{UA as LazyBlockComponent}from"../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{nm as updateIndicatorPlugin}from"../../../chunks/app-Dngenqvx.js";

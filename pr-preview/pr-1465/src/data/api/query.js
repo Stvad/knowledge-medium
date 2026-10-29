@@ -1,0 +1,1 @@
+export{att as defineQuery}from"../../../chunks/app-Dngenqvx.js";

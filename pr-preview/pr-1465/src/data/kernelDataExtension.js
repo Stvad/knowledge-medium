@@ -1,0 +1,1 @@
+export{AZ as kernelDataExtension}from"../../chunks/app-Dngenqvx.js";

@@ -1,0 +1,1 @@
+export{ig as aliasCollisionRejectionToast}from"../../../chunks/app-Dngenqvx.js";

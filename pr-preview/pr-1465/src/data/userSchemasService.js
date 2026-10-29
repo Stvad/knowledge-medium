@@ -1,0 +1,1 @@
+export{p$ as USER_SCHEMAS_PROJECTOR_ID,m$ as UserSchemasService,h$ as buildSchemaOrNull,g$ as decodePresetConfig,_$ as definitionSchema,v$ as isRegistrablePropertyName,y$ as propertySchemaNameRejection,b$ as tryBuildSchema,x$ as userSchemasProjector}from"../../chunks/app-Dngenqvx.js";

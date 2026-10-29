@@ -1,0 +1,1 @@
+export{$et as SYSTEM_AUTHOR_PREFIX,ett as isSystemAuthor,ttt as systemAuthor}from"../../../chunks/app-Dngenqvx.js";

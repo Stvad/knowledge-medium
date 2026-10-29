@@ -1,0 +1,1 @@
+export{snt as normalizeReferences}from"../../../chunks/app-Dngenqvx.js";

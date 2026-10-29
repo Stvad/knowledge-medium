@@ -1,0 +1,1 @@
+export{IM as BlockInfoDialog}from"../../../chunks/app-Dngenqvx.js";

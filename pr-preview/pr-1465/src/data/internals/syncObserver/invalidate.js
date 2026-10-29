@@ -1,0 +1,1 @@
+export{vZ as applySyncInvalidation}from"../../../../chunks/app-Dngenqvx.js";

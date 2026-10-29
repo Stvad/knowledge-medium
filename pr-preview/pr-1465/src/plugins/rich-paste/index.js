@@ -1,0 +1,1 @@
+export{lg as richPastePlugin}from"../../../chunks/app-Dngenqvx.js";

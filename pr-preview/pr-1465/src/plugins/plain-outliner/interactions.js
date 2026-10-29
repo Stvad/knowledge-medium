@@ -1,0 +1,1 @@
+export{_x as blockEditingContentRenderer}from"../../../chunks/app-Dngenqvx.js";

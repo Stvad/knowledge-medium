@@ -1,0 +1,1 @@
+export{TW as contributorsDataExtension}from"../../../chunks/app-Dngenqvx.js";

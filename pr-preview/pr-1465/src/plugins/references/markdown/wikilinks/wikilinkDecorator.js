@@ -1,0 +1,1 @@
+export{PT as isWikilinkDisplayParts,FT as resolveWikilinkDisplay,IT as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-Dngenqvx.js";

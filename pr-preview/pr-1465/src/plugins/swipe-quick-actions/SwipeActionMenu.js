@@ -1,0 +1,1 @@
+export{CD as SwipeActionMenu}from"../../../chunks/app-Dngenqvx.js";

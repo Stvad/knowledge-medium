@@ -1,0 +1,1 @@
+export{ZQ as agree,QQ as pluralize}from"../../chunks/app-Dngenqvx.js";

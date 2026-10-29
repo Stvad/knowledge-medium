@@ -1,0 +1,1 @@
+export{SQ as KERNEL_PROCESSORS}from"../../../chunks/app-Dngenqvx.js";

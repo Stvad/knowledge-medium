@@ -1,0 +1,1 @@
+export{Nv as videoPlayerMarkdownExtension}from"../../../chunks/app-Dngenqvx.js";

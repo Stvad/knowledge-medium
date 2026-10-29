@@ -1,0 +1,1 @@
+export{XK as omnilinerNamespace}from"../../chunks/app-Dngenqvx.js";
