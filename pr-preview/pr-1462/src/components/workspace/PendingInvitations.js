@@ -1,1 +1,0 @@
-export{KS as PendingInvitations}from"../../../chunks/app-CgGXypIL.js";

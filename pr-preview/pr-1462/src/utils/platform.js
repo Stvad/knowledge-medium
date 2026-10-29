@@ -1,1 +1,0 @@
-export{vR as isIOS,yR as isMacPlatform}from"../../chunks/app-CgGXypIL.js";

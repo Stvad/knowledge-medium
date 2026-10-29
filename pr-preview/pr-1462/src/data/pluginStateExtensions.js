@@ -1,1 +1,0 @@
-export{sG as pluginPrefsExtension,cG as pluginUIStateExtension}from"../../chunks/app-CgGXypIL.js";

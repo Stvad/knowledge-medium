@@ -1,1 +1,0 @@
-export{cg as richPasteDecisionContribution}from"../../../chunks/app-CgGXypIL.js";

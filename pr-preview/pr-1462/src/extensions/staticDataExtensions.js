@@ -1,1 +1,0 @@
-export{PB as staticDataExtensions}from"../../chunks/app-CgGXypIL.js";

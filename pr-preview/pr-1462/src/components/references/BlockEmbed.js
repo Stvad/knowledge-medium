@@ -1,1 +1,0 @@
-export{nO as BlockEmbed}from"../../../chunks/app-CgGXypIL.js";

@@ -1,1 +1,0 @@
-export{dg as attachmentsPlugin}from"../../../chunks/app-CgGXypIL.js";

@@ -1,1 +1,0 @@
-export{WC as openRecentsPage}from"../../../chunks/app-CgGXypIL.js";

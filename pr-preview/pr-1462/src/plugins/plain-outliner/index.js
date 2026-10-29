@@ -1,1 +1,0 @@
-export{dx as plainOutlinerPlugin}from"../../../chunks/app-CgGXypIL.js";

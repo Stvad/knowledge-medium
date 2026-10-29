@@ -1,1 +1,0 @@
-export{oO as kernelPropertyUiExtension,sO as typesPropertyUi,cO as typesPropertyUiExtension}from"../../../chunks/app-CgGXypIL.js";

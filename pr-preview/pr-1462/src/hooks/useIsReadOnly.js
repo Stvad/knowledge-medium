@@ -1,1 +1,0 @@
-export{Mh as useIsReadOnly}from"../../chunks/app-CgGXypIL.js";

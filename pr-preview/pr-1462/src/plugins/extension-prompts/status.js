@@ -1,1 +1,0 @@
-export{uk as extensionPromptDiagnosticContribution,dk as extensionPromptDiagnosticSource}from"../../../chunks/app-CgGXypIL.js";

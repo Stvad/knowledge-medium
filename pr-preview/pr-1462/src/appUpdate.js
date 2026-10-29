@@ -1,1 +1,0 @@
-export{Nk as appUpdate,Pk as useAppUpdateAvailable}from"../chunks/app-CgGXypIL.js";

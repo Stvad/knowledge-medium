@@ -1,1 +1,0 @@
-export{pF as BlockProperties}from"../../chunks/app-CgGXypIL.js";

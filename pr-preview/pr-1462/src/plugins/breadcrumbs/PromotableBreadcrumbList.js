@@ -1,1 +1,0 @@
-export{ox as PromotableBreadcrumbList}from"../../../chunks/app-CgGXypIL.js";

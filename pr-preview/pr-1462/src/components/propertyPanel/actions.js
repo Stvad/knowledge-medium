@@ -1,1 +1,0 @@
-export{IF as addProperty,LF as deleteProperty,RF as writeProperty}from"../../../chunks/app-CgGXypIL.js";

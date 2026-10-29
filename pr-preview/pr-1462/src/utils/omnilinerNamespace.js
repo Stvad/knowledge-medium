@@ -1,1 +1,0 @@
-export{IK as omnilinerNamespace}from"../../chunks/app-CgGXypIL.js";

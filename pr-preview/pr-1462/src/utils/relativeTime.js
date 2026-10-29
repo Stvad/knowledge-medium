@@ -1,1 +1,0 @@
-export{LC as formatAbsoluteDateTime,RC as formatRelativeTime}from"../../chunks/app-CgGXypIL.js";

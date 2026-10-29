@@ -1,1 +1,0 @@
-export{ax as usePromotableBreadcrumb}from"../../../chunks/app-CgGXypIL.js";

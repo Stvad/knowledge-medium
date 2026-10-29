@@ -1,1 +1,0 @@
-export{XO as BlockPasteShellDecorator,ZO as blockPasteShellDecorator}from"../../chunks/app-CgGXypIL.js";

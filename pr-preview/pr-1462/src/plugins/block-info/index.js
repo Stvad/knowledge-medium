@@ -1,1 +1,0 @@
-export{Yp as blockInfoPlugin}from"../../../chunks/app-CgGXypIL.js";

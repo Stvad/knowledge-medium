@@ -1,1 +1,0 @@
-export{WA as BlockLoadingPlaceholder}from"../../chunks/app-CgGXypIL.js";

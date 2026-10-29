@@ -1,1 +1,0 @@
-export{GN as useShortcutSurfaceActivations}from"../../chunks/app-CgGXypIL.js";

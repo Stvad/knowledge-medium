@@ -1,1 +1,0 @@
-export{gU as matchCharTrigger}from"../../chunks/app-CgGXypIL.js";

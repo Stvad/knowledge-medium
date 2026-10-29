@@ -1,1 +1,0 @@
-export{jz as usePropertySchemas}from"../../chunks/app-CgGXypIL.js";

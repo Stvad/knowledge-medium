@@ -1,1 +1,0 @@
-export{Sk as appUpdatePromptExtension}from"../../../chunks/app-CgGXypIL.js";

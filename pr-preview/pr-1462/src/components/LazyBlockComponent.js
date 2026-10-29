@@ -1,1 +1,0 @@
-export{VA as LazyBlockComponent}from"../../chunks/app-CgGXypIL.js";

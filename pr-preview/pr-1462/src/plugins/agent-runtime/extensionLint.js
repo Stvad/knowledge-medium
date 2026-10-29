@@ -1,1 +1,0 @@
-export{Gd as lintExtensionSource}from"../../../chunks/app-CgGXypIL.js";

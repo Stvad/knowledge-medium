@@ -1,1 +1,0 @@
-export{ck as ExtensionPromptSurface,lk as extensionPromptsExtension}from"../../../chunks/app-CgGXypIL.js";

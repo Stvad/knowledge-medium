@@ -1,1 +1,0 @@
-export{qS as usePendingInvitations}from"../../chunks/app-CgGXypIL.js";

@@ -1,1 +1,0 @@
-export{Nq as instrumentAdapter}from"../../../chunks/app-CgGXypIL.js";

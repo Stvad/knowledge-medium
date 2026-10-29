@@ -1,1 +1,0 @@
-export{V8 as hasSupabaseAuthConfig,H8 as isAuthCallbackUrl,U8 as readPersistedSession,W8 as sessionUserToAppUser,G8 as supabase}from"../../chunks/app-CgGXypIL.js";

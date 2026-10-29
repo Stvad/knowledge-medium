@@ -1,1 +1,0 @@
-export{Y8 as getOrCreatePropertiesPage,X8 as propertiesPageBlockId}from"../../chunks/app-CgGXypIL.js";

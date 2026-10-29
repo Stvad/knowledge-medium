@@ -1,1 +1,0 @@
-export{DM as useIsMobile,OM as usePointerCoarse}from"../../chunks/app-CgGXypIL.js";

@@ -1,1 +1,0 @@
-export{fB as SuspenseFallback}from"../../../chunks/app-CgGXypIL.js";

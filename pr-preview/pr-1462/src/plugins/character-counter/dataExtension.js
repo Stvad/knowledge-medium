@@ -1,1 +1,0 @@
-export{DW as characterCounterDataExtension}from"../../../chunks/app-CgGXypIL.js";

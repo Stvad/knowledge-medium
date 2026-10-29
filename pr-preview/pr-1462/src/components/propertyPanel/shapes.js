@@ -1,1 +1,0 @@
-export{Fz as propertyShapeLabel}from"../../../chunks/app-CgGXypIL.js";

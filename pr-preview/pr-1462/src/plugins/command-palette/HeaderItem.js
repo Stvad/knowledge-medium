@@ -1,1 +1,0 @@
-export{dD as CommandPaletteHeaderItem}from"../../../chunks/app-CgGXypIL.js";

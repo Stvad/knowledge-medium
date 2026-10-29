@@ -1,1 +1,0 @@
-export{UE as useCommandPaletteActions}from"../../../chunks/app-CgGXypIL.js";

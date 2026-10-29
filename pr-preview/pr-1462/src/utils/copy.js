@@ -1,1 +1,0 @@
-export{_L as copyBlockIdsToClipboard,vL as copyBlockToClipboard,yL as copySelectedBlocksToClipboard,bL as cutBlockIdsToClipboard,xL as serializeBlock,SL as serializeSelectedBlocks,CL as writeTextToClipboard}from"../../chunks/app-CgGXypIL.js";

@@ -1,1 +1,0 @@
-export{_D as swipeGestureActions,vD as swipeLeftOpenAction,yD as swipeLeftRevealAction,bD as swipeRightCloseAction}from"../../../chunks/app-CgGXypIL.js";

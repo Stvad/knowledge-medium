@@ -1,1 +1,0 @@
-export{fA as extensionDisplayName,pA as extensionName,mA as userExtensionShellToggle,hA as userExtensionToggle}from"../../chunks/app-CgGXypIL.js";

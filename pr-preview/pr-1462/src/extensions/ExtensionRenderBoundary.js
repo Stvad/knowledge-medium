@@ -1,1 +1,0 @@
-export{FM as ExtensionRenderBoundary}from"../../chunks/app-CgGXypIL.js";
