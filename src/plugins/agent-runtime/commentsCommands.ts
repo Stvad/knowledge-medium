@@ -6,7 +6,13 @@
  * plugin; this is its agent-facing shape.
  */
 
-import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
+import {
+  AGENT_VIEW_DEFAULTS,
+  type CommentAuthor,
+  type CommentNode,
+  type CommentsView,
+  type CommentThreadView,
+} from '@knowledge-medium/agent-cli/protocol'
 import type { BlockData } from '@/data/api'
 import { hasBlockType } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -18,7 +24,7 @@ import {
 } from '@/plugins/annotations/schema.js'
 import { threadIdsInScope } from '@/plugins/annotations/scope.js'
 import { authorIdOf } from '@/plugins/contributors/author.js'
-import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
+import { attributionCreatorsProp, contributorKindOf } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { loadCrumbs } from './agentViews/context.ts'
 import { resolveBlockRef, shortIds } from './agentViews/resolveRef.ts'
@@ -29,54 +35,6 @@ const DEFAULT_THREAD_LIMIT = 20
 const MAX_THREAD_LIMIT = 100
 /** Characters of target text kept on each side of a resolved quote. */
 const EXCERPT_CONTEXT_CHARS = 80
-
-export type AnchorState = 'block' | 'exact' | 'moved' | 'stale'
-
-export interface CommentAuthor {
-  /** The author's page; null for a system author. */
-  id: string | null
-  name: string
-  /** Null when the author's page is not here to say. */
-  kind: ContributorKind | null
-}
-
-export interface CommentNode {
-  id: string
-  shortId: string
-  content: string
-  /** Characters cut from `content`; get_block reads the rest. */
-  cut: number
-  author: CommentAuthor
-  createdAt: number
-  replies: CommentNode[]
-}
-
-export interface ThreadView {
-  id: string
-  shortId: string
-  /** `open` or `resolved`, or the stored value when this build can't read it. */
-  status: string
-  anchor: AnchorState
-  /** The quoted text; null for a thread on the whole block. */
-  quote: string | null
-  target: {
-    id: string
-    shortId: string
-    deleted: boolean
-    /** Root→parent labels, as a breadcrumb reads. */
-    path: string[]
-    /** The quote with some text around it, or the block's head. */
-    excerpt: string
-  } | null
-  comments: CommentNode[]
-}
-
-export interface CommentsView {
-  total: number
-  offset: number
-  nextOffset: number | null
-  threads: ThreadView[]
-}
 
 export interface CommentsParams {
   scope?: string
@@ -191,7 +149,7 @@ export const buildCommentsView = async (
     shortIds(repo, [...page.map(root => root.id), ...targetIds, ...allComments.map(row => row.id)]),
   ])
 
-  const threadView = (root: BlockData): ThreadView => {
+  const threadView = (root: BlockData): CommentThreadView => {
     const anchor = threadAnchorOf(root)
     const targetId = threadTargetIdOf(root)
     const target = targetId ? targets.get(targetId) : undefined

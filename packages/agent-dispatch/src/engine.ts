@@ -15,6 +15,7 @@ import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
+import { loadThreadContext, threadPathOf } from './threadContext.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
@@ -353,6 +354,15 @@ export const createEngine = (deps: EngineDeps) => {
       abortControllers.set(sourceId, abortController)
 
       const subtreeRows = await graph.getSubtree(sourceId)
+      const threadPath = threadPathOf(sourceId, ancestorBlocks)
+      // Context only: a thread that can't be read (an app without the
+      // comments verb, the plugin off) leaves the mention answered without it.
+      const thread = threadPath
+        ? await loadThreadContext(graph, threadPath).catch(error => {
+          log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
+          return null
+        })
+        : null
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
@@ -365,6 +375,7 @@ export const createEngine = (deps: EngineDeps) => {
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,
+        ...(thread ? {thread} : {}),
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,

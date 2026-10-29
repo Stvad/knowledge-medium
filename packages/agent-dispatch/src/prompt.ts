@@ -1,7 +1,18 @@
-/**
+/*
  * Prompt assembly for spawned agent runs. Small `{{placeholder}}`
  * templating — deliberately not a template engine.
  */
+
+/** A mention inside a comment thread (threadContext.ts). */
+export interface ThreadPromptContext {
+  /** The annotated block; null when it is gone. */
+  target: {content: string, path: string[]} | null
+  /** The quoted text; null for a thread on the whole block. */
+  quote: string | null
+  anchor: 'block' | 'exact' | 'moved' | 'stale'
+  /** From the thread's first comment down to the one that mentioned you. */
+  chain: Array<{author: string, kind: string | null, content: string}>
+}
 
 export interface MentionPromptContext {
   /** The mention block's own content. */
@@ -13,6 +24,8 @@ export interface MentionPromptContext {
   blockId: string
   deepLink: string
   watcherName: string
+  /** Present when the mention is a comment in a thread. */
+  thread?: ThreadPromptContext
   /** The daemon will split this reply into a block hierarchy along its
    *  markdown outline — append the outline-authoring nudge so the split
    *  threads naturally (the "prompting" half of the feature). */
@@ -23,7 +36,7 @@ export const DEFAULT_MENTION_PROMPT = `You are responding to a mention inside th
 
 The block that mentioned you:
 {{content}}
-
+{{thread}}
 Its full subtree (the task usually lives here):
 {{subtree}}
 
@@ -62,7 +75,7 @@ export const DEFAULT_MENTION_CHANNEL_PROMPT = `New mention in the user's Knowled
 
 The block that mentioned you (id {{blockId}}):
 {{content}}
-
+{{thread}}
 Its full subtree:
 {{subtree}}
 
@@ -75,6 +88,36 @@ Handle it now, then close the task out yourself:
 3. Mark the task finished with update_block on {{blockId}}: properties {"agent:status": "done"} (or "error" plus {"agent:error": "<why>"} if you could not complete it).
 Never write the literal token [[claude]] (or any watcher-target wikilink) anywhere — it re-triggers the watcher.`
 
+const ANCHOR_NOTES: Partial<Record<ThreadPromptContext['anchor'], string>> = {
+  moved: ' (the text around it has changed since)',
+  stale: ' (no longer in the block as quoted)',
+}
+
+/** Continuation lines of a multi-line comment, indented under its bullet. */
+const indentContinuation = (text: string, indent: string): string => text.split('\n').join(`\n${indent}`)
+
+export const renderThreadContext = (thread: ThreadPromptContext): string => {
+  const lines = ['The block that mentioned you is a comment in a thread on another block.', '']
+  if (thread.target) {
+    const path = thread.target.path.length > 0 ? thread.target.path.join(' › ') : '(top level)'
+    lines.push(`The annotated block (page path: ${path}):`, thread.target.content, '')
+  } else {
+    lines.push('The annotated block has been deleted.', '')
+  }
+  lines.push(thread.quote === null
+    ? 'The thread is on the whole block.'
+    : `The thread quotes: "${thread.quote}"${ANCHOR_NOTES[thread.anchor] ?? ''}`, '')
+  lines.push('The thread, from its first comment down to the one that mentioned you:')
+  thread.chain.forEach((comment, depth) => {
+    const indent = '  '.repeat(depth)
+    const author = comment.kind ? `${comment.author} (${comment.kind})` : comment.author
+    lines.push(`${indent}- ${author}: ${indentContinuation(comment.content, `${indent}  `)}`)
+  })
+  return lines.join('\n')
+}
+
+const THREAD_PLACEHOLDER = '{{thread}}'
+
 const renderTemplate = (template: string, values: Record<string, string>): string =>
   template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
     Object.hasOwn(values, key) ? values[key] : match)
@@ -83,7 +126,11 @@ export const renderMentionPrompt = (
   template: string | undefined,
   context: MentionPromptContext,
 ): string => {
-  const rendered = renderTemplate(template ?? DEFAULT_MENTION_PROMPT, {
+  const chosen = template ?? DEFAULT_MENTION_PROMPT
+  const thread = context.thread ? renderThreadContext(context.thread) : ''
+  const rendered = renderTemplate(chosen, {
+    // Blank-line framed in place, so an empty one leaves the template as it was.
+    thread: thread ? `\n${thread}\n` : '',
     content: context.content,
     subtree: context.subtree,
     ancestors: context.ancestors.length > 0 ? context.ancestors.map(line => `- ${line}`).join('\n') : '(top level)',
@@ -91,10 +138,12 @@ export const renderMentionPrompt = (
     deepLink: context.deepLink,
     watcherName: context.watcherName,
   })
+  // A custom `prompt` that doesn't place the thread still gets it, after.
+  const withThread = thread && !chosen.includes(THREAD_PLACEHOLDER) ? `${rendered}\n\n${thread}` : rendered
   // The nudge rides on the RENDERED prompt (not the template) so it also
   // applies to a watcher's custom `prompt` — splitReply is orthogonal to
   // what the run is asked to do.
-  return context.splitReply ? `${rendered}${SPLIT_REPLY_GUIDANCE}` : rendered
+  return context.splitReply ? `${withThread}${SPLIT_REPLY_GUIDANCE}` : withThread
 }
 
 export interface QueryPromptContext {

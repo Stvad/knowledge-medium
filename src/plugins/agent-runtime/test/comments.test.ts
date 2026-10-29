@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {COMMENT_THREAD_TYPE, type CommentsView} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {aliasesProp, typesProp} from '@/data/properties'
@@ -9,10 +10,10 @@ import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {annotationsDataExtension} from '@/plugins/annotations/dataExtension'
+import {THREAD_TYPE} from '@/plugins/annotations/schema'
 import {setThreadStatus} from '@/plugins/annotations/threads'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {createAgentRuntimeContext, executeCommand} from '../commands'
-import type {CommentsView} from '../commentsCommands'
 import type {AgentRuntimeContext} from '../protocol'
 
 const WS = 'ws'
@@ -83,6 +84,11 @@ describe('add-comment', () => {
 })
 
 describe('comments', () => {
+  it('names the thread type the dispatch daemon looks for', () => {
+    expect(COMMENT_THREAD_TYPE).toBe(THREAD_TYPE)
+  })
+
+
   it('returns each thread with its anchor, quote, target and nested comments with their authors', async () => {
     const {threadId, commentId} = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', content: 'Is it confirmed?'}) as {
       threadId: string, commentId: string,
