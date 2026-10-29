@@ -3,6 +3,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {EditorSelection, EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {ChangeScope} from '@/data/api'
+import {KERNEL_FIELD_RECOGNITION_CHANNEL, KERNEL_FIELD_RECOGNITION_KEY} from '@/data/invalidation'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -62,6 +63,36 @@ describe('annotations.threadsForBlock', () => {
     await vi.waitFor(() => expect(handle.peek()?.[0]?.commentCount).toBe(1))
     await setThreadStatus(repo, threadId, 'resolved')
     await vi.waitFor(() => expect(handle.peek()?.[0]?.open).toBe(false))
+    unsubscribe()
+  })
+
+  it('stops counting a deleted comment', async () => {
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    const replyId = await replyTo(repo, threadId)
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    expect((await handle.load())[0].commentCount).toBe(2)
+    const unsubscribe = handle.subscribe(() => {})
+
+    await repo.tx(tx => tx.delete(replyId), opts)
+    await vi.waitFor(() => expect(handle.peek()?.[0]?.commentCount).toBe(1))
+    unsubscribe()
+  })
+
+  it('depends on field recognition, which decides which children are properties', async () => {
+    await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    await handle.load()
+    expect(handle.__depsForTest()).toContainEqual(
+      {kind: 'plugin', channel: KERNEL_FIELD_RECOGNITION_CHANNEL, key: KERNEL_FIELD_RECOGNITION_KEY})
+  })
+
+  it('re-resolves when a thread is added to a block already showing its pill', async () => {
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    expect(await handle.load()).toEqual([])
+    const unsubscribe = handle.subscribe(() => {})
+
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    await vi.waitFor(() => expect(handle.peek()?.map(s => s.id)).toEqual([threadId]))
     unsubscribe()
   })
 })
