@@ -1143,7 +1143,9 @@ const reconcileMarkdownSubtree = async (
           for (const child of foreign) {
             const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
             const orderKey = keyBetween(lower, upper)
-            await tx.move(child.id, {parentId: target, orderKey})
+            // The person's own block, moved by the reconcile, not by them:
+            // a bookkeeping write, so it gains no author and no edit time.
+            await tx.move(child.id, {parentId: target, orderKey}, {skipMetadata: true})
             lower = orderKey
           }
         }
