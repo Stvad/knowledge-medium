@@ -1,0 +1,1 @@
+export{zet as SYSTEM_AUTHOR_PREFIX,Bet as isSystemAuthor,Vet as systemAuthor}from"../../../chunks/app-b7t3_JT2.js";

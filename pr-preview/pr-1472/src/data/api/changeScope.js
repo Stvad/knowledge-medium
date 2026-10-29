@@ -1,0 +1,1 @@
+export{Ltt as CHANGE_SCOPE_POLICIES,Rtt as ChangeScope,ztt as isChangeScope,Btt as policyForScope,Vtt as scopeAllowedInReadOnly,Htt as scopeIsUndoable,Utt as scopePoliciesEquivalent,Wtt as scopeUploadsToServer,Gtt as sourceForScope}from"../../../chunks/app-b7t3_JT2.js";

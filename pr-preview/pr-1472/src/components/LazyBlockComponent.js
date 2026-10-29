@@ -1,0 +1,1 @@
+export{VA as LazyBlockComponent}from"../../chunks/app-b7t3_JT2.js";

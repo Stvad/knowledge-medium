@@ -1,0 +1,1 @@
+export{Ny as COLEMAK_KEYBINDINGS_PLUGIN_ID,Py as colemakKeybindingsPlugin,Fy as colemakMovementKeybindingOverrides}from"../../../chunks/app-b7t3_JT2.js";

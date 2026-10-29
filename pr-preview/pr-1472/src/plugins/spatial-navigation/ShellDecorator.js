@@ -1,0 +1,1 @@
+export{Yy as SpatialNavigationShellDecorator}from"../../../chunks/app-b7t3_JT2.js";

@@ -1,0 +1,1 @@
+"use client";export{lF as Collapsible,uF as CollapsibleContent,dF as CollapsibleTrigger}from"../../../chunks/app-b7t3_JT2.js";

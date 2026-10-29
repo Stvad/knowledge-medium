@@ -1,0 +1,1 @@
+export{DP as BLOCK_TITLE_TEXT_CLASS,OP as useBlockTitleTextClass}from"../../../chunks/app-b7t3_JT2.js";

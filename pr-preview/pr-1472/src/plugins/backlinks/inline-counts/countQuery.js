@@ -1,0 +1,1 @@
+export{JW as BACKLINKS_COUNT_FOR_BLOCK_QUERY,YW as backlinksCountForBlockQuery}from"../../../../chunks/app-b7t3_JT2.js";

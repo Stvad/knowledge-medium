@@ -1,0 +1,1 @@
+export{KE as COMMAND_PALETTE_ACTION_ID,qE as COMMAND_PALETTE_CONTEXT,JE as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,YE as commandPaletteActionContext}from"../../../chunks/app-b7t3_JT2.js";

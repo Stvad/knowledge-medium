@@ -1,0 +1,1 @@
+export{V8 as hasSupabaseAuthConfig,H8 as isAuthCallbackUrl,U8 as readPersistedSession,W8 as sessionUserToAppUser,G8 as supabase}from"../../chunks/app-b7t3_JT2.js";

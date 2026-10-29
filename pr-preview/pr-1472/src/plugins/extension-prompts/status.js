@@ -1,0 +1,1 @@
+export{uk as extensionPromptDiagnosticContribution,dk as extensionPromptDiagnosticSource}from"../../../chunks/app-b7t3_JT2.js";

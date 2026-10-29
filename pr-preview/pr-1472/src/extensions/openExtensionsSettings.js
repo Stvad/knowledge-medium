@@ -1,0 +1,1 @@
+export{dj as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,fj as openExtensionsSettings}from"../../chunks/app-b7t3_JT2.js";

@@ -1,0 +1,1 @@
+export{k5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-b7t3_JT2.js";

@@ -1,0 +1,1 @@
+export{Y0 as ENVELOPE_PREFIX,X0 as GCM_TAG_BYTES,Z0 as NONCE_BYTES,Q0 as SCHEMA_VERSION,$0 as decodeEnvelope,e2 as encodeEnvelope,t2 as hasEnvelopePrefix}from"../../../chunks/app-b7t3_JT2.js";
