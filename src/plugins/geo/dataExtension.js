@@ -1,1 +1,1 @@
-export{VU as geoDataExtension}from"../../../chunks/app-C4PXEW-q.js";
+export{VU as geoDataExtension}from"../../../chunks/app-uj32hW31.js";
