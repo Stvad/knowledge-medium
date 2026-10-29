@@ -1,1 +1,1 @@
-export{bh as inlineBacklinkCountDecoratorContribution,xh as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-CbW2DZLO.js";
+export{xh as inlineBacklinkCountDecoratorContribution,Sh as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-BTdMr_I_.js";

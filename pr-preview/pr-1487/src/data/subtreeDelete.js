@@ -1,1 +1,1 @@
-export{v2 as deleteSubtreeInTx}from"../../chunks/app-CbW2DZLO.js";
+export{x2 as deleteSubtreeInTx}from"../../chunks/app-BTdMr_I_.js";
