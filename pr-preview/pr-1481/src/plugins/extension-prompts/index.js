@@ -1,1 +1,1 @@
-export{mA as ExtensionPromptSurface,hA as extensionPromptsExtension}from"../../../chunks/app-Bae36abn.js";
+export{gA as ExtensionPromptSurface,_A as extensionPromptsExtension}from"../../../chunks/app-D4ygSi7D.js";

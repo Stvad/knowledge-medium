@@ -1,1 +1,1 @@
-export{Vk as withRowSlide}from"../../chunks/app-Bae36abn.js";
+export{Uk as withRowSlide}from"../../chunks/app-D4ygSi7D.js";

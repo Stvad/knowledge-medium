@@ -1,1 +1,1 @@
-export{UI as Checkbox}from"../../../chunks/app-Bae36abn.js";
+export{GI as Checkbox}from"../../../chunks/app-D4ygSi7D.js";
