@@ -126,8 +126,10 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
 
     await runDaemon()
 
-    const update = commands.find(command => command.type === 'update-block')
-    expect(update).toMatchObject({contributorId: 'contributor-agent'})
+    const mcpConfig = JSON.parse(await fs.readFile(path.join(tempDir, 'agent-dispatch-mcp.json'), 'utf8'))
+    expect(mcpConfig.mcpServers.km.env).toMatchObject({AGENT_RUNTIME_CONTRIBUTOR_ID: 'contributor-agent'})
+    // The token was found: the run reached the bridge.
+    expect(commands.map(command => command.type)).toContain('update-block')
   })
 
   it('refuses an unset exact profile/workspace selection before bridge or pidfile startup', async () => {
@@ -187,12 +189,14 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
       AGENT_RUNTIME_WORKSPACE: 'workspace-test',
       AGENT_RUNTIME_CONTRIBUTOR_ID: expected,
     })
+    // Bookkeeping on the source block is unattributed whatever the choice; the
+    // choice attributes the agent's own writes (dispatchAttribution.test.ts).
     const update = commands.find(command => command.type === 'update-block')
     expect(update).toMatchObject({
       type: 'update-block',
       id: 'source-1',
       properties: {'agent:cancel': ''},
-      contributorId: selected,
+      contributorId: null,
     })
     expect(commands.map(command => command.type)).not.toContain('create-block')
   })

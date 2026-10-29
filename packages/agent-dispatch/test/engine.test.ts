@@ -1,7 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
 import {createEngine, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
-import type {BlockData, Graph} from '../src/graph'
+import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
@@ -14,7 +14,9 @@ interface FakeGraphSeed {
   blocks?: Record<string, Partial<BlockData>>
 }
 
-/** Minimal in-memory graph double tracking writes. */
+/** Minimal in-memory graph double tracking writes. One object stands in for
+ *  both handles (pass it as `graph` and `replies`); which handle carries which
+ *  write is pinned against the real ones in dispatchAttribution.test.ts. */
 const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const blocks = new Map<string, BlockData>(
     // editedAtMs defaults to NOW: most tests exercise the post-baseline
@@ -26,10 +28,9 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
-  const contentUpdates: Array<{id: string, content: string}> = []
   const cancelClears: string[] = []
 
-  const graph: Graph = {
+  const graph: Graph & ReplyWriter = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink}) => ({
@@ -100,12 +101,6 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       cancelClears.push(id)
     },
-    updateBlockContent: async (id, content) => {
-      const target = blocks.get(id) ?? {id, properties: {}}
-      target.content = content
-      blocks.set(id, target)
-      contentUpdates.push({id, content})
-    },
     sqlAll: vi.fn(async () => []),
     blockViews: async ids => new Map(
       ids.flatMap(id => {
@@ -115,7 +110,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
+  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
 }
 
 const memoryState = (
@@ -152,8 +147,9 @@ const mentionConfig = (overrides: object = {}) => parseConfig({
   ...overrides,
 })
 
-const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
+const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   createEngine({
+    replies: deps.graph,
     config: mentionConfig(),
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
@@ -649,7 +645,7 @@ describe('mention lifecycle', () => {
     let clock = NOW
     const runTask = vi.fn(async () => okRun())
     const engine = createEngine({
-      config: mentionConfig(), graph, state: memoryState(), runTask,
+      config: mentionConfig(), graph, replies: graph, state: memoryState(), runTask,
       deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
     })
 
@@ -1136,6 +1132,7 @@ describe('live progress streaming', () => {
       }),
       state: memoryState(),
       graph,
+      replies: graph,
       runTask,
       deliverToChannel: vi.fn(async () => {}),
       mcpConfigPath: '/tmp/mcp.json',
@@ -1330,6 +1327,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
       }),
       state: memoryState(),
       graph,
+      replies: graph,
       runTask,
       deliverToChannel: vi.fn(async () => {}),
       mcpConfigPath: '/tmp/mcp.json',
@@ -1360,6 +1358,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
       }),
       state: memoryState(),
       graph,
+      replies: graph,
       runTask,
       deliverToChannel: vi.fn(async () => {}),
       mcpConfigPath: '/tmp/mcp.json',
@@ -1450,7 +1449,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
     const state = memoryState([], {armBaselines: false})
     const runTask = vi.fn(async () => okRun())
     const engine = createEngine({
-      config: mentionConfig(), graph, state, runTask,
+      config: mentionConfig(), graph, replies: graph, state, runTask,
       deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
     })
 

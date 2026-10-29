@@ -2,16 +2,32 @@
  * Dispatch-specific graph writes layered over the generic bridge graph.
  * Generic reads/writes live in @knowledge-medium/agent-cli/graph; this
  * module owns only the durable dispatch task protocol.
+ *
+ * Two handles, split by attribution. `createGraph` carries the reads and
+ * every `agent:*` bookkeeping write, all unattributed. `createReplyWriter`
+ * carries the agent's own replies, the only writes attributed to its
+ * contributor. A bookkeeping write added to the wrong one is a type error at
+ * the engine, never a silent attribution.
  */
-import type { BridgeClient } from '@knowledge-medium/agent-cli/client'
-import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type BridgeGraph, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
+import { withContributorId, type BridgeClient } from '@knowledge-medium/agent-cli/client'
+import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
+export interface TaskPropsWrite {
+  status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
+  resumeOptions?: AgentResumeOptions | null,
+  attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+}
+
+/** Reads, and the `agent:*` writes to a mention's source block. They go
+ *  through a client with `contributorId: null`, for which the contributors
+ *  processor records nothing, so a person's note keeps exactly the authors
+ *  who wrote it. */
 export const createGraph = (client: BridgeClient) => {
-  const bridgeGraph = createBridgeGraph(client)
+  const bridgeGraph = createBridgeGraph(withContributorId(client, null))
 
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
@@ -19,14 +35,7 @@ export const createGraph = (client: BridgeClient) => {
   // It does NOT cause a re-trigger (decidePending only reads editedAtMs
   // when status is unset, and this sets status). A clean fix needs the
   // bridge to forward a skipMetadata flag to tx.update; not available yet.
-  const setTaskProps = async (
-    id: string,
-    args: {
-      status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
-      resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
-    },
-  ): Promise<void> => {
+  const setTaskProps = async (id: string, args: TaskPropsWrite): Promise<void> => {
     const properties: Record<string, unknown> = {
       [PROPS.status]: args.status,
       [PROPS.updatedAt]: args.nowMs,
@@ -42,29 +51,6 @@ export const createGraph = (client: BridgeClient) => {
     // so a satisfied/stale cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
     await bridgeGraph.updateBlock(id, {properties})
-  }
-
-  const createReply = async (parentId: string, content: string): Promise<BlockData> =>
-    bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
-
-  /** Reconcile the run's reply subtree (tagged `replyKey`) under `parentId`
-   *  to match `markdown`, app-side in ONE transaction (a failure never
-   *  leaves a partial tree). Every block is tagged the reply marker. This is
-   *  the SINGLE reply-write primitive: `shape:'outline'` splits along the
-   *  markdown outline into a block hierarchy, `'block'` keeps one block, and
-   *  because it's idempotent by `replyKey`, streaming a reply is just
-   *  repeated reconciles with the growing text (the last passes `final`).
-   *  Safe to retry — a re-send converges to the same tree, no duplication. */
-  const reconcileReplyTree = async (
-    parentId: string, markdown: string,
-    opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
-  ): Promise<void> => {
-    await bridgeGraph.reconcileMarkdownSubtree(parentId, markdown, {
-      key: opts.replyKey,
-      shape: opts.shape,
-      ...(opts.final ? {final: true} : {}),
-      properties: {[PROPS.reply]: true},
-    })
   }
 
   /** Transient "what the run is doing now" label — merged
@@ -93,43 +79,50 @@ export const createGraph = (client: BridgeClient) => {
   }
 
   return {
-    ...bridgeGraph,
+    resolvePageId: bridgeGraph.resolvePageId,
+    backlinkSources: bridgeGraph.backlinkSources,
+    getBlock: bridgeGraph.getBlock,
+    ancestors: bridgeGraph.ancestors,
+    getSubtree: bridgeGraph.getSubtree,
+    sqlAll: bridgeGraph.sqlAll,
+    blockViews: bridgeGraph.blockViews,
     setTaskProps,
-    createReply,
-    reconcileReplyTree,
     setActivity,
     setSession,
     clearCancel,
   }
 }
 
-type DispatchBridgeGraph = Pick<
-  BridgeGraph,
-  | 'resolvePageId'
-  | 'backlinkSources'
-  | 'getBlock'
-  | 'ancestors'
-  | 'getSubtree'
-  | 'updateBlockContent'
-  | 'sqlAll'
-  | 'blockViews'
->
+export type Graph = ReturnType<typeof createGraph>
 
-export type Graph = DispatchBridgeGraph & {
-  setTaskProps: (
-    id: string,
-    args: {
-      status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
-      resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
-    },
-  ) => Promise<void>
-  createReply: (parentId: string, content: string) => Promise<BlockData>
-  reconcileReplyTree: (
+/** The agent's replies, attributed to the client's contributor. */
+export const createReplyWriter = (client: BridgeClient) => {
+  const bridgeGraph = createBridgeGraph(client)
+
+  const createReply = async (parentId: string, content: string): Promise<BlockData> =>
+    bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
+
+  /** Reconcile the run's reply subtree (tagged `replyKey`) under `parentId`
+   *  to match `markdown`, app-side in ONE transaction (a failure never
+   *  leaves a partial tree). Every block is tagged the reply marker. This is
+   *  the SINGLE reply-write primitive: `shape:'outline'` splits along the
+   *  markdown outline into a block hierarchy, `'block'` keeps one block, and
+   *  because it's idempotent by `replyKey`, streaming a reply is just
+   *  repeated reconciles with the growing text (the last passes `final`).
+   *  Safe to retry — a re-send converges to the same tree, no duplication. */
+  const reconcileReplyTree = async (
     parentId: string, markdown: string,
     opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
-  ) => Promise<void>
-  setActivity: (id: string, label: string) => Promise<void>
-  setSession: (id: string, session: string, resumeOptions?: AgentResumeOptions | null) => Promise<void>
-  clearCancel: (id: string) => Promise<void>
+  ): Promise<void> => {
+    await bridgeGraph.reconcileMarkdownSubtree(parentId, markdown, {
+      key: opts.replyKey,
+      shape: opts.shape,
+      ...(opts.final ? {final: true} : {}),
+      properties: {[PROPS.reply]: true},
+    })
+  }
+
+  return {createReply, reconcileReplyTree}
 }
+
+export type ReplyWriter = ReturnType<typeof createReplyWriter>
