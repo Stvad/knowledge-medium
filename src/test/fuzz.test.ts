@@ -51,8 +51,15 @@ const flush = async (times = 5): Promise<void> => {
 }
 
 describe('statefulFuzzGuard', () => {
+  // One guard per test, built at collection time as a suite builds its own:
+  // the guard registers an afterEach, which belongs to a suite, not a running
+  // test.
+  const registrationGuard = statefulFuzzGuard()
+  const pinGuard = statefulFuzzGuard()
+  const nullSeedGuard = statefulFuzzGuard()
+
   it('a case abandoned while awaiting its predecessor is still awaited by a later barrier() (synchronous registration)', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = registrationGuard
     const a = createDeferred<void>()
     const b = createDeferred<void>()
 
@@ -84,7 +91,7 @@ describe('statefulFuzzGuard', () => {
   })
 
   it('a new pin is installed only after the predecessor\'s body AND finally have both completed (barrier-before-pin)', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = pinGuard
     const nativeRandom = Math.random
     const a = createDeferred<void>()
     const b = createDeferred<void>()
@@ -137,7 +144,7 @@ describe('statefulFuzzGuard', () => {
   })
 
   it('seed: null skips the Math.random pin but the case still barriers behind its predecessor', async () => {
-    const guard = statefulFuzzGuard()
+    const guard = nullSeedGuard
     const nativeRandom = Math.random
     const a = createDeferred<void>()
     const b = createDeferred<void>()
@@ -167,8 +174,7 @@ describe('statefulFuzzGuard', () => {
     expect(Math.random, 'restored once B settles').toBe(nativeRandom)
 
     // Sanity: barrier() itself resolves promptly once every case (pinned
-    // or not) has settled — the exact pattern every suite's `afterAll`
-    // relies on.
+    // or not) has settled — what the guard's own `afterEach` relies on.
     await guard.barrier()
   })
 })
