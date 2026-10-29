@@ -1,1 +1,0 @@
-export{gx as plainOutlinerPlugin}from"../../../chunks/app-D7X-oHab.js";

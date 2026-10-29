@@ -1,1 +1,0 @@
-export{uk as editorAutocompleteExtension}from"../../chunks/app-D7X-oHab.js";

@@ -1,1 +1,0 @@
-export{MM as useIsMobile,NM as usePointerCoarse}from"../../chunks/app-D7X-oHab.js";

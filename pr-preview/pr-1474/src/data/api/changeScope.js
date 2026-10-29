@@ -1,1 +1,0 @@
-export{ent as CHANGE_SCOPE_POLICIES,tnt as ChangeScope,nnt as isChangeScope,rnt as policyForScope,int as scopeAllowedInReadOnly,ant as scopeIsUndoable,ont as scopePoliciesEquivalent,snt as scopeUploadsToServer,cnt as sourceForScope}from"../../../chunks/app-D7X-oHab.js";

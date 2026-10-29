@@ -1,1 +1,0 @@
-export{Lx as getOrCreateShortcutsBlock,Rx as journalShortcutBlockId,zx as shortcutsBlockId}from"../../../chunks/app-D7X-oHab.js";

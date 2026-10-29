@@ -1,1 +1,0 @@
-export{em as blockInfoPlugin}from"../../../chunks/app-D7X-oHab.js";

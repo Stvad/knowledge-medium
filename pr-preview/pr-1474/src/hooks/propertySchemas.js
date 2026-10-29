@@ -1,1 +1,0 @@
-export{Iz as usePropertySchemas}from"../../chunks/app-D7X-oHab.js";

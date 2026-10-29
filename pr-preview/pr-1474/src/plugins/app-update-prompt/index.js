@@ -1,1 +1,0 @@
-export{Dk as appUpdatePromptExtension}from"../../../chunks/app-D7X-oHab.js";

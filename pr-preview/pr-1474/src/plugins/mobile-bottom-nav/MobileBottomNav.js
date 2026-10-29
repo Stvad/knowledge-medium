@@ -1,1 +1,0 @@
-export{rx as MobileBottomNav}from"../../../chunks/app-D7X-oHab.js";

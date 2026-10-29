@@ -1,1 +1,0 @@
-export{WK as SYNCED_TABLES,GK as syncedWriteTarget,KK as writeTargets}from"../../chunks/app-D7X-oHab.js";

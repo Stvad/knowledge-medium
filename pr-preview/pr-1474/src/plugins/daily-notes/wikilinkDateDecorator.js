@@ -1,1 +1,0 @@
-export{FT as dailyDateWikilinkDecorator}from"../../../chunks/app-D7X-oHab.js";

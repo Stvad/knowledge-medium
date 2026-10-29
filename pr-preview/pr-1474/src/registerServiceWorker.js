@@ -1,1 +1,0 @@
-export{Ik as checkForAppUpdate,Lk as registerServiceWorker}from"../chunks/app-D7X-oHab.js";

@@ -1,1 +1,0 @@
-export{K5 as deriveWorkspaceIdNamespace}from"../../../chunks/app-D7X-oHab.js";

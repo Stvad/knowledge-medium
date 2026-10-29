@@ -1,1 +1,0 @@
-export{al as blockTagsConfigUi}from"../../../chunks/app-D7X-oHab.js";

@@ -1,1 +1,0 @@
-export{gg as attachmentsPlugin}from"../../../chunks/app-D7X-oHab.js";

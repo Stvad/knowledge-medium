@@ -1,1 +1,0 @@
-export{GO as resolveStructuralEditPolicy,KO as structuralEditPolicyForBlock}from"../../chunks/app-D7X-oHab.js";

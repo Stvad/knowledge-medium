@@ -1,1 +1,0 @@
-export{KA as LazyBlockComponent}from"../../chunks/app-D7X-oHab.js";

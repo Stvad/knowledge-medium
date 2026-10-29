@@ -1,1 +1,0 @@
-export{n$ as NAMES_IN_A_SENTENCE,r$ as describeNames,i$ as firstFew}from"../../chunks/app-D7X-oHab.js";

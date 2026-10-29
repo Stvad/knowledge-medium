@@ -1,1 +1,0 @@
-export{zB as staticDataExtensions}from"../../chunks/app-D7X-oHab.js";

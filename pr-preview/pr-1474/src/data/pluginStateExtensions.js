@@ -1,1 +1,0 @@
-export{wG as pluginPrefsExtension,TG as pluginUIStateExtension}from"../../chunks/app-D7X-oHab.js";

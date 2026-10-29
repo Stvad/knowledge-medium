@@ -1,1 +1,0 @@
-export{mh as Wikilink}from"../../../../../chunks/app-D7X-oHab.js";

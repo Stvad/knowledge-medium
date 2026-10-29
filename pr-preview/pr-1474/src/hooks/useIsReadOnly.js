@@ -1,1 +1,0 @@
-export{Lh as useIsReadOnly}from"../../chunks/app-D7X-oHab.js";

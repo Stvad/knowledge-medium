@@ -1,1 +1,0 @@
-export{DD as SWIPE_QUICK_ACTIONS_GESTURE_ID,qD as SWIPE_RIGHT_BLOCK_ACTION_ID,ED as SwipeActionMenu,YD as quickActionItemsFacet,xD as swipeQuickActionsPlugin}from"../../../chunks/app-D7X-oHab.js";

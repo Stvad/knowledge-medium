@@ -1,1 +1,0 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-D7X-oHab.js";

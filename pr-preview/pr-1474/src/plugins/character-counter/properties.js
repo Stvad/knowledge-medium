@@ -1,1 +1,0 @@
-export{qW as charLimitProp,JW as charProfileProp,YW as charScopeProp}from"../../../chunks/app-D7X-oHab.js";

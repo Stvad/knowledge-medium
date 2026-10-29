@@ -1,1 +1,0 @@
-export{Bz as propertyShapeLabel}from"../../../chunks/app-D7X-oHab.js";

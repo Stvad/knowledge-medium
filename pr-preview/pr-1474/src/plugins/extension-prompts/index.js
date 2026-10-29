@@ -1,1 +1,0 @@
-export{pk as ExtensionPromptSurface,mk as extensionPromptsExtension}from"../../../chunks/app-D7X-oHab.js";

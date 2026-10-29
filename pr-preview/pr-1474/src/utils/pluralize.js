@@ -1,1 +1,0 @@
-export{e$ as agree,t$ as pluralize}from"../../chunks/app-D7X-oHab.js";

@@ -1,1 +1,0 @@
-export{QS as usePendingInvitations}from"../../chunks/app-D7X-oHab.js";

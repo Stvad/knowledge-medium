@@ -1,1 +1,0 @@
-export{WC as BlockRef}from"../../../chunks/app-D7X-oHab.js";
