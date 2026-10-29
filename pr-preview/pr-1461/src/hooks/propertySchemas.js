@@ -1,1 +1,1 @@
-export{Oz as usePropertySchemas}from"../../chunks/app-gX-t5P6B.js";
+export{Oz as usePropertySchemas}from"../../chunks/app-B3rAb2xY.js";
