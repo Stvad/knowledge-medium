@@ -44,9 +44,9 @@ export const annotationsPlugin: AppExtension = systemToggle({
   blockContentRendererFacet.of(threadRootContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
-  // Before the reference plugins (default precedence), which must see whole
-  // spans inside a mark.
-  markdownExtensionsFacet.of(threadMarksMarkdownExtension, {source: SOURCE, precedence: -10}),
+  // After every other markdown extension (default precedence), so its
+  // transform marks their nodes rather than splitting their tokens.
+  markdownExtensionsFacet.of(threadMarksMarkdownExtension, {source: SOURCE, precedence: 100}),
   mobileKeyboardToolbarItemsFacet.of(
     {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
     {source: SOURCE, precedence: 60}),

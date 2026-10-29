@@ -1,35 +1,36 @@
 /**
  * Read-mode highlights: each open thread's quote, marked in the rendered
- * markdown by a remark transform that runs before the reference plugins.
+ * markdown by a remark transform that runs after every other remark plugin.
  *
- * A quote is raw-content offsets; the rendered tree knows only the source
- * span of each node. The mapping is exact or it is not drawn:
+ * Last, because marking first would change what those plugins see: a split
+ * through a timestamp or a reference turns it into a different token, and a
+ * node wrapped in a mark loses the position a page embed's occurrence id is
+ * computed from. Running last, every token is already a node, and the rule is
+ * one: plain text may be cut, anything else is marked whole or not at all.
+ *
+ * A quote is raw-content offsets; the tree knows only source spans. The
+ * mapping is exact or the quote is not drawn:
  *
  * - a text node whose value IS its source slice is split at the range's
  *   boundaries;
- * - any other leaf (inline code, an image, text whose value differs from its
- *   source because of an escape or an entity) is marked whole, and a range
- *   that cuts one is not drawn;
- * - a range that cuts a reference span is not drawn either, so the reference
- *   plugins after this one always see whole spans;
+ * - any other node (inline code, an image, a reference, a timestamp, text
+ *   whose value differs from its source because of an escape or an entity)
+ *   is opaque: marked whole when the range covers it, and a range that cuts
+ *   one is not drawn;
  * - only phrasing content is wrapped; a covered paragraph or list item is
  *   marked inside.
  *
- * GFM's autolink literal splits text at parse time and leaves the pieces with
- * no position. Their spans are recovered by alignment against the source,
- * accepted only where the pieces' text equals the source slice they would
- * cover, and kept to this transform: a node it does not split keeps the
- * position the parser gave it, absent or not.
- *
- * Neighbouring marked nodes share one mark, so a span the parser split across
- * siblings (`[[` + an autolink + `]]`) stays under one parent for the
- * reference plugins to reassemble.
+ * The plugins before this one leave the nodes they create with no position.
+ * Their spans are recovered by aligning each positionless run against its
+ * positioned neighbours, from the source each node stands for, and kept only
+ * where the source spells it exactly; what can't be aligned is opaque.
+ * Recovered spans stay in this transform: a node it does not split keeps the
+ * position it had, absent or not.
  */
 
 import type {Parent, Root, RootContent} from 'mdast'
 import type {Plugin} from 'unified'
 import type {MarkdownExtension} from '@/markdown/extensions.js'
-import {widenToReferenceSpans} from './anchor.ts'
 import {HIGHLIGHT_CLASS, highlightRanges, MOVED_HIGHLIGHT_CLASS, type HighlightRange} from './highlights.ts'
 import type {ThreadSummary} from './summaries.ts'
 
@@ -80,12 +81,21 @@ const coverageOf = (segments: readonly Segment[], {from, to}: Span): Coverage =>
     : {kind: 'partial'}
 }
 
-const hasChildren = (node: RootContent | Root): node is (RootContent & Parent) | Root =>
-  Array.isArray((node as {children?: unknown}).children)
+/** Markdown's own containers, which this descends into. Every other node with
+ *  children was made by a plugin (a wikilink, a block ref) and is one token. */
+const MARKDOWN_CONTAINERS = new Set([
+  'root', 'paragraph', 'heading', 'blockquote', 'list', 'listItem', 'table', 'tableRow', 'tableCell',
+  'footnoteDefinition', 'emphasis', 'strong', 'delete', 'link', 'linkReference',
+])
 
 /** Containers whose children are phrasing content, the only place a mark can
  *  sit. */
 const PHRASING_PARENTS = new Set(['paragraph', 'heading', 'tableCell', 'emphasis', 'strong', 'delete', 'link', 'linkReference'])
+
+type Container = Root | (RootContent & Parent)
+
+const isContainer = (node: RootContent | Root): node is Container =>
+  MARKDOWN_CONTAINERS.has(node.type) && Array.isArray((node as {children?: unknown}).children)
 
 const parsedSpan = (node: RootContent | Root): Span | null => {
   const from = node.position?.start.offset
@@ -93,25 +103,36 @@ const parsedSpan = (node: RootContent | Root): Span | null => {
   return from === undefined || to === undefined ? null : {from, to}
 }
 
-/** The source text a positionless node stands for, where it is knowable: text
- *  is itself, and an autolink literal is its one text child. */
+/** The source text a positionless node stands for, where it is knowable:
+ *  text is itself, an autolink literal is its one text child, and a plugin's
+ *  token keeps its raw source as its `value`. */
 const literalSource = (node: RootContent): string | null => {
-  if (node.type === 'text') return node.value
-  if (node.type === 'link' && node.children.length === 1 && node.children[0].type === 'text') {
-    const text = node.children[0].value
+  if (node.type === 'link') {
+    const [child] = node.children
+    if (node.children.length !== 1 || child.type !== 'text') return null
     const url = node.url ?? ''
-    if ([text, `mailto:${text}`, `http://${text}`, `https://${text}`].includes(url)) return text
+    return [child.value, `mailto:${child.value}`, `http://${child.value}`, `https://${child.value}`].includes(url)
+      ? child.value
+      : null
   }
-  return null
+  const value = (node as {value?: unknown}).value
+  return typeof value === 'string' && !isContainer(node) ? value : null
 }
 
 /** Every node's span: the parser's, or one recovered for a run of positionless
- *  siblings. A run is placed against the positioned sibling after it (or the
- *  parent's end), or else the one before it, and kept only if the source
- *  there spells exactly the run's text. */
+ *  siblings. The run is aligned forward from the positioned sibling before it
+ *  (or the parent's start) and back from the one after it (or the parent's
+ *  end), node by node, each kept only where the source spells exactly the text
+ *  that node stands for. A node in the middle that neither end reaches (one
+ *  whose source isn't knowable) gets the whole stretch left between them,
+ *  which makes that stretch opaque. */
 const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
   const spans = new WeakMap<object, Span>()
-  const visit = (parent: Root | (RootContent & Parent)) => {
+  const assign = (node: RootContent, span: Span) => {
+    spans.set(node, span)
+    if (node.type === 'link') spans.set(node.children[0], span)
+  }
+  const visit = (parent: Container) => {
     const parentSpan = spans.get(parent)
     const children = parent.children as RootContent[]
     for (const child of children) {
@@ -122,27 +143,28 @@ const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
       if (spans.has(children[start])) continue
       let end = start
       while (end < children.length && !spans.has(children[end])) end++
-      const texts = children.slice(start, end).map(literalSource)
-      if (texts.every(t => t !== null)) {
-        const run = texts.join('')
-        const right = end < children.length ? spans.get(children[end])!.from : parentSpan?.to
-        const left = start > 0 ? spans.get(children[start - 1])!.to : undefined
-        const at = right !== undefined && source.slice(right - run.length, right) === run ? right - run.length
-          : left !== undefined && source.slice(left, left + run.length) === run ? left
-            : undefined
-        if (at !== undefined) {
-          let offset = at
-          for (const [i, child] of children.slice(start, end).entries()) {
-            const span = {from: offset, to: offset + texts[i]!.length}
-            spans.set(child, span)
-            if (child.type === 'link') spans.set(child.children[0], span)
-            offset = span.to
-          }
-        }
+      let from = start > 0 ? spans.get(children[start - 1])!.to : parentSpan?.from
+      let to = end < children.length ? spans.get(children[end])!.from : parentSpan?.to
+      let i = start
+      for (; i < end && from !== undefined; i++) {
+        const text = literalSource(children[i])
+        if (text === null || source.slice(from, from + text.length) !== text) break
+        assign(children[i], {from, to: from + text.length})
+        from += text.length
+      }
+      let j = end - 1
+      for (; j >= i && to !== undefined; j--) {
+        const text = literalSource(children[j])
+        if (text === null || source.slice(to - text.length, to) !== text) break
+        assign(children[j], {from: to - text.length, to})
+        to -= text.length
+      }
+      if (from !== undefined && to !== undefined && from <= to) {
+        for (let k = i; k <= j; k++) spans.set(children[k], {from, to})
       }
       start = end
     }
-    for (const child of children) if (hasChildren(child)) visit(child)
+    for (const child of children) if (isContainer(child)) visit(child)
   }
   const rootSpan = parsedSpan(tree)
   if (rootSpan) spans.set(tree, rootSpan)
@@ -155,11 +177,12 @@ const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
 const isAddressableText = (node: RootContent, span: Span, source: string): boolean =>
   node.type === 'text' && node.value === source.slice(span.from, span.to)
 
-/** Every leaf a range must not cut: those whose inside can't be addressed. */
-const opaqueLeaves = (tree: Root, spans: WeakMap<object, Span>, source: string): Span[] => {
+/** Every node a range must not cut: anything whose inside can't be
+ *  addressed. */
+const opaqueSpans = (tree: Root, spans: WeakMap<object, Span>, source: string): Span[] => {
   const found: Span[] = []
   const walk = (node: RootContent) => {
-    if (hasChildren(node)) {
+    if (isContainer(node)) {
       for (const child of node.children) walk(child)
       return
     }
@@ -170,12 +193,9 @@ const opaqueLeaves = (tree: Root, spans: WeakMap<object, Span>, source: string):
   return found
 }
 
-const drawable = (source: string, opaque: readonly Span[]) => ({from, to}: HighlightRange): boolean => {
-  if (!(from >= 0 && from < to && to <= source.length)) return false
-  const widened = widenToReferenceSpans(source, from, to)
-  if (widened.from !== from || widened.to !== to) return false
-  return opaque.every(leaf => leaf.to <= from || leaf.from >= to || (leaf.from >= from && leaf.to <= to))
-}
+const drawable = (source: string, opaque: readonly Span[]) => ({from, to}: HighlightRange): boolean =>
+  from >= 0 && from < to && to <= source.length &&
+  opaque.every(node => node.to <= from || node.from >= to || (node.from >= from && node.to <= to))
 
 const pointsOf = (source: string) => {
   const lineStarts = [0]
@@ -196,7 +216,7 @@ const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
   },
 } as unknown as RootContent)
 
-type Piece = {node: RootContent; mark: (Segment & {moved: boolean}) | null}
+type Piece = {node: RootContent; mark: Segment | null}
 
 export interface AnnotationMarksOptions {
   /** The content the ranges were resolved against. A renderer that transforms
@@ -209,7 +229,7 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   const source = String(file.value ?? '')
   if (source !== content || ranges.length === 0) return
   const spans = spansOf(tree, source)
-  const segments = segmentsOf(ranges.filter(drawable(source, opaqueLeaves(tree, spans, source))))
+  const segments = segmentsOf(ranges.filter(drawable(source, opaqueSpans(tree, spans, source))))
   if (segments.length === 0) return
   const pointAt = pointsOf(source)
   const position = (from: number, to: number): Position => ({start: pointAt(from), end: pointAt(to)})
@@ -238,18 +258,19 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
     const coverage = coverageOf(segments, span)
     if (coverage.kind === 'none') return [{node, mark: null}]
     if (coverage.kind === 'whole' && phrasing) return [{node, mark: {...span, moved: coverage.moved}}]
-    if (hasChildren(node)) {
+    if (isContainer(node)) {
       transform(node)
       return [{node, mark: null}]
     }
-    // Partly covered leaves are addressable text: `drawable` refused ranges
-    // that cut any other.
+    // Partly covered, so addressable text: `drawable` refused ranges that cut
+    // anything else.
     return phrasing && node.type === 'text' ? splitText(node, span) : [{node, mark: null}]
   }
 
   /** Rebuild `parent.children`, wrapping each run of marked pieces of one
-   *  style in one mark, when the markup between them is covered too. */
-  const transform = (parent: Root | (RootContent & Parent)) => {
+   *  style in one mark, when the markup between them is covered too, so a
+   *  quote reads as one mark rather than one per node. */
+  const transform = (parent: Container) => {
     const phrasing = PHRASING_PARENTS.has(parent.type)
     const out: RootContent[] = []
     let run: {mark: Segment; nodes: RootContent[]} | null = null
@@ -288,9 +309,9 @@ export interface ThreadHighlightsFeed {
   threads: readonly ThreadSummary[]
 }
 
-/** Ordered before the reference plugins (registered with a lower
- *  precedence), which must see whole spans. Ranges resolve against the
- *  snapshot being rendered, so they cannot lag it. */
+/** Registered after every other markdown extension (a higher precedence), so
+ *  its transform sees their nodes. Ranges resolve against the snapshot being
+ *  rendered, so they cannot lag it. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, data}) => {
   const feed = blockContext[THREAD_HIGHLIGHTS_KEY] as ThreadHighlightsFeed | undefined
   if (!feed || feed.blockId !== block.id || blockContext.isNestedSurface) return null
