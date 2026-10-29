@@ -1,1 +1,1 @@
-export{F2 as parsePropertyDefinitionMetadata,I2 as propertySchemaOriginForSeedKey}from"../../chunks/app-CK_CZ9Nv.js";
+export{P4 as parsePropertyDefinitionMetadata,F4 as propertySchemaOriginForSeedKey}from"../../chunks/app-BpNtW6Zs.js";

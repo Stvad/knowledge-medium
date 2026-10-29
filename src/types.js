@@ -1,1 +1,1 @@
-export{w7 as isChildBackedPropertiesWorkspace}from"../chunks/app-CK_CZ9Nv.js";
+export{C9 as isChildBackedPropertiesWorkspace}from"../chunks/app-BpNtW6Zs.js";

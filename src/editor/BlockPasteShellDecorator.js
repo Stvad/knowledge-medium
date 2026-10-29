@@ -1,1 +1,1 @@
-export{tk as BlockPasteShellDecorator,nk as blockPasteShellDecorator}from"../../chunks/app-CK_CZ9Nv.js";
+export{qk as BlockPasteShellDecorator,Jk as blockPasteShellDecorator}from"../../chunks/app-BpNtW6Zs.js";

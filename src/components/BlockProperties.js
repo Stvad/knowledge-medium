@@ -1,1 +1,1 @@
-export{vF as BlockProperties}from"../../chunks/app-CK_CZ9Nv.js";
+export{dI as BlockProperties}from"../../chunks/app-BpNtW6Zs.js";
