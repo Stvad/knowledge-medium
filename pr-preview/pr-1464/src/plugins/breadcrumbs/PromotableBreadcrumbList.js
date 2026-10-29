@@ -1,0 +1,1 @@
+export{rx as PromotableBreadcrumbList}from"../../../chunks/app-BlfD7uf-.js";

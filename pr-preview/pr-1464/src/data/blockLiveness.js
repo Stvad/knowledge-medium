@@ -1,0 +1,1 @@
+export{UI as anyBlockTombstoned,WI as isBlockTombstoned}from"../../chunks/app-BlfD7uf-.js";

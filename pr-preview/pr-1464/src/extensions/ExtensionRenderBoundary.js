@@ -1,0 +1,1 @@
+export{MM as ExtensionRenderBoundary}from"../../chunks/app-BlfD7uf-.js";

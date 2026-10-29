@@ -1,0 +1,1 @@
+export{sk as extensionPromptDiagnosticContribution,ck as extensionPromptDiagnosticSource}from"../../../chunks/app-BlfD7uf-.js";

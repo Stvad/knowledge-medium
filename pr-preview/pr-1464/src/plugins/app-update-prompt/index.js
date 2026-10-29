@@ -1,0 +1,1 @@
+export{yk as appUpdatePromptExtension}from"../../../chunks/app-BlfD7uf-.js";

@@ -1,0 +1,1 @@
+export{XQ as USER_SCHEMAS_PROJECTOR_ID,ZQ as UserSchemasService,QQ as buildSchemaOrNull,$Q as decodePresetConfig,e$ as definitionSchema,t$ as isRegistrablePropertyName,n$ as propertySchemaNameRejection,r$ as tryBuildSchema,i$ as userSchemasProjector}from"../../chunks/app-BlfD7uf-.js";

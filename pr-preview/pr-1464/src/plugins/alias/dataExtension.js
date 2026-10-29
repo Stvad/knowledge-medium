@@ -1,0 +1,1 @@
+export{JG as aliasDataExtension}from"../../../chunks/app-BlfD7uf-.js";

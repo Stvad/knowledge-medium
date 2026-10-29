@@ -1,0 +1,1 @@
+export{fw as BlockCrumbs}from"../../chunks/app-BlfD7uf-.js";

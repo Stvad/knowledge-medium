@@ -1,0 +1,1 @@
+export{jB as staticDataExtensions}from"../../chunks/app-BlfD7uf-.js";
