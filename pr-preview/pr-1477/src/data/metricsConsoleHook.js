@@ -1,1 +1,1 @@
-export{Ek as ensureMetricsConsoleHook}from"../../chunks/app-BGNME_dp.js";
+export{Ek as ensureMetricsConsoleHook}from"../../chunks/app-DnSHGFdg.js";

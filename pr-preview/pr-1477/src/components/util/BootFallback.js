@@ -1,1 +1,1 @@
-export{lV as BootFallback}from"../../../chunks/app-BGNME_dp.js";
+export{lV as BootFallback}from"../../../chunks/app-DnSHGFdg.js";

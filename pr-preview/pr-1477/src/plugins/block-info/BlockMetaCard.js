@@ -1,1 +1,1 @@
-export{qm as BlockMetaCard}from"../../../chunks/app-BGNME_dp.js";
+export{qm as BlockMetaCard}from"../../../chunks/app-DnSHGFdg.js";

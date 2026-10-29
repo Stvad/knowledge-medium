@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-BGNME_dp.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{th as backlinksViewPlugin}from"../../../chunks/app-BGNME_dp.js";
+export{th as backlinksViewPlugin}from"../../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{c_ as attachmentsPlugin}from"../../../chunks/app-BGNME_dp.js";
+export{c_ as attachmentsPlugin}from"../../../chunks/app-DnSHGFdg.js";

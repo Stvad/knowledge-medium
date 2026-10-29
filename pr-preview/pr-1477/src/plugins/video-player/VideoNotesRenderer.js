@@ -1,1 +1,1 @@
-export{Ny as VideoNotesLayout,Py as VideoNotesRenderer,Fy as videoNotesLayoutContribution}from"../../../chunks/app-BGNME_dp.js";
+export{Ny as VideoNotesLayout,Py as VideoNotesRenderer,Fy as videoNotesLayoutContribution}from"../../../chunks/app-DnSHGFdg.js";

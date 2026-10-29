@@ -1,1 +1,1 @@
-export{kG as contributorsDataExtension}from"../../../chunks/app-BGNME_dp.js";
+export{kG as contributorsDataExtension}from"../../../chunks/app-DnSHGFdg.js";

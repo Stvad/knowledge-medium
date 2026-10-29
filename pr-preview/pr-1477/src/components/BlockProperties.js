@@ -1,1 +1,1 @@
-export{dI as BlockProperties}from"../../chunks/app-BGNME_dp.js";
+export{dI as BlockProperties}from"../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{yq as aliasDataExtension}from"../../../chunks/app-BGNME_dp.js";
+export{yq as aliasDataExtension}from"../../../chunks/app-DnSHGFdg.js";

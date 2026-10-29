@@ -1,1 +1,1 @@
-export{NB as propertyShapeLabel}from"../../../chunks/app-BGNME_dp.js";
+export{NB as propertyShapeLabel}from"../../../chunks/app-DnSHGFdg.js";

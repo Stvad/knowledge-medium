@@ -1,1 +1,1 @@
-export{Oy as videoPlayerMarkdownExtension}from"../../../chunks/app-BGNME_dp.js";
+export{Oy as videoPlayerMarkdownExtension}from"../../../chunks/app-DnSHGFdg.js";

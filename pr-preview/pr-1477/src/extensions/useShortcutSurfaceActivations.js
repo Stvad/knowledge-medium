@@ -1,1 +1,1 @@
-export{UP as useShortcutSurfaceActivations}from"../../chunks/app-BGNME_dp.js";
+export{UP as useShortcutSurfaceActivations}from"../../chunks/app-DnSHGFdg.js";

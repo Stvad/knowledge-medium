@@ -1,1 +1,1 @@
-export{kK as pluginPrefsExtension,AK as pluginUIStateExtension}from"../../chunks/app-BGNME_dp.js";
+export{kK as pluginPrefsExtension,AK as pluginUIStateExtension}from"../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{FM as BlockTypeBlockRenderer,IM as BlockTypeContentRenderer,LM as writeBlockTypeLabel}from"../../../chunks/app-BGNME_dp.js";
+export{FM as BlockTypeBlockRenderer,IM as BlockTypeContentRenderer,LM as writeBlockTypeLabel}from"../../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{Eh as LazyBlockEntry}from"../../../chunks/app-BGNME_dp.js";
+export{Eh as LazyBlockEntry}from"../../../chunks/app-DnSHGFdg.js";

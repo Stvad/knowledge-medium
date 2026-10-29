@@ -1,1 +1,1 @@
-export{RQ as kernelDataExtension}from"../../chunks/app-BGNME_dp.js";
+export{RQ as kernelDataExtension}from"../../chunks/app-DnSHGFdg.js";

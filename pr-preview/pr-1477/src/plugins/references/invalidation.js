@@ -1,1 +1,1 @@
-export{YV as REFERENCES_TARGET_INVALIDATION_CHANNEL,XV as referencesInvalidationRule}from"../../../chunks/app-BGNME_dp.js";
+export{YV as REFERENCES_TARGET_INVALIDATION_CHANNEL,XV as referencesInvalidationRule}from"../../../chunks/app-DnSHGFdg.js";

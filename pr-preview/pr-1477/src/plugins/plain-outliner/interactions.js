@@ -1,1 +1,1 @@
-export{fS as blockEditingContentRenderer}from"../../../chunks/app-BGNME_dp.js";
+export{fS as blockEditingContentRenderer}from"../../../chunks/app-DnSHGFdg.js";

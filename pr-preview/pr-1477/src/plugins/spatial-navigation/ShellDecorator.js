@@ -1,1 +1,1 @@
-export{Kb as SpatialNavigationShellDecorator}from"../../../chunks/app-BGNME_dp.js";
+export{Kb as SpatialNavigationShellDecorator}from"../../../chunks/app-DnSHGFdg.js";

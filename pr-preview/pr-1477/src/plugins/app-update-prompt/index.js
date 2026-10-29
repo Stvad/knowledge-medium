@@ -1,1 +1,1 @@
-export{yA as appUpdatePromptExtension}from"../../../chunks/app-BGNME_dp.js";
+export{yA as appUpdatePromptExtension}from"../../../chunks/app-DnSHGFdg.js";

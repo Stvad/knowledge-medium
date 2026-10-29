@@ -1,1 +1,1 @@
-export{mA as approveExtensionHere}from"../../chunks/app-BGNME_dp.js";
+export{mA as approveExtensionHere}from"../../chunks/app-DnSHGFdg.js";

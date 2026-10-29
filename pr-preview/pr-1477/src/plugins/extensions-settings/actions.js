@@ -1,1 +1,1 @@
-export{or as openExtensionsSettingsAction}from"../../../chunks/app-BGNME_dp.js";
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-DnSHGFdg.js";

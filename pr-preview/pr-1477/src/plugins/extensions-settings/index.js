@@ -1,1 +1,1 @@
-export{yf as extensionsOverridesProp,bf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BGNME_dp.js";
+export{yf as extensionsOverridesProp,bf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DnSHGFdg.js";

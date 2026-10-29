@@ -1,1 +1,1 @@
-export{kB as usePropertySchemas}from"../../chunks/app-BGNME_dp.js";
+export{kB as usePropertySchemas}from"../../chunks/app-DnSHGFdg.js";

@@ -1,1 +1,1 @@
-export{rj as dynamicExtensionsExtension}from"../../chunks/app-BGNME_dp.js";
+export{rj as dynamicExtensionsExtension}from"../../chunks/app-DnSHGFdg.js";

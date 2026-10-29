@@ -1,1 +1,1 @@
-export{rk as kernelPropertyUiExtension,ik as typesPropertyUi,ak as typesPropertyUiExtension}from"../../../chunks/app-BGNME_dp.js";
+export{rk as kernelPropertyUiExtension,ik as typesPropertyUi,ak as typesPropertyUiExtension}from"../../../chunks/app-DnSHGFdg.js";

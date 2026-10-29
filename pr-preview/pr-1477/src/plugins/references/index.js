@@ -1,1 +1,1 @@
-export{ig as referencesPlugin}from"../../../chunks/app-BGNME_dp.js";
+export{ig as referencesPlugin}from"../../../chunks/app-DnSHGFdg.js";
