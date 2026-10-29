@@ -655,7 +655,13 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
   <li><strong>Monitoring a scope without being mentioned</strong> is a <code>query</code> watcher running a comments recipe. That watcher already exists: it fires once per batch of new ids, sets a first-run baseline so old comments are not replayed, and keeps a seen-ids cursor that advances before the run, so it survives restarts and never re-bills a failed prompt. It already pushes through a <code>watch-events</code> <code>sql</code> watcher, whose fingerprint changes whenever a new id appears. The recipe, shipped in the guide's <code>comments</code> topic, selects comment ids in the scope that are:
     <ul>
       <li>visible descendants, at any depth, of open threads in the (recursive) scope;</li>
-      <li>non-empty, so a freshly created empty reply waits until it has text;</li>
+      <li>non-empty, <em>and</em> last edited at least a quiet period ago, measured on <code>coalesce(user_updated_at, updated_at)</code>.
+        <ul>
+          <li><strong>Why:</strong> the <code>query</code> watcher fires on the first appearance of an id and advances its cursor before the run. Its push settle is only one second (<code>QUERY_SETTLE_MS</code> in <code>push.ts</code>). Without the condition, a reply caught on its first debounced write would be answered half-typed, and its finished version never seen.</li>
+          <li><strong>The period:</strong> use the mention watcher's 15 seconds (<code>quietMs</code>), so both paths wait alike.</li>
+          <li><strong>Latency:</strong> time passing changes no table, so the push watcher cannot see a comment go quiet. The poll sweep picks it up, which makes the latency the quiet period plus up to one poll interval.</li>
+        </ul>
+      </li>
       <li>not created by an agent or automation contributor, which is the loop guard, and also stops two agents on one scope from ping-ponging;</li>
       <li>not mentioning a dispatch target page, so a <code>[[claude]]</code> comment is answered once, by the mention watcher.</li>
     </ul>
@@ -818,7 +824,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
       <li>B's reference pill does not count X.</li>
     </ul>
   </li>
-  <li><strong>Dispatch:</strong> bookkeeping writes leave a mentioning block's attribution untouched. The recipe excludes agent-authored, empty and mentioning comments.</li>
+  <li><strong>Dispatch:</strong> bookkeeping writes leave a mentioning block's attribution untouched. The recipe excludes agent-authored, empty and mentioning comments. It also excludes a comment edited within the quiet period, which is selected once it goes quiet, with its finished text.</li>
 </ul>
 
 <h2 id="decisions">Decisions</h2>
