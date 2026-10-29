@@ -1,1 +1,1 @@
-export{Wn as KeyCaptureInput}from"../../../chunks/app-BBNVXogN.js";
+export{Wn as KeyCaptureInput}from"../../../chunks/app-BEHGIkVx.js";

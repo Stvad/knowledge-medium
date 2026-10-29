@@ -1,1 +1,1 @@
-export{Vx as defaultToolbarItems}from"../../../chunks/app-BBNVXogN.js";
+export{Vx as defaultToolbarItems}from"../../../chunks/app-BEHGIkVx.js";

@@ -1,1 +1,1 @@
-export{CV as BootFallback}from"../../../chunks/app-BBNVXogN.js";
+export{CV as BootFallback}from"../../../chunks/app-BEHGIkVx.js";

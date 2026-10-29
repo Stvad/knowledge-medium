@@ -1,1 +1,1 @@
-export{Ant as defineQuery}from"../../../chunks/app-BBNVXogN.js";
+export{Ant as defineQuery}from"../../../chunks/app-BEHGIkVx.js";

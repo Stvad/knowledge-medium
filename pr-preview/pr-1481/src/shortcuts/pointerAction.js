@@ -1,1 +1,1 @@
-export{XA as dispatchPointerAction,ZA as setPointerActionDispatcher}from"../../chunks/app-BBNVXogN.js";
+export{XA as dispatchPointerAction,ZA as setPointerActionDispatcher}from"../../chunks/app-BEHGIkVx.js";

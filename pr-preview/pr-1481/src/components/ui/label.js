@@ -1,1 +1,1 @@
-export{ZT as Label}from"../../../chunks/app-BBNVXogN.js";
+export{ZT as Label}from"../../../chunks/app-BEHGIkVx.js";

@@ -1,1 +1,1 @@
-export{f9 as deriveWorkspaceIdNamespace}from"../../../chunks/app-BBNVXogN.js";
+export{f9 as deriveWorkspaceIdNamespace}from"../../../chunks/app-BEHGIkVx.js";

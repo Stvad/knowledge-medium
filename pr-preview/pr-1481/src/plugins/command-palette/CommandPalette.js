@@ -1,1 +1,1 @@
-export{KD as CommandPalette}from"../../../chunks/app-BBNVXogN.js";
+export{KD as CommandPalette}from"../../../chunks/app-BEHGIkVx.js";

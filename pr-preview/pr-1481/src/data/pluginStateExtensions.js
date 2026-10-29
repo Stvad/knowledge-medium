@@ -1,1 +1,1 @@
-export{UK as pluginPrefsExtension,WK as pluginUIStateExtension}from"../../chunks/app-BBNVXogN.js";
+export{UK as pluginPrefsExtension,WK as pluginUIStateExtension}from"../../chunks/app-BEHGIkVx.js";

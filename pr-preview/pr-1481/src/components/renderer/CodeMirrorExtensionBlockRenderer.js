@@ -1,1 +1,1 @@
-export{LM as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BBNVXogN.js";
+export{LM as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BEHGIkVx.js";
