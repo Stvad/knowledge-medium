@@ -722,6 +722,16 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
   return Boolean(element?.closest(interactiveContentSelector))
 }
 
+/** Whether a content-surface gesture (a swipe, a scrub, a hold) may start on
+ *  `target`: anywhere but an interactive descendant, except links and video.
+ *  Those fill much of readable content and keep their taps, since only a
+ *  gesture that completes takes the event from them. */
+export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
+  if (!isInteractiveContentEvent({target})) return true
+  const element = target instanceof Element ? target : (target as Node).parentElement
+  return Boolean(element?.closest('a[href],video'))
+}
+
 /**
  * Where one block's DOM ends and another's begins: a content surface
  * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an

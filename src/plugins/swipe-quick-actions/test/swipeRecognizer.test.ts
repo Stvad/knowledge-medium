@@ -14,17 +14,19 @@ import type {
 } from '@/extensions/continuousGestures.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { Block } from '@/data/block'
+import { selectionStateProp } from '@/data/properties.js'
 
 const fakeBlock = (id: string): Block =>
   ({id, peekProperty: vi.fn(() => undefined)} as unknown as Block)
 
-const context = (): BlockResolveContext =>
+const context = ({selectedBlockIds = [] as string[]} = {}): BlockResolveContext =>
   ({
     block: fakeBlock('b1'),
     // `peek()` backs the focus/editing check; empty properties → not focused.
     uiStateBlock: {
       peek: vi.fn(() => ({properties: {}})),
-      peekProperty: vi.fn(() => undefined),
+      peekProperty: vi.fn((prop: {name: string}) =>
+        prop.name === selectionStateProp.name ? {selectedBlockIds, anchorBlockId: null} : undefined),
     } as unknown as Block,
     repo: {} as never,
     types: [],
@@ -40,8 +42,8 @@ const session = (changed: GesturePointer, all: readonly GesturePointer[] = [chan
 const eventCtx = (pointerType = 'touch'): GestureEventContext =>
   ({element: document.createElement('div'), event: {pointerType, target: null} as unknown as PointerEvent})
 
-const make = (): GestureRecognizer => {
-  const r = swipeRecognizer(context())
+const make = (options?: Parameters<typeof context>[0]): GestureRecognizer => {
+  const r = swipeRecognizer(context(options))
   if (!r) throw new Error('recognizer not contributed')
   return r
 }
@@ -126,5 +128,9 @@ describe('swipeRecognizer', () => {
     expect(make().isEnabled?.()).toBe(true) // beforeEach reports a mobile viewport
     window.matchMedia = vi.fn().mockReturnValue({matches: false}) as unknown as typeof window.matchMedia
     expect(make().isEnabled?.()).toBe(false)
+  })
+
+  it('is off while blocks are selected: a swipe would act on one block mid-selection', () => {
+    expect(make({selectedBlockIds: ['b2']}).isEnabled?.()).toBe(false)
   })
 })

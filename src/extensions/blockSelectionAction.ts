@@ -1,6 +1,6 @@
 import { focusBlock, selectionStateProp } from '@/data/properties.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
+import { ActionContextTypes, type ActionConfig, type BlockPointerDependencies } from '@/shortcuts/types.js'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
 
 export const EXTEND_BLOCK_SELECTION_ACTION_ID = 'extend_block_selection'
@@ -64,23 +64,30 @@ export const toggleBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
     {kind: 'mouse', mods: ['$mod'], phase: 'click'},
     {kind: 'mouse', mods: ['Control'], phase: 'click'},
   ],
-  handler: async ({block, uiStateBlock, renderScopeId}) => {
-    const repo = uiStateBlock.repo
-    const selectionState = getSelectionStateSnapshot(uiStateBlock)
-    const isSelected = selectionState.selectedBlockIds.includes(block.id)
-    const newSelectedIds = isSelected
-      ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-      : [...selectionState.selectedBlockIds, block.id]
+  handler: deps => toggleBlockInSelection(deps),
+}
 
-    const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
+/** Put `block` in the selection, or take it out if it is already there
+ *  (with hierarchy validation), then focus it. Taking out the last block
+ *  ends the selection. */
+export const toggleBlockInSelection = async (
+  {block, uiStateBlock, renderScopeId}: BlockPointerDependencies,
+): Promise<void> => {
+  const repo = uiStateBlock.repo
+  const selectionState = getSelectionStateSnapshot(uiStateBlock)
+  const isSelected = selectionState.selectedBlockIds.includes(block.id)
+  const newSelectedIds = isSelected
+    ? selectionState.selectedBlockIds.filter(id => id !== block.id)
+    : [...selectionState.selectedBlockIds, block.id]
 
-    void uiStateBlock.set(selectionStateProp, {
-      selectedBlockIds: validatedIds,
-      anchorBlockId: validatedIds.length > 0
-        ? (selectionState.anchorBlockId || block.id)
-        : null,
-    })
+  const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
 
-    void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
-  },
+  void uiStateBlock.set(selectionStateProp, {
+    selectedBlockIds: validatedIds,
+    anchorBlockId: validatedIds.length > 0
+      ? (selectionState.anchorBlockId || block.id)
+      : null,
+  })
+
+  void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
 }

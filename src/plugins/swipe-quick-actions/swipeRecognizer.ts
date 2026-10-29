@@ -23,9 +23,9 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
-import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
-import type { Block } from '@/data/block'
+import { isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { isEditingBlock } from '@/data/properties.js'
+import { hasBlockSelection } from '@/data/stateBlocks.js'
 import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { swipeProgressTickEvent } from './events.ts'
 import { isMobileViewport } from '@/utils/viewport.js'
@@ -41,19 +41,6 @@ const DIRECTION_LOCK_PX = 8
 // recognizer applies the same gate at gesture time via `isMobileViewport` —
 // read live so a resize doesn't leave a stale decision (the factory isn't
 // re-run on resize).
-
-const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
-  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
-  Boolean(uiStateBlock.peekProperty(isEditingProp))
-
-/** Links and video can occupy a large part of readable content; a tap on them
- *  still works (only a completed horizontal swipe preventDefaults), so they are
- *  NOT treated as interactive-content the way buttons/editor are. */
-const isSwipeSurfaceEvent = (target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  return Boolean(element?.closest('a[href],video'))
-}
 
 interface SwipeStart {
   readonly x: number
@@ -92,16 +79,17 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
     : undefined
   let start: SwipeStart | null = null
 
-  const editing = (): boolean => isBlockEditing(block.id, uiStateBlock, renderScopeId)
+  const editing = (): boolean => isEditingBlock(uiStateBlock, block.id, renderScopeId)
 
   const recognizer: GestureRecognizer = {
     id: SWIPE_QUICK_ACTIONS_GESTURE_ID,
-    // Applicability gate (the menu is mobile-only and a swipe is meaningless on
-    // an editing block): the loop drops the recognizer's handlers and its pan-y
-    // when this is false, so the handlers below only state per-event ownership.
-    // Read live, so a resize / edit toggle is reflected without re-running the
-    // factory.
-    isEnabled: () => isMobileViewport() && !editing(),
+    // Applicability gate (the menu is mobile-only, a swipe is meaningless on
+    // an editing block, and while blocks are selected a gesture acts on the
+    // selection, not on one block): the loop drops the recognizer's handlers
+    // and its pan-y when this is false, so the handlers below only state
+    // per-event ownership. Read live, so a resize / edit toggle is reflected
+    // without re-running the factory.
+    isEnabled: () => isMobileViewport() && !editing() && !hasBlockSelection(uiStateBlock),
     // pan-y hands horizontal motion to JS while keeping native vertical scroll,
     // so the recognizer doesn't have to preventDefault moves to suppress scroll.
     touchAction: 'pan-y',
@@ -116,9 +104,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       }
       // Don't intercept gestures starting on buttons / the editor / other
       // interactive descendants; links and video are the exception (taps work).
-      if (!isSwipeSurfaceEvent(ctx.event.target) && isInteractiveContentEvent(ctx.event)) {
-        return GESTURE_IDLE
-      }
+      if (!isGestureSurfaceTarget(ctx.event.target)) return GESTURE_IDLE
       start = {x: session.changed.x, y: session.changed.y, pointerId: session.changed.pointerId, decided: null, previewed: false}
       return GESTURE_IDLE
     },
