@@ -6,8 +6,7 @@
  * the runtime's own `executeCommand` and returns what the bridge loop would.
  */
 import { provideRuntimeGlobals } from './nodeShims'
-import { knownAgentCommandSchema, type KnownCommand } from '@knowledge-medium/agent-cli/protocol'
-import type { BridgeClient } from '../../packages/agent-cli/src/client'
+import type { KnownCommand } from '@knowledge-medium/agent-cli/protocol'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { TestDb } from '@/data/test/createTestDb'
@@ -17,10 +16,10 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createAgentRuntimeContext, executeCommand } from '@/plugins/agent-runtime/commands'
 import type { AgentRuntimeContext } from '@/plugins/agent-runtime/protocol'
-import { commandResult } from '@/plugins/agent-runtime/bridgeLoop'
 import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { importRoam } from '@/plugins/roam-import/import'
 import { buildFixture, TEST_USER, TEST_WORKSPACE_ID } from './fixture'
+import { createInProcessBridgeClient } from './inProcessBridgeClient'
 import { connectMcpClient } from './mcpClient'
 
 
@@ -57,14 +56,8 @@ export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolea
   }
 }
 
-export const createInProcessBridgeClient = (context: AgentRuntimeContext): BridgeClient => ({
+const fixtureBridgeClient = (context: AgentRuntimeContext) => createInProcessBridgeClient(context, {
   bridgeUrl: 'in-process://agent-eval',
-  runCommand: async command => {
-    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse({contributorId: null, ...command}), context))
-    if (!result.ok) throw new Error(result.error.message)
-    return JSON.parse(JSON.stringify(result.value)) as unknown
-  },
-  nextEvents: async () => ({events: [], nextSeq: 0}),
   whoami: async () => ({
     clientId: 'in-process',
     audience: {userId: TEST_USER.id, workspaceId: TEST_WORKSPACE_ID, label: 'agent-eval'},
@@ -72,8 +65,6 @@ export const createInProcessBridgeClient = (context: AgentRuntimeContext): Bridg
     connected: true,
     clientLastSeen: null,
   }),
-  health: async () => {},
-  resolveToken: async () => 'in-process',
 })
 
 export interface FixtureTestGraph {
@@ -87,7 +78,7 @@ export interface FixtureTestGraph {
 
 export const openFixtureTestGraph = async (db: TestDb['db'], options: {seed: boolean}): Promise<FixtureTestGraph> => {
   const runtime = await openFixtureRuntime(db, options)
-  const bridge = createInProcessBridgeClient(runtime.context)
+  const bridge = fixtureBridgeClient(runtime.context)
   const mcp = await connectMcpClient(bridge)
   return {
     callTool: mcp.callTool,

@@ -717,10 +717,7 @@ describe('mention lifecycle', () => {
 
     let clock = NOW
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, replies: graph, state: memoryState(), runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, runTask, now: () => clock})
 
     await engine.tick()          // resolves page-v1, no backlinks
     await engine.drain()
@@ -1198,19 +1195,10 @@ describe('live progress streaming', () => {
       options.onEvent?.({kind: 'text', text: 'Once upon a time'}) // t+1600: past 1.5s, writes
       return okRun({resultText: 'Once upon a time, the end.'})
     })
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
       graph,
-      replies: graph,
-      runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => clock,
+      runTask, now: () => clock,
     })
 
     await engine.tick()
@@ -1393,19 +1381,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
       graph,
-      replies: graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1424,19 +1403,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
       graph,
-      replies: graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1521,10 +1491,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
     })
     const state = memoryState([], {armBaselines: false})
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, replies: graph, state, runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, state, runTask, now: () => clock})
 
     await engine.tick()
     await engine.drain()
