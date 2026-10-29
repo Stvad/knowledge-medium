@@ -1,8 +1,8 @@
 /**
  * `Comments (km)`: the one page per workspace that thread roots live under.
  *
- * Created lazily by the first comment, inside that comment's undo group, so the
- * first comment is one undo step. Found by its derived id, so no marker type.
+ * Created lazily by the first comment. Found by its derived id, so no marker
+ * type.
  * Where a thread lives is incidental — discovery is the `annotation:target`
  * edge, so a root moved elsewhere by hand still works.
  */
@@ -23,13 +23,14 @@ export const COMMENTS_PAGE_ALIAS = 'Comments (km)'
 export const commentsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, COMMENTS_PAGE_NS)
 
-/** Undoable: call it inside the creating gesture's `undoGroup`. */
+/** A container, so its create is never part of the comment's undo step (see
+ *  `getOrCreateKernelPage`): undoing a first comment leaves the page. */
 export const getOrCreateCommentsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: COMMENTS_PAGE_NS,
     alias: COMMENTS_PAGE_ALIAS,
     markerType: null,
-  })
+  }, {skipUndo: true})
 
 /** Deleting a page deletes its subtree, so one stray delete of the container
  *  would hide every comment in the workspace, and restoring the page alone
