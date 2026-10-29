@@ -1,1 +1,1 @@
-export{PC as DEFAULT_SESSION_GAP_MS,FC as groupRecentActivity}from"../../../chunks/app-Dx9GREdf.js";
+export{FC as DEFAULT_SESSION_GAP_MS,IC as groupRecentActivity}from"../../../chunks/app-CgGXypIL.js";

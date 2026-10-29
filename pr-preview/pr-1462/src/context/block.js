@@ -1,1 +1,1 @@
-export{hz as BlockContext,gz as BlockContextProvider,_z as NestedBlockContextProvider,vz as useBlockContext}from"../../chunks/app-Dx9GREdf.js";
+export{gz as BlockContext,_z as BlockContextProvider,vz as NestedBlockContextProvider,yz as useBlockContext}from"../../chunks/app-CgGXypIL.js";

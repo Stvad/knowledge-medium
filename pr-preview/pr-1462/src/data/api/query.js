@@ -1,1 +1,1 @@
-export{Wet as defineQuery}from"../../../chunks/app-Dx9GREdf.js";
+export{Get as defineQuery}from"../../../chunks/app-CgGXypIL.js";

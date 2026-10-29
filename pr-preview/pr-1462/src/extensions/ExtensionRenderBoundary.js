@@ -1,1 +1,1 @@
-export{PM as ExtensionRenderBoundary}from"../../chunks/app-Dx9GREdf.js";
+export{FM as ExtensionRenderBoundary}from"../../chunks/app-CgGXypIL.js";

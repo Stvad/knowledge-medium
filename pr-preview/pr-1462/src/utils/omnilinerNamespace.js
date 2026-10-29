@@ -1,1 +1,1 @@
-export{FK as omnilinerNamespace}from"../../chunks/app-Dx9GREdf.js";
+export{IK as omnilinerNamespace}from"../../chunks/app-CgGXypIL.js";

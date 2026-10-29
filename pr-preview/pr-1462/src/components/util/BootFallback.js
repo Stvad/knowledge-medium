@@ -1,1 +1,1 @@
-export{uB as BootFallback}from"../../../chunks/app-Dx9GREdf.js";
+export{dB as BootFallback}from"../../../chunks/app-CgGXypIL.js";

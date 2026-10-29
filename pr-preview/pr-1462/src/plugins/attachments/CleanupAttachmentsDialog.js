@@ -1,1 +1,1 @@
-export{mg as CleanupAttachmentsDialog}from"../../../chunks/app-Dx9GREdf.js";
+export{hg as CleanupAttachmentsDialog}from"../../../chunks/app-CgGXypIL.js";

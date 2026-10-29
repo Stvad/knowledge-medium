@@ -1,1 +1,1 @@
-export{ux as plainOutlinerPlugin}from"../../../chunks/app-Dx9GREdf.js";
+export{dx as plainOutlinerPlugin}from"../../../chunks/app-CgGXypIL.js";
