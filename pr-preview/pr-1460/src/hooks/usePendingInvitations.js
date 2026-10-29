@@ -1,1 +1,0 @@
-export{WS as usePendingInvitations}from"../../chunks/app-D1qjnAUM.js";

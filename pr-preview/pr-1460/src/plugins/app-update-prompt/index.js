@@ -1,1 +1,0 @@
-export{yk as appUpdatePromptExtension}from"../../../chunks/app-D1qjnAUM.js";

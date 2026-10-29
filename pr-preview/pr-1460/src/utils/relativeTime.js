@@ -1,1 +1,0 @@
-export{PC as formatAbsoluteDateTime,FC as formatRelativeTime}from"../../chunks/app-D1qjnAUM.js";
