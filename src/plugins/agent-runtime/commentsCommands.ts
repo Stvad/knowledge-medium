@@ -9,6 +9,7 @@
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import type { BlockData } from '@/data/api'
 import { hasBlockType } from '@/data/properties'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import type { Repo } from '@/data/repo'
 import { addComment } from '@/plugins/annotations/addComment.js'
 import { resolveAnchor } from '@/plugins/annotations/anchor.js'
@@ -20,10 +21,10 @@ import { threadIdsInScope } from '@/plugins/annotations/scope.js'
 import { authorIdOf } from '@/plugins/contributors/author.js'
 import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
-import { loadCrumbs } from './agentViews/context.ts'
+import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
 import { resolveBlockRef, shortIds } from './agentViews/resolveRef.ts'
 import { clampInt } from './agentViews/shared.ts'
-import { clipLine, oneLine } from './agentViews/text.ts'
+import { clip, clipLine, oneLine } from './agentViews/text.ts'
 
 const DEFAULT_THREAD_LIMIT = 20
 const MAX_THREAD_LIMIT = 100
@@ -98,13 +99,7 @@ const statusOf = (root: BlockData): string => {
   }
 }
 
-const creatorsOf = (row: BlockData): readonly string[] => {
-  try {
-    return attributionCreatorsProp.codec.decode(row.properties[attributionCreatorsProp.name] ?? [])
-  } catch {
-    return []
-  }
-}
+const creatorsOf = (row: BlockData): readonly string[] => safeDecodeRowProperty(row, attributionCreatorsProp)
 
 /** The thread roots a call names, newest first. */
 const selectThreadIds = async (repo: Repo, workspaceId: string, params: CommentsParams): Promise<string[]> => {
@@ -143,10 +138,8 @@ const authorsOf = async (repo: Repo, comments: readonly BlockData[]): Promise<Ma
   for (const comment of comments) {
     pageIds.set(comment.id, authorIdOf({creators: creatorsOf(comment), ...comment}))
   }
-  const pages = new Map<string, BlockData | null>()
-  for (const id of new Set(pageIds.values())) {
-    if (id) pages.set(id, await repo.load(id) ?? null)
-  }
+  const authorPageIds = [...new Set(pageIds.values())].filter((id): id is string => !!id)
+  const pages = new Map((await loadBlocks(repo, authorPageIds)).map(page => [page.id, page]))
   for (const comment of comments) {
     const id = pageIds.get(comment.id)
     const page = id ? pages.get(id) : null
@@ -174,7 +167,7 @@ export const buildCommentsView = async (
   params: CommentsParams,
 ): Promise<CommentsView> => {
   const ids = await selectThreadIds(repo, workspaceId, params)
-  const roots = (await Promise.all(ids.map(id => repo.load(id)))).filter(isThreadRoot)
+  const roots = (await loadBlocks(repo, ids, {workspaceId})).filter(isThreadRoot)
   // A thread asked for by its root is answered whatever its status.
   const listed = params.thread !== undefined || params.includeClosed ? roots : roots.filter(threadIsOpen)
   const offset = params.offset ?? 0
@@ -201,11 +194,11 @@ export const buildCommentsView = async (
     const nodes = new Map<string, CommentNode>()
     const topLevel: CommentNode[] = []
     for (const row of commentRows.get(root.id) ?? []) {
-      const cut = Math.max(0, row.content.length - AGENT_VIEW_DEFAULTS.blockMaxChars)
+      const {text: content, cut} = clip(row.content, AGENT_VIEW_DEFAULTS.blockMaxChars)
       const node: CommentNode = {
         id: row.id,
         shortId: short.get(row.id) ?? row.id,
-        content: cut > 0 ? `${row.content.slice(0, AGENT_VIEW_DEFAULTS.blockMaxChars)}…` : row.content,
+        content,
         cut,
         author: authors.get(row.id)!,
         createdAt: row.createdAt,

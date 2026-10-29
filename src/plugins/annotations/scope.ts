@@ -25,6 +25,14 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *  UNION dedups, so a cycle ends. Binds the scope id, then what `fieldRow`
  *  binds.
  *
+ *  The descent stops at a thread root: a root is covered only through its
+ *  target, so one moved by hand under another thread's comment keeps its own
+ *  comments to itself.
+ *
+ *  The `INDEXED BY` is load-bearing, as on `SUBTREE_SQL` (treeQueries.ts):
+ *  without it the workspace equality below leads the planner to scan the
+ *  workspace index for every covered row.
+ *
  *  DEFENCE IN DEPTH: the `workspace_id` equalities. Sync applies parent ids
  *  and rewrites `workspace_id` verbatim, so a covered block's child or
  *  referrer can sit in another workspace. */
@@ -34,9 +42,10 @@ const coveredCte = (fieldRow: (rowRef: string) => string): string => `
     UNION
     SELECT child.id, covered.thread_id, covered.workspace_id
       FROM covered
-      JOIN blocks child ON child.parent_id = covered.id
+      JOIN blocks child INDEXED BY idx_blocks_parent_order ON child.parent_id = covered.id
      WHERE child.deleted = 0 AND child.workspace_id = covered.workspace_id
        AND NOT (${fieldRow('child')})
+       AND NOT EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = child.id AND t.type = '${THREAD_TYPE}')
     UNION
     SELECT root.id, root.id, covered.workspace_id
       FROM covered
@@ -61,7 +70,7 @@ export const threadIdsInScope = async (repo: Repo, scopeId: string): Promise<str
     THREAD_IDS_IN_SCOPE_SQL,
     [scopeId, ...registryRecognitionParams(repo)],
   )
-  return [...new Set(rows.map(row => row.id))]
+  return rows.map(row => row.id)
 }
 
 /** The quiet period the comments recipe waits for, the mention watcher's
@@ -79,15 +88,15 @@ export const COMMENTS_RECIPE_QUIET_MS = 15_000
  *  treats every `::` field row as one; the scope read above asks the
  *  registry. */
 export const COMMENTS_RECIPE_SQL = `${coveredCte(rowRef => `COALESCE(${rowRef}.is_field_form, 0) = 1`)}
-  SELECT DISTINCT comment.id, covered.thread_id AS thread_id, comment.content
+  SELECT comment.id, covered.thread_id AS thread_id, comment.content
     FROM covered
     JOIN blocks comment ON comment.id = covered.id
     JOIN blocks root ON root.id = covered.thread_id
     LEFT JOIN blocks author
       ON author.id = json_extract(comment.properties_json, '$."${attributionCreatorsProp.name}"[0]')
-   WHERE covered.thread_id IS NOT NULL AND covered.id != covered.thread_id
+   WHERE covered.id != covered.thread_id
      AND COALESCE(json_extract(root.properties_json, '$."${annotationStatusProp.name}"'), 'open') = 'open'
-     AND trim(comment.content) != ''
+     AND trim(comment.content, ' ' || char(9, 10, 13)) != ''
      AND COALESCE(comment.user_updated_at, comment.updated_at)
          <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 - ${COMMENTS_RECIPE_QUIET_MS}
      AND (
