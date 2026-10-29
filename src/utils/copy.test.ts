@@ -7,7 +7,7 @@ import { Repo } from '@/data/repo'
 import { armCut, disarmCut, getArmedCut, matchArmedCut } from '@/paste/armedCut'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import type { BlockShortcutDependencies } from '@/shortcuts/types'
-import { copyBlockIdsToClipboard, cutBlockIdsToClipboard } from './copy'
+import { copyBlockIdsToClipboard, cutBlockIdsToClipboard, writeTextToClipboard } from './copy'
 
 const WS = 'ws-1'
 
@@ -95,5 +95,24 @@ describe('block copy actions (copy ref, embed, link, content)', () => {
 
     expect(writeText).toHaveBeenCalledWith('((a))')
     await vi.waitFor(() => expect(getArmedCut()).toBeNull())
+  })
+})
+
+describe('writeTextToClipboard (every other clipboard writer in the app)', () => {
+  it('disarms a cut once the text is written', async () => {
+    vi.stubGlobal('navigator', {clipboard: {writeText: vi.fn(async () => {})}})
+    await armCut('((a))', {workspaceId: WS, rootIds: ['a']})
+
+    await writeTextToClipboard('((a))')
+
+    expect(getArmedCut()).toBeNull()
+  })
+
+  it('keeps the cut armed when the write is refused', async () => {
+    vi.stubGlobal('navigator', {clipboard: {writeText: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    await armCut('((a))', {workspaceId: WS, rootIds: ['a']})
+
+    await expect(writeTextToClipboard('((a))')).rejects.toThrow('NotAllowedError')
+    expect(getArmedCut()?.rootIds).toEqual(['a'])
   })
 })

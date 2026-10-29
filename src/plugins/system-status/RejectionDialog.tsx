@@ -1,3 +1,4 @@
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { useQuery, usePowerSync } from '@powersync/react'
 import { Copy, Lock, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -77,7 +78,7 @@ export function RejectionDialog({open, onOpenChange}: Props) {
       error: safeParseJson(row.error_message ?? '') ?? row.error_message,
       rejected_at: new Date(row.rejected_at).toISOString(),
     }
-    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+    await writeTextToClipboard(JSON.stringify(payload, null, 2))
     setCopiedId(row.id)
     setTimeout(() => setCopiedId(current => (current === row.id ? null : current)), 1500)
   }

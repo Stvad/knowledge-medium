@@ -53,6 +53,7 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
   })
 
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
+  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
   navigator.clipboard.write([createClipboardItem(data)])
 
 /** Copy: the clipboard no longer holds a cut, so a paste must not move one.
@@ -60,6 +61,15 @@ const writeToClipboard = async (data: ClipboardData): Promise<void> =>
  *  the clipboard. */
 const copyToClipboard = async (data: ClipboardData): Promise<void> => {
   await writeToClipboard(data)
+  disarmCut()
+}
+
+/** Write `text` to the clipboard: the app's one plain-text clipboard writer,
+ *  enforced by lint. Whatever it writes replaces a cut on the clipboard, so it
+ *  disarms that cut once the write resolved (see {@link copyToClipboard}). */
+export const writeTextToClipboard = async (text: string): Promise<void> => {
+  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+  await navigator.clipboard.writeText(text)
   disarmCut()
 }
 

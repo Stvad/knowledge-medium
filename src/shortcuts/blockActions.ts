@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
-import { copyBlockToClipboard } from '@/utils/copy.js'
+import { copyBlockToClipboard, writeTextToClipboard } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { withRowSlide } from '@/utils/flipSlide.js'
@@ -20,7 +20,6 @@ import {
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
-import { disarmCut } from '@/paste/armedCut.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -78,11 +77,10 @@ export const bindBlockActionContext = <T extends ActionContextType>(
 /** Write to the system clipboard if the platform exposes the async API.
  *  Used by the block-level "copy *" actions; safe to call in non-browser
  *  contexts (jsdom, Node) — the no-clipboard branch silently no-ops so
- *  unit tests can invoke handlers without setting up a clipboard mock.
- *  A copy replaces any cut on the clipboard, so it disarms it once written. */
+ *  unit tests can invoke handlers without setting up a clipboard mock. */
 const writeToClipboard = (text: string): void => {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return
-  void navigator.clipboard.writeText(text).then(() => disarmCut())
+  void writeTextToClipboard(text)
 }
 
 /** Move `block` one step up (-1) or down (+1) in the visible outline,

@@ -20,6 +20,7 @@
  * panel is actually visible while the dialog floats — close it with Escape or
  * the ✕; an outside click is intentionally NOT a close (see below).
  */
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, CheckCircle2, CircleAlert, Copy, Check, RefreshCw } from 'lucide-react'
 import {
@@ -112,7 +113,7 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
     try {
       // Throws synchronously in an insecure context / older webview where
       // `navigator.clipboard` is undefined — caught below.
-      await navigator.clipboard.writeText(id)
+      await writeTextToClipboard(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     } catch (error) {

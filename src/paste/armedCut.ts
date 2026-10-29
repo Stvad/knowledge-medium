@@ -10,11 +10,11 @@
  * stale but never wrong: if the user copied something else since, the paste
  * text no longer matches and the paste is an ordinary one.
  *
- * A cut arms it; the block copy helpers and any native copy or cut in the
- * page (`@/extensions/armedCutAppMount.js`) disarm it. Writes from other apps
- * can't, which is what the digest check is for. Inherent limit: plain text
- * from elsewhere that is IDENTICAL to the cut's text matches it. (The app's
- * other clipboard writers, a token or a JSON dump, can't produce block text.)
+ * A cut arms it. Every other clipboard write in the app disarms it: the
+ * async writes go through `@/utils/copy.js` (lint-enforced), and native copy
+ * and cut events through `@/extensions/armedCutAppMount.js`. Writes from other
+ * apps can't, which is what the digest check is for. Inherent limit: plain
+ * text from elsewhere that is IDENTICAL to the cut's text matches it.
  */
 
 import { CallbackSet } from '@/utils/callbackSet.js'
