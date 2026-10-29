@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useRepo } from '@/context/repo.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import { BULLET_HOVER_CARD_ATTRIBUTE } from '@/components/renderer/BulletHoverCard.js'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
@@ -41,10 +42,7 @@ export function BlockDragLayer() {
   useEffect(() => controller.install(), [controller])
   const {active, line} = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   // A read-only workspace takes no drag, so its bullets keep panning.
-  const readOnly = useSyncExternalStore(
-    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
-    () => repo.isReadOnly,
-  )
+  const readOnly = useIsReadOnly(repo)
 
   return (
     <>
