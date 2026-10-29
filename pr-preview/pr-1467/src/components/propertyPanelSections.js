@@ -1,1 +1,1 @@
-export{DI as buildPropertyPanelSections}from"../../chunks/app-C2CObLQf.js";
+export{AI as buildPropertyPanelSections}from"../../chunks/app-C-KD-Wd6.js";

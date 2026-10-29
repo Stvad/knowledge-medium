@@ -1,1 +1,1 @@
-export{ng as wikilinkMarkdownExtension}from"../../../../../chunks/app-C2CObLQf.js";
+export{ag as wikilinkMarkdownExtension}from"../../../../../chunks/app-C-KD-Wd6.js";

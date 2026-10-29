@@ -1,1 +1,1 @@
-export{Wx as MobileBottomNavButton}from"../../../chunks/app-C2CObLQf.js";
+export{qx as MobileBottomNavButton}from"../../../chunks/app-C-KD-Wd6.js";

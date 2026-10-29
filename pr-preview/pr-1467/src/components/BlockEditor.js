@@ -1,1 +1,1 @@
-export{kP as BlockEditor}from"../../chunks/app-C2CObLQf.js";
+export{MP as BlockEditor}from"../../chunks/app-C-KD-Wd6.js";

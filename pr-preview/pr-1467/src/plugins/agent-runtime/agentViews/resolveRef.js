@@ -1,1 +1,1 @@
-export{Jp as BlockRefError,Yp as MIN_ID_PREFIX,Xp as resolveBlockRef,Zp as shortIds}from"../../../../chunks/app-C2CObLQf.js";
+export{Zp as BlockRefError,Qp as MIN_ID_PREFIX,$p as resolveBlockRef,em as shortIds}from"../../../../chunks/app-C-KD-Wd6.js";
