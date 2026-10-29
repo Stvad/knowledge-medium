@@ -1,1 +1,1 @@
-export{C1 as USER_SCHEMAS_PROJECTOR_ID,w1 as UserSchemasService,T1 as buildSchemaOrNull,E1 as decodePresetConfig,D1 as definitionSchema,O1 as isRegistrablePropertyName,k1 as propertySchemaNameRejection,A1 as tryBuildSchema,j1 as userSchemasProjector}from"../../chunks/app-C4PqjIEh.js";
+export{w1 as USER_SCHEMAS_PROJECTOR_ID,T1 as UserSchemasService,E1 as buildSchemaOrNull,D1 as decodePresetConfig,O1 as definitionSchema,k1 as isRegistrablePropertyName,A1 as propertySchemaNameRejection,j1 as tryBuildSchema,M1 as userSchemasProjector}from"../../chunks/app-CXaAjJgJ.js";
