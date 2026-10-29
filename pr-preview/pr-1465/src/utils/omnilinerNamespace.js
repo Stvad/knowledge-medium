@@ -1,1 +1,0 @@
-export{XK as omnilinerNamespace}from"../../chunks/app-B4tW26gl.js";

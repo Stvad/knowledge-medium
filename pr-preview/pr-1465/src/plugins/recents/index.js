@@ -1,1 +1,0 @@
-export{jC as OPEN_RECENTS_ACTION_ID,MC as openRecentsAction,NC as recentsHeaderItem,PC as recentsPlugin}from"../../../chunks/app-B4tW26gl.js";

@@ -1,1 +1,0 @@
-export{sx as usePromotableBreadcrumb}from"../../../chunks/app-B4tW26gl.js";

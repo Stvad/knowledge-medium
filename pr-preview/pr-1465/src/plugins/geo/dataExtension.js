@@ -1,1 +1,0 @@
-export{GH as geoDataExtension}from"../../../chunks/app-B4tW26gl.js";

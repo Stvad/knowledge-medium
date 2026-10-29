@@ -1,1 +1,0 @@
-export{WW as charLimitProp,GW as charProfileProp,KW as charScopeProp}from"../../../chunks/app-B4tW26gl.js";

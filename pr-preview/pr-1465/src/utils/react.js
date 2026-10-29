@@ -1,1 +1,0 @@
-export{kM as useIsMobile,AM as usePointerCoarse}from"../../chunks/app-B4tW26gl.js";

@@ -1,1 +1,0 @@
-export{AZ as kernelDataExtension}from"../../chunks/app-B4tW26gl.js";

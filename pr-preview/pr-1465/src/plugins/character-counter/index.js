@@ -1,1 +1,0 @@
-export{HW as CHAR_COUNTER_TYPE,un as RAW_CHARACTER_COUNT_PROFILE_ID,fn as charCountDisplay,WW as charLimitProp,GW as charProfileProp,KW as charScopeProp,dn as characterCountProfilesFacet,cn as characterCounterPlugin}from"../../../chunks/app-B4tW26gl.js";

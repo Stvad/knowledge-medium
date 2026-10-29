@@ -1,1 +1,0 @@
-export{Fy as COLEMAK_KEYBINDINGS_PLUGIN_ID,Iy as colemakKeybindingsPlugin,Ly as colemakMovementKeybindingOverrides}from"../../../chunks/app-B4tW26gl.js";

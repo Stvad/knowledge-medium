@@ -1,1 +1,0 @@
-export{GC as RecentsHeaderItem}from"../../../chunks/app-B4tW26gl.js";

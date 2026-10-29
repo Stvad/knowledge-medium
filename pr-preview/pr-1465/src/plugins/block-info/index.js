@@ -1,1 +1,0 @@
-export{em as blockInfoPlugin}from"../../../chunks/app-B4tW26gl.js";

@@ -1,1 +1,0 @@
-export{VW as characterCounterDataExtension}from"../../../chunks/app-B4tW26gl.js";

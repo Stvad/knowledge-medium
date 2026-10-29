@@ -1,1 +1,0 @@
-export{UA as LazyBlockComponent}from"../../chunks/app-B4tW26gl.js";

@@ -1,1 +1,0 @@
-export{uk as ExtensionPromptSurface,dk as extensionPromptsExtension}from"../../../chunks/app-B4tW26gl.js";

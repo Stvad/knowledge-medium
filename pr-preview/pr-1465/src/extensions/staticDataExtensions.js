@@ -1,1 +1,0 @@
-export{IB as staticDataExtensions}from"../../chunks/app-B4tW26gl.js";
