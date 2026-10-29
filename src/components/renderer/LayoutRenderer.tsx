@@ -26,7 +26,7 @@ type RenderSlot =
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
 const TOP_LEVEL_COLUMN_CLASS =
-  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink'
+  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-sm md:basis-0 md:grow md:shrink'
 const WIDE_SCROLL_COLUMN_CLASS =
   'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
