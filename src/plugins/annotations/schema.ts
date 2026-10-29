@@ -70,6 +70,8 @@ export const annotationThreadType = seedType({
   id: THREAD_TYPE,
   label: 'Comment thread',
   hideFromCompletion: true,
+  // The root already renders as a thread; a chip would say it twice.
+  hideFromBlockDisplay: true,
   properties: [
     annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
     annotationQuoteSuffixProp, annotationStatusProp,
@@ -88,8 +90,7 @@ const decoded = <T,>(data: BlockData, schema: {name: string; codec: {decode: (va
   return value === undefined ? schema.defaultValue : schema.codec.decode(value)
 }
 
-/** A thread root's anchor, read from its content and anchor properties. */
-export const threadAnchorOf = (root: BlockData): ThreadAnchor =>
+const readAnchor = (root: BlockData): ThreadAnchor =>
   root.content === ''
     ? {kind: 'block'}
     : {
@@ -100,7 +101,33 @@ export const threadAnchorOf = (root: BlockData): ThreadAnchor =>
       suffix: decoded(root, annotationQuoteSuffixProp) ?? '',
     }
 
-export const threadTargetIdOf = (root: BlockData): string | undefined =>
-  decoded(root, annotationTargetProp) || undefined
+/** A thread root's anchor, read from its content and anchor properties. A
+ *  hand-edited property that no longer decodes leaves the quote with no
+ *  position, which resolves as moved or stale rather than failing the read. */
+export const threadAnchorOf = (root: BlockData): ThreadAnchor => {
+  try {
+    return readAnchor(root)
+  } catch {
+    return {kind: 'range', quote: root.content, quoteStart: undefined, prefix: '', suffix: ''}
+  }
+}
+
+export const threadTargetIdOf = (root: BlockData): string | undefined => {
+  try {
+    return decoded(root, annotationTargetProp) || undefined
+  } catch {
+    return undefined
+  }
+}
 
 export const threadStatusOf = (root: BlockData): ThreadStatus => decoded(root, annotationStatusProp)
+
+/** False for resolved, and for a status this build cannot decode, such as a
+ *  later build's closed states. */
+export const threadIsOpen = (root: BlockData): boolean => {
+  try {
+    return threadStatusOf(root) === 'open'
+  } catch {
+    return false
+  }
+}
