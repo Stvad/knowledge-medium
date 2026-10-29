@@ -6,12 +6,13 @@
 import {ChangeScope, propertyValue, type BlockReference} from '@/data/api'
 import {createChild} from '@/data/mutators'
 import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
+import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
 import {createTypedChild} from '@/data/typedRecords'
 import {hasLoneSurrogate} from '@/utils/string'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {getOrCreateCommentsPage} from './container.ts'
+import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
   annotationQuotePrefixProp,
   annotationQuoteStartProp,
@@ -56,7 +57,7 @@ export class InvalidQuoteError extends Error {
 export const isThreadRefusal = (error: unknown): error is Error =>
   error instanceof AnchorChangedError || error instanceof UnannotatableTargetError || error instanceof InvalidQuoteError
 
-const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+export const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
 
 /** Anchors come from `captureAnchor` in the app, but agents and the bridge
  *  build their own. */
@@ -85,6 +86,11 @@ export interface CreatedThread {
   commentId: string | null
 }
 
+export interface CreateThreadOptions {
+  /** The transaction's description; an agent write names its own verb. */
+  description?: string
+}
+
 /** One undo step: the thread root and its first comment. A workspace's first
  *  comment also creates the container, outside the undo step.
  *
@@ -94,6 +100,7 @@ export interface CreatedThread {
 export const createThread = async (
   repo: Repo,
   {targetId, anchor, comment}: CreateThreadArgs,
+  options: CreateThreadOptions = {},
 ): Promise<CreatedThread> => {
   if (anchor) assertQuotable(anchor)
   const target = await repo.load(targetId)
@@ -107,6 +114,9 @@ export const createThread = async (
     if (!current || current.deleted) throw missingTarget(targetId)
     if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
       throw new UnannotatableTargetError('A property row can’t be commented on.')
+    }
+    if (hasBlockType(current, THREAD_TYPE) || current.id === commentsPageBlockId(current.workspaceId)) {
+      throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
     }
     if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
       throw new AnchorChangedError()
@@ -136,7 +146,10 @@ export const createThread = async (
       ? await tx.run(createChild, {parentId: threadId, content: comment})
       : null
     return {threadId, commentId}
-  }, {scope: ChangeScope.BlockDefault, description: anchor ? 'comment on selection' : 'comment on block'})
+  }, {
+    scope: ChangeScope.BlockDefault,
+    description: options.description ?? (anchor ? 'comment on selection' : 'comment on block'),
+  })
 }
 
 /** An empty reply under the comment being answered (or under the root, for a

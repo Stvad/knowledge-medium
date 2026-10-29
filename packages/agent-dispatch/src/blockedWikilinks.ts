@@ -395,6 +395,14 @@ export const createBlockedWikilinkWriteGuard = (
           if (edited) await assertNoBlockedRefs(edited.content, edited.properties)
           return
         }
+        case 'add_comment':
+          // The quote is copied from the target, which already holds it, onto a
+          // thread root, whose content the backlinks owner never counts as a
+          // mention; the comment is the thread's own text. Accepted: with the
+          // Comments plugin off that exclusion goes too, and a root quoting a
+          // blocked page reads as a mention, one run each under runsPerHour.
+          await assertNoBlockedRefs(operation.content)
+          return
         case 'create_page':
           // A date's note is got or created the way opening that day does,
           // repairs included; its own row is not inspected (accepted — that

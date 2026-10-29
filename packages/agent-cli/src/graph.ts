@@ -187,6 +187,14 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'edit-block') as unknown as EditBlockResult
   }
 
+  /** Start a comment thread on `target`; resolves to its root's id. */
+  const addComment = async (input: {
+    target: string
+    quote?: string
+    occurrence?: number
+    content?: string
+  } & ExactIds): Promise<unknown> => client.runCommand({type: 'add-comment', ...input})
+
   const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>
     client.runCommand({type: 'create-page', ...input})
 
@@ -289,6 +297,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     updateBlock,
     appendMarkdown,
     editBlock,
+    addComment,
     createPage,
     recentChanges,
     resolveBlockId,

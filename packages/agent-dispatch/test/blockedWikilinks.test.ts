@@ -397,6 +397,15 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
       .rejects.toThrow('references a blocked page')
   })
 
+  it('blocks add_comment when the comment references a blocked target, but not for quoting one', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'add_comment', target: 'b', content: 'ask [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+    // A thread root's quote is a copy the backlinks owner never counts as a mention.
+    await expect(guard.beforeWrite({type: 'add_comment', target: 'b', quote: '[[claude]] whether', content: 'Which one?'}))
+      .resolves.toBeUndefined()
+  })
+
   it('lets update_block write a block that references a blocked target — a task is completed that way', async () => {
     const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ask [[claude]] to tidy up'}])
     const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
