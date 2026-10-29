@@ -1,1 +1,1 @@
-export{AZ as kernelDataExtension}from"../../chunks/app-Dngenqvx.js";
+export{AZ as kernelDataExtension}from"../../chunks/app-BQYxDWrE.js";

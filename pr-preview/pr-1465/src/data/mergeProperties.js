@@ -1,1 +1,1 @@
-export{G$ as mergeProperties}from"../../chunks/app-Dngenqvx.js";
+export{G$ as mergeProperties}from"../../chunks/app-BQYxDWrE.js";

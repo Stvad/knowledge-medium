@@ -1,1 +1,1 @@
-export{Cm as inlineBacklinksApplies}from"../../../../chunks/app-Dngenqvx.js";
+export{Cm as inlineBacklinksApplies}from"../../../../chunks/app-BQYxDWrE.js";

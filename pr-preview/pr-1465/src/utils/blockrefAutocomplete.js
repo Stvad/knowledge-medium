@@ -1,1 +1,1 @@
-export{bh as blockrefCompletionSource}from"../../chunks/app-Dngenqvx.js";
+export{bh as blockrefCompletionSource}from"../../chunks/app-BQYxDWrE.js";

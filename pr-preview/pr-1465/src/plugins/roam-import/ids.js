@@ -1,1 +1,1 @@
-export{yu as resolveDailyPage}from"../../../chunks/app-Dngenqvx.js";
+export{yu as resolveDailyPage}from"../../../chunks/app-BQYxDWrE.js";

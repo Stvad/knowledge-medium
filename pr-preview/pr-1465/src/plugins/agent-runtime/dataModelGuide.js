@@ -1,1 +1,1 @@
-export{Fp as DATA_MODEL_GUIDE,Ip as dataModelGuide}from"../../../chunks/app-Dngenqvx.js";
+export{Fp as DATA_MODEL_GUIDE,Ip as dataModelGuide}from"../../../chunks/app-BQYxDWrE.js";

@@ -1,1 +1,1 @@
-export{KA as BlockLoadingPlaceholder}from"../../chunks/app-Dngenqvx.js";
+export{KA as BlockLoadingPlaceholder}from"../../chunks/app-BQYxDWrE.js";

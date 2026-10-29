@@ -1,1 +1,1 @@
-export{LT as createEditorReferenceDateAdapter,RT as referenceDateAdapter,zT as replaceSingleDateReferenceContent,BT as singleDateReferenceMatch}from"../../../chunks/app-Dngenqvx.js";
+export{LT as createEditorReferenceDateAdapter,RT as referenceDateAdapter,zT as replaceSingleDateReferenceContent,BT as singleDateReferenceMatch}from"../../../chunks/app-BQYxDWrE.js";

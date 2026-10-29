@@ -1,1 +1,1 @@
-export{Oy as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,ky as enterBlockEditModeOnGestureAction,Ay as vimClickToFocusDecorator,jy as vimNormalModeActivation}from"../../../chunks/app-Dngenqvx.js";
+export{Oy as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,ky as enterBlockEditModeOnGestureAction,Ay as vimClickToFocusDecorator,jy as vimNormalModeActivation}from"../../../chunks/app-BQYxDWrE.js";

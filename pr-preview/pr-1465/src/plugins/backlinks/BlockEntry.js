@@ -1,1 +1,1 @@
-export{Pm as LazyBlockEntry}from"../../../chunks/app-Dngenqvx.js";
+export{Pm as LazyBlockEntry}from"../../../chunks/app-BQYxDWrE.js";

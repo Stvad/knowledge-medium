@@ -1,1 +1,1 @@
-export{GT as todayDailyNoteLanding}from"../../../chunks/app-Dngenqvx.js";
+export{GT as todayDailyNoteLanding}from"../../../chunks/app-BQYxDWrE.js";
