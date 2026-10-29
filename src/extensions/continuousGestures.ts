@@ -244,6 +244,9 @@ export interface BlockGestureController {
   handlePointerMove(sample: PointerSample): boolean
   handlePointerUp(sample: PointerSample): boolean
   handlePointerCancel(sample: PointerSample): void
+  /** Drop pending holds. Called when the surface detaches, which then sees
+   *  no release or cancel that would end its session. */
+  dispose(): void
   /** Union `touch-action` the React layer applies to the surface. */
   readonly touchAction: string | undefined
 }
@@ -293,6 +296,11 @@ export const createBlockGestureController = ({
     progress = null
   }
 
+  const clearHolds = (): void => {
+    for (const timer of holdTimers.values()) clearTimeout(timer)
+    holdTimers.clear()
+  }
+
   const resetSession = (): void => {
     // A release that didn't commit leaves the preview open — settle it so the
     // toolbar/affordance animates home rather than freezing mid-reveal.
@@ -300,8 +308,7 @@ export const createBlockGestureController = ({
     activeId = null
     out.clear()
     consumed = false
-    for (const timer of holdTimers.values()) clearTimeout(timer)
-    holdTimers.clear()
+    clearHolds()
     lastSample = null
   }
 
@@ -545,6 +552,7 @@ export const createBlockGestureController = ({
       pointers.delete(sample.pointerId)
       if (pointers.size === 0) resetSession()
     },
+    dispose: clearHolds,
     get touchAction() {
       return enabledTouchAction(recognizers)
     },
@@ -713,6 +721,7 @@ export const useContinuousGestures = (
     element.addEventListener('pointercancel', onCancel)
 
     return () => {
+      controller.dispose()
       element.removeEventListener('pointerdown', onDown)
       element.removeEventListener('pointermove', onMove)
       element.removeEventListener('pointerup', onUp)

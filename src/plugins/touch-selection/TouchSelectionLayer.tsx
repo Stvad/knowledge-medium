@@ -6,6 +6,7 @@ import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { usePointerCoarse } from '@/utils/react.js'
 import { POINTER_COARSE_QUERY } from '@/utils/viewport.js'
+import { PANEL_BOTTOM_CLEARANCE } from '@/utils/panelClearance.js'
 import { touchSelectionToolbarItemsFacet } from './facet.ts'
 
 /** A hold on read-mode content belongs to the hold recognizer, so iOS must
@@ -58,12 +59,17 @@ function ToolbarButton({
   )
 }
 
+/** The toolbar's height: its h-16 row over the safe-area inset. */
+const TOOLBAR_CLEARANCE = 'calc(env(safe-area-inset-bottom) + 4rem)'
+
 /** The movement bar shown while blocks are selected on a touch-primary
  *  device. Fixed to the bottom at the bottom nav's height and above it, so
- *  on a phone it takes the nav's place for as long as the selection lasts;
- *  no keyboard is up while selecting, so the safe-area inset is the only
- *  offset it needs. Hidden while a block or property is edited, when the
- *  keyboard toolbar owns the bottom of the screen. */
+ *  on a phone it takes the nav's place (and its clearance) for as long as
+ *  the selection lasts; from md up, where there is no nav, it reserves its
+ *  own clearance in the panes. No keyboard is up while selecting, so the
+ *  safe-area inset is the only offset it needs. Hidden while a block or
+ *  property is edited, when the keyboard toolbar owns the bottom of the
+ *  screen. */
 function SelectionToolbar() {
   const activeContexts = useActiveContextsState()
   const resolved = useActionRefItems(touchSelectionToolbarItemsFacet, ActionContextTypes.MULTI_SELECT_MODE)
@@ -76,19 +82,22 @@ function SelectionToolbar() {
   if (!pointerCoarse || !selecting || editing) return null
 
   return (
-    <div
-      role="toolbar"
-      aria-label="Selected blocks"
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background px-2"
-      style={{paddingBottom: 'env(safe-area-inset-bottom)'}}
-      data-block-interaction="ignore"
-    >
-      <div className="mx-auto flex h-16 max-w-md items-center justify-around">
-        {resolved.map(({item, action}) =>
-          action ? <ToolbarButton key={item.id} action={action} activeContexts={activeContexts}/> : null,
-        )}
+    <>
+      <style>{`:root { ${PANEL_BOTTOM_CLEARANCE}: ${TOOLBAR_CLEARANCE}; }`}</style>
+      <div
+        role="toolbar"
+        aria-label="Selected blocks"
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background px-2"
+        style={{paddingBottom: 'env(safe-area-inset-bottom)'}}
+        data-block-interaction="ignore"
+      >
+        <div className="mx-auto flex h-16 max-w-md items-center justify-around">
+          {resolved.map(({item, action}) =>
+            action ? <ToolbarButton key={item.id} action={action} activeContexts={activeContexts}/> : null,
+          )}
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 

@@ -68,6 +68,26 @@ describe('useContinuousGestures', () => {
     expect(onPointerDown).toHaveBeenCalledTimes(2)
   })
 
+  it('never runs a hold for a surface that unmounted mid-press', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(() => GESTURE_IDLE)
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => ({id: 'hold', holdMs: 500, onHold})),
+    ])
+    const {getByTestId, unmount} = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <Harness which="a"/>
+      </AppRuntimeContextProvider>,
+    )
+
+    firePointerDown(getByTestId('a'))
+    unmount()
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
   it('re-applies touch-action when the viewport crosses a recognizer breakpoint', () => {
     // The host re-renders on edit-mode but NOT on a breakpoint cross (its
     // useIsMobile lives in child slots), so without a viewport subscription a

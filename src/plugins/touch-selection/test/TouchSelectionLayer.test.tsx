@@ -75,6 +75,19 @@ describe('TouchSelectionLayer', () => {
     expect(mocks.dispatch.mock.calls[0]?.slice(0, 2)).toEqual([moveUp.id, selectionDeps])
   })
 
+  it('reserves its height in the panes while it shows, where no bottom nav does', () => {
+    const clearance = () => [...document.querySelectorAll('style')]
+      .some(style => style.textContent?.includes('--panel-bottom-clearance'))
+
+    render(<TouchSelectionLayer/>)
+    expect(clearance()).toBe(false)
+    cleanup()
+
+    activate(ActionContextTypes.MULTI_SELECT_MODE)
+    render(<TouchSelectionLayer/>)
+    expect(clearance()).toBe(true)
+  })
+
   it('stays hidden with nothing selected', () => {
     render(<TouchSelectionLayer/>)
     expect(toolbar()).toBeNull()

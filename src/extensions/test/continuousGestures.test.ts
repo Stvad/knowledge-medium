@@ -578,6 +578,22 @@ describe('holds (holdMs / onHold)', () => {
     expect(rivalUp).toHaveBeenCalledTimes(1)
   })
 
+  it('drops pending holds when disposed: a detached surface never sees the release', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', holdMs: 500, onHold}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.dispose()
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
   it('runs no further hold once one has consumed the session', () => {
     vi.useFakeTimers()
     const laterHold = vi.fn(holdCommit)
