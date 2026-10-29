@@ -447,7 +447,7 @@ describe('enablement (isEnabled)', () => {
   })
 })
 
-describe('holds (holdMs / onHold)', () => {
+describe('holds (hold.ms / hold.onHold)', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
