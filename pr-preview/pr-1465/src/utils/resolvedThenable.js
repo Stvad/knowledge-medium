@@ -1,1 +1,1 @@
-export{UG as resolvedThenable,WG as stampFulfilled}from"../../chunks/app-BQYxDWrE.js";
+export{UG as resolvedThenable,WG as stampFulfilled}from"../../chunks/app-B4tW26gl.js";

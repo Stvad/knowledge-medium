@@ -1,1 +1,1 @@
-export{G9 as backlinkRenderScopeId,K9 as breadcrumbRenderScopeId,q9 as embedRenderScopeId,J9 as isPanelRenderScopeId,Y9 as outlineRenderScopeId,X9 as panelRenderScopeId}from"../../chunks/app-BQYxDWrE.js";
+export{G9 as backlinkRenderScopeId,K9 as breadcrumbRenderScopeId,q9 as embedRenderScopeId,J9 as isPanelRenderScopeId,Y9 as outlineRenderScopeId,X9 as panelRenderScopeId}from"../../chunks/app-B4tW26gl.js";

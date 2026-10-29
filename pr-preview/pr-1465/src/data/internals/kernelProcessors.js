@@ -1,1 +1,1 @@
-export{SQ as KERNEL_PROCESSORS}from"../../../chunks/app-BQYxDWrE.js";
+export{SQ as KERNEL_PROCESSORS}from"../../../chunks/app-B4tW26gl.js";

@@ -1,1 +1,1 @@
-export{VC as BlockRef}from"../../../chunks/app-BQYxDWrE.js";
+export{VC as BlockRef}from"../../../chunks/app-B4tW26gl.js";

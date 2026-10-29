@@ -1,1 +1,1 @@
-export{Lu as contributorBadgesDecoratorContribution}from"../../../chunks/app-BQYxDWrE.js";
+export{Lu as contributorBadgesDecoratorContribution}from"../../../chunks/app-B4tW26gl.js";

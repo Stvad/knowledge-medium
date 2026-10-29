@@ -1,1 +1,1 @@
-export{BJ as BlockCache,VJ as BlockCacheMetrics}from"../../chunks/app-BQYxDWrE.js";
+export{BJ as BlockCache,VJ as BlockCacheMetrics}from"../../chunks/app-B4tW26gl.js";
