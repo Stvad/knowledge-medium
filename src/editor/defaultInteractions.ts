@@ -160,6 +160,11 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
     },
     onTouchStart: (event: TouchEvent<HTMLDivElement>) => {
       if (!isOurs(event)) return
+      // A second finger makes the whole touch something other than a tap.
+      if (event.touches.length > 1) {
+        contentTouchStarts.delete(context.block.id)
+        return
+      }
       const touch = event.touches[0]
       if (!touch) return
       contentTouchStarts.set(context.block.id, {

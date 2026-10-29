@@ -284,9 +284,10 @@ export const createBlockGestureController = ({
   // filter) on every pointer-move tick of an unpreviewed gesture. `progress`
   // itself is null only when nothing is streaming.
   let progress: { readonly recognizerId: string; readonly dispatch: GestureProgressDispatch | null } | null = null
-  // A handled commit spends the pointer session: its remaining events are
-  // prevented and reach no recognizer, so a gesture that commits before the
-  // release (a hold) isn't also read as a swipe or a click by what follows.
+  // A handled commit spends the pointer session: its remaining events reach
+  // no recognizer, and its moves and releases are prevented (a finger landing
+  // on it is left alone), so a gesture that commits before the release (a
+  // hold) isn't also read as a swipe or a click by what follows.
   let consumed = false
   // Armed hold timers by recognizer id.
   const holdTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -497,10 +498,13 @@ export const createBlockGestureController = ({
     applyVerdict(recognizer, hold.onHold(session, ctx), session, ctx)
   }
 
+  // Arms only recognizers enabled at this pointerdown: a disabled one's
+  // onPointerDown didn't run, so it would hold state from an earlier press.
+  // Firing re-checks the gate and eligibility, since a rival can still claim.
   const armHolds = (armedBy: PointerSample): void => {
     for (const recognizer of recognizers) {
       const {hold} = recognizer
-      if (!hold) continue
+      if (!hold || !enabled(recognizer)) continue
       clearTimeout(holdTimers.get(recognizer.id))
       holdTimers.set(recognizer.id, setTimeout(() => fireHold(recognizer, hold, armedBy), hold.ms))
     }
@@ -710,7 +714,9 @@ export const useContinuousGestures = (
         event.preventDefault()
         // pointerup cancelation can't stop the synthesized click (PE spec) — arm
         // a one-shot swallow so a handled up-gesture doesn't also fire a click.
-        suppressNextClick(element)
+        // On the document, not the surface: the gesture may have put something
+        // else under the finger (a toolbar, a menu), which the click then hits.
+        suppressNextClick(element.ownerDocument.documentElement)
       }
     }
     const onCancel = (event: PointerEvent): void => {

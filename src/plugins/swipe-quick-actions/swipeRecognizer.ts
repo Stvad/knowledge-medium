@@ -60,13 +60,12 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
 
   const recognizer: GestureRecognizer = {
     id: SWIPE_QUICK_ACTIONS_GESTURE_ID,
-    // Applicability gate (the menu is mobile-only, a swipe is meaningless on
-    // an editing block, and while blocks are selected a gesture acts on the
-    // selection, not on one block): the loop drops the recognizer's handlers
-    // and its pan-y when this is false, so the handlers below only state
-    // per-event ownership. Read live, so a resize / edit toggle is reflected
-    // without re-running the factory.
-    isEnabled: () => isMobileViewport() && !editing() && !hasBlockSelection(uiStateBlock),
+    // Applicability gate (the menu is mobile-only and a swipe is meaningless on
+    // an editing block): the loop drops the recognizer's handlers and its pan-y
+    // when this is false, so the handlers below only state per-event ownership.
+    // Read live, so a resize / edit toggle is reflected without re-running the
+    // factory.
+    isEnabled: () => isMobileViewport() && !editing(),
     // pan-y hands horizontal motion to JS while keeping native vertical scroll,
     // so the recognizer doesn't have to preventDefault moves to suppress scroll.
     touchAction: 'pan-y',
@@ -75,6 +74,13 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // Touch only; a second pointer means this isn't a one-finger swipe, so
       // yield (drop any claim) and let a multi-finger gesture have it.
       if (ctx.event.pointerType !== 'touch') return GESTURE_IDLE
+      // While blocks are selected a gesture acts on the selection, not on one
+      // block. Not in isEnabled: the surface doesn't re-render when the
+      // selection changes, so its pan-y would go stale.
+      if (hasBlockSelection(uiStateBlock)) {
+        start = null
+        return GESTURE_IDLE
+      }
       if (session.pointers.length > 1) {
         start = null
         return GESTURE_CANCEL

@@ -69,7 +69,8 @@ export const toggleBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
 
 /** Put `block` in the selection, or take it out if it is already there
  *  (with hierarchy validation), then focus it. Taking out the last block
- *  ends the selection. */
+ *  ends the selection. Accepted: it reads the selection before its loads, so
+ *  two toggles overlapping by tens of ms can lose one; taps are slower. */
 export const toggleBlockInSelection = async (
   {block, uiStateBlock, renderScopeId}: BlockPointerDependencies,
 ): Promise<void> => {

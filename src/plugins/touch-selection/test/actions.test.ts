@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { focusBlock, isEditingProp, selectionStateProp } from '@/data/properties.js'
+import { focusBlock, isEditingProp, selectionStateProp, topLevelBlockIdProp } from '@/data/properties.js'
 import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
 import { selectHeldBlockAction, toggleTappedBlockAction } from '../actions.ts'
 
@@ -19,6 +19,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  window.matchMedia = vi.fn().mockReturnValue({matches: true}) as unknown as typeof window.matchMedia
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
@@ -71,11 +72,36 @@ describe('selectHeldBlockAction', () => {
   })
 })
 
+describe('the panel root', () => {
+  beforeEach(async () => {
+    await repo.block('panel').set(topLevelBlockIdProp, 'root')
+  })
+
+  it('is never selected by a hold, which is still handled', async () => {
+    const result = await selectHeldBlockAction.handler(depsFor('root'), trigger)
+    expect(result).not.toBe(false)
+    expect(selection()?.selectedBlockIds ?? []).toEqual([])
+  })
+
+  it('leaves the selection alone when tapped, which is still handled', async () => {
+    await repo.block('panel').set(selectionStateProp, {selectedBlockIds: ['r1', 'r2'], anchorBlockId: 'r1'})
+    const result = await toggleTappedBlockAction.handler(depsFor('root'), trigger)
+    expect(result).not.toBe(false)
+    expect(selection()).toEqual({selectedBlockIds: ['r1', 'r2'], anchorBlockId: 'r1'})
+  })
+})
+
 describe('toggleTappedBlockAction', () => {
-  it('only takes a tap while blocks are selected; otherwise the tap edits as usual', async () => {
+  it('only takes a tap or click while blocks are selected; otherwise it edits as usual', async () => {
     expect(toggleTappedBlockAction.canDispatch?.(depsFor('r1'))).toBe(false)
     await repo.block('panel').set(selectionStateProp, {selectedBlockIds: ['r1'], anchorBlockId: 'r1'})
     expect(toggleTappedBlockAction.canDispatch?.(depsFor('r1'))).toBe(true)
+  })
+
+  it('leaves a click with a fine pointer to edit, even while selecting', async () => {
+    window.matchMedia = vi.fn().mockReturnValue({matches: false}) as unknown as typeof window.matchMedia
+    await repo.block('panel').set(selectionStateProp, {selectedBlockIds: ['r1'], anchorBlockId: 'r1'})
+    expect(toggleTappedBlockAction.canDispatch?.(depsFor('r2'))).toBe(false)
   })
 
   it('adds a tapped block, removes a tapped selected one, and ends the selection with the last', async () => {

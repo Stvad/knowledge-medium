@@ -10,15 +10,19 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import type { PointerBindingSpec } from '@/shortcuts/canonicalizeChord.js'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
 import { vimNormalModeInteractionExtension } from '@/plugins/vim-normal-mode'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
 import { touchSelectionPlugin, touchSelectionToolbarItemsFacet } from '../index.ts'
 import { toggleTappedBlockAction } from '../actions.ts'
 
-const bindsTouchTap = (action: ActionConfig): boolean => {
+const binds = (matches: (spec: PointerBindingSpec) => boolean) => (action: ActionConfig): boolean => {
   const spec = action.pointerBinding
   if (!spec) return false
   const specs: readonly PointerBindingSpec[] = Array.isArray(spec) ? spec : [spec]
-  return specs.some(candidate => candidate.kind === 'touch')
+  return specs.some(matches)
 }
+const bindsTouchTap = binds(spec => spec.kind === 'touch')
+const bindsPlainClick = binds(spec => spec.kind === 'mouse' && (spec.mods ?? []).length === 0 && (spec.phase ?? 'click') === 'click')
 
 describe('touchSelectionPlugin', () => {
   it('orders its tap ahead of vim\'s tap-to-edit, so a tap while selecting toggles', () => {
@@ -29,6 +33,14 @@ describe('touchSelectionPlugin', () => {
 
     expect(tapActions.length).toBeGreaterThan(1)
     expect(tapActions[0]?.id).toBe(toggleTappedBlockAction.id)
+  })
+
+  it('orders its click ahead of click-to-edit, so a slow tap or a tap beside the text while selecting toggles', () => {
+    const runtime = resolveFacetRuntimeSync([plainOutlinerPlugin, touchSelectionPlugin])
+    const clickActions = getEffectiveActions(runtime).filter(bindsPlainClick)
+
+    expect(clickActions.map(action => action.id)).toContain(ENTER_BLOCK_EDIT_MODE_ACTION_ID)
+    expect(clickActions[0]?.id).toBe(toggleTappedBlockAction.id)
   })
 
   it('every toolbar item resolves to an action with an icon on a default install', () => {

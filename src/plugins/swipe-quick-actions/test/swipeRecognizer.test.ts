@@ -130,7 +130,13 @@ describe('swipeRecognizer', () => {
     expect(make().isEnabled?.()).toBe(false)
   })
 
-  it('is off while blocks are selected: a swipe would act on one block mid-selection', () => {
-    expect(make({selectedBlockIds: ['b2']}).isEnabled?.()).toBe(false)
+  it('takes no press while blocks are selected, but stays enabled so its pan-y does', () => {
+    // Selection is not an input the surface re-renders on, so gating it in
+    // isEnabled would strand touch-action on blocks that didn't re-render.
+    const r = make({selectedBlockIds: ['b2']})
+    expect(r.isEnabled?.()).toBe(true)
+    down(r, 100, 100)
+    const verdict = r.onPointerMove?.(session(pointer(1, 60, 100)), eventCtx()) as GesturePhaseResult
+    expect(verdict.status).toBe('idle')
   })
 })

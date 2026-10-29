@@ -551,6 +551,25 @@ describe('holds (holdMs / onHold)', () => {
     expect(onHold).not.toHaveBeenCalled()
   })
 
+  it('never runs onHold for a press its recognizer did not see go down', () => {
+    // Disabled at the pointerdown, its onPointerDown never ran, so whatever it
+    // holds is from an earlier press.
+    vi.useFakeTimers()
+    let enabled = false
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', isEnabled: () => enabled, hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    enabled = true
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
   it('a handled commit consumes the session: later moves and the release are prevented and reach no recognizer', () => {
     vi.useFakeTimers()
     const rivalMove = vi.fn(() => GESTURE_ACTIVE)

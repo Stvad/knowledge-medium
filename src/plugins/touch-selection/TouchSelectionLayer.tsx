@@ -12,10 +12,11 @@ import { touchSelectionToolbarItemsFacet } from './facet.ts'
 /** A hold on read-mode content belongs to the hold recognizer, so iOS must
  *  not start its own text selection or callout there. Same gate as the
  *  recognizer's `isEnabled`: a coarse pointer, a writable workspace, and a
- *  block that isn't being edited, whose editor keeps native selection. */
+ *  block that isn't being edited, whose editor keeps native selection. A
+ *  read-only CodeMirror (an extension block's source view) is read mode. */
 const HOLD_STYLES = `
 @media ${POINTER_COARSE_QUERY} {
-  .block-content:not(:has(.cm-editor)) {
+  .block-content:not(:has(.cm-content[contenteditable="true"])) {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
