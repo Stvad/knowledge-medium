@@ -1,0 +1,1 @@
+export{Sy as videoPlayerMarkdownExtension}from"../../../chunks/app-C2CObLQf.js";

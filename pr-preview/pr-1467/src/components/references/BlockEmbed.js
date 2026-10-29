@@ -1,0 +1,1 @@
+export{qO as BlockEmbed}from"../../../chunks/app-C2CObLQf.js";

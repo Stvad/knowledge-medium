@@ -1,0 +1,1 @@
+export{DN as ExtensionRenderBoundary}from"../../chunks/app-C2CObLQf.js";

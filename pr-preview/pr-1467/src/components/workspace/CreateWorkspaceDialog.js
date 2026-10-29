@@ -1,0 +1,1 @@
+export{JS as CreateWorkspaceDialog}from"../../../chunks/app-C2CObLQf.js";

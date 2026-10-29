@@ -1,0 +1,1 @@
+export{EN as BlockInfoDialog}from"../../../chunks/app-C2CObLQf.js";

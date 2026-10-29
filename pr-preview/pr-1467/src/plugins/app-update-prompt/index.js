@@ -1,0 +1,1 @@
+export{pA as appUpdatePromptExtension}from"../../../chunks/app-C2CObLQf.js";

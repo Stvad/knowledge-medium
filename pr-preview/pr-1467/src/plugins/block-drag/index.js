@@ -1,0 +1,1 @@
+export{mg as blockDragPlugin}from"../../../chunks/app-C2CObLQf.js";

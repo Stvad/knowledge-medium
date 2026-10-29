@@ -1,0 +1,1 @@
+export{Fw as openRecentsPage}from"../../../chunks/app-C2CObLQf.js";

@@ -1,0 +1,1 @@
+export{DQ as Block,OQ as requireLoadedBlock}from"../../chunks/app-C2CObLQf.js";

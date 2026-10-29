@@ -1,0 +1,1 @@
+export{SG as contributorsDataExtension}from"../../../chunks/app-C2CObLQf.js";

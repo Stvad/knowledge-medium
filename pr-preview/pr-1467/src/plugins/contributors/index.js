@@ -1,0 +1,1 @@
+export{wd as contributorsPlugin}from"../../../chunks/app-C2CObLQf.js";

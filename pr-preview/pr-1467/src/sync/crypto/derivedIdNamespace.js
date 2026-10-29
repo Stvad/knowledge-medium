@@ -1,0 +1,1 @@
+export{U7 as deriveWorkspaceIdNamespace}from"../../../chunks/app-C2CObLQf.js";

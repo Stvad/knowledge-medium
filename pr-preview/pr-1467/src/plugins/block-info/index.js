@@ -1,0 +1,1 @@
+export{Um as blockInfoPlugin}from"../../../chunks/app-C2CObLQf.js";

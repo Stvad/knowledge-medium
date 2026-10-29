@@ -1,0 +1,1 @@
+export{AQ as kernelDataExtension}from"../../chunks/app-C2CObLQf.js";

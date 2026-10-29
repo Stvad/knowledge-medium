@@ -1,0 +1,1 @@
+export{gnt as CORE_BLOCK_DELETED_EVENT,_nt as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-C2CObLQf.js";

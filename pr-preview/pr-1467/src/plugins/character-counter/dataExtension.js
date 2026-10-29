@@ -1,0 +1,1 @@
+export{RG as characterCounterDataExtension}from"../../../chunks/app-C2CObLQf.js";

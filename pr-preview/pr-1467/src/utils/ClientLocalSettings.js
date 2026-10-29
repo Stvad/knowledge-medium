@@ -1,0 +1,1 @@
+export{qA as ClientLocalSettings,JA as clientLocalSettings}from"../../chunks/app-C2CObLQf.js";

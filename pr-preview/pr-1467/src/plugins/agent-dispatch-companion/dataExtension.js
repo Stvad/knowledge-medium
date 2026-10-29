@@ -1,0 +1,1 @@
+export{Eq as agentDispatchCompanionDataExtension}from"../../../chunks/app-C2CObLQf.js";

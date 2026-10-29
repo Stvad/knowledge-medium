@@ -1,0 +1,1 @@
+export{DB as propertyShapeLabel}from"../../../chunks/app-C2CObLQf.js";

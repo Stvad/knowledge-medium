@@ -1,0 +1,1 @@
+export{Qg as richPastePlugin}from"../../../chunks/app-C2CObLQf.js";

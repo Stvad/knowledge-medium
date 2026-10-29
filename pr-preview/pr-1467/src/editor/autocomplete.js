@@ -1,0 +1,1 @@
+export{Xk as editorAutocompleteExtension}from"../../chunks/app-C2CObLQf.js";

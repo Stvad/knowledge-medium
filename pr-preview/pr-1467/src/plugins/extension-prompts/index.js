@@ -1,0 +1,1 @@
+export{$k as ExtensionPromptSurface,eA as extensionPromptsExtension}from"../../../chunks/app-C2CObLQf.js";

@@ -1,0 +1,1 @@
+export{Ux as MobileBottomNav}from"../../../chunks/app-C2CObLQf.js";

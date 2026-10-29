@@ -1,0 +1,1 @@
+export{Qm as backlinksViewPlugin}from"../../../chunks/app-C2CObLQf.js";

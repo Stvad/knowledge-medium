@@ -1,0 +1,1 @@
+export{Mj as LazyBlockComponent}from"../../chunks/app-C2CObLQf.js";

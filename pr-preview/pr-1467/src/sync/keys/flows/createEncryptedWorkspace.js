@@ -1,0 +1,1 @@
+export{YS as createEncryptedWorkspace}from"../../../../chunks/app-C2CObLQf.js";

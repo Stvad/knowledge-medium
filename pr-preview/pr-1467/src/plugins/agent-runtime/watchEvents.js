@@ -1,0 +1,1 @@
+export{dp as createWatchEventsRegistry,fp as watchEventsRegistry}from"../../../chunks/app-C2CObLQf.js";

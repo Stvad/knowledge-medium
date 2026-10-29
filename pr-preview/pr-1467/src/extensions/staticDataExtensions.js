@@ -1,0 +1,1 @@
+export{EV as staticDataExtensions}from"../../chunks/app-C2CObLQf.js";

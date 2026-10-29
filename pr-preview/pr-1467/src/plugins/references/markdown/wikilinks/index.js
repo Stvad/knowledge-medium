@@ -1,0 +1,1 @@
+export{ng as wikilinkMarkdownExtension}from"../../../../../chunks/app-C2CObLQf.js";

@@ -1,0 +1,1 @@
+export{WG as backlinksDataExtension}from"../../../chunks/app-C2CObLQf.js";

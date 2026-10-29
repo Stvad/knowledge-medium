@@ -1,0 +1,1 @@
+export{Gx as mobileBottomNavItemsFacet}from"../../../chunks/app-C2CObLQf.js";

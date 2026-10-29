@@ -1,0 +1,1 @@
+export{rG as annotationsDataExtension}from"../../../chunks/app-C2CObLQf.js";

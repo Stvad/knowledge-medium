@@ -1,0 +1,1 @@
+export{LP as useShortcutSurfaceActivations}from"../../chunks/app-C2CObLQf.js";

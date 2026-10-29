@@ -1,0 +1,1 @@
+export{kP as BlockEditor}from"../../chunks/app-C2CObLQf.js";

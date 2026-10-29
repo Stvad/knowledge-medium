@@ -1,0 +1,1 @@
+export{ont as defineQuery}from"../../../chunks/app-C2CObLQf.js";

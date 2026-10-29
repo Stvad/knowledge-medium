@@ -1,0 +1,1 @@
+export{mnt as definePostCommitProcessor}from"../../../chunks/app-C2CObLQf.js";

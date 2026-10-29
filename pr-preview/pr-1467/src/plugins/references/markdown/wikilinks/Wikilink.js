@@ -1,0 +1,1 @@
+export{rg as Wikilink}from"../../../../../chunks/app-C2CObLQf.js";

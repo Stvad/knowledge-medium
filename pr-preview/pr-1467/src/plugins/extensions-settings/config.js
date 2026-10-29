@@ -1,0 +1,1 @@
+export{hf as extensionsOverridesPresetCore,gf as extensionsOverridesProp,_f as extensionsPrefsType,vf as overridesCodec}from"../../../chunks/app-C2CObLQf.js";

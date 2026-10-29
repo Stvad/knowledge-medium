@@ -1,0 +1,1 @@
+export{CH as preferredSpanReplacement}from"../../../chunks/app-C2CObLQf.js";
