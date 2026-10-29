@@ -18,12 +18,16 @@
  *    and clobber, the new case's pin.
  *  - **`seed: null`**: skips the pin entirely (`Math.random` untouched)
  *    but the case still participates in the barrier chain.
+ *  - **per-test barrier**: a case its test abandoned settles before the
+ *    end-of-test Repo release (`testRepoScope.ts`).
  *
  * Plain deferred promises stand in for "a case that's still running" —
  * no fake timers, no `fc`, so these tests are fast and fully
  * deterministic.
  */
 import { describe, expect, it } from 'vitest'
+import type { Repo } from '@/data/repo'
+import { trackTestRepo } from '@/data/test/testRepoScope'
 import { statefulFuzzGuard } from '@/test/fuzz'
 
 interface Deferred<T> {
@@ -166,5 +170,35 @@ describe('statefulFuzzGuard', () => {
     // or not) has settled — the exact pattern every suite's `afterAll`
     // relies on.
     await guard.barrier()
+  })
+})
+
+describe('statefulFuzzGuard per-test barrier', () => {
+  // Built at collection time, as every suite builds its guard.
+  const guard = statefulFuzzGuard()
+  /** How long the abandoned case keeps running after its test returns —
+   *  far longer than the end-of-test hooks take to reach the release. */
+  const ABANDONED_CASE_MS = 50
+  let releasedWhileCaseRan: boolean | undefined
+
+  it('a case still running when its test returns', () => {
+    let released = false
+    // Only the calls `releaseTestRepos` makes; it records when the release
+    // reaches this Repo.
+    trackTestRepo({
+      flushSyncObserver: async () => {},
+      stopSyncObserver: () => {},
+      setActiveWorkspaceId: () => { released = true },
+      awaitDeferredWork: async () => {},
+    } as unknown as Repo)
+    // Not awaited: fast-check's time budget abandons the case the same way.
+    void guard.run(null, async () => {
+      await new Promise(resolve => setTimeout(resolve, ABANDONED_CASE_MS))
+      releasedWhileCaseRan = released
+    })
+  })
+
+  it('settles before that test\'s Repos are released', () => {
+    expect(releasedWhileCaseRan, 'the abandoned case finished before its test\'s Repo release').toBe(false)
   })
 })
