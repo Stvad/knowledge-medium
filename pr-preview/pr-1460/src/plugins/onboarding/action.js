@@ -1,1 +1,1 @@
-export{uy as INSERT_TUTORIAL_ACTION_ID,dy as insertTutorialAction,fy as insertTutorialIntoWorkspace,py as openTutorialInActiveWorkspace}from"../../../chunks/app-Clk6rFQ9.js";
+export{uy as INSERT_TUTORIAL_ACTION_ID,dy as insertTutorialAction,fy as insertTutorialIntoWorkspace,py as openTutorialInActiveWorkspace}from"../../../chunks/app-CgT1vg2g.js";
