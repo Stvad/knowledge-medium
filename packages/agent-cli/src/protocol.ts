@@ -324,11 +324,13 @@ export const addCommentCommandSchema = z.looseObject({
   type: z.literal('add-comment'),
   target: z.string().describe('The block to comment on: a full id or a printed ^shortid'),
   quote: z.string().optional().describe(
-    'Text of the block to anchor to, as it reads now; omit to comment on the whole block. '
-    + 'A quote that cuts a [[link]] or ((ref)) is widened to the whole of it',
+    'Text of the block to anchor to, verbatim as get_block returns its content (outline views collapse '
+    + 'whitespace); omit to comment on the whole block. A quote that cuts a [[link]] or ((ref)) is widened '
+    + 'to the whole of it',
   ),
   occurrence: z.number().int().positive().optional().describe(
-    'Which appearance of the quote, from 1; required when it appears more than once',
+    'Which appearance of the quote in that content, from 1; required when it appears more than once. '
+    + 'The result\'s quoteStart and excerpt show which one was anchored',
   ),
   content: z.string().optional().describe('The first comment; omit for a highlight with no comments'),
   ...exactIdsField,
@@ -626,6 +628,7 @@ export const AGENT_VIEW_DEFAULTS = {
    *  prints the same rows several times larger; and text dense in tokens per
    *  character reaches the MCP cap sooner. */
   outlineChars: 24_000,
+  commentsLimit: 20,
 } as const
 
 const viewRefField = z.string().describe(
@@ -739,7 +742,7 @@ export const commentsCommandSchema = z.looseObject({
   block: z.string().optional().describe('Threads on this one block (same forms as a block ref)'),
   thread: z.string().optional().describe("One thread, by its root's id, whatever its status"),
   includeClosed: z.boolean().optional().describe('Include resolved threads (default: open only)'),
-  limit: viewLimitField('threads', 20),
+  limit: viewLimitField('threads', AGENT_VIEW_DEFAULTS.commentsLimit),
   offset: viewOffsetField('threads'),
   workspaceId: viewFields.workspaceId,
   ...contributorField,
@@ -790,6 +793,8 @@ export interface CommentThreadView {
     excerpt: string
   } | null
   comments: CommentNode[]
+  /** Comments past the per-thread cap, not in `comments`. */
+  omittedComments: number
 }
 
 export interface CommentsView {
@@ -1309,7 +1314,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Comment threads of a scope, a block, or one thread. As JSON: with --scope, those on any block under '
       + 'it and, recursively, on their comments. Each has its status; its anchor (block for a whole-block thread, else exact, moved or '
       + 'stale against the target as it reads now); the quote; the target\'s id, path and an excerpt; and its comments '
-      + 'nested as replied, each with its author\'s name and kind (human, agent or automation). Open threads only unless '
+      + 'nested as replied (the first 50 per thread; omittedComments counts the rest), each with its author\'s name and '
+      + 'kind (human, agent or automation). A page ends early past the views\' size budget. Open threads only unless '
       + '--include-closed. Reply with append-markdown under the comment being answered; resolve or reopen with '
       + 'update-block on the root\'s annotation:status (open | resolved). See `kmagent data-model comments`.',
     readOnly: true,

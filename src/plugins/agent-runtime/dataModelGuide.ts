@@ -270,10 +270,14 @@ comment it answers, to any depth. A quote is a copy, not a mention: a
   excerpt, and its comments nested as replied. Each comment names its author
   and the author's kind (human, agent or automation). The author is the first
   \`attribution:creators\` entry, else the page of the comment's \`created_by\`
-  user.
+  user. A thread shows its first 50 comments in reading order
+  (\`omittedComments\` counts the rest; \`subtree\` on the root reads them), and a
+  page of threads ends early past the views' size budget, with \`nextOffset\`.
 - \`add-comment\` (MCP \`add_comment\`) starts a thread on quoted text, or on the
   whole block, and returns its root id. Writing \`((rootId))\` elsewhere quotes
-  that range.
+  that range. The quote and \`occurrence\` count in the block's verbatim
+  content, as \`get-block\` returns it (outline views collapse whitespace); the
+  result's \`quoteStart\` and \`excerpt\` show which appearance it anchored.
 - **Reply** with \`append-markdown\` whose target is the comment you are answering.
   Target the thread root only to start a new top-level comment.
 - **Resolve or reopen** with \`update-block\` on the root, properties
@@ -295,8 +299,12 @@ comment it answers, to any depth. A quote is a copy, not a mention: a
   - they mention no target page, so the mention watcher answers those, once.
 
   Its rows carry \`id\`, \`thread_id\` and \`content\`. A comment is picked up by
-  the next poll after it goes quiet: time passing changes no table, so a push
-  event never fires for it. The daemon needs a contributor. Under
+  the next poll after it goes quiet, or by any later write that re-runs the
+  query: time passing changes no table, so going quiet fires no push event of
+  its own. The watcher fires on ids it has not seen, so reopening a thread
+  resolved before its baseline, or moving a block with old threads into the
+  scope, brings their old comments in as new ones, one run of up to
+  \`maxRowsPerFire\`. The daemon needs a contributor. Under
   \`contributor none\` its replies look human, and the recipe fires on them
   again, bounded only by \`runsPerHour\`.
 
