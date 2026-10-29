@@ -132,10 +132,23 @@ const authorsOf = async (repo: Repo, comments: readonly BlockData[]): Promise<Ma
   return byComment
 }
 
-/** Each thread's visible descendants: its comments, at every depth. */
-const commentRowsOf = async (repo: Repo, rootId: string): Promise<BlockData[]> =>
-  (await repo.query['core.subtree']({id: rootId, hidePropertyChildren: true}).load())
-    .filter(row => row.id !== rootId)
+/** Each thread's visible descendants: its comments, at every depth. They
+ *  stop at a nested thread root, as the scope read's descent does
+ *  (annotations/scope.ts): a root moved by hand under one of these comments
+ *  is its own thread, with its own comments. */
+const commentRowsOf = async (repo: Repo, rootId: string): Promise<BlockData[]> => {
+  const rows = await repo.query['core.subtree']({id: rootId, hidePropertyChildren: true}).load()
+  const outside = new Set<string>()
+  // Pre-order, so a row's parent is decided before the row.
+  return rows.filter(row => {
+    if (row.id === rootId) return false
+    if ((row.parentId && outside.has(row.parentId)) || hasBlockType(row, THREAD_TYPE)) {
+      outside.add(row.id)
+      return false
+    }
+    return true
+  })
+}
 
 export const buildCommentsView = async (
   repo: Repo,

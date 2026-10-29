@@ -161,6 +161,17 @@ describe('comments', () => {
     expect((await comments({block: BLOCK, offset: page.nextOffset!})).threads.length).toBeGreaterThan(0)
   })
 
+  it('keeps a thread root moved under another thread\'s comment, and its comments, out of that thread', async () => {
+    const outer = await asAgent({type: 'add-comment', target: BLOCK, content: 'Outer'}) as {threadId: string, commentId: string}
+    const inner = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', content: 'Inner'}) as {threadId: string, commentId: string}
+    await context.repo.tx(tx => tx.move(inner.threadId, {parentId: outer.commentId, orderKey: 'z0'}), opts)
+
+    const [outerThread] = (await comments({thread: outer.threadId})).threads
+    expect(outerThread.comments).toMatchObject([{id: outer.commentId, replies: []}])
+    const [innerThread] = (await comments({thread: inner.threadId})).threads
+    expect(innerThread.comments).toMatchObject([{id: inner.commentId}])
+  })
+
   it('takes exactly one of scope, block and thread, and refuses a thread id that is no thread', async () => {
     await expect(comments({})).rejects.toThrow(/exactly one/)
     await expect(comments({scope: PAGE, block: BLOCK})).rejects.toThrow(/exactly one/)
