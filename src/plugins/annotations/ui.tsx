@@ -34,6 +34,7 @@ import {
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
 import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
+import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {isImeKeyEvent} from '@/shortcuts/utils.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
@@ -107,21 +108,14 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     <div className="flex w-full items-start gap-1">
       <div className="min-w-0 flex-1"><Inner block={block}/></div>
       {(count !== null || expanded) && (
-        <button
-          type="button"
+        <GutterPill
+          count={count}
+          expanded={expanded}
           onClick={event => { event.stopPropagation(); toggleThreadsExpanded(key) }}
-          aria-expanded={expanded}
-          aria-label={label}
-          title={label}
-          className={`mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-0.5 rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
-            expanded
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-amber-100 text-amber-900 hover:bg-accent hover:text-accent-foreground dark:bg-amber-900/40 dark:text-amber-100'
-          }`}
-        >
-          <MessageSquare className="h-3 w-3" aria-hidden/>
-          {count ? count : null}
-        </button>
+          label={label}
+          icon={MessageSquare}
+          tone="amber"
+        />
       )}
     </div>
   )
