@@ -105,4 +105,29 @@ describe('toggleBlockSelectionAction', () => {
     await toggle('B')
     await expectSelection({selectedBlockIds: [], anchorBlockId: null})
   })
+
+  // Multi-select actions fan out over the selection in its stored order
+  // (indent, move up/down), so a block toggled in out of order must still
+  // land in document order: indenting [r3, r2] in that order nests r3 under r2.
+  it('keeps the selection in document order whatever order blocks are toggled in', async () => {
+    const panel = repo.block('panel')
+    await toggle('r3')
+    await toggle('r1')
+    await toggle('r2')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  it('orders a block among selected blocks at other depths by where it renders', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'r1a', workspaceId: WS, parentId: 'r1', orderKey: 'a0', content: 'r1a'})
+    }, {scope: ChangeScope.UiState})
+    const panel = repo.block('panel')
+    await toggle('r2')
+    await toggle('r1a')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1a', 'r2'])
+
+    // Selecting the parent replaces its selected child, in the child's place.
+    await toggle('r1')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1', 'r2'])
+  })
 })

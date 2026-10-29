@@ -1,7 +1,7 @@
 import { focusBlock, selectionStateProp } from '@/data/properties.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { ActionContextTypes, type ActionConfig, type BlockPointerDependencies } from '@/shortcuts/types.js'
-import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
+import { extendSelection, insertInDocumentOrder, validateSelectionHierarchy } from '@/utils/selection.js'
 
 export const EXTEND_BLOCK_SELECTION_ACTION_ID = 'extend_block_selection'
 export const TOGGLE_BLOCK_SELECTION_ACTION_ID = 'toggle_block_selection'
@@ -78,7 +78,7 @@ export const toggleBlockInSelection = async (
   const isSelected = selectionState.selectedBlockIds.includes(block.id)
   const newSelectedIds = isSelected
     ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-    : [...selectionState.selectedBlockIds, block.id]
+    : await insertInDocumentOrder(selectionState.selectedBlockIds, block.id, repo)
 
   const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
 

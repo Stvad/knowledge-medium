@@ -9,7 +9,7 @@ import {
   selectionStateProp,
   uiStateRenderScopeId,
 } from '@/data/properties'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -214,6 +214,55 @@ const isDescendantOf = (descendant: Block, ancestor: Block): boolean => {
     currentId = repo.cache.getSnapshot(currentId)?.parentId
   }
   return false
+}
+
+/** `id`'s chain from its root down to itself, read from the cache (load its
+ *  ancestors first), or null when part of it isn't loaded or it cycles. */
+const pathFromRoot = (repo: Repo, id: string): BlockData[] | null => {
+  const path: BlockData[] = []
+  const seen = new Set<string>()
+  let current = repo.cache.getSnapshot(id)
+  while (current) {
+    if (seen.has(current.id)) return null
+    seen.add(current.id)
+    path.unshift(current)
+    if (!current.parentId) return path
+    current = repo.cache.getSnapshot(current.parentId)
+  }
+  return null
+}
+
+/** Whether `a` renders before `b` in their tree: an ancestor before its
+ *  descendants, siblings as every children query sorts them (order key,
+ *  then id). Blocks in different trees have no order. */
+const precedesInTree = (a: readonly BlockData[], b: readonly BlockData[]): boolean => {
+  if (a[0].id !== b[0].id) return false
+  for (let depth = 1; depth < Math.min(a.length, b.length); depth++) {
+    const [x, y] = [a[depth], b[depth]]
+    if (x.id === y.id) continue
+    return x.orderKey < y.orderKey || (x.orderKey === y.orderKey && x.id < y.id)
+  }
+  return a.length < b.length
+}
+
+/** `ids` with `id` inserted before the first of them it renders before,
+ *  else appended — so a selection kept in document order stays in it. The
+ *  multi-select actions apply in selection order and rely on that. Loads
+ *  the ancestors the comparison reads. */
+export async function insertInDocumentOrder(
+  ids: readonly string[],
+  id: string,
+  repo: Repo,
+): Promise<string[]> {
+  await Promise.all([id, ...ids].map(each => repo.load(each, {ancestors: true})))
+  const path = pathFromRoot(repo, id)
+  const index = path
+    ? ids.findIndex(other => {
+      const otherPath = pathFromRoot(repo, other)
+      return otherPath !== null && precedesInTree(path, otherPath)
+    })
+    : -1
+  return index === -1 ? [...ids, id] : [...ids.slice(0, index), id, ...ids.slice(index)]
 }
 
 /** Validates a set of block ids against hierarchical selection
