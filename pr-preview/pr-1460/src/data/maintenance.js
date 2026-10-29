@@ -1,1 +1,1 @@
-export{AK as oweAnalyzeInstalledTables,gX as runAnalyzeIfStale,jK as runAnalyzeInstalledTables,_X as runAnalyzeNow,vX as runAnalyzeTables}from"../../chunks/app-IRRvvGXg.js";
+export{AK as oweAnalyzeInstalledTables,gX as runAnalyzeIfStale,jK as runAnalyzeInstalledTables,_X as runAnalyzeNow,vX as runAnalyzeTables}from"../../chunks/app-DIEtZN4U.js";
