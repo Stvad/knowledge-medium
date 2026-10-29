@@ -1,13 +1,8 @@
 /**
  * Dispatch-specific graph writes layered over the generic bridge graph.
  * Generic reads/writes live in @knowledge-medium/agent-cli/graph; this
- * module owns only the durable dispatch task protocol.
- *
- * Two handles, split by attribution. `createGraph` carries the reads and
- * every `agent:*` bookkeeping write, all unattributed. `createReplyWriter`
- * carries the agent's own replies, the only writes attributed to its
- * contributor. A bookkeeping write added to the wrong one is a type error at
- * the engine, never a silent attribution.
+ * module owns only the durable dispatch task protocol. A write's
+ * attribution is decided by the factory that defines it.
  */
 import { withContributorId, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
@@ -16,7 +11,7 @@ import type { AgentResumeOptions } from './resumeCommand.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
-export interface TaskPropsWrite {
+interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
   resumeOptions?: AgentResumeOptions | null,
   attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,

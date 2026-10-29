@@ -3,8 +3,7 @@
  * graph modules, over a bridge client that hands each wire command to the
  * runtime's own `executeCommand`, with the contributors processor installed. */
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {withContributorId, type BridgeClient} from '@knowledge-medium/agent-cli/client'
-import {knownAgentCommandSchema} from '@knowledge-medium/agent-cli/protocol'
+import {withContributorId} from '@knowledge-medium/agent-cli/client'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {aliasesProp, typesProp} from '@/data/properties'
@@ -13,11 +12,11 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
-import {commandResult} from '@/plugins/agent-runtime/bridgeLoop'
-import {createAgentRuntimeContext, executeCommand} from '@/plugins/agent-runtime/commands'
+import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
 import {parseConfig, PROPS} from '../src/config'
+import {createInProcessBridgeClient} from '../../../scripts/agent-eval/inProcessBridgeClient'
 import {createEngine} from '../src/engine'
 import {createGraph, createReplyWriter} from '../src/graph'
 import type {AgentRunOptions, AgentRunResult} from '../src/runner'
@@ -35,20 +34,7 @@ let agentId: string
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
-const inProcessClient = (): BridgeClient => ({
-  bridgeUrl: 'in-process://dispatch-attribution',
-  runCommand: async command => {
-    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse(command), context))
-    if (!result.ok) throw new Error(result.error.message)
-    return JSON.parse(JSON.stringify(result.value)) as unknown
-  },
-  nextEvents: async () => ({events: [], nextSeq: 0}),
-  whoami: async () => {
-    throw new Error('not used')
-  },
-  health: async () => {},
-  resolveToken: async () => 'in-process',
-})
+const inProcessClient = () => createInProcessBridgeClient(context)
 
 beforeEach(async () => {
   await resetTestDb(db.db)
@@ -132,6 +118,9 @@ describe('dispatch attribution', () => {
       options.onEvent?.({kind: 'session', sessionId: 'sess-1'})
       options.onEvent?.({kind: 'activity', label: 'Reading the page'})
       options.onEvent?.({kind: 'text', text: 'Half an answer'})
+      // The progress writes land while the run is live, not only at its end.
+      await vi.waitFor(async () => expect((await repo.load(MENTION))?.properties)
+        .toMatchObject({[PROPS.activity]: 'Reading the page', [PROPS.session]: 'sess-1'}))
       return result({resultText: 'The summary.'})
     })
 
@@ -139,13 +128,23 @@ describe('dispatch attribution', () => {
     await engine.drain()
 
     const mention = await repo.load(MENTION)
-    // The run went through claim, activity, session and completion.
     expect(mention?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.session]: 'sess-1', [PROPS.activity]: ''})
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
     const replies = await replyIds()
     expect(replies).toHaveLength(1)
     // Streaming edits the reply after creating it, so the agent is also its editor.
     expect((await attributionOf(replies[0])).creators).toEqual([agentId])
+  })
+
+  it('leaves a person\'s note under a reply untouched when the reply drops the node it sits under', async () => {
+    const replies = createReplyWriter(withContributorId(inProcessClient(), agentId))
+    await replies.reconcileReplyTree(MENTION, '- first\n- second', {replyKey: 'k', shape: 'outline'})
+    const second = (await repo.query['core.childIds']({id: MENTION}).load()).at(-1)!
+    const note = await repo.mutate.createChild({parentId: second, content: 'My note on this'})
+    await replies.reconcileReplyTree(MENTION, 'All in one', {replyKey: 'k', shape: 'block', final: true})
+
+    expect((await repo.load(note))?.parentId).toBe(MENTION)
+    expect(await attributionOf(note)).toEqual({creators: [], editors: []})
   })
 
   it('leaves them untouched through a cancelled run', async () => {

@@ -21,6 +21,10 @@ let bridge: http.Server
 let bridgeUrl: string
 const requests: string[] = []
 const commands: Array<Record<string, unknown>> = []
+/** Set, the stub serves `source-1` as a pending mention whose properties
+ *  follow the daemon's writes, so a run gets claimed and replied to; unset, it
+ *  serves a running block with a cancel no run owns. */
+let pendingMention: Record<string, unknown> | null = null
 
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-dispatch-selection-'))
@@ -29,6 +33,7 @@ beforeEach(async () => {
   selectionDir = path.join(tempDir, 'contributors')
   requests.length = 0
   commands.length = 0
+  pendingMention = null
   await fs.writeFile(tokenFile, JSON.stringify({profiles: {'dispatch-test': {token: 'STUB-TOKEN'}}}))
   await fs.writeFile(configPath, JSON.stringify({
     profile: 'dispatch-test',
@@ -56,13 +61,24 @@ beforeEach(async () => {
         })
       }
       if (req.method === 'POST' && req.url === '/runtime/commands') {
-        commands.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>)
+        const command = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+        commands.push(command)
+        if (pendingMention && command.type === 'update-block') {
+          Object.assign(pendingMention, command.properties as Record<string, unknown>)
+        }
         return send(202, {id: `command-${commands.length}`})
       }
       const commandMatch = req.method === 'GET' && req.url?.match(/^\/runtime\/commands\/([^/]+)$/)
       if (commandMatch) {
         const command = commands[Number(commandMatch[1]!.slice('command-'.length)) - 1]
-        const value = command?.type === 'page'
+        const mention = pendingMention && command?.type === 'get-block'
+          ? {id: 'source-1', content: '[[claude]] x', properties: pendingMention, userUpdatedAt: 1}
+          : pendingMention && command?.type === 'sql' && String(command.sql).includes('edited_at')
+            ? [{id: 'source-1', properties_json: JSON.stringify(pendingMention), edited_at: 1}]
+            : pendingMention && command?.type === 'sql'
+              ? []
+              : undefined
+        const value = mention !== undefined ? mention : command?.type === 'page'
           ? {match: {id: 'page-1'}}
           : command?.type === 'backlinks'
             ? {backlinks: [{id: 'source-1', deepLink: 'link:source-1', content: '[[claude]]'}]}
@@ -163,6 +179,36 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
     expect(commands[0]).not.toHaveProperty('contributorId')
     expect(requests).not.toContain('GET /runtime/whoami')
     await expect(fs.access(path.join(tempDir, 'agent-dispatch.pid'))).rejects.toMatchObject({code: 'ENOENT'})
+  })
+
+  it.each([
+    ['saved id', 'contributor-agent'],
+    ['explicit none', null],
+  ] as const)('attributes the agent\'s reply to the %s, and its bookkeeping to no one', async (_label, selected) => {
+    vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_DIR', selectionDir)
+    await saveContributorSelection('dispatch-test', 'workspace-test', selected)
+    const statePath = path.join(tempDir, 'state.json')
+    await fs.writeFile(configPath, JSON.stringify({
+      profile: 'dispatch-test',
+      workspaceId: 'workspace-test',
+      statePath,
+      push: false,
+      // Fails at once, so the run ends in the daemon's reply note.
+      claudeBin: '/usr/bin/false',
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude'}],
+    }))
+    await fs.writeFile(statePath, JSON.stringify({backlinkBaselines: {mentions: 0}}))
+    pendingMention = {}
+
+    await runDaemon()
+
+    const replies = commands.filter(command => command.type === 'reconcile-markdown-subtree')
+    expect(replies.length).toBeGreaterThan(0)
+    for (const reply of replies) expect(reply).toMatchObject({parentId: 'source-1', contributorId: selected})
+    const bookkeeping = commands.filter(command => command.type === 'update-block')
+    expect(bookkeeping.map(command => (command.properties as Record<string, unknown>)['agent:status']))
+      .toEqual(['running', 'error'])
+    for (const write of bookkeeping) expect(write).toMatchObject({id: 'source-1', contributorId: null})
   })
 
   it.each([
