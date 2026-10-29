@@ -1,1 +1,1 @@
-export{wm as BacklinksViewSection,Tm as backlinksViewFooterContribution}from"../../../chunks/app-DclA3_xk.js";
+export{wm as BacklinksViewSection,Tm as backlinksViewFooterContribution}from"../../../chunks/app-DI51Phbt.js";

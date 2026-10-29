@@ -1,1 +1,1 @@
-export{JE as useCommandPaletteActions}from"../../../chunks/app-DclA3_xk.js";
+export{JE as useCommandPaletteActions}from"../../../chunks/app-DI51Phbt.js";

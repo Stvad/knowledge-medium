@@ -1,1 +1,1 @@
-export{mn as BirthdayCelebration}from"../../../chunks/app-DclA3_xk.js";
+export{mn as BirthdayCelebration}from"../../../chunks/app-DI51Phbt.js";

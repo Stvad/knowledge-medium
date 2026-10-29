@@ -1,1 +1,1 @@
-export{WC as BlockRef}from"../../../chunks/app-DclA3_xk.js";
+export{WC as BlockRef}from"../../../chunks/app-DI51Phbt.js";

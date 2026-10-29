@@ -1,1 +1,1 @@
-export{fg as richPastePlugin}from"../../../chunks/app-DclA3_xk.js";
+export{fg as richPastePlugin}from"../../../chunks/app-DI51Phbt.js";

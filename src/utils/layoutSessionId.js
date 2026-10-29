@@ -1,1 +1,1 @@
-export{H6 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,U6 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,W6 as __resetLayoutSessionIdForTesting,G6 as getLayoutSessionId,K6 as isInstalledAppDisplayMode,q6 as readOrCreateLayoutSessionId}from"../../chunks/app-DclA3_xk.js";
+export{J6 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Y6 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,X6 as __resetLayoutSessionIdForTesting,Z6 as getLayoutSessionId,Q6 as isInstalledAppDisplayMode,$6 as readOrCreateLayoutSessionId}from"../../chunks/app-DI51Phbt.js";

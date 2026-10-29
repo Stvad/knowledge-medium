@@ -1,1 +1,1 @@
-export{zB as staticDataExtensions}from"../../chunks/app-DclA3_xk.js";
+export{zB as staticDataExtensions}from"../../chunks/app-DI51Phbt.js";

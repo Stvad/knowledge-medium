@@ -1,1 +1,1 @@
-export{hk as extensionPromptDiagnosticContribution,gk as extensionPromptDiagnosticSource}from"../../../chunks/app-DclA3_xk.js";
+export{hk as extensionPromptDiagnosticContribution,gk as extensionPromptDiagnosticSource}from"../../../chunks/app-DI51Phbt.js";

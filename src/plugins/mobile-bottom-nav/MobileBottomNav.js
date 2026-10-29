@@ -1,1 +1,1 @@
-export{rx as MobileBottomNav}from"../../../chunks/app-DclA3_xk.js";
+export{rx as MobileBottomNav}from"../../../chunks/app-DI51Phbt.js";

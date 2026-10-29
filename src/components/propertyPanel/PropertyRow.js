@@ -1,1 +1,1 @@
-export{wF as PropertyRow}from"../../../chunks/app-DclA3_xk.js";
+export{wF as PropertyRow}from"../../../chunks/app-DI51Phbt.js";

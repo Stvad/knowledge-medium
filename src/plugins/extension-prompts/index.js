@@ -1,1 +1,1 @@
-export{pk as ExtensionPromptSurface,mk as extensionPromptsExtension}from"../../../chunks/app-DclA3_xk.js";
+export{pk as ExtensionPromptSurface,mk as extensionPromptsExtension}from"../../../chunks/app-DI51Phbt.js";

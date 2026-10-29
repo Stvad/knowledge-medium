@@ -1,1 +1,1 @@
-export{QS as usePendingInvitations}from"../../chunks/app-DclA3_xk.js";
+export{QS as usePendingInvitations}from"../../chunks/app-DI51Phbt.js";

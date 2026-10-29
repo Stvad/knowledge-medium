@@ -1,1 +1,1 @@
-export{Iv as videoPlayerMarkdownExtension}from"../../../chunks/app-DclA3_xk.js";
+export{Iv as videoPlayerMarkdownExtension}from"../../../chunks/app-DI51Phbt.js";
