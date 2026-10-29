@@ -107,6 +107,10 @@ describe('pasteArmedCut', () => {
 
     expect(await pasteArmedCut(CUT_TEXT, repo.block('a1'), repo)).toEqual({kind: 'refused'})
     expect(await pasteArmedCut(CUT_TEXT, repo.block('a'), repo)).toEqual({kind: 'refused'})
+    // Beside a cut block: no cycle for core.move to catch, so only the
+    // explicit check refuses it rather than reporting a move of nothing.
+    expect(await pasteArmedCut(CUT_TEXT, repo.block('b'), repo, {placement: 'sibling'}))
+      .toEqual({kind: 'refused'})
     expect(await childIds('page')).toEqual(['a', 'b', 'x', 'y'])
     expect(getArmedCut()).not.toBeNull()
   })
