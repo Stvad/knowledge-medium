@@ -1,1 +1,0 @@
-export{OA as checkForAppUpdate,kA as registerServiceWorker}from"../chunks/app-jJA1W0_U.js";

@@ -1,1 +1,0 @@
-export{tY as instrumentAdapter}from"../../../chunks/app-jJA1W0_U.js";

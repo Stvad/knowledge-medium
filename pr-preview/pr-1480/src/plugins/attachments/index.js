@@ -1,1 +1,0 @@
-export{c_ as attachmentsPlugin}from"../../../chunks/app-jJA1W0_U.js";

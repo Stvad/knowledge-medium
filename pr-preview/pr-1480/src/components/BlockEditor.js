@@ -1,1 +1,0 @@
-export{FP as BlockEditor}from"../../chunks/app-jJA1W0_U.js";

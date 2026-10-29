@@ -1,1 +1,0 @@
-export{uo as dataIntegrityPlugin}from"../../../chunks/app-jJA1W0_U.js";

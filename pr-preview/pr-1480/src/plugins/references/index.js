@@ -1,1 +1,0 @@
-export{ig as referencesPlugin}from"../../../chunks/app-jJA1W0_U.js";
