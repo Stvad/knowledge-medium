@@ -1,0 +1,1 @@
+export{Lh as useIsReadOnly}from"../../chunks/app-B7DkhrGA.js";

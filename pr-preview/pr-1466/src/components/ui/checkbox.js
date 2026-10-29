@@ -1,1 +1,1 @@
-export{FF as Checkbox}from"../../../chunks/app-CM7SCidV.js";
+export{RF as Checkbox}from"../../../chunks/app-B7DkhrGA.js";
