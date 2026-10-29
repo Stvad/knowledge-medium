@@ -1,0 +1,1 @@
+export{Iq as agentDispatchCompanionDataExtension}from"../../../chunks/app-C4PqjIEh.js";

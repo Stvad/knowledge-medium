@@ -1,0 +1,1 @@
+export{kH as preferredSpanReplacement}from"../../../chunks/app-C4PqjIEh.js";

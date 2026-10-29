@@ -1,0 +1,1 @@
+export{Km as blockInfoPlugin}from"../../../chunks/app-C4PqjIEh.js";

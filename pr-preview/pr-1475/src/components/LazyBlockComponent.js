@@ -1,0 +1,1 @@
+export{Rj as LazyBlockComponent}from"../../chunks/app-C4PqjIEh.js";
