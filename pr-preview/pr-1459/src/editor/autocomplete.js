@@ -1,1 +1,0 @@
-export{sk as editorAutocompleteExtension}from"../../chunks/app-C9at7SIF.js";

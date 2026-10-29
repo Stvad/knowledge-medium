@@ -1,1 +1,0 @@
-export{BF as METADATA_ROW_GRID_STYLE,VF as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-C9at7SIF.js";

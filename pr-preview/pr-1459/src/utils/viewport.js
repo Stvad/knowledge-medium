@@ -1,1 +1,0 @@
-export{jI as MOBILE_BREAKPOINT_QUERY,MI as isMobileViewport}from"../../chunks/app-C9at7SIF.js";

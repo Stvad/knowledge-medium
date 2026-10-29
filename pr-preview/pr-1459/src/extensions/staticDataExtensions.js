@@ -1,1 +1,0 @@
-export{vB as staticDataExtensions}from"../../chunks/app-C9at7SIF.js";

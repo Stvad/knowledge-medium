@@ -1,1 +1,0 @@
-export{uO as DEFAULT_TYPE_COLORS,dO as defaultTypeColor,fO as pickLeastUsedTypeColor}from"../../chunks/app-C9at7SIF.js";

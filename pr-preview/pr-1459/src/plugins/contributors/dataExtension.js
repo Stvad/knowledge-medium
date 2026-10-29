@@ -1,1 +1,0 @@
-export{YU as contributorsDataExtension}from"../../../chunks/app-C9at7SIF.js";
