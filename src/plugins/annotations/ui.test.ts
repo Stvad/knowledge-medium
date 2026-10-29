@@ -2,12 +2,14 @@
 import {describe, expect, it} from 'vitest'
 import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
 import {THREAD_TYPE} from './schema'
+import type {ThreadSummary} from './summaries'
 import {
   COMMENT_CARD_KEY,
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
   commentsFooterContribution,
+  threadsUnderComment,
 } from './ui'
 
 /** The contributions decide from the resolve context alone, so a context with
@@ -40,4 +42,11 @@ describe('where the comments UI attaches', () => {
     expect(commentActionsContribution(ctx({blockContext: embedInCard}))).toBeNull()
   })
 
+  it('shows a comment\u2019s open threads under it, but never a thread whose card already encloses it', () => {
+    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
+    const onComment = [thread('T'), thread('U'), thread('V', false)]
+    // A thread anchored to a comment of itself would otherwise render itself
+    // inside its own card, forever.
+    expect(threadsUnderComment(onComment, ['T']).map(t => t.id)).toEqual(['U'])
+  })
 })

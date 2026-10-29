@@ -1,7 +1,7 @@
 /**
  * Per-tab view state for comments: which blocks have their threads expanded
- * inline, which show resolved threads too, and the open composers with their
- * drafts. Deliberately ephemeral module state, never block data: a draft is
+ * inline, which show resolved threads too, the open composers with their
+ * drafts, each panel's margin state and a pending re-anchor. Deliberately ephemeral module state, never block data: a draft is
  * written only on submit, so an abandoned comment leaves nothing behind.
  *
  * Keyed by `viewKey`, one block as shown in one render scope, so expanding or
@@ -74,3 +74,62 @@ export const peekComposer = (key: string): ComposerState | undefined => composer
 
 export const useComposer = (key: string): ComposerState | undefined =>
   useSyncExternalStore(subscribe, () => composers.get(key))
+
+// ──── The side margin, per panel ────
+
+/** Panels whose margin is drawn right now: switched on AND wide enough. Their
+ *  pills hand threads to the margin instead of expanding them inline. */
+const marginShowing = new Set<string>()
+/** The thread whose card is pinned to its anchor in each panel's margin. */
+const activeThreads = new Map<string, string>()
+const showingClosed = new Set<string>()
+
+export const setMarginShowing = (panelId: string, showing: boolean): void => {
+  if (marginShowing.has(panelId) === showing) return
+  if (showing) marginShowing.add(panelId)
+  else marginShowing.delete(panelId)
+  listeners.notify()
+}
+
+export const useMarginShowing = (panelId: string | undefined): boolean =>
+  useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
+
+export const activateThread = (panelId: string, threadId: string): void => {
+  if (activeThreads.get(panelId) === threadId) return
+  activeThreads.set(panelId, threadId)
+  listeners.notify()
+}
+
+export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)
+
+export const useActiveThread = (panelId: string): string | undefined =>
+  useSyncExternalStore(subscribe, () => activeThreads.get(panelId))
+
+export const toggleShowClosed = (panelId: string): void => toggle(showingClosed, panelId)
+export const useShowClosed = (panelId: string): boolean =>
+  useSyncExternalStore(subscribe, () => showingClosed.has(panelId))
+
+/** Every store notification, for the margin's layout pass: a card activated
+ *  or a composer opened moves cards. */
+export const onUiStoreChange = (listener: () => void): (() => void) => subscribe(listener)
+
+// ──── Re-anchoring by selection ────
+
+export interface PendingReanchor {
+  threadId: string
+  targetId: string
+}
+
+/** The thread waiting for the user to select its new text. One at a time:
+ *  the next comment-on-selection in its target's editor re-anchors it. */
+let pendingReanchor: PendingReanchor | null = null
+
+export const startReanchor = (pending: PendingReanchor | null): void => {
+  pendingReanchor = pending
+  listeners.notify()
+}
+
+export const peekPendingReanchor = (): PendingReanchor | null => pendingReanchor
+
+export const usePendingReanchor = (): PendingReanchor | null =>
+  useSyncExternalStore(subscribe, () => pendingReanchor)

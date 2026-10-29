@@ -278,9 +278,11 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   transform(tree)
 }
 
-/** Set on the content renderer's block context by the comment pill, which
- *  already reads the block's thread summaries. Embeds inside the content
- *  inherit it, hence the block id. */
+/** Set on the content renderer's block context by whatever already reads the
+ *  block's thread summaries: the comment pill on outline blocks, and a card
+ *  for its comments. Nested surfaces get none of their own, and the ones
+ *  inside the content (an embed, a block ref) inherit this one, hence the
+ *  block id. */
 export const THREAD_HIGHLIGHTS_KEY = 'annotations.threadHighlights'
 
 export interface ThreadHighlightsFeed {
@@ -293,7 +295,7 @@ export interface ThreadHighlightsFeed {
  *  snapshot being rendered, so they cannot lag it. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, data}) => {
   const feed = blockContext[THREAD_HIGHLIGHTS_KEY] as ThreadHighlightsFeed | undefined
-  if (!feed || feed.blockId !== block.id || blockContext.isNestedSurface) return null
+  if (!feed || feed.blockId !== block.id) return null
   const ranges = highlightRanges(data.content, feed.threads)
   return ranges.length === 0 ? null : {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges}]]}
 }

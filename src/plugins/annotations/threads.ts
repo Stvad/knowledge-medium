@@ -60,7 +60,7 @@ const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block 
 
 /** Anchors come from `captureAnchor` in the app, but agents and the bridge
  *  build their own. */
-const assertQuotable = (anchor: RangeAnchor): void => {
+export const assertQuotable = (anchor: RangeAnchor): void => {
   if (anchor.quote === '') throw new InvalidQuoteError('The quote is empty.')
   if (anchor.quoteStart !== undefined && !(Number.isInteger(anchor.quoteStart) && anchor.quoteStart >= 0)) {
     throw new InvalidQuoteError(`quoteStart ${anchor.quoteStart} is not a position in the text.`)
