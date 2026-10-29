@@ -1,1 +1,1 @@
-export{MP as BLOCK_TITLE_TEXT_CLASS,NP as useBlockTitleTextClass}from"../../../chunks/app-D9A2uOmE.js";
+export{MP as BLOCK_TITLE_TEXT_CLASS,NP as useBlockTitleTextClass}from"../../../chunks/app-CK_CZ9Nv.js";
