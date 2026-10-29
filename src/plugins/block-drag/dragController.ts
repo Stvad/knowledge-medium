@@ -8,12 +8,15 @@
  * Not built on `continuousGestures.ts`: that loop attaches to a block's
  * CONTENT surface (the bullet sits outside it, in the controls column) and
  * classifies per-block gestures that commit as named actions, while a drag
- * spans rows and panels, tracks a live target and auto-scrolls.
+ * spans rows and panels, tracks a live target and auto-scrolls. So the
+ * content surface's swipe and date scrub never see a press on the bullet.
  *
- * v1: mouse only. Everything after `begin` is pointer-type agnostic, so a
- * touch long-press on the bullet needs only its own start condition in
- * `onPointerDown`/`onPendingMove` (a hold timer instead of the distance
- * threshold).
+ * Only the start differs by pointer. A mouse press becomes a drag once it
+ * moves past a threshold. A touch (or pen) press must first rest on the
+ * bullet for a hold; moving before it is not a drag, and the bullet's
+ * `touch-action: none` (`BlockDragLayer`) keeps it from scrolling the page
+ * either way. A held press that moves drags; one let go in place opens
+ * the bullet's context menu, the touch long-press this takes over.
  */
 import type { Repo } from '@/data/repo.js'
 import type { Block } from '@/data/block'
@@ -28,9 +31,14 @@ import { CallbackSet } from '@/utils/callbackSet.js'
 import { isWithinSubtreeOfAny, moveBlocksTo, unselectMovedBlocks } from '@/plugins/move-blocks'
 import { PANEL_SELECTOR, resolveDropTarget, ROW_SELECTOR, type DropLine, type DropTarget } from './dropTarget.ts'
 
-/** Movement before a press on the bullet becomes a drag; below it the
- *  press stays a click that opens the block. */
+/** Movement before a mouse press on the bullet becomes a drag; below it
+ *  the press stays a click that opens the block. */
 const DRAG_THRESHOLD_PX = 4
+/** How long a touch must rest on the bullet to pick its block up, and how
+ *  far it may wander meanwhile: UIKit's long-press defaults. The same
+ *  slop then separates a lifted block from a drag. */
+export const TOUCH_HOLD_MS = 500
+export const TOUCH_SLOP_PX = 10
 /** Distance from a scroll container's top/bottom edge where auto-scroll
  *  starts, and its speed at the very edge. */
 const AUTO_SCROLL_EDGE_PX = 48
@@ -57,10 +65,16 @@ interface Payload {
 
 interface Session {
   readonly pointerId: number
+  /** Touch or pen: the press starts with a hold, not a threshold. */
+  readonly touch: boolean
+  readonly bullet: Element
   readonly startX: number
   readonly startY: number
   readonly payload: Promise<Payload>
-  phase: 'pending' | 'dragging' | 'cancelled'
+  /** `held`: a touch rested through the hold and the block is lifted, but
+   *  it hasn't moved yet. */
+  phase: 'pending' | 'held' | 'dragging' | 'cancelled'
+  holdTimer: number | undefined
   x: number
   y: number
   /** The bullet's own block until the payload resolves. */
@@ -97,9 +111,12 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
   let session: Session | null = null
 
   const onPointerDown = (event: PointerEvent) => {
-    if (event.pointerType !== 'mouse') return
-    // A drag whose release never reached us (let go outside the window)
-    // ends here; left live, the next click anywhere would drop it.
+    const touch = event.pointerType !== 'mouse'
+    // A second finger leaves a live session alone; a cancelled one only
+    // waits to swallow its release, which a fresh press supersedes.
+    if (touch && session && session.phase !== 'cancelled') return
+    // A mouse drag whose release never reached us (let go outside the
+    // window) ends here; left live, the next click anywhere would drop it.
     end()
     if (event.button !== 0) return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
@@ -107,24 +124,35 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     const bullet = (event.target as Element | null)?.closest?.(`[${BLOCK_BULLET_ATTRIBUTE}]`)
     const row = bullet?.closest<HTMLElement>(ROW_SELECTOR)
     const blockId = row?.dataset.blockId
-    if (!row || !blockId) return
+    if (!bullet || !row || !blockId) return
 
     const payload = resolvePayload(repo, blockId, row)
     // Read only once the press becomes a drag; a click must not surface
     // its rejection as unhandled.
     payload.catch(() => {})
-    session = {
+    const current: Session = {
       pointerId: event.pointerId,
+      touch,
+      bullet,
       startX: event.clientX,
       startY: event.clientY,
       x: event.clientX,
       y: event.clientY,
       payload,
       phase: 'pending',
+      holdTimer: undefined,
       draggedIds: new Set([blockId]),
       frame: null,
       scroller: null,
       surfaceChecks: new Map(),
+    }
+    session = current
+    if (touch) {
+      current.holdTimer = window.setTimeout(() => onHold(current), TOUCH_HOLD_MS)
+      // The bullet's context menu arms a touch long-press of its own,
+      // which it skips for a prevented press; the release opens it instead.
+      event.preventDefault()
+      window.addEventListener('contextmenu', onContextMenu, true)
     }
     window.addEventListener('pointermove', onPointerMove, true)
     window.addEventListener('pointerup', onPointerUp, true)
@@ -133,6 +161,13 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     window.addEventListener('blur', onWindowBlur)
     // Scroll events don't bubble; capture sees every container's.
     document.addEventListener('scroll', onScroll, {capture: true, passive: true})
+  }
+
+  /** Runs only for a live, still-pending press: every other way out of
+   *  `pending` (`end`, `cancel`) clears the timer. */
+  const onHold = (current: Session) => {
+    current.phase = 'held'
+    lift(current)
   }
 
   const onPointerMove = (event: PointerEvent) => {
@@ -145,21 +180,35 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     session.x = event.clientX
     session.y = event.clientY
     if (session.phase === 'pending') {
-      const distance = Math.hypot(session.x - session.startX, session.y - session.startY)
-      if (distance < DRAG_THRESHOLD_PX) return
-      begin(session)
+      if (travel(session) < (session.touch ? TOUCH_SLOP_PX : DRAG_THRESHOLD_PX)) return
+      // A touch that moves before the hold is a swipe, not a drag. Cancelled
+      // rather than ended: iOS still clicks the bullet after a short one,
+      // and that click must not open the block.
+      if (session.touch) {
+        cancel(session)
+        return
+      }
+      // A mouse press-drag may have selected text on its way. A touch on the
+      // bullet selects none (`user-select: none`), and clearing would strand
+      // a focused editor's caret.
+      window.getSelection()?.removeAllRanges()
+      session.phase = 'dragging'
+      lift(session)
+    } else if (session.phase === 'held') {
+      if (travel(session) < TOUCH_SLOP_PX) return
+      session.phase = 'dragging'
     }
     if (session.phase === 'dragging') scheduleFrame(session)
   }
 
-  const begin = (current: Session) => {
-    current.phase = 'dragging'
-    window.getSelection()?.removeAllRanges()
+  /** Dim the dragged rows — the bullet's block at once, the whole
+   *  selection once it resolves. */
+  const lift = (current: Session) => {
     document.documentElement.setAttribute(DRAG_ACTIVE_ATTRIBUTE, '')
     markDragged(current.draggedIds)
     publish({active: true, line: null})
     void current.payload.then(payload => {
-      if (session !== current || current.phase !== 'dragging') return
+      if (session !== current || current.phase === 'cancelled') return
       current.draggedIds = new Set(payload.ids)
       markDragged(current.draggedIds)
       scheduleFrame(current)
@@ -233,13 +282,22 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
   const onPointerUp = (event: PointerEvent) => {
     if (!session || event.pointerId !== session.pointerId) return
     const ended = session
-    // A press that never became a drag is a click: let it open the block.
+    // A press that never lifted the block is a click: let it open the block.
     if (ended.phase !== 'pending') suppressNextClick(document.documentElement)
-    const dropping = ended.phase === 'dragging'
+    const {phase} = ended
     ended.x = event.clientX
     ended.y = event.clientY
     end()
-    if (dropping) void drop(repo, ended, releaseTarget(ended))
+    if (phase === 'dragging') void drop(repo, ended, releaseTarget(ended))
+    // After `end`, so `onContextMenu` no longer holds it back.
+    else if (phase === 'held') openContextMenu(ended)
+  }
+
+  /** A native long-press menu (Android fires one mid-hold) would open over
+   *  the lifted block: the release decides instead. */
+  const onContextMenu = (event: MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
   }
 
   const onPointerCancel = (event: PointerEvent) => {
@@ -259,24 +317,28 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     if (session?.phase === 'dragging') scheduleFrame(session)
   }
 
-  /** A drag cancels, so the release that may still reach us is swallowed;
-   *  a press that never became one just ends. */
+  /** A lifted block cancels, so the release that may still reach us is
+   *  swallowed; a press that never lifted one just ends. */
   const onWindowBlur = () => {
-    if (session?.phase === 'dragging') cancel(session)
+    if (session?.phase === 'dragging' || session?.phase === 'held') cancel(session)
     else end()
   }
 
-  /** Escape: drop the visuals now, but keep listening until the button
-   *  comes up so its click can be swallowed rather than open the block. */
+  /** Escape, a lost focus, or a touch that moved before its hold: drop the
+   *  visuals now, but keep listening until the button comes up so its click
+   *  can be swallowed rather than open the block. */
   const cancel = (current: Session) => {
     current.phase = 'cancelled'
+    clearTimeout(current.holdTimer)
     clearVisuals()
   }
 
   const end = () => {
     if (!session) return
     if (session.frame !== null) cancelAnimationFrame(session.frame)
+    clearTimeout(session.holdTimer)
     session = null
+    window.removeEventListener('contextmenu', onContextMenu, true)
     window.removeEventListener('pointermove', onPointerMove, true)
     window.removeEventListener('pointerup', onPointerUp, true)
     window.removeEventListener('pointercancel', onPointerCancel, true)
@@ -378,6 +440,21 @@ const drop = async (repo: Repo, session: Session, resolvedTarget: Promise<DropTa
     showError(error instanceof Error ? error.message : 'Failed to move blocks')
   }
 }
+
+/** The standard event for "open the context menu here", so the bullet's
+ *  menu opens at the press as it would for a right click. */
+const openContextMenu = (session: Session) => {
+  session.bullet.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: session.startX,
+    clientY: session.startY,
+  }))
+}
+
+/** How far the pointer is from where it pressed. */
+const travel = (session: Session): number =>
+  Math.hypot(session.x - session.startX, session.y - session.startY)
 
 const markDragged = (ids: ReadonlySet<string>) => {
   for (const id of ids) {

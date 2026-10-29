@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog.js'
 import { Button } from '@/components/ui/button.js'
 import { useRepo } from '@/context/repo.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
@@ -71,14 +72,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const analysis = useSyncExternalStore(subscribeVerdict, () =>
     getPerfAnalysisFor(repo, workspaceId ?? repo.activeWorkspaceId),
   )
-  // The dialog reads the recording blocker LIVE, and a role change moves it
-  // with nothing else moving — no analysis is published, so the store's
-  // subscription never fires. Same seam the status chip uses; without it this
-  // dialog shows the pre-change status until the next cadence.
-  const readOnly = useSyncExternalStore(
-    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
-    () => repo.isReadOnly,
-  )
+  // A role change publishes no analysis, so the recording blocker reads it live.
+  const readOnly = useIsReadOnly(repo)
   /** The context a refresh is running for, or null. A refresh superseded by a
    *  sign-out, a workspace change or a monitor toggle would otherwise hold the
    *  replacement's button disabled until it settled — or forever, if it hung. */
