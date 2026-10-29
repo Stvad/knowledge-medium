@@ -43,5 +43,6 @@ export const annotationsPlugin: AppExtension = systemToggle({
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
   mobileKeyboardToolbarItemsFacet.of(
-    {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID}, {source: SOURCE, precedence: 60}),
+    {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
+    {source: SOURCE, precedence: 60}),
 ])

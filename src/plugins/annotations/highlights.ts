@@ -49,6 +49,8 @@ export const highlightField = StateField.define<HighlightState>({
     let threads = value.threads
     for (const effect of tr.effects) if (effect.is(setThreads)) threads = effect.value
     if (threads === value.threads && !tr.docChanged) return value
+    // Most editors have no threads: skip building the doc string per keystroke.
+    if (threads.length === 0) return value.threads.length === 0 ? value : {threads, decorations: Decoration.none}
     return {threads, decorations: decorationsFor(tr.state.doc.toString(), threads)}
   },
   provide: field => EditorView.decorations.from(field, state => state.decorations),

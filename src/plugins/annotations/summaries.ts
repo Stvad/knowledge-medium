@@ -19,8 +19,15 @@ export interface ThreadSummary {
  *  comments) shows only as its highlight. */
 export const countsInPill = (thread: ThreadSummary): boolean => thread.open && thread.commentCount > 0
 
-/** Does this thread draw a highlight over its quote? Whether a thread with no
- *  comments should is still open; this is the one place that decides it. */
+/** The number on a block's comment pill, or null for no pill: a block with no
+ *  threads. A block whose threads are all highlights or resolved gets an
+ *  unnumbered pill (0), so they stay reachable. */
+export const pillCount = (threads: readonly ThreadSummary[]): number | null =>
+  threads.length === 0 ? null : threads.filter(countsInPill).length
+
+/** Does this thread draw a highlight over its quote? Every open range thread
+ *  does, comments or not, as decided for now; it may narrow to threads with
+ *  comments, quoters or a replacement. This is the one place that decides it. */
 export const drawsHighlight = (thread: ThreadSummary): boolean => thread.open && thread.anchor.kind === 'range'
 
 /** Whole-block threads first, then by where the quote started, then oldest

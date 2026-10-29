@@ -12,7 +12,7 @@ import {annotationsDataExtension} from './dataExtension'
 import {highlightField, highlightRanges, threadHighlights} from './highlights'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {annotationTargetProp} from './schema'
-import {countsInPill, drawsHighlight, THREADS_FOR_BLOCK_QUERY} from './summaries'
+import {countsInPill, drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY} from './summaries'
 import {createThread, replyTo, setThreadStatus} from './threads'
 
 const WS = 'ws'
@@ -91,6 +91,16 @@ describe('visibility', () => {
     const highlighted = summaries.filter(drawsHighlight)
     expect(highlighted).toHaveLength(2)
     expect(highlighted.map(s => s.id)).not.toContain(whole.threadId)
+  })
+
+  it('keeps a pill, unnumbered, on a block whose threads are all resolved or highlights', async () => {
+    expect(pillCount(await summariesOfB())).toBeNull()
+    const resolved = await createThread(repo, {targetId: 'B', anchor: quoteAnchor('launch'), comment: 'Done'})
+    await setThreadStatus(repo, resolved.threadId, 'resolved')
+    await createThread(repo, {targetId: 'B', anchor: quoteAnchor('Thursday')})
+    expect(pillCount(await summariesOfB())).toBe(0)
+    await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    expect(pillCount(await summariesOfB())).toBe(1)
   })
 })
 

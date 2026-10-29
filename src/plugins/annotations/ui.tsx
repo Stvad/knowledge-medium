@@ -12,18 +12,20 @@
  *   Delete (`CommentActions`).
  */
 
-import {useEffect, useRef, useState, type ReactNode} from 'react'
+import {useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
-import {useUIStateBlock} from '@/data/globalState.js'
-import {editorSelection, focusBlock, requestEditorFocus} from '@/data/properties.js'
+import type {Repo} from '@/data/repo'
+import {useInEditMode, useUIStateBlock} from '@/data/globalState.js'
+import {exitEditModeForBlock} from '@/data/properties.js'
 import {BlockComponent} from '@/components/BlockComponent.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, useWorkspaceId} from '@/hooks/block.js'
 import {
   cachedContentDecorator,
+  enterEditModeForBlock,
   type BlockChildrenFooterContribution,
   type BlockContentDecoratorContribution,
   type BlockContextMenuItemsContribution,
@@ -32,8 +34,10 @@ import {
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
 import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
-import {useOpenBlock} from '@/utils/navigation.js'
+import {ReferenceLink} from '@/components/references/ReferenceLink.js'
+import {isImeKeyEvent} from '@/shortcuts/utils.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
+import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import {resolveAnchor} from './anchor.ts'
 import {submitComposer} from './actions.ts'
@@ -45,7 +49,7 @@ import {
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
-import {countsInPill, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {pillCount, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
 import {replyTo, setThreadStatus} from './threads.ts'
 import {
   closeComposer,
@@ -56,12 +60,27 @@ import {
   useComposer,
   useShowResolved,
   useThreadsExpanded,
+  viewKey,
   type ComposerState,
 } from './uiStore.ts'
 
-/** Set on a card's nested surface; read by the root's header renderer and by
- *  the per-comment actions. */
+/** Set to the thread id on a card's nested surface; read by the root's header
+ *  renderer and by the per-comment actions. */
 export const COMMENT_CARD_KEY = 'annotations.commentCard'
+
+/** Inside a thread's card, and not inside a nested surface within it: block
+ *  context is inherited, but every nested surface (an embed in a comment, say)
+ *  resets the scope root, so the card's blocks are those whose scope root is
+ *  the thread the card was opened for. */
+const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
+  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.scopeRootId
+
+const useReadOnly = (repo: Repo): boolean =>
+  useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
+
+const reportFailure = (error: unknown): void => {
+  showError(error instanceof Error ? error.message : String(error))
+}
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
@@ -80,19 +99,17 @@ const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
 
 const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
-  const expanded = useThreadsExpanded(block.id)
-  const hasOpen = threads.some(thread => thread.open)
-  // A block whose open threads are all pure highlights still gets an
-  // unnumbered pill, so its threads stay reachable.
-  const count = threads.filter(countsInPill).length
-  const label = count > 0 ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
+  const key = viewKey(useBlockContext().renderScopeId, block.id)
+  const expanded = useThreadsExpanded(key)
+  const count = pillCount(threads)
+  const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
   return (
     <div className="flex w-full items-start gap-1">
       <div className="min-w-0 flex-1"><Inner block={block}/></div>
-      {(hasOpen || expanded) && (
+      {(count !== null || expanded) && (
         <button
           type="button"
-          onClick={event => { event.stopPropagation(); toggleThreadsExpanded(block.id) }}
+          onClick={event => { event.stopPropagation(); toggleThreadsExpanded(key) }}
           aria-expanded={expanded}
           aria-label={label}
           title={label}
@@ -103,7 +120,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
           }`}
         >
           <MessageSquare className="h-3 w-3" aria-hidden/>
-          {count > 0 && count}
+          {count ? count : null}
         </button>
       )}
     </div>
@@ -120,10 +137,9 @@ export const commentPillContribution: BlockContentDecoratorContribution = ctx =>
 const QuoteText = ({anchor}: {anchor: ThreadAnchor}) =>
   anchor.kind === 'block'
     ? <span className="italic">whole block</span>
-    : <span className="break-words">“{anchor.quote.length > 160 ? `${anchor.quote.slice(0, 160)}…` : anchor.quote}”</span>
+    : <span className="break-words">“{truncate(anchor.quote, 160)}”</span>
 
-const Composer = ({block, composer}: {block: Block; composer: ComposerState}) => {
-  const [busy, setBusy] = useState(false)
+const Composer = ({block, composerKey, composer}: {block: Block; composerKey: string; composer: ComposerState}) => {
   const input = useRef<HTMLTextAreaElement>(null)
   // A frame late, on open and on re-aim: a menu that opened the composer
   // returns focus to its trigger as it closes.
@@ -132,13 +148,10 @@ const Composer = ({block, composer}: {block: Block; composer: ComposerState}) =>
     return () => cancelAnimationFrame(frame)
   }, [composer.anchor])
   const submit = async () => {
-    setBusy(true)
     try {
-      await submitComposer(block.repo, block.id)
+      await submitComposer(block.repo, composerKey)
     } catch (error) {
-      showError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
+      reportFailure(error)
     }
   }
   return (
@@ -151,15 +164,17 @@ const Composer = ({block, composer}: {block: Block; composer: ComposerState}) =>
         aria-label="New comment"
         rows={2}
         value={composer.draft}
-        onChange={event => updateComposer(block.id, {draft: event.target.value, error: null})}
+        onChange={event => updateComposer(composerKey, {draft: event.target.value, error: null})}
         onKeyDown={event => {
           event.stopPropagation()
+          // Escape and Enter belong to an IME composition while one is open.
+          if (isImeKeyEvent(event.nativeEvent)) return
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
             event.preventDefault()
             void submit()
           } else if (event.key === 'Escape') {
             event.preventDefault()
-            closeComposer(block.id)
+            closeComposer(composerKey)
           }
         }}
         className="w-full resize-y rounded border bg-background px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -168,13 +183,13 @@ const Composer = ({block, composer}: {block: Block; composer: ComposerState}) =>
       <div className="flex gap-2 text-xs">
         <button
           type="button"
-          disabled={busy || composer.draft.trim() === ''}
+          disabled={composer.submitting || composer.draft.trim() === ''}
           onClick={() => void submit()}
           className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50"
         >
           Comment
         </button>
-        <button type="button" onClick={() => closeComposer(block.id)} className="px-1 text-muted-foreground hover:text-foreground">
+        <button type="button" onClick={() => closeComposer(composerKey)} className="px-1 text-muted-foreground hover:text-foreground">
           Cancel
         </button>
       </div>
@@ -192,8 +207,8 @@ const ThreadCard = ({thread}: {thread: ThreadSummary}) => {
         layoutBoundary: false,
         renderScopeId,
         scopeRootId: thread.id,
-        [COMMENT_CARD_KEY]: true,
-        [CONTRIBUTOR_CARD_MODE_KEY]: true,
+        [COMMENT_CARD_KEY]: thread.id,
+        [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
       }}>
         <BlockComponent blockId={thread.id}/>
       </NestedBlockContextProvider>
@@ -203,19 +218,20 @@ const ThreadCard = ({thread}: {thread: ThreadSummary}) => {
 
 const ThreadsSection = ({block}: {block: Block}) => {
   const threads = useThreadSummaries(block)
-  const composer = useComposer(block.id)
-  const showResolved = useShowResolved(block.id)
+  const key = viewKey(useBlockContext().renderScopeId, block.id)
+  const composer = useComposer(key)
+  const showResolved = useShowResolved(key)
   const open = threads.filter(thread => thread.open)
   const closed = threads.filter(thread => !thread.open)
   return (
     <section aria-label="Comments" className="my-1 ml-6 min-w-0 space-y-1.5 rounded-md border border-dashed p-1.5">
-      {composer && <Composer block={block} composer={composer}/>}
+      {composer && <Composer block={block} composerKey={key} composer={composer}/>}
       {open.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
       {!composer && open.length === 0 && closed.length === 0 && (
         <p className="px-1 text-xs text-muted-foreground">No comments.</p>
       )}
       {closed.length > 0 && (
-        <button type="button" onClick={() => toggleShowResolved(block.id)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
+        <button type="button" onClick={() => toggleShowResolved(key)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
           {showResolved ? 'Hide' : 'Show'} {closed.length} resolved
         </button>
       )}
@@ -226,7 +242,8 @@ const ThreadsSection = ({block}: {block: Block}) => {
 
 export const commentsFooterContribution: BlockChildrenFooterContribution = ctx => {
   if (!appliesToOutlineBlock(ctx)) return null
-  const Section: BlockRenderer = ({block}) => (useThreadsExpanded(block.id) ? <ThreadsSection block={block}/> : null)
+  const Section: BlockRenderer = ({block}) =>
+    useThreadsExpanded(viewKey(useBlockContext().renderScopeId, block.id)) ? <ThreadsSection block={block}/> : null
   Section.displayName = 'InlineCommentThreads'
   return Section
 }
@@ -236,11 +253,7 @@ export const commentsFooterContribution: BlockChildrenFooterContribution = ctx =
 const useFocusNewComment = () => {
   const uiStateBlock = useUIStateBlock()
   const {renderScopeId} = useBlockContext()
-  return async (id: string) => {
-    await focusBlock(uiStateBlock, id, {edit: !uiStateBlock.repo.isReadOnly, renderScopeId})
-    await uiStateBlock.set(editorSelection, {blockId: id, start: 0})
-    requestEditorFocus(uiStateBlock)
-  }
+  return (id: string) => enterEditModeForBlock(uiStateBlock.repo.block(id), uiStateBlock, renderScopeId, {start: 0})
 }
 
 const ActionButton = ({onClick, children}: {onClick: () => void; children: ReactNode}) => (
@@ -261,7 +274,7 @@ const ANCHOR_BADGES: Record<Exclude<AnchorState, 'exact'>, string> = {
   deleted: 'on a deleted block',
 }
 
-const useAnchorState = (root: BlockData): AnchorState => {
+const useAnchorState = (root: RootFields): AnchorState => {
   const repo = useRepo()
   const targetId = threadTargetIdOf(root) ?? ''
   const targetContent = useHandle(repo.block(targetId), {selector: data => data && !data.deleted ? data.content : null})
@@ -270,29 +283,38 @@ const useAnchorState = (root: BlockData): AnchorState => {
   return anchor.kind === 'block' ? 'exact' : resolveAnchor(targetContent, anchor).state
 }
 
-const TargetLink = ({targetId, workspaceId}: {targetId: string; workspaceId: string}) => {
+const TargetLink = ({targetId}: {targetId: string}) => {
   const repo = useRepo()
-  const excerpt = useHandle(repo.block(targetId), {selector: data => data?.content.split('\n')[0].slice(0, 80) ?? ''})
-  const open = useOpenBlock({blockId: targetId, workspaceId})
-  return (
-    <a href="#" onClick={event => { event.stopPropagation(); open(event) }} className="underline decoration-dotted">
-      {excerpt || 'a block'}
-    </a>
-  )
+  const target = repo.block(targetId)
+  const excerpt = useHandle(target, {selector: data => truncate(firstLine(data?.content ?? ''), 80)})
+  return <ReferenceLink block={target}>{excerpt || 'a block'}</ReferenceLink>
 }
 
 const ThreadRootContent: BlockRenderer = ({block}) => {
-  const root = useHandle(block, {selector: data => data})
-  const {[COMMENT_CARD_KEY]: inCard} = useBlockContext()
+  const root = useHandle(block, {selector: data => data && {
+    id: data.id, workspaceId: data.workspaceId, content: data.content, properties: data.properties,
+  }})
+  const blockContext = useBlockContext()
   const focusNewComment = useFocusNewComment()
+  const uiStateBlock = useUIStateBlock()
+  // The root renders no editor, so edit mode on it (a click on the quote, an
+  // arrow up from the first comment) would leave the keyboard with nowhere to
+  // go. Drop to plain focus instead.
+  const editing = useInEditMode(block.id)
+  useEffect(() => {
+    if (editing) void exitEditModeForBlock(uiStateBlock, block.id, blockContext.renderScopeId)
+  }, [editing, uiStateBlock, block.id, blockContext.renderScopeId])
   if (!root) return null
-  return inCard === true
+  return inCard(blockContext)
     ? <ThreadHeader root={root} onReply={async () => focusNewComment(await replyTo(block.repo, block.id))}/>
     : <ThreadElsewhere root={root}/>
 }
 
-const ThreadHeader = ({root, onReply}: {root: BlockData; onReply: () => Promise<void>}) => {
+type RootFields = Pick<BlockData, 'id' | 'workspaceId' | 'content' | 'properties'>
+
+const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise<void>}) => {
   const repo = useRepo()
+  const readOnly = useReadOnly(repo)
   const state = useAnchorState(root)
   const open = threadIsOpen(root)
   return (
@@ -301,22 +323,24 @@ const ThreadHeader = ({root, onReply}: {root: BlockData; onReply: () => Promise<
       {state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
-      <ActionButton onClick={() => void onReply()}>Reply</ActionButton>
-      <ActionButton onClick={() => void setThreadStatus(repo, root.id, open ? 'resolved' : 'open')}>
-        {open ? 'Resolve' : 'Reopen'}
-      </ActionButton>
+      {!readOnly && <>
+        <ActionButton onClick={() => onReply().catch(reportFailure)}>Reply</ActionButton>
+        <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
+          {open ? 'Resolve' : 'Reopen'}
+        </ActionButton>
+      </>}
     </div>
   )
 }
 
 /** On the container page, in search results and anywhere else a root shows
  *  outside a card: which block it is on, and what it quotes. */
-const ThreadElsewhere = ({root}: {root: BlockData}) => {
+const ThreadElsewhere = ({root}: {root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
   return (
     <div className="text-sm text-muted-foreground">
       <span>on </span>
-      {targetId ? <TargetLink targetId={targetId} workspaceId={root.workspaceId}/> : <span>a missing block</span>}
+      {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
       <QuoteText anchor={threadAnchorOf(root)}/>
     </div>
@@ -331,13 +355,16 @@ export const threadRootContentContribution: VariantContribution<BlockResolveCont
 
 const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const focusNewComment = useFocusNewComment()
+  const readOnly = useReadOnly(block.repo)
   return (
     <div className="w-full">
       <Inner block={block}/>
-      <div className="flex gap-2 pb-0.5">
-        <ActionButton onClick={() => void replyTo(block.repo, block.id).then(focusNewComment)}>Reply</ActionButton>
-        <ActionButton onClick={() => void deleteCommentFromCard(block)}>Delete</ActionButton>
-      </div>
+      {!readOnly && (
+        <div className="flex gap-2 pb-0.5">
+          <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
+          <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+        </div>
+      )}
     </div>
   )
 }
@@ -345,13 +372,16 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
 const decorateComment = cachedContentDecorator(CommentActions, 'WithCommentActions')
 
 export const commentActionsContribution: BlockContentDecoratorContribution = ctx =>
-  ctx.blockContext?.[COMMENT_CARD_KEY] === true && !ctx.types.includes(THREAD_TYPE) ? decorateComment : null
+  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) ? decorateComment : null
 
 // ──── Bullet menu ────
 
-export const commentContextMenuItem: BlockContextMenuItemsContribution = ({block}) => ({
-  id: 'annotations.comment',
-  label: 'Comment',
-  icon: MessageSquare,
-  onSelect: () => openComposer(block.id, null),
-})
+/** Only where the composer can render: the inline threads live on outline
+ *  blocks, not on nested surfaces. */
+export const commentContextMenuItem: BlockContextMenuItemsContribution = ctx =>
+  appliesToOutlineBlock(ctx)
+    ? {
+      id: 'annotations.comment', label: 'Comment', icon: MessageSquare,
+      onSelect: () => openComposer(viewKey(ctx.blockContext?.renderScopeId, ctx.block.id), ctx.block.id, null),
+    }
+    : null

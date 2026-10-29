@@ -133,8 +133,11 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   )
 }
 
-/** A surface that wants every block's author shown, humans included — a
- *  comment card — sets this in its `NestedBlockContextProvider` overrides. */
+/** A surface that wants every block's author shown, humans included (a comment
+ *  card), sets this to its scope root's id in its `NestedBlockContextProvider`
+ *  overrides. Card mode covers the blocks under that root, not the root itself
+ *  (the card's header), and stops at any nested surface inside the card, which
+ *  resets the scope root. */
 export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
 
 /** The author line of a card: the first recorded creator, which every agent
@@ -148,9 +151,12 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
   })
   const userPage = useUserPage(meta?.createdBy ?? '', meta?.workspaceId)
   const now = useMinuteClock()
-  const creator = attribution?.creators.map(id => profiles.get(id)).find((p): p is Profile => Boolean(p))
-  const authorId = creator?.id ?? userPage.blockId
-  const authorName = creator?.name ?? userPage.name
+  // A recorded creator wins even before its profile row loads (or syncs), so
+  // an agent's comment never shows the tab's human as its author.
+  const creatorId = attribution?.creators[0]
+  const creator = creatorId ? profiles.get(creatorId) : undefined
+  const authorId = creatorId ?? userPage.blockId
+  const authorName = creatorId ? creator?.name ?? 'Contributor' : userPage.name
   const open = useOpenBlock({blockId: authorId ?? '', workspaceId: meta?.workspaceId ?? ''})
   const href = useAppHashInContext(meta?.workspaceId ?? '', authorId ?? '')
   if (!meta) return <Inner block={block}/>
@@ -171,5 +177,10 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
 const decorate = cachedContentDecorator(ContributorBadgesView, 'WithContributorBadges')
 const decorateCard = cachedContentDecorator(ContributorCardView, 'WithContributorCard')
 
+const inCardBody = ({block, blockContext}: Parameters<BlockContentDecoratorContribution>[0]): boolean => {
+  const root = blockContext?.[CONTRIBUTOR_CARD_MODE_KEY]
+  return typeof root === 'string' && root === blockContext?.scopeRootId && block.id !== root
+}
+
 export const contributorBadgesDecoratorContribution: BlockContentDecoratorContribution = ctx =>
-  ctx.blockContext?.[CONTRIBUTOR_CARD_MODE_KEY] === true ? decorateCard : decorate
+  inCardBody(ctx) ? decorateCard : decorate
