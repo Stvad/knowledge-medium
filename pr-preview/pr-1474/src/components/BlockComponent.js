@@ -1,1 +1,1 @@
-export{WA as BlockChildren,GA as BlockComponent}from"../../chunks/app-COBdvV8I.js";
+export{WA as BlockChildren,GA as BlockComponent}from"../../chunks/app-D7X-oHab.js";

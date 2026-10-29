@@ -1,1 +1,1 @@
-export{IV as preferredSpanReplacement}from"../../../chunks/app-COBdvV8I.js";
+export{IV as preferredSpanReplacement}from"../../../chunks/app-D7X-oHab.js";
