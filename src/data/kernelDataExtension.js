@@ -1,1 +1,1 @@
-export{RQ as kernelDataExtension}from"../../chunks/app-uj32hW31.js";
+export{RQ as kernelDataExtension}from"../../chunks/app-C4CXWwHy.js";
