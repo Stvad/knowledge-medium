@@ -1,1 +1,0 @@
-export{mk as approveExtensionHere}from"../../chunks/app-C72L0xf5.js";
