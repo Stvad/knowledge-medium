@@ -1,0 +1,1 @@
+export{VK as BACKLINKS_COUNT_FOR_BLOCK_QUERY,HK as backlinksCountForBlockQuery}from"../../../../chunks/app-C5b2X93-.js";

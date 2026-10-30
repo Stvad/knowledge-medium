@@ -1,0 +1,1 @@
+export{$d as extensionsOverridesPresetCore,ef as extensionsOverridesProp,tf as extensionsPrefsType,nf as overridesCodec}from"../../../chunks/app-C5b2X93-.js";

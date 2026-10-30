@@ -1,0 +1,1 @@
+export{Ku as COMMENT_ON_BLOCK_ACTION_ID,qu as COMMENT_ON_SELECTION_ACTION_ID,Ju as HIGHLIGHT_SELECTION_ACTION_ID,Yu as anchorFromEditor,Xu as annotationActions,Zu as submitComposer}from"../../../chunks/app-C5b2X93-.js";

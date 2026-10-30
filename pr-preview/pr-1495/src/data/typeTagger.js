@@ -1,0 +1,1 @@
+export{FX as TypeTagger,IX as applyTypeTagInTx}from"../../chunks/app-C5b2X93-.js";

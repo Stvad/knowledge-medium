@@ -1,0 +1,1 @@
+export{WP as readClipboardContent}from"../../chunks/app-C5b2X93-.js";
