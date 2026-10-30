@@ -1,1 +1,1 @@
-export{Kg as usePlaceSearch}from"../../../chunks/app-CjBo-MhY.js";
+export{Kg as usePlaceSearch}from"../../../chunks/app-DcRfLIAG.js";

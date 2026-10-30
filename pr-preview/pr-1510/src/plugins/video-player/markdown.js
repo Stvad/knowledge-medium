@@ -1,1 +1,1 @@
-export{fb as videoPlayerMarkdownExtension}from"../../../chunks/app-CjBo-MhY.js";
+export{mb as videoPlayerMarkdownExtension}from"../../../chunks/app-DcRfLIAG.js";

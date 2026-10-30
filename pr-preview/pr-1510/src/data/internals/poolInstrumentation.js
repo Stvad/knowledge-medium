@@ -1,1 +1,1 @@
-export{NX as instrumentAdapter}from"../../../chunks/app-CjBo-MhY.js";
+export{BX as instrumentAdapter}from"../../../chunks/app-DcRfLIAG.js";

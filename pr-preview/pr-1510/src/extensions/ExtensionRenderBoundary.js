@@ -1,1 +1,1 @@
-export{CP as ExtensionRenderBoundary}from"../../chunks/app-CjBo-MhY.js";
+export{EP as ExtensionRenderBoundary}from"../../chunks/app-DcRfLIAG.js";

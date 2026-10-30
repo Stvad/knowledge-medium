@@ -1,1 +1,1 @@
-export{Nb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Pb as VIDEO_NOTES_VIEW_MODE,Fb as videoNotesPaneRatioProp}from"../../../chunks/app-CjBo-MhY.js";
+export{Fb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Ib as VIDEO_NOTES_VIEW_MODE,Lb as videoNotesPaneRatioProp}from"../../../chunks/app-DcRfLIAG.js";

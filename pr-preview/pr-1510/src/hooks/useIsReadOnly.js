@@ -1,1 +1,1 @@
-export{P_ as useIsReadOnly}from"../../chunks/app-CjBo-MhY.js";
+export{I_ as useIsReadOnly}from"../../chunks/app-DcRfLIAG.js";

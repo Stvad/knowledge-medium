@@ -1,1 +1,1 @@
-export{db as videoPlayerPlugin}from"../../../chunks/app-CjBo-MhY.js";
+export{pb as videoPlayerPlugin}from"../../../chunks/app-DcRfLIAG.js";

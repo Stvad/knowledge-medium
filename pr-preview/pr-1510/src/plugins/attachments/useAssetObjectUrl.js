@@ -1,1 +1,1 @@
-export{My as useAssetObjectUrl}from"../../../chunks/app-CjBo-MhY.js";
+export{Py as useAssetObjectUrl}from"../../../chunks/app-DcRfLIAG.js";

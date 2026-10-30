@@ -1,1 +1,1 @@
-export{Hf as extensionsOverridesProp,Uf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CjBo-MhY.js";
+export{Hf as extensionsOverridesProp,Uf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DcRfLIAG.js";

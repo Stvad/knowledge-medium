@@ -1,1 +1,1 @@
-export{Vj as ClientLocalSettings,Hj as clientLocalSettings}from"../../chunks/app-CjBo-MhY.js";
+export{Wj as ClientLocalSettings,Gj as clientLocalSettings}from"../../chunks/app-DcRfLIAG.js";

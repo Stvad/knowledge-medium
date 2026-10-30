@@ -1,1 +1,1 @@
-export{zf as extensionApiCatalog,Bf as extensionApiRuntimeExports}from"../../chunks/app-CjBo-MhY.js";
+export{zf as extensionApiCatalog,Bf as extensionApiRuntimeExports}from"../../chunks/app-DcRfLIAG.js";
