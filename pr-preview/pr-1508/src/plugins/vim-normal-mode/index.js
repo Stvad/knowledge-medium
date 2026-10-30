@@ -1,1 +1,1 @@
-export{Qb as vimNormalModeInteractionExtension,$b as vimNormalModePlugin}from"../../../chunks/app-DBlUtf0z.js";
+export{Qb as vimNormalModeInteractionExtension,$b as vimNormalModePlugin}from"../../../chunks/app-DsYfXr1R.js";

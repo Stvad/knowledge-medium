@@ -1,1 +1,1 @@
-export{pi as interactionMetricsPlugin}from"../../../chunks/app-DBlUtf0z.js";
+export{pi as interactionMetricsPlugin}from"../../../chunks/app-DsYfXr1R.js";

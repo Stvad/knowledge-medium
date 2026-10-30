@@ -1,1 +1,1 @@
-export{jp as adoptTypedBlock,Mp as createTypedChild,ott as derivedBlockId,Np as getOrCreateTypedChild}from"../../chunks/app-DBlUtf0z.js";
+export{jp as adoptTypedBlock,Mp as createTypedChild,ott as derivedBlockId,Np as getOrCreateTypedChild}from"../../chunks/app-DsYfXr1R.js";
