@@ -1,1 +1,1 @@
-export{UD as actionSourcesFromRuntime,WD as buildShortcutHelpModel,GD as describeHandler}from"../../../chunks/app-DMatHd7w.js";
+export{UD as actionSourcesFromRuntime,WD as buildShortcutHelpModel,GD as describeHandler}from"../../../chunks/app-BY7pExd3.js";

@@ -1,1 +1,1 @@
-export{XA as appUpdatePromptExtension}from"../../../chunks/app-DMatHd7w.js";
+export{XA as appUpdatePromptExtension}from"../../../chunks/app-BY7pExd3.js";
