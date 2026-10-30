@@ -1,1 +1,0 @@
-"use client";export{UI as Collapsible,WI as CollapsibleContent,GI as CollapsibleTrigger}from"../../../chunks/app-l1kitjF9.js";

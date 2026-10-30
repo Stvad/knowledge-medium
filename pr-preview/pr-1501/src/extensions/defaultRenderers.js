@@ -1,1 +1,0 @@
-export{xM as defaultRegistry,SM as defaultRendererContributions,CM as defaultRenderersExtension}from"../../chunks/app-l1kitjF9.js";

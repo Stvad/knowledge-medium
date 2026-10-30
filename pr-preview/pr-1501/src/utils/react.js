@@ -1,1 +1,0 @@
-export{iP as useIsMobile,aP as usePointerCoarse}from"../../chunks/app-l1kitjF9.js";

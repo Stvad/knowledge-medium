@@ -1,1 +1,0 @@
-export{Ig as geoContentDecoratorContribution}from"../../../chunks/app-l1kitjF9.js";

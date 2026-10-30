@@ -1,1 +1,0 @@
-export{FA as ExtensionPromptSurface,IA as extensionPromptsExtension}from"../../../chunks/app-l1kitjF9.js";
