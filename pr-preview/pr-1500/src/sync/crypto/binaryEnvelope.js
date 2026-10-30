@@ -1,1 +1,0 @@
-export{bC as BINARY_ENVELOPE_MAGIC,xC as BINARY_ENVELOPE_MIN_BYTES,SC as BINARY_ENVELOPE_OVERHEAD_BYTES,CC as BINARY_MAGIC_BYTES,wC as decodeBinaryEnvelope,TC as encodeBinaryEnvelope,EC as hasBinaryEnvelopeMagic}from"../../../chunks/app-CheJFivW.js";

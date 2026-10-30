@@ -1,1 +1,0 @@
-export{yI as BlockProperties}from"../../chunks/app-CheJFivW.js";

@@ -1,1 +1,0 @@
-export{QU as geoDataExtension}from"../../../chunks/app-CheJFivW.js";

@@ -1,1 +1,0 @@
-export{uK as characterCounterDataExtension}from"../../../chunks/app-CheJFivW.js";

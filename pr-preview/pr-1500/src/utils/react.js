@@ -1,1 +1,0 @@
-export{MN as useIsMobile,NN as usePointerCoarse}from"../../chunks/app-CheJFivW.js";

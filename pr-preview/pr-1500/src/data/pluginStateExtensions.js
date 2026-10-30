@@ -1,1 +1,0 @@
-export{JK as pluginPrefsExtension,YK as pluginUIStateExtension}from"../../chunks/app-CheJFivW.js";

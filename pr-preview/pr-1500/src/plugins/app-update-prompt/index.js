@@ -1,1 +1,0 @@
-export{CA as appUpdatePromptExtension}from"../../../chunks/app-CheJFivW.js";

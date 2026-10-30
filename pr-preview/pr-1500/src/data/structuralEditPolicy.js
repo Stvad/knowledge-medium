@@ -1,1 +1,0 @@
-export{Bk as resolveStructuralEditPolicy,Vk as structuralEditPolicyForBlock}from"../../chunks/app-CheJFivW.js";

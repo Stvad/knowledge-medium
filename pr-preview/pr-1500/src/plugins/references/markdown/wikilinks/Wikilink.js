@@ -1,1 +1,0 @@
-export{bg as Wikilink}from"../../../../../chunks/app-CheJFivW.js";

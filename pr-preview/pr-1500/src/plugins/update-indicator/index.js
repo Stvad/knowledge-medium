@@ -1,1 +1,0 @@
-export{sh as updateIndicatorPlugin}from"../../../chunks/app-CheJFivW.js";

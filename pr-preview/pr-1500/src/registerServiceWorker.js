@@ -1,1 +1,0 @@
-export{MA as checkForAppUpdate,NA as registerServiceWorker}from"../chunks/app-CheJFivW.js";

@@ -1,1 +1,0 @@
-export{WG as COMMENTS_PAGE_ALIAS,GG as commentsPageBlockId,KG as commentsPageSpec,qG as getOrCreateCommentsPage}from"../../../chunks/app-CheJFivW.js";

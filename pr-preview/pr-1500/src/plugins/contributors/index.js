@@ -1,1 +1,0 @@
-export{md as contributorsPlugin}from"../../../chunks/app-CheJFivW.js";

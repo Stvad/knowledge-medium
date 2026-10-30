@@ -1,1 +1,0 @@
-export{JG as contributorsDataExtension}from"../../../chunks/app-CheJFivW.js";

@@ -1,1 +1,0 @@
-export{kf as lintExtensionSource}from"../../../chunks/app-CheJFivW.js";

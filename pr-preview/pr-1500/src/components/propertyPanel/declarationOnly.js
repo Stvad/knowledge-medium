@@ -1,1 +1,0 @@
-export{GI as declarationOnlyDefinitionForName,KI as declarationOnlyStatusText}from"../../../chunks/app-CheJFivW.js";

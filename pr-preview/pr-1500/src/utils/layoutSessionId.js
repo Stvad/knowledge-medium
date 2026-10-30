@@ -1,1 +1,0 @@
-export{I5 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,L5 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,R5 as __resetLayoutSessionIdForTesting,z5 as getLayoutSessionId,B5 as isInstalledAppDisplayMode,V5 as readOrCreateLayoutSessionId}from"../../chunks/app-CheJFivW.js";

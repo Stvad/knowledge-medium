@@ -1,1 +1,0 @@
-export{dk as TypeChip}from"../../../chunks/app-CheJFivW.js";
