@@ -41,6 +41,21 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.4.0
+
+0.4.0 requires `@knowledge-medium/agent-cli` 0.9.0. Upgrade both packages, restart the bridge as described in the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section, then restart the daemon. A `delivery: "channel"` watcher's ambient session loads the dispatch channel MCP when it starts, so restart that session too.
+
+```bash
+npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli
+launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch
+```
+
+What changes:
+
+- The daemon's `agent:*` bookkeeping on the block that mentioned it is written with no attribution; the saved contributor is credited only with the run's own writes (see [Contributor selection](#contributor-selection)). The daemon still needs that saved choice to start.
+- A mention that is a comment in a thread gets the thread in its prompt (step 3 of [How a mention task runs](#how-a-mention-task-runs)). A custom `prompt` places it with `{{thread}}`; one without the placeholder gets the thread appended. Reading the thread needs an app build with the `comments` verb: against an older tab the daemon logs `no thread context for <id>` and answers the mention without it.
+- Runs get the km `comments` and `add_comment` tools.
+
 ## Upgrade to 0.3.0
 
 0.3.0 requires `@knowledge-medium/agent-cli` 0.8.0. Before starting active watchers, save an agent or automation contributor for the daemon's configured profile and workspace with `kmagent --profile agent-dispatch contributor use <id> --workspace <workspace-id>`; `contributor use none` explicitly opts out by sending null attribution. You can also create and select an automation profile with `contributor create`.
@@ -273,7 +288,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 0. A watcher's **first tick establishes a baseline without firing**: pre-existing backlinks to `target` are history, not a backlog — pointing a watcher at an established page (hundreds of old mentions) must not claim and bill them. Only blocks **edited after** the baseline become tasks; editing an old mention deliberately re-surfaces it. Baselines persist in the state file — delete the watcher's `backlinkBaselines` entry there to re-baseline.
 1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
 2. Claim: `agent:status=running` + `agent:watcher` + `agent:executor` + `agent:attempts` + `agent:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
-3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped).
+3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped). A mention that is a comment in a thread also gets the thread: the annotated block's text and page path, the quote, and the comments from the thread's first one down to the mention, with their authors (`{{thread}}`; a custom `prompt` without it gets the thread appended). Reading it needs an app with the `comments` verb; without one the mention is answered without it.
 4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`.
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).

@@ -39,9 +39,9 @@ describe('dailyNotesDeletionGuard', () => {
     expect(await dailyNotesDeletionGuard(note)).toMatch(/Daily notes/)
   })
 
-  it('refuses the Journal', async () => {
+  it('leaves the Journal to the core kernel-page rule', async () => {
     const journal = await getOrCreateJournalBlock(repo, WS)
-    expect(await dailyNotesDeletionGuard(journal)).toMatch(/Journal/)
+    expect(await dailyNotesDeletionGuard(journal)).toBeNull()
   })
 
   it('allows an ordinary page, including a child of a daily note', async () => {

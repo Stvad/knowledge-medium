@@ -2,7 +2,7 @@ import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from 
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
 import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
-import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
+import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -45,6 +45,12 @@ export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
 export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
 const JOURNAL_ALIAS = 'Journal'
+
+export const journalPageSpec: KernelPageSpec = {
+  namespace: JOURNAL_NS,
+  alias: JOURNAL_ALIAS,
+  markerType: null,
+}
 
 export const journalBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, JOURNAL_NS)
@@ -113,11 +119,7 @@ export const getOrCreateJournalBlock = async (
   // A container of every device's daily notes, so its create never joins an
   // undo step (see `getOrCreateKernelPage`): undoing a day's first note leaves
   // the Journal.
-  getOrCreateKernelPage(repo, workspaceId, {
-    namespace: JOURNAL_NS,
-    alias: JOURNAL_ALIAS,
-    markerType: null,
-  }, {skipUndo: true})
+  getOrCreateKernelPage(repo, workspaceId, journalPageSpec, {skipUndo: true})
 
 /** Order key under the journal page. The tree uses normal ascending
  *  `(order_key, id)` ordering, so daily notes encode the date as its

@@ -15,6 +15,7 @@ import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
+import { loadThreadContext } from './threadContext.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
@@ -353,6 +354,12 @@ export const createEngine = (deps: EngineDeps) => {
       abortControllers.set(sourceId, abortController)
 
       const subtreeRows = await graph.getSubtree(sourceId)
+      // Context only: a thread that can't be read (an app without the
+      // comments verb, the plugin off) leaves the mention answered without it.
+      const thread = await loadThreadContext(graph, block, ancestorBlocks).catch(error => {
+        log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
+        return null
+      })
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
@@ -365,12 +372,22 @@ export const createEngine = (deps: EngineDeps) => {
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,
+        thread: thread ?? undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
       })
 
       if (watcher.delivery === 'channel') {
+        // A Stop during the reads above: once delivered, the channel session
+        // has the task and nothing aborts it.
+        if (abortController.signal.aborted) {
+          await reconcileReply('⏹️ agent-dispatch run cancelled', {final: true, shape: 'block'})
+          terminalReplyDelivered = true
+          await graph.setTaskProps(sourceId, {status: 'error', error: 'cancelled', activity: null, cancel: null, nowMs: now()})
+          log(`[${watcher.name}] CANCELLED ${sourceId} before delivery`)
+          return
+        }
         // Ambient mode: deliver and step back — the channel session owns
         // the rest of the lifecycle (reply block + done/error props). If
         // it never does, the stale-running sweep re-delivers, bounded by

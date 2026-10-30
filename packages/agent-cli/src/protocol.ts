@@ -749,6 +749,61 @@ export const commentsCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** The type of a comment thread's root, which the annotations plugin owns as
+ *  `annotation:thread`; a test there holds the two equal. */
+export const COMMENT_THREAD_TYPE = 'annotation:thread'
+
+/** What `comments` answers. */
+export type CommentAnchorState = 'block' | 'exact' | 'moved' | 'stale'
+
+export interface CommentAuthor {
+  /** The author's page; null for a system author. */
+  id: string | null
+  name: string
+  /** Null when the author's page is not here to say. */
+  kind: 'human' | 'agent' | 'automation' | null
+}
+
+export interface CommentNode {
+  id: string
+  shortId: string
+  content: string
+  /** Characters cut from `content`; get_block reads the rest. */
+  cut: number
+  author: CommentAuthor
+  createdAt: number
+  replies: CommentNode[]
+}
+
+export interface CommentThreadView {
+  id: string
+  shortId: string
+  /** `open` or `resolved`, or the stored value when this build can't read it. */
+  status: string
+  anchor: CommentAnchorState
+  /** The quoted text; null for a thread on the whole block. */
+  quote: string | null
+  target: {
+    id: string
+    shortId: string
+    deleted: boolean
+    /** Root→parent labels, as a breadcrumb reads. */
+    path: string[]
+    /** The quote with some text around it, or the block's head. */
+    excerpt: string
+  } | null
+  comments: CommentNode[]
+  /** Comments past the per-thread cap, not in `comments`. */
+  omittedComments: number
+}
+
+export interface CommentsView {
+  total: number
+  offset: number
+  nextOffset: number | null
+  threads: CommentThreadView[]
+}
+
 // ----- read-only SQL guard --------------------------------------------
 
 /** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite

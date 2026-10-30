@@ -1,9 +1,10 @@
 import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'
-import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, systemPagesFacet, typeSeedsFacet } from '@/data/facets.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { getOrCreateKernelPage } from '@/data/kernelPage.js'
 import { getOrCreateTypedChild } from '@/data/typedRecords.js'
 import type { Repo } from '@/data/repo.js'
+import type { KernelPageSpec } from '@/data/kernelPage.js'
 
 // One namespace per KIND, and generate your OWN (`crypto.randomUUID()`);
 // changing one later orphans every row already written under it. A kernel
@@ -47,7 +48,14 @@ const highlightType = seedType({
   properties: [highlightIdProp, noteProp],
 })
 
+export const readwiseRootSpec: KernelPageSpec = {
+  namespace: READWISE_ROOT_NS,
+  alias: 'Readwise Library',
+  markerType: libraryType.id,
+}
+
 export default [
+  systemPagesFacet.of({spec: readwiseRootSpec, eager: false}, {source: 'readwise'}),
   definitionSeedsFacet.of(highlightIdProp, {source: 'readwise'}),
   definitionSeedsFacet.of(noteProp, {source: 'readwise'}),
   typeSeedsFacet.of(libraryType, {source: 'readwise'}),
@@ -65,11 +73,7 @@ export const syncHighlights = async (
   workspaceId: string,
   highlights: readonly Highlight[],
 ): Promise<void> => {
-  const root = await getOrCreateKernelPage(repo, workspaceId, {
-    namespace: READWISE_ROOT_NS,
-    alias: 'Readwise Library',
-    markerType: libraryType.id,
-  })
+  const root = await getOrCreateKernelPage(repo, workspaceId, readwiseRootSpec, {skipUndo: true})
 
   await repo.tx(async tx => {
     for (const hl of highlights) {

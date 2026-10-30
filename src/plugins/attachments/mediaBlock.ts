@@ -14,6 +14,7 @@
 
 import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { TypeSeedDeclaration } from '@/data/api'
+import type { KernelPageSpec } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 
 export const MEDIA_TYPE = 'media'
@@ -186,6 +187,12 @@ export const ASSETS_TYPE = 'assets'
  *  `uuidv5(workspaceId, ASSETS_NS)` (see {@link kernelPageBlockId}). */
 export const ASSETS_NS = 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'
 export const ASSETS_ALIAS = 'Assets'
+
+export const assetsPageSpec: KernelPageSpec = {
+  namespace: ASSETS_NS,
+  alias: ASSETS_ALIAS,
+  markerType: ASSETS_TYPE,
+}
 
 export const ASSETS_TYPE_CONTRIBUTION: TypeSeedDeclaration = seedType({
   seedKey: 'system:attachments/type/assets',
