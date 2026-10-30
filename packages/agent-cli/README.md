@@ -71,6 +71,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
 | `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
 | `kmagent data-model [<topic id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with a topic id (`data-model pages`, or `--topic pages`), all of it with `all`. |
+| `kmagent comments (--scope <ref> \| --block <ref> \| --thread <id>) [--include-closed]` | Comment threads as JSON: each thread's status, anchor, quote, target and its comments nested as replied, with their authors. Open threads only unless `--include-closed`. See `data-model comments`. |
 | `kmagent create-block <json>` | Create one block: `{parentId, content, properties?, position?}`. `parentId` is a write target (see Writing); absent or `null` makes a top-level block, which is not a page — use `create-page`. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
@@ -78,6 +79,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
 | `kmagent append-markdown <target> -- '<markdown>'` (or markdown on stdin) | Split markdown into blocks the way "paste as markdown" does and insert them under a target in one transaction (`--first`, `--after <id>`, `--before <id>`, `--one-block`). See [Writing](#writing). |
 | `kmagent edit-block <id> <old> <new>` | Replace the one occurrence of `<old>` in a block, against its content at write time. |
+| `kmagent add-comment '<json>'` | Start a comment thread from `{target, quote?, occurrence?, content?}`: on quoted text of the block, or on the whole block; no `content` makes a highlight. Prints the thread root's id. Reply with `append-markdown` under the comment being answered. |
 | `kmagent create-page <name> \| --date <expr>` | Get-or-create a page (as `[[name]]` would) or a daily note. |
 | `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |
 | `kmagent block-history <id>` | One block's recorded changes with prior content (cut past 2,000 chars) — local and synced. |
@@ -278,7 +280,11 @@ The bridge is a background process that keeps running after the CLI that started
 kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
-Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.8.0 km-mcp`).
+Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.9.0 km-mcp`).
+
+### Upgrade to 0.9.0
+
+0.9.0 adds comment threads: the `comments` read tool and verb, and the `add_comment` write tool with its `kmagent add-comment` verb. Upgrade `agent-cli`, restart the bridge using the steps above, and restart every MCP client that launches `km-mcp`. Restart the bridge even if you only read: it classifies verbs by its own copy of the command list, so a bridge older than 0.9.0 treats `comments` as a write and refuses it to a read-only token (read-write tokens are unaffected). Both tools need an app build that has the `comments` and `add-comment` verbs; an older app tab fails them with `Invalid command body`.
 
 ### Upgrade to 0.8.0
 
