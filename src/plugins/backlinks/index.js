@@ -1,1 +1,1 @@
-export{Kh as backlinksPlugin}from"../../../chunks/app-D3hCmSkG.js";
+export{Kh as backlinksPlugin}from"../../../chunks/app-V_lamiLq.js";

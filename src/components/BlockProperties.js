@@ -1,1 +1,1 @@
-export{QI as BlockProperties}from"../../chunks/app-D3hCmSkG.js";
+export{QI as BlockProperties}from"../../chunks/app-V_lamiLq.js";
