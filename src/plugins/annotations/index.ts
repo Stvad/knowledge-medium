@@ -17,6 +17,7 @@ import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import {annotationActions, COMMENT_ON_SELECTION_ACTION_ID} from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
+import {suggestEditAction} from './suggestActions.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
@@ -37,6 +38,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
 }).of([
   annotationsDataExtension,
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
+  actionsFacet.of(suggestEditAction, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),

@@ -31,7 +31,7 @@
 import type {Parent, Root, RootContent} from 'mdast'
 import type {Plugin} from 'unified'
 import type {MarkdownExtension} from '@/markdown/extensions.js'
-import {highlightClasses, highlightRanges, type HighlightRange} from './highlights.ts'
+import {coveringStyle, highlightClasses, highlightRanges, type HighlightRange} from './highlights.ts'
 import type {HighlightThread} from './summaries.ts'
 
 const ANNOTATION_MARK_NODE = 'annotationMark'
@@ -45,13 +45,14 @@ interface Span {
   to: number
 }
 
-/** One stretch of source covered by the same highlight style. */
+/** One stretch of source covered by the same highlight style, as the mark's
+ *  classes. */
 interface Segment extends Span {
-  moved: boolean
+  className: string
 }
 
-/** The covered stretches, disjoint and in order. Where an exact and a moved
- *  range overlap, the exact style wins: the text there is certainly quoted. */
+/** The covered stretches, disjoint and in order, each styled as
+ *  `coveringStyle` decides where ranges overlap. */
 const segmentsOf = (ranges: readonly HighlightRange[]): Segment[] => {
   const cuts = [...new Set(ranges.flatMap(r => [r.from, r.to]))].sort((a, b) => a - b)
   const segments: Segment[] = []
@@ -60,22 +61,22 @@ const segmentsOf = (ranges: readonly HighlightRange[]): Segment[] => {
     const to = cuts[i + 1]
     const covering = ranges.filter(r => r.from <= from && r.to >= to)
     if (covering.length === 0) continue
-    const moved = covering.every(r => r.moved)
+    const className = highlightClasses(coveringStyle(covering))
     const last = segments[segments.length - 1]
-    if (last && last.to === from && last.moved === moved) last.to = to
-    else segments.push({from, to, moved})
+    if (last && last.to === from && last.className === className) last.to = to
+    else segments.push({from, to, className})
   }
   return segments
 }
 
-type Coverage = {kind: 'none'} | {kind: 'whole'; moved: boolean} | {kind: 'partial'}
+type Coverage = {kind: 'none'} | {kind: 'whole'; className: string} | {kind: 'partial'}
 
 const coverageOf = (segments: readonly Segment[], {from, to}: Span): Coverage => {
   const touching = segments.filter(s => s.from < to && s.to > from)
   if (touching.length === 0) return {kind: 'none'}
   const [only] = touching
   return touching.length === 1 && only.from <= from && only.to >= to
-    ? {kind: 'whole', moved: only.moved}
+    ? {kind: 'whole', className: only.className}
     : {kind: 'partial'}
 }
 
@@ -207,17 +208,17 @@ const pointsOf = (source: string) => {
   }
 }
 
-const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
+const markNode = (className: string, children: RootContent[]): RootContent => ({
   type: ANNOTATION_MARK_NODE,
   children,
   data: {
     hName: 'mark',
-    hProperties: {className: highlightClasses(moved).split(' ')},
+    hProperties: {className: className.split(' ')},
   },
 } as unknown as RootContent)
 
-/** `moved` is the piece's highlight style, or null when it is not marked. */
-type Piece = {node: RootContent; moved: boolean | null}
+/** `className` is the piece's mark, or null when it is not marked. */
+type Piece = {node: RootContent; className: string | null}
 
 export interface AnnotationMarksOptions {
   /** The content the ranges were resolved against. A renderer that transforms
@@ -248,24 +249,24 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
         ...(node.position ? {position: position(piece.from, piece.to)} : {}),
       } as RootContent
       const coverage = coverageOf(segments, piece)
-      pieces.push({node: text, moved: coverage.kind === 'whole' ? coverage.moved : null})
+      pieces.push({node: text, className: coverage.kind === 'whole' ? coverage.className : null})
     }
     return pieces
   }
 
   const piecesOf = (node: RootContent, phrasing: boolean): Piece[] => {
     const span = spans.get(node)
-    if (!span) return [{node, moved: null}]
+    if (!span) return [{node, className: null}]
     const coverage = coverageOf(segments, span)
-    if (coverage.kind === 'none') return [{node, moved: null}]
-    if (coverage.kind === 'whole' && phrasing) return [{node, moved: coverage.moved}]
+    if (coverage.kind === 'none') return [{node, className: null}]
+    if (coverage.kind === 'whole' && phrasing) return [{node, className: coverage.className}]
     if (isContainer(node)) {
       transform(node)
-      return [{node, moved: null}]
+      return [{node, className: null}]
     }
     // Partly covered, so addressable text: `drawable` refused ranges that cut
     // anything else.
-    return node.type === 'text' ? splitText(node, span) : [{node, moved: null}]
+    return node.type === 'text' ? splitText(node, span) : [{node, className: null}]
   }
 
   /** Rebuild `parent.children`, wrapping each run of adjacent marked pieces
@@ -274,16 +275,16 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   const transform = (parent: Container) => {
     const phrasing = PHRASING_PARENTS.has(parent.type)
     const out: RootContent[] = []
-    let run = null as {moved: boolean; nodes: RootContent[]} | null
-    for (const {node, moved} of (parent.children as RootContent[]).flatMap(child => piecesOf(child, phrasing))) {
-      if (moved === null) {
+    let run = null as {className: string; nodes: RootContent[]} | null
+    for (const {node, className} of (parent.children as RootContent[]).flatMap(child => piecesOf(child, phrasing))) {
+      if (className === null) {
         run = null
         out.push(node)
-      } else if (run?.moved === moved) {
+      } else if (run?.className === className) {
         run.nodes.push(node)
       } else {
-        run = {moved, nodes: [node]}
-        out.push(markNode(moved, run.nodes))
+        run = {className, nodes: [node]}
+        out.push(markNode(className, run.nodes))
       }
     }
     parent.children = out as Parent['children']
