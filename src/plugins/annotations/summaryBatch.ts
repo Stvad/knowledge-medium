@@ -9,8 +9,9 @@
  * held between flushes. Caching is the handle store's job.
  */
 
-import type {QueryReadDb} from '@/data/api'
+import type {BlockData, QueryCtx, QueryReadDb} from '@/data/api'
 import {buildQualifiedBlockColumnsSql} from '@/data/blockSchema'
+import {dependOnRecognitionParams} from '@/data/internals/kernelQueries'
 import {contentionFor} from '@/data/internals/timingMetrics'
 import {recognizedFieldRowSql, type RecognitionParams} from '@/data/internals/treeQueries'
 
@@ -116,11 +117,27 @@ export class ThreadRootBatcher {
 /** One batcher per read surface, which is one per `Repo`. */
 const batchers = new WeakMap<QueryReadDb, ThreadRootBatcher>()
 
-export const threadRootBatcherFor = (db: QueryReadDb): ThreadRootBatcher => {
+const batcherFor = (db: QueryReadDb): ThreadRootBatcher => {
   let batcher = batchers.get(db)
   if (!batcher) {
     batcher = new ThreadRootBatcher(db)
     batchers.set(db, batcher)
   }
   return batcher
+}
+
+/** The live roots among `ids`, hydrated, each with its comment count, through
+ *  the batch. Declares what the count reads: each root's children and field
+ *  recognition. */
+export const threadRootsWithCounts = async (
+  ctx: QueryCtx,
+  ids: readonly string[],
+): Promise<{root: BlockData; commentCount: number}[]> => {
+  const recognitionParams = dependOnRecognitionParams(ctx)
+  for (const id of ids) ctx.depend({kind: 'parent-edge', parentId: id})
+  const batcher = batcherFor(ctx.db)
+  const found = (await Promise.all(ids.map(id => batcher.request(id, recognitionParams))))
+    .filter(answer => answer !== null)
+  return ctx.hydrateBlocks(found.map(answer => answer.row))
+    .map((root, i) => ({root, commentCount: found[i].commentCount}))
 }

@@ -1,10 +1,9 @@
 import {z} from 'zod'
 import {defineQuery, type Query, type Schema} from '@/data/api'
-import {dependOnRecognitionParams} from '@/data/internals/kernelQueries'
 import {hasBlockType} from '@/data/properties'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries.ts'
 import {THREAD_TYPE, threadAnchorOf, threadIsOpen, type ThreadAnchor} from './schema.ts'
-import {threadRootBatcherFor} from './summaryBatch.ts'
+import {threadRootsWithCounts} from './summaryBatch.ts'
 
 export const THREADS_FOR_BLOCK_QUERY = 'annotations.threadsForBlock'
 
@@ -56,24 +55,16 @@ export const threadsForBlockQuery: Query<{workspaceId: string; id: string}, Thre
   resolve: async ({workspaceId, id}, ctx) => {
     const ids = await ctx.run(THREAD_IDS_FOR_BLOCK_QUERY, {workspaceId, id})
     if (ids.length === 0) return []
-    const recognitionParams = dependOnRecognitionParams(ctx)
-    for (const rootId of ids) ctx.depend({kind: 'parent-edge', parentId: rootId})
-    const batcher = threadRootBatcherFor(ctx.db)
-    const found = (await Promise.all(ids.map(rootId => batcher.request(rootId, recognitionParams))))
-      .filter(answer => answer !== null)
-    const roots = ctx.hydrateBlocks(found.map(answer => answer.row))
-    const summaries: ThreadSummary[] = []
-    for (const [i, root] of roots.entries()) {
-      if (!hasBlockType(root, THREAD_TYPE)) continue
-      summaries.push({
+    return (await threadRootsWithCounts(ctx, ids))
+      .filter(({root}) => hasBlockType(root, THREAD_TYPE))
+      .map(({root, commentCount}) => ({
         id: root.id,
         open: threadIsOpen(root),
         anchor: threadAnchorOf(root),
-        commentCount: found[i].commentCount,
+        commentCount,
         createdAt: root.createdAt,
-      })
-    }
-    return summaries.sort(byPosition)
+      }))
+      .sort(byPosition)
   },
 })
 
