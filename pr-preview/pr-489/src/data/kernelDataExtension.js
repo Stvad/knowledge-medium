@@ -1,0 +1,1 @@
+export{i1 as kernelDataExtension}from"../../chunks/app-CWigMzH7.js";

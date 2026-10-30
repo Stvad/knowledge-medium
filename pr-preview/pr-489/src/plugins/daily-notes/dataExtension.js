@@ -1,0 +1,1 @@
+export{kG as dailyNotesDataExtension}from"../../../chunks/app-CWigMzH7.js";

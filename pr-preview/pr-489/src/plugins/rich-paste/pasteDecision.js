@@ -1,0 +1,1 @@
+export{Q_ as richPasteDecisionContribution}from"../../../chunks/app-CWigMzH7.js";

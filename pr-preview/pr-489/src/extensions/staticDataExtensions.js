@@ -1,0 +1,1 @@
+export{gH as staticDataExtensions}from"../../chunks/app-CWigMzH7.js";

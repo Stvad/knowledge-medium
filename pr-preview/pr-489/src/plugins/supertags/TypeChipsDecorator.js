@@ -1,0 +1,1 @@
+export{Zt as typeChipsDecoratorContribution}from"../../../chunks/app-CWigMzH7.js";

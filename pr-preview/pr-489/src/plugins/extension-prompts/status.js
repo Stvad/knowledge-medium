@@ -1,0 +1,1 @@
+export{IA as extensionPromptDiagnosticContribution,LA as extensionPromptDiagnosticSource}from"../../../chunks/app-CWigMzH7.js";

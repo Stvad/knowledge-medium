@@ -1,0 +1,1 @@
+export{FS as plainOutlinerPlugin}from"../../../chunks/app-CWigMzH7.js";

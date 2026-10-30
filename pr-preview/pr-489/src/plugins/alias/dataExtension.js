@@ -1,0 +1,1 @@
+export{_J as aliasDataExtension}from"../../../chunks/app-CWigMzH7.js";

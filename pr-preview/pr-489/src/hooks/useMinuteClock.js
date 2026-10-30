@@ -1,0 +1,1 @@
+export{fT as useMinuteClock}from"../../chunks/app-CWigMzH7.js";

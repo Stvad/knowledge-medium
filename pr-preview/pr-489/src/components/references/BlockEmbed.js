@@ -1,0 +1,1 @@
+export{Dk as BlockEmbed}from"../../../chunks/app-CWigMzH7.js";

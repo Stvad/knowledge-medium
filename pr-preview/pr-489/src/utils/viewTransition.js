@@ -1,0 +1,1 @@
+export{oB as withMoveTransition}from"../../chunks/app-CWigMzH7.js";

@@ -1,0 +1,1 @@
+export{vk as AccountHeaderItem}from"../../../chunks/app-CWigMzH7.js";

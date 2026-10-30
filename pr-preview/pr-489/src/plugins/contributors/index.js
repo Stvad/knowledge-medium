@@ -1,0 +1,1 @@
+export{Rd as contributorsPlugin}from"../../../chunks/app-CWigMzH7.js";

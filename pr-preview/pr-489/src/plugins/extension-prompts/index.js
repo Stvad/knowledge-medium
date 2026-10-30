@@ -1,0 +1,1 @@
+export{PA as ExtensionPromptSurface,FA as extensionPromptsExtension}from"../../../chunks/app-CWigMzH7.js";

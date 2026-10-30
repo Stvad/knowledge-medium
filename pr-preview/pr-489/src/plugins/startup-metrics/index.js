@@ -1,0 +1,1 @@
+export{Ei as startupMetricsPlugin}from"../../../chunks/app-CWigMzH7.js";

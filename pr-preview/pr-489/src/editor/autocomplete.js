@@ -1,0 +1,1 @@
+export{jA as editorAutocompleteExtension}from"../../chunks/app-CWigMzH7.js";

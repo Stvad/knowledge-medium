@@ -1,0 +1,1 @@
+export{bM as defaultRegistry,xM as defaultRendererContributions,SM as defaultRenderersExtension}from"../../chunks/app-CWigMzH7.js";

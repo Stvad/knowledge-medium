@@ -1,0 +1,1 @@
+export{Lk as chipStyle}from"../../../chunks/app-CWigMzH7.js";

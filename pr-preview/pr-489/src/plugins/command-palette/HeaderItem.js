@@ -1,0 +1,1 @@
+export{FO as CommandPaletteHeaderItem}from"../../../chunks/app-CWigMzH7.js";

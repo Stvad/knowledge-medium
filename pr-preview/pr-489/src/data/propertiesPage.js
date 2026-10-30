@@ -1,0 +1,1 @@
+export{B9 as getOrCreatePropertiesPage,V9 as propertiesPageBlockId,H9 as propertiesPageSpec}from"../../chunks/app-CWigMzH7.js";

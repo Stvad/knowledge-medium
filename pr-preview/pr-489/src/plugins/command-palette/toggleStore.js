@@ -1,0 +1,1 @@
+export{IO as commandPaletteToggle}from"../../../chunks/app-CWigMzH7.js";

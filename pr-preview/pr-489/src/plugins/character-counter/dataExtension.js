@@ -1,0 +1,1 @@
+export{HK as characterCounterDataExtension}from"../../../chunks/app-CWigMzH7.js";

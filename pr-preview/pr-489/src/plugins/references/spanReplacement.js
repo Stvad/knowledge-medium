@@ -1,0 +1,1 @@
+export{pU as preferredSpanReplacement}from"../../../chunks/app-CWigMzH7.js";

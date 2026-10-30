@@ -1,0 +1,1 @@
+export{AG as dailyNotesLocalSchema}from"../../../chunks/app-CWigMzH7.js";

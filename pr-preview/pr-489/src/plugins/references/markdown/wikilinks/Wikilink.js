@@ -1,0 +1,1 @@
+export{Gg as Wikilink}from"../../../../../chunks/app-CWigMzH7.js";

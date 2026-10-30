@@ -1,0 +1,1 @@
+export{YG as annotationsDataExtension}from"../../../chunks/app-CWigMzH7.js";

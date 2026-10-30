@@ -1,0 +1,1 @@
+export{MS as getBreadcrumbContentPreview}from"../../../chunks/app-CWigMzH7.js";

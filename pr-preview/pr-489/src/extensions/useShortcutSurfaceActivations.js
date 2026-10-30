@@ -1,0 +1,1 @@
+export{xF as useShortcutSurfaceActivations}from"../../chunks/app-CWigMzH7.js";

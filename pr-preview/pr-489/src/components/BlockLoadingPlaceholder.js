@@ -1,0 +1,1 @@
+export{_M as BlockLoadingPlaceholder}from"../../chunks/app-CWigMzH7.js";
