@@ -104,6 +104,20 @@ export const toggleShowClosed = showingClosed.toggle
 export const showClosedThreads = showingClosed.add
 export const useShowClosed = showingClosed.useHas
 
+export const peekMarginShowing = (panelId: string): boolean => marginShowing.has(panelId)
+
+/** Show `threadId`'s card for the block that `key` names in `panelId`: pinned
+ *  in the margin, and expanded inline for when the margin isn't drawn, with
+ *  closed threads shown if it is closed. */
+export const revealThread = (panelId: string, key: string, threadId: string, open: boolean): void => {
+  expanded.add(key)
+  if (!open) {
+    showingResolved.add(key)
+    showingClosed.add(panelId)
+  }
+  activateThread(panelId, threadId)
+}
+
 /** The notifications that move cards without mounting or unmounting one, for
  *  the margin's layout pass: a card activated, a composer opened. */
 export const onUiStoreChange = (listener: () => void): (() => void) => subscribe(listener)
