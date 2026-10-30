@@ -1,1 +1,1 @@
-export{DA as checkForAppUpdate,OA as registerServiceWorker}from"../chunks/app-Jr1gF51b.js";
+export{DA as checkForAppUpdate,OA as registerServiceWorker}from"../chunks/app-BHWTBkks.js";
