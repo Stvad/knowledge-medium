@@ -47,12 +47,13 @@ import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {composerReady, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
-import {showsAnchorState, SuggestionActions, SuggestionText, suggestionOf} from './suggestionCard.tsx'
+import {showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
   threadAnchorOf,
   threadIsOpen,
+  threadSuggestionOf,
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
@@ -463,7 +464,7 @@ const ReanchorControls = ({root, state, targetContent}: {
     <div className="flex flex-wrap gap-x-2">
       {state === 'moved' && <ActionButton onClick={confirm}>Confirm position</ActionButton>}
       {targetId && <ActionButton onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
-      {!suggestionOf(root) && (
+      {!threadSuggestionOf(root) && (
         <ActionButton onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
       )}
     </div>
@@ -475,7 +476,7 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
   const readOnly = useReadOnly(repo)
   const {state, targetContent} = useAnchorState(root)
   const open = threadIsOpen(root)
-  const suggestion = suggestionOf(root)
+  const suggestion = threadSuggestionOf(root)
   const anchorShown = showsAnchorState(root)
   return (
     <div className="space-y-0.5">
@@ -507,7 +508,7 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
  *  outside a card: which block it is on, and what it quotes. */
 const ThreadElsewhere = ({root}: {root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
-  const suggestion = suggestionOf(root)
+  const suggestion = threadSuggestionOf(root)
   return (
     <div className="text-sm text-muted-foreground">
       <span>on </span>

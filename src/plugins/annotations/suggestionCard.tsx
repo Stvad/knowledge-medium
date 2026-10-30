@@ -8,31 +8,17 @@ import type {BlockData} from '@/data/api'
 import {useRepo} from '@/context/repo.js'
 import {truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {threadAnchorOf, threadIsOpen, threadReplacementOf, threadStatusOf} from './schema.ts'
+import {threadIsOpen, threadStatusOf, threadSuggestionOf, type ThreadSuggestion} from './schema.ts'
 import {acceptSuggestion} from './suggestions.ts'
 import {setThreadStatus} from './threads.ts'
 
 type RootFields = Pick<BlockData, 'content' | 'properties'>
 
-export interface Suggestion {
-  quote: string
-  replacement: string
-}
-
-/** A suggestion's quote and replacement, or null for any other thread. A
- *  replacement on a whole-block thread (set by hand) has nothing to replace,
- *  so that thread reads as a plain one. */
-export const suggestionOf = (root: RootFields): Suggestion | null => {
-  const replacement = threadReplacementOf(root)
-  const anchor = threadAnchorOf(root)
-  return replacement !== undefined && anchor.kind === 'range' ? {quote: anchor.quote, replacement} : null
-}
-
 /** Does the card show where the quote resolves now, and offer to re-anchor
  *  it? Not for a closed suggestion, which reads from its properties alone:
  *  accepting changed the text around its quote on purpose, and re-anchoring
  *  it would make it applicable a second time. */
-export const showsAnchorState = (root: RootFields): boolean => threadIsOpen(root) || !suggestionOf(root)
+export const showsAnchorState = (root: RootFields): boolean => threadIsOpen(root) || !threadSuggestionOf(root)
 
 const closedAs = (root: RootFields): 'accepted' | 'rejected' | null => {
   try {
@@ -47,19 +33,19 @@ const clipped = (text: string): string => truncate(text, 160)
 
 /** Read off the properties: the anchor is not rewritten on accept, so the
  *  quote is the text the replacement took the place of. */
-export const SuggestionText = ({root, suggestion}: {root: RootFields; suggestion: Suggestion}) => {
+export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}}: {root: RootFields; suggestion: ThreadSuggestion}) => {
   const closed = closedAs(root)
   if (closed === 'accepted') {
-    return <span className="break-words">Replaced “{clipped(suggestion.quote)}” with “{clipped(suggestion.replacement)}”</span>
+    return <span className="break-words">Replaced “{clipped(quote)}” with “{clipped(replacement)}”</span>
   }
   if (closed === 'rejected') {
-    return <span className="break-words">Rejected replacing “{clipped(suggestion.quote)}” with “{clipped(suggestion.replacement)}”</span>
+    return <span className="break-words">Rejected replacing “{clipped(quote)}” with “{clipped(replacement)}”</span>
   }
   return (
-    <span className="break-words" aria-label={`Suggested edit: replace “${suggestion.quote}” with “${suggestion.replacement}”`}>
-      <del className="text-muted-foreground decoration-red-600/70">{clipped(suggestion.quote)}</del>
+    <span className="break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>
+      <del className="text-muted-foreground decoration-red-600/70">{clipped(quote)}</del>
       {' '}
-      <ins className="rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{clipped(suggestion.replacement)}</ins>
+      <ins className="rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{clipped(replacement)}</ins>
     </span>
   )
 }

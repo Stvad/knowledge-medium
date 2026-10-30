@@ -2,7 +2,7 @@ import {z} from 'zod'
 import {defineQuery, type Query, type Schema} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries.ts'
-import {THREAD_TYPE, threadAnchorOf, threadIsOpen, threadReplacementOf, type ThreadAnchor} from './schema.ts'
+import {THREAD_TYPE, threadAnchorOf, threadIsOpen, threadSuggestionOf, type ThreadAnchor} from './schema.ts'
 import {threadRootsWithCounts} from './summaryBatch.ts'
 
 export const THREADS_FOR_BLOCK_QUERY = 'annotations.threadsForBlock'
@@ -68,7 +68,7 @@ export const threadsForBlockQuery: Query<{workspaceId: string; id: string}, Thre
         id: root.id,
         open: threadIsOpen(root),
         anchor: threadAnchorOf(root),
-        suggestion: threadReplacementOf(root) !== undefined,
+        suggestion: threadSuggestionOf(root) !== null,
         commentCount,
         createdAt: root.createdAt,
       }))

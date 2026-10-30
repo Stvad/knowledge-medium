@@ -10,8 +10,8 @@ import {RepoContext} from '@/context/repo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
-import {annotationReplacementProp, annotationStatusProp, threadStatusOf} from './schema'
-import {showsAnchorState, SuggestionActions, SuggestionText, suggestionOf} from './suggestionCard'
+import {annotationReplacementProp, annotationStatusProp, threadStatusOf, threadSuggestionOf} from './schema'
+import {showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard'
 import {createThread} from './threads'
 
 const WS = 'ws'
@@ -42,11 +42,11 @@ const suggestOnB = async () => (await createThread(repo, {
   targetId: 'B', anchor: captureAnchor(TEXT, 5, 13), replacement: 'Thursday 9am',
 })).threadId
 
-describe('suggestionOf', () => {
-  it('is the quote and replacement of a suggestion, and null for a comment or a whole-block thread', () => {
-    expect(suggestionOf(root('open'))).toEqual({quote: 'Thursday', replacement: 'Thursday 9am'})
-    expect(suggestionOf(root('open', null))).toBeNull()
-    expect(suggestionOf({...root('open'), content: ''})).toBeNull()
+describe('threadSuggestionOf', () => {
+  it('is the anchor and replacement of a suggestion, and null for a comment or a whole-block thread', () => {
+    expect(threadSuggestionOf(root('open'))).toMatchObject({anchor: {quote: 'Thursday'}, replacement: 'Thursday 9am'})
+    expect(threadSuggestionOf(root('open', null))).toBeNull()
+    expect(threadSuggestionOf({...root('open'), content: ''})).toBeNull()
   })
 })
 
@@ -62,7 +62,7 @@ describe('showsAnchorState', () => {
 describe('SuggestionText', () => {
   const textOf = (status: string) => {
     const r = root(status)
-    const {container} = render(<SuggestionText root={r} suggestion={suggestionOf(r)!}/>)
+    const {container} = render(<SuggestionText root={r} suggestion={threadSuggestionOf(r)!}/>)
     return container
   }
 
