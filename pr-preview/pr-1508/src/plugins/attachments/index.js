@@ -1,0 +1,1 @@
+export{iv as attachmentsPlugin}from"../../../chunks/app-Cro8SwbF.js";

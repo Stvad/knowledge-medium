@@ -1,0 +1,1 @@
+export{RS as plainOutlinerPlugin}from"../../../chunks/app-Cro8SwbF.js";

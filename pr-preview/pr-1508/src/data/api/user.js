@@ -1,0 +1,1 @@
+export{Rrt as SYSTEM_AUTHOR_PREFIX,zrt as isSystemAuthor,Brt as systemAuthor}from"../../../chunks/app-Cro8SwbF.js";

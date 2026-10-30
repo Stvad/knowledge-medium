@@ -1,0 +1,1 @@
+export{XV as BootFallback}from"../../../chunks/app-Cro8SwbF.js";

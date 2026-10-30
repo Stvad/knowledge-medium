@@ -1,0 +1,1 @@
+export{XO as SWIPE_QUICK_ACTIONS_GESTURE_ID,ZO as SWIPE_TRIGGER_PX,QO as swipeRecognizer}from"../../../chunks/app-Cro8SwbF.js";

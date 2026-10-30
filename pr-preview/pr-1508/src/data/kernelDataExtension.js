@@ -1,0 +1,1 @@
+export{l1 as kernelDataExtension}from"../../chunks/app-Cro8SwbF.js";

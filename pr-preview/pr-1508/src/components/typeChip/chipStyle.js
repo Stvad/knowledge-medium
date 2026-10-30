@@ -1,0 +1,1 @@
+export{Bk as chipStyle}from"../../../chunks/app-Cro8SwbF.js";

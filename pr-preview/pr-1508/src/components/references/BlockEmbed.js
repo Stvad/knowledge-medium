@@ -1,0 +1,1 @@
+export{Ak as BlockEmbed}from"../../../chunks/app-Cro8SwbF.js";

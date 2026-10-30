@@ -1,0 +1,1 @@
+export{Af as extensionsOverridesProp,jf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Cro8SwbF.js";

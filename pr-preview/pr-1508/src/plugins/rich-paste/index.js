@@ -1,0 +1,1 @@
+export{ev as richPastePlugin}from"../../../chunks/app-Cro8SwbF.js";

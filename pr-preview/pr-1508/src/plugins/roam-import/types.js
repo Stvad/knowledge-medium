@@ -1,0 +1,1 @@
+export{yu as getExtraRoamProps}from"../../../chunks/app-Cro8SwbF.js";

@@ -1,0 +1,1 @@
+export{NS as PromotableBreadcrumbList}from"../../../chunks/app-Cro8SwbF.js";

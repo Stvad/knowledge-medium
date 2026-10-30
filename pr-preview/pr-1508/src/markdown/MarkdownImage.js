@@ -1,0 +1,1 @@
+export{kM as MarkdownImage}from"../../chunks/app-Cro8SwbF.js";

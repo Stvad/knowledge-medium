@@ -1,0 +1,1 @@
+export{Ng as backlinksViewFacet}from"../../../chunks/app-Cro8SwbF.js";

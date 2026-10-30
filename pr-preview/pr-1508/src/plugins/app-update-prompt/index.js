@@ -1,0 +1,1 @@
+export{ZA as appUpdatePromptExtension}from"../../../chunks/app-Cro8SwbF.js";

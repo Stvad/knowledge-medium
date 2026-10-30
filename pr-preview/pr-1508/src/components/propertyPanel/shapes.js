@@ -1,0 +1,1 @@
+export{bV as propertyShapeLabel}from"../../../chunks/app-Cro8SwbF.js";

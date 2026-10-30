@@ -1,0 +1,1 @@
+export{DS as mobileBottomNavItemsFacet}from"../../../chunks/app-Cro8SwbF.js";

@@ -1,0 +1,1 @@
+export{Mu as annotationsPlugin}from"../../../chunks/app-Cro8SwbF.js";

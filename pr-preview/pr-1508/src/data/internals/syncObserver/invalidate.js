@@ -1,0 +1,1 @@
+export{Z$ as applySyncInvalidation}from"../../../../chunks/app-Cro8SwbF.js";

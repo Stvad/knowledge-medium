@@ -1,0 +1,1 @@
+export{T2 as mergeProperties}from"../../chunks/app-Cro8SwbF.js";

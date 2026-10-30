@@ -1,0 +1,1 @@
+export{SJ as aliasDataExtension}from"../../../chunks/app-Cro8SwbF.js";

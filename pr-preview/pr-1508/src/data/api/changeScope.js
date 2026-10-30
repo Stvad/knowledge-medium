@@ -1,0 +1,1 @@
+export{Iit as CHANGE_SCOPE_POLICIES,Lit as ChangeScope,Rit as isChangeScope,zit as policyForScope,Bit as scopeAllowedInReadOnly,Vit as scopeIsUndoable,Hit as scopePoliciesEquivalent,Uit as scopeUploadsToServer,Wit as sourceForScope}from"../../../chunks/app-Cro8SwbF.js";

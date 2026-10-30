@@ -1,0 +1,1 @@
+export{EK as annotationMarginOpenProp}from"../../../chunks/app-Cro8SwbF.js";

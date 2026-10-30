@@ -1,0 +1,1 @@
+export{Ij as dynamicExtensionsExtension}from"../../chunks/app-Cro8SwbF.js";
