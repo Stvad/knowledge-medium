@@ -1,0 +1,1 @@
+export{db as videoPlayerPlugin}from"../../../chunks/app-B13MlUy7.js";

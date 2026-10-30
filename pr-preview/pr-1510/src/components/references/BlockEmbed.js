@@ -1,0 +1,1 @@
+export{zk as BlockEmbed}from"../../../chunks/app-B13MlUy7.js";

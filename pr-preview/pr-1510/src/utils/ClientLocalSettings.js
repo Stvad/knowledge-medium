@@ -1,0 +1,1 @@
+export{Vj as ClientLocalSettings,Hj as clientLocalSettings}from"../../chunks/app-B13MlUy7.js";

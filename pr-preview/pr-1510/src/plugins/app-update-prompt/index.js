@@ -1,0 +1,1 @@
+export{oj as appUpdatePromptExtension}from"../../../chunks/app-B13MlUy7.js";
