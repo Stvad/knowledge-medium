@@ -36,6 +36,10 @@ import type { BlockRenderer, BlockRendererProps } from '@/types'
 import { BlockRefAncestorsProvider } from '../cycleGuard'
 import { BlockRef } from '../BlockRef'
 import { BlockEmbed } from '../BlockEmbed'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
+import { markdownExtensionsFacet } from '@/markdown/extensions'
+import { blockrefMarkdownExtension } from '@/plugins/references/markdown/blockrefs/index.tsx'
+import { wikilinkMarkdownExtension } from '@/plugins/references/markdown/wikilinks/index.tsx'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -118,32 +122,19 @@ const extensions = [
     return null
   }, {source: 'test-spy'}),
   blockRenderersFacet.of({id: 'marker', renderer: MarkerRenderer}, {source: 'test-spy'}),
+  markdownExtensionsFacet.of(wikilinkMarkdownExtension, {source: 'references'}),
+  markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'references'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
   let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
-  let originalMatchMedia: typeof window.matchMedia
 
   beforeAll(async () => {
     sharedDb = await createTestDb()
-    // jsdom lacks matchMedia; the embed renders the full default layout, whose
-    // controls call `useIsMobile()` → `matchMedia`. Stub desktop (no match).
-    originalMatchMedia = window.matchMedia
-    window.matchMedia = ((query: string) => ({
-      matches: false,
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      onchange: null,
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia
   })
   afterAll(async () => {
-    window.matchMedia = originalMatchMedia
     await sharedDb.cleanup()
   })
 
@@ -348,6 +339,52 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(marker.closest('a.blockref')).toBeTruthy()
     // ...NOT the raw markdown content string the old BlockRef hardcoded.
     expect(screen.queryByText('plain markdown body')).toBeNull()
+  })
+
+  it('an edit to the source block keeps the references in its content mounted', async () => {
+    // Block refs address a block by uuid. Only text AFTER the references
+    // changes, so every occurrence id (a source offset) stays the same.
+    const embedded = '22222222-2222-4222-8222-222222222222'
+    const content = `see !((${embedded})) and ((${embedded})) and ![[Target]] and [[Target]]`
+    await repo.tx(async tx => {
+      await tx.create({
+        id: embedded, workspaceId: 'ws-1', parentId: null, orderKey: 'b0', content: 'Embedded body',
+      })
+      await tx.create({
+        id: 'embedded-child', workspaceId: 'ws-1', parentId: embedded, orderKey: 'a0', content: 'Child content',
+      })
+      await tx.create({
+        id: 'host', workspaceId: 'ws-1', parentId: null, orderKey: 'b1', content,
+        references: [{id: 'target', alias: 'Target'}],
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create host'})
+    const host = repo.block('host')
+    await host.load()
+    renderInSource(<MarkdownContentRenderer block={host}/>)
+
+    const embeds = await waitFor(() => {
+      const found = [...document.querySelectorAll('.blockembed')]
+      expect(found).toHaveLength(2)
+      return found
+    })
+    const ref = document.querySelector('a.blockref')!
+    const wikilink = document.querySelector('a.wikilink')!
+    expect(ref).toBeTruthy()
+    expect(wikilink).toBeTruthy()
+    const embeddedChildren = await waitFor(() => {
+      const found = screen.getAllByText('Child content')
+      expect(found).toHaveLength(2)
+      return found
+    })
+    expect(ref.textContent).toContain('Embedded body')
+
+    await repo.tx(async tx => {
+      await tx.update('host', {content: `${content} edited`})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit host'})
+    await screen.findByText(/edited/)
+
+    expect([...embeds, ref, wikilink, ...embeddedChildren].map(el => el.isConnected))
+      .toEqual([true, true, true, true, true, true])
   })
 
   it('an embed runs the interactive shell (decorators + shortcut activations)', async () => {
