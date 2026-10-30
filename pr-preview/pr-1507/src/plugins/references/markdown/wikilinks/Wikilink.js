@@ -1,0 +1,1 @@
+export{Jg as Wikilink}from"../../../../../chunks/app-OHkFEKw0.js";

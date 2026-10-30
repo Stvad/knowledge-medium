@@ -1,0 +1,1 @@
+export{NG as dailyNotesLocalSchema}from"../../../chunks/app-OHkFEKw0.js";

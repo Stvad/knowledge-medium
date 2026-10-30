@@ -1,0 +1,1 @@
+export{Wrt as defineQuery}from"../../../chunks/app-OHkFEKw0.js";

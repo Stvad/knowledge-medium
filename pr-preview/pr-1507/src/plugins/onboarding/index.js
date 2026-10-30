@@ -1,0 +1,1 @@
+export{Gb as EXTENSIONS_PAGE_TITLE,Kb as TUTORIAL_DEFAULT_TITLE,qb as TUTORIAL_VIM_TITLE,Mb as onboardingPlugin,Wb as seedTutorial}from"../../../chunks/app-OHkFEKw0.js";

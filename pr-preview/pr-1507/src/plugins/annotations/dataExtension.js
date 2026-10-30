@@ -1,0 +1,1 @@
+export{QG as annotationsDataExtension}from"../../../chunks/app-OHkFEKw0.js";
