@@ -54,8 +54,9 @@ export class InvalidQuoteError extends Error {
   }
 }
 
-/** The thread can't be, or isn't, an edit suggestion: one needs a quote to
- *  replace and a replacement that changes it. */
+/** The thread can't be, or isn't, an edit suggestion, or can't be applied:
+ *  one needs a quote to replace and a replacement that changes it, in a way
+ *  its anchor can tell apart from the original. */
 export class InvalidSuggestionError extends Error {
   constructor(reason: string) {
     super(reason)

@@ -138,6 +138,20 @@ describe('acceptSuggestion', () => {
     expect(threadStatusOf(await rootOf(duplicate))).toBe('open')
   })
 
+  it('refuses a change that would leave it applicable again, where the text repeats around the quote', async () => {
+    const text = 'Say very very very very very very good.'
+    await setTarget(text)
+    const threadId = await suggest('very', 'very very')
+    // The premise: after the splice, the quote sits at its offset between the
+    // same windows, so a duplicate or a reopened copy would resolve exact.
+    const anchor = threadAnchorOf(await rootOf(threadId)) as RangeAnchor
+    expect(resolveAnchor(text.replace('very', 'very very'), anchor).state).toBe('exact')
+
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(InvalidSuggestionError)
+    expect(await targetText()).toBe(text)
+    expect(threadStatusOf(await rootOf(threadId))).toBe('open')
+  })
+
   it('refuses the same suggestion reopened after it was applied', async () => {
     await setTarget('Meet Thursday')
     const threadId = await suggest('Thursday', 'Thursday 9am')
