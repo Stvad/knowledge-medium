@@ -1,10 +1,13 @@
 /**
  * Navigating to a thread root, or to any comment in its thread, lands on the
  * thread's target instead, with the thread's card showing and the block
- * navigated to focused in it, which scrolls it into view. A thread is read
+ * navigated to focused in it. A thread is read
  * beside the text it is about. This covers a click on a range reference
  * (`((T))` links to the root), a search result that hits a root or a comment,
  * and a comment's bullet.
+ *
+ * ACCEPTED: a URL (a new tab, a shared link) restores panels without
+ * navigating, so it opens the root itself.
  */
 
 import {ChangeScope, type BlockData} from '@/data/api'
@@ -13,9 +16,9 @@ import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {decodeRowProperty} from '@/data/rowProperty'
 import {navigationVerb, type NavigationResult} from '@/utils/navigation'
-import {panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
+import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
-import {peekMarginShowing, revealThread, viewKey} from './uiStore.ts'
+import {cardRenderScopeId, peekMarginShowing, revealThread, viewKey} from './uiStore.ts'
 
 export interface ThreadLanding {
   /** Where the navigation lands: the outermost thread's target. */
@@ -32,10 +35,10 @@ export interface ThreadLanding {
  *  expanded for `id` to show in the root's card: its ancestors up to the
  *  root, the root included. */
 const threadRootOf = async (repo: Repo, id: string): Promise<{root: BlockData; above: BlockData[]} | null> => {
-  const block = await repo.load(id)
+  const block = await repo.block(id).load()
   if (!block) return null
   if (hasBlockType(block, THREAD_TYPE)) return {root: block, above: []}
-  const {ancestors} = await repo.query['core.ancestors']({id}).load()
+  const {ancestors} = await repo.query.ancestors({id}).load()
   const at = ancestors.findIndex(ancestor => hasBlockType(ancestor, THREAD_TYPE))
   return at < 0 ? null : {root: ancestors[at], above: ancestors.slice(0, at + 1)}
 }
@@ -57,7 +60,7 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
     if (!found || threads.some(thread => thread.id === found.root.id)) break
     const {root, above} = found
     const targetId = threadTargetIdOf(root)
-    if (!targetId || !await repo.load(targetId)) break
+    if (!targetId || !await repo.block(targetId).load()) break
     const open = threadIsOpen(root)
     threads.unshift({id: root.id, open})
     collapsed.push(...above.filter(block => decodeRowProperty(block, isCollapsedProp)).map(block => block.id))
@@ -68,12 +71,12 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
 }
 
 /** The render scope `blockId` has inside the cards of `landing`, once the
- *  navigation has made the target its panel's top-level block. Each card
- *  derives its scope from the one around it, as `ThreadCard` does; the
- *  outermost is a margin card where the margin is drawn. */
+ *  navigation has made the target its panel's top-level block. Each card's
+ *  scope derives from the one around it; the outermost is a margin card where
+ *  the margin is drawn. */
 export const landingFocusScope = (panelId: string, landing: ThreadLanding, inMargin: boolean): string =>
   landing.threads.reduce(
-    (scope, thread, depth) => surfaceRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id),
+    (scope, thread, depth) => cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id),
     panelRenderScopeId(panelId, landing.targetId),
   )
 

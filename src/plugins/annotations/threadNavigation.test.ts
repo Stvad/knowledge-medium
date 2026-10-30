@@ -11,13 +11,13 @@ import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
 import {navigate} from '@/utils/navigation'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
-import {panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
+import {panelRenderScopeId} from '@/utils/renderScope'
 import {captureAnchor} from './anchor'
 import {annotationsPlugin} from './index'
 import {annotationTargetProp} from './schema'
 import {landingFocusScope} from './threadNavigation'
 import {createThread, setThreadStatus} from './threads'
-import {peekActiveThread} from './uiStore'
+import {cardRenderScopeId, peekActiveThread} from './uiStore'
 
 const WS = 'ws'
 const USER: User = {id: 'alex', name: 'Alex'}
@@ -63,7 +63,7 @@ const focused = async (panelId: string) => {
 
 /** The scope of a card on `B`, shown inline (the margin isn't drawn here). */
 const cardScope = (panelId: string, threadId: string, parent = panelRenderScopeId(panelId, 'B')) =>
-  surfaceRenderScopeId('comments', parent, threadId)
+  cardRenderScopeId('comments', parent, threadId)
 
 describe('navigating into a thread', () => {
   it('a thread root lands on its target, with the card pinned and its root focused in it', async () => {
@@ -179,8 +179,8 @@ describe('navigating into a thread', () => {
 describe('landingFocusScope', () => {
   it('puts the outermost card in the margin where the margin is drawn, and the cards inside it inline', () => {
     const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: []}
-    const margin = surfaceRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
+    const margin = cardRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
-    expect(landingFocusScope('p', landing, true)).toBe(surfaceRenderScopeId('comments', margin, 'T2'))
+    expect(landingFocusScope('p', landing, true)).toBe(cardRenderScopeId('comments', margin, 'T2'))
   })
 })
