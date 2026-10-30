@@ -1,4 +1,7 @@
 import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
+import { COMMENTS_PAGE_ALIAS } from '@/plugins/annotations/container.js'
+import { annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
+import { COMMENTS_RECIPE_QUIET_MS, COMMENTS_RECIPE_SQL } from '@/plugins/annotations/scope.js'
 
 const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
 
@@ -244,6 +247,76 @@ Write the way you would edit files, and let the app do the outline:
   A bridge write is a transaction described \`agent runtime <verb>\` — except
   \`eval\`, \`sql execute\` and \`run-action\`, and the follow-up transactions
   the app runs after a write (such as a page a new [[link]] mints).
+`,
+  },
+  {
+    topic: 'comments',
+    text: `## Comments and annotations
+
+A **comment thread** is a block typed \`${THREAD_TYPE}\`, filed under the
+\`${COMMENTS_PAGE_ALIAS}\` page. Its \`${annotationTargetProp.name}\` ref points
+at the block it annotates. Its content is the quoted text of that block, or empty
+for a thread on the whole block, and \`${annotationStatusProp.name}\` is \`open\` or
+\`resolved\`. Its children are the comments, and a reply is a child of the
+comment it answers, to any depth. A quote is a copy, not a mention: a
+\`[[Page]]\` inside it never counts as a backlink.
+
+- \`comments\` (MCP \`comments\`) reads threads as JSON. \`scope\` gives every
+  thread on a block under that page or block, plus the threads on their
+  comments, recursively. \`block\` gives one block's threads, and \`thread\`
+  gives one thread by its root id. Each thread comes with its anchor: \`block\`
+  for a whole-block thread, otherwise \`exact\`, \`moved\` or \`stale\` against
+  the target as it reads now. It also has the quote, the target's path and an
+  excerpt, and its comments nested as replied. Each comment names its author
+  and the author's kind (human, agent or automation). The author is the first
+  \`attribution:creators\` entry, else the page of the comment's \`created_by\`
+  user. A thread shows its first 50 comments in reading order
+  (\`omittedComments\` counts the rest; \`subtree\` on the root reads them), and a
+  page of threads ends early past the views' size budget, with \`nextOffset\`.
+- \`add-comment\` (MCP \`add_comment\`) starts a thread on quoted text, or on the
+  whole block, and returns its root id. Writing \`((rootId))\` elsewhere quotes
+  that range. The quote and \`occurrence\` count in the block's verbatim
+  content, as \`get-block\` returns it (outline views collapse whitespace); the
+  result's \`quoteStart\` and \`excerpt\` show which appearance it anchored.
+- **Reply** with \`append-markdown\` whose target is the comment you are answering.
+  Target the thread root only to start a new top-level comment.
+- **Resolve or reopen** with \`update-block\` on the root, properties
+  \`{"${annotationStatusProp.name}": "resolved"}\` (or \`"open"\`).
+
+### Being woken by comments
+
+- A comment mentioning a dispatch watcher's target page (\`[[claude]]\`) is a
+  mention like any other. The mention watcher answers it under that comment,
+  with the thread from its root down to that comment as context.
+- To follow a page without being mentioned, give the dispatch daemon a
+  \`query\` watcher running the recipe below, as its \`sql\` (one JSON string).
+  It binds two params: the scope's id, and a JSON array of the dispatch target
+  page ids (resolve them with \`page\`). The recipe selects comments, at any
+  depth, of open threads in the scope that pass four tests:
+  - they are not empty;
+  - they have been quiet for ${COMMENTS_RECIPE_QUIET_MS / 1000} s, so a half-typed reply is never answered;
+  - they were not created by an agent or automation contributor, which is the loop guard;
+  - they mention no target page, so the mention watcher answers those, once.
+
+  Its rows carry \`id\`, \`thread_id\` and \`content\`. A comment is picked up by
+  the next poll after it goes quiet, or by any later write that re-runs the
+  query: time passing changes no table, so going quiet fires no push event of
+  its own. The watcher fires on ids it has not seen, so reopening a thread
+  resolved before its baseline, or moving a block with old threads into the
+  scope, brings their old comments in as new ones, one run of up to
+  \`maxRowsPerFire\`. The daemon needs a contributor. Under
+  \`contributor none\` its replies look human, and the recipe fires on them
+  again, bounded only by \`runsPerHour\`.
+
+\`\`\`json
+{"kind": "query", "name": "review-comments", "sql": "<the recipe>",
+ "params": ["<scope id>", "[\\"<claude page id>\\"]"],
+ "prompt": "New comments to answer:\\n{{newRows}}\\nFor each, read its thread with comments (thread: its thread_id), then reply with append_markdown under the comment (target: its id)."}
+\`\`\`
+
+\`\`\`sql
+${COMMENTS_RECIPE_SQL.trim()}
+\`\`\`
 `,
   },
   {

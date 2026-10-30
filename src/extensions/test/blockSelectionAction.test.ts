@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
@@ -86,10 +86,8 @@ describe('toggleBlockSelectionAction', () => {
 
   it('adds and removes the clicked block from the selection, tracking the anchor', async () => {
     const panel = repo.block('panel')
-    // The handler fire-and-forgets the selection-state set, and each toggle
-    // reads the prior committed state — so wait for each commit before the next.
     const expectSelection = (state: {selectedBlockIds: string[]; anchorBlockId: string | null}) =>
-      vi.waitFor(() => expect(panel.peekProperty(selectionStateProp)).toEqual(state))
+      expect(panel.peekProperty(selectionStateProp)).toEqual(state)
 
     await toggle('A')
     await expectSelection({selectedBlockIds: ['A'], anchorBlockId: 'A'})
@@ -104,5 +102,30 @@ describe('toggleBlockSelectionAction', () => {
     // Removing the last block clears the anchor.
     await toggle('B')
     await expectSelection({selectedBlockIds: [], anchorBlockId: null})
+  })
+
+  // Multi-select actions fan out over the selection in its stored order
+  // (indent, move up/down), so a block toggled in out of order must still
+  // land in document order: indenting [r3, r2] in that order nests r3 under r2.
+  it('keeps the selection in document order whatever order blocks are toggled in', async () => {
+    const panel = repo.block('panel')
+    await toggle('r3')
+    await toggle('r1')
+    await toggle('r2')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  it('orders a block among selected blocks at other depths by where it renders', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'r1a', workspaceId: WS, parentId: 'r1', orderKey: 'a0', content: 'r1a'})
+    }, {scope: ChangeScope.UiState})
+    const panel = repo.block('panel')
+    await toggle('r2')
+    await toggle('r1a')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1a', 'r2'])
+
+    // Selecting the parent replaces its selected child, in the child's place.
+    await toggle('r1')
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['r1', 'r2'])
   })
 })

@@ -29,6 +29,8 @@ import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRo
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { buildCommentsView, runAddComment } from './commentsCommands.ts'
+import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
 import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
 import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
@@ -63,6 +65,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import {
   definitionSeedsFacet,
+  queriesFacet,
   sameTxProcessorsFacet,
   projectedTypeDefinitionsFacet,
   typeSeedsFacet,
@@ -1143,7 +1146,9 @@ const reconcileMarkdownSubtree = async (
           for (const child of foreign) {
             const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
             const orderKey = keyBetween(lower, upper)
-            await tx.move(child.id, {parentId: target, orderKey})
+            // The person's own block, moved by the reconcile, not by them:
+            // a bookkeeping write, so it gains no author and no edit time.
+            await tx.move(child.id, {parentId: target, orderKey}, {skipMetadata: true})
             lower = orderKey
           }
         }
@@ -1657,6 +1662,12 @@ const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
 
 const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
   context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
+const requireComments = (context: AgentRuntimeContext): void => {
+  if (!context.runtime.read(queriesFacet).has(THREAD_IDS_FOR_BLOCK_QUERY)) {
+    throw new Error('Enable the Comments plugin to read or write comment threads.')
+  }
+}
 
 const runRuntimeAction = async (
   command: KnownAgentCommand,
@@ -2352,6 +2363,19 @@ const executeAttributedCommand = async (
     case 'view-grouped-backlinks':
     case 'view-search':
       return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
+
+    case 'comments':
+      requireComments(context)
+      return buildCommentsView(context.repo, viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)), command)
+
+    case 'add-comment':
+      requireComments(context)
+      return runAddComment(context.repo, {
+        targetId: await blockIdField(context.repo, requireString(command.target, 'target'), 'add-comment', command.exactIds === true),
+        quote: command.quote,
+        occurrence: command.occurrence,
+        content: command.content,
+      })
 
     case 'create-block':
       return context.createBlock({

@@ -1,7 +1,8 @@
 import {describe, expect, it, vi} from 'vitest'
 import {createEngine, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
-import type {BlockData, Graph} from '../src/graph'
+import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
+import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
@@ -12,9 +13,13 @@ interface FakeGraphSeed {
   pageId?: string
   backlinks?: Array<{id: string, deepLink?: string}>
   blocks?: Record<string, Partial<BlockData>>
+  /** What `comments({thread})` answers, by root id. */
+  threads?: Record<string, CommentThreadView>
 }
 
-/** Minimal in-memory graph double tracking writes. */
+/** Minimal in-memory graph double tracking writes. One object stands in for
+ *  both handles (pass it as `graph` and `replies`); which handle carries which
+ *  write is pinned against the real ones in dispatchAttribution.test.ts. */
 const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const blocks = new Map<string, BlockData>(
     // editedAtMs defaults to NOW: most tests exercise the post-baseline
@@ -26,10 +31,9 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
-  const contentUpdates: Array<{id: string, content: string}> = []
   const cancelClears: string[] = []
 
-  const graph: Graph = {
+  const graph: Graph & ReplyWriter = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink}) => ({
@@ -100,13 +104,11 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       cancelClears.push(id)
     },
-    updateBlockContent: async (id, content) => {
-      const target = blocks.get(id) ?? {id, properties: {}}
-      target.content = content
-      blocks.set(id, target)
-      contentUpdates.push({id, content})
-    },
     sqlAll: vi.fn(async () => []),
+    comments: vi.fn(async ({thread}: {thread?: string}) => {
+      const view = thread ? seed.threads?.[thread] : undefined
+      return {total: view ? 1 : 0, offset: 0, nextOffset: null, threads: view ? [view] : []}
+    }),
     blockViews: async ids => new Map(
       ids.flatMap(id => {
         const target = blocks.get(id)
@@ -115,7 +117,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
+  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
 }
 
 const memoryState = (
@@ -152,8 +154,9 @@ const mentionConfig = (overrides: object = {}) => parseConfig({
   ...overrides,
 })
 
-const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
+const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   createEngine({
+    replies: deps.graph,
     config: mentionConfig(),
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
@@ -164,6 +167,121 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
+
+describe('mention inside a comment thread', () => {
+  const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
+  const comment = (id: string, by: ReturnType<typeof author>, content: string, replies: CommentThreadView['comments'] = []) => ({
+    id, shortId: id, content, cut: 0, author: by, createdAt: 1, replies,
+  })
+  const alex = author('Alex', 'human')
+  const claude = author('Claude', 'agent')
+  const threadSeed = (): FakeGraphSeed => ({
+    backlinks: [{id: 'c3'}],
+    blocks: {
+      'target': {content: 'We moved the launch to Thursday because the vendor slipped.'},
+      'container': {content: 'Comments (km)'},
+      'root': {parentId: 'container', content: 'Thursday', properties: {types: ['annotation:thread']}},
+      'c1': {parentId: 'root', content: 'Is Thursday confirmed?'},
+      'c2': {parentId: 'c1', content: 'Yes, 9am.'},
+      'c3': {parentId: 'c2', content: '[[claude]] can you check the venue too?'},
+    },
+    threads: {
+      root: {
+        id: 'root', shortId: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
+        target: {id: 'target', shortId: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
+        comments: [
+          comment('c1', alex, 'Is Thursday confirmed?', [
+            comment('c2', claude, 'Yes, 9am.', [comment('c3', alex, '[[claude]] can you check the venue too?')]),
+          ]),
+          comment('sibling', author('Sam', 'human'), 'An unrelated sibling comment'),
+        ],
+        omittedComments: 0,
+      },
+    },
+  })
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => {
+    expect(runTask).toHaveBeenCalled()
+    return (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  }
+
+  it('adds the annotated block, the quote, its path and the chain down to the mention, not the whole thread', async () => {
+    const {graph} = fakeGraph(threadSeed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    const prompt = promptOf(runTask)
+    expect(graph.comments).toHaveBeenCalledWith({thread: 'root'})
+    expect(prompt).toContain('The annotated block (page path: Launch plan):\nWe moved the launch to Thursday because the vendor slipped.')
+    expect(prompt).toContain('The thread quotes: "Thursday"')
+    expect(prompt).toContain([
+      '- [c1] Alex (human): Is Thursday confirmed?',
+      '  - [c2] Claude (agent): Yes, 9am.',
+      '    - [c3] Alex (human): [[claude]] can you check the venue too?',
+    ].join('\n'))
+    expect(prompt).not.toContain('unrelated sibling')
+  })
+
+  it('answers the mention without the thread when the thread cannot be read', async () => {
+    const {graph} = fakeGraph(threadSeed())
+    graph.comments = vi.fn(async () => { throw new Error('Unknown command type: comments') })
+    const runTask = vi.fn(async () => okRun())
+    const log = vi.fn()
+    const engine = engineWith({graph, runTask, log})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).not.toContain('comment in a thread')
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('no thread context for c3'))
+  })
+
+  it('reads no thread for a mention outside one', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] summarize inbox'}}})
+    const runTask = vi.fn(async () => okRun())
+    const log = vi.fn()
+    const engine = engineWith({graph, runTask, log})
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalled()
+    expect(graph.comments).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('no thread context'))
+  })
+})
+
+describe('channel delivery', () => {
+  it('parks a task stopped before delivery as cancelled, and delivers nothing', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] x'}}})
+    let reading!: () => void
+    const reads = new Promise<void>(resolve => { reading = resolve })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const getSubtree = graph.getSubtree
+    graph.getSubtree = async id => {
+      reading()
+      await held
+      return getSubtree(id)
+    }
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}]}),
+    })
+
+    await engine.tick()
+    await reads
+    // The Stop chip's write, then the next tick's sweep.
+    blocks.get('b-1')!.properties = {...blocks.get('b-1')!.properties, [PROPS.cancel]: 'requested'}
+    await engine.tick()
+    release()
+    await engine.drain()
+
+    expect(deliverToChannel).not.toHaveBeenCalled()
+    expect(blocks.get('b-1')?.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: ''})
+    expect(reconciles.at(-1)?.markdown).toContain('cancelled')
+  })
+})
 
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
@@ -648,10 +766,7 @@ describe('mention lifecycle', () => {
 
     let clock = NOW
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, state: memoryState(), runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, runTask, now: () => clock})
 
     await engine.tick()          // resolves page-v1, no backlinks
     await engine.drain()
@@ -1129,18 +1244,10 @@ describe('live progress streaming', () => {
       options.onEvent?.({kind: 'text', text: 'Once upon a time'}) // t+1600: past 1.5s, writes
       return okRun({resultText: 'Once upon a time, the end.'})
     })
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
       graph,
-      runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => clock,
+      runTask, now: () => clock,
     })
 
     await engine.tick()
@@ -1323,18 +1430,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
       graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1353,18 +1452,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-    workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
       graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1449,10 +1540,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
     })
     const state = memoryState([], {armBaselines: false})
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, state, runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, state, runTask, now: () => clock})
 
     await engine.tick()
     await engine.drain()

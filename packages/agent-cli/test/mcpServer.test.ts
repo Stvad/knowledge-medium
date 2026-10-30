@@ -134,6 +134,8 @@ describe('createGraphMcpServer', () => {
           }
         case 'edit-block':
           return {id: command.id, shortId: 'b', excerpt: 'edited'}
+        case 'add-comment':
+          return {threadId: 't', commentId: 'c', quote: 'a'}
         case 'create-page':
           return {id: 'page', kind: 'page', created: true}
         default:
@@ -160,6 +162,7 @@ describe('createGraphMcpServer', () => {
       target: 'today', markdown: '- note', position: {kind: 'before', siblingId: 's'},
     }, {})
     await tools.edit_block.handler({id: 'b', old: 'a', new: 'b'}, {})
+    await tools.add_comment.handler({target: 'b', quote: 'a', content: 'why?'}, {})
     await tools.create_page.handler({name: 'Inbox'}, {})
 
     expect(operations).toEqual([
@@ -173,6 +176,7 @@ describe('createGraphMcpServer', () => {
         position: {kind: 'before', siblingId: 'full-s'}, shape: undefined,
       },
       {type: 'edit_block', id: 'full-b', old: 'a', new: 'b'},
+      {type: 'add_comment', target: 'full-b', quote: 'a', content: 'why?'},
       {type: 'create_page', name: 'Inbox', date: undefined},
     ])
     // The write acts on the id the guard checked, marked so the runtime uses it
@@ -183,7 +187,7 @@ describe('createGraphMcpServer', () => {
       .map(command => [command.type, (command as {exactIds?: unknown}).exactIds]))
       .toEqual([
         ['update-block', true], ['move-block', true], ['delete-block', true],
-        ['restore-block', true], ['append-markdown', true], ['edit-block', true],
+        ['restore-block', true], ['append-markdown', true], ['edit-block', true], ['add-comment', true],
       ])
     expect(commands.map(command => command.type)).toEqual([
       'create-block',
@@ -193,6 +197,7 @@ describe('createGraphMcpServer', () => {
       'restore-block',
       'append-markdown',
       'edit-block',
+      'add-comment',
       'create-page',
     ])
   })

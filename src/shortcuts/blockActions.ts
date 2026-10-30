@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease, IndentIncrease, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
-import { resetBlockSelection } from '@/data/stateBlocks.js'
+import { hasBlockSelection, resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard, writeTextToClipboard } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -13,7 +13,6 @@ import {
   isEditingProp,
   peekFocusedBlockLocation,
   requestEditorFocus,
-  selectionStateProp,
   setIsEditing,
   showPropertiesProp,
   type EditorSelectionState,
@@ -114,12 +113,6 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
-/** True when a block selection is already active. The Roam-style first
- *  Shift+Direction selects just the focused block; only once something is
- *  selected do further presses extend to neighbours. */
-const hasActiveSelection = (uiStateBlock: Block): boolean =>
-  (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
-
 /** Extend the block selection to the next visible block. Returns whether a
  *  selection was actually extended — false at the last visible block in the
  *  surface (no next block) or if the range resolved empty. Edit-mode callers
@@ -141,7 +134,7 @@ export const extendSelectionDown = async (
   // block can be selected/deleted); subsequent presses extend downward. Don't
   // select the surface's own root — acting on the view root within its view is
   // meaningless, so leave the keystroke native (matches the old no-op there).
-  if (!hasActiveSelection(uiStateBlock)) {
+  if (!hasBlockSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
     return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }
@@ -168,7 +161,7 @@ export const extendSelectionUp = async (
   if (!focusedId) return false
 
   // Roam-style first press — see extendSelectionDown.
-  if (!hasActiveSelection(uiStateBlock)) {
+  if (!hasBlockSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
     return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }

@@ -18,6 +18,7 @@ import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
+  addCommentCommandSchema,
   createContributorCommandSchema,
   listContributorsCommandSchema,
   moveBlockPositionSchema,
@@ -69,6 +70,7 @@ export type GraphMcpWriteOperation =
   | {type: 'restore_block', id: string}
   | {type: 'append_markdown', target: string, markdown: string, position?: MoveBlockPositionInput, shape?: 'outline' | 'block'}
   | {type: 'edit_block', id: string, old: string, new: string}
+  | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string}
   | {type: 'create_page', name?: string, date?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
@@ -270,6 +272,25 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     const edit = {...input, id: await blockId(input.id)}
     await beforeWrite({type: 'edit_block', ...edit})
     return json(await graph.editBlock({...edit, exactIds}))
+  })
+
+  server.registerTool('add_comment' satisfies KmMcpToolName, {
+    description: 'Start a comment thread on a block, on quoted text of it or on the whole block, and return its root id '
+    + '(write ((id)) to quote that range elsewhere). The quote is found in the block\'s current content, verbatim as '
+    + 'get_block returns it; one that appears more than once needs occurrence, and the result\'s quoteStart and excerpt '
+    + 'show which appearance was anchored. No content makes a highlight. Reply to a comment with append_markdown under '
+    + 'that comment; resolve a thread with update_block on its root, properties {"annotation:status": "resolved"}. '
+    + 'comments reads threads.',
+    inputSchema: {
+      target: addCommentCommandSchema.shape.target,
+      quote: addCommentCommandSchema.shape.quote,
+      occurrence: addCommentCommandSchema.shape.occurrence,
+      content: addCommentCommandSchema.shape.content,
+    },
+  }, async input => {
+    const comment = {...input, target: await blockId(input.target)}
+    await beforeWrite({type: 'add_comment', ...comment})
+    return json(await graph.addComment({...comment, exactIds}))
   })
 
   server.registerTool('create_page' satisfies KmMcpToolName, {

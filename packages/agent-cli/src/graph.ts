@@ -4,6 +4,7 @@
  * business logic belongs in this package.
  */
 import type { BridgeClient } from './client.js'
+import type { CommentsView } from './protocol.js'
 
 export interface HydratedRef {
   id: string
@@ -187,6 +188,28 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'edit-block') as unknown as EditBlockResult
   }
 
+  /** Comment threads, as the `comments` verb answers them. */
+  const comments = async (input: {
+    scope?: string
+    block?: string
+    thread?: string
+    includeClosed?: boolean
+    limit?: number
+    offset?: number
+  }): Promise<CommentsView> => {
+    const result = asRecord(await client.runCommand({type: 'comments', ...input}), 'comments')
+    if (!Array.isArray(result.threads)) throw new Error('Unexpected comments result shape')
+    return result as unknown as CommentsView
+  }
+
+  /** Start a comment thread on `target`; resolves to its root's id. */
+  const addComment = async (input: {
+    target: string
+    quote?: string
+    occurrence?: number
+    content?: string
+  } & ExactIds): Promise<unknown> => client.runCommand({type: 'add-comment', ...input})
+
   const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>
     client.runCommand({type: 'create-page', ...input})
 
@@ -289,6 +312,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     updateBlock,
     appendMarkdown,
     editBlock,
+    comments,
+    addComment,
     createPage,
     recentChanges,
     resolveBlockId,

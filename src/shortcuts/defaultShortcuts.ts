@@ -1,4 +1,4 @@
-import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -1363,6 +1363,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     {
       id: 'clear_selection',
       description: 'Clear selection',
+      icon: Check,
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async (deps: MultiSelectModeDependencies) =>
         deps.uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue),

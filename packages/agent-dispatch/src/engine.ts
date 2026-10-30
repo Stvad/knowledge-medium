@@ -9,12 +9,13 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
-import type { Graph } from './graph.js'
+import type { Graph, ReplyWriter } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
+import { loadThreadContext } from './threadContext.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
@@ -24,7 +25,10 @@ export interface ChannelEvent {
 
 export interface EngineDeps {
   config: DaemonConfig
+  /** Reads and the unattributed `agent:*` bookkeeping on source blocks. */
   graph: Graph
+  /** The run's replies, the only writes attributed to the agent. */
+  replies: ReplyWriter
   state: StateStore
   runTask: (options: AgentRunOptions) => Promise<AgentRunResult>
   /** EXPERIMENTAL: push an event into the ambient channel session
@@ -106,7 +110,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 }
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
+  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
@@ -232,7 +236,7 @@ export const createEngine = (deps: EngineDeps) => {
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
     await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await graph.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
+    await replies.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
@@ -298,7 +302,7 @@ export const createEngine = (deps: EngineDeps) => {
       markdown: string,
       {final = false, shape = replyShape}: {final?: boolean, shape?: 'outline' | 'block'} = {},
     ): Promise<void> => {
-      await graph.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
+      await replies.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
     }
     const reconcileReplyWithRetry = async (
       markdown: string,
@@ -350,6 +354,12 @@ export const createEngine = (deps: EngineDeps) => {
       abortControllers.set(sourceId, abortController)
 
       const subtreeRows = await graph.getSubtree(sourceId)
+      // Context only: a thread that can't be read (an app without the
+      // comments verb, the plugin off) leaves the mention answered without it.
+      const thread = await loadThreadContext(graph, block, ancestorBlocks).catch(error => {
+        log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
+        return null
+      })
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
@@ -362,12 +372,22 @@ export const createEngine = (deps: EngineDeps) => {
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,
+        thread: thread ?? undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
       })
 
       if (watcher.delivery === 'channel') {
+        // A Stop during the reads above: once delivered, the channel session
+        // has the task and nothing aborts it.
+        if (abortController.signal.aborted) {
+          await reconcileReply('⏹️ agent-dispatch run cancelled', {final: true, shape: 'block'})
+          terminalReplyDelivered = true
+          await graph.setTaskProps(sourceId, {status: 'error', error: 'cancelled', activity: null, cancel: null, nowMs: now()})
+          log(`[${watcher.name}] CANCELLED ${sourceId} before delivery`)
+          return
+        }
         // Ambient mode: deliver and step back — the channel session owns
         // the rest of the lifecycle (reply block + done/error props). If
         // it never does, the stale-running sweep re-delivers, bounded by
