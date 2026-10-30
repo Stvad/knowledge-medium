@@ -6,8 +6,7 @@ import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import { referencesCodeMirrorExtensions } from './codeMirrorExtensions.ts'
 import { referencesDataExtension } from './dataExtension.ts'
-import { blockrefMarkdownExtension } from './markdown/blockrefs/index.tsx'
-import { wikilinkMarkdownExtension } from './markdown/wikilinks/index.tsx'
+import { referencesMarkdownExtension } from './markdown/index.ts'
 
 export const referencesPlugin: AppExtension = systemToggle({
   id: 'system:references',
@@ -15,8 +14,7 @@ export const referencesPlugin: AppExtension = systemToggle({
   description: 'Wikilink + block-ref parsing, the reference layout, and the wikilink display decorator.',
 }).of([
   referencesDataExtension,
-  markdownExtensionsFacet.of(wikilinkMarkdownExtension, {source: 'references'}),
-  markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'references'}),
+  markdownExtensionsFacet.of(referencesMarkdownExtension, {source: 'references'}),
   blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
   codeMirrorExtensionsFacet.of(referencesCodeMirrorExtensions, {source: 'references'}),
 ])
