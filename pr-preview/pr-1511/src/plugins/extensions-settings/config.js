@@ -1,1 +1,1 @@
-export{Uf as extensionsOverridesPresetCore,Wf as extensionsOverridesProp,Gf as extensionsPrefsType,Kf as overridesCodec}from"../../../chunks/app-Btv8a-Np.js";
+export{Uf as extensionsOverridesPresetCore,Wf as extensionsOverridesProp,Gf as extensionsPrefsType,Kf as overridesCodec}from"../../../chunks/app-CkPYYLeM.js";

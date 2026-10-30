@@ -1,1 +1,1 @@
-export{IE as Label}from"../../../chunks/app-Btv8a-Np.js";
+export{IE as Label}from"../../../chunks/app-CkPYYLeM.js";

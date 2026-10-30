@@ -1,1 +1,1 @@
-export{rN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,iN as openExtensionsSettings}from"../../chunks/app-Btv8a-Np.js";
+export{rN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,iN as openExtensionsSettings}from"../../chunks/app-CkPYYLeM.js";

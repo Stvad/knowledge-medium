@@ -1,1 +1,1 @@
-export{Vf as extensionApiCatalog,Hf as extensionApiRuntimeExports}from"../../chunks/app-Btv8a-Np.js";
+export{Vf as extensionApiCatalog,Hf as extensionApiRuntimeExports}from"../../chunks/app-CkPYYLeM.js";

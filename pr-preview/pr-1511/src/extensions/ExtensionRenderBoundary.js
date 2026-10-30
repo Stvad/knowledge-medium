@@ -1,1 +1,1 @@
-export{AP as ExtensionRenderBoundary}from"../../chunks/app-Btv8a-Np.js";
+export{AP as ExtensionRenderBoundary}from"../../chunks/app-CkPYYLeM.js";

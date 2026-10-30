@@ -1,1 +1,1 @@
-export{IU as preferredSpanReplacement}from"../../../chunks/app-Btv8a-Np.js";
+export{IU as preferredSpanReplacement}from"../../../chunks/app-CkPYYLeM.js";

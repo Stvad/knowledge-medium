@@ -1,1 +1,1 @@
-export{DC as WorkspaceSwitcher}from"../../../chunks/app-Btv8a-Np.js";
+export{DC as WorkspaceSwitcher}from"../../../chunks/app-CkPYYLeM.js";

@@ -1,1 +1,1 @@
-export{TY as agentDispatchCompanionDataExtension}from"../../../chunks/app-Btv8a-Np.js";
+export{TY as agentDispatchCompanionDataExtension}from"../../../chunks/app-CkPYYLeM.js";

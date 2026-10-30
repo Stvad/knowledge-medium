@@ -1,1 +1,1 @@
-export{xL as PropertyRow}from"../../../chunks/app-Btv8a-Np.js";
+export{xL as PropertyRow}from"../../../chunks/app-CkPYYLeM.js";

@@ -1,1 +1,1 @@
-export{bit as CORE_BLOCK_DELETED_EVENT,xit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-Btv8a-Np.js";
+export{bit as CORE_BLOCK_DELETED_EVENT,xit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-CkPYYLeM.js";

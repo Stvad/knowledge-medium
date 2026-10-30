@@ -1,1 +1,1 @@
-export{ek as CommandPaletteHeaderItem}from"../../../chunks/app-Btv8a-Np.js";
+export{ek as CommandPaletteHeaderItem}from"../../../chunks/app-CkPYYLeM.js";

@@ -1,1 +1,1 @@
-export{ox as seedTutorial}from"../../../chunks/app-Btv8a-Np.js";
+export{ox as seedTutorial}from"../../../chunks/app-CkPYYLeM.js";

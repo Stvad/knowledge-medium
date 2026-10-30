@@ -1,1 +1,1 @@
-export{zM as defaultRegistry,BM as defaultRendererContributions,VM as defaultRenderersExtension}from"../../chunks/app-Btv8a-Np.js";
+export{zM as defaultRegistry,BM as defaultRendererContributions,VM as defaultRenderersExtension}from"../../chunks/app-CkPYYLeM.js";
