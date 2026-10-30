@@ -1,1 +1,1 @@
-export{bG as dailyNotesLocalSchema}from"../../../chunks/app-f5JV5pGi.js";
+export{bG as dailyNotesLocalSchema}from"../../../chunks/app-7S2O4F6Y.js";
