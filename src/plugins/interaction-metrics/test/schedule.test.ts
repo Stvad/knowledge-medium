@@ -21,7 +21,9 @@ import {
   observeWorkspace,
   observeWorkspaceEffect,
 } from '../sessionContext'
+import { pageRecordFor } from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
+import { observation, stubPerformanceObserver } from './fakePerformanceObserver'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
@@ -195,5 +197,62 @@ describe('interactionMetricsEffect', () => {
     stop?.()
     await settleSamples(10 * 60_000)
     expect(samples()).toBe(afterFirst)
+  })
+})
+
+describe('main-thread responsiveness', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  const start = () => interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
+    typeof interactionMetricsEffect.start
+  >[0])
+  const longFrame = { duration: 120, blockingDuration: 70, scripts: [{ forcedStyleAndLayoutDuration: 30 }] }
+  const storedResponsiveness = async () => {
+    const block = repo.block(pageRecordFor(repo, WS)!.blockId)
+    await block.load()
+    return block.peekProperty(interactionRecordProp)?.responsiveness
+  }
+
+  it('stores what the observers saw beside the counters', async () => {
+    const live = stubPerformanceObserver(['long-animation-frame', 'event'])
+    const stop = await start()
+    observation(live, 'long-animation-frame').deliver([longFrame])
+    await settleSamples()
+    expect((await storedResponsiveness())?.longFrames).toMatchObject({ count: 1, blockingMs: 70, forcedLayoutMs: 30 })
+    stop?.()
+  })
+
+  // A reset starts a new counter span and the next sample opens a record for
+  // it. Frames seen before the reset belong to the retired span, so carrying
+  // them into the new record would put the old span's jank beside fresh counters.
+  it('starts the summary over when the counters are reset', async () => {
+    const live = stubPerformanceObserver(['long-animation-frame', 'event'])
+    const stop = await start()
+    observation(live, 'long-animation-frame').deliver([longFrame])
+    repo.resetMetrics()
+    await settleSamples()
+    expect((await storedResponsiveness())?.longFrames?.count).toBe(0)
+    stop?.()
+  })
+
+  it('stops observing once the effect is torn down', async () => {
+    const live = stubPerformanceObserver(['long-animation-frame', 'event'])
+    const stop = await start()
+    expect(live).toHaveLength(2)
+    stop?.()
+    expect(live).toEqual([])
+  })
+
+  // No observer is worth arming for a session that can never be recorded.
+  it('observes nothing where the browser offers neither entry type', async () => {
+    stubPerformanceObserver(['mark'])
+    const stop = await start()
+    await settleSamples()
+    expect(await storedResponsiveness()).toBeUndefined()
+    stop?.()
   })
 })

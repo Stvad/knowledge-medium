@@ -1,15 +1,17 @@
 /**
  * Interaction-metrics persistence: folds a `repo.metrics()` snapshot into a
  * durable per-session record, one block per session under a hidden per-user
- * ui-state subtree (so two devices never write the same row). Takes no
- * measurement of its own, so cost is one snapshot + write per sample, on
- * genuine idle (see `./schedule`). `@/plugins/perf-monitor` reads the series.
+ * ui-state subtree (so two devices never write the same row). Its one
+ * measurement of its own is `./responsiveness`, which only observes; otherwise
+ * cost is one snapshot + write per sample, on genuine idle (see `./schedule`).
+ * `@/plugins/perf-monitor` reads the series.
  */
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { appendClientRecord, clientGroupId, updateClientRecord } from './recordStore.js'
+import type { ResponsivenessSample, ResponsivenessSource } from './responsiveness.js'
 import {
   assertStillAttributable,
   awaitRecordingAllowed,
@@ -156,6 +158,17 @@ export interface InteractionRecordData extends InteractionComparable {
     /** Resolvers registering the most deps, by query name. */
     topHeavy: Array<{ query: string; depCount: number }>
   }
+  /** Whether the main thread was free while the timings above were taken; its
+   *  declaration holds what each field means. ABSENT on records written before
+   *  this existed and where the browser observes neither entry type: not
+   *  measured, never zero.
+   *
+   *  Stored for diagnosis and NOT compared by `series.ts`: main-thread time
+   *  moves with what the user did and with everything else on the device —
+   *  other tabs, thermal and power state — and nothing here can filter that out
+   *  the way `uncontended` filters the pool's queue. A ratio over it would
+   *  alarm on a busy afternoon. */
+  responsiveness?: ResponsivenessSample
 }
 
 /** One identity-codec property (engine-controlled blob), not per-field
@@ -188,7 +201,7 @@ export const interactionRecordType = seedType({
   properties: [interactionRecordProp],
 })
 
-/** ~4 sessions/day at ~1.7KB each: about three months of history per client group. The reader never looks past 40. */
+/** ~4 sessions/day at ~2KB each: about three months of history per client group. The reader never looks past 40. */
 export const INTERACTION_RETAIN = 400
 
 /** Parent ui-state container; each session adds one child under its client's group. */
@@ -312,6 +325,7 @@ export const buildInteractionRecord = (
     deviceLabel: string
     blockCount: number
   },
+  responsiveness?: ResponsivenessSample,
 ): InteractionRecordData => {
   const db: Record<string, TimingSample> = {}
   for (const [method, timing] of Object.entries(metrics.db)) {
@@ -341,6 +355,7 @@ export const buildInteractionRecord = (
         depCount: h.depCount,
       })),
     },
+    ...(responsiveness ? { responsiveness } : {}),
   }
 }
 
@@ -406,6 +421,8 @@ const isUsableRecord = async (
 export const writeInteractionSample = async (
   repo: Repo,
   workspaceId: string,
+  /** Absent: the record carries no `responsiveness`. */
+  responsiveness?: ResponsivenessSource,
 ): Promise<string | null> => {
   observeWorkspace(repo, workspaceId)
   const context = metricsSessionContext(repo, workspaceId)
@@ -416,6 +433,8 @@ export const writeInteractionSample = async (
   // transactions that create its own record block. Re-taken HERE, not reused
   // from the check above: another recorder can commit in the await between them.
   const { metrics } = readLiveSession(repo, workspaceId)
+  // Beside the counters, so both describe the same instant.
+  const mainThread = responsiveness?.sample()
   // The record can be deleted elsewhere (another device, or a user browsing
   // the tree); writing to a tombstone doesn't restore it, so without this check the session updates a row nothing reads.
   const stored = pageRecordFor(repo, workspaceId)
@@ -436,7 +455,7 @@ export const writeInteractionSample = async (
     // Re-counted per sample, not cached from session start: the dominant
     // confound for every timing here — a big import/sync would otherwise measure against the opening graph size.
     blockCount: await countLiveBlocks(repo, workspaceId),
-  })
+  }, mainThread)
 
   try {
     {

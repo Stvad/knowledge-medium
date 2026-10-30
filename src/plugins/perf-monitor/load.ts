@@ -56,6 +56,22 @@ const isTimingSample = (v: unknown): boolean =>
   ((v as { uncontended?: unknown }).uncontended === undefined ||
     isDistribution((v as { uncontended: unknown }).uncontended))
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+
+/** The main-thread fields the trend table renders. ABSENT at any level is
+ *  valid — not measured — but a present one is dereferenced. `observedMs` is
+ *  divided by, so a numeric string would coerce into a plausible rate. */
+const isUsableResponsiveness = (v: unknown): boolean =>
+  v === undefined || (
+    isObject(v) && isCount(v.observedMs) &&
+    (v.longFrames === undefined || (isObject(v.longFrames) && isCount(v.longFrames.blockingMs))) &&
+    (v.slowInputs === undefined || (
+      isObject(v.slowInputs) && isCount(v.slowInputs.count) &&
+      (v.slowInputs.duration === undefined ||
+        (isObject(v.slowInputs.duration) && isCount(v.slowInputs.duration.p95Ms)))
+    ))
+  )
+
 /** A validator must cover EVERY field a reader dereferences — a missed check
  *  throws (analysis or dialog render) instead of skipping one bad row. Add a
  *  field to either reader here too, INCLUDING the nested `queries` samples. */
@@ -65,9 +81,11 @@ export const isUsableInteractionRecord = (r: {
   writes?: unknown
   blockCount?: unknown
   appSha?: unknown
+  responsiveness?: unknown
 }): boolean =>
   isAbsentOrString(r.appSha) &&
   isCount(r.writes) && isCount(r.blockCount) &&
+  isUsableResponsiveness(r.responsiveness) &&
   typeof r.queries === 'object' && r.queries !== null &&
   Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
   typeof r.fanout === 'object' && r.fanout !== null &&

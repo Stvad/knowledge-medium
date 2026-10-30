@@ -180,6 +180,35 @@ describe('PerfTrendDialog tables', () => {
     expect(screen.queryByText(/no startup records/i)).toBeNull()
   })
 
+  // Blocking is a per-minute RATE over what was observed, not the raw total,
+  // which only grows with how long the tab stayed open.
+  it('renders the main-thread summary the recorder stored', async () => {
+    const responsiveness = {
+      observedMs: 120_000,
+      longFrames: { count: 3, totalMs: 900, blockingMs: 600, forcedLayoutMs: 200, maxMs: 400 },
+      slowInputs: {
+        count: 4,
+        duration: { p50Ms: 90, p95Ms: 180, maxMs: 180 },
+        inputDelay: { p50Ms: 2, p95Ms: 30, maxMs: 30 },
+      },
+    }
+    expect(await writeInteractionSample(repo, WS, { sample: () => responsiveness })).toBeTruthy()
+
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+
+    await waitFor(() => expect(screen.getByText('300ms/min')).toBeInTheDocument())
+    expect(screen.getByText('4 (180ms)')).toBeInTheDocument()
+  })
+
+  // Not measured is not zero: a browser without the entry types, or a record
+  // from before they were recorded, shows no figure at all.
+  it('shows no main-thread figures for a record that never measured them', async () => {
+    expect(await writeInteractionSample(repo, WS)).toBeTruthy()
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getByText('Blocking / min')).toBeInTheDocument())
+    expect(screen.queryByText(/ms\/min$/)).toBeNull()
+  })
+
   // `recordedAt` is stamped when the deferred, RETRYING write lands; the series
   // is ranked by boot time. Stamping rows with write time lists them in one
   // order and timestamps them in the other, naming an earlier session as the

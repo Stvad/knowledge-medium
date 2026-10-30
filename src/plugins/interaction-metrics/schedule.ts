@@ -12,6 +12,7 @@ import { LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { cadencedIdleJob } from '@/utils/cadencedIdleJob.js'
 import { metricsSessionContext, observeWorkspace } from './sessionContext.js'
 import { writeInteractionSample } from './record.js'
+import { observeResponsiveness } from './responsiveness.js'
 
 /** Wall clock between samples. Each rewrites one small block, so this trades
  *  series resolution against write volume: a record is only ever read as its
@@ -39,7 +40,16 @@ export const interactionMetricsEffect: AppEffect = {
     // read-only half is NOT decided here — it resolves asynchronously after
     // mount, so the write consults it again at the moment it matters.
     if (metricsSessionContext(repo, workspaceId).blockedBy === 'no-persistent-client') return
-    return job.start(async () => { await writeInteractionSample(repo, workspaceId) }).stop
+    const responsiveness = observeResponsiveness() ?? undefined
+    // A reset starts a new counter span, and the summary must cover the same
+    // span as the counters stored beside it.
+    const stopWatchingReset = responsiveness ? repo.onMetricsReset(responsiveness.restart) : () => {}
+    const sampling = job.start(async () => { await writeInteractionSample(repo, workspaceId, responsiveness) })
+    return () => {
+      sampling.stop()
+      stopWatchingReset()
+      responsiveness?.stop()
+    }
   },
 }
 
