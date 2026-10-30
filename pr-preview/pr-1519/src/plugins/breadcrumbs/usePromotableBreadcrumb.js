@@ -1,0 +1,1 @@
+export{jS as usePromotableBreadcrumb}from"../../../chunks/app-BulqmRUg.js";

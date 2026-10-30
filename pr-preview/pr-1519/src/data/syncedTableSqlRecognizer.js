@@ -1,0 +1,1 @@
+export{SY as SYNCED_TABLES,CY as syncedWriteTarget,wY as writeTargets}from"../../chunks/app-BulqmRUg.js";

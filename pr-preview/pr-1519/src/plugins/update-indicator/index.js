@@ -1,0 +1,1 @@
+export{Mh as updateIndicatorPlugin}from"../../../chunks/app-BulqmRUg.js";

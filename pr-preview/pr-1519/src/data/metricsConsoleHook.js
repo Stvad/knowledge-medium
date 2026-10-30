@@ -1,0 +1,1 @@
+export{rA as ensureMetricsConsoleHook}from"../../chunks/app-BulqmRUg.js";

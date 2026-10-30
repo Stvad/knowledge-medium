@@ -1,0 +1,1 @@
+export{wV as propertyShapeLabel}from"../../../chunks/app-BulqmRUg.js";

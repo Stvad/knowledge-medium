@@ -1,0 +1,1 @@
+export{YK as characterCounterDataExtension}from"../../../chunks/app-BulqmRUg.js";

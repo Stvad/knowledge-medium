@@ -1,0 +1,1 @@
+export{AC as createEncryptedWorkspace}from"../../../../chunks/app-BulqmRUg.js";

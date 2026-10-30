@@ -1,0 +1,1 @@
+export{oG as matchCharTrigger}from"../../chunks/app-BulqmRUg.js";

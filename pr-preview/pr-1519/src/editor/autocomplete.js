@@ -1,0 +1,1 @@
+export{PA as editorAutocompleteExtension}from"../../chunks/app-BulqmRUg.js";

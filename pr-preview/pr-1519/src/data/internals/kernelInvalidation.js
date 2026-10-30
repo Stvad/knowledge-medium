@@ -1,0 +1,1 @@
+export{V1 as emitKernelInvalidations,H1 as kernelInvalidationRule}from"../../../chunks/app-BulqmRUg.js";

@@ -1,0 +1,1 @@
+export{ntt as isChildBackedPropertiesWorkspace}from"../chunks/app-BulqmRUg.js";

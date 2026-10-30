@@ -1,0 +1,1 @@
+export{nK as annotationsDataExtension}from"../../../chunks/app-BulqmRUg.js";

@@ -1,0 +1,1 @@
+export{Ij as dynamicExtensionsExtension}from"../../chunks/app-BulqmRUg.js";

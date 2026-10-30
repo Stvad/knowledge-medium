@@ -1,0 +1,1 @@
+export{NS as BreadcrumbRenderer}from"../../../chunks/app-BulqmRUg.js";

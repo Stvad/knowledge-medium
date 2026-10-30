@@ -1,0 +1,1 @@
+export{r0 as KERNEL_PROCESSORS}from"../../../chunks/app-BulqmRUg.js";

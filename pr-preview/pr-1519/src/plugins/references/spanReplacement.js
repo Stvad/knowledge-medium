@@ -1,0 +1,1 @@
+export{bU as preferredSpanReplacement}from"../../../chunks/app-BulqmRUg.js";

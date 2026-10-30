@@ -1,0 +1,1 @@
+export{OK as annotationMarginOpenProp}from"../../../chunks/app-BulqmRUg.js";

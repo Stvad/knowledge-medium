@@ -1,0 +1,1 @@
+export{IG as dailyNotesDataExtension}from"../../../chunks/app-BulqmRUg.js";

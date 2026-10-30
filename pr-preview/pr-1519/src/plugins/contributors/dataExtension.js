@@ -1,0 +1,1 @@
+export{NK as contributorsDataExtension}from"../../../chunks/app-BulqmRUg.js";

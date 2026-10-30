@@ -1,0 +1,1 @@
+export{Jrt as defineQuery}from"../../../chunks/app-BulqmRUg.js";

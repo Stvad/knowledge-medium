@@ -1,0 +1,1 @@
+export{CH as staticDataExtensions}from"../../chunks/app-BulqmRUg.js";

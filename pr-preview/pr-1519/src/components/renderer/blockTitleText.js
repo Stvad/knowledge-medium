@@ -1,0 +1,1 @@
+export{oI as BLOCK_TITLE_TEXT_CLASS,sI as useBlockTitleTextClass}from"../../../chunks/app-BulqmRUg.js";

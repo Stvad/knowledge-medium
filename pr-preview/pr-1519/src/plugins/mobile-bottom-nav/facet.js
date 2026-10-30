@@ -1,0 +1,1 @@
+export{ES as mobileBottomNavItemsFacet}from"../../../chunks/app-BulqmRUg.js";

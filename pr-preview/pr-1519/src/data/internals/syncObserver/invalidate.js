@@ -1,0 +1,1 @@
+export{$$ as applySyncInvalidation}from"../../../../chunks/app-BulqmRUg.js";

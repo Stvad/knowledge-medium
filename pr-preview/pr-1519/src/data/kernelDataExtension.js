@@ -1,0 +1,1 @@
+export{d1 as kernelDataExtension}from"../../chunks/app-BulqmRUg.js";

@@ -1,0 +1,1 @@
+export{_M as LazyBlockComponent}from"../../chunks/app-BulqmRUg.js";
