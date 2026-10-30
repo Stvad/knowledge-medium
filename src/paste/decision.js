@@ -1,1 +1,1 @@
-export{IP as defaultPasteDecision,LP as pasteDecisionVerb}from"../../chunks/app-Cjy1JBj4.js";
+export{sF as defaultPasteDecision,cF as pasteDecisionVerb}from"../../chunks/app-CebdL9Xf.js";

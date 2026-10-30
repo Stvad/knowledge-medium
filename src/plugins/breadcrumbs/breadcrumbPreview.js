@@ -1,1 +1,1 @@
-export{sS as getBreadcrumbContentPreview}from"../../../chunks/app-Cjy1JBj4.js";
+export{MS as getBreadcrumbContentPreview}from"../../../chunks/app-CebdL9Xf.js";

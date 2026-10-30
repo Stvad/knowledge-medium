@@ -1,1 +1,1 @@
-export{TR as useTypes}from"../../chunks/app-Cjy1JBj4.js";
+export{QR as useTypes}from"../../chunks/app-CebdL9Xf.js";

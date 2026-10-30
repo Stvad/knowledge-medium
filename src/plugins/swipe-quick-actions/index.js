@@ -1,1 +1,1 @@
-export{SO as SWIPE_QUICK_ACTIONS_GESTURE_ID,HO as SWIPE_RIGHT_BLOCK_ACTION_ID,xO as SwipeActionMenu,WO as quickActionItemsFacet,gO as swipeQuickActionsPlugin}from"../../../chunks/app-Cjy1JBj4.js";
+export{qO as SWIPE_QUICK_ACTIONS_GESTURE_ID,pk as SWIPE_RIGHT_BLOCK_ACTION_ID,KO as SwipeActionMenu,hk as quickActionItemsFacet,VO as swipeQuickActionsPlugin}from"../../../chunks/app-CebdL9Xf.js";
