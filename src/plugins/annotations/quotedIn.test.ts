@@ -10,6 +10,7 @@ import {BACKLINKS_COUNT_FOR_BLOCK_QUERY} from '@/plugins/backlinks/inline-counts
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
 import {deleteCommentFromCard} from './deleteComment'
+import {QuotedThreadError, reanchorThread} from './reanchor'
 import {annotationsPlugin} from './index'
 import {pillCount, THREADS_FOR_BLOCK_QUERY} from './summaries'
 import {createThread} from './threads'
@@ -85,6 +86,31 @@ describe('a quoted thread', () => {
   })
 })
 
+describe('re-anchoring a quoted thread', () => {
+  it('refuses the whole block, which would leave its quoters no quote', async () => {
+    await quote()
+
+    await expect(reanchorThread(repo, threadId, null)).rejects.toBeInstanceOf(QuotedThreadError)
+
+    expect((await repo.load(threadId))?.content).toBe('Thursday')
+  })
+
+  it('still moves the quote to new text', async () => {
+    await quote()
+    const from = B_TEXT.indexOf('vendor')
+
+    await reanchorThread(repo, threadId, captureAnchor(B_TEXT, from, from + 'vendor'.length))
+
+    expect((await repo.load(threadId))?.content).toBe('vendor')
+  })
+
+  it('lets an unquoted thread take the whole block', async () => {
+    await reanchorThread(repo, threadId, null)
+
+    expect((await repo.load(threadId))?.content).toBe('')
+  })
+})
+
 describe('deleting a quoted thread’s last comment from its card', () => {
   const lastComment = async () => {
     const commentId = await repo.mutate.createChild({parentId: threadId, content: 'Confirmed?'})
@@ -97,7 +123,7 @@ describe('deleting a quoted thread’s last comment from its card', () => {
 
     expect(await deleteCommentFromCard(comment)).toBe('refused')
 
-    expect(dialogs.opened).toEqual([{count: 1}])
+    expect(dialogs.opened).toEqual([{count: 1, wholeBlock: false}])
     expect((await repo.load(threadId))?.deleted).toBe(false)
     expect((await repo.load(comment.id))?.deleted).toBe(false)
   })
