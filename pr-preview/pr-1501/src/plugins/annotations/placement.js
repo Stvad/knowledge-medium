@@ -1,1 +1,1 @@
-export{Qu as placeCards}from"../../../chunks/app-CHtyvdtt.js";
+export{Qu as placeCards}from"../../../chunks/app-DfwwEdaD.js";

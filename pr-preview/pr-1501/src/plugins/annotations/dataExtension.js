@@ -1,1 +1,1 @@
-export{QG as annotationsDataExtension}from"../../../chunks/app-CHtyvdtt.js";
+export{QG as annotationsDataExtension}from"../../../chunks/app-DfwwEdaD.js";

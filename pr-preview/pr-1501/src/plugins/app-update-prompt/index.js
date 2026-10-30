@@ -1,1 +1,1 @@
-export{ZA as appUpdatePromptExtension}from"../../../chunks/app-CHtyvdtt.js";
+export{ZA as appUpdatePromptExtension}from"../../../chunks/app-DfwwEdaD.js";
