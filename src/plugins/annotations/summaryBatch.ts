@@ -5,14 +5,13 @@
  * so one read per root and one more per root's children would queue a wave's
  * worth of statements on the one- or two-connection read pool.
  *
- * Purely a transport, like `backlinks/sourceBatch.ts`: nothing resolved is
- * held between flushes. Caching is the handle store's job.
+ * The transport — coalescing, failure scope — is `@/data/internals/readBatch`.
  */
 
 import type {BlockData, QueryCtx, QueryReadDb} from '@/data/api'
 import {buildQualifiedBlockColumnsSql} from '@/data/blockSchema'
 import {dependOnRecognitionParams} from '@/data/internals/kernelQueries'
-import {contentionFor} from '@/data/internals/timingMetrics'
+import {ReadBatcher, readBatcherPerDb} from '@/data/internals/readBatch'
 import {recognizedFieldRowSql, type RecognitionParams} from '@/data/internals/treeQueries'
 
 export interface ThreadRootRow {
@@ -34,97 +33,35 @@ const THREAD_ROOTS_SQL = `
    WHERE b.deleted = 0
 `
 
-interface Pending {
-  promise: Promise<ThreadRootRow | null>
-  resolve: (answer: ThreadRootRow | null) => void
-  reject: (error: unknown) => void
-  callers: number
-}
-
-const pending = (): Pending => {
-  let resolve!: Pending['resolve']
-  let reject!: Pending['reject']
-  const promise = new Promise<ThreadRootRow | null>((res, rej) => { resolve = res; reject = rej })
-  return {promise, resolve, reject, callers: 1}
-}
-
-/** Requests one statement can answer: the same recognition snapshot
- *  (`registryRecognitionParams` is cached per snapshot, so identity is the
- *  comparison). */
-interface Group {
-  recognitionParams: RecognitionParams
-  roots: Map<string, Pending>
-}
-
 export class ThreadRootBatcher {
-  private groups: Group[] = []
-  private scheduled = false
-  private readonly pool: ReturnType<typeof contentionFor>
+  private readonly batch: ReadBatcher<RecognitionParams, ThreadRootRow | null>
 
-  constructor(private readonly db: QueryReadDb) {
-    this.pool = contentionFor(db)
+  /** Requests one statement can answer: the same recognition snapshot
+   *  (`registryRecognitionParams` is cached per snapshot, so identity — the
+   *  batcher's default — is the comparison). Unchunked: the ids bind as one
+   *  JSON value. */
+  constructor(db: QueryReadDb) {
+    this.batch = new ReadBatcher(db, {
+      read: async (recognitionParams, roots) => {
+        const rows = await db.getAll<Record<string, unknown>>(
+          THREAD_ROOTS_SQL, [...recognitionParams, JSON.stringify(roots)],
+        )
+        const answers = new Map<string, ThreadRootRow>()
+        for (const {km_comment_count, ...row} of rows) {
+          answers.set(row.id as string, {row, commentCount: Number(km_comment_count)})
+        }
+        return id => answers.get(id) ?? null
+      },
+    })
   }
 
   /** The root's row and comment count, or null for a missing or deleted row. */
   request(rootId: string, recognitionParams: RecognitionParams): Promise<ThreadRootRow | null> {
-    let group = this.groups.find(g => g.recognitionParams === recognitionParams)
-    if (!group) {
-      group = {recognitionParams, roots: new Map()}
-      this.groups.push(group)
-    }
-    const existing = group.roots.get(rootId)
-    if (existing) {
-      existing.callers++
-      return existing.promise
-    }
-    const entry = pending()
-    group.roots.set(rootId, entry)
-    if (!this.scheduled) {
-      this.scheduled = true
-      queueMicrotask(() => { void this.flush() })
-    }
-    return entry.promise
-  }
-
-  private async flush(): Promise<void> {
-    // Taken before the first await, so a request arriving while a statement is
-    // in flight opens the NEXT batch rather than joining one already read.
-    const groups = this.groups
-    this.groups = []
-    this.scheduled = false
-    await Promise.all(groups.map(group => this.flushGroup(group)))
-  }
-
-  private async flushGroup({recognitionParams, roots}: Group): Promise<void> {
-    let callers = 0
-    for (const entry of roots.values()) callers += entry.callers
-    if (callers > 1) this.pool?.noteSharedWork()
-    try {
-      const rows = await this.db.getAll<Record<string, unknown>>(
-        THREAD_ROOTS_SQL, [...recognitionParams, JSON.stringify([...roots.keys()])],
-      )
-      const answers = new Map<string, ThreadRootRow>()
-      for (const {km_comment_count, ...row} of rows) {
-        answers.set(row.id as string, {row, commentCount: Number(km_comment_count)})
-      }
-      for (const [id, entry] of roots) entry.resolve(answers.get(id) ?? null)
-    } catch (error) {
-      for (const entry of roots.values()) entry.reject(error)
-    }
+    return this.batch.request(rootId, recognitionParams)
   }
 }
 
-/** One batcher per read surface, which is one per `Repo`. */
-const batchers = new WeakMap<QueryReadDb, ThreadRootBatcher>()
-
-const batcherFor = (db: QueryReadDb): ThreadRootBatcher => {
-  let batcher = batchers.get(db)
-  if (!batcher) {
-    batcher = new ThreadRootBatcher(db)
-    batchers.set(db, batcher)
-  }
-  return batcher
-}
+const batcherFor = readBatcherPerDb(db => new ThreadRootBatcher(db))
 
 /** The live roots among `ids`, hydrated, each with its comment count, through
  *  the batch. Declares what the count reads: each root's children and field

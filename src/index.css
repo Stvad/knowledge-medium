@@ -5,7 +5,9 @@
 
 @plugin "tailwind-scrollbar";
 
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* `data-theme-mode` is the active theme's `mode`, set beside its id by
+ * src/plugins/theme-toggle/theme.ts and the index.html pre-paint script. */
+@custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));
 
 @theme {
   --breakpoint-xs: 375px;
@@ -70,6 +72,13 @@
 @layer base {
   *, ::before, ::after {
     border-color: hsl(var(--border));
+  }
+}
+
+/* Native scrollbars, form controls and pickers follow the theme's mode. */
+@layer base {
+  [data-theme-mode="dark"] {
+    color-scheme: dark;
   }
 }
 
