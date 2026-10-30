@@ -142,7 +142,7 @@ const childSourceForReassembly = (node: RootContent): {text: string; opaque: boo
   return {text: OPAQUE_SENTINEL, opaque: true}
 }
 
-export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree) => {
+export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree, file) => {
   const resolve = (alias: string) => options?.resolveAlias?.(alias) ?? ''
 
   // First pass: rewrite `[display]([[alias]])` markdown links so the display
@@ -278,7 +278,7 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     const parent = node as Parent
     if (!Array.isArray((parent as {children?: unknown}).children)) return
 
-    while (reassembleOneCrossNodeRef(parent, resolve)) {
+    while (reassembleOneCrossNodeRef(parent, resolve, String(file))) {
       // Loop until no more cross-node refs remain.
     }
   })
@@ -287,6 +287,7 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
 const reassembleOneCrossNodeRef = (
   parent: Parent,
   resolve: (alias: string) => string,
+  source: string,
 ): boolean => {
   const kids = parent.children as RootContent[]
   if (kids.length < 3) return false
@@ -309,10 +310,14 @@ const reassembleOneCrossNodeRef = (
   if (refs.length === 0) return false
 
   for (const ref of refs) {
+    const wrapper = linkFormWrapperAround(joined, ref)
+    const isEmbed = wrapper === null && ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
+    const spanStart = wrapper?.start ?? (isEmbed ? ref.startIndex - 1 : ref.startIndex)
+    const spanEnd = wrapper?.end ?? ref.endIndex
     let startChild = pieces.length - 1
-    while (startChild > 0 && starts[startChild] > ref.startIndex) startChild--
+    while (startChild > 0 && starts[startChild] > spanStart) startChild--
     let endChild = startChild
-    while (endChild < pieces.length - 1 && starts[endChild + 1] < ref.endIndex) endChild++
+    while (endChild < pieces.length - 1 && starts[endChild + 1] < spanEnd) endChild++
     if (startChild === endChild) continue  // single-node — third pass owned it
 
     let spansOpaque = false
@@ -321,22 +326,32 @@ const reassembleOneCrossNodeRef = (
     }
     if (spansOpaque) continue
 
-    const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
-    const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
     // Prefix and suffix become text, so every HTML token must be contained
     // whole: neither delimiter may start or end inside an attribute/comment.
     let cutsHtml = false
     for (let i = startChild; i <= endChild; i++) {
       if (kids[i].type !== 'html') continue
-      if (starts[i] >= spanStart && starts[i] + pieces[i].length <= ref.endIndex) continue
+      if (starts[i] >= spanStart && starts[i] + pieces[i].length <= spanEnd) continue
       cutsHtml = true
       break
     }
     if (cutsHtml) continue
 
+    const htmlIndex = kids.findIndex((child, i) => i >= startChild && i <= endChild && child.type === 'html')
+    if (htmlIndex !== -1) {
+      // Keep normalized HTML aliases literal rather than resolve a different
+      // indexed name; a full source-to-decoded offset map is out of scope.
+      const identityStart = isEmbed ? spanStart : ref.startIndex
+      const identity = joined.slice(identityStart, ref.endIndex)
+      const htmlOffset = kids[htmlIndex].position?.start.offset
+      const sourceStart = htmlOffset === undefined ? undefined : htmlOffset + identityStart - starts[htmlIndex]
+      const original = sourceStart === undefined ? undefined : source.slice(sourceStart, sourceStart + identity.length)
+      if (original !== identity) continue
+    }
+
     const prefix = pieces[startChild].slice(0, spanStart - starts[startChild])
-    const suffix = pieces[endChild].slice(ref.endIndex - starts[endChild])
-    const raw = joined.slice(spanStart, ref.endIndex)
+    const suffix = pieces[endChild].slice(spanEnd - starts[endChild])
+    const raw = joined.slice(spanStart, spanEnd)
     const parentOffset = parent.position?.start.offset ?? 0
 
     const replacement: RootContent[] = []
@@ -351,9 +366,9 @@ const reassembleOneCrossNodeRef = (
       : buildWikilinkNode(
           ref.alias,
           resolve(ref.alias),
-          [{type: 'text', value: ref.alias}],
+          [{type: 'text', value: wrapper?.display ?? ref.alias}],
           raw,
-          false,
+          wrapper !== null,
         ),
     )
     if (suffix.length > 0) replacement.push({type: 'text', value: suffix})

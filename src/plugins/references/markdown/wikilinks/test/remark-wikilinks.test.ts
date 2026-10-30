@@ -27,7 +27,7 @@ const transform = (md: string, refs: Record<string, string> = {}) => {
     .use(remarkParse)
     .use(remarkWikilinks, {resolveAlias: (alias: string) => refs[alias]})
   const tree = processor.parse(md) as Root
-  return processor.runSync(tree) as Root
+  return processor.runSync(tree, md) as Root
 }
 
 // Runs the full real pipeline (parse + remark-gfm + remarkWikilinks) so the
@@ -40,7 +40,7 @@ const transformWithGfm = (md: string, refs: Record<string, string> = {}) => {
     .use(remarkGfm)
     .use(remarkWikilinks, {resolveAlias: (alias: string) => refs[alias]})
   const tree = processor.parse(md) as Root
-  return processor.runSync(tree) as Root
+  return processor.runSync(tree, md) as Root
 }
 
 const collectWikilinks = (tree: Root): WikilinkNode[] => {
@@ -51,10 +51,7 @@ const collectWikilinks = (tree: Root): WikilinkNode[] => {
   return out
 }
 
-// The visitor bodies are braced deliberately: `visit` reads a NUMERIC return
-// as "resume at this index", and `Array.prototype.push` returns the new
-// length — an expression body re-visits the node it just collected, which
-// duplicates entries (invisible to `toContain`, wrong under `toEqual`).
+// Visitors must return void; numeric returns change traversal.
 const collectText = (tree: Root): string[] => {
   const out: string[] = []
   visit(tree, 'text', (node) => { out.push(node.value) })
@@ -393,6 +390,7 @@ describe('remarkWikilinks', () => {
   // bridges those `html` nodes; see `childSourceForReassembly`.
   describe('raw inline HTML tokenization interaction', () => {
     it('rewrites [[<taglike page>]] into a wikilink instead of literal text', () => {
+      expect(parseReferences('[[<taglike page>]]').map(ref => ref.alias)).toEqual(['<taglike page>'])
       const tree = transformWithGfm('[[<taglike page>]]', {'<taglike page>': 'block-tag'})
       const links = collectWikilinks(tree)
       expect(links).toHaveLength(1)
@@ -431,23 +429,69 @@ describe('remarkWikilinks', () => {
       ])
     })
 
-    it('agrees with the canonical grammar about the alias', () => {
-      // DOCUMENTS the renderer↔index invariant; it does not check it
-      // independently. `parseReferences` runs over RAW content to build the
-      // stored edge and already reported this span as a reference — the
-      // renderer refusing to draw it was the whole bug — so asserting both
-      // sides here states the agreement in one place for a future reader.
-      // It cannot fail on its own: the renderer half duplicates the first
-      // test in this block, and the grammar half has its own suite.
-      //
-      // Note the invariant is not universal — it is agreement on THIS input,
-      // not a general property. Entity and backslash escapes still diverge
-      // (`[[a&amp;b]]` renders alias `a&b`, the index stores `a&amp;b`);
-      // see the source-FAITHFUL vs source-EXACT note in remark-wikilinks.ts.
-      const content = '[[<taglike page>]]'
-      expect(parseReferences(content).map(r => r.alias)).toEqual(['<taglike page>'])
-      expect(collectWikilinks(transformWithGfm(content)).map(l => l.data.hProperties.alias))
-        .toEqual(['<taglike page>'])
+    it('preserves custom display text for a cross-node HTML alias', () => {
+      const tree = transformWithGfm('before [display]([[<taglike page>]]) after', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties).toEqual({alias: '<taglike page>', blockId: 'target', hasCustomDisplay: true})
+      expect(wikilinkChildText(links[0])).toBe('display')
+      expect(collectText(tree)).toEqual(['before ', 'display', ' after'])
+    })
+
+    it('keeps decoded display text outside a source-exact HTML alias', () => {
+      const tree = transformWithGfm('[a&amp;b]([[<taglike page>]])', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
+      expect(wikilinkChildText(links[0])).toBe('a&b')
+      expect(collectText(tree)).toEqual(['a&b'])
+    })
+
+    it.each([
+      ['entity after HTML', '<b>&amp; docs', '<b>& docs'],
+      ['escape after HTML', '<b>\\*docs', '<b>*docs'],
+      ['entity before HTML', '&amp; <b>docs', '& <b>docs'],
+    ])('keeps an HTML embed visible when %s changes its indexed alias', (_case, alias, decodedAlias) => {
+      const content = `![[${alias}]]`
+      expect(parseReferences(content).map(ref => ref.alias)).toEqual([alias])
+      const tree = transformWithGfm(content, {[alias]: 'target', [decodedAlias]: 'wrong-target'})
+      expect(collectEmbeds(tree)).toEqual([])
+      expect(collectWikilinks(tree)).toEqual([])
+      expect(collectHtml(tree)).toEqual(['<b>'])
+      expect(inlineValue(tree)).toBe(`![[${decodedAlias}]]`)
+    })
+
+    it('does not turn an entity-encoded bang into an HTML page embed', () => {
+      const tree = transformWithGfm('&#33;[[<taglike page>]]', {'<taglike page>': 'target'})
+      expect(collectEmbeds(tree)).toEqual([])
+      expect(collectWikilinks(tree)).toEqual([])
+      expect(inlineValue(tree)).toBe('![[<taglike page>]]')
+    })
+
+    it('keeps HTML literal when the transformer has no original source', () => {
+      const processor = unified().use(remarkParse).use(remarkGfm).use(remarkWikilinks)
+      const content = '![[<taglike page>]]'
+      const tree = processor.runSync(processor.parse(content)) as Root
+      expect(collectEmbeds(tree)).toEqual([])
+      expect(collectHtml(tree)).toEqual(['<taglike page>'])
+      expect(inlineValue(tree)).toBe(content)
+    })
+
+    it('checks HTML source identity after an earlier pass has split adjacent text', () => {
+      const tree = transformWithGfm('[[First]] then ![[<b>&amp; docs]] and [[Last]]')
+      expect(collectWikilinks(tree).map(link => link.data.hProperties.alias)).toEqual(['First', 'Last'])
+      expect(collectEmbeds(tree)).toEqual([])
+      expect(collectHtml(tree)).toEqual(['<b>'])
+      expect(collectText(tree)).toContain(' then ![[')
+      expect(collectText(tree)).toContain('& docs]] and ')
+    })
+
+    it('preserves decoded text surrounding a source-exact HTML alias', () => {
+      const tree = transformWithGfm('before &amp; [[<taglike page>]] after', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.blockId).toBe('target')
+      expect(collectText(tree)).toEqual(['before & ', '<taglike page>', ' after'])
     })
 
     it('passes tag-shaped aliases to rehype as literal text while preserving outside raw HTML', () => {
@@ -528,10 +572,6 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
       .use(remarkBlockrefs)
     return processor.runSync(processor.parse(md) as Root) as Root
   }
-  // Braced body: see the note on `collectText` — an expression body returns
-  // `push`'s length, which `visit` reads as "resume at this index" and which
-  // here SKIPS whole subtrees (`a **b** c` loses the `strong`). That would
-  // quietly weaken the `not.toContain('blockref')` assertion below.
   const nodeTypes = (tree: Root): string[] => {
     const out: string[] = []
     visit(tree, (n) => { out.push((n as {type: string}).type) })
