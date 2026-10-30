@@ -8,12 +8,14 @@ import { pluralize } from '@/utils/pluralize.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import {
+  blockSyntaxOnLine,
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
   type OutlineNode,
   type ParsedBlock,
 } from '@/utils/markdownParser.js'
-import { keysBetween } from '../data/orderKey.ts'
+import { v4 as uuidv4 } from 'uuid'
+import { keyAtEnd, keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
@@ -58,15 +60,20 @@ export interface EditModePasteSelection {
 }
 
 export interface EditModeMultilinePastePlan {
+  /** The pasted blocks in document order, contents final: the text after the
+   *  caret is already on the last one, or is a block of its own. */
   parsed: ParsedBlock[]
-  absorbedRoot: ParsedBlock
+  /** The root merged into the edited block at the caret, if any. */
+  absorbedRoot: ParsedBlock | undefined
   targetContent: string
+  /** Caret in the edited block once it holds `targetContent`. */
   focusOffsetInTarget: number
-  suffix: string
+  /** Where the caret ends — the end of the pasted text — when that is in a
+   *  created block rather than the edited one. */
+  focus: {parsedId: string; offset: number} | undefined
 }
 
 export interface EditModeMultilinePasteResult {
-  pasted: Block[]
   focusBlock: Block
   focusOffset: number
 }
@@ -120,6 +127,17 @@ const isCollapsed = (properties: Record<string, unknown>): boolean => {
   const raw = properties[isCollapsedProp.name]
   return raw === undefined ? isCollapsedProp.defaultValue : isCollapsedProp.codec.decode(raw)
 }
+
+/** A pasted root's content as it merges at the caret. A pre-built tree's root
+ *  content is already final. A multi-line parsed root is an atomic token
+ *  (`OutlineToken`'s `atomic` kind) — the "merge only the first source line"
+ *  rule would drop its body, so it merges whole. Single-line parsed roots keep
+ *  the first-line merge (strips the bullet marker, preserves leading
+ *  whitespace at the cursor). */
+const contentMergedAtCaret = (pasted: string | readonly OutlineNode[], root: ParsedBlock): string =>
+  typeof pasted !== 'string' || root.content.includes('\n')
+    ? root.content
+    : editorContentForFirstPastedLine(pasted, root.content)
 
 const editorContentForFirstPastedLine = (
   pastedText: string,
@@ -331,33 +349,32 @@ export const planEditModeMultilinePaste = (
   selection: EditModePasteSelection,
 ): EditModeMultilinePastePlan | null => {
   const parsed = typeof pasted === 'string' ? parseMarkdownToBlocks(pasted) : parsedBlocksFromOutline(pasted)
-  const absorbedRoot = parsed.find(block => !block.parentId)
-  if (!absorbedRoot) return null
+  const firstRoot = parsed.find(block => !block.parentId)
+  const tail = parsed.at(-1)
+  if (!firstRoot || !tail) return null
 
   const from = Math.max(0, Math.min(selection.from, currentContent.length))
   const to = Math.max(from, Math.min(selection.to ?? selection.from, currentContent.length))
   const prefix = currentContent.slice(0, from)
   const suffix = currentContent.slice(to)
-  const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
-  // A pre-built tree's root content is already final. A multi-line parsed
-  // root is an atomic token (`OutlineToken`'s `atomic` kind) — the "merge
-  // only the first source line" rule would drop its body, so merge it whole.
-  // Single-line parsed roots keep the first-line merge (strips the bullet
-  // marker, preserves leading whitespace at the cursor).
-  const mergedFirstContent = typeof pasted !== 'string' || absorbedRoot.content.includes('\n')
-    ? absorbedRoot.content
-    : editorContentForFirstPastedLine(pasted, absorbedRoot.content)
-  const contentBeforeStructuralBreak = `${prefix}${mergedFirstContent}`
 
-  return {
-    parsed,
-    absorbedRoot,
-    targetContent: createsAdditionalBlocks
-      ? contentBeforeStructuralBreak
-      : `${contentBeforeStructuralBreak}${suffix}`,
-    focusOffsetInTarget: contentBeforeStructuralBreak.length,
-    suffix: createsAdditionalBlocks ? suffix : '',
-  }
+  // Text on either side of the caret stays off a line that block syntax owns
+  // (`blockSyntaxOnLine`): the edited block keeps the text before, and the
+  // text after becomes a block of its own.
+  const absorbedRoot = isBlankContent(prefix) || !blockSyntaxOnLine(firstRoot.content, 'first') ? firstRoot : undefined
+  const suffixBlock: ParsedBlock | undefined = !isBlankContent(suffix) && blockSyntaxOnLine(tail.content, 'last')
+    ? {id: uuidv4(), parentId: tail.parentId, orderKey: keyAtEnd(tail.orderKey), content: suffix}
+    : undefined
+
+  const head = absorbedRoot ? `${prefix}${contentMergedAtCaret(pasted, absorbedRoot)}` : prefix
+
+  // The caret ends where the pasted text does — in the edited block when the
+  // paste merged into it whole.
+  const focus = tail === absorbedRoot ? undefined : {parsedId: tail.id, offset: tail.content.length}
+  const plan = {absorbedRoot, targetContent: head, focusOffsetInTarget: head.length, focus}
+  if (suffixBlock) return {...plan, parsed: [...parsed, suffixBlock]}
+  if (tail === absorbedRoot) return {...plan, parsed, targetContent: `${head}${suffix}`}
+  return {...plan, parsed: [...parsed.slice(0, -1), {...tail, content: `${tail.content}${suffix}`}]}
 }
 
 /** Paste markdown text into the outline around a target block, parsed into
@@ -474,7 +491,6 @@ export async function pasteEditModeMultilineText(
   repo: Repo,
   options: Pick<PasteOptions, 'scopeRootId'> = {},
 ): Promise<EditModeMultilinePasteResult | null> {
-  const rootBlocks: Block[] = []
   let focusBlock = pasteTarget
   let focusOffset = plan.focusOffsetInTarget
 
@@ -491,36 +507,31 @@ export async function pasteEditModeMultilineText(
       scopeRootId: options.scopeRootId,
       placement: 'visible',
       parsed: plan.parsed,
-      absorbedRootId: plan.absorbedRoot.id,
+      absorbedRootId: plan.absorbedRoot?.id,
     })
 
     await tx.update(target.id, {content: plan.targetContent})
-    rootBlocks.push(repo.block(target.id))
 
     const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
-      tx, target, plan.parsed, plan.absorbedRoot.id, destination,
+      tx, target, plan.parsed, plan.absorbedRoot?.id, destination,
     )
 
-    const lastCreatedBlock = blocksToCreate.at(-1)
     for (const block of blocksToCreate) {
-      const parentId = finalParentId(block)
-      const isFocusBlock = block.id === lastCreatedBlock?.id
-      const id = await tx.create({
+      await tx.create({
         id: block.id,
         workspaceId: target.workspaceId,
-        parentId,
+        parentId: finalParentId(block),
         orderKey: orderKeysByParsedId.get(block.id) ?? block.orderKey,
-        content: isFocusBlock ? `${block.content}${plan.suffix}` : block.content,
+        content: block.content,
       })
-      if (!block.parentId) rootBlocks.push(repo.block(id))
-      if (isFocusBlock) {
-        focusBlock = repo.block(id)
-        focusOffset = block.content.length
-      }
+    }
+    if (plan.focus) {
+      focusBlock = repo.block(plan.focus.parsedId)
+      focusOffset = plan.focus.offset
     }
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
 
-  return {pasted: rootBlocks, focusBlock, focusOffset}
+  return {focusBlock, focusOffset}
 }
 
 // ──── a paste that completes a cut ────
