@@ -1,1 +1,1 @@
-export{LD as useCommandPaletteActions}from"../../../chunks/app-BHWTBkks.js";
+export{HD as useCommandPaletteActions}from"../../../chunks/app-Cjy1JBj4.js";

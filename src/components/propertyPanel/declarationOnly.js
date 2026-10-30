@@ -1,1 +1,1 @@
-export{BI as declarationOnlyDefinitionForName,VI as declarationOnlyStatusText}from"../../../chunks/app-BHWTBkks.js";
+export{GI as declarationOnlyDefinitionForName,KI as declarationOnlyStatusText}from"../../../chunks/app-Cjy1JBj4.js";
