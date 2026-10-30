@@ -55,9 +55,8 @@ import { orNullWhenKeyUnavailable } from '@/sync/keys/openWorkspaceKeys.js'
 import { materializabilityToMode, type GetMaterializability } from '@/sync/transform.js'
 import type { ByteStore } from './byteStore.js'
 import {
-  ASSETS_ALIAS,
+  assetsPageSpec,
   ASSETS_NS,
-  ASSETS_TYPE,
   MEDIA_TYPE,
   mediaFilenameProp,
   mediaHashProp,
@@ -181,11 +180,7 @@ export const captureMedia = async (
   // at the caret per the text policy.
   let inserted = false
   await deps.repo.undoGroup(async (repo) => {
-    await getOrCreateKernelPage(repo, workspaceId, {
-      namespace: ASSETS_NS,
-      alias: ASSETS_ALIAS,
-      markerType: ASSETS_TYPE,
-    }, {skipUndo: true})
+    await getOrCreateKernelPage(repo, workspaceId, assetsPageSpec, {skipUndo: true})
     const containerId = kernelPageBlockId(workspaceId, ASSETS_NS)
     const typeSnapshot = repo.snapshotTypeRegistries()
 

@@ -8,6 +8,8 @@
  * no error surface, no partial degradation, the app simply does not come up.
  */
 
+import * as kernelPage from '@/data/kernelPage'
+import {migrationsPageBlockId} from '@/data/migrationsPage'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { typesPageBlockId } from '@/data/typesPage'
@@ -85,13 +87,18 @@ describe('bootstrapWorkspace', () => {
     // thrown: a foreign row at the derived id, or an ordinary bug in a
     // transpiled extension. Either one, uncaught, stops the app coming up.
     repo.setRuntimeContributions(systemPagesFacet, 'test-pages', [
-      {id: 'test:broken', ensure: () => Promise.reject(new Error('transient'))},
+      {spec: {namespace: '22222222-2222-4222-8222-222222222222', alias: 'Broken page', markerType: null}, eager: true},
     ])
+    const original = kernelPage.getOrCreateKernelPage
+    const create = vi.spyOn(kernelPage, 'getOrCreateKernelPage').mockImplementation((repo, ws, spec, options) =>
+      spec.alias === 'Broken page' ? Promise.reject(new Error('transient')) : original(repo, ws, spec, options))
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const layoutSession = await open()
 
+    create.mockRestore()
     expect(layoutSession.id).toBeTruthy()
+    expect(await repo.load(migrationsPageBlockId(WS))).toBeNull()
     // Its siblings materialized alongside the failure, rather than being
     // stranded by it.
     expect((await repo.load(propertiesPageBlockId(WS)))?.content).toBe('Properties')

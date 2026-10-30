@@ -317,9 +317,8 @@ export const actionContextsFacet = defineFacet<ActionContextConfig, readonly Act
  * own guards (`SeededDefinitionWriteError`, read-only workspaces) are the rules
  * that genuinely cannot be bypassed.
  *
- * The motivating case: pages that are get-or-CREATE by construction (today's
- * daily note, the Journal). Deleting one doesn't stick — revisiting the date
- * recreates it — so the gesture reads as broken while still destroying the
+ * Kernel pages and daily notes are get-or-CREATE by construction. Deleting
+ * one doesn't stick — its next use recreates it — so the gesture reads as broken while still destroying the
  * page's contents.
  */
 export type BlockDeletionGuard = (block: Block) => Promise<string | null> | string | null

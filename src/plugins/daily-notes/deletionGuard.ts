@@ -1,7 +1,7 @@
 /**
- * Refuse UI deletion of the pages this plugin owns by construction.
+ * Refuse UI deletion of the daily notes.
  *
- * A daily note and the Journal are get-or-CREATE: every navigation to a date
+ * A daily note is get-or-CREATE: every navigation to a date
  * calls `getOrCreateDailyNote`, which RESTORES a soft-deleted row rather than
  * making a new one. So deleting one never sticks — revisit the date and the
  * page is back. Worse, `delete` cascades to the subtree while `tx.restore` is
@@ -15,7 +15,6 @@
  * that really means it still goes through `block.delete()`.
  */
 import type { BlockDeletionGuard } from '@/extensions/core.js'
-import { journalBlockId } from './dailyNotes.ts'
 import { DAILY_NOTE_TYPE } from './schema.ts'
 
 /**
@@ -37,9 +36,6 @@ export const dailyNotesDeletionGuard: BlockDeletionGuard = block => {
   const data = block.peek()
   if (!data) return null
 
-  if (block.id === journalBlockId(data.workspaceId)) {
-    return 'The Journal can\u2019t be deleted \u2014 it\u2019s recreated automatically as the home for daily notes.'
-  }
   if (block.hasType(DAILY_NOTE_TYPE)) {
     return 'Daily notes can\u2019t be deleted \u2014 a note exists for every date, and revisiting it would bring the page back empty. Delete its contents instead.'
   }

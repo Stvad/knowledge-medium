@@ -2,9 +2,10 @@
  *  anchor properties and the backlink edges threads own. Composed into
  *  `annotationsPlugin` in `./index.ts`. */
 
-import {definitionSeedsFacet, queriesFacet, typeSeedsFacet} from '@/data/facets'
+import {definitionSeedsFacet, queriesFacet, systemPagesFacet, typeSeedsFacet} from '@/data/facets'
 import type {AppExtension} from '@/facets/facet'
 import {backlinkEdgeExclusionsFacet} from '@/plugins/backlinks/edgeExclusions.js'
+import {commentsPageSpec} from './container'
 import {threadIdsForBlockQuery} from './queries.ts'
 import {threadsForBlockQuery} from './summaries.ts'
 import {annotationPropertySeeds, annotationTargetProp, annotationThreadType, THREAD_TYPE} from './schema.ts'
@@ -12,6 +13,7 @@ import {annotationPropertySeeds, annotationTargetProp, annotationThreadType, THR
 const SOURCE = 'annotations'
 
 export const annotationsDataExtension: AppExtension = [
+  systemPagesFacet.of({spec: commentsPageSpec, eager: false}, {source: 'annotations'}),
   annotationPropertySeeds.map(prop => definitionSeedsFacet.of(prop, {source: SOURCE})),
   typeSeedsFacet.of(annotationThreadType, {source: SOURCE}),
   queriesFacet.of(threadIdsForBlockQuery, {source: SOURCE}),
