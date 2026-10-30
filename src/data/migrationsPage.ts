@@ -1,15 +1,12 @@
 /** Migrations-page bootstrap. Thin wrapper around `getOrCreateKernelPage`,
- *  same shape as the Properties and Types pages — but deliberately NOT
- *  registered on `systemPagesFacet`.
+ *  registered as lazy on `systemPagesFacet`, unlike Properties and Types.
  *
  *  Created lazily, by the first claim that needs it (`tryClaim` ensures its
  *  own parent). Two reasons, both worth keeping:
  *   - a workspace that never runs a migration never grows an empty page it
  *     has no use for;
- *   - `ensureSystemPages` is on the uncaught bootstrap path, so an eager
- *     registration puts this page's alias claim there too, where a collision
- *     stops the workspace opening. Created from inside an operator-triggered
- *     migration instead, a collision fails that migration and says so.
+ *   - creation belongs to the operator-triggered migration, so any failure
+ *     is reported there rather than silently skipped by bootstrap.
  *
  *  Each WORKSPACE has one, and workspace-scoped is the whole point: it hosts
  *  the `per-graph` backfill claims, which must be visible to every device in
@@ -20,7 +17,7 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { MIGRATIONS_PAGE_TYPE } from '@/data/blockTypes'
-import { getOrCreateKernelPage, kernelPageBlockId } from './kernelPage'
+import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from './kernelPage'
 
 const MIGRATIONS_PAGE_NS = 'f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73'
 /** Deliberately not `Migrations`: on mature graphs with years of content that
@@ -29,6 +26,12 @@ const MIGRATIONS_PAGE_NS = 'f1c0a7e2-5b3d-4a8e-9c1f-2d6b8e4a0c73'
  *  another live block holds, so a collision would leave this page alias-less
  *  beside the user's own `Migrations` page; the name is one nobody types. */
 export const MIGRATIONS_PAGE_ALIAS = 'System Migrations (km)'
+
+export const migrationsPageSpec: KernelPageSpec = {
+  namespace: MIGRATIONS_PAGE_NS,
+  alias: MIGRATIONS_PAGE_ALIAS,
+  markerType: MIGRATIONS_PAGE_TYPE,
+}
 
 export const migrationsPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, MIGRATIONS_PAGE_NS)
@@ -43,8 +46,4 @@ export const migrationsPageBlockId = (workspaceId: string): string =>
  *  the claim block filed under it is `skipUndo` too, so reverting only the
  *  parent orphans it. */
 export const getOrCreateMigrationsPage = (repo: Repo, workspaceId: string): Promise<Block> =>
-  getOrCreateKernelPage(repo, workspaceId, {
-    namespace: MIGRATIONS_PAGE_NS,
-    alias: MIGRATIONS_PAGE_ALIAS,
-    markerType: MIGRATIONS_PAGE_TYPE,
-  }, {skipUndo: true})
+  getOrCreateKernelPage(repo, workspaceId, migrationsPageSpec, {skipUndo: true})

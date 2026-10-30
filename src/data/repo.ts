@@ -154,6 +154,7 @@ import {
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
+import { getOrCreateKernelPage } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
@@ -3070,11 +3071,11 @@ export class Repo {
   }
 
   /**
-   * Ensure every registered system page (`systemPagesFacet`) exists for
+   * Ensure every eager registered system page (`systemPagesFacet`) exists for
    * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
    * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
    * Locations) resolves to the canonical page instead of auto-creating a rival
-   * that takes the name. Each `ensure` get-or-creates at a deterministic id
+   * that takes the name. Each spec get-or-creates at a deterministic id
    * (idempotent), so repeated bootstraps and offline-converging clients all
    * land on the same rows.
    *
@@ -3087,7 +3088,7 @@ export class Repo {
    * a page whose derived id is held by a row from another of the user's own
    * workspaces renders confusingly, which does not outrank the app not opening.
    *
-   * A failing `ensure` is logged and skipped, and this resolves regardless:
+   * A failing create is logged and skipped, and this resolves regardless:
    * `bootstrapWorkspace` awaits it on the critical path with no catch, so a
    * throw here does not degrade one page's feature, it stops the app coming up.
    * No page is worth that. Console rather than `onUserError` because what
@@ -3099,16 +3100,16 @@ export class Repo {
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    // `await` inside the try, not `return page.ensure(…)`: the catch has to
+    // `await` inside the try, not `return getOrCreateKernelPage(…)`: the catch has to
     // cover a rejected promise as well as a synchronous throw, and a returned
     // promise rejects after the try has already exited.
-    await Promise.all(pages.map(async page => {
+    await Promise.all(pages.filter(page => page.eager).map(async page => {
       try {
-        await page.ensure(this, workspaceId)
+        await getOrCreateKernelPage(this, workspaceId, page.spec, {skipUndo: true})
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         console.error(
-          `[ensureSystemPages] ${page.id} unavailable in workspace ${workspaceId} `
+          `[ensureSystemPages] ${page.spec.alias} unavailable in workspace ${workspaceId} `
           + `(will retry on the next workspace open): ${reason}`,
         )
       }
