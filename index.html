@@ -15,27 +15,37 @@
     <meta name="application-name" content="Knowledge Medium" />
     <title>Knowledge medium</title>
     <script>
-      // Resolve the persisted theme before paint so we don't flash the
-      // default palette. The __KM_..._ tokens below are generated at
-      // build/dev time (vite-plugins/injectThemeBootDefaults.ts) from
-      // THEME_STORAGE_KEY and DEFAULT_THEME_ID_LIGHT / _DARK — the
-      // source of truth for all three lives in src/themeBootDefaults.ts,
+      // Resolve the persisted theme and its mode before paint so we don't
+      // flash the default palette or the light `dark:` utilities. The
+      // __KM_..._ tokens below are generated at build/dev time
+      // (vite-plugins/injectThemeBootDefaults.ts) from THEME_STORAGE_KEY,
+      // THEME_MODE_STORAGE_KEY and DEFAULT_THEME_ID_LIGHT / _DARK — the
+      // source of truth for all four lives in src/themeBootDefaults.ts,
       // so this script can't drift from the values
       // src/plugins/theme-toggle/theme.ts and
       // src/plugins/default-themes/themes.ts actually use. Unknown
       // stored values fall through to the :root defaults in
       // src/index.css until the theme-toggle style-sync effect injects
-      // the matching rule.
+      // the matching rule; a stored id with no stored mode gets its mode
+      // from that effect too.
       (function () {
+        var root = document.documentElement
         try {
           var stored = window.localStorage.getItem(__KM_THEME_STORAGE_KEY__)
+          if (stored) {
+            root.dataset.theme = stored
+            var storedMode = window.localStorage.getItem(__KM_THEME_MODE_STORAGE_KEY__)
+            if (storedMode) root.dataset.themeMode = storedMode
+            return
+          }
           var prefersDark =
             window.matchMedia &&
             window.matchMedia('(prefers-color-scheme: dark)').matches
-          document.documentElement.dataset.theme =
-            stored || (prefersDark ? __KM_DEFAULT_THEME_ID_DARK__ : __KM_DEFAULT_THEME_ID_LIGHT__)
+          root.dataset.theme = prefersDark ? __KM_DEFAULT_THEME_ID_DARK__ : __KM_DEFAULT_THEME_ID_LIGHT__
+          root.dataset.themeMode = prefersDark ? 'dark' : 'light'
         } catch (e) {
-          document.documentElement.dataset.theme = __KM_DEFAULT_THEME_ID_LIGHT__
+          root.dataset.theme = __KM_DEFAULT_THEME_ID_LIGHT__
+          root.dataset.themeMode = 'light'
         }
       })()
     </script>

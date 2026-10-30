@@ -2,9 +2,10 @@
   Theme registry. The active theme is written to `data-theme` on the
   document root; the matching `[data-theme="<id>"]` block in src/index.css
   (for built-ins) or in a runtime-managed <style> element (for plugin
-  contributions) supplies the palette. A pre-paint script in index.html
-  reads the persisted value before React mounts to avoid a flash of the
-  default palette on reload.
+  contributions) supplies the palette. Its mode goes beside it as
+  `data-theme-mode`, which Tailwind's `dark:` variant keys on. A pre-paint
+  script in index.html reads both persisted values before React mounts to
+  avoid a flash of the default palette on reload.
 
   Plugins register themes via `themesFacet.of(...)` — see
   `ThemeContribution` below. The theme-toggle plugin's effect mirrors
@@ -14,12 +15,14 @@
 */
 
 import { defineFacet } from '@/facets/facet.js'
-import { THEME_STORAGE_KEY } from '@/themeBootDefaults.js'
+import { THEME_MODE_STORAGE_KEY, THEME_STORAGE_KEY } from '@/themeBootDefaults.js'
+
+export type ThemeMode = 'light' | 'dark'
 
 export interface ThemeDefinition {
   readonly id: string
   readonly label: string
-  readonly mode: 'light' | 'dark'
+  readonly mode: ThemeMode
 }
 
 /** A plugin-contributed theme. `tokens` maps CSS variable names (no
@@ -84,7 +87,7 @@ export const setThemeRegistry = (next: readonly ThemeDefinition[]): void => {
   registryById = new Map(next.map((t) => [t.id, t]))
 }
 
-export { THEME_STORAGE_KEY }
+export { THEME_MODE_STORAGE_KEY, THEME_STORAGE_KEY }
 
 const getDocumentRoot = (): HTMLElement => window.document.documentElement
 
@@ -98,19 +101,52 @@ export const getCurrentTheme = (
 ): ThemeDefinition =>
   registryById.get(root.dataset.theme ?? '') ?? registry[0] ?? FALLBACK_THEME
 
+/** The one writer of the live theme: both root attributes and both
+ *  persisted keys. An absent mode clears the attribute and the key, so
+ *  `dark:` falls back to light, as the `:root` palette does. */
+const writeLiveTheme = (
+  id: string,
+  mode: ThemeMode | undefined,
+  root: HTMLElement,
+): void => {
+  root.dataset.theme = id
+  if (mode) root.dataset.themeMode = mode
+  else delete root.dataset.themeMode
+  try {
+    window.localStorage?.setItem(THEME_STORAGE_KEY, id)
+    if (mode) window.localStorage?.setItem(THEME_MODE_STORAGE_KEY, mode)
+    else window.localStorage?.removeItem(THEME_MODE_STORAGE_KEY)
+  } catch {
+    // Storage may be unavailable (private mode, embedded contexts) —
+    // the visual switch still takes effect; persistence is best-effort.
+  }
+}
+
 export const applyTheme = (
   theme: ThemeDefinition | string,
   root: HTMLElement = getDocumentRoot(),
 ): ThemeDefinition => {
   const resolved = resolveTheme(theme)
-  root.dataset.theme = resolved.id
-  try {
-    window.localStorage?.setItem(THEME_STORAGE_KEY, resolved.id)
-  } catch {
-    // Storage may be unavailable (private mode, embedded contexts) —
-    // the visual switch still takes effect; persistence is best-effort.
-  }
+  writeLiveTheme(resolved.id, resolved.mode, root)
   return resolved
+}
+
+/** Applies `id` verbatim, unlike `applyTheme`, which swaps an unregistered
+ *  id for the first registered theme. An id the registry doesn't know yet
+ *  gets no mode until `syncLiveThemeMode` sees it register. */
+export const applyThemeId = (
+  id: string,
+  root: HTMLElement = getDocumentRoot(),
+): void => {
+  writeLiveTheme(id, registryById.get(id)?.mode, root)
+}
+
+/** Re-stamps the live theme's mode from the registry, for an id that was
+ *  set before it registered (pre-paint, `applyThemeId`). Leaves an
+ *  unregistered live id alone: its mode was written with it. */
+export const syncLiveThemeMode = (root: HTMLElement = getDocumentRoot()): void => {
+  const live = registryById.get(root.dataset.theme ?? '')
+  if (live) writeLiveTheme(live.id, live.mode, root)
 }
 
 export const toggleTheme = (

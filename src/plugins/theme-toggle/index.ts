@@ -8,15 +8,18 @@ import { toggleTheme } from './theme.ts'
 export { ThemeToggle } from './ThemeToggle.tsx'
 export {
   applyTheme,
+  applyThemeId,
   FALLBACK_THEME,
   getCurrentTheme,
   getThemes,
   setThemeRegistry,
   themesFacet,
   toggleTheme,
+  THEME_MODE_STORAGE_KEY,
   THEME_STORAGE_KEY,
   type ThemeContribution,
   type ThemeDefinition,
+  type ThemeMode,
 } from './theme.ts'
 export { themeStyleSyncEffect } from './effect.ts'
 
