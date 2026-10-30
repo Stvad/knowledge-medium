@@ -1,1 +1,0 @@
-export{m$ as kernelDataExtension}from"../../chunks/app-C5b2X93-.js";

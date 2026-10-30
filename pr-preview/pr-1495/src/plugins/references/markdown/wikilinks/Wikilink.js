@@ -1,1 +1,0 @@
-export{vg as Wikilink}from"../../../../../chunks/app-C5b2X93-.js";

@@ -1,1 +1,0 @@
-export{ef as extensionsOverridesProp,tf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-C5b2X93-.js";
