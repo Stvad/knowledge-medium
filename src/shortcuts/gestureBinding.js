@@ -1,1 +1,1 @@
-export{lj as gestureBindingDescriptor,uj as matchesGestureEvent}from"../../chunks/app-DOH0WDlZ.js";
+export{lj as gestureBindingDescriptor,uj as matchesGestureEvent}from"../../chunks/app-CRDWzWIw.js";

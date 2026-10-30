@@ -1,1 +1,1 @@
-export{t as Textarea}from"../../../chunks/textarea-YluqW0CY.js";
+export{t as Textarea}from"../../../chunks/textarea-2xvyRZzF.js";

@@ -1,1 +1,1 @@
-export{Pg as selectHeldBlockAction,Fg as toggleTappedBlockAction}from"../../../chunks/app-DOH0WDlZ.js";
+export{Pg as selectHeldBlockAction,Fg as toggleTappedBlockAction}from"../../../chunks/app-CRDWzWIw.js";
