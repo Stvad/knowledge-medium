@@ -1,1 +1,1 @@
-export{Fb as PanelCursorFollowsScroll}from"../../../chunks/app-CXaAjJgJ.js";
+export{ex as PanelCursorFollowsScroll}from"../../../chunks/app-BRJfZeDZ.js";

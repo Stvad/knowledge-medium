@@ -1,1 +1,1 @@
-export{C8 as InvalidBlockIdError,w8 as assertCanonicalBlockId}from"../../chunks/app-CXaAjJgJ.js";
+export{Q8 as InvalidBlockIdError,$8 as assertCanonicalBlockId}from"../../chunks/app-BRJfZeDZ.js";

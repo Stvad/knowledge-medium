@@ -1,1 +1,1 @@
-export{vI as PropertyRow}from"../../../chunks/app-CXaAjJgJ.js";
+export{UI as PropertyRow}from"../../../chunks/app-BRJfZeDZ.js";

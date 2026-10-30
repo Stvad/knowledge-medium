@@ -1,1 +1,1 @@
-export{_g as referenceLayoutContribution}from"../../../chunks/app-CXaAjJgJ.js";
+export{Og as referenceLayoutContribution}from"../../../chunks/app-BRJfZeDZ.js";
