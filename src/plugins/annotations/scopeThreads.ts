@@ -21,9 +21,11 @@ export interface ScopeThread {
 }
 
 /** Every thread root of the workspace with its target, walked UP from the
- *  target, one row per (thread, block on the way). The walk stops at the
- *  scope root or at a missing or deleted block. Binds the edge's field name,
- *  the workspace, the thread type, then the scope root. */
+ *  target, one row per (thread, block on the way). The target's row is there
+ *  even when it is missing or deleted (`live` = 0), so its restore can wake
+ *  the query; the walk goes on only from live blocks, and stops at the scope
+ *  root. Binds the edge's field name, the workspace, the thread type, then
+ *  the scope root. */
 const THREAD_PATHS_SQL = `
   WITH RECURSIVE
   roots(thread_id, target_id) AS (
@@ -33,14 +35,13 @@ const THREAD_PATHS_SQL = `
       JOIN block_references edge ON edge.source_id = t.block_id AND edge.source_field = ?
      WHERE t.workspace_id = ? AND t.type = ?
   ),
-  up(thread_id, id, parent_id, depth) AS (
-    SELECT roots.thread_id, b.id, b.parent_id, 0
-      FROM roots JOIN blocks b ON b.id = roots.target_id
-     WHERE b.deleted = 0
+  up(thread_id, id, parent_id, live, depth) AS (
+    SELECT roots.thread_id, roots.target_id, b.parent_id, COALESCE(b.deleted = 0, 0), 0
+      FROM roots LEFT JOIN blocks b ON b.id = roots.target_id
     UNION ALL
-    SELECT up.thread_id, p.id, p.parent_id, up.depth + 1
+    SELECT up.thread_id, p.id, p.parent_id, 1, up.depth + 1
       FROM up JOIN blocks p ON p.id = up.parent_id
-     WHERE up.id != ? AND p.deleted = 0 AND up.depth < 100
+     WHERE up.live = 1 AND up.id != ? AND p.deleted = 0 AND up.depth < 100
   )
   SELECT thread_id, id, parent_id FROM up ORDER BY thread_id, depth
 `

@@ -74,6 +74,18 @@ describe('annotations.threadsInScope', () => {
     unsubscribe()
   })
 
+  it('brings a thread back when its deleted target is restored', async () => {
+    const deep = await createThread(repo, {targetId: 'A1', anchor: null, comment: 'deep'})
+    const handle = handleFor('P')
+    await handle.load()
+    const unsubscribe = handle.subscribe(() => {})
+    await repo.tx(tx => tx.delete('A1'), opts)
+    await vi.waitFor(() => expect(handle.peek()).toEqual([]))
+    await repo.tx(tx => tx.restore('A1'), opts)
+    await vi.waitFor(() => expect(byThread(handle.peek())).toEqual({[deep.threadId]: {open: true, path: ['A1', 'A']}}))
+    unsubscribe()
+  })
+
   it('does not re-resolve on a content edit along a path', async () => {
     await createThread(repo, {targetId: 'A1', anchor: null, comment: 'deep'})
     const handle = handleFor('P')
