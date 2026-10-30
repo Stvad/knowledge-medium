@@ -1,0 +1,1 @@
+export{dx as spatialNavigationShellDecorator}from"../../../chunks/app-PrEaXWFR.js";

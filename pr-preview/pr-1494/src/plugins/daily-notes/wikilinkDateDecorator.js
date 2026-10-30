@@ -1,0 +1,1 @@
+export{JE as dailyDateWikilinkDecorator}from"../../../chunks/app-PrEaXWFR.js";

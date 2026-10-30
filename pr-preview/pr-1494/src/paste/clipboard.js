@@ -1,0 +1,1 @@
+export{GP as readClipboardContent}from"../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{oK as contributorsDataExtension}from"../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{ig as geoPlugin}from"../../../chunks/app-PrEaXWFR.js";

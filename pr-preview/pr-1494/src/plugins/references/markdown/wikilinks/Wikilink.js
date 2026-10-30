@@ -1,0 +1,1 @@
+export{vg as Wikilink}from"../../../../../chunks/app-PrEaXWFR.js";

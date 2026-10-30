@@ -1,0 +1,1 @@
+export{SK as characterCounterDataExtension}from"../../../chunks/app-PrEaXWFR.js";

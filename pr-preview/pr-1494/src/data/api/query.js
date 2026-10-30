@@ -1,0 +1,1 @@
+export{qnt as defineQuery}from"../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{hF as useShortcutSurfaceActivations}from"../../chunks/app-PrEaXWFR.js";

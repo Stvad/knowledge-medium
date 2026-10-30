@@ -1,0 +1,1 @@
+export{fJ as agentDispatchCompanionDataExtension}from"../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{oq as pluginPrefsExtension,sq as pluginUIStateExtension}from"../../chunks/app-PrEaXWFR.js";

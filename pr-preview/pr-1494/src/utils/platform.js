@@ -1,0 +1,1 @@
+export{qz as isIOS,Jz as isMacPlatform}from"../../chunks/app-PrEaXWFR.js";

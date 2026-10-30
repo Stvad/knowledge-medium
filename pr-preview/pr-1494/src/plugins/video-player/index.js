@@ -1,0 +1,1 @@
+export{qy as videoPlayerPlugin}from"../../../chunks/app-PrEaXWFR.js";

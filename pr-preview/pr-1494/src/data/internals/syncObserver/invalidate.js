@@ -1,0 +1,1 @@
+export{i$ as applySyncInvalidation}from"../../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{DI as defineVariant,OI as defineVariantFacet}from"../../chunks/app-PrEaXWFR.js";

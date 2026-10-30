@@ -1,0 +1,1 @@
+export{trt as definePostCommitProcessor}from"../../../chunks/app-PrEaXWFR.js";

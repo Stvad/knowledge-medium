@@ -1,0 +1,1 @@
+export{ZF as BLOCK_TITLE_TEXT_CLASS,QF as useBlockTitleTextClass}from"../../../chunks/app-PrEaXWFR.js";

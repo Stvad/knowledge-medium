@@ -1,0 +1,1 @@
+export{vN as GESTURE_ACTIVE,yN as GESTURE_CANCEL,bN as GESTURE_IDLE,xN as TOUCH_HOLD_MS,SN as TOUCH_SLOP_PX,CN as continuousGestureRecognizersFacet,wN as createBlockGestureController,TN as enabledTouchAction,EN as suppressNextClick,DN as unionTouchAction,ON as useContinuousGestures}from"../../chunks/app-PrEaXWFR.js";

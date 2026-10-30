@@ -1,0 +1,1 @@
+export{aP as ExtensionRenderBoundary}from"../../chunks/app-PrEaXWFR.js";

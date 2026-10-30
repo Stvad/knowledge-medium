@@ -1,0 +1,1 @@
+export{_S as MobileBottomNavButton}from"../../../chunks/app-PrEaXWFR.js";

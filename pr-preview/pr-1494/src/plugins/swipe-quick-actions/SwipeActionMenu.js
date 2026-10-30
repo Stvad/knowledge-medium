@@ -1,0 +1,1 @@
+export{BO as SwipeActionMenu}from"../../../chunks/app-PrEaXWFR.js";

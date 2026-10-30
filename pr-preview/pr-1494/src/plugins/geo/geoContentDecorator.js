@@ -1,0 +1,1 @@
+export{lg as geoContentDecoratorContribution}from"../../../chunks/app-PrEaXWFR.js";

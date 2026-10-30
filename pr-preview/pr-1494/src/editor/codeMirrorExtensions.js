@@ -1,0 +1,1 @@
+export{lG as codeMirrorExtensionsFacet}from"../../chunks/app-PrEaXWFR.js";

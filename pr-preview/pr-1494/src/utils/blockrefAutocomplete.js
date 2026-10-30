@@ -1,0 +1,1 @@
+export{wg as blockrefCompletionSource}from"../../chunks/app-PrEaXWFR.js";

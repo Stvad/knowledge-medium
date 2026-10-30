@@ -1,0 +1,1 @@
+export{SC as createEncryptedWorkspace}from"../../../../chunks/app-PrEaXWFR.js";

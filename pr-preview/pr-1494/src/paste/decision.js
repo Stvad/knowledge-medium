@@ -1,0 +1,1 @@
+export{tF as defaultPasteDecision,nF as pasteDecisionVerb}from"../../chunks/app-PrEaXWFR.js";

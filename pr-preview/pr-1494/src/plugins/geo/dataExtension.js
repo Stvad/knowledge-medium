@@ -1,0 +1,1 @@
+export{vW as geoDataExtension}from"../../../chunks/app-PrEaXWFR.js";

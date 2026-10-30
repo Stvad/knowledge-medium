@@ -1,0 +1,1 @@
+export{UA as appUpdatePromptExtension}from"../../../chunks/app-PrEaXWFR.js";

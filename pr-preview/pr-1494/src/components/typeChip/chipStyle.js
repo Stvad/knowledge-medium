@@ -1,0 +1,1 @@
+export{jk as chipStyle}from"../../../chunks/app-PrEaXWFR.js";

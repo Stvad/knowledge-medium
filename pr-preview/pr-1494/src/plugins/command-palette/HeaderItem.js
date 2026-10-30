@@ -1,0 +1,1 @@
+export{kO as CommandPaletteHeaderItem}from"../../../chunks/app-PrEaXWFR.js";

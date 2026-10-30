@@ -1,0 +1,1 @@
+export{ZN as useIsMobile,QN as usePointerCoarse}from"../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{uV as propertyShapeLabel}from"../../../chunks/app-PrEaXWFR.js";

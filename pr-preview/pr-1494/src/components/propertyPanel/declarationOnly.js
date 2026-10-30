@@ -1,0 +1,1 @@
+export{uL as declarationOnlyDefinitionForName,dL as declarationOnlyStatusText}from"../../../chunks/app-PrEaXWFR.js";

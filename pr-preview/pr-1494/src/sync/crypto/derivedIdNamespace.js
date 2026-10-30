@@ -1,0 +1,1 @@
+export{k9 as deriveWorkspaceIdNamespace}from"../../../chunks/app-PrEaXWFR.js";

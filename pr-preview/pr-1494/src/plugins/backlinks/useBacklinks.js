@@ -1,0 +1,1 @@
+export{tg as useBacklinks}from"../../../chunks/app-PrEaXWFR.js";

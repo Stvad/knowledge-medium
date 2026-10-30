@@ -1,0 +1,1 @@
+export{ih as BlockMetaCard}from"../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{cT as openRecentsPage}from"../../../chunks/app-PrEaXWFR.js";

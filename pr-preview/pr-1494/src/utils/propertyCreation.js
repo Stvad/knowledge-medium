@@ -1,0 +1,1 @@
+export{UP as canConvertEmptyChildBlockToProperty,WP as convertEmptyChildBlockToProperty}from"../../chunks/app-PrEaXWFR.js";

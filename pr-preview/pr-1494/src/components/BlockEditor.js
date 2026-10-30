@@ -1,0 +1,1 @@
+export{sF as BlockEditor}from"../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{oU as preferredSpanReplacement}from"../../../chunks/app-PrEaXWFR.js";

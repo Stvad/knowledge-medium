@@ -1,0 +1,1 @@
+export{CS as usePromotableBreadcrumb}from"../../../chunks/app-PrEaXWFR.js";

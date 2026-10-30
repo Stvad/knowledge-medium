@@ -1,0 +1,1 @@
+export{lH as staticDataExtensions}from"../../chunks/app-PrEaXWFR.js";

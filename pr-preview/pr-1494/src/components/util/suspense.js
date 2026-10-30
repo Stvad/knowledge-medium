@@ -1,0 +1,1 @@
+export{VV as SuspenseFallback}from"../../../chunks/app-PrEaXWFR.js";

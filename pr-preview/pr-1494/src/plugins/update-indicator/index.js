@@ -1,0 +1,1 @@
+export{ah as updateIndicatorPlugin}from"../../../chunks/app-PrEaXWFR.js";

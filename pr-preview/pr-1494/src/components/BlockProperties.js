@@ -1,0 +1,1 @@
+export{RI as BlockProperties}from"../../chunks/app-PrEaXWFR.js";

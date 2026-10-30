@@ -1,0 +1,1 @@
+export{MM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,NM as openExtensionsSettings}from"../../chunks/app-PrEaXWFR.js";

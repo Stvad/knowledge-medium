@@ -1,0 +1,1 @@
+export{IJ as omnilinerNamespace}from"../../chunks/app-PrEaXWFR.js";

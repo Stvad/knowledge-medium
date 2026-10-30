@@ -1,0 +1,1 @@
+export{Jk as ensureMetricsConsoleHook}from"../../chunks/app-PrEaXWFR.js";

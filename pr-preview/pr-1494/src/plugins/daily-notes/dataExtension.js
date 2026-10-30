@@ -1,0 +1,1 @@
+export{xG as dailyNotesDataExtension}from"../../../chunks/app-PrEaXWFR.js";

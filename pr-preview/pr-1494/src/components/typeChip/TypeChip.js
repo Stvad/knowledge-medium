@@ -1,0 +1,1 @@
+export{Ak as TypeChip}from"../../../chunks/app-PrEaXWFR.js";

@@ -1,0 +1,1 @@
+export{SG as dailyNotesLocalSchema}from"../../../chunks/app-PrEaXWFR.js";
