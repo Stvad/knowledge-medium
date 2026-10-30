@@ -331,8 +331,12 @@ const reassembleOneCrossNodeRef = (
   const refs = parseOutermostReferences(joined)
   if (refs.length === 0) return false
 
+  // Wrapper delimiters belong to text; parsed display nodes stay atomic.
+  const wrapperSource = pieces.map((piece, i) => kids[i].type === 'text'
+    ? piece
+    : OPAQUE_SENTINEL.repeat(piece.length)).join('')
   for (const ref of refs) {
-    const wrapper = linkFormWrapperAround(joined, ref)
+    const wrapper = linkFormWrapperAround(wrapperSource, ref)
     const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
     const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
     const aliasNodes = sliceChildren(kids, pieces, starts, spanStart, ref.endIndex)

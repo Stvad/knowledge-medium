@@ -446,6 +446,18 @@ describe('remarkWikilinks', () => {
       expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
     })
 
+    it('does not read a bracket inside display HTML as a wrapper delimiter', () => {
+      const tree = transformWithGfm('[<b title="[">display</b>]([[<taglike page>]])', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
+      expect(links[0].children).toMatchObject([
+        {type: 'html', value: '<b title="[">'},
+        {type: 'text', value: 'display'},
+        {type: 'html', value: '</b>'},
+      ])
+    })
+
     it('preserves display HTML and anchors source identity inside the alias', () => {
       const tree = transformWithGfm('[<b>a&amp;b</b>]([[<taglike page>]])', {'<taglike page>': 'target'})
       const links = collectWikilinks(tree)
