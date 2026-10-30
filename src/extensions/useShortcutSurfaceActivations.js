@@ -1,1 +1,1 @@
-export{mF as useShortcutSurfaceActivations}from"../../chunks/app-DesS5Elt.js";
+export{GP as useShortcutSurfaceActivations}from"../../chunks/app-Jr1gF51b.js";

@@ -1,1 +1,1 @@
-export{Tk as kernelPropertyUiExtension,Ek as typesPropertyUi,Dk as typesPropertyUiExtension}from"../../../chunks/app-DesS5Elt.js";
+export{tk as kernelPropertyUiExtension,nk as typesPropertyUi,rk as typesPropertyUiExtension}from"../../../chunks/app-Jr1gF51b.js";

@@ -1,1 +1,1 @@
-export{ps as appVersion}from"../chunks/app-DesS5Elt.js";
+export{ps as appVersion}from"../chunks/app-Jr1gF51b.js";

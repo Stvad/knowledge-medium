@@ -1,1 +1,1 @@
-export{uw as PendingInvitations}from"../../../chunks/app-DesS5Elt.js";
+export{BC as PendingInvitations}from"../../../chunks/app-Jr1gF51b.js";
