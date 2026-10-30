@@ -1,1 +1,1 @@
-export{Ik as kernelPropertyUiExtension,Lk as typesPropertyUi,Rk as typesPropertyUiExtension}from"../../../chunks/app-BAccJFMh.js";
+export{Ik as kernelPropertyUiExtension,Lk as typesPropertyUi,Rk as typesPropertyUiExtension}from"../../../chunks/app-DwFL0p6A.js";

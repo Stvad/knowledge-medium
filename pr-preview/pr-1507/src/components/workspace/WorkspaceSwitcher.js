@@ -1,1 +1,1 @@
-export{pC as WorkspaceSwitcher}from"../../../chunks/app-BAccJFMh.js";
+export{pC as WorkspaceSwitcher}from"../../../chunks/app-DwFL0p6A.js";
