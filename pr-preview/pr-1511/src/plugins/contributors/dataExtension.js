@@ -1,1 +1,1 @@
-export{UK as contributorsDataExtension}from"../../../chunks/app-DiSMs6in.js";
+export{ZK as contributorsDataExtension}from"../../../chunks/app-Btv8a-Np.js";

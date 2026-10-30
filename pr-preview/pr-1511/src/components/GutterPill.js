@@ -1,1 +1,1 @@
-export{Sg as GutterPill}from"../../chunks/app-DiSMs6in.js";
+export{wg as GutterPill}from"../../chunks/app-Btv8a-Np.js";

@@ -1,1 +1,1 @@
-export{OO as useCommandPaletteActions}from"../../../chunks/app-DiSMs6in.js";
+export{MO as useCommandPaletteActions}from"../../../chunks/app-Btv8a-Np.js";

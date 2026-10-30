@@ -1,1 +1,1 @@
-export{eM as extensionDisplayName,tM as extensionName,nM as userExtensionShellToggle,rM as userExtensionToggle}from"../../chunks/app-DiSMs6in.js";
+export{iM as extensionDisplayName,aM as extensionName,oM as userExtensionShellToggle,sM as userExtensionToggle}from"../../chunks/app-Btv8a-Np.js";

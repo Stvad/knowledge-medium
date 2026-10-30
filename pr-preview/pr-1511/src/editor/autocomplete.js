@@ -1,1 +1,1 @@
-export{KA as editorAutocompleteExtension}from"../../chunks/app-DiSMs6in.js";
+export{XA as editorAutocompleteExtension}from"../../chunks/app-Btv8a-Np.js";

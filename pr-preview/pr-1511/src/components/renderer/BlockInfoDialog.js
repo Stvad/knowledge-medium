@@ -1,1 +1,1 @@
-export{TP as BlockInfoDialog}from"../../../chunks/app-DiSMs6in.js";
+export{kP as BlockInfoDialog}from"../../../chunks/app-Btv8a-Np.js";

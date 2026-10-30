@@ -1,1 +1,1 @@
-export{L_ as useIsReadOnly}from"../../chunks/app-DiSMs6in.js";
+export{V_ as useIsReadOnly}from"../../chunks/app-Btv8a-Np.js";

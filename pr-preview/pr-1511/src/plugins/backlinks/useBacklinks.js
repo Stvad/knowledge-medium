@@ -1,1 +1,1 @@
-export{Ug as useBacklinks}from"../../../chunks/app-DiSMs6in.js";
+export{Gg as useBacklinks}from"../../../chunks/app-Btv8a-Np.js";

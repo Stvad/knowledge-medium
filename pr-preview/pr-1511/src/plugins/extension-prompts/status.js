@@ -1,1 +1,1 @@
-export{ZA as extensionPromptDiagnosticContribution,QA as extensionPromptDiagnosticSource}from"../../../chunks/app-DiSMs6in.js";
+export{tj as extensionPromptDiagnosticContribution,nj as extensionPromptDiagnosticSource}from"../../../chunks/app-Btv8a-Np.js";

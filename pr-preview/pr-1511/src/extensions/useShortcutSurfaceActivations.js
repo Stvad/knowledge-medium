@@ -1,1 +1,1 @@
-export{IF as useShortcutSurfaceActivations}from"../../chunks/app-DiSMs6in.js";
+export{BF as useShortcutSurfaceActivations}from"../../chunks/app-Btv8a-Np.js";

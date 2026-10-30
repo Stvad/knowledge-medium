@@ -1,1 +1,1 @@
-export{Hf as extensionsOverridesProp,Uf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DiSMs6in.js";
+export{Wf as extensionsOverridesProp,Gf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Btv8a-Np.js";

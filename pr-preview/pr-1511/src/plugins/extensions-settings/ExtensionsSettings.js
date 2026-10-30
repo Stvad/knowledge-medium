@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-DiSMs6in.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-Btv8a-Np.js";

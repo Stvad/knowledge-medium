@@ -1,1 +1,1 @@
-export{VM as MarkdownImage}from"../../chunks/app-DiSMs6in.js";
+export{GM as MarkdownImage}from"../../chunks/app-Btv8a-Np.js";

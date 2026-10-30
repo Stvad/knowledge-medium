@@ -1,1 +1,1 @@
-export{Xd as contributorsPlugin}from"../../../chunks/app-DiSMs6in.js";
+export{Qd as contributorsPlugin}from"../../../chunks/app-Btv8a-Np.js";

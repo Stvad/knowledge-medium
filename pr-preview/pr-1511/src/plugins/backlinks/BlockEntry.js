@@ -1,1 +1,1 @@
-export{Eg as LazyBlockEntry}from"../../../chunks/app-DiSMs6in.js";
+export{Og as LazyBlockEntry}from"../../../chunks/app-Btv8a-Np.js";

@@ -1,1 +1,1 @@
-export{FM as defaultRegistry,IM as defaultRendererContributions,LM as defaultRenderersExtension}from"../../chunks/app-DiSMs6in.js";
+export{zM as defaultRegistry,BM as defaultRendererContributions,VM as defaultRenderersExtension}from"../../chunks/app-Btv8a-Np.js";

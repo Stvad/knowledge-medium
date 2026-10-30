@@ -1,1 +1,1 @@
-export{XO as CommandPaletteHeaderItem}from"../../../chunks/app-DiSMs6in.js";
+export{ek as CommandPaletteHeaderItem}from"../../../chunks/app-Btv8a-Np.js";

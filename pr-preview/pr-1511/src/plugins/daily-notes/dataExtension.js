@@ -1,1 +1,1 @@
-export{WG as dailyNotesDataExtension}from"../../../chunks/app-DiSMs6in.js";
+export{QG as dailyNotesDataExtension}from"../../../chunks/app-Btv8a-Np.js";

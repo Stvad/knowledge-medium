@@ -1,1 +1,1 @@
-export{DM as BlockChildren,OM as BlockComponent}from"../../chunks/app-DiSMs6in.js";
+export{jM as BlockChildren,MM as BlockComponent}from"../../chunks/app-Btv8a-Np.js";

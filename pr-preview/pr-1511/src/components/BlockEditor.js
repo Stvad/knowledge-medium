@@ -1,1 +1,1 @@
-export{OF as BlockEditor}from"../../chunks/app-DiSMs6in.js";
+export{MF as BlockEditor}from"../../chunks/app-Btv8a-Np.js";

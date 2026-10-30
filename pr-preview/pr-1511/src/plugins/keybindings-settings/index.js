@@ -1,1 +1,1 @@
-export{vO as keybindingOverridesProp,yO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-DiSMs6in.js";
+export{SO as keybindingOverridesProp,CO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-Btv8a-Np.js";

@@ -1,1 +1,1 @@
-export{hO as openKeybindingsSettingsAction}from"../../../chunks/app-DiSMs6in.js";
+export{yO as openKeybindingsSettingsAction}from"../../../chunks/app-Btv8a-Np.js";

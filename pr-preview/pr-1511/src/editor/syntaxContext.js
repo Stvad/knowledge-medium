@@ -1,1 +1,1 @@
-export{_G as isInsideLiteralMarkdown}from"../../chunks/app-DiSMs6in.js";
+export{TG as isInsideLiteralMarkdown}from"../../chunks/app-Btv8a-Np.js";

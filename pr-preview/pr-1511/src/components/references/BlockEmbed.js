@@ -1,1 +1,1 @@
-export{Hk as BlockEmbed}from"../../../chunks/app-DiSMs6in.js";
+export{Kk as BlockEmbed}from"../../../chunks/app-Btv8a-Np.js";

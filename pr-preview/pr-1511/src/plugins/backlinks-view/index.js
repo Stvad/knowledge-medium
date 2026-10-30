@@ -1,1 +1,1 @@
-export{eg as backlinksViewPlugin}from"../../../chunks/app-DiSMs6in.js";
+export{ng as backlinksViewPlugin}from"../../../chunks/app-Btv8a-Np.js";

@@ -1,1 +1,1 @@
-export{YA as ExtensionPromptSurface,XA as extensionPromptsExtension}from"../../../chunks/app-DiSMs6in.js";
+export{$A as ExtensionPromptSurface,ej as extensionPromptsExtension}from"../../../chunks/app-Btv8a-Np.js";

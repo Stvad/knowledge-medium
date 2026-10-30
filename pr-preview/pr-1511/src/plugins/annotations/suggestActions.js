@@ -1,1 +1,1 @@
-export{md as SUGGEST_EDIT_ACTION_ID,hd as suggestEditAction}from"../../../chunks/app-DiSMs6in.js";
+export{md as SUGGEST_EDIT_ACTION_ID,hd as openSuggestionComposer,gd as suggestEditAction}from"../../../chunks/app-Btv8a-Np.js";
