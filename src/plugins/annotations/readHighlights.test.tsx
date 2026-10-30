@@ -4,6 +4,7 @@ import {createElement, type ReactNode} from 'react'
 import {renderToStaticMarkup} from 'react-dom/server'
 import Markdown, {type Components} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type {Root} from 'mdast'
 import type {PluggableList} from 'unified'
 import {remarkWikilinks} from '@/plugins/references/markdown/wikilinks/remark-wikilinks.js'
 import {remarkBlockrefs} from '@/plugins/references/markdown/blockrefs/remark-blockrefs.js'
@@ -12,7 +13,12 @@ import {rehypeTrimBlockSeparators} from '@/markdown/blockSeparators.js'
 import type {HighlightRange} from './highlights.ts'
 import type {Block} from '@/data/block'
 import type {BlockContextType} from '@/types.js'
-import {remarkAnnotationMarks, THREAD_HIGHLIGHTS_INPUT, threadMarksMarkdownExtension} from './readHighlights.ts'
+import {
+  remarkAnnotationMarks,
+  THREAD_HIGHLIGHTS_INPUT,
+  threadMarksMarkdownExtension,
+  type AnnotationMarksOptions,
+} from './readHighlights.ts'
 import type {ThreadSummary} from './summaries.ts'
 import {highlightsOf} from './ui.tsx'
 
@@ -186,6 +192,68 @@ describe('read-mode marks', () => {
   })
 })
 
+describe('recorded source spans', () => {
+  const recorded = (content: string, ranges: readonly HighlightRange[] = [], before: PluggableList = []): string[] => {
+    const html = renderToStaticMarkup(createElement(Markdown, {
+      remarkPlugins: [
+        remarkGfm,
+        [remarkWikilinks, {resolveAlias: (alias: string) => `id-${alias}`}],
+        remarkBlockrefs,
+        ...before,
+        [remarkAnnotationMarks, {content, ranges, sourceBlockId: 'B'}],
+      ] as PluggableList,
+      rehypePlugins: [rehypeTrimBlockSeparators],
+      components,
+    }, content))
+    return [...html.matchAll(/<(\w[\w-]*)[^>]*? data-annotation-source="([^"]*)"/g)].map(m => `${m[1]}: ${m[2]}`)
+  }
+
+  it('records each text child of a phrasing element, in order, on that element', () => {
+    expect(recorded('A **bold** claim')).toEqual(['p: B 0-2 10-16', 'strong: B 4-8'])
+    expect(recorded('# Title *here*')).toEqual(['h1: B 2-8', 'em: B 9-13'])
+  })
+
+  it('records text beside a reference, which it does not look inside', () => {
+    expect(recorded('see [[Launch plan]] and ((0b4a1f6e-1c2d-4e5f-8a9b-0c1d2e3f4a5b)) soon'))
+      .toEqual(['p: B 0-4 19-24 64-69'])
+  })
+
+  it('records the recovered spans of text the autolink literal split', () => {
+    expect(recorded('see https://example.com now')).toEqual(['p: B 0-4 23-27', 'a: B 4-23'])
+  })
+
+  it('records the pieces a highlight split, inside and outside the mark', () => {
+    const content = 'see https://example.com now and then'
+    expect(recorded(content, [range(content, 'now and')])).toEqual(['p: B 0-4 23-24 31-36', 'a: B 4-23', 'mark: B 24-31'])
+  })
+
+  it('records text that is not its source as unplaceable, without losing count', () => {
+    expect(recorded('A \\*literal\\* star')).toEqual(['p: B -'])
+    // The line break renders as <br> and a newline text of its own.
+    expect(recorded('first  \nsecond')).toEqual(['p: B 0-5 - 8-14'])
+  })
+
+  it('records no entry for an empty text, which renders no node', () => {
+    const leadingEmptyText = () => (tree: Root) => {
+      for (const node of tree.children) if (node.type === 'paragraph') node.children.unshift({type: 'text', value: ''})
+    }
+    expect(recorded('plain words', [], [leadingEmptyText])).toEqual(['p: B 0-11'])
+  })
+
+  it('records nothing where the rendered text count is not knowable', () => {
+    expect(recorded('a <b>raw</b> tag')).toEqual([])
+    // The paragraph holding the reference, not the reference itself.
+    expect(recorded('a [ref] here\n\n[ref]: https://example.com')).toEqual(['a: B 3-6'])
+  })
+
+  it('records nothing for a static render, which has no selection to map', () => {
+    const context = {block: {id: 'B'} as unknown as Block, input: {}, data: {content: 'text', references: [], workspaceId: 'ws'}}
+    expect(threadMarksMarkdownExtension({...context, blockContext: {}})).toBeNull()
+    expect(threadMarksMarkdownExtension({...context, blockContext: {renderScopeId: 'panel:p:B'}}))
+      .toMatchObject({remarkPlugins: [[remarkAnnotationMarks, {sourceBlockId: 'B', ranges: []}]]})
+  })
+})
+
 describe('the highlight feed', () => {
   const B = {id: 'B'} as unknown as Block
   const thread = (commentCount: number): ThreadSummary => ({
@@ -198,16 +266,18 @@ describe('the highlight feed', () => {
   })
   const feed = {blockId: 'B', renderScopeId: 'panel:p:B', threads: highlightsOf([thread(1)])}
 
+  const rangesOf = (feed: unknown, blockContext: BlockContextType) =>
+    (config(feed, blockContext) as {remarkPlugins: [[unknown, AnnotationMarksOptions]]}).remarkPlugins[0][1].ranges
+
   it('marks only the block that set it, in the render scope that set it', () => {
-    expect(config(feed, {renderScopeId: 'panel:p:B'})).toMatchObject({remarkPlugins: [expect.anything()]})
-    expect(config({...feed, blockId: 'X'}, {renderScopeId: 'panel:p:B'})).toBeNull()
+    expect(rangesOf(feed, {renderScopeId: 'panel:p:B'})).toHaveLength(1)
+    expect(rangesOf({...feed, blockId: 'X'}, {renderScopeId: 'panel:p:B'})).toEqual([])
     // A block shown inside itself, as `((B))` in B, inherits B's own feed
     // under the reference's own scope.
-    expect(config(feed, {renderScopeId: 'embed:B:text:0:B:panel:p:B', isNestedSurface: true})).toBeNull()
+    expect(rangesOf(feed, {renderScopeId: 'embed:B:text:0:B:panel:p:B', isNestedSurface: true})).toEqual([])
     // A card sets its feed in its own nested scope, for its comments.
     const inCard = {...feed, renderScopeId: 'surface.margin:T:panel:p:B'}
-    expect(config(inCard, {renderScopeId: 'surface.margin:T:panel:p:B', isNestedSurface: true}))
-      .toMatchObject({remarkPlugins: [expect.anything()]})
+    expect(rangesOf(inCard, {renderScopeId: 'surface.margin:T:panel:p:B', isNestedSurface: true})).toHaveLength(1)
   })
 
   it('carries what the marks read and not the comment count, so a new comment leaves it as it was', () => {

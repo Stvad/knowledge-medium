@@ -227,14 +227,23 @@ export interface AnnotationMarksOptions {
    *  the content first gets no marks, since the ranges would not line up. */
   content: string
   ranges: readonly HighlightRange[]
+  /** The block being rendered, when a read-mode selection in it should map
+   *  back to its text: see {@link SOURCE_SPANS_ATTRIBUTE}. */
+  sourceBlockId?: string
 }
 
-export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({content, ranges}) => (tree, file) => {
+export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({content, ranges, sourceBlockId}) => (tree, file) => {
   const source = String(file.value ?? '')
   if (source !== content) return
   const spans = spansOf(tree, source)
-  const segments = segmentsOf(ranges.filter(drawable(opaqueSpans(tree, spans, source))))
-  if (segments.length === 0) return
+  const segments = ranges.length === 0 ? [] : segmentsOf(ranges.filter(drawable(opaqueSpans(tree, spans, source))))
+  if (segments.length > 0) drawMarks(tree, spans, segments, source)
+  if (sourceBlockId !== undefined) recordSourceSpans(tree, spans, source, sourceBlockId)
+}
+
+/** Wrap every covered stretch in a mark, splitting addressable text at the
+ *  segment boundaries. Each split piece's span joins `spans`. */
+const drawMarks = (tree: Root, spans: WeakMap<object, Span>, segments: readonly Segment[], source: string) => {
   const pointAt = pointsOf(source)
   const position = (from: number, to: number): Position => ({start: pointAt(from), end: pointAt(to)})
 
@@ -250,6 +259,7 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
         value: node.value.slice(piece.from - span.from, piece.to - span.from),
         ...(node.position ? {position: position(piece.from, piece.to)} : {}),
       } as RootContent
+      spans.set(text, piece)
       const coverage = coverageOf(segments, piece)
       pieces.push({node: text, moved: coverage.kind === 'whole' ? coverage.moved : null})
     }
@@ -295,6 +305,57 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   transform(tree)
 }
 
+/**
+ * Where each text node of the render came from, for mapping a DOM selection
+ * back to raw offsets (`readSelection.ts`). Written on the element that holds
+ * the text: the block's id, then one entry per DOM text node that element will
+ * hold, in order — `from-to` where the text is exactly that slice of the
+ * source, `-` where it is not.
+ *
+ * The entries count what React renders, not what mdast holds: an empty text
+ * renders no node, and a line break renders a newline text after its `<br>`.
+ * Where that count can't be known here the element records nothing, and a
+ * reader that finds a different count refuses rather than guess.
+ */
+export const SOURCE_SPANS_ATTRIBUTE = 'data-annotation-source'
+
+const recordSourceSpans = (tree: Root, spans: WeakMap<object, Span>, source: string, blockId: string) => {
+  const entriesOf = (children: readonly RootContent[]): string[] | null => {
+    const entries: string[] = []
+    for (const child of children) {
+      if (child.type === 'text') {
+        // DEFENCE IN DEPTH: no plugin here leaves an empty text today. React
+        // renders none, so counting one would make the element refuse.
+        if (child.value === '') continue
+        const span = spans.get(child)
+        entries.push(span && isAddressableText(child, span, source) ? `${span.from}-${span.to}` : '-')
+      } else if (child.type === 'break') {
+        entries.push('-')
+      } else if (child.type === 'html' || child.type === 'linkReference' || child.type === 'imageReference') {
+        // Raw HTML may render as text or as elements, and an unresolved
+        // reference reverts to bracketed text around its children.
+        return null
+      }
+    }
+    return entries
+  }
+  const visit = (node: Root | RootContent) => {
+    // A mark is this transform's own node, outside mdast's type union.
+    const marked = (node.type as string) === ANNOTATION_MARK_NODE
+    if (!marked && !isContainer(node)) return
+    const {children} = node as Container
+    if (marked || PHRASING_PARENTS.has(node.type)) {
+      const entries = entriesOf(children)
+      if (entries) {
+        const data = (node.data ?? {}) as {hProperties?: Record<string, unknown>}
+        node.data = {...data, hProperties: {...data.hProperties, [SOURCE_SPANS_ATTRIBUTE]: [blockId, ...entries].join(' ')}}
+      }
+    }
+    for (const child of children) visit(child)
+  }
+  visit(tree)
+}
+
 /** The input the block's feed is provided under, around its content, by
  *  whatever already reads its thread summaries: the comment pill on outline
  *  blocks, and a card for its comments. It applies only where it was provided,
@@ -309,10 +370,13 @@ export interface ThreadHighlightsFeed {
 }
 
 /** Ranges resolve against the snapshot being rendered, so they cannot lag
- *  it. */
+ *  it. Source spans are recorded wherever the block renders live; a static
+ *  render (an export) has no render scope, and no selection to map. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, input, data}) => {
   const feed = input[THREAD_HIGHLIGHTS_INPUT] as ThreadHighlightsFeed | undefined
-  if (!feed || feed.blockId !== block.id || feed.renderScopeId !== blockContext.renderScopeId) return null
-  const ranges = highlightRanges(data.content, feed.threads)
-  return ranges.length === 0 ? null : {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges}]]}
+  const fed = feed !== undefined && feed.blockId === block.id && feed.renderScopeId === blockContext.renderScopeId
+  const ranges = fed ? highlightRanges(data.content, feed.threads) : []
+  const sourceBlockId = blockContext.renderScopeId === undefined ? undefined : block.id
+  if (ranges.length === 0 && sourceBlockId === undefined) return null
+  return {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges, sourceBlockId}]]}
 }

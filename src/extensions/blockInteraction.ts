@@ -757,7 +757,7 @@ export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
  * layout's class: a layout is free to style its own wrapper, and one that does
  * must still be recognisable as a block.
  */
-const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
+export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
 
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?

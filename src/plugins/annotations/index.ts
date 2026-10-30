@@ -5,7 +5,7 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {actionsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
+import {actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {
   blockChildrenFooterFacet,
   blockContentDecoratorsFacet,
@@ -15,11 +15,18 @@ import {
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
-import {annotationActions, COMMENT_ON_SELECTION_ACTION_ID} from './actions.ts'
+import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
+import {
+  annotationActions,
+  COMMENT_ON_SELECTION_ACTION_ID,
+  keepSelectionOnClick,
+  readSelectionContext,
+} from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
+import {readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
   commentActionsContribution,
   commentContextMenuItem,
@@ -36,7 +43,11 @@ export const annotationsPlugin: AppExtension = systemToggle({
   description: 'Comment on a block, or on selected text in it, in threads that live beside your notes.',
 }).of([
   annotationsDataExtension,
+  actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
+  appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
+  // Outside every other wrap of click-to-edit (vim's click-to-focus included).
+  actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),

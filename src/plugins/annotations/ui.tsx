@@ -48,6 +48,7 @@ import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
+import {ReadSelectionMenu} from './readSelectionUi.tsx'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -172,11 +173,13 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-          <Inner block={block}/>
-        </MarkdownInputProvider>
-      </div>
+      <ReadSelectionMenu block={block}>
+        <div className="min-w-0 flex-1">
+          <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+            <Inner block={block}/>
+          </MarkdownInputProvider>
+        </div>
+      </ReadSelectionMenu>
       {(count !== null || expanded) && (
         <GutterPill
           count={count}
