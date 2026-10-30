@@ -1,1 +1,0 @@
-export{FO as CommandPaletteHeaderItem}from"../../../chunks/app-6IOIoqPQ.js";

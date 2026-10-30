@@ -1,1 +1,0 @@
-export{vk as AccountHeaderItem}from"../../../chunks/app-6IOIoqPQ.js";

@@ -1,1 +1,0 @@
-export{_V as propertyShapeLabel}from"../../../chunks/app-6IOIoqPQ.js";

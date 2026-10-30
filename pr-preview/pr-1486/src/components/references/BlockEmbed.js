@@ -1,1 +1,0 @@
-export{Dk as BlockEmbed}from"../../../chunks/app-6IOIoqPQ.js";

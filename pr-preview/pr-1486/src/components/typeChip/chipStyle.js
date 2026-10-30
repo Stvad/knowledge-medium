@@ -1,1 +1,0 @@
-export{Lk as chipStyle}from"../../../chunks/app-6IOIoqPQ.js";

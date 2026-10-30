@@ -1,1 +1,0 @@
-export{QI as PropertyRow}from"../../../chunks/app-6IOIoqPQ.js";

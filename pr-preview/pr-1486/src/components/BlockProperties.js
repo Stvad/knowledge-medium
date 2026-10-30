@@ -1,1 +1,0 @@
-export{KI as BlockProperties}from"../../chunks/app-6IOIoqPQ.js";

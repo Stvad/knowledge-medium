@@ -1,1 +1,0 @@
-export{QR as useTypes}from"../../chunks/app-6IOIoqPQ.js";
