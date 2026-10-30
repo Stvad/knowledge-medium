@@ -1,0 +1,1 @@
+export{H_ as useIsReadOnly}from"../../chunks/app-Ct5QN1BQ.js";

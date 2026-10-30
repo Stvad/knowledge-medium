@@ -1,0 +1,1 @@
+export{MB as withMoveTransition}from"../../chunks/app-Ct5QN1BQ.js";

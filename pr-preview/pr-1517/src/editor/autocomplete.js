@@ -1,0 +1,1 @@
+export{QA as editorAutocompleteExtension}from"../../chunks/app-Ct5QN1BQ.js";

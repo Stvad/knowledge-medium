@@ -1,0 +1,1 @@
+export{Jf as extensionsOverridesProp,Yf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Ct5QN1BQ.js";

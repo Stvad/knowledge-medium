@@ -1,0 +1,1 @@
+export{HR as PanelHistoryStore,UR as __resetConfirmedDeletedForTesting,WR as goBackInPanel,GR as goForwardInPanel,KR as isBlockConfirmedDeleted,qR as markBlockConfirmedDeleted,JR as navigateInPanel,YR as panelHistory,XR as recoverPanelOffDeadContent,ZR as usePanelHistory,QR as writePanelContent}from"../../chunks/app-Ct5QN1BQ.js";

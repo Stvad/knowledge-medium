@@ -1,0 +1,1 @@
+export{WL as declarationOnlyDefinitionForName,GL as declarationOnlyStatusText}from"../../../chunks/app-Ct5QN1BQ.js";

@@ -1,0 +1,1 @@
+export{mq as characterCounterDataExtension}from"../../../chunks/app-Ct5QN1BQ.js";

@@ -1,0 +1,1 @@
+export{vL as BlockProperties}from"../../chunks/app-Ct5QN1BQ.js";

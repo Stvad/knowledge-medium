@@ -1,0 +1,1 @@
+export{tC as plainOutlinerPlugin}from"../../../chunks/app-Ct5QN1BQ.js";
