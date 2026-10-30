@@ -1,1 +1,0 @@
-export{al as blockTagsConfigUi}from"../../../chunks/app-NFsz5I4q.js";

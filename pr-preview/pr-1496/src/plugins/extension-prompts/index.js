@@ -1,1 +1,0 @@
-export{OA as ExtensionPromptSurface,kA as extensionPromptsExtension}from"../../../chunks/app-NFsz5I4q.js";

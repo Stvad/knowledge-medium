@@ -1,1 +1,0 @@
-export{Gz as isIOS,Kz as isMacPlatform}from"../../chunks/app-NFsz5I4q.js";

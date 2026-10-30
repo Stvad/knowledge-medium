@@ -1,1 +1,0 @@
-export{Gnt as defineQuery}from"../../../chunks/app-NFsz5I4q.js";
