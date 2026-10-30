@@ -194,13 +194,18 @@ describe('the highlight feed', () => {
   })
   const config = (blockContext: BlockContextType) =>
     threadMarksMarkdownExtension({block: B, blockContext, data: {content: 'We moved it', references: [], workspaceId: 'ws'}})
-  const feed = {blockId: 'B', threads: highlightsOf([thread(1)])}
+  const feed = {blockId: 'B', renderScopeId: 'panel:p:B', threads: highlightsOf([thread(1)])}
 
-  it('marks only the block that set it, and only outside nested surfaces', () => {
-    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed})).toMatchObject({remarkPlugins: [expect.anything()]})
-    expect(config({[THREAD_HIGHLIGHTS_KEY]: {...feed, blockId: 'X'}})).toBeNull()
-    // A block shown inside itself, as `((B))` in B, inherits B's own feed.
-    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed, isNestedSurface: true})).toBeNull()
+  it('marks only the block that set it, in the render scope that set it', () => {
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed, renderScopeId: 'panel:p:B'})).toMatchObject({remarkPlugins: [expect.anything()]})
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: {...feed, blockId: 'X'}, renderScopeId: 'panel:p:B'})).toBeNull()
+    // A block shown inside itself, as `((B))` in B, inherits B's own feed
+    // under the reference's own scope.
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed, renderScopeId: 'embed:B:text:0:B:panel:p:B', isNestedSurface: true})).toBeNull()
+    // A card sets its feed in its own nested scope, for its comments.
+    const inCard = {...feed, renderScopeId: 'surface.margin:T:panel:p:B'}
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: inCard, renderScopeId: 'surface.margin:T:panel:p:B', isNestedSurface: true}))
+      .toMatchObject({remarkPlugins: [expect.anything()]})
   })
 
   it('carries what the marks read and not the comment count, so a new comment leaves it as it was', () => {

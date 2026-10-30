@@ -1,12 +1,13 @@
 /**
- * Per-tab view state for comments: which blocks have their threads expanded
- * inline, which show resolved threads too, and the open composers with their
- * drafts. Module state like the toggle sets (`createKeyedToggleSet`), never
- * block data: a draft is written only on submit, so an abandoned comment
- * leaves nothing behind.
+ * Per-tab view state for comments. Module state like the toggle sets
+ * (`createKeyedToggleSet`), never block data: a draft is written only on
+ * submit, so an abandoned comment leaves nothing behind.
  *
- * Keyed by `viewKey`, one block as shown in one render scope, so expanding or
- * commenting on a block in one panel leaves the same block in another alone.
+ * - Inline threads, resolved threads shown and open composers are keyed by
+ *   `viewKey`, one block as shown in one render scope, so expanding or
+ *   commenting on a block in one panel leaves the same block in another alone.
+ * - The margin's state is keyed by panel.
+ * - A pending re-anchor is one for the tab.
  */
 
 import {useSyncExternalStore} from 'react'
@@ -30,7 +31,7 @@ export interface ComposerState {
 const expanded = createKeyedToggleSet('annotations-expanded')
 const showingResolved = createKeyedToggleSet('annotations-show-resolved')
 const composers = new Map<string, ComposerState>()
-const listeners = new CallbackSet('annotations-composers')
+const listeners = new CallbackSet('annotations-ui')
 
 const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
 
@@ -68,3 +69,71 @@ export const peekComposer = (key: string): ComposerState | undefined => composer
 
 export const useComposer = (key: string): ComposerState | undefined =>
   useSyncExternalStore(subscribe, () => composers.get(key))
+
+// ──── The side margin, per panel ────
+
+/** Panels whose margin is drawn right now: switched on AND wide enough. Their
+ *  pills hand threads to the margin instead of expanding them inline. */
+const marginShowing = new Set<string>()
+/** The thread whose card is pinned to its anchor in each panel's margin. */
+const activeThreads = new Map<string, string>()
+const showingClosed = createKeyedToggleSet('annotations-show-closed')
+
+export const setMarginShowing = (panelId: string, showing: boolean): void => {
+  if (marginShowing.has(panelId) === showing) return
+  if (showing) marginShowing.add(panelId)
+  else marginShowing.delete(panelId)
+  listeners.notify()
+}
+
+export const useMarginShowing = (panelId: string | undefined): boolean =>
+  useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
+
+export const activateThread = (panelId: string, threadId: string): void => {
+  if (activeThreads.get(panelId) === threadId) return
+  activeThreads.set(panelId, threadId)
+  listeners.notify()
+}
+
+export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)
+
+export const useActiveThread = (panelId: string): string | undefined =>
+  useSyncExternalStore(subscribe, () => activeThreads.get(panelId))
+
+export const toggleShowClosed = showingClosed.toggle
+export const showClosedThreads = showingClosed.add
+export const useShowClosed = showingClosed.useHas
+
+/** The notifications that move cards without mounting or unmounting one, for
+ *  the margin's layout pass: a card activated, a composer opened. */
+export const onUiStoreChange = (listener: () => void): (() => void) => subscribe(listener)
+
+// ──── Re-anchoring by selection ────
+
+export interface PendingReanchor {
+  threadId: string
+  targetId: string
+}
+
+/** The thread waiting for the user to select its new text. One at a time:
+ *  the next comment-on-selection in its target's editor re-anchors it. It
+ *  lives only as long as the card that shows it (`releasePendingReanchor`). */
+let pendingReanchor: PendingReanchor | null = null
+
+export const startReanchor = (pending: PendingReanchor | null): void => {
+  pendingReanchor = pending
+  listeners.notify()
+}
+
+export const peekPendingReanchor = (): PendingReanchor | null => pendingReanchor
+
+/** For the cue that shows a pending re-anchor, as it goes away (its card
+ *  closed, or the thread no longer needs moving): the pending state goes with
+ *  it, so a later comment-on-selection can't move the thread unseen. Unless
+ *  it has moved on to another thread since. */
+export const releasePendingReanchor = (threadId: string): void => {
+  if (pendingReanchor?.threadId === threadId) startReanchor(null)
+}
+
+export const usePendingReanchor = (): PendingReanchor | null =>
+  useSyncExternalStore(subscribe, () => pendingReanchor)

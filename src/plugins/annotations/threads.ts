@@ -14,9 +14,7 @@ import {hasLoneSurrogate} from '@/utils/string'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
-  annotationQuotePrefixProp,
-  annotationQuoteStartProp,
-  annotationQuoteSuffixProp,
+  anchorFieldValues,
   annotationStatusProp,
   annotationTargetProp,
   THREAD_TYPE,
@@ -61,7 +59,7 @@ export const missingTarget = (targetId: string) => new UnannotatableTargetError(
 
 /** Anchors come from `captureAnchor` in the app, but agents and the bridge
  *  build their own. */
-const assertQuotable = (anchor: RangeAnchor): void => {
+export const assertQuotable = (anchor: RangeAnchor): void => {
   if (anchor.quote === '') throw new InvalidQuoteError('The quote is empty.')
   if (anchor.quoteStart !== undefined && !(Number.isInteger(anchor.quoteStart) && anchor.quoteStart >= 0)) {
     throw new InvalidQuoteError(`quoteStart ${anchor.quoteStart} is not a position in the text.`)
@@ -134,11 +132,7 @@ export const createThread = async (
       properties: [
         propertyValue(annotationTargetProp, targetId),
         propertyValue(annotationStatusProp, 'open'),
-        ...(anchor ? [
-          propertyValue(annotationQuoteStartProp, anchor.quoteStart),
-          propertyValue(annotationQuotePrefixProp, anchor.prefix),
-          propertyValue(annotationQuoteSuffixProp, anchor.suffix),
-        ] : []),
+        ...(anchor ? anchorFieldValues(anchor) : []),
       ],
       references: [targetEdge],
     })

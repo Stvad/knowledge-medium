@@ -1,18 +1,31 @@
 import type {EditorView} from '@codemirror/view'
-import {MessageSquarePlus, Highlighter} from 'lucide-react'
+import {MessageSquarePlus, Highlighter, PanelRight} from 'lucide-react'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import type {Repo} from '@/data/repo'
+import {getLayoutSessionBlock} from '@/data/stateBlocks.js'
 import {flushEditorContent} from '@/editor/contentFlush.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
+import {resolveActivePanelRow} from '@/utils/navigation.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {showError, showInfo} from '@/utils/toast.js'
 import {captureAnchor, type RangeAnchor} from './anchor.ts'
+import {annotationMarginOpenProp} from './marginSchema.ts'
+import {reanchorThread} from './reanchor.ts'
 import {createThread, isThreadRefusal} from './threads.ts'
-import {closeComposer, openComposer, peekComposer, updateComposer, viewKey} from './uiStore.ts'
+import {
+  closeComposer,
+  openComposer,
+  peekComposer,
+  peekPendingReanchor,
+  startReanchor,
+  updateComposer,
+  viewKey,
+} from './uiStore.ts'
 
 export const COMMENT_ON_SELECTION_ACTION_ID = 'annotations.commentOnSelection'
 export const HIGHLIGHT_SELECTION_ACTION_ID = 'annotations.highlightSelection'
 export const COMMENT_ON_BLOCK_ACTION_ID = 'annotations.commentOnBlock'
+export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
 
 /** The selection's anchor as the user sees it. The stored row lags the editor
  *  by its debounce, so the pending write is flushed first; it lands on the
@@ -54,14 +67,27 @@ const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
 
 const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
 
+/** The thread waiting for new text in this block (Reselect on its card), if
+ *  any. It takes the selection wherever the block is edited, a comment's
+ *  editor inside a card included, since no composer opens for it. */
+const pendingReanchorIn = ({block}: {block: {id: string}}) => {
+  const pending = peekPendingReanchor()
+  return pending?.targetId === block.id ? pending : null
+}
+
 const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   id: COMMENT_ON_SELECTION_ACTION_ID,
   description: 'Comment on selection',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MessageSquarePlus,
   defaultBinding: {keys: '$mod+Alt+m'},
-  isVisible: onOutline,
-  handler: deps => {
+  isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
+  handler: async deps => {
+    const pending = pendingReanchorIn(deps)
+    if (pending) {
+      await reanchorToSelection(deps.block.repo, pending.threadId, deps.editorView)
+      return
+    }
     if (!onOutline(deps)) {
       showInfo(NOT_ON_OUTLINE)
       return
@@ -72,6 +98,25 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
     // still reach it (a bare Enter would split the block at the quote).
     void exitEditModeForBlock(deps.uiStateBlock, deps.block.id, deps.renderScopeId)
   },
+}
+
+/** A thread waiting for new text (Reselect on its card) takes the selection
+ *  instead of a new comment. A refusal keeps it waiting, so the user can
+ *  select again. */
+const reanchorToSelection = async (repo: Repo, threadId: string, view: EditorView): Promise<void> => {
+  const anchor = anchorFromEditor(view)
+  if (!anchor) {
+    showInfo('Select the text to move the comment to.')
+    return
+  }
+  try {
+    await reanchorThread(repo, threadId, anchor)
+    startReanchor(null)
+    showInfo('Moved the comment to the selection.')
+  } catch (error) {
+    if (isThreadRefusal(error)) showError(error.message)
+    else throw error
+  }
 }
 
 const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
@@ -115,4 +160,19 @@ const commentOnBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   },
 }
 
-export const annotationActions: readonly ActionConfig[] = [commentOnSelection, highlightSelection, commentOnBlock]
+/** Per panel: the active one, as global commands pick it. */
+const toggleMargin: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+  id: TOGGLE_MARGIN_ACTION_ID,
+  description: 'Toggle comments margin',
+  context: ActionContextTypes.GLOBAL,
+  icon: PanelRight,
+  handler: async ({uiStateBlock}) => {
+    const repo = uiStateBlock.repo
+    const panelRow = await resolveActivePanelRow(await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId))
+    if (!panelRow) return
+    const panel = repo.block(panelRow.id)
+    await panel.set(annotationMarginOpenProp, !panel.peekProperty(annotationMarginOpenProp))
+  },
+}
+
+export const annotationActions: readonly ActionConfig[] = [commentOnSelection, highlightSelection, commentOnBlock, toggleMargin]

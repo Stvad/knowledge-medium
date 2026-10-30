@@ -1,5 +1,6 @@
 /**
- * The slice-1 comments UI on ordinary outline blocks:
+ * The comments UI on outline blocks and in thread cards (the side margin's
+ * column is `margin.tsx`):
  *
  * - a comment pill in the gutter, after the reference pill, on every
  *   non-nested surface, the focal block included (nothing else shows a focal
@@ -41,9 +42,10 @@ import {isImeKeyEvent} from '@/shortcuts/utils.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {resolveAnchor} from './anchor.ts'
+import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {THREAD_HIGHLIGHTS_KEY, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
@@ -53,14 +55,21 @@ import {
   type ThreadAnchor,
 } from './schema.ts'
 import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
-import {replyTo, setThreadStatus} from './threads.ts'
+import {isThreadRefusal, replyTo, setThreadStatus} from './threads.ts'
 import {
+  activateThread,
   closeComposer,
   openComposer,
+  releasePendingReanchor,
+  showClosedThreads,
+  startReanchor,
   toggleShowResolved,
   toggleThreadsExpanded,
   updateComposer,
+  useActiveThread,
   useComposer,
+  useMarginShowing,
+  usePendingReanchor,
   useShowResolved,
   useThreadsExpanded,
   viewKey,
@@ -94,17 +103,25 @@ const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
 export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
   threads?.filter(drawsHighlight).map(({id, open, anchor}) => ({id, open, anchor})) ?? NO_HIGHLIGHTS
 
-/** The block's highlights, only: the selection keeps its identity while just
- *  a thread's comments change, and so does the feed built from it
- *  (`THREAD_HIGHLIGHTS_KEY` says why that matters). */
-const useHighlightFeed = (block: Block): ThreadHighlightsFeed => {
+/** The block's highlights, only, for this render scope: the selection keeps
+ *  its identity while just a thread's comments change, and so does the feed
+ *  built from it (`THREAD_HIGHLIGHTS_KEY` says why that matters). Threads a
+ *  card already encloses are left out. */
+const useHighlightFeed = (block: Block, exclude: readonly string[] = NO_IDS): ThreadHighlightsFeed => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const {renderScopeId} = useBlockContext()
   const threads = useHandle(block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}), {selector: highlightsOf})
-  return useMemo(() => ({blockId: block.id, threads}), [block.id, threads])
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    threads: exclude.length === 0 ? threads : threads.filter(thread => !exclude.includes(thread.id)),
+  }), [block.id, renderScopeId, threads, exclude])
 }
 
-const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
+const NO_IDS: readonly string[] = Object.freeze([])
+
+export const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   return useHandle(
@@ -115,10 +132,40 @@ const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
 
 // ──── Pill ────
 
+export type PillClick =
+  | {kind: 'expand-inline'}
+  | {kind: 'activate'; threadId: string; revealClosed: boolean}
+
+/** What a click on the pill does. With the margin drawn it pins the block's
+ *  first open thread's card, or, for a block whose threads are all resolved,
+ *  the first one's, revealing closed threads so the card is there to pin. */
+export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean): PillClick => {
+  const first = threads.find(thread => thread.open) ?? threads[0]
+  return inMargin && first
+    ? {kind: 'activate', threadId: first.id, revealClosed: !first.open}
+    : {kind: 'expand-inline'}
+}
+
 const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
-  const key = viewKey(useBlockContext().renderScopeId, block.id)
-  const expanded = useThreadsExpanded(key)
+  const blockContext = useBlockContext()
+  const key = viewKey(blockContext.renderScopeId, block.id)
+  const panelId = blockContext.panelId
+  // With the margin drawn, the threads are already beside the block: the pill
+  // pins its first card instead of expanding them a second time inline.
+  const inMargin = useMarginShowing(panelId)
+  const activeThread = useActiveThread(panelId ?? '')
+  const inlineExpanded = useThreadsExpanded(key)
+  const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
+  const onPill = () => {
+    const click = pillClick(threads, inMargin)
+    if (click.kind === 'expand-inline') {
+      toggleThreadsExpanded(key)
+      return
+    }
+    if (click.revealClosed) showClosedThreads(panelId!)
+    activateThread(panelId!, click.threadId)
+  }
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
   const highlights = useHighlightFeed(block)
@@ -133,7 +180,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
         <GutterPill
           count={count}
           expanded={expanded}
-          onClick={event => { event.stopPropagation(); toggleThreadsExpanded(key) }}
+          onClick={event => { event.stopPropagation(); onPill() }}
           label={label}
           icon={MessageSquare}
           tone="amber"
@@ -214,9 +261,21 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
   )
 }
 
-const ThreadCard = ({thread}: {thread: ThreadSummary}) => {
+/** The thread ids of the cards enclosing this one, outermost first: a thread
+ *  anchored to a comment renders inside that comment's card, and a thread
+ *  anchored (by hand or by an agent) to a comment of itself must not render
+ *  itself forever. */
+const CARD_CHAIN_KEY = 'annotations.cardChain'
+
+const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
+  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
+
+/** One thread, its root rendered through `BlockComponent` in a nested surface.
+ *  `surface` keeps an inline card and a margin card of the same thread in
+ *  distinct render scopes. */
+export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: string}) => {
   const parent = useBlockContext()
-  const renderScopeId = surfaceRenderScopeId('comments', parent.renderScopeId ?? '', thread.id)
+  const renderScopeId = surfaceRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
       <NestedBlockContextProvider overrides={{
@@ -226,6 +285,7 @@ const ThreadCard = ({thread}: {thread: ThreadSummary}) => {
         scopeRootId: thread.id,
         [COMMENT_CARD_KEY]: thread.id,
         [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
+        [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
       }}>
         <BlockComponent blockId={thread.id}/>
       </NestedBlockContextProvider>
@@ -235,9 +295,17 @@ const ThreadCard = ({thread}: {thread: ThreadSummary}) => {
 
 const ThreadsSection = ({block}: {block: Block}) => {
   const threads = useThreadSummaries(block)
-  const key = viewKey(useBlockContext().renderScopeId, block.id)
+  const blockContext = useBlockContext()
+  const key = viewKey(blockContext.renderScopeId, block.id)
   const composer = useComposer(key)
   const showResolved = useShowResolved(key)
+  const inMargin = useMarginShowing(blockContext.panelId)
+  // The margin shows the threads; only a composer opened here stays inline.
+  if (inMargin) {
+    return composer
+      ? <section aria-label="Comments" className="my-1 ml-6 min-w-0"><Composer block={block} composerKey={key} composer={composer}/></section>
+      : null
+  }
   const open = threads.filter(thread => thread.open)
   const closed = threads.filter(thread => !thread.open)
   return (
@@ -291,13 +359,13 @@ const ANCHOR_BADGES: Record<Exclude<AnchorState, 'exact'>, string> = {
   deleted: 'on a deleted block',
 }
 
-const useAnchorState = (root: RootFields): AnchorState => {
+const useAnchorState = (root: RootFields): {state: AnchorState; targetContent: string | null} => {
   const repo = useRepo()
   const targetId = threadTargetIdOf(root) ?? ''
   const targetContent = useHandle(repo.block(targetId), {selector: data => data && !data.deleted ? data.content : null})
-  if (targetContent === null) return 'deleted'
+  if (targetContent === null) return {state: 'deleted', targetContent}
   const anchor = threadAnchorOf(root)
-  return anchor.kind === 'block' ? 'exact' : resolveAnchor(targetContent, anchor).state
+  return {state: anchor.kind === 'block' ? 'exact' : resolveAnchor(targetContent, anchor).state, targetContent}
 }
 
 const TargetLink = ({targetId}: {targetId: string}) => {
@@ -329,12 +397,56 @@ const ThreadRootContent: BlockRenderer = ({block}) => {
 
 type RootFields = Pick<BlockData, 'id' | 'workspaceId' | 'content' | 'properties'>
 
+const reportRefusal = (error: unknown): void => {
+  if (isThreadRefusal(error)) showError(error.message)
+  else reportFailure(error)
+}
+
+/** Re-anchoring a moved or stale quote: confirm it where it now sits, select
+ *  new text for it (the next comment-on-selection in its block re-anchors
+ *  it), or anchor it to the whole block. */
+const ReanchorControls = ({root, state, targetContent}: {
+  root: RootFields
+  state: 'moved' | 'stale'
+  targetContent: string
+}) => {
+  const repo = useRepo()
+  const pending = usePendingReanchor()
+  const anchor = threadAnchorOf(root) as {kind: 'range'} & RangeAnchor
+  const targetId = threadTargetIdOf(root)
+  useEffect(() => () => releasePendingReanchor(root.id), [root.id])
+  if (pending?.threadId === root.id) {
+    return (
+      <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground" role="status">
+        <span>Select the new text in the block, then choose Comment on selection.</span>
+        <ActionButton onClick={() => startReanchor(null)}>Cancel</ActionButton>
+      </div>
+    )
+  }
+  const confirm = () => {
+    const next = confirmedAnchor(targetContent, anchor)
+    if (!next) {
+      showError('This quote can\u2019t be confirmed where it is now. Select it again.')
+      return
+    }
+    reanchorThread(repo, root.id, next).catch(reportRefusal)
+  }
+  return (
+    <div className="flex flex-wrap gap-x-2">
+      {state === 'moved' && <ActionButton onClick={confirm}>Confirm position</ActionButton>}
+      {targetId && <ActionButton onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
+      <ActionButton onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
+    </div>
+  )
+}
+
 const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise<void>}) => {
   const repo = useRepo()
   const readOnly = useReadOnly(repo)
-  const state = useAnchorState(root)
+  const {state, targetContent} = useAnchorState(root)
   const open = threadIsOpen(root)
   return (
+    <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
       <span className="min-w-0 flex-1 text-muted-foreground"><QuoteText anchor={threadAnchorOf(root)}/></span>
       {state !== 'exact' && (
@@ -346,6 +458,10 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
           {open ? 'Resolve' : 'Reopen'}
         </ActionButton>
       </>}
+    </div>
+    {!readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
+      <ReanchorControls root={root} state={state} targetContent={targetContent}/>
+    )}
     </div>
   )
 }
@@ -370,16 +486,38 @@ export const threadRootContentContribution: VariantContribution<BlockResolveCont
 
 // ──── Per-comment actions ────
 
+/** The threads a comment's card shows under it: the open ones, less any card
+ *  already open around it. */
+export const threadsUnderComment = (
+  threads: readonly ThreadSummary[],
+  chain: readonly string[],
+): readonly ThreadSummary[] => threads.filter(thread => thread.open && !chain.includes(thread.id))
+
+/** Threads anchored to a comment (a quote-reply, a note on a phrase) render
+ *  inside that comment's card, highlighted in its text with their cards under
+ *  it; they never get a margin card of their own. */
 const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const focusNewComment = useFocusNewComment()
   const readOnly = useReadOnly(block.repo)
+  const blockContext = useBlockContext()
+  const chain = cardChainOf(blockContext)
+  const all = useThreadSummaries(block)
+  const threads = useMemo(() => threadsUnderComment(all, chain), [all, chain])
+  const highlights = useHighlightFeed(block, chain)
   return (
     <div className="w-full">
-      <Inner block={block}/>
+      <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
+        <Inner block={block}/>
+      </NestedBlockContextProvider>
       {!readOnly && (
         <div className="flex gap-2 pb-0.5">
           <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
           <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+        </div>
+      )}
+      {threads.length > 0 && (
+        <div className="mb-1 space-y-1 border-l-2 border-yellow-500/50 pl-1.5" aria-label="Comments on this comment">
+          {threads.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
         </div>
       )}
     </div>

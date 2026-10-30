@@ -240,6 +240,20 @@ export type BlockBulletHoverResolver =
  *  handler resolving ownership can ask one question of both halves. */
 export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
 
+/** Every row one render scope draws, in document order: the shells of mounted
+ *  rows, and the placeholders `LazyViewportMount` labels with the scope for
+ *  rows not mounted yet. A wrapper that mints its own scope (a backlink entry,
+ *  an embed) labels its rows with that scope, so they never match another. */
+export const scopeRowSelector = (renderScopeId: string): string => {
+  const scope = CSS.escape(renderScopeId)
+  return `[${BLOCK_SHELL_ATTRIBUTE}][data-block-id][data-render-scope-id="${scope}"], ` +
+    `[data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`
+}
+
+/** The block a {@link scopeRowSelector} row stands for, mounted or not. */
+export const scopeRowBlockId = (row: HTMLElement): string | undefined =>
+  row.dataset.blockId ?? row.dataset.lazyBlockId
+
 /** Marks a block's bullet — the handle plugins attach row-level pointer
  *  gestures to (block drag-and-drop) by delegating from the document, so the
  *  bullet needs no per-gesture handler props. Its block is the enclosing

@@ -1,4 +1,4 @@
-import {ChangeScope, seedProperty, seedType, type BlockData} from '@/data/api'
+import {ChangeScope, propertyValue, seedProperty, seedType, type BlockData} from '@/data/api'
 import {decodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -64,6 +64,16 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
 })
+
+/** Where a range thread's quote sat and what surrounded it; a whole-block
+ *  thread carries none of them. */
+export const anchorFieldProps = [annotationQuoteStartProp, annotationQuotePrefixProp, annotationQuoteSuffixProp] as const
+
+export const anchorFieldValues = (anchor: RangeAnchor) => [
+  propertyValue(annotationQuoteStartProp, anchor.quoteStart),
+  propertyValue(annotationQuotePrefixProp, anchor.prefix),
+  propertyValue(annotationQuoteSuffixProp, anchor.suffix),
+]
 
 export const annotationPropertySeeds = [
   annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,

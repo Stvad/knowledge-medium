@@ -292,9 +292,11 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   transform(tree)
 }
 
-/** Set on the content renderer's block context by the comment pill, which
- *  already reads the block's thread summaries. Embeds inside the content
- *  inherit it, hence the block id.
+/** Set on the content renderer's block context by whatever already reads the
+ *  block's thread summaries: the comment pill on outline blocks, and a card
+ *  for its comments. It applies only where it was set, that block in that
+ *  render scope: an embed or a block ref inside the content inherits it, and
+ *  sets a scope of its own, `((B))` inside B included.
  *
  *  ACCEPTED: block context is inherited, so a new feed is a new context for
  *  everything under the content, and an embed or block ref inside it
@@ -306,6 +308,7 @@ export const THREAD_HIGHLIGHTS_KEY = 'annotations.threadHighlights'
 
 export interface ThreadHighlightsFeed {
   blockId: string
+  renderScopeId: string | undefined
   threads: readonly HighlightThread[]
 }
 
@@ -313,7 +316,7 @@ export interface ThreadHighlightsFeed {
  *  it. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, data}) => {
   const feed = blockContext[THREAD_HIGHLIGHTS_KEY] as ThreadHighlightsFeed | undefined
-  if (!feed || feed.blockId !== block.id || blockContext.isNestedSurface) return null
+  if (!feed || feed.blockId !== block.id || feed.renderScopeId !== blockContext.renderScopeId) return null
   const ranges = highlightRanges(data.content, feed.threads)
   return ranges.length === 0 ? null : {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges}]]}
 }

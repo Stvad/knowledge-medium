@@ -5,7 +5,12 @@
  * `moveBlocksTo`, whose transaction re-checks everything (cycle, missing
  * parent, workspace) when the drop lands.
  */
-import { BLOCK_BULLET_ATTRIBUTE, BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
+import {
+  BLOCK_BULLET_ATTRIBUTE,
+  BLOCK_SHELL_ATTRIBUTE,
+  scopeRowBlockId,
+  scopeRowSelector,
+} from '@/extensions/blockInteraction.js'
 import { isPanelRenderScopeId } from '@/utils/renderScope.js'
 import type { MoveTarget } from '@/data/mutators.js'
 import { findSlot, projectDrop, type DropRow, type SlotRows } from './projection.ts'
@@ -108,11 +113,8 @@ const surfaceRows = (
 ): SurfaceRows => {
   // Deferred rows of this scope too, in document order: the projection
   // must know where a gap borders one.
-  const scope = CSS.escape(renderScopeId)
-  const rows = Array.from(container.querySelectorAll<HTMLElement>(
-    `${scopedRowSelector(renderScopeId)}, [data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`,
-  ))
-  const blockIdOf = (i: number): string => rows[i].dataset.blockId ?? rows[i].dataset.lazyBlockId!
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(scopeRowSelector(renderScopeId)))
+  const blockIdOf = (i: number): string => scopeRowBlockId(rows[i])!
   const rects = new Map<number, DOMRect>()
   const rect = (i: number): DOMRect => {
     let cached = rects.get(i)
