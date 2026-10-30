@@ -10,6 +10,7 @@ import {
   uiStateRenderScopeId,
 } from '@/data/properties'
 import { ChangeScope, type BlockData } from '@/data/api'
+import { precedesInTree } from '@/data/treeOrder.js'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -231,20 +232,6 @@ const pathFromRoot = (repo: Repo, id: string): BlockData[] | null => {
     current = repo.cache.getSnapshot(current.parentId)
   }
   return null
-}
-
-/** Whether path `a` renders before path `b`: an ancestor before its
- *  descendants, siblings as every children query sorts them (order key,
- *  then id). Each path runs down from a root, or any shared ancestor, to
- *  its block; paths that start at different blocks have no order. */
-export const precedesInTree = (a: readonly BlockData[], b: readonly BlockData[]): boolean => {
-  if (a[0].id !== b[0].id) return false
-  for (let depth = 1; depth < Math.min(a.length, b.length); depth++) {
-    const [x, y] = [a[depth], b[depth]]
-    if (x.id === y.id) continue
-    return x.orderKey < y.orderKey || (x.orderKey === y.orderKey && x.id < y.id)
-  }
-  return a.length < b.length
 }
 
 /** `ids` with `id` inserted before the first of them it renders before,

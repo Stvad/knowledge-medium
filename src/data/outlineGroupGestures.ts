@@ -1,7 +1,7 @@
 import type { BlockData, Tx } from '@/data/api'
 import { indent, moveVertical, outdent } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { precedesInTree } from '@/utils/selection'
+import { precedesInTree } from '@/data/treeOrder'
 
 interface GroupGesture {
   /** Run bottom-up. Move-down travels toward the next sibling, and outdent
