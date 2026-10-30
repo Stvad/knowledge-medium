@@ -1,1 +1,1 @@
-export{vk as AccountHeaderItem}from"../../../chunks/app-CpQt1K3i.js";
+export{vk as AccountHeaderItem}from"../../../chunks/app-DO3tI4b2.js";
