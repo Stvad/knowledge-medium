@@ -1,1 +1,1 @@
-export{Lg as MOVE_BLOCKS_ACTION_ID,Rg as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Gg as MoveDestinationPicker,Ug as isWithinSubtreeOfAny,zg as moveBlockAction,Bg as moveBlocksAction,Pg as moveBlocksPlugin,Wg as moveBlocksTo,Hg as unselectMovedBlocks}from"../../../chunks/app-DxQZgJCS.js";
+export{Rg as MOVE_BLOCKS_ACTION_ID,zg as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Kg as MoveDestinationPicker,Wg as isWithinSubtreeOfAny,Bg as moveBlockAction,Vg as moveBlocksAction,Fg as moveBlocksPlugin,Gg as moveBlocksTo,Ug as unselectMovedBlocks}from"../../../chunks/app-BPh8nENr.js";

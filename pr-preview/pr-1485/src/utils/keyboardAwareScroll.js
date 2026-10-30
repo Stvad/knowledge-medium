@@ -1,1 +1,1 @@
-export{JP as keyboardAwareScroll,YP as shouldReassertCaret}from"../../chunks/app-DxQZgJCS.js";
+export{YP as keyboardAwareScroll,XP as shouldReassertCaret}from"../../chunks/app-BPh8nENr.js";

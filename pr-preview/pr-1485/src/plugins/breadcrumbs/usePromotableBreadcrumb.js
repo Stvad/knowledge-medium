@@ -1,1 +1,1 @@
-export{oS as usePromotableBreadcrumb}from"../../../chunks/app-DxQZgJCS.js";
+export{sS as usePromotableBreadcrumb}from"../../../chunks/app-BPh8nENr.js";

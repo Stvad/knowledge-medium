@@ -1,1 +1,1 @@
-export{tg as geoContentDecoratorContribution}from"../../../chunks/app-DxQZgJCS.js";
+export{ng as geoContentDecoratorContribution}from"../../../chunks/app-BPh8nENr.js";

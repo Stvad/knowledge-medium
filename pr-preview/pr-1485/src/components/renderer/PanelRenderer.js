@@ -1,1 +1,1 @@
-export{SM as PanelRenderer}from"../../../chunks/app-DxQZgJCS.js";
+export{CM as PanelRenderer}from"../../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,1 @@
-export{gh as toggleBacklinkExpansion,_h as useBacklinkExpansion}from"../../../../chunks/app-DxQZgJCS.js";
+export{_h as toggleBacklinkExpansion,vh as useBacklinkExpansion}from"../../../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,1 @@
-export{BP as blockEditResumed,VP as blockEditSettled,HP as notifyBlockEditResumed,UP as notifyBlockEditSettled}from"../../chunks/app-DxQZgJCS.js";
+export{VP as blockEditResumed,HP as blockEditSettled,UP as notifyBlockEditResumed,WP as notifyBlockEditSettled}from"../../chunks/app-BPh8nENr.js";

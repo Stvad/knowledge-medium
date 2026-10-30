@@ -1,1 +1,1 @@
-export{Ng as useIsReadOnly}from"../../chunks/app-DxQZgJCS.js";
+export{Pg as useIsReadOnly}from"../../chunks/app-BPh8nENr.js";
