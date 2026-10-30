@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm'
 import type {PluggableList} from 'unified'
 import {remarkWikilinks} from '@/plugins/references/markdown/wikilinks/remark-wikilinks.js'
 import {remarkBlockrefs} from '@/plugins/references/markdown/blockrefs/remark-blockrefs.js'
+import {remarkReferenceOccurrences} from '@/plugins/references/markdown/remark-reference-occurrences.js'
 import {remarkTimestamps} from '@/plugins/video-player/remark-timestamps.js'
 import {rehypeTrimBlockSeparators} from '@/markdown/blockSeparators.js'
 import type {HighlightRange} from './highlights.ts'
@@ -18,7 +19,10 @@ import {highlightsOf} from './ui.tsx'
 
 type Props = {node?: {properties?: Record<string, unknown>}; children?: ReactNode}
 const show = (tag: string) => ({node, children}: Props) =>
-  createElement(`x-${tag}`, {'data-props': JSON.stringify(node?.properties ?? {})}, children)
+  createElement(`x-${tag}`, {
+    'data-props': JSON.stringify(node?.properties ?? {}),
+    'data-occurrence': node?.properties?.occurrenceId,
+  }, children)
 
 const components = {
   wikilink: show('wikilink'), pageembed: show('pageembed'), blockref: show('blockref'), blockembed: show('blockembed'),
@@ -32,6 +36,7 @@ const render = (content: string, ranges: readonly HighlightRange[] | null, resol
     remarkGfm,
     [remarkWikilinks, {resolveAlias: (alias: string) => `id-${alias}`}],
     remarkBlockrefs,
+    remarkReferenceOccurrences,
     remarkTimestamps,
     ...(ranges ? [[remarkAnnotationMarks, {content: resolvedAgainst, ranges}]] as PluggableList : []),
   ]
@@ -91,7 +96,8 @@ describe('read-mode marks', () => {
     const content = 'One ![[a@example.com]] and two ![[a@example.com]] here.'
     const result = marked(content, [range(content, '![[a@example.com]]'), range(content, '![[a@example.com]]', false, 1)])
     expect(result).toHaveLength(2)
-    const ids = result.map(m => /occurrenceId&quot;:&quot;([^&]*)&quot;/.exec(m.html)?.[1])
+    const ids = result.map(m => /data-occurrence="([^"]*)"/.exec(m.html)?.[1])
+    expect(ids.every(id => id !== undefined)).toBe(true)
     expect(new Set(ids).size).toBe(2)
   })
 
