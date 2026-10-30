@@ -1,1 +1,1 @@
-export{MX as instrumentAdapter}from"../../../chunks/app-iQIBK7yD.js";
+export{FX as instrumentAdapter}from"../../../chunks/app-Hs_TCcDF.js";
