@@ -207,6 +207,9 @@ const pointsOf = (source: string) => {
   }
 }
 
+/** ACCEPTED: a mark wrapping an embed moves it under a new parent, and a mark
+ *  added before a marked embed shifts its key, so an editor open in an embed
+ *  inside a quote remounts when that paragraph's marks change. */
 const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
   type: ANNOTATION_MARK_NODE,
   children,
@@ -292,19 +295,12 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
   transform(tree)
 }
 
-/** Set on the content renderer's block context by whatever already reads the
- *  block's thread summaries: the comment pill on outline blocks, and a card
- *  for its comments. It applies only where it was set, that block in that
- *  render scope: an embed or a block ref inside the content inherits it, and
- *  sets a scope of its own, `((B))` inside B included.
- *
- *  ACCEPTED: block context is inherited, so a new feed is a new context for
- *  everything under the content, and an embed or block ref inside it
- *  remounts, an editor open in an embed included. The feed carries only what
- *  the marks read, so that happens when a range thread on the block appears,
- *  resolves or moves, not on every comment. Avoiding it entirely needs a
- *  core seam for reactive markdown input. */
-export const THREAD_HIGHLIGHTS_KEY = 'annotations.threadHighlights'
+/** The input the block's feed is provided under, around its content, by
+ *  whatever already reads its thread summaries: the comment pill on outline
+ *  blocks, and a card for its comments. It applies only where it was provided,
+ *  that block in that render scope: an embed or a block ref inside the content
+ *  inherits it, and sets a scope of its own, `((B))` inside B included. */
+export const THREAD_HIGHLIGHTS_INPUT = 'annotations.threadHighlights'
 
 export interface ThreadHighlightsFeed {
   blockId: string
@@ -314,8 +310,8 @@ export interface ThreadHighlightsFeed {
 
 /** Ranges resolve against the snapshot being rendered, so they cannot lag
  *  it. */
-export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, data}) => {
-  const feed = blockContext[THREAD_HIGHLIGHTS_KEY] as ThreadHighlightsFeed | undefined
+export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, input, data}) => {
+  const feed = input[THREAD_HIGHLIGHTS_INPUT] as ThreadHighlightsFeed | undefined
   if (!feed || feed.blockId !== block.id || feed.renderScopeId !== blockContext.renderScopeId) return null
   const ranges = highlightRanges(data.content, feed.threads)
   return ranges.length === 0 ? null : {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges}]]}

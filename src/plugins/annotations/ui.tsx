@@ -23,6 +23,7 @@ import {useInEditMode, useUIStateBlock} from '@/data/globalState.js'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BlockComponent} from '@/components/BlockComponent.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
+import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, useWorkspaceId} from '@/hooks/block.js'
 import {
@@ -46,7 +47,7 @@ import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
-import {THREAD_HIGHLIGHTS_KEY, type ThreadHighlightsFeed} from './readHighlights.ts'
+import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -105,7 +106,7 @@ export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): rea
 
 /** The block's highlights, only, for this render scope: the selection keeps
  *  its identity while just a thread's comments change, and so does the feed
- *  built from it (`THREAD_HIGHLIGHTS_KEY` says why that matters). Threads a
+ *  built from it, so a new comment doesn't re-render the content. Threads a
  *  card already encloses are left out. */
 const useHighlightFeed = (block: Block, exclude: readonly string[] = NO_IDS): ThreadHighlightsFeed => {
   const repo = useRepo()
@@ -172,9 +173,9 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   return (
     <div className="flex w-full items-start gap-1">
       <div className="min-w-0 flex-1">
-        <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
+        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
           <Inner block={block}/>
-        </NestedBlockContextProvider>
+        </MarkdownInputProvider>
       </div>
       {(count !== null || expanded) && (
         <GutterPill
@@ -506,9 +507,9 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
   const highlights = useHighlightFeed(block, chain)
   return (
     <div className="w-full">
-      <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
+      <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
         <Inner block={block}/>
-      </NestedBlockContextProvider>
+      </MarkdownInputProvider>
       {!readOnly && (
         <div className="flex gap-2 pb-0.5">
           <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
