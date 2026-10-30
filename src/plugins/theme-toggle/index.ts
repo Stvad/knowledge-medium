@@ -5,7 +5,6 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { themeStyleSyncEffect } from './effect.ts'
 import { toggleTheme } from './theme.ts'
 
-export { ThemeToggle } from './ThemeToggle.tsx'
 export {
   applyTheme,
   FALLBACK_THEME,

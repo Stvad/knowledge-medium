@@ -147,6 +147,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: ['markdownExtensionsFacet'],
     types: [],
   },
+  {
+    category: 'markdown',
+    importPath: '@/markdown/context.js',
+    description: 'Around rendered markdown: the block a `components` override renders for, and reactive `MarkdownRenderContext.input`.',
+    exports: ['useMarkdownSource', 'MarkdownInputProvider'],
+    types: ['MarkdownSource'],
+  },
 
   // --- Paste seam -----------------------------------------------------------
   {
