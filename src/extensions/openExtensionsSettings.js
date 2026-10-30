@@ -1,1 +1,1 @@
-export{jM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,MM as openExtensionsSettings}from"../../chunks/app-Sdu-HCfi.js";
+export{jM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,MM as openExtensionsSettings}from"../../chunks/app-DesS5Elt.js";

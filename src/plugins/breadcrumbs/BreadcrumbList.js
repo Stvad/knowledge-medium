@@ -1,1 +1,1 @@
-export{OS as BreadcrumbList}from"../../../chunks/app-Sdu-HCfi.js";
+export{OS as BreadcrumbList}from"../../../chunks/app-DesS5Elt.js";

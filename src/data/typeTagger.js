@@ -1,1 +1,1 @@
-export{FX as TypeTagger,IX as applyTypeTagInTx}from"../../chunks/app-Sdu-HCfi.js";
+export{FX as TypeTagger,IX as applyTypeTagInTx}from"../../chunks/app-DesS5Elt.js";

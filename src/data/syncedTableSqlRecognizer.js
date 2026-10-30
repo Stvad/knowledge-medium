@@ -1,1 +1,1 @@
-export{TJ as SYNCED_TABLES,EJ as syncedWriteTarget,DJ as writeTargets}from"../../chunks/app-Sdu-HCfi.js";
+export{TJ as SYNCED_TABLES,EJ as syncedWriteTarget,DJ as writeTargets}from"../../chunks/app-DesS5Elt.js";

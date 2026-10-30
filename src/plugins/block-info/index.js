@@ -1,1 +1,1 @@
-export{rh as blockInfoPlugin}from"../../../chunks/app-Sdu-HCfi.js";
+export{rh as blockInfoPlugin}from"../../../chunks/app-DesS5Elt.js";

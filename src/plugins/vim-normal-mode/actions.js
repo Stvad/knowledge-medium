@@ -1,1 +1,1 @@
-export{qb as getVimNormalModeActions,Jb as jumpVisibleBlocks,Yb as vimNormalModeActionsExtension}from"../../../chunks/app-Sdu-HCfi.js";
+export{qb as getVimNormalModeActions,Jb as jumpVisibleBlocks,Yb as vimNormalModeActionsExtension}from"../../../chunks/app-DesS5Elt.js";

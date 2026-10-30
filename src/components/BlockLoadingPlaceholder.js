@@ -1,1 +1,1 @@
-export{uM as BlockLoadingPlaceholder}from"../../chunks/app-Sdu-HCfi.js";
+export{uM as BlockLoadingPlaceholder}from"../../chunks/app-DesS5Elt.js";

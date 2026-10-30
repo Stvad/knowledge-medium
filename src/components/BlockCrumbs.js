@@ -1,1 +1,1 @@
-export{NT as BlockCrumbs}from"../../chunks/app-Sdu-HCfi.js";
+export{NT as BlockCrumbs}from"../../chunks/app-DesS5Elt.js";

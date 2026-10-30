@@ -1,1 +1,1 @@
-export{UW as matchCharTrigger}from"../../chunks/app-Sdu-HCfi.js";
+export{UW as matchCharTrigger}from"../../chunks/app-DesS5Elt.js";

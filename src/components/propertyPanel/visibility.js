@@ -1,1 +1,1 @@
-export{sz as isPropertyPanelHiddenProperty,cz as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-Sdu-HCfi.js";
+export{sz as isPropertyPanelHiddenProperty,cz as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-DesS5Elt.js";

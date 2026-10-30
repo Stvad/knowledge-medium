@@ -1,1 +1,1 @@
-export{iq as pluginPrefsExtension,aq as pluginUIStateExtension}from"../../chunks/app-Sdu-HCfi.js";
+export{iq as pluginPrefsExtension,aq as pluginUIStateExtension}from"../../chunks/app-DesS5Elt.js";

@@ -1,1 +1,1 @@
-export{_S as MobileBottomNavButton}from"../../../chunks/app-Sdu-HCfi.js";
+export{_S as MobileBottomNavButton}from"../../../chunks/app-DesS5Elt.js";

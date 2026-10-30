@@ -1,1 +1,1 @@
-export{ol as BlockTagsConfigEditor}from"../../../chunks/app-Sdu-HCfi.js";
+export{ol as BlockTagsConfigEditor}from"../../../chunks/app-DesS5Elt.js";

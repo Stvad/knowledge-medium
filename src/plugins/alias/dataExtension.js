@@ -1,1 +1,1 @@
-export{Yq as aliasDataExtension}from"../../../chunks/app-Sdu-HCfi.js";
+export{Yq as aliasDataExtension}from"../../../chunks/app-DesS5Elt.js";

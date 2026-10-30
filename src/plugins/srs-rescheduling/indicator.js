@@ -1,1 +1,1 @@
-export{Bc as srsBarClass,Vc as srsIndicatorTitle}from"../../../chunks/app-Sdu-HCfi.js";
+export{Bc as srsBarClass,Vc as srsIndicatorTitle}from"../../../chunks/app-DesS5Elt.js";

@@ -1,1 +1,1 @@
-export{ig as geoPlugin}from"../../../chunks/app-Sdu-HCfi.js";
+export{ig as geoPlugin}from"../../../chunks/app-DesS5Elt.js";

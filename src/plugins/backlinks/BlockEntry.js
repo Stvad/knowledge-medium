@@ -1,1 +1,1 @@
-export{Rh as LazyBlockEntry}from"../../../chunks/app-Sdu-HCfi.js";
+export{Rh as LazyBlockEntry}from"../../../chunks/app-DesS5Elt.js";

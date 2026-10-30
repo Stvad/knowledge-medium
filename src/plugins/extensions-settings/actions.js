@@ -1,1 +1,1 @@
-export{or as openExtensionsSettingsAction}from"../../../chunks/app-Sdu-HCfi.js";
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-DesS5Elt.js";

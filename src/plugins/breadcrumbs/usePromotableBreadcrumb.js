@@ -1,1 +1,1 @@
-export{CS as usePromotableBreadcrumb}from"../../../chunks/app-Sdu-HCfi.js";
+export{CS as usePromotableBreadcrumb}from"../../../chunks/app-DesS5Elt.js";

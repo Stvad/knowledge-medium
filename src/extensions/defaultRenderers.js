@@ -1,1 +1,1 @@
-export{pM as defaultRegistry,mM as defaultRendererContributions,hM as defaultRenderersExtension}from"../../chunks/app-Sdu-HCfi.js";
+export{pM as defaultRegistry,mM as defaultRendererContributions,hM as defaultRenderersExtension}from"../../chunks/app-DesS5Elt.js";

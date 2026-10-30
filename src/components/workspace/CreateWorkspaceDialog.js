@@ -1,1 +1,1 @@
-export{xC as CreateWorkspaceDialog}from"../../../chunks/app-Sdu-HCfi.js";
+export{xC as CreateWorkspaceDialog}from"../../../chunks/app-DesS5Elt.js";

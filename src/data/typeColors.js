@@ -1,1 +1,1 @@
-export{Mk as DEFAULT_TYPE_COLORS,Nk as defaultTypeColor,Pk as pickLeastUsedTypeColor}from"../../chunks/app-Sdu-HCfi.js";
+export{Mk as DEFAULT_TYPE_COLORS,Nk as defaultTypeColor,Pk as pickLeastUsedTypeColor}from"../../chunks/app-DesS5Elt.js";

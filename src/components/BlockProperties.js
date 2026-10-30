@@ -1,1 +1,1 @@
-export{LI as BlockProperties}from"../../chunks/app-Sdu-HCfi.js";
+export{LI as BlockProperties}from"../../chunks/app-DesS5Elt.js";

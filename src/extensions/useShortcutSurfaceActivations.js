@@ -1,1 +1,1 @@
-export{mF as useShortcutSurfaceActivations}from"../../chunks/app-Sdu-HCfi.js";
+export{mF as useShortcutSurfaceActivations}from"../../chunks/app-DesS5Elt.js";

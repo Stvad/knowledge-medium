@@ -1,1 +1,1 @@
-export{O_ as attachmentsPlugin}from"../../../chunks/app-Sdu-HCfi.js";
+export{O_ as attachmentsPlugin}from"../../../chunks/app-DesS5Elt.js";

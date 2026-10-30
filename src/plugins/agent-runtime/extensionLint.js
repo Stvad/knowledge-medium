@@ -1,1 +1,1 @@
-export{Cf as lintExtensionSource}from"../../../chunks/app-Sdu-HCfi.js";
+export{Cf as lintExtensionSource}from"../../../chunks/app-DesS5Elt.js";

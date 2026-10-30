@@ -1,1 +1,1 @@
-export{nb as VideoPlayerContentRenderer,rb as VideoPlayerRenderer,ib as isPlayableVideoBlock}from"../../../chunks/app-Sdu-HCfi.js";
+export{nb as VideoPlayerContentRenderer,rb as VideoPlayerRenderer,ib as isPlayableVideoBlock}from"../../../chunks/app-DesS5Elt.js";

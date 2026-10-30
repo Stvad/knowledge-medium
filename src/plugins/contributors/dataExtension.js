@@ -1,1 +1,1 @@
-export{iK as contributorsDataExtension}from"../../../chunks/app-Sdu-HCfi.js";
+export{iK as contributorsDataExtension}from"../../../chunks/app-DesS5Elt.js";

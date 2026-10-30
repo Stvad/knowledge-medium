@@ -1,1 +1,1 @@
-export{AO as commandPaletteToggle}from"../../../chunks/app-Sdu-HCfi.js";
+export{AO as commandPaletteToggle}from"../../../chunks/app-DesS5Elt.js";

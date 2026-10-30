@@ -1,1 +1,1 @@
-export{sM as LazyBlockComponent}from"../../chunks/app-Sdu-HCfi.js";
+export{sM as LazyBlockComponent}from"../../chunks/app-DesS5Elt.js";

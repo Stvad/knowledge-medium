@@ -1,1 +1,1 @@
-export{TA as editorAutocompleteExtension}from"../../chunks/app-Sdu-HCfi.js";
+export{TA as editorAutocompleteExtension}from"../../chunks/app-DesS5Elt.js";
