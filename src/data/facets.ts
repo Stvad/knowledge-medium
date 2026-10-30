@@ -3,7 +3,6 @@
  * contributions and the `Repo` lifecycle (spec §6, §8).
  */
 
-import type {KernelPageSpec} from './kernelPage'
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
 import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
@@ -26,6 +25,7 @@ import {
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
+import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
 import type { BlockSearchFilter } from './searchFilter.ts'
 

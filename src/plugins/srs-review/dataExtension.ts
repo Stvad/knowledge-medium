@@ -1,7 +1,7 @@
-import {reviewDeckSpec} from './deck'
 import { definitionSeedsFacet, systemPagesFacet, typeSeedsFacet } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { reviewDeckSpec } from './deck.ts'
 import {
   dailyNoteDecksProp,
   reviewDeckStartedProp,

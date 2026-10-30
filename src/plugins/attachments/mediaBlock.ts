@@ -12,9 +12,9 @@
  * cosmetic. (Capture — Phase 5 — populates them; this phase only defines + renders.)
  */
 
-import type {KernelPageSpec} from '@/data/kernelPage'
 import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { TypeSeedDeclaration } from '@/data/api'
+import type { KernelPageSpec } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 
 export const MEDIA_TYPE = 'media'

@@ -8,7 +8,7 @@ export const kernelPageDeletionGuard: BlockDeletionGuard = block => {
   if (!data) return null
   for (const {spec} of block.repo.facetRuntime?.read(systemPagesFacet) ?? []) {
     if (block.id !== kernelPageBlockId(data.workspaceId, spec.namespace)) continue
-    return `${spec.alias} is a system page and can't be deleted — it's recreated automatically, and deleting it would hide everything filed under it.`
+    return `${spec.alias} is a system page and can\u2019t be deleted \u2014 it\u2019s recreated automatically, and deleting it would hide everything filed under it.`
   }
   return null
 }

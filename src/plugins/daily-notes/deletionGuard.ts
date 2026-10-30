@@ -1,9 +1,9 @@
 /**
  * Refuse UI deletion of the daily notes.
  *
- * A daily note is get-or-CREATE: every navigation to a date
- * calls `getOrCreateDailyNote`, which RESTORES a soft-deleted row rather than
- * making a new one. So deleting one never sticks — revisit the date and the
+ * A daily note is get-or-CREATE: every navigation to a date calls
+ * `getOrCreateDailyNote`, which RESTORES a soft-deleted row rather than making
+ * a new one. So deleting one never sticks — revisit the date and the
  * page is back. Worse, `delete` cascades to the subtree while `tx.restore` is
  * single-row, so what comes back is the page WITHOUT its contents: the gesture
  * looks like it failed while having thrown away the day's notes.

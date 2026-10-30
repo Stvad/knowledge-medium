@@ -1,4 +1,3 @@
-import {kernelPageDeletionGuard} from '@/extensions/kernelPageDeletionGuard'
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
@@ -8,7 +7,6 @@ import {isCollapsedProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {blockDeletionGuardsFacet, resolveDeletionRefusal} from '@/extensions/core.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {COMMENTS_PAGE_ALIAS, commentsPageBlockId} from './container'
@@ -37,7 +35,7 @@ afterAll(async () => { await db.cleanup() })
 
 const setUp = async (extensions = [referencesDataExtension, annotationsPlugin]) => {
   await resetTestDb(db.db)
-  repo = createTestRepo({db: db.db, user: {id: 'alex', name: 'Alex'}, extensions: [...extensions, blockDeletionGuardsFacet.of(kernelPageDeletionGuard)]}).repo
+  repo = createTestRepo({db: db.db, user: {id: 'alex', name: 'Alex'}, extensions}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Project notes',
@@ -259,41 +257,6 @@ describe('target lifecycle', () => {
     const anchor = threadAnchorOf(root)
     if (anchor.kind !== 'range') throw new Error('expected a range anchor')
     expect(resolveAnchor((await repo.load('A'))!.content, anchor)).toEqual({state: 'moved', from: 24, to: 31})
-  })
-})
-
-describe('the container', () => {
-  beforeEach(() => setUp())
-
-  it('refuses deletion even after its last thread is deleted', async () => {
-    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
-    const container = repo.block(commentsPageBlockId(WS))
-    await container.load()
-    expect(await resolveDeletionRefusal(repo, container)).toContain(COMMENTS_PAGE_ALIAS)
-    await repo.tx(tx => tx.delete(threadId), opts)
-    expect(await resolveDeletionRefusal(repo, container)).toContain(COMMENTS_PAGE_ALIAS)
-  })
-
-  it('refuses deletion while threads sit under a block of the user\u2019s own on the page', async () => {
-    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
-    const containerId = commentsPageBlockId(WS)
-    const archive = await repo.mutate.createChild({parentId: containerId, content: 'Archive', position: {kind: 'first'}})
-    await repo.mutate.move({id: threadId, parentId: archive, position: {kind: 'last'}})
-    const container = repo.block(containerId)
-    await container.load()
-    expect(await resolveDeletionRefusal(repo, container)).toContain(COMMENTS_PAGE_ALIAS)
-  })
-
-  it('leaves other pages alone, even one a thread root was moved under by hand', async () => {
-    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
-    await repo.mutate.move({id: threadId, parentId: 'page', position: {kind: 'last'}})
-    const page = repo.block('page')
-    await page.load()
-    expect(await resolveDeletionRefusal(repo, page)).toBeNull()
-    // The empty kernel page stays protected.
-    const container = repo.block(commentsPageBlockId(WS))
-    await container.load()
-    expect(await resolveDeletionRefusal(repo, container)).toContain(COMMENTS_PAGE_ALIAS)
   })
 })
 

@@ -4,7 +4,6 @@
  * `run` / `query` / `block`, plus registry accessors and sync/undo control.
  */
 
-import {getOrCreateKernelPage} from './kernelPage'
 import { v4 as uuidv4 } from 'uuid'
 import type { FacetRuntime, Facet, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -155,6 +154,7 @@ import {
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
+import { getOrCreateKernelPage } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'

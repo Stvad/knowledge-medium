@@ -1,7 +1,7 @@
-import {systemPagesFacet} from '@/data/facets'
-import {assetsPageSpec} from './mediaBlock'
 import { attachmentCleanerIOVerb } from '@/data/attachmentCleanerIOVerb.js'
+import { systemPagesFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { assetsPageSpec } from './mediaBlock.js'
 
 export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
   // Loaded when asked for: the data runtime's extensions are imported by the

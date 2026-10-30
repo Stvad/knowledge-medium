@@ -26,7 +26,6 @@
  * (renderers, actions, contexts) live in their own extensions.
  */
 
-import {migrationsPageSpec} from '@/data/migrationsPage'
 import {
   definitionBlockProjectorFacet,
   definitionSeedsFacet,
@@ -44,6 +43,7 @@ import {
 import { propertiesPageSpec } from '@/data/propertiesPage'
 import { typesPageSpec } from '@/data/typesPage'
 import { recentsPageSpec } from '@/data/recentsPage'
+import { migrationsPageSpec } from '@/data/migrationsPage'
 import { propertyCellBackfill } from './internals/propertyCellBackfill'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'

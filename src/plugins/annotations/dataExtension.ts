@@ -5,7 +5,7 @@
 import {definitionSeedsFacet, queriesFacet, systemPagesFacet, typeSeedsFacet} from '@/data/facets'
 import type {AppExtension} from '@/facets/facet'
 import {backlinkEdgeExclusionsFacet} from '@/plugins/backlinks/edgeExclusions.js'
-import {commentsPageSpec} from './container'
+import {commentsPageSpec} from './container.ts'
 import {threadIdsForBlockQuery} from './queries.ts'
 import {threadsForBlockQuery} from './summaries.ts'
 import {annotationPropertySeeds, annotationTargetProp, annotationThreadType, THREAD_TYPE} from './schema.ts'
