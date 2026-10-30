@@ -1,1 +1,1 @@
-export{oh as UpdateIndicator}from"../../../chunks/app-CRDWzWIw.js";
+export{oh as UpdateIndicator}from"../../../chunks/app-Sdu-HCfi.js";

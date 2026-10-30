@@ -1,1 +1,1 @@
-export{OX as FacetBridge}from"../../chunks/app-CRDWzWIw.js";
+export{OX as FacetBridge}from"../../chunks/app-Sdu-HCfi.js";
