@@ -25,10 +25,13 @@ export const countsInPill = (thread: ThreadSummary): boolean => thread.open && t
 export const pillCount = (threads: readonly ThreadSummary[]): number | null =>
   threads.length === 0 ? null : threads.filter(countsInPill).length
 
+/** What a highlight reads off a thread. */
+export type HighlightThread = Pick<ThreadSummary, 'id' | 'open' | 'anchor'>
+
 /** Does this thread draw a highlight over its quote? Every open range thread
  *  does, comments or not, as decided for now; it may narrow to threads with
  *  comments, quoters or a replacement. This is the one place that decides it. */
-export const drawsHighlight = (thread: ThreadSummary): boolean => thread.open && thread.anchor.kind === 'range'
+export const drawsHighlight = (thread: HighlightThread): boolean => thread.open && thread.anchor.kind === 'range'
 
 /** Whole-block threads first, then by where the quote started, then oldest
  *  first. */

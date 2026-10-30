@@ -51,7 +51,7 @@ import {
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
-import {pillCount, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
 import {replyTo, setThreadStatus} from './threads.ts'
 import {
   closeComposer,
@@ -88,6 +88,21 @@ const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
 const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
 
+const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
+
+export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
+  threads?.filter(drawsHighlight).map(({id, open, anchor}) => ({id, open, anchor})) ?? NO_HIGHLIGHTS
+
+/** The block's highlights, only: the selection keeps its identity while just
+ *  a thread's comments change, and so does the feed built from it
+ *  (`THREAD_HIGHLIGHTS_KEY` says why that matters). */
+const useHighlightFeed = (block: Block): ThreadHighlightsFeed => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const threads = useHandle(block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}), {selector: highlightsOf})
+  return useMemo(() => ({blockId: block.id, threads}), [block.id, threads])
+}
+
 const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
@@ -105,7 +120,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const expanded = useThreadsExpanded(key)
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
-  const highlights = useMemo((): ThreadHighlightsFeed => ({blockId: block.id, threads}), [block.id, threads])
+  const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
       <div className="min-w-0 flex-1">
