@@ -1,1 +1,1 @@
-export{nC as WorkspaceSwitcher}from"../../../chunks/app-DsPOwokX.js";
+export{nC as WorkspaceSwitcher}from"../../../chunks/app-CTLbkBhX.js";

@@ -1,1 +1,1 @@
-export{JD as openKeybindingsSettingsAction}from"../../../chunks/app-DsPOwokX.js";
+export{JD as openKeybindingsSettingsAction}from"../../../chunks/app-CTLbkBhX.js";

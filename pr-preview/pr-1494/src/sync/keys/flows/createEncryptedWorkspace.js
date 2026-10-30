@@ -1,1 +1,1 @@
-export{SC as createEncryptedWorkspace}from"../../../../chunks/app-DsPOwokX.js";
+export{SC as createEncryptedWorkspace}from"../../../../chunks/app-CTLbkBhX.js";

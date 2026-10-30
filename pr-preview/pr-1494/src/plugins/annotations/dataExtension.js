@@ -1,1 +1,1 @@
-export{BG as annotationsDataExtension}from"../../../chunks/app-DsPOwokX.js";
+export{BG as annotationsDataExtension}from"../../../chunks/app-CTLbkBhX.js";
