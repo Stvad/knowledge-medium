@@ -321,10 +321,10 @@ export class DbContention {
     return this.isCleanWindow(window.mark)
   }
 
-  /** One read answered several callers at once. Called by request coalescers
-   *  (`ancestorBatch`), the only place that fact is known. Every window open
-   *  across it is disqualified: N callers awaiting one statement each record
-   *  its full wall-clock, which is one observation reported N times.
+  /** One read answered several callers at once. Called by the request
+   *  coalescer (`readBatch`), the only place that fact is known. Every window
+   *  open across it is disqualified: N callers awaiting one statement each
+   *  record its full wall-clock, which is one observation reported N times.
    *
    *  UNCONDITIONAL, and that costs something deliberately. A resolver batching
    *  many ids for its own single resolve (`core.manyAncestors`,
@@ -459,9 +459,9 @@ export class DbContention {
 }
 
 /** The contention tracker for a metrics-wrapped db, reachable from the db
- *  alone. `WeakMap` for the same reason `ancestorBatch` keys its batchers that
- *  way: a coalescer holding only `ctx.db` has to be able to report shared work
- *  without the Repo threading a sink through every query signature. */
+ *  alone. `WeakMap` for the same reason `readBatcherPerDb` keys its batchers
+ *  that way: a coalescer holding only `ctx.db` has to be able to report shared
+ *  work without the Repo threading a sink through every query signature. */
 const contentionByDb = new WeakMap<object, DbContention>()
 
 /** Establish `pool` as the tracker for `db`, and attach the feeds that belong
