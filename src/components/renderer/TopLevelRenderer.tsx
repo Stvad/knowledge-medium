@@ -55,7 +55,7 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
       className="min-h-screen h-screen bg-background text-foreground flex flex-col"
       style={{paddingTop: 'env(safe-area-inset-top, 0px)'}}
     >
-      <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-0.5 md:px-2">
+      <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden">
         <Header/>
         <NestedBlockContextProvider
           overrides={{
