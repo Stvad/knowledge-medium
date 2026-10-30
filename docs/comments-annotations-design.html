@@ -600,7 +600,7 @@ The nearest-to-hint rule this design first used picks 19, which is the wrong tex
     <ul>
       <li><strong>The same holds at the end of a block.</strong> Take <code>Meet Thursday</code>: its stored suffix is empty. After accepting, the window after <code>Thursday</code> is <code>" 9am"</code>, not empty, so the anchor is not exact.</li>
       <li><strong>And at the start.</strong> A stored prefix shorter than 16 characters must still begin the block.</li>
-      <li><strong>Except where the text repeats.</strong> In <code>Say very very very very very very good.</code>, accepting <code>very</code> → <code>very very</code> leaves the quote at its offset between the same 16-character windows, so a duplicate would still be exact. Accept therefore refuses any application after which its own anchor would still resolve exact; there the user edits the block directly.</li>
+      <li><strong>Except where the text repeats.</strong> In <code>Say very very very very very very good.</code>, accepting <code>very</code> → <code>very very</code> leaves the quote at its offset between the same 16-character windows, so a duplicate would still be exact. Accept therefore refuses any application after which its own anchor would still resolve exact; there the user edits the block directly. "Confirm position" can also put a copy's anchor back on applied text, where it is exact again, so accept also refuses where the text around the quote already reads as the replacement.</li>
     </ul>
   </li>
   <li><strong>The editor.</strong> A pending debounced write in the target's editor could flush stale text over an accepted change. But Accept is a click in the card, which blurs the editor. Blur flushes the pending write (<code>BlockEditor.tsx:306-307</code>), and that write is queued on the write lock ahead of the accept's transaction. v1 has no programmatic accept, so nothing else can accept while the target is open. An agent proposes changes; a person accepts them. An agent that should change text directly uses <code>edit_block</code>.</li>
@@ -813,7 +813,7 @@ add_comment({target: "^3f2a9c1d", quote: "Thursday", replacement: "Thursday 9am"
       <li>refuses on stale, moved or deleted targets;</li>
       <li>is one undo step;</li>
       <li>refuses a duplicate of an applied suggestion, both mid-block and with the quote at the very start or the very end of the block, where the stored context is shorter than 16 characters or empty;</li>
-      <li>refuses, before writing, a change after which the anchor would still be exact (text that repeats around the quote).</li>
+      <li>refuses, before writing, a change after which the anchor would still be exact (text that repeats around the quote), and a copy re-anchored onto applied text.</li>
     </ul>
   </li>
   <li><strong>Nested threads:</strong>
