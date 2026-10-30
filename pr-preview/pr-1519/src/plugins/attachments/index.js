@@ -1,1 +1,0 @@
-export{rv as attachmentsPlugin}from"../../../chunks/app-BulqmRUg.js";

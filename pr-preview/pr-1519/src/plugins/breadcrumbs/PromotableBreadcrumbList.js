@@ -1,1 +1,0 @@
-export{MS as PromotableBreadcrumbList}from"../../../chunks/app-BulqmRUg.js";

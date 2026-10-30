@@ -1,1 +1,0 @@
-export{xj as dispatchPointerAction,Sj as setPointerActionDispatcher}from"../../chunks/app-BulqmRUg.js";

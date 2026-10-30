@@ -1,1 +1,0 @@
-export{DN as GESTURE_ACTIVE,ON as GESTURE_CANCEL,kN as GESTURE_IDLE,AN as TOUCH_HOLD_MS,jN as TOUCH_SLOP_PX,MN as continuousGestureRecognizersFacet,NN as createBlockGestureController,PN as enabledTouchAction,FN as suppressNextClick,IN as unionTouchAction,LN as useContinuousGestures}from"../../chunks/app-BulqmRUg.js";

@@ -1,1 +1,0 @@
-export{LA as ExtensionPromptSurface,RA as extensionPromptsExtension}from"../../../chunks/app-BulqmRUg.js";

@@ -1,1 +1,0 @@
-export{Ak as BlockEmbed}from"../../../chunks/app-BulqmRUg.js";

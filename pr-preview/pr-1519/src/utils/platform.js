@@ -1,1 +1,0 @@
-export{sB as isIOS,cB as isMacPlatform}from"../../chunks/app-BulqmRUg.js";

@@ -1,1 +1,0 @@
-export{Kg as remarkWikilinks}from"../../../../../chunks/app-BulqmRUg.js";

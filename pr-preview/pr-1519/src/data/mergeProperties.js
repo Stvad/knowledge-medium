@@ -1,1 +1,0 @@
-export{D2 as mergeProperties}from"../../chunks/app-BulqmRUg.js";

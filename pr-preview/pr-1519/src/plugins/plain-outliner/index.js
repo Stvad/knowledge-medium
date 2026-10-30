@@ -1,1 +1,0 @@
-export{LS as plainOutlinerPlugin}from"../../../chunks/app-BulqmRUg.js";

@@ -1,1 +1,0 @@
-export{C7 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,w7 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,T7 as __resetLayoutSessionIdForTesting,E7 as getLayoutSessionId,D7 as isInstalledAppDisplayMode,O7 as readOrCreateLayoutSessionId}from"../../chunks/app-BulqmRUg.js";

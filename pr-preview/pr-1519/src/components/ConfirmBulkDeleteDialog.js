@@ -1,1 +1,0 @@
-export{SN as ConfirmBulkDeleteDialog}from"../../chunks/app-BulqmRUg.js";

@@ -1,1 +1,0 @@
-export{$_ as richPastePlugin}from"../../../chunks/app-BulqmRUg.js";

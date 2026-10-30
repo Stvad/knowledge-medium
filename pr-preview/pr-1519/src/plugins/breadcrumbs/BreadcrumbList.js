@@ -1,1 +1,0 @@
-export{IS as BreadcrumbList}from"../../../chunks/app-BulqmRUg.js";

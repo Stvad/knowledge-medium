@@ -1,1 +1,0 @@
-export{$I as BlockProperties}from"../../chunks/app-BulqmRUg.js";

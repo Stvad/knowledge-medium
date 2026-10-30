@@ -1,1 +1,0 @@
-export{RO as CommandPaletteHeaderItem}from"../../../chunks/app-BulqmRUg.js";
