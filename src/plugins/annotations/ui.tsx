@@ -3,7 +3,8 @@
  *
  * - a comment pill in the gutter, after the reference pill, on every
  *   non-nested surface, the focal block included (nothing else shows a focal
- *   block's comments);
+ *   block's comments). It also hands the block's threads to the read-mode
+ *   highlights (`readHighlights.ts`);
  * - its inline expansion under the block, holding the composer and a card per
  *   thread;
  * - each card renders the thread root through `BlockComponent` in a nested
@@ -12,7 +13,7 @@
  *   Delete (`CommentActions`).
  */
 
-import {useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
@@ -43,6 +44,7 @@ import {showError} from '@/utils/toast.js'
 import {resolveAnchor} from './anchor.ts'
 import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {THREAD_HIGHLIGHTS_KEY, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -50,7 +52,7 @@ import {
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
-import {pillCount, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
 import {replyTo, setThreadStatus} from './threads.ts'
 import {
   closeComposer,
@@ -87,6 +89,21 @@ const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
 const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
 
+const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
+
+export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
+  threads?.filter(drawsHighlight).map(({id, open, anchor}) => ({id, open, anchor})) ?? NO_HIGHLIGHTS
+
+/** The block's highlights, only: the selection keeps its identity while just
+ *  a thread's comments change, and so does the feed built from it
+ *  (`THREAD_HIGHLIGHTS_KEY` says why that matters). */
+const useHighlightFeed = (block: Block): ThreadHighlightsFeed => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const threads = useHandle(block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}), {selector: highlightsOf})
+  return useMemo(() => ({blockId: block.id, threads}), [block.id, threads])
+}
+
 const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
@@ -104,9 +121,14 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const expanded = useThreadsExpanded(key)
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
+  const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1"><Inner block={block}/></div>
+      <div className="min-w-0 flex-1">
+        <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
+          <Inner block={block}/>
+        </NestedBlockContextProvider>
+      </div>
       {(count !== null || expanded) && (
         <GutterPill
           count={count}
