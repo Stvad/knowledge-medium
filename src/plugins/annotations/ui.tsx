@@ -84,9 +84,12 @@ export const COMMENT_CARD_KEY = 'annotations.commentCard'
 /** Inside a thread's card, and not inside a nested surface within it: block
  *  context is inherited, but every nested surface (an embed in a comment, say)
  *  resets the scope root, so the card's blocks are those whose scope root is
- *  the thread the card was opened for. */
-const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
-  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.scopeRootId
+ *  the thread the card was opened for. An embed of the thread itself (in a
+ *  comment, or a quoter listed under "Quoted in") resets it to that same id,
+ *  so nothing inside an embed is in the card; cards never render in one. */
+export const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
+  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.scopeRootId &&
+  blockContext.isEmbedded !== true
 
 const useReadOnly = (repo: Repo): boolean =>
   useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)

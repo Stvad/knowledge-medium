@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
+import {quotedInFooterContribution} from './quotedIn'
 import {THREAD_TYPE} from './schema'
 import type {ThreadSummary} from './summaries'
 import {
@@ -9,6 +10,7 @@ import {
   commentContextMenuItem,
   commentPillContribution,
   commentsFooterContribution,
+  inCard,
   pillClick,
   threadsUnderComment,
 } from './ui'
@@ -43,8 +45,16 @@ describe('where the comments UI attaches', () => {
     expect(commentActionsContribution(ctx({blockContext: embedInCard}))).toBeNull()
   })
 
+  it('stops at an embed of the card’s own thread, whose scope root is the thread again', () => {
+    // A comment embedding its thread, or a quoter listed under "Quoted in".
+    const threadEmbeddedInItsCard = {[COMMENT_CARD_KEY]: 'T', scopeRootId: 'T', isNestedSurface: true, isEmbedded: true}
+    expect(inCard(threadEmbeddedInItsCard)).toBe(false)
+    expect(quotedInFooterContribution(ctx({types: [THREAD_TYPE], blockContext: threadEmbeddedInItsCard}))).toBeFalsy()
+    expect(quotedInFooterContribution(ctx({types: [THREAD_TYPE], blockContext: {[COMMENT_CARD_KEY]: 'T', scopeRootId: 'T'}}))).toBeTruthy()
+  })
+
   it('shows a comment\u2019s open threads under it, but never a thread whose card already encloses it', () => {
-    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
+    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, quoterCount: 0, createdAt: 0})
     const onComment = [thread('T'), thread('U'), thread('V', false)]
     // A thread anchored to a comment of itself would otherwise render itself
     // inside its own card, forever.
@@ -52,7 +62,7 @@ describe('where the comments UI attaches', () => {
   })
 
   it('pins a card from the pill when the margin is drawn, revealing closed threads when they are all there is', () => {
-    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
+    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, quoterCount: 0, createdAt: 0})
     expect(pillClick([thread('R', false), thread('O')], true)).toEqual({kind: 'activate', threadId: 'O', revealClosed: false})
     expect(pillClick([thread('R', false)], true)).toEqual({kind: 'activate', threadId: 'R', revealClosed: true})
     expect(pillClick([thread('O')], false)).toEqual({kind: 'expand-inline'})
