@@ -1,1 +1,1 @@
-export{wF as useShortcutSurfaceActivations}from"../../chunks/app-CISOAGNk.js";
+export{wF as useShortcutSurfaceActivations}from"../../chunks/app-PA-vUtQD.js";

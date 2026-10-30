@@ -1,1 +1,1 @@
-export{NK as contributorsDataExtension}from"../../../chunks/app-CISOAGNk.js";
+export{NK as contributorsDataExtension}from"../../../chunks/app-PA-vUtQD.js";

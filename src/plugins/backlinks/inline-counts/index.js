@@ -1,1 +1,1 @@
-export{qh as inlineBacklinkCountsExtension}from"../../../../chunks/app-CISOAGNk.js";
+export{qh as inlineBacklinkCountsExtension}from"../../../../chunks/app-PA-vUtQD.js";

@@ -1,1 +1,1 @@
-export{dC as WorkspaceSettingsDialog}from"../../../chunks/app-CISOAGNk.js";
+export{dC as WorkspaceSettingsDialog}from"../../../chunks/app-PA-vUtQD.js";

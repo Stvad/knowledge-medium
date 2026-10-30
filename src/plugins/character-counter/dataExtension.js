@@ -1,1 +1,1 @@
-export{YK as characterCounterDataExtension}from"../../../chunks/app-CISOAGNk.js";
+export{YK as characterCounterDataExtension}from"../../../chunks/app-PA-vUtQD.js";

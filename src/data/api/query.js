@@ -1,1 +1,1 @@
-export{Jrt as defineQuery}from"../../../chunks/app-CISOAGNk.js";
+export{Jrt as defineQuery}from"../../../chunks/app-PA-vUtQD.js";

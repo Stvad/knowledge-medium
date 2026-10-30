@@ -1,1 +1,1 @@
-export{yx as spatialNavigationShellDecorator}from"../../../chunks/app-CISOAGNk.js";
+export{yx as spatialNavigationShellDecorator}from"../../../chunks/app-PA-vUtQD.js";

@@ -1,1 +1,1 @@
-export{UD as shortcutHelpToggle}from"../../../chunks/app-CISOAGNk.js";
+export{UD as shortcutHelpToggle}from"../../../chunks/app-PA-vUtQD.js";

@@ -1,1 +1,1 @@
-export{oP as useIsMobile,sP as usePointerCoarse}from"../../chunks/app-CISOAGNk.js";
+export{oP as useIsMobile,sP as usePointerCoarse}from"../../chunks/app-PA-vUtQD.js";

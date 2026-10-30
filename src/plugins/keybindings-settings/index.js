@@ -1,1 +1,1 @@
-export{oO as keybindingOverridesProp,sO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-CISOAGNk.js";
+export{oO as keybindingOverridesProp,sO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-PA-vUtQD.js";

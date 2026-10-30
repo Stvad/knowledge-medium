@@ -1,1 +1,1 @@
-export{DL as AddPropertyForm}from"../../../chunks/app-CISOAGNk.js";
+export{DL as AddPropertyForm}from"../../../chunks/app-PA-vUtQD.js";

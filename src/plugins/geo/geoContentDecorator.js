@@ -1,1 +1,1 @@
-export{Ig as geoContentDecoratorContribution}from"../../../chunks/app-CISOAGNk.js";
+export{Ig as geoContentDecoratorContribution}from"../../../chunks/app-PA-vUtQD.js";
