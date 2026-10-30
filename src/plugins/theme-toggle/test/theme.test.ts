@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   applyTheme,
-  applyThemeId,
   FALLBACK_THEME,
   setThemeRegistry,
   syncLiveThemeMode,
@@ -52,20 +51,14 @@ describe('theme mode on the document root', () => {
     expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBe('light')
   })
 
-  it('applyThemeId keeps an unregistered id verbatim and drops the stale mode', () => {
+  it('applyTheme keeps an unregistered id verbatim and drops the stale mode', () => {
     applyTheme(WARM_DARK)
-    applyThemeId('not-registered-yet')
+    applyTheme('not-registered-yet')
 
     expect(root.dataset.theme).toBe('not-registered-yet')
     expect(root.dataset.themeMode).toBeUndefined()
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('not-registered-yet')
     expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBeNull()
-  })
-
-  it('applyThemeId takes the mode of a registered id from the registry', () => {
-    applyThemeId(WARM_DARK.id)
-
-    expect(root.dataset.themeMode).toBe('dark')
   })
 
   it('syncLiveThemeMode stamps and persists the mode of a persisted id that registered after it was set', () => {

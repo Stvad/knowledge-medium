@@ -17,13 +17,9 @@
     <script>
       // Resolve the persisted theme and its mode before paint so we don't
       // flash the default palette or the light `dark:` utilities. The
-      // __KM_..._ tokens below are generated at build/dev time
-      // (vite-plugins/injectThemeBootDefaults.ts) from THEME_STORAGE_KEY,
-      // THEME_MODE_STORAGE_KEY and DEFAULT_THEME_ID_LIGHT / _DARK — the
-      // source of truth for all four lives in src/themeBootDefaults.ts,
-      // so this script can't drift from the values
-      // src/plugins/theme-toggle/theme.ts and
-      // src/plugins/default-themes/themes.ts actually use. Unknown
+      // __KM_..._ tokens below are substituted at build/dev time
+      // (vite-plugins/injectThemeBootDefaults.ts) with the values in
+      // src/themeBootDefaults.ts, which the app itself uses. Unknown
       // stored values fall through to the :root defaults in
       // src/index.css until the theme-toggle style-sync effect injects
       // the matching rule; a stored id with no stored mode gets its mode

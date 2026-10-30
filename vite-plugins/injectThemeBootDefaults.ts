@@ -33,11 +33,8 @@ const LEFTOVER_TOKEN = /__KM_[A-Za-z0-9_]*__/g
 
 /**
  * Substitutes the `__KM_..._`-token placeholders in index.html's pre-paint
- * script with the current THEME_STORAGE_KEY / THEME_MODE_STORAGE_KEY /
- * DEFAULT_THEME_ID_LIGHT / DEFAULT_THEME_ID_DARK values
- * (src/themeBootDefaults.ts), so the
- * hand-duplicated literals that used to live in index.html can't drift
- * from the source of truth the app itself uses.
+ * script with the values in src/themeBootDefaults.ts, so the script can't
+ * drift from the source of truth the app itself uses.
  *
  * A plain split/join (not a single combined regex) keeps each token's
  * replacement independent and unambiguous even if a substituted value

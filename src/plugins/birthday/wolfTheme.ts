@@ -7,10 +7,9 @@
     works, and whatever he picks wins). But it is deliberately NOT
     contributed via `themesFacet`, so it never joins the toggle cycle or
     the command-palette theme list. Because it's unregistered,
-    `applyTheme('wolf')` (which resolves ids through the registry) wouldn't
-    find it — so we apply the `WOLF_THEME` definition itself, restore via
-    `applyThemeId` (verbatim, since the registry may still be empty at
-    startup), and inject the palette ourselves under `[data-theme="wolf"]`.
+    `applyTheme('wolf')` wouldn't know its mode — so we apply the
+    `WOLF_THEME` definition itself, and inject the palette ourselves under
+    `[data-theme="wolf"]`.
   - Pop stack, not an override layer: on the birthday we save the user's
     current theme and switch to wolf; after the birthday we restore it —
     but ONLY if he never touched it (live theme is still wolf). If he
@@ -21,10 +20,10 @@
 
 import {
   applyTheme,
-  applyThemeId,
   THEME_STORAGE_KEY,
   type ThemeDefinition,
 } from '@/plugins/theme-toggle/theme.js'
+import { DEFAULT_THEME_ID_LIGHT } from '@/themeBootDefaults.js'
 
 export const WOLF_THEME_ID = 'wolf'
 
@@ -36,7 +35,7 @@ const STYLE_EL_ID = 'birthday-wolf-theme'
 
 /** Restore target of last resort, if storage was cleared mid-celebration
  *  and we have no saved previous theme. Matches the app's runtime default. */
-const DEFAULT_RESTORE = 'sunset-warm-light'
+const DEFAULT_RESTORE = DEFAULT_THEME_ID_LIGHT
 
 /** Complete midnight-wolf palette. A partial token set inherits the
  *  `:root` (light) default for any missing key and produces a half-lit
@@ -202,7 +201,7 @@ export function syncWolfTheme(isBirthday: boolean, cycle: string): void {
     // still live here, or still persisted by another tab that applied it.
     // If the user picked another theme during the day, that choice stands.
     if (liveThemeId() === WOLF_THEME_ID || read(THEME_STORAGE_KEY) === WOLF_THEME_ID) {
-      applyThemeId(read(PREV_KEY) ?? DEFAULT_RESTORE)
+      applyTheme(read(PREV_KEY) ?? DEFAULT_RESTORE)
     }
     remove(ACTIVE_KEY)
     remove(PREV_KEY)

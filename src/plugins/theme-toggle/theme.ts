@@ -15,7 +15,11 @@
 */
 
 import { defineFacet } from '@/facets/facet.js'
-import { THEME_MODE_STORAGE_KEY, THEME_STORAGE_KEY } from '@/themeBootDefaults.js'
+import {
+  DEFAULT_THEME_ID_LIGHT,
+  THEME_MODE_STORAGE_KEY,
+  THEME_STORAGE_KEY,
+} from '@/themeBootDefaults.js'
 
 export type ThemeMode = 'light' | 'dark'
 
@@ -60,7 +64,7 @@ export const themesFacet = defineFacet<ThemeContribution, readonly ThemeContribu
  *  default-themes plugin contributes a `sunset-warm-light` theme of
  *  its own once it loads; from then on this entry is unreferenced. */
 export const FALLBACK_THEME: ThemeDefinition = {
-  id: 'sunset-warm-light',
+  id: DEFAULT_THEME_ID_LIGHT,
   label: 'Sunset Warm Light',
   mode: 'light',
 }
@@ -90,11 +94,6 @@ export const setThemeRegistry = (next: readonly ThemeDefinition[]): void => {
 export { THEME_MODE_STORAGE_KEY, THEME_STORAGE_KEY }
 
 const getDocumentRoot = (): HTMLElement => window.document.documentElement
-
-const resolveTheme = (theme: ThemeDefinition | string): ThemeDefinition =>
-  typeof theme === 'string'
-    ? registryById.get(theme) ?? registry[0] ?? FALLBACK_THEME
-    : theme
 
 export const getCurrentTheme = (
   root: HTMLElement = getDocumentRoot(),
@@ -134,30 +133,23 @@ const persistedThemeId = (): string | null => {
   }
 }
 
+/** Applies a theme and persists it. An id is applied verbatim, even one
+ *  the registry doesn't know yet (at startup, before the style-sync effect
+ *  fills it); such an id gets no mode until `syncLiveThemeMode` sees it
+ *  register. */
 export const applyTheme = (
   theme: ThemeDefinition | string,
   root: HTMLElement = getDocumentRoot(),
-): ThemeDefinition => {
-  const resolved = resolveTheme(theme)
-  setLiveTheme(resolved.id, resolved.mode, root)
-  persistTheme(resolved.id, resolved.mode)
-  return resolved
-}
-
-/** Applies `id` verbatim, unlike `applyTheme`, which swaps an unregistered
- *  id for the first registered theme. An id the registry doesn't know yet
- *  gets no mode until `syncLiveThemeMode` sees it register. */
-export const applyThemeId = (
-  id: string,
-  root: HTMLElement = getDocumentRoot(),
 ): void => {
-  const mode = registryById.get(id)?.mode
+  const { id, mode } = typeof theme === 'string'
+    ? { id: theme, mode: registryById.get(theme)?.mode }
+    : theme
   setLiveTheme(id, mode, root)
   persistTheme(id, mode)
 }
 
 /** Re-stamps the live theme's mode from the registry, for an id that was
- *  set before it registered (pre-paint, `applyThemeId`). Persists the mode
+ *  set before it registered (pre-paint, `applyTheme`). Persists the mode
  *  only beside the same persisted id, so it never turns pre-paint's
  *  system-preference default into a chosen theme or overwrites another
  *  tab's newer choice.
@@ -169,19 +161,18 @@ export const applyThemeId = (
 export const syncLiveThemeMode = (root: HTMLElement = getDocumentRoot()): void => {
   const live = registryById.get(root.dataset.theme ?? '')
   if (!live) return
-  setLiveTheme(live.id, live.mode, root)
+  root.dataset.themeMode = live.mode
   if (persistedThemeId() === live.id) persistTheme(live.id, live.mode)
 }
 
 export const toggleTheme = (
   root: HTMLElement = getDocumentRoot(),
-): ThemeDefinition => {
+): void => {
   if (registry.length === 0) return applyTheme(FALLBACK_THEME, root)
   // getCurrentTheme maps an unregistered live id (a persisted plugin theme
   // that's no longer loaded) to registry[0], whose look the `:root` palette
   // gives it, so the first toggle moves on to registry[1].
   const current = getCurrentTheme(root)
   const idx = registry.findIndex((t) => t.id === current.id)
-  const next = registry[(idx + 1) % registry.length]
-  return applyTheme(next, root)
+  applyTheme(registry[(idx + 1) % registry.length], root)
 }
