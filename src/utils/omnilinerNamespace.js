@@ -1,1 +1,1 @@
-export{wY as omnilinerNamespace}from"../../chunks/app-DQWxf-Ru.js";
+export{OY as omnilinerNamespace}from"../../chunks/app-C8u6psG-.js";

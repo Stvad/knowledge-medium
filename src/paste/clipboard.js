@@ -1,1 +1,1 @@
-export{ZP as readClipboardContent}from"../../chunks/app-DQWxf-Ru.js";
+export{$P as readClipboardContent}from"../../chunks/app-C8u6psG-.js";
