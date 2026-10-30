@@ -1,1 +1,1 @@
-export{EM as BlockLoadingPlaceholder}from"../../chunks/app-BoteRsPs.js";
+export{EM as BlockLoadingPlaceholder}from"../../chunks/app-BXe3NkND.js";

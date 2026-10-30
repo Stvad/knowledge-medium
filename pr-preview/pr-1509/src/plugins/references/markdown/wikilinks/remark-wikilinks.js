@@ -1,1 +1,1 @@
-export{Qg as remarkWikilinks}from"../../../../../chunks/app-BoteRsPs.js";
+export{Qg as remarkWikilinks}from"../../../../../chunks/app-BXe3NkND.js";

@@ -1,1 +1,1 @@
-export{cp as BLOCK_HISTORY_CONTENT_CHARS,lp as LISTED_PROPERTY_NAMES,up as MAX_LISTED_CHANGES,dp as blockHistory,fp as recentChanges}from"../../../chunks/app-BoteRsPs.js";
+export{cp as BLOCK_HISTORY_CONTENT_CHARS,lp as LISTED_PROPERTY_NAMES,up as MAX_LISTED_CHANGES,dp as blockHistory,fp as recentChanges}from"../../../chunks/app-BXe3NkND.js";

@@ -1,1 +1,1 @@
-export{eit as defineQuery}from"../../../chunks/app-BoteRsPs.js";
+export{eit as defineQuery}from"../../../chunks/app-BXe3NkND.js";

@@ -1,1 +1,1 @@
-export{RS as PromotableBreadcrumbList}from"../../../chunks/app-BoteRsPs.js";
+export{RS as PromotableBreadcrumbList}from"../../../chunks/app-BXe3NkND.js";

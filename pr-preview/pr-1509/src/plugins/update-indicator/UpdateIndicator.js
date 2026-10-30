@@ -1,1 +1,1 @@
-export{zh as UpdateIndicator}from"../../../chunks/app-BoteRsPs.js";
+export{zh as UpdateIndicator}from"../../../chunks/app-BXe3NkND.js";

@@ -1,1 +1,1 @@
-export{zq as pluginPrefsExtension,Bq as pluginUIStateExtension}from"../../chunks/app-BoteRsPs.js";
+export{zq as pluginPrefsExtension,Bq as pluginUIStateExtension}from"../../chunks/app-BXe3NkND.js";

@@ -1,1 +1,1 @@
-export{BK as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,VK as contributorProfilesByIdsQuery}from"../../../chunks/app-BoteRsPs.js";
+export{BK as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,VK as contributorProfilesByIdsQuery}from"../../../chunks/app-BXe3NkND.js";

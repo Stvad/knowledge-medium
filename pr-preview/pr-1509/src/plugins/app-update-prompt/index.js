@@ -1,1 +1,1 @@
-export{rj as appUpdatePromptExtension}from"../../../chunks/app-BoteRsPs.js";
+export{rj as appUpdatePromptExtension}from"../../../chunks/app-BXe3NkND.js";

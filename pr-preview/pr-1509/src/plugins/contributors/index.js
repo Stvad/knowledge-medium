@@ -1,1 +1,1 @@
-export{Wd as contributorsPlugin}from"../../../chunks/app-BoteRsPs.js";
+export{Wd as contributorsPlugin}from"../../../chunks/app-BXe3NkND.js";

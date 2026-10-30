@@ -1,1 +1,1 @@
-export{aL as BlockProperties}from"../../chunks/app-BoteRsPs.js";
+export{aL as BlockProperties}from"../../chunks/app-BXe3NkND.js";

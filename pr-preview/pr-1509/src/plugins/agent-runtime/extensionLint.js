@@ -1,1 +1,1 @@
-export{ap as lintExtensionSource}from"../../../chunks/app-BoteRsPs.js";
+export{ap as lintExtensionSource}from"../../../chunks/app-BXe3NkND.js";

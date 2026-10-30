@@ -1,1 +1,1 @@
-export{Cp as addComment,wp as anchorForQuote}from"../../../chunks/app-BoteRsPs.js";
+export{Cp as addComment,wp as anchorForQuote}from"../../../chunks/app-BXe3NkND.js";

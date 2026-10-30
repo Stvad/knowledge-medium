@@ -1,1 +1,1 @@
-export{qM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,JM as openExtensionsSettings}from"../../chunks/app-BoteRsPs.js";
+export{qM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,JM as openExtensionsSettings}from"../../chunks/app-BXe3NkND.js";

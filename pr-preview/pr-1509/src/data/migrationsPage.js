@@ -1,1 +1,1 @@
-export{G7 as MIGRATIONS_PAGE_ALIAS,K7 as getOrCreateMigrationsPage,q7 as migrationsPageBlockId,J7 as migrationsPageSpec}from"../../chunks/app-BoteRsPs.js";
+export{G7 as MIGRATIONS_PAGE_ALIAS,K7 as getOrCreateMigrationsPage,q7 as migrationsPageBlockId,J7 as migrationsPageSpec}from"../../chunks/app-BXe3NkND.js";

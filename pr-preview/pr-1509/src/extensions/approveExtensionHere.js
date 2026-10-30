@@ -1,1 +1,1 @@
-export{QA as approveExtensionHere}from"../../chunks/app-BoteRsPs.js";
+export{QA as approveExtensionHere}from"../../chunks/app-BXe3NkND.js";
