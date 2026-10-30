@@ -1,7 +1,7 @@
 import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
 import type { MarkdownExtension } from '@/markdown/extensions.js'
-import { useMarkdownSource } from '@/markdown/source.js'
+import { useMarkdownSource } from '@/markdown/context.js'
 import { remarkWikilinks } from './remark-wikilinks.ts'
 import { Wikilink } from './Wikilink.tsx'
 import { EmbedComponent } from '../referenceNode.tsx'

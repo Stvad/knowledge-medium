@@ -12,7 +12,8 @@ import {
   type MarkdownRenderConfig,
   type MarkdownRenderContext,
 } from '@/markdown/extensions.js'
-import { MarkdownSourceContext } from '@/markdown/source.js'
+import { MarkdownSourceContext } from '@/markdown/context.js'
+import { BlockContext } from '@/context/block.js'
 
 export type RenderMarkdownHtmlMode = 'app' | 'external'
 
@@ -98,15 +99,17 @@ export const renderMarkdownHtml = (
     }
     : config.components
   const markdown = (
-    <MarkdownSourceContext value={{block: context.block, workspaceId: context.data.workspaceId}}>
-      <Markdown
-        remarkPlugins={config.remarkPlugins}
-        rehypePlugins={config.rehypePlugins}
-        components={components}
-      >
-        {content}
-      </Markdown>
-    </MarkdownSourceContext>
+    <BlockContext value={context.blockContext}>
+      <MarkdownSourceContext value={{block: context.block, workspaceId: context.data.workspaceId}}>
+        <Markdown
+          remarkPlugins={config.remarkPlugins}
+          rehypePlugins={config.rehypePlugins}
+          components={components}
+        >
+          {content}
+        </Markdown>
+      </MarkdownSourceContext>
+    </BlockContext>
   )
   const element = mode === 'app' && options?.runtime
     ? (

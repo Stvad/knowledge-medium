@@ -1,5 +1,5 @@
 import { BlockEmbed } from '@/components/references/BlockEmbed.js'
-import { useMarkdownSource } from '@/markdown/source.js'
+import { useMarkdownSource } from '@/markdown/context.js'
 
 export interface ReferenceNode {
   properties?: {

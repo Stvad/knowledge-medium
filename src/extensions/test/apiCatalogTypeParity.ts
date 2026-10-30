@@ -89,7 +89,7 @@ export type {
 
 export type {
   MarkdownSource,
-} from '@/markdown/source.js'
+} from '@/markdown/context.js'
 
 export type {
   OutlineNode,

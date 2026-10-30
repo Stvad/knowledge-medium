@@ -149,17 +149,10 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'markdown',
-    importPath: '@/markdown/source.js',
-    description: 'The block whose content the surrounding markdown renders, for markdown `components` overrides.',
-    exports: ['useMarkdownSource'],
+    importPath: '@/markdown/context.js',
+    description: 'Around rendered markdown: the block a `components` override renders for, and reactive `MarkdownRenderContext.input`.',
+    exports: ['useMarkdownSource', 'MarkdownInputProvider'],
     types: ['MarkdownSource'],
-  },
-  {
-    category: 'markdown',
-    importPath: '@/markdown/input.js',
-    description: 'Reactive input for markdown extensions, provided around a block\'s content and read on `MarkdownRenderContext.input`.',
-    exports: ['MarkdownInputProvider'],
-    types: [],
   },
 
   // --- Paste seam -----------------------------------------------------------

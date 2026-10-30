@@ -23,7 +23,7 @@ import {useInEditMode, useUIStateBlock} from '@/data/globalState.js'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BlockComponent} from '@/components/BlockComponent.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
-import {MarkdownInputProvider} from '@/markdown/input.js'
+import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, useWorkspaceId} from '@/hooks/block.js'
 import {
