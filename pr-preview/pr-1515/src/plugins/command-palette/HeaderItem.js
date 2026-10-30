@@ -1,0 +1,1 @@
+export{BO as CommandPaletteHeaderItem}from"../../../chunks/app-tsG3kq9k.js";

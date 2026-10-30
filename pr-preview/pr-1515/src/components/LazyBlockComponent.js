@@ -1,0 +1,1 @@
+export{yM as LazyBlockComponent}from"../../chunks/app-tsG3kq9k.js";

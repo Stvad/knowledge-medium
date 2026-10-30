@@ -1,0 +1,1 @@
+export{Xrt as defineQuery}from"../../../chunks/app-tsG3kq9k.js";

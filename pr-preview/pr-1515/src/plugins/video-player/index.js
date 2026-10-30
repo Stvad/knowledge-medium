@@ -1,0 +1,1 @@
+export{rb as videoPlayerPlugin}from"../../../chunks/app-tsG3kq9k.js";

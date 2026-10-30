@@ -1,0 +1,1 @@
+export{J9 as getOrCreateTypesPage,Y9 as typesPageBlockId,X9 as typesPageSpec}from"../../chunks/app-tsG3kq9k.js";

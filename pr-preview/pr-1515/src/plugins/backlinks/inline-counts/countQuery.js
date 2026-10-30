@@ -1,0 +1,1 @@
+export{vq as BACKLINKS_COUNT_FOR_BLOCK_QUERY,yq as backlinksCountForBlockQuery}from"../../../../chunks/app-tsG3kq9k.js";

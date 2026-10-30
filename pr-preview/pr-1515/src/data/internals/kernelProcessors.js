@@ -1,0 +1,1 @@
+export{a0 as KERNEL_PROCESSORS}from"../../../chunks/app-tsG3kq9k.js";

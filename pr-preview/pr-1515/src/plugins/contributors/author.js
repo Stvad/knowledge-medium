@@ -1,0 +1,1 @@
+export{gp as authorIdOf}from"../../../chunks/app-tsG3kq9k.js";
