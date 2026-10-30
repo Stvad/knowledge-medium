@@ -1,0 +1,1 @@
+export{g$ as kernelDataExtension}from"../../chunks/app-f5JV5pGi.js";

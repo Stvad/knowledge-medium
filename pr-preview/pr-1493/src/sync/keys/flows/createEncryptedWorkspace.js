@@ -1,0 +1,1 @@
+export{SC as createEncryptedWorkspace}from"../../../../chunks/app-f5JV5pGi.js";

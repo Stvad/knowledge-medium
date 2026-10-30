@@ -1,0 +1,1 @@
+export{WG as ThreadRootBatcher,GG as threadRootBatcherFor}from"../../../chunks/app-f5JV5pGi.js";

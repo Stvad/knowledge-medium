@@ -1,0 +1,1 @@
+export{XN as useIsMobile,ZN as usePointerCoarse}from"../../chunks/app-f5JV5pGi.js";

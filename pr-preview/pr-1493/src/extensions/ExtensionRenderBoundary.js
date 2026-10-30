@@ -1,0 +1,1 @@
+export{iP as ExtensionRenderBoundary}from"../../chunks/app-f5JV5pGi.js";

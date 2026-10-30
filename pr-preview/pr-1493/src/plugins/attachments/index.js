@@ -1,0 +1,1 @@
+export{O_ as attachmentsPlugin}from"../../../chunks/app-f5JV5pGi.js";

@@ -1,0 +1,1 @@
+export{ZA as checkForAppUpdate,QA as registerServiceWorker}from"../chunks/app-f5JV5pGi.js";

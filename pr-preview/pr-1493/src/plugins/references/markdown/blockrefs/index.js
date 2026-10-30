@@ -1,0 +1,1 @@
+export{bg as blockrefMarkdownExtension}from"../../../../../chunks/app-f5JV5pGi.js";

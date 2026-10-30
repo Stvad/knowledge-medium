@@ -1,0 +1,1 @@
+export{Tg as backlinkCompletionSource,Eg as createBacklinkAutocomplete,Dg as isInsideBacklinkBrackets}from"../../chunks/app-f5JV5pGi.js";

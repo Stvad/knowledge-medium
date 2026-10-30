@@ -1,0 +1,1 @@
+export{MC as MAX_OBJECT_BYTES,NC as encodeBytes,PC as encodedSize,FC as fitsObjectLimit,IC as verifyObjectBytes}from"../../chunks/app-f5JV5pGi.js";

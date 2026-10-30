@@ -1,0 +1,1 @@
+export{Ej as dynamicExtensionsExtension}from"../../chunks/app-f5JV5pGi.js";

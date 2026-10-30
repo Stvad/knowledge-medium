@@ -1,0 +1,1 @@
+export{uM as BlockLoadingPlaceholder}from"../../chunks/app-f5JV5pGi.js";

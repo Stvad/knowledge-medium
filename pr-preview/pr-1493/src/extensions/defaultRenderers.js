@@ -1,0 +1,1 @@
+export{pM as defaultRegistry,mM as defaultRendererContributions,hM as defaultRenderersExtension}from"../../chunks/app-f5JV5pGi.js";

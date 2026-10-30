@@ -1,0 +1,1 @@
+export{jM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,MM as openExtensionsSettings}from"../../chunks/app-f5JV5pGi.js";

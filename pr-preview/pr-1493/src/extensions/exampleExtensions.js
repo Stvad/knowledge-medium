@@ -1,0 +1,1 @@
+export{rA as exampleExtensions,iA as insertExampleExtensionsUnder}from"../../chunks/app-f5JV5pGi.js";

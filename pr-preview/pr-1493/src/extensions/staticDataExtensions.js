@@ -1,0 +1,1 @@
+export{sH as staticDataExtensions}from"../../chunks/app-f5JV5pGi.js";

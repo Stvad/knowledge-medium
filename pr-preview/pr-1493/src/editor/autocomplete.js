@@ -1,0 +1,1 @@
+export{TA as editorAutocompleteExtension}from"../../chunks/app-f5JV5pGi.js";

@@ -1,0 +1,1 @@
+export{ps as appVersion}from"../chunks/app-f5JV5pGi.js";

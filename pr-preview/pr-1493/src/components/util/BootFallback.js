@@ -1,0 +1,1 @@
+export{RV as BootFallback}from"../../../chunks/app-f5JV5pGi.js";

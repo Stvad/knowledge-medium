@@ -1,0 +1,1 @@
+export{AX as FacetBridge}from"../../chunks/app-f5JV5pGi.js";
