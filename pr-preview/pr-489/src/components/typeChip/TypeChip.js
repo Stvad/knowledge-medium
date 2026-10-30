@@ -1,1 +1,0 @@
-export{Ik as TypeChip}from"../../../chunks/app-4eK6KgYh.js";

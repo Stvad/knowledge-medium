@@ -1,1 +1,0 @@
-export{JV as SuspenseFallback}from"../../../chunks/app-4eK6KgYh.js";
