@@ -73,6 +73,7 @@ export interface InputTimings {
 
 /** The fields of a long-animation-frame entry this reads. */
 export interface LongFrameEntry {
+  startTime: number
   duration: number
   blockingDuration: number
   scripts: ReadonlyArray<{ forcedStyleAndLayoutDuration: number }>
@@ -130,8 +131,16 @@ export class ResponsivenessTotals {
     this.restart(opts.startedAt)
   }
 
+  /** An entry belongs to the span it BEGAN in. The observer keeps delivering
+   *  after a restart — a queued callback, an entry still waiting for its paint
+   *  — and one begun before it would put the retired span's time in the new. */
+  private beganInSpan(e: { startTime: number }): boolean {
+    return e.startTime >= this.startedAt
+  }
+
   addFrames(entries: readonly LongFrameEntry[]): void {
     for (const e of entries) {
+      if (!this.beganInSpan(e)) continue
       this.frameCount++
       this.frameMs += e.duration
       this.blockingMs += e.blockingDuration
@@ -144,7 +153,7 @@ export class ResponsivenessTotals {
     let newest = -Infinity
     for (const e of entries) {
       newest = Math.max(newest, e.startTime)
-      if (e.duration < SLOW_MS) continue
+      if (e.duration < SLOW_MS || !this.beganInSpan(e)) continue
       // Two identities, either of which can name an input first: a tap's
       // mousedown carries no interactionId but shares pointerdown's start, and
       // its pointerup shares the id but not the start.

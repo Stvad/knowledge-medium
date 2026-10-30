@@ -210,7 +210,9 @@ describe('main-thread responsiveness', () => {
   const start = () => interactionMetricsEffect.start({ repo, workspaceId: WS } as Parameters<
     typeof interactionMetricsEffect.start
   >[0])
-  const longFrame = { duration: 120, blockingDuration: 70, scripts: [{ forcedStyleAndLayoutDuration: 30 }] }
+  /** Begun now, so it falls inside whatever span is current when it is delivered. */
+  const longFrame = () =>
+    ({ startTime: performance.now(), duration: 120, blockingDuration: 70, scripts: [{ forcedStyleAndLayoutDuration: 30 }] })
   const storedResponsiveness = async () => {
     const block = repo.block(pageRecordFor(repo, WS)!.blockId)
     await block.load()
@@ -220,7 +222,7 @@ describe('main-thread responsiveness', () => {
   it('stores what the observers saw beside the counters', async () => {
     const live = stubPerformanceObserver(['long-animation-frame', 'event'])
     const stop = await start()
-    observation(live, 'long-animation-frame').deliver([longFrame])
+    observation(live, 'long-animation-frame').deliver([longFrame()])
     await settleSamples()
     expect((await storedResponsiveness())?.longFrames).toMatchObject({ count: 1, blockingMs: 70, forcedLayoutMs: 30 })
     stop?.()
@@ -232,7 +234,7 @@ describe('main-thread responsiveness', () => {
   it('starts the summary over when the counters are reset', async () => {
     const live = stubPerformanceObserver(['long-animation-frame', 'event'])
     const stop = await start()
-    observation(live, 'long-animation-frame').deliver([longFrame])
+    observation(live, 'long-animation-frame').deliver([longFrame()])
     repo.resetMetrics()
     await settleSamples()
     expect((await storedResponsiveness())?.longFrames?.count).toBe(0)

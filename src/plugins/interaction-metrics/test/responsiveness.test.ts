@@ -14,8 +14,8 @@ import { observation, stubPerformanceObserver } from './fakePerformanceObserver'
 
 const both = (startedAt = 0) => new ResponsivenessTotals({ frames: true, inputs: true, startedAt })
 
-const frame = (duration: number, blockingDuration: number, forced: number[] = []): LongFrameEntry =>
-  ({ duration, blockingDuration, scripts: forced.map((f) => ({ forcedStyleAndLayoutDuration: f })) })
+const frame = (duration: number, blockingDuration: number, forced: number[] = [], startTime = 0): LongFrameEntry =>
+  ({ startTime, duration, blockingDuration, scripts: forced.map((f) => ({ forcedStyleAndLayoutDuration: f })) })
 
 const input = (startTime: number, duration: number, over: Partial<InputEventEntry> = {}): InputEventEntry =>
   ({ startTime, duration, processingStart: startTime + 4, interactionId: 0, ...over })
@@ -198,6 +198,22 @@ describe('coverage', () => {
     expect(sample.slowInputs).toEqual({ count: 0 })
   })
 
+  // The observer keeps delivering after a restart: a callback already queued,
+  // or an entry still waiting for its paint. Begun before the restart, it
+  // belongs to the span being retired, however late it arrives.
+  it('drops entries that began before the restart, delivered after it', () => {
+    const totals = both(0)
+    totals.restart(50_000)
+    totals.addFrames([frame(120, 70, [30], 49_900)])
+    totals.addInputs([input(49_950, 88)])
+    const sample = totals.sample(LATER)
+    expect(sample.longFrames?.count).toBe(0)
+    expect(sample.slowInputs).toEqual({ count: 0 })
+    // ...while one that began inside the new span still counts.
+    totals.addFrames([frame(120, 70, [30], 50_000)])
+    expect(totals.sample(LATER).longFrames?.count).toBe(1)
+  })
+
   // An input still pending at the restart belongs to the old span.
   it('drops an input still pending at the restart', () => {
     const totals = both(0)
@@ -210,15 +226,20 @@ describe('coverage', () => {
 })
 
 describe('observeResponsiveness', () => {
-  afterEach(() => { vi.unstubAllGlobals() })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
 
   it('feeds both entry types into the sample', () => {
     const live = stubPerformanceObserver(['long-animation-frame', 'event', 'mark'])
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)
     const observer = observeResponsiveness()!
     expect(live.map((o) => o.type).sort()).toEqual(['event', 'long-animation-frame'])
-    observation(live, 'long-animation-frame').deliver([frame(90, 40, [12])])
-    // Past the merge horizon, so the sample counts it rather than waiting on it.
-    observation(live, 'event').deliver([input(performance.now() - 10_000, 80)])
+    observation(live, 'long-animation-frame').deliver([frame(90, 40, [12], 2_000)])
+    observation(live, 'event').deliver([input(2_000, 80)])
+    // Past the merge horizon, so the sample counts the input rather than waiting on it.
+    now.mockReturnValue(20_000)
     const sample = observer.sample()
     expect(sample.longFrames?.count).toBe(1)
     expect(sample.slowInputs?.count).toBe(1)
