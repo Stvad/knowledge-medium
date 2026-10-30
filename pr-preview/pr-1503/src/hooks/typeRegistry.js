@@ -1,1 +1,1 @@
-export{nz as useTypes}from"../../chunks/app-Cpn5UbvN.js";
+export{iz as useTypes}from"../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,1 @@
-export{Gh as useGroupedBacklinksConfig}from"../../../chunks/app-Cpn5UbvN.js";
+export{Gh as useGroupedBacklinksConfig}from"../../../chunks/app-DG9MuXTp.js";

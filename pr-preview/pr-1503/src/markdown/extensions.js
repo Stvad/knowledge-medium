@@ -1,1 +1,1 @@
-export{UI as markdownExtensionsFacet,WI as resolveMarkdownRenderConfig}from"../../chunks/app-Cpn5UbvN.js";
+export{GI as markdownExtensionsFacet,KI as resolveMarkdownRenderConfig}from"../../chunks/app-DG9MuXTp.js";
