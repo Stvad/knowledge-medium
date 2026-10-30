@@ -1,1 +1,0 @@
-export{UI as METADATA_ROW_GRID_STYLE,WI as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-BLQCx6nr.js";

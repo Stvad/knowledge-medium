@@ -1,1 +1,0 @@
-export{BC as PendingInvitations}from"../../../chunks/app-BLQCx6nr.js";

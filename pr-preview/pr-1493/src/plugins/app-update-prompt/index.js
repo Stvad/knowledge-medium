@@ -1,1 +1,0 @@
-export{vA as appUpdatePromptExtension}from"../../../chunks/app-BLQCx6nr.js";

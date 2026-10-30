@@ -1,1 +1,0 @@
-export{ID as CommandPalette}from"../../../chunks/app-BLQCx6nr.js";

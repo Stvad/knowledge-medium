@@ -1,1 +1,0 @@
-export{Kg as useIsReadOnly}from"../../chunks/app-BLQCx6nr.js";

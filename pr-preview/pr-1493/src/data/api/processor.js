@@ -1,1 +1,0 @@
-export{frt as definePostCommitProcessor}from"../../../chunks/app-BLQCx6nr.js";

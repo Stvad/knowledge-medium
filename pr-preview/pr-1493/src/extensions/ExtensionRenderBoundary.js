@@ -1,1 +1,0 @@
-export{FN as ExtensionRenderBoundary}from"../../chunks/app-BLQCx6nr.js";

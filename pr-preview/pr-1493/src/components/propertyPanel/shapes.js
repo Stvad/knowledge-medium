@@ -1,1 +1,0 @@
-export{zB as propertyShapeLabel}from"../../../chunks/app-BLQCx6nr.js";

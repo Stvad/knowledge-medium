@@ -1,1 +1,0 @@
-export{wf as lintExtensionSource}from"../../../chunks/app-BLQCx6nr.js";

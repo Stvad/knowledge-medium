@@ -1,1 +1,0 @@
-export{irt as defineQuery}from"../../../chunks/app-BLQCx6nr.js";

@@ -1,1 +1,0 @@
-export{DG as THREAD_TYPE,OG as annotationPropertySeeds,kG as annotationQuotePrefixProp,AG as annotationQuoteStartProp,jG as annotationQuoteSuffixProp,MG as annotationStatusProp,NG as annotationTargetProp,PG as annotationThreadType,FG as threadAnchorOf,IG as threadIsOpen,LG as threadStatusOf,RG as threadTargetIdOf}from"../../../chunks/app-BLQCx6nr.js";

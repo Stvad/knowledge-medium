@@ -1,1 +1,0 @@
-export{UK as pluginPrefsExtension,WK as pluginUIStateExtension}from"../../chunks/app-BLQCx6nr.js";
