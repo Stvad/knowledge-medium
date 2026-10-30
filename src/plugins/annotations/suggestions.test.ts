@@ -19,7 +19,8 @@ import {
   threadReplacementOf,
   threadStatusOf,
 } from './schema'
-import {acceptSuggestion, SuggestionChangedError} from './suggestions'
+import {confirmedAnchor, reanchorThread} from './reanchor'
+import {acceptSuggestion, appliedContent, SuggestionChangedError} from './suggestions'
 import {createThread, InvalidSuggestionError, setThreadStatus, UnannotatableTargetError} from './threads'
 
 const WS = 'ws'
@@ -71,9 +72,16 @@ describe('creating a suggestion', () => {
       .rejects.toBeInstanceOf(InvalidSuggestionError)
   })
 
-  it('refuses an empty replacement, and one that changes nothing', async () => {
+  it('refuses an empty replacement, one that changes nothing, and one that cuts a character in half', async () => {
     await expect(suggest('Thursday', '')).rejects.toBeInstanceOf(InvalidSuggestionError)
     await expect(suggest('Thursday', 'Thursday')).rejects.toBeInstanceOf(InvalidSuggestionError)
+    await expect(suggest('Thursday', 'Thu\ud83d')).rejects.toBeInstanceOf(InvalidSuggestionError)
+  })
+
+  it('stays a suggestion when re-anchored: anchoring it to the whole block is refused', async () => {
+    const threadId = await suggest('Thursday', 'Thursday 9am')
+    await expect(reanchorThread(repo, threadId, null)).rejects.toBeInstanceOf(InvalidSuggestionError)
+    expect((await rootOf(threadId)).content).toBe('Thursday')
   })
 })
 
@@ -152,6 +160,39 @@ describe('acceptSuggestion', () => {
     expect(threadStatusOf(await rootOf(threadId))).toBe('open')
   })
 
+  // Confirm position puts a copy's anchor back on the applied text, where it
+  // is exact again; the text itself still says it was applied.
+  it.each([
+    ['appends to the quote', 'Meet Thursday at noon', 'Thursday 9am', 'Meet Thursday 9am at noon'],
+    ['prefixes the quote', 'Meet Thursday at noon', 'next Thursday', 'Meet next Thursday at noon'],
+  ])('refuses a copy re-anchored onto applied text, where the replacement %s', async (_, before, replacement, after) => {
+    await setTarget(before)
+    const first = await suggest('Thursday', replacement)
+    const duplicate = await suggest('Thursday', replacement)
+    await acceptSuggestion(repo, first)
+    expect(await targetText()).toBe(after)
+    const confirmed = confirmedAnchor(after, threadAnchorOf(await rootOf(duplicate)) as RangeAnchor)!
+    await reanchorThread(repo, duplicate, confirmed)
+
+    await expect(acceptSuggestion(repo, duplicate)).rejects.toThrow('already reads as this suggestion')
+    expect(await targetText()).toBe(after)
+  })
+
+  it('refuses a suggestion that is no longer open, as a card on another device may still offer it', async () => {
+    const threadId = await suggest('Thursday', 'Thursday 9am')
+    await setThreadStatus(repo, threadId, 'rejected')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(InvalidSuggestionError)
+    expect(await targetText()).toBe(MID)
+    expect(threadStatusOf(await rootOf(threadId))).toBe('rejected')
+  })
+
+  it('refuses a change that would turn the target into a property field row', async () => {
+    await setTarget('oops')
+    const threadId = await suggest('oops', '::((3f2a9c1d-0000-4000-8000-00000000f1e1))')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(InvalidSuggestionError)
+    expect(await targetText()).toBe('oops')
+  })
+
   it('refuses the same suggestion reopened after it was applied', async () => {
     await setTarget('Meet Thursday')
     const threadId = await suggest('Thursday', 'Thursday 9am')
@@ -201,6 +242,17 @@ describe('acceptSuggestion', () => {
 
     await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(UnannotatableTargetError)
     expect((await repo.load(value.id))!.content).toBe(value.content)
+  })
+})
+
+describe('appliedContent', () => {
+  it('refuses a change after which the quote still sits between the same windows, though the text does not read as it yet', () => {
+    // The replacement copies the 16 characters after the quote, then differs.
+    const content = 'Ship it. The vendor slipped badly.'
+    const anchor = anchorFor(content, 'Ship it.')
+    const resolved = {from: 0, to: anchor.quote.length}
+    expect(() => appliedContent(content, resolved, anchor, 'Ship it. The vendor slipped twice.')).toThrow('could not be told from')
+    expect(appliedContent(content, resolved, anchor, 'Ship it now.')).toBe('Ship it now. The vendor slipped badly.')
   })
 })
 

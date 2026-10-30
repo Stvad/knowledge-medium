@@ -108,12 +108,22 @@ export const assertQuotable = (anchor: RangeAnchor): void => {
   }
 }
 
+/** A suggestion replaces quoted text, so its anchor is a range: when it is
+ *  made and whenever it is re-anchored. */
+export const assertSuggestionAnchor = (anchor: RangeAnchor | null, replacement: string | undefined): void => {
+  if (replacement !== undefined && !anchor) {
+    throw new InvalidSuggestionError('A suggestion replaces quoted text: select the text to change.')
+  }
+}
+
 const assertSuggestion = (anchor: RangeAnchor | null, replacement: string): void => {
-  if (!anchor) throw new InvalidSuggestionError('A suggestion replaces quoted text: select the text to change.')
+  assertSuggestionAnchor(anchor, replacement)
+  if (!anchor) return
   if (replacement === '') {
     throw new InvalidSuggestionError('The replacement is empty. To suggest deleting text, replace a slightly wider span.')
   }
   if (replacement === anchor.quote) throw new InvalidSuggestionError('The replacement is the same as the quoted text.')
+  if (hasLoneSurrogate(replacement)) throw new InvalidSuggestionError('The replacement cuts a character in half.')
 }
 
 export interface CreateThreadArgs {
