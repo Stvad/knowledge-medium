@@ -1,1 +1,1 @@
-export{Ch as updateIndicatorPlugin}from"../../../chunks/app-z8bqnIE2.js";
+export{Ch as updateIndicatorPlugin}from"../../../chunks/app-BTtCPXjD.js";

@@ -1,1 +1,1 @@
-export{PA as ExtensionPromptSurface,FA as extensionPromptsExtension}from"../../../chunks/app-z8bqnIE2.js";
+export{PA as ExtensionPromptSurface,FA as extensionPromptsExtension}from"../../../chunks/app-BTtCPXjD.js";

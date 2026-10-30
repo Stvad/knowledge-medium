@@ -1,1 +1,1 @@
-export{IA as extensionPromptDiagnosticContribution,LA as extensionPromptDiagnosticSource}from"../../../chunks/app-z8bqnIE2.js";
+export{IA as extensionPromptDiagnosticContribution,LA as extensionPromptDiagnosticSource}from"../../../chunks/app-BTtCPXjD.js";

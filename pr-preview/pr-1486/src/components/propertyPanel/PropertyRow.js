@@ -1,1 +1,1 @@
-export{KI as PropertyRow}from"../../../chunks/app-z8bqnIE2.js";
+export{KI as PropertyRow}from"../../../chunks/app-BTtCPXjD.js";

@@ -1,1 +1,1 @@
-export{bg as backlinksViewFacet}from"../../../chunks/app-z8bqnIE2.js";
+export{bg as backlinksViewFacet}from"../../../chunks/app-BTtCPXjD.js";

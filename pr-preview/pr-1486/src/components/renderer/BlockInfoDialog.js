@@ -1,1 +1,1 @@
-export{sP as BlockInfoDialog}from"../../../chunks/app-z8bqnIE2.js";
+export{sP as BlockInfoDialog}from"../../../chunks/app-BTtCPXjD.js";

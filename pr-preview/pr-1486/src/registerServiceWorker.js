@@ -1,1 +1,1 @@
-export{rj as checkForAppUpdate,ij as registerServiceWorker}from"../chunks/app-z8bqnIE2.js";
+export{rj as checkForAppUpdate,ij as registerServiceWorker}from"../chunks/app-BTtCPXjD.js";

@@ -1,1 +1,1 @@
-export{LM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,RM as openExtensionsSettings}from"../../chunks/app-z8bqnIE2.js";
+export{LM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,RM as openExtensionsSettings}from"../../chunks/app-BTtCPXjD.js";

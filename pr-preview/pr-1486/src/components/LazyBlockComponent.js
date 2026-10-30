@@ -1,1 +1,1 @@
-export{pM as LazyBlockComponent}from"../../chunks/app-z8bqnIE2.js";
+export{pM as LazyBlockComponent}from"../../chunks/app-BTtCPXjD.js";
