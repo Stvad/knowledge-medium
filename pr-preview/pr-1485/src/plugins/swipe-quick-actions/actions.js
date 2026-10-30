@@ -1,1 +1,1 @@
-export{HO as DEFAULT_QUICK_ACTION_ITEMS,UO as SWIPE_RIGHT_BLOCK_ACTION_ID,WO as isQuickActionItem,GO as quickActionItemsFacet}from"../../../chunks/app-C1rsLWpp.js";
+export{HO as DEFAULT_QUICK_ACTION_ITEMS,UO as SWIPE_RIGHT_BLOCK_ACTION_ID,WO as isQuickActionItem,GO as quickActionItemsFacet}from"../../../chunks/app-DxQZgJCS.js";

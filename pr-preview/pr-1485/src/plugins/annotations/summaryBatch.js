@@ -1,1 +1,1 @@
-export{yG as ThreadRootBatcher,bG as threadRootBatcherFor}from"../../../chunks/app-C1rsLWpp.js";
+export{yG as ThreadRootBatcher,bG as threadRootsWithCounts}from"../../../chunks/app-DxQZgJCS.js";
