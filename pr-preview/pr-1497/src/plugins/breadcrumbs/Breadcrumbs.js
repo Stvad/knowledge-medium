@@ -1,0 +1,1 @@
+export{rS as Breadcrumbs}from"../../../chunks/app-BQwU82a4.js";

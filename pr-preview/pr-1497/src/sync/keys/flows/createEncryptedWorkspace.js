@@ -1,0 +1,1 @@
+export{QS as createEncryptedWorkspace}from"../../../../chunks/app-BQwU82a4.js";

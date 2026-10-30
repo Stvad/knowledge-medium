@@ -1,0 +1,1 @@
+export{db as seedTutorial}from"../../../chunks/app-BQwU82a4.js";

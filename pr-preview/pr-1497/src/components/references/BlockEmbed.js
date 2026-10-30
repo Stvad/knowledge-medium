@@ -1,0 +1,1 @@
+export{ZO as BlockEmbed}from"../../../chunks/app-BQwU82a4.js";

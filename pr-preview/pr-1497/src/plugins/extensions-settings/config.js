@@ -1,0 +1,1 @@
+export{ef as extensionsOverridesPresetCore,tf as extensionsOverridesProp,nf as extensionsPrefsType,rf as overridesCodec}from"../../../chunks/app-BQwU82a4.js";

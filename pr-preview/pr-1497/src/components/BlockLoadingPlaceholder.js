@@ -1,0 +1,1 @@
+export{Vj as BlockLoadingPlaceholder}from"../../chunks/app-BQwU82a4.js";

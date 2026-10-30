@@ -1,0 +1,1 @@
+export{RV as staticDataExtensions}from"../../chunks/app-BQwU82a4.js";

@@ -1,0 +1,1 @@
+export{g$ as Block,_$ as requireLoadedBlock}from"../../chunks/app-BQwU82a4.js";

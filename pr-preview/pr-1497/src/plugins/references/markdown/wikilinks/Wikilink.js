@@ -1,0 +1,1 @@
+export{hg as Wikilink}from"../../../../../chunks/app-BQwU82a4.js";
