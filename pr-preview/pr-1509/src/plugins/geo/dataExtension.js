@@ -1,0 +1,1 @@
+export{MW as geoDataExtension}from"../../../chunks/app-CH6w_ufQ.js";

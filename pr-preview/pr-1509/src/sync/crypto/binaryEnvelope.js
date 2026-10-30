@@ -1,0 +1,1 @@
+export{QC as BINARY_ENVELOPE_MAGIC,$C as BINARY_ENVELOPE_MIN_BYTES,ew as BINARY_ENVELOPE_OVERHEAD_BYTES,tw as BINARY_MAGIC_BYTES,nw as decodeBinaryEnvelope,rw as encodeBinaryEnvelope,iw as hasBinaryEnvelopeMagic}from"../../../chunks/app-CH6w_ufQ.js";

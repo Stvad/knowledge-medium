@@ -1,0 +1,1 @@
+export{Gd as contributorsPlugin}from"../../../chunks/app-CH6w_ufQ.js";

@@ -1,0 +1,1 @@
+export{KS as blockEditingContentRenderer}from"../../../chunks/app-CH6w_ufQ.js";

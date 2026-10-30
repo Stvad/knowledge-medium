@@ -1,0 +1,1 @@
+export{Vg as usePlaceSearch}from"../../../chunks/app-CH6w_ufQ.js";

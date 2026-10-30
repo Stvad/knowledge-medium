@@ -1,0 +1,1 @@
+export{Ug as geoContentDecoratorContribution}from"../../../chunks/app-CH6w_ufQ.js";

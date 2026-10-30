@@ -1,0 +1,1 @@
+export{OF as useShortcutSurfaceActivations}from"../../chunks/app-CH6w_ufQ.js";

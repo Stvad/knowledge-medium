@@ -1,0 +1,1 @@
+export{Gk as DEFAULT_TYPE_COLORS,Kk as defaultTypeColor,qk as pickLeastUsedTypeColor}from"../../chunks/app-CH6w_ufQ.js";

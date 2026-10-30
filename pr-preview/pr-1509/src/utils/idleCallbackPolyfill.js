@@ -1,0 +1,1 @@
+export{Ct as installIdleCallbackPolyfill}from"../../chunks/app-CH6w_ufQ.js";

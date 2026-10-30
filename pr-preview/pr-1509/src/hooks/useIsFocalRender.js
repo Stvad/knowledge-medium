@@ -1,0 +1,1 @@
+export{WI as isFocalRender,GI as useIsFocalRender}from"../../chunks/app-CH6w_ufQ.js";

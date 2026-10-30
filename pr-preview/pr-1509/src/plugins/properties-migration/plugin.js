@@ -1,0 +1,1 @@
+export{oa as propertiesMigrationPlugin}from"../../../chunks/app-CH6w_ufQ.js";

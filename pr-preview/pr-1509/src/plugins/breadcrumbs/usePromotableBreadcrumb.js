@@ -1,0 +1,1 @@
+export{IS as usePromotableBreadcrumb}from"../../../chunks/app-CH6w_ufQ.js";

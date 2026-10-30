@@ -1,0 +1,1 @@
+export{L7 as MIGRATIONS_PAGE_ALIAS,R7 as getOrCreateMigrationsPage,z7 as migrationsPageBlockId,B7 as migrationsPageSpec}from"../../chunks/app-CH6w_ufQ.js";

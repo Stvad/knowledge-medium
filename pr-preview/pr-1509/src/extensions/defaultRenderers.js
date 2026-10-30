@@ -1,0 +1,1 @@
+export{DM as defaultRegistry,OM as defaultRendererContributions,kM as defaultRenderersExtension}from"../../chunks/app-CH6w_ufQ.js";

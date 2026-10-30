@@ -1,0 +1,1 @@
+export{Krt as defineQuery}from"../../../chunks/app-CH6w_ufQ.js";

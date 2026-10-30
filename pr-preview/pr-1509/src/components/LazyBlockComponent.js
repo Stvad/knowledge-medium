@@ -1,0 +1,1 @@
+export{xM as LazyBlockComponent}from"../../chunks/app-CH6w_ufQ.js";

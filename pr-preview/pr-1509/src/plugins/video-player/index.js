@@ -1,0 +1,1 @@
+export{ob as videoPlayerPlugin}from"../../../chunks/app-CH6w_ufQ.js";

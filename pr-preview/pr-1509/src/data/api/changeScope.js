@@ -1,0 +1,1 @@
+export{Rit as CHANGE_SCOPE_POLICIES,zit as ChangeScope,Bit as isChangeScope,Vit as policyForScope,Hit as scopeAllowedInReadOnly,Uit as scopeIsUndoable,Wit as scopePoliciesEquivalent,Git as scopeUploadsToServer,Kit as sourceForScope}from"../../../chunks/app-CH6w_ufQ.js";
