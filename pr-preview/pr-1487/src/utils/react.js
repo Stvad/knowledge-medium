@@ -1,1 +1,0 @@
-export{RN as useIsMobile,zN as usePointerCoarse}from"../../chunks/app-BTdMr_I_.js";

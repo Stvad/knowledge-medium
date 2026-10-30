@@ -1,1 +1,0 @@
-export{gk as kernelPropertyUiExtension,_k as typesPropertyUi,vk as typesPropertyUiExtension}from"../../../chunks/app-BTdMr_I_.js";

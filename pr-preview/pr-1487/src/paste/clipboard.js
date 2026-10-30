@@ -1,1 +1,0 @@
-export{MP as readClipboardContent}from"../../chunks/app-BTdMr_I_.js";

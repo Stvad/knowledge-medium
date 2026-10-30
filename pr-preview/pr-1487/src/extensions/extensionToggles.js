@@ -1,1 +1,0 @@
-export{Sj as extensionDisplayName,Cj as extensionName,wj as userExtensionShellToggle,Tj as userExtensionToggle}from"../../chunks/app-BTdMr_I_.js";

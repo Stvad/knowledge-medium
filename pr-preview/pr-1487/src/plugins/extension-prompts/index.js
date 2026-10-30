@@ -1,1 +1,0 @@
-export{vA as ExtensionPromptSurface,yA as extensionPromptsExtension}from"../../../chunks/app-BTdMr_I_.js";

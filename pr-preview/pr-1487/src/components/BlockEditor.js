@@ -1,1 +1,0 @@
-export{JP as BlockEditor}from"../../chunks/app-BTdMr_I_.js";

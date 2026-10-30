@@ -1,1 +1,0 @@
-export{iG as dailyNotesLocalSchema}from"../../../chunks/app-BTdMr_I_.js";

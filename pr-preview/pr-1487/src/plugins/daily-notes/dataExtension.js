@@ -1,1 +1,0 @@
-export{rG as dailyNotesDataExtension}from"../../../chunks/app-BTdMr_I_.js";

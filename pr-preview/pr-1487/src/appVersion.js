@@ -1,1 +1,0 @@
-export{ps as appVersion}from"../chunks/app-BTdMr_I_.js";

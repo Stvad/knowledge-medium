@@ -1,1 +1,0 @@
-export{Ct as installIdleCallbackPolyfill}from"../../chunks/app-BTdMr_I_.js";

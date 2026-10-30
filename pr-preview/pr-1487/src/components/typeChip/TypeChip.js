@@ -1,1 +1,0 @@
-export{xk as TypeChip}from"../../../chunks/app-BTdMr_I_.js";

@@ -1,1 +1,0 @@
-export{kz as isIOS,Az as isMacPlatform}from"../../chunks/app-BTdMr_I_.js";

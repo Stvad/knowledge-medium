@@ -1,1 +1,0 @@
-export{GV as staticDataExtensions}from"../../chunks/app-BTdMr_I_.js";

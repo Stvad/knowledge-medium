@@ -1,1 +1,0 @@
-export{KN as ExtensionRenderBoundary}from"../../chunks/app-BTdMr_I_.js";

@@ -1,1 +1,0 @@
-export{UA as appUpdate,WA as useAppUpdateAvailable}from"../chunks/app-BTdMr_I_.js";

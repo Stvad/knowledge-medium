@@ -1,1 +1,0 @@
-export{xM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,SM as openExtensionsSettings}from"../../chunks/app-BTdMr_I_.js";

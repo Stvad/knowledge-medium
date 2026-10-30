@@ -1,1 +1,0 @@
-export{VA as checkForAppUpdate,HA as registerServiceWorker}from"../chunks/app-BTdMr_I_.js";

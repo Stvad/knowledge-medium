@@ -1,1 +1,0 @@
-export{WP as captureMediaVerb}from"../../chunks/app-BTdMr_I_.js";

@@ -1,1 +1,0 @@
-export{sK as charLimitProp,cK as charProfileProp,lK as charScopeProp}from"../../../chunks/app-BTdMr_I_.js";

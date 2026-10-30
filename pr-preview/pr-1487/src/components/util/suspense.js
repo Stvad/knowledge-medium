@@ -1,1 +1,0 @@
-export{CV as SuspenseFallback}from"../../../chunks/app-BTdMr_I_.js";

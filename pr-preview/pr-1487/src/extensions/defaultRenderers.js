@@ -1,1 +1,0 @@
-export{rM as defaultRegistry,iM as defaultRendererContributions,aM as defaultRenderersExtension}from"../../chunks/app-BTdMr_I_.js";

@@ -1,1 +1,0 @@
-export{Xk as resolveStructuralEditPolicy,Zk as structuralEditPolicyForBlock}from"../../chunks/app-BTdMr_I_.js";

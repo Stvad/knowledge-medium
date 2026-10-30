@@ -1,1 +1,0 @@
-export{vg as Wikilink}from"../../../../../chunks/app-BTdMr_I_.js";

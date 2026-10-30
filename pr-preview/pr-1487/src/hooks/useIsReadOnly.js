@@ -1,1 +1,0 @@
-export{Vg as useIsReadOnly}from"../../chunks/app-BTdMr_I_.js";
