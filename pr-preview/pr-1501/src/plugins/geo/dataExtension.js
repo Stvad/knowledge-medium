@@ -1,0 +1,1 @@
+export{OW as geoDataExtension}from"../../../chunks/app-CHtyvdtt.js";

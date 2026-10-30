@@ -1,0 +1,1 @@
+export{mA as resolveStructuralEditPolicy,hA as structuralEditPolicyForBlock}from"../../chunks/app-CHtyvdtt.js";

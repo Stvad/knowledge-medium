@@ -1,0 +1,1 @@
+export{fq as BACKLINKS_COUNT_FOR_BLOCK_QUERY,pq as backlinksCountForBlockQuery}from"../../../../chunks/app-CHtyvdtt.js";

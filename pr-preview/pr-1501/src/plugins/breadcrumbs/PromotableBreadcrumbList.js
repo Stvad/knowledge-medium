@@ -1,0 +1,1 @@
+export{AS as PromotableBreadcrumbList}from"../../../chunks/app-CHtyvdtt.js";

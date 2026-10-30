@@ -1,0 +1,1 @@
+export{CL as AddPropertyForm}from"../../../chunks/app-CHtyvdtt.js";

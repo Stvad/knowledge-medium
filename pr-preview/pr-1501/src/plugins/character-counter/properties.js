@@ -1,0 +1,1 @@
+export{JK as charLimitProp,YK as charProfileProp,XK as charScopeProp}from"../../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{Z_ as richPastePlugin}from"../../../chunks/app-CHtyvdtt.js";

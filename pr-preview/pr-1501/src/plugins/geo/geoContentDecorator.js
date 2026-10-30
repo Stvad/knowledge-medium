@@ -1,0 +1,1 @@
+export{Ig as geoContentDecoratorContribution}from"../../../chunks/app-CHtyvdtt.js";

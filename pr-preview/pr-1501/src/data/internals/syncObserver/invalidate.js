@@ -1,0 +1,1 @@
+export{Y$ as applySyncInvalidation}from"../../../../chunks/app-CHtyvdtt.js";

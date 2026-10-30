@@ -1,0 +1,1 @@
+export{YI as BlockProperties}from"../../chunks/app-CHtyvdtt.js";

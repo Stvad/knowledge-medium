@@ -1,0 +1,1 @@
+export{wK as annotationMarginOpenProp}from"../../../chunks/app-CHtyvdtt.js";

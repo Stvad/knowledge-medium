@@ -1,0 +1,1 @@
+"use client";export{GI as Collapsible,KI as CollapsibleContent,qI as CollapsibleTrigger}from"../../../chunks/app-CHtyvdtt.js";

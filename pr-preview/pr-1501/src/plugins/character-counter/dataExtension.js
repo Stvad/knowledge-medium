@@ -1,0 +1,1 @@
+export{GK as characterCounterDataExtension}from"../../../chunks/app-CHtyvdtt.js";

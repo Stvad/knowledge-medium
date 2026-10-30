@@ -1,0 +1,1 @@
+export{_x as spatialNavigationShellDecorator}from"../../../chunks/app-CHtyvdtt.js";

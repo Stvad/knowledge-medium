@@ -1,0 +1,1 @@
+export{Ng as LocationPropertyEditor}from"../../../chunks/app-CHtyvdtt.js";

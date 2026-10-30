@@ -1,0 +1,1 @@
+export{wF as useShortcutSurfaceActivations}from"../../chunks/app-CHtyvdtt.js";

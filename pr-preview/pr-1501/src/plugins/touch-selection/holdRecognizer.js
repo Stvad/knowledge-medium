@@ -1,0 +1,1 @@
+export{l_ as BLOCK_HOLD_GESTURE,u_ as BLOCK_HOLD_RECOGNIZER_ID,d_ as blockHoldRecognizer}from"../../../chunks/app-CHtyvdtt.js";

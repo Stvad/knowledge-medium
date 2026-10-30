@@ -1,0 +1,1 @@
+export{U9 as getOrCreatePropertiesPage,W9 as propertiesPageBlockId,G9 as propertiesPageSpec}from"../../chunks/app-CHtyvdtt.js";

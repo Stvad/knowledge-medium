@@ -1,0 +1,1 @@
+export{MS as getBreadcrumbContentPreview}from"../../../chunks/app-CHtyvdtt.js";

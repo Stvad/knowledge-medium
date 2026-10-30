@@ -1,0 +1,1 @@
+export{kS as usePromotableBreadcrumb}from"../../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{Xet as isChildBackedPropertiesWorkspace}from"../chunks/app-CHtyvdtt.js";

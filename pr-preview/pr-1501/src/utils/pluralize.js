@@ -1,0 +1,1 @@
+export{k0 as agree,A0 as pluralize}from"../../chunks/app-CHtyvdtt.js";

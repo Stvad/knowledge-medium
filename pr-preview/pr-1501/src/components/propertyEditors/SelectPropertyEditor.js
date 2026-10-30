@@ -1,0 +1,1 @@
+export{Tk as SelectPropertyEditor}from"../../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{wX as instrumentAdapter}from"../../../chunks/app-CHtyvdtt.js";

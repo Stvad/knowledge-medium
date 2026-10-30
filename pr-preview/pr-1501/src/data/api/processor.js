@@ -1,0 +1,1 @@
+export{Xrt as definePostCommitProcessor}from"../../../chunks/app-CHtyvdtt.js";

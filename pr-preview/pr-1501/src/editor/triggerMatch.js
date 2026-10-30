@@ -1,0 +1,1 @@
+export{nG as matchCharTrigger}from"../../chunks/app-CHtyvdtt.js";

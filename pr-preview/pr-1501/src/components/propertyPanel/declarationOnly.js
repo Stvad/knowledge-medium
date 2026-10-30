@@ -1,0 +1,1 @@
+export{xL as declarationOnlyDefinitionForName,SL as declarationOnlyStatusText}from"../../../chunks/app-CHtyvdtt.js";

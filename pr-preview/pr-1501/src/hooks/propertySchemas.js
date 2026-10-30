@@ -1,0 +1,1 @@
+export{gV as usePropertySchemas}from"../../chunks/app-CHtyvdtt.js";

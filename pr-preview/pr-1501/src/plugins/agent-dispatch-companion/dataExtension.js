@@ -1,0 +1,1 @@
+export{rY as agentDispatchCompanionDataExtension}from"../../../chunks/app-CHtyvdtt.js";

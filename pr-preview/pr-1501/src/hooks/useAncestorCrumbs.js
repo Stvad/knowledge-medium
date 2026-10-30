@@ -1,0 +1,1 @@
+export{UT as useAncestorCrumbs}from"../../chunks/app-CHtyvdtt.js";

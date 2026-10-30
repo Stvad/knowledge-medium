@@ -1,0 +1,1 @@
+export{bM as BlockLoadingPlaceholder}from"../../chunks/app-CHtyvdtt.js";

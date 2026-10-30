@@ -1,0 +1,1 @@
+export{kK as contributorsDataExtension}from"../../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{mP as ExtensionRenderBoundary}from"../../chunks/app-CHtyvdtt.js";

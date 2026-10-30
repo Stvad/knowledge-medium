@@ -1,0 +1,1 @@
+export{Vk as DEFAULT_TYPE_COLORS,Hk as defaultTypeColor,Uk as pickLeastUsedTypeColor}from"../../chunks/app-CHtyvdtt.js";

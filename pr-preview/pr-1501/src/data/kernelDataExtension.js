@@ -1,0 +1,1 @@
+export{s1 as kernelDataExtension}from"../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{bV as propertyShapeLabel}from"../../../chunks/app-CHtyvdtt.js";

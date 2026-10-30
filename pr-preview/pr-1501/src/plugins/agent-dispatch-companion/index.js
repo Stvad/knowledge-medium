@@ -1,0 +1,1 @@
+export{Vd as agentDispatchCompanionPlugin}from"../../../chunks/app-CHtyvdtt.js";

@@ -1,0 +1,1 @@
+export{Qq as resolvedThenable,$q as stampFulfilled}from"../../chunks/app-CHtyvdtt.js";

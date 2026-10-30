@@ -1,0 +1,1 @@
+export{lB as withMoveTransition}from"../../chunks/app-CHtyvdtt.js";

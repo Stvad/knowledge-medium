@@ -1,0 +1,1 @@
+export{FS as plainOutlinerPlugin}from"../../../chunks/app-CHtyvdtt.js";

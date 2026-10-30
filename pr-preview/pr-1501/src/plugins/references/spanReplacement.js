@@ -1,0 +1,1 @@
+export{gU as preferredSpanReplacement}from"../../../chunks/app-CHtyvdtt.js";

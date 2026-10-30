@@ -1,0 +1,1 @@
+export{bJ as aliasDataExtension}from"../../../chunks/app-CHtyvdtt.js";

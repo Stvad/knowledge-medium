@@ -1,0 +1,1 @@
+export{eb as videoPlayerMarkdownExtension}from"../../../chunks/app-CHtyvdtt.js";

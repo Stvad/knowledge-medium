@@ -1,0 +1,1 @@
+export{Mj as ClientLocalSettings,Nj as clientLocalSettings}from"../../chunks/app-CHtyvdtt.js";

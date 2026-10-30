@@ -1,0 +1,1 @@
+export{Qw as DEFAULT_THEME_ID_DARK,$w as DEFAULT_THEME_ID_LIGHT,Fw as defaultThemeContributions,Pw as defaultThemesPlugin}from"../../../chunks/app-CHtyvdtt.js";

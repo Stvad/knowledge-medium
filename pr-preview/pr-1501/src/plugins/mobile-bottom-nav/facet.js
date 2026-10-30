@@ -1,0 +1,1 @@
+export{wS as mobileBottomNavItemsFacet}from"../../../chunks/app-CHtyvdtt.js";
