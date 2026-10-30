@@ -1,1 +1,1 @@
-export{UA as editorAutocompleteExtension}from"../../chunks/app-B13MlUy7.js";
+export{UA as editorAutocompleteExtension}from"../../chunks/app-CjBo-MhY.js";
