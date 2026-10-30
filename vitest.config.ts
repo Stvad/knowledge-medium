@@ -59,7 +59,7 @@ export default defineConfig({
     // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
     // starts one and runs those through vitest.supabase.config.ts.
     exclude: [
-      '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
+      '**/node_modules/**', '**/dist/**', '**/.git/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
       SUPABASE_STACK_TESTS,
     ],
