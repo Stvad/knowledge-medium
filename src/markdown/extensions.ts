@@ -33,6 +33,11 @@ export interface MarkdownRenderConfig {
    *  only the `raw` nodes remark left: HTML a remark plugin already folded
    *  into its own node (a wikilink alias) arrives as literal text. */
   rehypePlugins: PluggableList
+  /** Define each component once, at module scope, and read what it needs from
+   *  the node or from context (`useMarkdownSource()` for the block being
+   *  rendered): one built per resolve is a new element type each time, and
+   *  React remounts its subtree, an embed's open editor included, whenever the
+   *  block re-renders. */
   components: Components
 }
 
