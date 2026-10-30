@@ -12,7 +12,7 @@ import {Decoration, EditorView, ViewPlugin, type DecorationSet} from '@codemirro
 import type {Handle} from '@/data/api'
 import type {CodeMirrorExtensionContribution} from '@/editor/codeMirrorExtensions.js'
 import {resolveAnchor} from './anchor.ts'
-import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
 
 export const HIGHLIGHT_CLASS = 'km-annotation-highlight'
 export const MOVED_HIGHLIGHT_CLASS = 'km-annotation-highlight-moved'
@@ -24,7 +24,7 @@ export interface HighlightRange {
 }
 
 /** Where `threads` highlight `doc`: exact and moved anchors, stale ones not. */
-export const highlightRanges = (doc: string, threads: readonly ThreadSummary[]): HighlightRange[] =>
+export const highlightRanges = (doc: string, threads: readonly HighlightThread[]): HighlightRange[] =>
   threads.filter(drawsHighlight).flatMap(thread => {
     if (thread.anchor.kind !== 'range') return []
     const resolved = resolveAnchor(doc, thread.anchor)

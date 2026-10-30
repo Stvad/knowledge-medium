@@ -32,9 +32,9 @@ import type {Parent, Root, RootContent} from 'mdast'
 import type {Plugin} from 'unified'
 import type {MarkdownExtension} from '@/markdown/extensions.js'
 import {HIGHLIGHT_CLASS, highlightRanges, MOVED_HIGHLIGHT_CLASS, type HighlightRange} from './highlights.ts'
-import type {ThreadSummary} from './summaries.ts'
+import type {HighlightThread} from './summaries.ts'
 
-export const ANNOTATION_MARK_NODE = 'annotationMark'
+const ANNOTATION_MARK_NODE = 'annotationMark'
 
 type Position = NonNullable<RootContent['position']>
 type Point = Position['start']
@@ -81,21 +81,19 @@ const coverageOf = (segments: readonly Segment[], {from, to}: Span): Coverage =>
     : {kind: 'partial'}
 }
 
+/** Markdown's own containers whose children are phrasing content, the only
+ *  place a mark can sit. */
+const PHRASING_PARENTS = new Set(['paragraph', 'heading', 'tableCell', 'emphasis', 'strong', 'delete', 'link', 'linkReference'])
+
 /** Markdown's own containers, which this descends into. Every other node with
  *  children was made by a plugin (a wikilink, a block ref) and is one token. */
 const MARKDOWN_CONTAINERS = new Set([
-  'root', 'paragraph', 'heading', 'blockquote', 'list', 'listItem', 'table', 'tableRow', 'tableCell',
-  'footnoteDefinition', 'emphasis', 'strong', 'delete', 'link', 'linkReference',
+  'root', 'blockquote', 'list', 'listItem', 'table', 'tableRow', 'footnoteDefinition', ...PHRASING_PARENTS,
 ])
-
-/** Containers whose children are phrasing content, the only place a mark can
- *  sit. */
-const PHRASING_PARENTS = new Set(['paragraph', 'heading', 'tableCell', 'emphasis', 'strong', 'delete', 'link', 'linkReference'])
 
 type Container = Root | (RootContent & Parent)
 
-const isContainer = (node: RootContent | Root): node is Container =>
-  MARKDOWN_CONTAINERS.has(node.type) && Array.isArray((node as {children?: unknown}).children)
+const isContainer = (node: RootContent | Root): node is Container => MARKDOWN_CONTAINERS.has(node.type)
 
 const parsedSpan = (node: RootContent | Root): Span | null => {
   const from = node.position?.start.offset
@@ -103,20 +101,29 @@ const parsedSpan = (node: RootContent | Root): Span | null => {
   return from === undefined || to === undefined ? null : {from, to}
 }
 
+/** Text markdown may have decoded from longer source: a backslash (an
+ *  escape, or what one left), an entity, a line whose prefix was stripped.
+ *  Decoding only shortens, so the decoded text can also be spelled, one or
+ *  more characters early, by the source it came from (`&amp;amp;` reads
+ *  `&amp;`), and aligning it there would mark the wrong text. */
+const MAYBE_DECODED = /\\|&[#a-z]|\n[>\s]/i
+
 /** The source text a positionless node stands for, where it is knowable:
  *  text is itself, an autolink literal is its one text child, and a plugin's
- *  token keeps its raw source as its `value`. */
+ *  token keeps its raw source as its `value`. Never text that may have been
+ *  decoded. */
 const literalSource = (node: RootContent): string | null => {
-  if (node.type === 'link') {
-    const [child] = node.children
-    if (node.children.length !== 1 || child.type !== 'text') return null
-    const url = node.url ?? ''
-    return [child.value, `mailto:${child.value}`, `http://${child.value}`, `https://${child.value}`].includes(url)
-      ? child.value
-      : null
-  }
-  const value = (node as {value?: unknown}).value
-  return typeof value === 'string' && !isContainer(node) ? value : null
+  const text = node.type === 'link' ? autolinkText(node) : (node as {value?: unknown}).value
+  return typeof text === 'string' && !MAYBE_DECODED.test(text) ? text : null
+}
+
+const autolinkText = (node: RootContent & {type: 'link'}): string | null => {
+  const [child] = node.children
+  if (node.children.length !== 1 || child.type !== 'text') return null
+  const url = node.url ?? ''
+  return [child.value, `mailto:${child.value}`, `http://${child.value}`, `https://${child.value}`].includes(url)
+    ? child.value
+    : null
 }
 
 /** Every node's span: the parser's, or one recovered for a run of positionless
@@ -128,10 +135,6 @@ const literalSource = (node: RootContent): string | null => {
  *  which makes that stretch opaque. */
 const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
   const spans = new WeakMap<object, Span>()
-  const assign = (node: RootContent, span: Span) => {
-    spans.set(node, span)
-    if (node.type === 'link') spans.set(node.children[0], span)
-  }
   const visit = (parent: Container) => {
     const parentSpan = spans.get(parent)
     const children = parent.children as RootContent[]
@@ -149,14 +152,14 @@ const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
       for (; i < end && from !== undefined; i++) {
         const text = literalSource(children[i])
         if (text === null || source.slice(from, from + text.length) !== text) break
-        assign(children[i], {from, to: from + text.length})
+        spans.set(children[i], {from, to: from + text.length})
         from += text.length
       }
       let j = end - 1
       for (; j >= i && to !== undefined; j--) {
         const text = literalSource(children[j])
         if (text === null || source.slice(to - text.length, to) !== text) break
-        assign(children[j], {from: to - text.length, to})
+        spans.set(children[j], {from: to - text.length, to})
         to -= text.length
       }
       if (from !== undefined && to !== undefined && from <= to) {
@@ -193,8 +196,7 @@ const opaqueSpans = (tree: Root, spans: WeakMap<object, Span>, source: string): 
   return found
 }
 
-const drawable = (source: string, opaque: readonly Span[]) => ({from, to}: HighlightRange): boolean =>
-  from >= 0 && from < to && to <= source.length &&
+const drawable = (opaque: readonly Span[]) => ({from, to}: HighlightRange): boolean =>
   opaque.every(node => node.to <= from || node.from >= to || (node.from >= from && node.to <= to))
 
 const pointsOf = (source: string) => {
@@ -216,7 +218,8 @@ const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
   },
 } as unknown as RootContent)
 
-type Piece = {node: RootContent; mark: Segment | null}
+/** `moved` is the piece's highlight style, or null when it is not marked. */
+type Piece = {node: RootContent; moved: boolean | null}
 
 export interface AnnotationMarksOptions {
   /** The content the ranges were resolved against. A renderer that transforms
@@ -227,9 +230,9 @@ export interface AnnotationMarksOptions {
 
 export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({content, ranges}) => (tree, file) => {
   const source = String(file.value ?? '')
-  if (source !== content || ranges.length === 0) return
+  if (source !== content) return
   const spans = spansOf(tree, source)
-  const segments = segmentsOf(ranges.filter(drawable(source, opaqueSpans(tree, spans, source))))
+  const segments = segmentsOf(ranges.filter(drawable(opaqueSpans(tree, spans, source))))
   if (segments.length === 0) return
   const pointAt = pointsOf(source)
   const position = (from: number, to: number): Position => ({start: pointAt(from), end: pointAt(to)})
@@ -247,52 +250,44 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
         ...(node.position ? {position: position(piece.from, piece.to)} : {}),
       } as RootContent
       const coverage = coverageOf(segments, piece)
-      pieces.push({node: text, mark: coverage.kind === 'whole' ? {...piece, moved: coverage.moved} : null})
+      pieces.push({node: text, moved: coverage.kind === 'whole' ? coverage.moved : null})
     }
     return pieces
   }
 
   const piecesOf = (node: RootContent, phrasing: boolean): Piece[] => {
     const span = spans.get(node)
-    if (!span) return [{node, mark: null}]
+    if (!span) return [{node, moved: null}]
     const coverage = coverageOf(segments, span)
-    if (coverage.kind === 'none') return [{node, mark: null}]
-    if (coverage.kind === 'whole' && phrasing) return [{node, mark: {...span, moved: coverage.moved}}]
+    if (coverage.kind === 'none') return [{node, moved: null}]
+    if (coverage.kind === 'whole' && phrasing) return [{node, moved: coverage.moved}]
     if (isContainer(node)) {
       transform(node)
-      return [{node, mark: null}]
+      return [{node, moved: null}]
     }
     // Partly covered, so addressable text: `drawable` refused ranges that cut
     // anything else.
-    return phrasing && node.type === 'text' ? splitText(node, span) : [{node, mark: null}]
+    return node.type === 'text' ? splitText(node, span) : [{node, moved: null}]
   }
 
-  /** Rebuild `parent.children`, wrapping each run of marked pieces of one
-   *  style in one mark, when the markup between them is covered too, so a
-   *  quote reads as one mark rather than one per node. */
+  /** Rebuild `parent.children`, wrapping each run of adjacent marked pieces
+   *  of one style in one mark, so a quote reads as one mark rather than one
+   *  per node. */
   const transform = (parent: Container) => {
     const phrasing = PHRASING_PARENTS.has(parent.type)
     const out: RootContent[] = []
-    let run: {mark: Segment; nodes: RootContent[]} | null = null
-    const close = () => {
-      if (run) out.push(markNode(run.mark.moved, run.nodes))
-      run = null
-    }
-    for (const piece of (parent.children as RootContent[]).flatMap(child => piecesOf(child, phrasing))) {
-      const current: {mark: Segment; nodes: RootContent[]} | null = run
-      if (!piece.mark) {
-        close()
-        out.push(piece.node)
-      } else if (current && current.mark.moved === piece.mark.moved &&
-        coverageOf(segments, {from: current.mark.to, to: piece.mark.from}).kind === 'whole') {
-        current.nodes.push(piece.node)
-        current.mark.to = piece.mark.to
+    let run = null as {moved: boolean; nodes: RootContent[]} | null
+    for (const {node, moved} of (parent.children as RootContent[]).flatMap(child => piecesOf(child, phrasing))) {
+      if (moved === null) {
+        run = null
+        out.push(node)
+      } else if (run?.moved === moved) {
+        run.nodes.push(node)
       } else {
-        close()
-        run = {mark: {...piece.mark}, nodes: [piece.node]}
+        run = {moved, nodes: [node]}
+        out.push(markNode(moved, run.nodes))
       }
     }
-    close()
     parent.children = out as Parent['children']
   }
 
@@ -301,22 +296,29 @@ export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({c
 
 /** Set on the content renderer's block context by whatever already reads the
  *  block's thread summaries: the comment pill on outline blocks, and a card
- *  for its comments. Nested surfaces get none of their own, and the ones
- *  inside the content (an embed, a block ref) inherit this one, hence the
- *  block id. */
+ *  for its comments. It applies only where it was set, that block in that
+ *  render scope: an embed or a block ref inside the content inherits it, and
+ *  sets a scope of its own, `((B))` inside B included.
+ *
+ *  ACCEPTED: block context is inherited, so a new feed is a new context for
+ *  everything under the content, and an embed or block ref inside it
+ *  remounts, an editor open in an embed included. The feed carries only what
+ *  the marks read, so that happens when a range thread on the block appears,
+ *  resolves or moves, not on every comment. Avoiding it entirely needs a
+ *  core seam for reactive markdown input. */
 export const THREAD_HIGHLIGHTS_KEY = 'annotations.threadHighlights'
 
 export interface ThreadHighlightsFeed {
   blockId: string
-  threads: readonly ThreadSummary[]
+  renderScopeId: string | undefined
+  threads: readonly HighlightThread[]
 }
 
-/** Registered after every other markdown extension (a higher precedence), so
- *  its transform sees their nodes. Ranges resolve against the snapshot being
- *  rendered, so they cannot lag it. */
+/** Ranges resolve against the snapshot being rendered, so they cannot lag
+ *  it. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, data}) => {
   const feed = blockContext[THREAD_HIGHLIGHTS_KEY] as ThreadHighlightsFeed | undefined
-  if (!feed || feed.blockId !== block.id) return null
+  if (!feed || feed.blockId !== block.id || feed.renderScopeId !== blockContext.renderScopeId) return null
   const ranges = highlightRanges(data.content, feed.threads)
   return ranges.length === 0 ? null : {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges}]]}
 }

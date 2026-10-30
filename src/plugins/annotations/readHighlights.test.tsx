@@ -10,7 +10,11 @@ import {remarkBlockrefs} from '@/plugins/references/markdown/blockrefs/remark-bl
 import {remarkTimestamps} from '@/plugins/video-player/remark-timestamps.js'
 import {rehypeTrimBlockSeparators} from '@/markdown/blockSeparators.js'
 import type {HighlightRange} from './highlights.ts'
-import {remarkAnnotationMarks} from './readHighlights.ts'
+import type {Block} from '@/data/block'
+import type {BlockContextType} from '@/types.js'
+import {remarkAnnotationMarks, THREAD_HIGHLIGHTS_KEY, threadMarksMarkdownExtension} from './readHighlights.ts'
+import type {ThreadSummary} from './summaries.ts'
+import {highlightsOf} from './ui.tsx'
 
 type Props = {node?: {properties?: Record<string, unknown>}; children?: ReactNode}
 const show = (tag: string) => ({node, children}: Props) =>
@@ -157,8 +161,54 @@ describe('read-mode marks', () => {
     expect(marked(content, [range(content, 'end.\n\n- item one')]).map(m => m.html)).toEqual(['end.', 'item one'])
   })
 
+  it('never places text that may have been decoded, which its source can spell early', () => {
+    // Each quote is spelled, one or more characters early, by the decoded
+    // text of the piece beside it.
+    const entity = 'See [[P]]&amp;amp;'
+    expect(marked(entity, [range(entity, '&amp;')])).toEqual([])
+    const escapes = 'Share \\\\[[Server]]'
+    expect(marked(escapes, [{from: 6, to: 8, moved: false}])).toEqual([])
+    const quoted = '> a 1:23\n> \\>[[P]] z'
+    expect(marked(quoted, [{from: 9, to: 11, moved: false}])).toEqual([])
+    // Plain text beside a token still draws.
+    const plain = 'Tom & Jerry [[P]] later'
+    expect(marked(plain, [range(plain, 'Jerry')]).map(m => m.html)).toEqual(['Jerry'])
+  })
+
+  it('keeps exact positions on split text, which the block-separator pass reads', () => {
+    const content = 'a <div>\nb'
+    expect(marked(content, [range(content, 'b')]).map(m => m.html)).toEqual(['b'])
+  })
+
   it('draws nothing when the rendered content is not the content the ranges were resolved against', () => {
     const content = 'We moved the launch.'
     expect(render(content, [range(content, 'moved')], 'We moved the date.')).toBe(render(content, null))
+  })
+})
+
+describe('the highlight feed', () => {
+  const B = {id: 'B'} as unknown as Block
+  const thread = (commentCount: number): ThreadSummary => ({
+    id: 'T', open: true, commentCount, createdAt: 0,
+    anchor: {kind: 'range', quote: 'moved', quoteStart: 3, prefix: 'We ', suffix: ' it'},
+  })
+  const config = (blockContext: BlockContextType) =>
+    threadMarksMarkdownExtension({block: B, blockContext, data: {content: 'We moved it', references: [], workspaceId: 'ws'}})
+  const feed = {blockId: 'B', renderScopeId: 'panel:p:B', threads: highlightsOf([thread(1)])}
+
+  it('marks only the block that set it, in the render scope that set it', () => {
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed, renderScopeId: 'panel:p:B'})).toMatchObject({remarkPlugins: [expect.anything()]})
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: {...feed, blockId: 'X'}, renderScopeId: 'panel:p:B'})).toBeNull()
+    // A block shown inside itself, as `((B))` in B, inherits B's own feed
+    // under the reference's own scope.
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: feed, renderScopeId: 'embed:B:text:0:B:panel:p:B', isNestedSurface: true})).toBeNull()
+    // A card sets its feed in its own nested scope, for its comments.
+    const inCard = {...feed, renderScopeId: 'surface.margin:T:panel:p:B'}
+    expect(config({[THREAD_HIGHLIGHTS_KEY]: inCard, renderScopeId: 'surface.margin:T:panel:p:B', isNestedSurface: true}))
+      .toMatchObject({remarkPlugins: [expect.anything()]})
+  })
+
+  it('carries what the marks read and not the comment count, so a new comment leaves it as it was', () => {
+    expect(highlightsOf([thread(1)])).toEqual(highlightsOf([thread(2)]))
   })
 })

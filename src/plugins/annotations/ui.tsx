@@ -52,7 +52,7 @@ import {
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
-import {pillCount, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
 import {isThreadRefusal, replyTo, setThreadStatus} from './threads.ts'
 import {
   activateThread,
@@ -95,6 +95,29 @@ const reportFailure = (error: unknown): void => {
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
 const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
+
+const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
+
+export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
+  threads?.filter(drawsHighlight).map(({id, open, anchor}) => ({id, open, anchor})) ?? NO_HIGHLIGHTS
+
+/** The block's highlights, only, for this render scope: the selection keeps
+ *  its identity while just a thread's comments change, and so does the feed
+ *  built from it (`THREAD_HIGHLIGHTS_KEY` says why that matters). Threads a
+ *  card already encloses are left out. */
+const useHighlightFeed = (block: Block, exclude: readonly string[] = NO_IDS): ThreadHighlightsFeed => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const {renderScopeId} = useBlockContext()
+  const threads = useHandle(block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}), {selector: highlightsOf})
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    threads: exclude.length === 0 ? threads : threads.filter(thread => !exclude.includes(thread.id)),
+  }), [block.id, renderScopeId, threads, exclude])
+}
+
+const NO_IDS: readonly string[] = Object.freeze([])
 
 export const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
   const repo = useRepo()
@@ -143,7 +166,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   }
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
-  const highlights = useMemo((): ThreadHighlightsFeed => ({blockId: block.id, threads}), [block.id, threads])
+  const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
       <div className="min-w-0 flex-1">
@@ -485,7 +508,7 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
   const chain = cardChainOf(blockContext)
   const all = useThreadSummaries(block)
   const threads = useMemo(() => threadsUnderComment(all, chain), [all, chain])
-  const highlights = useMemo((): ThreadHighlightsFeed => ({blockId: block.id, threads}), [block.id, threads])
+  const highlights = useHighlightFeed(block, chain)
   return (
     <div className="w-full">
       <NestedBlockContextProvider overrides={{[THREAD_HIGHLIGHTS_KEY]: highlights}}>
