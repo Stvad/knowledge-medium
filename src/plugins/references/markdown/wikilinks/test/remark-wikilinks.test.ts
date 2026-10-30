@@ -438,6 +438,34 @@ describe('remarkWikilinks', () => {
       expect(collectText(tree)).toEqual(['before ', 'display', ' after'])
     })
 
+    it('preserves parsed emphasis in a cross-node custom display', () => {
+      const tree = transformWithGfm('[*display*]([[<taglike page>]])', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].children).toMatchObject([{type: 'emphasis', children: [{type: 'text', value: 'display'}]}])
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
+    })
+
+    it('preserves display HTML and anchors source identity inside the alias', () => {
+      const tree = transformWithGfm('[<b>a&amp;b</b>]([[<taglike page>]])', {'<taglike page>': 'target'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.blockId).toBe('target')
+      expect(links[0].children).toMatchObject([
+        {type: 'html', value: '<b>'},
+        {type: 'text', value: 'a&b'},
+        {type: 'html', value: '</b>'},
+      ])
+    })
+
+    it('does not hide an alias delimiter inside HTML by widening to its wrapper', () => {
+      const content = 'Paste [label<a href="]([[">x]]) and more'
+      const tree = transformWithGfm(content)
+      expect(collectWikilinks(tree)).toEqual([])
+      expect(collectHtml(tree)).toEqual(['<a href="]([[">'])
+      expect(inlineValue(tree)).toBe(content)
+    })
+
     it('keeps decoded display text outside a source-exact HTML alias', () => {
       const tree = transformWithGfm('[a&amp;b]([[<taglike page>]])', {'<taglike page>': 'target'})
       const links = collectWikilinks(tree)
