@@ -1,1 +1,1 @@
-export{BI as defineVariant,VI as defineVariantFacet}from"../../chunks/app-DwFL0p6A.js";
+export{UI as defineVariant,WI as defineVariantFacet}from"../../chunks/app-DrRP7hpd.js";

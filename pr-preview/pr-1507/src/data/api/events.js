@@ -1,1 +1,1 @@
-export{cit as CORE_BLOCK_DELETED_EVENT,lit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DwFL0p6A.js";
+export{fit as CORE_BLOCK_DELETED_EVENT,pit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DrRP7hpd.js";

@@ -1,1 +1,1 @@
-export{Ng as backlinksViewFacet}from"../../../chunks/app-DwFL0p6A.js";
+export{Fg as backlinksViewFacet}from"../../../chunks/app-DrRP7hpd.js";
