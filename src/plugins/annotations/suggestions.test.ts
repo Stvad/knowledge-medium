@@ -20,7 +20,7 @@ import {
   threadStatusOf,
 } from './schema'
 import {confirmedAnchor, reanchorThread} from './reanchor'
-import {acceptSuggestion, appliedContent} from './suggestions'
+import {acceptSuggestion, appliedContent, rejectSuggestion} from './suggestions'
 import {AnchorChangedError, createThread, InvalidSuggestionError, setThreadStatus, UnannotatableTargetError} from './threads'
 
 const WS = 'ws'
@@ -174,7 +174,7 @@ describe('acceptSuggestion', () => {
 
   it('refuses a suggestion that is no longer open, as a card on another device may still offer it', async () => {
     const threadId = await suggest('Thursday', 'Thursday 9am')
-    await setThreadStatus(repo, threadId, 'rejected')
+    await rejectSuggestion(repo, threadId)
     await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(InvalidSuggestionError)
     expect(await targetText()).toBe(MID)
     expect(threadStatusOf(await rootOf(threadId))).toBe('rejected')
@@ -250,12 +250,21 @@ describe('appliedContent', () => {
   })
 })
 
-describe('rejecting', () => {
+describe('rejectSuggestion', () => {
   it('only closes the thread', async () => {
     const threadId = await suggest('Thursday', 'Thursday 9am')
-    await setThreadStatus(repo, threadId, 'rejected')
+    await rejectSuggestion(repo, threadId)
     expect(threadStatusOf(await rootOf(threadId))).toBe('rejected')
     expect(threadIsOpen(await rootOf(threadId))).toBe(false)
     expect(await targetText()).toBe(MID)
+  })
+
+  it('refuses a suggestion accepted meanwhile, so its status never contradicts the applied text', async () => {
+    const threadId = await suggest('Thursday', 'Thursday 9am')
+    // Both clicks queued: accept lands first on the write lock.
+    const [accepted, rejected] = await Promise.allSettled([acceptSuggestion(repo, threadId), rejectSuggestion(repo, threadId)])
+    expect(accepted.status).toBe('fulfilled')
+    expect(rejected).toMatchObject({status: 'rejected', reason: expect.any(InvalidSuggestionError)})
+    expect(threadStatusOf(await rootOf(threadId))).toBe('accepted')
   })
 })
