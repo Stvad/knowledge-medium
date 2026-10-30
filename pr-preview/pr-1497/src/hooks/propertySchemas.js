@@ -1,1 +1,0 @@
-export{FB as usePropertySchemas}from"../../chunks/app-BAQvgU1U.js";

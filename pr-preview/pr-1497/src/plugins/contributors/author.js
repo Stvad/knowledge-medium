@@ -1,1 +1,0 @@
-export{Vf as authorIdOf}from"../../../chunks/app-BAQvgU1U.js";

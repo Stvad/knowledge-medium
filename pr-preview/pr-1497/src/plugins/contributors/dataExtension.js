@@ -1,1 +1,0 @@
-export{VG as contributorsDataExtension}from"../../../chunks/app-BAQvgU1U.js";

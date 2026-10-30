@@ -1,1 +1,0 @@
-export{vp as createWatchEventsRegistry,yp as watchEventsRegistry}from"../../../chunks/app-BAQvgU1U.js";

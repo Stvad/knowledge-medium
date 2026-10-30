@@ -1,1 +1,0 @@
-export{BI as declarationOnlyDefinitionForName,VI as declarationOnlyStatusText}from"../../../chunks/app-BAQvgU1U.js";

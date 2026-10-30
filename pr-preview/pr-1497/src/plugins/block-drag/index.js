@@ -1,1 +1,0 @@
-export{Ig as blockDragPlugin}from"../../../chunks/app-BAQvgU1U.js";

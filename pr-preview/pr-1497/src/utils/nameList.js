@@ -1,1 +1,0 @@
-export{U1 as NAMES_IN_A_SENTENCE,W1 as describeNames,G1 as firstFew}from"../../chunks/app-BAQvgU1U.js";
