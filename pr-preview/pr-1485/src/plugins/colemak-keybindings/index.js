@@ -1,1 +1,0 @@
-export{Fb as COLEMAK_KEYBINDINGS_PLUGIN_ID,Ib as colemakKeybindingsPlugin,Lb as colemakMovementKeybindingOverrides}from"../../../chunks/app-BPh8nENr.js";

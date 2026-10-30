@@ -1,1 +1,0 @@
-export{ck as kernelPropertyUiExtension,lk as typesPropertyUi,uk as typesPropertyUiExtension}from"../../../chunks/app-BPh8nENr.js";

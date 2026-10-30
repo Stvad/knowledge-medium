@@ -1,1 +1,0 @@
-export{tK as charLimitProp,nK as charProfileProp,rK as charScopeProp}from"../../../chunks/app-BPh8nENr.js";

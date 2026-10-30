@@ -1,1 +1,0 @@
-export{GA as gestureBindingDescriptor,KA as matchesGestureEvent}from"../../chunks/app-BPh8nENr.js";

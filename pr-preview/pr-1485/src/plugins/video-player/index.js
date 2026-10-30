@@ -1,1 +1,0 @@
-export{My as videoPlayerPlugin}from"../../../chunks/app-BPh8nENr.js";

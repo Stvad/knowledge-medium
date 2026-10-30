@@ -1,1 +1,0 @@
-export{JD as COMMAND_PALETTE_ACTION_ID,YD as COMMAND_PALETTE_CONTEXT,XD as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,ZD as commandPaletteActionContext}from"../../../chunks/app-BPh8nENr.js";

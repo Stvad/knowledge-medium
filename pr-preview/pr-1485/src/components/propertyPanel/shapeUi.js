@@ -1,1 +1,0 @@
-export{IB as PropertyShapeButton,LB as PropertyShapeGlyph}from"../../../chunks/app-BPh8nENr.js";

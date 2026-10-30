@@ -1,1 +1,0 @@
-export{NA as checkForAppUpdate,PA as registerServiceWorker}from"../chunks/app-BPh8nENr.js";

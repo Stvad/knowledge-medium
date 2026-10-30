@@ -1,1 +1,0 @@
-export{qf as lintExtensionSource}from"../../../chunks/app-BPh8nENr.js";

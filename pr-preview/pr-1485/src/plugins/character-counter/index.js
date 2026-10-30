@@ -1,1 +1,0 @@
-export{$G as CHAR_COUNTER_TYPE,un as RAW_CHARACTER_COUNT_PROFILE_ID,fn as charCountDisplay,tK as charLimitProp,nK as charProfileProp,rK as charScopeProp,dn as characterCountProfilesFacet,cn as characterCounterPlugin}from"../../../chunks/app-BPh8nENr.js";

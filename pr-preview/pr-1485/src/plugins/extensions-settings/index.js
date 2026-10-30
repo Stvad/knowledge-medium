@@ -1,1 +1,0 @@
-export{wf as extensionsOverridesProp,Tf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,0 @@
-export{BP as BlockEditor}from"../../chunks/app-BPh8nENr.js";

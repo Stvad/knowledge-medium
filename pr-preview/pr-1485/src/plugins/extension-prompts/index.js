@@ -1,1 +1,0 @@
-export{uA as ExtensionPromptSurface,dA as extensionPromptsExtension}from"../../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,0 @@
-export{GD as useCommandPaletteActions}from"../../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,0 @@
-export{BM as BlockTypeBlockRenderer,VM as BlockTypeContentRenderer,HM as writeBlockTypeLabel}from"../../../chunks/app-BPh8nENr.js";

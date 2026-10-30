@@ -1,1 +1,0 @@
-export{QG as characterCounterDataExtension}from"../../../chunks/app-BPh8nENr.js";

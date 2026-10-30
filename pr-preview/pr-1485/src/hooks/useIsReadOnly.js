@@ -1,1 +1,0 @@
-export{Pg as useIsReadOnly}from"../../chunks/app-BPh8nENr.js";

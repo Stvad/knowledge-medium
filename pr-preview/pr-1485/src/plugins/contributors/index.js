@@ -1,1 +1,0 @@
-export{Md as contributorsPlugin}from"../../../chunks/app-BPh8nENr.js";

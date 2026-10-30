@@ -1,1 +1,0 @@
-export{MB as floatingAnchorFromRect,NB as useAnchoredFloating}from"../../../chunks/app-BPh8nENr.js";

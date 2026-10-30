@@ -1,1 +1,0 @@
-export{YC as usePendingInvitations}from"../../chunks/app-BPh8nENr.js";

@@ -1,1 +1,0 @@
-export{xf as extensionApiCatalog,Sf as extensionApiRuntimeExports}from"../../chunks/app-BPh8nENr.js";

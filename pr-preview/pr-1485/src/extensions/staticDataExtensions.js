@@ -1,1 +1,0 @@
-export{LV as staticDataExtensions}from"../../chunks/app-BPh8nENr.js";

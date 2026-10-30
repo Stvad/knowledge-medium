@@ -1,1 +1,0 @@
-export{wG as THREAD_TYPE,TG as annotationPropertySeeds,EG as annotationQuotePrefixProp,DG as annotationQuoteStartProp,OG as annotationQuoteSuffixProp,kG as annotationStatusProp,AG as annotationTargetProp,jG as annotationThreadType,MG as threadAnchorOf,NG as threadIsOpen,PG as threadStatusOf,FG as threadTargetIdOf}from"../../../chunks/app-BPh8nENr.js";

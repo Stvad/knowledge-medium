@@ -1,1 +1,0 @@
-export{wA as appUpdatePromptExtension}from"../../../chunks/app-BPh8nENr.js";

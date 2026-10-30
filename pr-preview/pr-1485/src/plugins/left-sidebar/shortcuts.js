@@ -1,1 +1,0 @@
-export{PS as getOrCreateShortcutsBlock,FS as journalShortcutBlockId,IS as shortcutsBlockId}from"../../../chunks/app-BPh8nENr.js";

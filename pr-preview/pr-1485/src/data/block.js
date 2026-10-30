@@ -1,1 +1,0 @@
-export{HQ as Block,UQ as requireLoadedBlock}from"../../chunks/app-BPh8nENr.js";

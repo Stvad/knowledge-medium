@@ -1,1 +1,0 @@
-export{xb as EXTENSIONS_PAGE_TITLE,Sb as TUTORIAL_DEFAULT_TITLE,Cb as TUTORIAL_VIM_TITLE,cb as onboardingPlugin,bb as seedTutorial}from"../../../chunks/app-BPh8nENr.js";

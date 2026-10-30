@@ -1,1 +1,0 @@
-export{RB as propertyShapeLabel}from"../../../chunks/app-BPh8nENr.js";

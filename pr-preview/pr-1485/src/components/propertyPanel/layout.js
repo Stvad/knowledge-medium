@@ -1,1 +1,0 @@
-export{GI as METADATA_ROW_GRID_STYLE,KI as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-BPh8nENr.js";

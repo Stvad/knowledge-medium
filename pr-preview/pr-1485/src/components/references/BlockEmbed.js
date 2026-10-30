@@ -1,1 +1,0 @@
-export{ik as BlockEmbed}from"../../../chunks/app-BPh8nENr.js";

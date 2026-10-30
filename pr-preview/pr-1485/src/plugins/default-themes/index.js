@@ -1,1 +1,0 @@
-export{Ow as DEFAULT_THEME_ID_DARK,kw as DEFAULT_THEME_ID_LIGHT,pw as defaultThemeContributions,fw as defaultThemesPlugin}from"../../../chunks/app-BPh8nENr.js";

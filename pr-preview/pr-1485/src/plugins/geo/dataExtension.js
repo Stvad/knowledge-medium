@@ -1,1 +1,0 @@
-export{KU as geoDataExtension}from"../../../chunks/app-BPh8nENr.js";

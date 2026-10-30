@@ -1,1 +1,0 @@
-export{Bk as exampleExtensions,Vk as insertExampleExtensionsUnder}from"../../chunks/app-BPh8nENr.js";
