@@ -1,0 +1,1 @@
+export{Up as adoptTypedBlock,Wp as createTypedChild,utt as derivedBlockId,Gp as getOrCreateTypedChild}from"../../chunks/app-CkedynFV.js";

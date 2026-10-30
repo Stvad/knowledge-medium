@@ -1,0 +1,1 @@
+export{lj as appUpdatePromptExtension}from"../../../chunks/app-CkedynFV.js";

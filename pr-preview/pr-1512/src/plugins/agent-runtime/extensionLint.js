@@ -1,0 +1,1 @@
+export{mp as lintExtensionSource}from"../../../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{Mx as spatialNavigationShellDecorator}from"../../../chunks/app-CkedynFV.js";

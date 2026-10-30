@@ -1,0 +1,1 @@
+export{ow as BINARY_ENVELOPE_MAGIC,sw as BINARY_ENVELOPE_MIN_BYTES,cw as BINARY_ENVELOPE_OVERHEAD_BYTES,lw as BINARY_MAGIC_BYTES,uw as decodeBinaryEnvelope,dw as encodeBinaryEnvelope,fw as hasBinaryEnvelopeMagic}from"../../../chunks/app-CkedynFV.js";

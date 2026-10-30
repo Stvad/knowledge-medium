@@ -1,0 +1,1 @@
+export{V0 as agree,H0 as pluralize}from"../../chunks/app-CkedynFV.js";

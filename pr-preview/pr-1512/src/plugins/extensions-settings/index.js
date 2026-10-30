@@ -1,0 +1,1 @@
+export{Gf as extensionsOverridesProp,Kf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CkedynFV.js";

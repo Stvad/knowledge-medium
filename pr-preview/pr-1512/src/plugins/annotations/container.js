@@ -1,0 +1,1 @@
+export{LK as COMMENTS_PAGE_ALIAS,RK as commentsPageBlockId,zK as commentsPageSpec,BK as getOrCreateCommentsPage}from"../../../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{g1 as Block,_1 as requireLoadedBlock}from"../../chunks/app-CkedynFV.js";

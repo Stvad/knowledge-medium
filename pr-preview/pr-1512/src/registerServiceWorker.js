@@ -1,0 +1,1 @@
+export{vj as checkForAppUpdate,yj as registerServiceWorker}from"../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{lq as backlinksDataExtension}from"../../../chunks/app-CkedynFV.js";

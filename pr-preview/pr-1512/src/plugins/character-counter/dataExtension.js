@@ -1,0 +1,1 @@
+export{rq as characterCounterDataExtension}from"../../../chunks/app-CkedynFV.js";

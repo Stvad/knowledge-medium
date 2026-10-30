@@ -1,0 +1,1 @@
+export{TP as BlockInfoDialog}from"../../../chunks/app-CkedynFV.js";

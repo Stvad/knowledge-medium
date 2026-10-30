@@ -1,0 +1,1 @@
+export{pv as richPasteDecisionContribution}from"../../../chunks/app-CkedynFV.js";

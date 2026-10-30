@@ -1,0 +1,1 @@
+export{wq as BACKLINKS_COUNT_FOR_BLOCK_QUERY,Tq as backlinksCountForBlockQuery}from"../../../../chunks/app-CkedynFV.js";

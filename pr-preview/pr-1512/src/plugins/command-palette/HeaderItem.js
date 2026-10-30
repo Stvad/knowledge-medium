@@ -1,0 +1,1 @@
+export{XO as CommandPaletteHeaderItem}from"../../../chunks/app-CkedynFV.js";

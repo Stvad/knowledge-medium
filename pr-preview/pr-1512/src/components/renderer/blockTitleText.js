@@ -1,0 +1,1 @@
+export{vI as BLOCK_TITLE_TEXT_CLASS,yI as useBlockTitleTextClass}from"../../../chunks/app-CkedynFV.js";

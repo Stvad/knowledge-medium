@@ -1,0 +1,1 @@
+export{Zg as geoContentDecoratorContribution}from"../../../chunks/app-CkedynFV.js";

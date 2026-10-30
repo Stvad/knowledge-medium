@@ -1,0 +1,1 @@
+export{zS as mobileBottomNavItemsFacet}from"../../../chunks/app-CkedynFV.js";

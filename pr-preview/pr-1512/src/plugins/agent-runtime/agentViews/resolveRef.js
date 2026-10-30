@@ -1,0 +1,1 @@
+export{Km as BlockRefError,qm as MIN_ID_PREFIX,Jm as resolveBlockRef,Ym as shortIds}from"../../../../chunks/app-CkedynFV.js";

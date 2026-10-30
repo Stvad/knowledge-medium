@@ -1,0 +1,1 @@
+export{QI as isFocalRender,$I as useIsFocalRender}from"../../chunks/app-CkedynFV.js";

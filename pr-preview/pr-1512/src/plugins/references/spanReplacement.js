@@ -1,0 +1,1 @@
+export{OU as preferredSpanReplacement}from"../../../chunks/app-CkedynFV.js";

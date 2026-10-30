@@ -1,0 +1,1 @@
+export{eit as defineQuery}from"../../../chunks/app-CkedynFV.js";

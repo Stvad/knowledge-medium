@@ -1,0 +1,1 @@
+export{PN as ConfirmBulkDeleteDialog}from"../../chunks/app-CkedynFV.js";

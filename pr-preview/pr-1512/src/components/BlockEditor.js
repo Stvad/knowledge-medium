@@ -1,0 +1,1 @@
+export{OF as BlockEditor}from"../../chunks/app-CkedynFV.js";

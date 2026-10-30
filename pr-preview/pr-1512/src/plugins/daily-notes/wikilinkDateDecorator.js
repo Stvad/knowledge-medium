@@ -1,0 +1,1 @@
+export{hD as dailyDateWikilinkDecorator}from"../../../chunks/app-CkedynFV.js";

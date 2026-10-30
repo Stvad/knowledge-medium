@@ -1,0 +1,1 @@
+export{fv as richPastePlugin}from"../../../chunks/app-CkedynFV.js";

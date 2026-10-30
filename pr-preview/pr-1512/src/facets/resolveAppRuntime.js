@@ -1,0 +1,1 @@
+export{Kj as resolveAppRuntime,qj as resolveAppRuntimeSync}from"../../chunks/app-CkedynFV.js";

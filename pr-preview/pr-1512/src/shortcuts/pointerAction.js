@@ -1,0 +1,1 @@
+export{Nj as dispatchPointerAction,Pj as setPointerActionDispatcher}from"../../chunks/app-CkedynFV.js";

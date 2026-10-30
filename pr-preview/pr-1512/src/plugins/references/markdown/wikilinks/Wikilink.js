@@ -1,0 +1,1 @@
+export{o_ as Wikilink}from"../../../../../chunks/app-CkedynFV.js";

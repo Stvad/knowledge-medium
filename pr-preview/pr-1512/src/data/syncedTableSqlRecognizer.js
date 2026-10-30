@@ -1,0 +1,1 @@
+export{AY as SYNCED_TABLES,jY as syncedWriteTarget,MY as writeTargets}from"../../chunks/app-CkedynFV.js";

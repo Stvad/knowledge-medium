@@ -1,0 +1,1 @@
+export{IK as annotationMarginOpenProp}from"../../../chunks/app-CkedynFV.js";

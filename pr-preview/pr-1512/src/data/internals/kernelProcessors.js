@@ -1,0 +1,1 @@
+export{d0 as KERNEL_PROCESSORS}from"../../../chunks/app-CkedynFV.js";

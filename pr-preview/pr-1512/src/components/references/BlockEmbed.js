@@ -1,0 +1,1 @@
+export{Hk as BlockEmbed}from"../../../chunks/app-CkedynFV.js";

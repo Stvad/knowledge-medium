@@ -1,0 +1,1 @@
+export{MJ as aliasDataExtension}from"../../../chunks/app-CkedynFV.js";

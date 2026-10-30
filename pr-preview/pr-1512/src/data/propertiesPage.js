@@ -1,0 +1,1 @@
+export{tet as getOrCreatePropertiesPage,net as propertiesPageBlockId,ret as propertiesPageSpec}from"../../chunks/app-CkedynFV.js";

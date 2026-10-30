@@ -1,0 +1,1 @@
+export{xB as withMoveTransition}from"../../chunks/app-CkedynFV.js";

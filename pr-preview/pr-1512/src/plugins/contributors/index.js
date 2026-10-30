@@ -1,0 +1,1 @@
+export{$d as contributorsPlugin}from"../../../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{lm as createWatchEventsRegistry,um as watchEventsRegistry}from"../../../chunks/app-CkedynFV.js";

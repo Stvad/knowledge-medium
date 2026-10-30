@@ -1,0 +1,1 @@
+export{mT as OPEN_RECENTS_ACTION_ID,hT as openRecentsAction,gT as recentsHeaderItem,_T as recentsPlugin}from"../../../chunks/app-CkedynFV.js";

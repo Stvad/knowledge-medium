@@ -1,0 +1,1 @@
+export{Hf as extensionApiCatalog,Uf as extensionApiRuntimeExports}from"../../chunks/app-CkedynFV.js";

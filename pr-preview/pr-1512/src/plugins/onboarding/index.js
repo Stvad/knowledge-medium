@@ -1,0 +1,1 @@
+export{rx as EXTENSIONS_PAGE_TITLE,ix as TUTORIAL_DEFAULT_TITLE,ax as TUTORIAL_VIM_TITLE,Wb as onboardingPlugin,nx as seedTutorial}from"../../../chunks/app-CkedynFV.js";

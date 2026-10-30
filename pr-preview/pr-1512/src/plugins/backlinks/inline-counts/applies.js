@@ -1,0 +1,1 @@
+export{mg as inlineBacklinksApplies}from"../../../../chunks/app-CkedynFV.js";

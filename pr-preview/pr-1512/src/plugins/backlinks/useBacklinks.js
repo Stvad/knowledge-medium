@@ -1,0 +1,1 @@
+export{Ug as useBacklinks}from"../../../chunks/app-CkedynFV.js";

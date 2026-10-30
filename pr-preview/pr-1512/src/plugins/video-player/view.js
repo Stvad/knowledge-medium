@@ -1,0 +1,1 @@
+export{Ib as DEFAULT_VIDEO_NOTES_PANE_RATIO,Lb as VIDEO_NOTES_VIEW_MODE,Rb as videoNotesPaneRatioProp}from"../../../chunks/app-CkedynFV.js";

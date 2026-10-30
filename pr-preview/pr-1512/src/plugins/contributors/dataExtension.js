@@ -1,0 +1,1 @@
+export{VK as contributorsDataExtension}from"../../../chunks/app-CkedynFV.js";

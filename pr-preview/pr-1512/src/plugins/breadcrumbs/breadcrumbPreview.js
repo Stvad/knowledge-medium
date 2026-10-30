@@ -1,0 +1,1 @@
+export{qS as getBreadcrumbContentPreview}from"../../../chunks/app-CkedynFV.js";

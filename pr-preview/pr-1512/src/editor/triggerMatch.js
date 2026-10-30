@@ -1,0 +1,1 @@
+export{mG as matchCharTrigger}from"../../chunks/app-CkedynFV.js";

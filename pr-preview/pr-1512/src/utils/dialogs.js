@@ -1,0 +1,1 @@
+export{bP as __resetDialogsForTests,xP as getDialogQueue,SP as isDialogOpenForWorkspace,CP as openDialog,wP as subscribeDialogs}from"../../chunks/app-CkedynFV.js";

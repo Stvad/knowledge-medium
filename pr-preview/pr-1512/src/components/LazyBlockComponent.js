@@ -1,0 +1,1 @@
+export{kM as LazyBlockComponent}from"../../chunks/app-CkedynFV.js";

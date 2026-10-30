@@ -1,0 +1,1 @@
+export{fH as BATCH_SENTINEL_SQL,pH as closePowerSyncDbIfOpen,mH as ensurePowerSyncReady,hH as getActiveSyncResolver,gH as getActiveUserId,_H as getPowerSyncDb,vH as initializeClientSchema,yH as isRemoteSyncActive,bH as syncObserverDepsFor,xH as syncResolverForUser,SH as webDatabaseOptions}from"../../chunks/app-CkedynFV.js";

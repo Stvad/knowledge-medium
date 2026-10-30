@@ -1,0 +1,1 @@
+export{jH as staticDataExtensions}from"../../chunks/app-CkedynFV.js";

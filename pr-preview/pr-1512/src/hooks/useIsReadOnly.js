@@ -1,0 +1,1 @@
+export{L_ as useIsReadOnly}from"../../chunks/app-CkedynFV.js";

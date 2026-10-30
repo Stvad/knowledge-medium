@@ -1,0 +1,1 @@
+export{WG as dailyNotesDataExtension}from"../../../chunks/app-CkedynFV.js";

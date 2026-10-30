@@ -1,0 +1,1 @@
+export{IX as instrumentAdapter}from"../../../chunks/app-CkedynFV.js";

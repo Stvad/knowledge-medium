@@ -1,0 +1,1 @@
+export{Kh as BlockMetaCard}from"../../../chunks/app-CkedynFV.js";

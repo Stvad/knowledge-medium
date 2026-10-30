@@ -1,0 +1,1 @@
+export{NL as declarationOnlyDefinitionForName,PL as declarationOnlyStatusText}from"../../../chunks/app-CkedynFV.js";

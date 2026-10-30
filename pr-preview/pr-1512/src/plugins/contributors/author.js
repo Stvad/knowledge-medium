@@ -1,0 +1,1 @@
+export{jp as authorIdOf}from"../../../chunks/app-CkedynFV.js";

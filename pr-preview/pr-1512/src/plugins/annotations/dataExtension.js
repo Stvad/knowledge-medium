@@ -1,0 +1,1 @@
+export{uK as annotationsDataExtension}from"../../../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{Kg as geoPlugin}from"../../../chunks/app-CkedynFV.js";

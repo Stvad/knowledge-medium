@@ -1,0 +1,1 @@
+export{kN as trimIfEdited}from"../../chunks/app-CkedynFV.js";

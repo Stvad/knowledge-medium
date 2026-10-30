@@ -1,0 +1,1 @@
+export{Jf as PROVENANCE_BLOCKS_PER_KEY,Yf as PROVENANCE_KEY_LIMIT,Xf as auditPropertyRegistration,Zf as describeUnregisteredProperty}from"../../../chunks/app-CkedynFV.js";

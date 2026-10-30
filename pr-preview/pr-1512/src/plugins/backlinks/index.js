@@ -1,0 +1,1 @@
+export{sg as backlinksPlugin}from"../../../chunks/app-CkedynFV.js";

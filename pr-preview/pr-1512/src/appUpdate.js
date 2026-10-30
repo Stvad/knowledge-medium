@@ -1,0 +1,1 @@
+export{bj as appUpdate,xj as useAppUpdateAvailable}from"../chunks/app-CkedynFV.js";

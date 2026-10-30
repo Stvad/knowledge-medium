@@ -1,0 +1,1 @@
+export{Iet as deriveWorkspaceIdNamespace}from"../../../chunks/app-CkedynFV.js";

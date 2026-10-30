@@ -1,0 +1,1 @@
+export{MV as propertyShapeLabel}from"../../../chunks/app-CkedynFV.js";

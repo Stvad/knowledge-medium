@@ -1,0 +1,1 @@
+export{IF as useShortcutSurfaceActivations}from"../../chunks/app-CkedynFV.js";

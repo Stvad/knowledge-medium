@@ -1,0 +1,1 @@
+export{WS as usePromotableBreadcrumb}from"../../../chunks/app-CkedynFV.js";

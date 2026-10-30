@@ -1,0 +1,1 @@
+export{_D as isWikilinkDisplayParts,vD as resolveWikilinkDisplay,yD as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-CkedynFV.js";

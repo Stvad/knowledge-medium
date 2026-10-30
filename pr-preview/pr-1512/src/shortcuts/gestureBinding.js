@@ -1,0 +1,1 @@
+export{jj as gestureBindingDescriptor,Mj as matchesGestureEvent}from"../../chunks/app-CkedynFV.js";

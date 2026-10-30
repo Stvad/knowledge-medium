@@ -1,0 +1,1 @@
+export{Bu as quotedInFooterContribution}from"../../../chunks/app-CkedynFV.js";

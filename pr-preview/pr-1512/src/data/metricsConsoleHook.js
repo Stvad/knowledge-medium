@@ -1,0 +1,1 @@
+export{hA as ensureMetricsConsoleHook}from"../../chunks/app-CkedynFV.js";

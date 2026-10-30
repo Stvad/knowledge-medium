@@ -1,0 +1,1 @@
+export{eg as backlinksViewPlugin}from"../../../chunks/app-CkedynFV.js";

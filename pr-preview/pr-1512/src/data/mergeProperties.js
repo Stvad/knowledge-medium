@@ -1,0 +1,1 @@
+export{F2 as mergeProperties}from"../../chunks/app-CkedynFV.js";

@@ -1,0 +1,1 @@
+export{XS as plainOutlinerPlugin}from"../../../chunks/app-CkedynFV.js";

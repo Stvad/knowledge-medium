@@ -1,0 +1,1 @@
+export{s1 as applySyncInvalidation}from"../../../../chunks/app-CkedynFV.js";

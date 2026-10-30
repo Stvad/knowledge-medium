@@ -1,0 +1,1 @@
+export{nx as seedTutorial}from"../../../chunks/app-CkedynFV.js";
