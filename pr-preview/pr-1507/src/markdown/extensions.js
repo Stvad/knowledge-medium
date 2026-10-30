@@ -1,1 +1,1 @@
-export{JI as markdownExtensionsFacet,YI as resolveMarkdownRenderConfig}from"../../chunks/app-Dt5mIL57.js";
+export{JI as markdownExtensionsFacet,YI as resolveMarkdownRenderConfig}from"../../chunks/app-BAccJFMh.js";

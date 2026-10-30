@@ -1,1 +1,1 @@
-export{Vk as TypeChip}from"../../../chunks/app-Dt5mIL57.js";
+export{Vk as TypeChip}from"../../../chunks/app-BAccJFMh.js";

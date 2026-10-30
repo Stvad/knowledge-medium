@@ -1,1 +1,1 @@
-export{Eb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Db as VIDEO_NOTES_VIEW_MODE,Ob as videoNotesPaneRatioProp}from"../../../chunks/app-Dt5mIL57.js";
+export{Eb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Db as VIDEO_NOTES_VIEW_MODE,Ob as videoNotesPaneRatioProp}from"../../../chunks/app-BAccJFMh.js";

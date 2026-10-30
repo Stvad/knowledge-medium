@@ -1,1 +1,1 @@
-export{Sx as spatialNavigationShellDecorator}from"../../../chunks/app-Dt5mIL57.js";
+export{Sx as spatialNavigationShellDecorator}from"../../../chunks/app-BAccJFMh.js";

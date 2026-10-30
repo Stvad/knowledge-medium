@@ -1,1 +1,1 @@
-export{HI as isFocalRender,UI as useIsFocalRender}from"../../chunks/app-Dt5mIL57.js";
+export{HI as isFocalRender,UI as useIsFocalRender}from"../../chunks/app-BAccJFMh.js";
