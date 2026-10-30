@@ -1,1 +1,1 @@
-export{SM as BlockLoadingPlaceholder}from"../../chunks/app-DsYfXr1R.js";
+export{SM as BlockLoadingPlaceholder}from"../../chunks/app-iQIBK7yD.js";

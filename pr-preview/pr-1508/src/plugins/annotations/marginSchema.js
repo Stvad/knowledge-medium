@@ -1,1 +1,1 @@
-export{MK as annotationMarginOpenProp}from"../../../chunks/app-DsYfXr1R.js";
+export{MK as annotationMarginOpenProp}from"../../../chunks/app-iQIBK7yD.js";

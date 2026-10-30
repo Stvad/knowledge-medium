@@ -1,1 +1,1 @@
-export{Ig as LocationPropertyEditor}from"../../../chunks/app-DsYfXr1R.js";
+export{Ig as LocationPropertyEditor}from"../../../chunks/app-iQIBK7yD.js";
