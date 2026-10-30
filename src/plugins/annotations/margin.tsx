@@ -20,6 +20,7 @@ import type {Block} from '@/data/block'
 import {activePanelIdProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {useLayoutSessionBlock} from '@/data/globalState.js'
 import {NestedBlockContextProvider} from '@/context/block.js'
+import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {runActionByIdSafely} from '@/shortcuts/runAction.js'
@@ -57,16 +58,6 @@ interface ColumnFrame {
 const sameFrame = (a: ColumnFrame | null, b: ColumnFrame | null): boolean =>
   a === b || (a !== null && b !== null &&
     a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height)
-
-/** Rows of the panel's own outline: shells, and the placeholders of rows not
- *  mounted yet. Rows inside an embed or a backlink entry carry other scopes. */
-const rowSelector = (scope: string): string => {
-  const s = CSS.escape(scope)
-  return `[data-block-shell][data-block-id][data-render-scope-id="${s}"], [data-lazy-block-id][data-lazy-render-scope-id="${s}"]`
-}
-
-const rowBlockId = (el: Element): string | null =>
-  el.getAttribute('data-block-id') ?? el.getAttribute('data-lazy-block-id')
 
 /** A card slot: where a card registers its element for the layout pass. */
 interface CardEntry {
@@ -121,7 +112,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const scrollport = panelEl?.querySelector<HTMLElement>('[data-panel-scrollport]')
     if (!panelEl || !scrollport) return
     scrollportRef.current = scrollport
-    const selector = rowSelector(scope)
+    const selector = scopeRowSelector(scope)
     let pending = 0
     /** Room added below the outline so the last cards, pushed below the last
      *  row, can be scrolled to. Inline style, which React leaves alone on the
@@ -164,8 +155,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const nextFrame = measure(topRow, portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
       const rowEls = new Map<string, Element>()
-      for (const el of scrollport.querySelectorAll(selector)) {
-        const id = rowBlockId(el)
+      for (const el of scrollport.querySelectorAll<HTMLElement>(selector)) {
+        const id = scopeRowBlockId(el)
         if (id && !rowEls.has(id)) rowEls.set(id, el)
       }
       const order = [...rowEls.keys()]
