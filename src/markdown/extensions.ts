@@ -10,9 +10,18 @@ import type { PluggableList } from 'unified'
  *  subscribes to (via its `useHandle` selector). */
 export type MarkdownRenderData = Pick<BlockData, 'content' | 'references' | 'workspaceId'>
 
+/** Values provided for a block's markdown by the components rendering around
+ *  it, by key (`MarkdownInputProvider`). */
+export type MarkdownInput = Readonly<Record<string, unknown>>
+
 export interface MarkdownRenderContext {
   block: Block
   blockContext: BlockContextType
+  /** Reactive input for extensions, the channel to use instead of block
+   *  context. Every block renderer below memoizes its slots on block context,
+   *  so a new value there remounts embeds and block refs in the content; a new
+   *  value here re-renders the markdown below it and remounts nothing. */
+  input: MarkdownInput
   /** The reactive snapshot the renderer is currently displaying. Extensions
    *  MUST derive rendered output (e.g. a wikilink alias→id map) from this —
    *  NOT from `block.peek()`. Under React Compiler the resolver call is

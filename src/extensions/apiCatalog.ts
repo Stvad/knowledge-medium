@@ -147,6 +147,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: ['markdownExtensionsFacet'],
     types: [],
   },
+  {
+    category: 'markdown',
+    importPath: '@/markdown/input.js',
+    description: 'Reactive input for markdown extensions, provided around a block\'s content and read on `MarkdownRenderContext.input`.',
+    exports: ['MarkdownInputProvider'],
+    types: [],
+  },
 
   // --- Paste seam -----------------------------------------------------------
   {

@@ -6,6 +6,7 @@ import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
+import { useMarkdownInput } from '@/markdown/input.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
@@ -45,6 +46,7 @@ export function MarkdownContentRenderer({
       : undefined,
   })
   const blockContext = useBlockContext()
+  const input = useMarkdownInput()
   const runtime = useAppRuntime()
   // Title typography travels with the title text. A surface that wants a real
   // page title renders this component (the recents page does) and gets one;
@@ -82,7 +84,7 @@ export function MarkdownContentRenderer({
   // resolver recomputes when the snapshot changes. Reading mutable state via
   // `block.peek()` inside an extension would be captured once and never
   // refreshed — see the `data` doc on MarkdownRenderContext.
-  const markdownConfig = resolveMarkdownConfig({block, blockContext, data: renderData})
+  const markdownConfig = resolveMarkdownConfig({block, blockContext, input, data: renderData})
   const components = inline
     ? {...markdownConfig.components, ...inlineComponents}
     : markdownConfig.components

@@ -27,6 +27,7 @@ export interface RenderMarkdownHtmlOptions {
 const staticMarkdownContext = (content: string): MarkdownRenderContext => ({
   block: {} as Block,
   blockContext: {} as BlockContextType,
+  input: {},
   data: {content, references: [], workspaceId: ''},
 })
 

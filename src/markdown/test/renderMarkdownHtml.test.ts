@@ -11,6 +11,7 @@ import { renderMarkdownHtml } from '../renderMarkdownHtml'
 const testContext = (content: string): MarkdownRenderContext => ({
   block: {} as Block,
   blockContext: {} as BlockContextType,
+  input: {},
   data: {content, references: [], workspaceId: 'ws-test'},
 })
 
