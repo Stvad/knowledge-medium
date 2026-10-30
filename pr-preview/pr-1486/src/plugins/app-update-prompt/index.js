@@ -1,1 +1,1 @@
-export{JA as appUpdatePromptExtension}from"../../../chunks/app-Dkz9eVj3.js";
+export{JA as appUpdatePromptExtension}from"../../../chunks/app-z8bqnIE2.js";
