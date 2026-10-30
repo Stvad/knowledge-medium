@@ -112,6 +112,7 @@ const reanchorToSelection = async (repo: Repo, threadId: string, view: EditorVie
   try {
     await reanchorThread(repo, threadId, anchor)
     startReanchor(null)
+    showInfo('Moved the comment to the selection.')
   } catch (error) {
     if (isThreadRefusal(error)) showError(error.message)
     else throw error

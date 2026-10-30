@@ -14,7 +14,7 @@
  * inline.
  */
 
-import {createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type WheelEvent} from 'react'
+import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type WheelEvent} from 'react'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import {activePanelIdProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
@@ -25,11 +25,10 @@ import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {runActionByIdSafely} from '@/shortcuts/runAction.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
-import {OPEN_THREADS_UNDER_QUERY} from './hiddenThreads.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {placeCards} from './placement.ts'
-import {THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
-import {ThreadCard} from './ui.tsx'
+import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
+import {ThreadCard, useThreadSummaries} from './ui.tsx'
 import {
   activateThread,
   onUiStoreChange,
@@ -99,6 +98,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   const [rows, setRows] = useState<readonly string[]>([])
   const cards = useRef(new Map<string, CardEntry>())
   const scheduleRef = useRef<() => void>(() => {})
+  const scrollportRef = useRef<HTMLElement | null>(null)
   const cardObserver = useRef<ResizeObserver | null>(null)
 
   const [registry] = useState<MarginRegistry>(() => ({
@@ -119,6 +119,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const panelEl = probeRef.current?.closest<HTMLElement>('[data-panel-id]')
     const scrollport = panelEl?.querySelector<HTMLElement>('[data-panel-scrollport]')
     if (!panelEl || !scrollport) return
+    scrollportRef.current = scrollport
     const selector = rowSelector(scope)
     let pending = 0
     /** Room added below the outline so the last cards, pushed below the last
@@ -138,9 +139,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
      *  is re-found each pass, since the row can remount. */
     let observedTopRow: Element | null = null
 
-    const measure = (top: Element | null): ColumnFrame | null => {
+    const measure = (top: Element | null, portRect: DOMRect): ColumnFrame | null => {
       const panelRect = panelEl.getBoundingClientRect()
-      const portRect = scrollport.getBoundingClientRect()
       const textRight = top ? top.getBoundingClientRect().right : portRect.right
       const width = Math.min(MAX_COLUMN_PX, Math.floor(portRect.right - textRight - 2 * EDGE_PX))
       return width < MIN_COLUMN_PX ? null : {
@@ -159,7 +159,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         if (topRow) resize.observe(topRow)
         observedTopRow = topRow
       }
-      const nextFrame = measure(topRow)
+      const portRect = scrollport.getBoundingClientRect()
+      const nextFrame = measure(topRow, portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll(selector)) {
@@ -183,12 +184,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         height: entry.el.offsetHeight,
       }))
       const active = peekActiveThread(panelId)
-      const focused = placed.findIndex(([key]) => key === active)
-      // Pinned only while its row is in view: a card whose text is scrolled
-      // away has nothing to stay beside, and pinning it would push the cards
-      // that are in view away from theirs.
-      const pinned = focused >= 0 && boxes[focused].anchor >= 0 && boxes[focused].anchor < nextFrame.height ? focused : null
-      const tops = placeCards(boxes, pinned, CARD_GAP_PX)
+      const tops = placeCards(boxes, placed.findIndex(([key]) => key === active), CARD_GAP_PX, nextFrame.height)
       for (const [i, [, entry]] of placed.entries()) {
         entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
         entry.el.style.visibility = 'visible'
@@ -198,7 +194,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
       const last = tops.length - 1
       const cardsEnd = last < 0 ? 0 : scrollport.scrollTop + tops[last] + boxes[last].height + CARD_GAP_PX
-      const contentEnd = scrollport.scrollHeight - extraBottom
+      // From the outline itself, not `scrollHeight`: on a page shorter than
+      // the viewport that is the viewport's height, so the padding would
+      // converge on its size a frame at a time.
+      const contentEnd = topRow
+        ? topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
+        : scrollport.scrollHeight - extraBottom
       setExtraBottom(Math.max(0, Math.ceil(cardsEnd - contentEnd)))
     }
     const schedule = () => {
@@ -236,12 +237,22 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     return () => setMarginShowing(panelId, false)
   }, [panelId, showing])
 
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(repo.block(topLevelBlockId), repo.activeWorkspaceId ?? '')
+  const scopeThreads = useHandle(
+    repo.query[THREADS_IN_SCOPE_QUERY]({workspaceId, scopeId: topLevelBlockId}),
+    {selector: threads => threads ?? NO_SCOPE_THREADS},
+  )
+  const showClosed = useShowClosed(panelId)
+  const hosts = useMemo(
+    () => marginHosts(scopeThreads, rows, topLevelBlockId, showClosed),
+    [scopeThreads, rows, topLevelBlockId, showClosed],
+  )
+
   // The column is outside the scrollport, so a wheel over a card would scroll
   // nothing; hand it to the outline.
   const forwardWheel = (event: WheelEvent) => {
-    if (event.ctrlKey) return
-    probeRef.current?.closest('[data-panel-id]')?.querySelector('[data-panel-scrollport]')
-      ?.scrollBy({top: event.deltaY, left: 0})
+    if (!event.ctrlKey) scrollportRef.current?.scrollBy({top: event.deltaY, left: 0})
   }
 
   return (
@@ -258,10 +269,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         >
           <MarginRegistryContext value={registry}>
             <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
-              <ShowClosedToggle panelId={panelId} rows={rows}/>
-              {rows.map(blockId => (
-                <MarginRow key={blockId} blockId={blockId} isTopLevel={blockId === topLevelBlockId}/>
-              ))}
+              {scopeThreads.length > 0 && <ShowClosedToggle panelId={panelId}/>}
+              {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
+              {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
             </NestedBlockContextProvider>
           </MarginRegistryContext>
         </div>
@@ -270,34 +280,61 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   )
 }
 
-const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
+const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
 
-const useBlockThreads = (blockId: string): readonly ThreadSummary[] => {
-  const repo = useRepo()
-  const block = repo.block(blockId)
-  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
-  return useHandle(repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: blockId}), {selector: t => t ?? NO_THREADS})
+export interface MarginHosts {
+  /** Rendered rows with cards of their own, in outline order. */
+  cardRows: readonly string[]
+  /** Rendered rows standing in for open threads whose own row isn't
+   *  rendered (inside a collapsed block, or not mounted yet): how many. */
+  stubs: ReadonlyMap<string, number>
 }
 
-const MarginRow = ({blockId, isTopLevel}: {blockId: string; isTopLevel: boolean}) => {
+/** Where each thread of the scope shows: on its target's row when that row is
+ *  rendered, else as a count on the nearest rendered ancestor. Closed threads
+ *  show only when asked for, and never as a count. */
+export const marginHosts = (
+  threads: readonly ScopeThread[],
+  rows: readonly string[],
+  scopeId: string,
+  showClosed: boolean,
+): MarginHosts => {
+  const rendered = new Set(rows)
+  const withCards = new Set<string>()
+  const stubs = new Map<string, number>()
+  for (const thread of threads) {
+    if (!thread.open && !showClosed) continue
+    const host = [...thread.path, scopeId].find(id => rendered.has(id))
+    if (host === undefined) continue
+    if (host === (thread.path[0] ?? scopeId)) withCards.add(host)
+    else if (thread.open) stubs.set(host, (stubs.get(host) ?? 0) + 1)
+  }
+  return {cardRows: rows.filter(id => withCards.has(id)), stubs}
+}
+
+const MarginRow = ({blockId}: {blockId: string}) => {
   const registry = useContext(MarginRegistryContext)!
-  const threads = useBlockThreads(blockId)
-  const showClosed = useShowClosed(registry.panelId)
   const repo = useRepo()
-  const [collapsed] = usePropertyValue(repo.block(blockId), isCollapsedProp)
-  return (
-    <>
-      {threads.map((thread, order) => (thread.open || showClosed) && (
-        <CardSlot key={thread.id} slotKey={thread.id} blockId={blockId} order={order}>
-          <div className={thread.open ? undefined : 'opacity-70'}>
-            <ThreadCard thread={thread} surface="margin"/>
-          </div>
-        </CardSlot>
-      ))}
-      {/* The focal block's own subtree always renders, collapsed or not. */}
-      {collapsed && !isTopLevel && <CollapsedStub blockId={blockId}/>}
-    </>
-  )
+  const threads = useThreadSummaries(repo.block(blockId))
+  const showClosed = useShowClosed(registry.panelId)
+  return threads.map((thread, order) => (thread.open || showClosed) && (
+    <CardSlot key={thread.id} slotKey={thread.id} blockId={blockId} order={order}>
+      <div className={thread.open ? undefined : 'opacity-70'}>
+        <ThreadCard thread={thread} surface="margin"/>
+      </div>
+    </CardSlot>
+  ))
+}
+
+/** Keyboard focus, which can't be aimed at a card that is about to move. A
+ *  pointer press can, so it activates on the click, after the press has
+ *  landed: pinning on press would move the card out from under it. */
+const isKeyboardFocus = (event: FocusEvent): boolean => {
+  try {
+    return (event.target as Element).matches(':focus-visible')
+  } catch {
+    return false
+  }
 }
 
 const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId: string; order: number; children: ReactNode}) => {
@@ -309,8 +346,8 @@ const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId
     <div
       ref={ref}
       data-margin-card={slotKey}
-      onPointerDownCapture={() => activateThread(registry.panelId, slotKey)}
-      onFocusCapture={() => activateThread(registry.panelId, slotKey)}
+      onClick={() => activateThread(registry.panelId, slotKey)}
+      onFocus={event => { if (isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
       // Placed by the layout pass; hidden until it has.
       style={{visibility: 'hidden'}}
       className={`pointer-events-auto absolute inset-x-0 top-0 rounded-md transition-shadow ${
@@ -322,32 +359,27 @@ const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId
   )
 }
 
-/** Threads anchored inside a collapsed block, as one stub on it; expanding
- *  the block brings their rows, and their cards, back. */
-const CollapsedStub = ({blockId}: {blockId: string}) => {
-  const repo = useRepo()
-  const block = repo.block(blockId)
-  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
-  const hidden = useHandle(repo.query[OPEN_THREADS_UNDER_QUERY]({workspaceId, id: blockId}), {selector: ids => ids?.length ?? 0})
-  if (hidden === 0) return null
+/** Open threads whose rows aren't rendered, as one stub on the nearest row
+ *  that is; expanding it brings their rows, and their cards, back. */
+const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) => {
+  const block = useRepo().block(blockId)
   return (
-    <CardSlot slotKey={`collapsed:${blockId}`} blockId={blockId} order={Number.MAX_SAFE_INTEGER}>
+    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={Number.MAX_SAFE_INTEGER}>
       <button
         type="button"
-        onClick={() => void block.set(isCollapsedProp, false)}
+        onClick={() => { if (block.peekProperty(isCollapsedProp)) void block.set(isCollapsedProp, false) }}
         className="flex w-full items-center gap-1.5 rounded-md border border-dashed bg-background px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
       >
         <MessageSquare className="h-3 w-3" aria-hidden/>
-        {hidden} thread{hidden === 1 ? '' : 's'} inside
+        {count} thread{count === 1 ? '' : 's'} inside
       </button>
     </CardSlot>
   )
 }
 
 /** Floats at the column's foot: closed threads are hidden unless asked for. */
-const ShowClosedToggle = ({panelId, rows}: {panelId: string; rows: readonly string[]}) => {
+const ShowClosedToggle = ({panelId}: {panelId: string}) => {
   const showClosed = useShowClosed(panelId)
-  if (rows.length === 0) return null
   return (
     <div className="pointer-events-none absolute bottom-2 right-1 z-10">
       <button
@@ -363,7 +395,9 @@ const ShowClosedToggle = ({panelId, rows}: {panelId: string; rows: readonly stri
 
 // ──── Header item ────
 
-/** Shows and switches the margin of the active panel. */
+/** Shows and switches the margin of the active panel. It reads the session's
+ *  pointer where the action resolves the visible pane; the two differ only
+ *  while a maximized link is being coerced, which accepts a stale icon. */
 export function MarginHeaderItem() {
   const layoutSession = useLayoutSessionBlock()
   const [activePanelId] = usePropertyValue(layoutSession, activePanelIdProp)

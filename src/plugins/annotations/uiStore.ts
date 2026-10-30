@@ -127,7 +127,8 @@ export interface PendingReanchor {
 }
 
 /** The thread waiting for the user to select its new text. One at a time:
- *  the next comment-on-selection in its target's editor re-anchors it. */
+ *  the next comment-on-selection in its target's editor re-anchors it. It
+ *  lives only as long as the card that shows it (`releasePendingReanchor`). */
 let pendingReanchor: PendingReanchor | null = null
 
 export const startReanchor = (pending: PendingReanchor | null): void => {
@@ -136,6 +137,14 @@ export const startReanchor = (pending: PendingReanchor | null): void => {
 }
 
 export const peekPendingReanchor = (): PendingReanchor | null => pendingReanchor
+
+/** For the cue that shows a pending re-anchor, as it goes away (its card
+ *  closed, or the thread no longer needs moving): the pending state goes with
+ *  it, so a later comment-on-selection can't move the thread unseen. Unless
+ *  it has moved on to another thread since. */
+export const releasePendingReanchor = (threadId: string): void => {
+  if (pendingReanchor?.threadId === threadId) startReanchor(null)
+}
 
 export const usePendingReanchor = (): PendingReanchor | null =>
   useSyncExternalStore(subscribe, () => pendingReanchor)

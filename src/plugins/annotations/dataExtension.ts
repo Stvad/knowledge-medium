@@ -5,9 +5,9 @@
 import {definitionSeedsFacet, queriesFacet, typeSeedsFacet} from '@/data/facets'
 import type {AppExtension} from '@/facets/facet'
 import {backlinkEdgeExclusionsFacet} from '@/plugins/backlinks/edgeExclusions.js'
-import {openThreadsUnderQuery} from './hiddenThreads.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {threadIdsForBlockQuery} from './queries.ts'
+import {threadsInScopeQuery} from './scopeThreads.ts'
 import {threadsForBlockQuery} from './summaries.ts'
 import {annotationPropertySeeds, annotationTargetProp, annotationThreadType, THREAD_TYPE} from './schema.ts'
 
@@ -19,7 +19,7 @@ export const annotationsDataExtension: AppExtension = [
   typeSeedsFacet.of(annotationThreadType, {source: SOURCE}),
   queriesFacet.of(threadIdsForBlockQuery, {source: SOURCE}),
   queriesFacet.of(threadsForBlockQuery, {source: SOURCE}),
-  queriesFacet.of(openThreadsUnderQuery, {source: SOURCE}),
+  queriesFacet.of(threadsInScopeQuery, {source: SOURCE}),
   // A thread is not a mention of its target: it shows as a thread there.
   backlinkEdgeExclusionsFacet.of({kind: 'field', field: annotationTargetProp.name}, {source: SOURCE}),
   // A root's content is a quote of its target, not the thread's own text, so a

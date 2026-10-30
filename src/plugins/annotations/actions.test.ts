@@ -16,7 +16,7 @@ import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
 import {createThread} from './threads'
-import {closeComposer, openComposer, peekComposer, peekPendingReanchor, startReanchor, updateComposer, viewKey} from './uiStore'
+import {closeComposer, openComposer, peekComposer, peekPendingReanchor, releasePendingReanchor, startReanchor, updateComposer, viewKey} from './uiStore'
 
 const WS = 'ws'
 const TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -168,6 +168,28 @@ describe('commenting on an editor selection', () => {
     expect(commentOnSelection.isVisible!(inCard as never)).toBe(true)
     await commentOnSelection.handler(inCard as never, new CustomEvent('test'))
     expect((await repo.load(threadId))!.content).toBe('Thursday')
+    expect(peekPendingReanchor()).toBeNull()
+  })
+
+  it('opens a composer, leaving a pending thread alone, in a block that is not its target', async () => {
+    await repo.tx(tx => tx.create({id: 'C', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Another block entirely.'}), opts)
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
+    startReanchor({threadId, targetId: 'B'})
+    const commentOnSelection = annotationActions.find(action => action.id === COMMENT_ON_SELECTION_ACTION_ID)!
+    view = new EditorView({state: EditorState.create({doc: 'Another block entirely.'})})
+    view.dispatch({selection: EditorSelection.single(0, 7)})
+    await commentOnSelection.handler({block: repo.block('C'), uiStateBlock: repo.block('C'), renderScopeId: PANEL, editorView: view} as never, new CustomEvent('test'))
+    expect(peekComposer(viewKey(PANEL, 'C'))?.anchor?.quote).toBe('Another')
+    expect((await repo.load(threadId))!.content).toBe('')
+    expect(peekPendingReanchor()).toEqual({threadId, targetId: 'B'})
+    closeComposer(viewKey(PANEL, 'C'))
+  })
+
+  it('ends a pending re-anchor with the card that shows it, not with another thread\u2019s', () => {
+    startReanchor({threadId: 'T', targetId: 'B'})
+    releasePendingReanchor('U')
+    expect(peekPendingReanchor()).toEqual({threadId: 'T', targetId: 'B'})
+    releasePendingReanchor('T')
     expect(peekPendingReanchor()).toBeNull()
   })
 

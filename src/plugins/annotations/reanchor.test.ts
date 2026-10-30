@@ -7,7 +7,7 @@ import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {confirmedAnchor, reanchorThread} from './reanchor'
-import {annotationQuoteStartProp, threadAnchorOf} from './schema'
+import {annotationQuotePrefixProp, annotationQuoteStartProp, annotationQuoteSuffixProp, threadAnchorOf} from './schema'
 import {AnchorChangedError, createThread, InvalidQuoteError} from './threads'
 
 const WS = 'ws'
@@ -86,7 +86,9 @@ describe('reanchorThread', () => {
     const root = await rootOf(threadId)
     expect(root.content).toBe('')
     expect(threadAnchorOf(root)).toEqual({kind: 'block'})
-    expect(root.properties[annotationQuoteStartProp.name]).toBeUndefined()
+    for (const prop of [annotationQuoteStartProp, annotationQuotePrefixProp, annotationQuoteSuffixProp]) {
+      expect(root.properties[prop.name]).toBeUndefined()
+    }
   })
 
   it('refuses, writing nothing, when the text changed after it was selected', async () => {
@@ -95,6 +97,15 @@ describe('reanchorThread', () => {
     await setTarget(`${TEXT} Later.`)
     await expect(reanchorThread(repo, threadId, selected)).rejects.toBeInstanceOf(AnchorChangedError)
     expect((await rootOf(threadId)).content).toBe('Ship')
+  })
+
+  it('refuses a deleted thread, and a thread whose target is deleted', async () => {
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'x'})
+    await repo.tx(tx => tx.delete(threadId), opts)
+    await expect(reanchorThread(repo, threadId, null)).rejects.toThrow(`Thread ${threadId} is missing or deleted.`)
+    const other = await createThread(repo, {targetId: 'B', anchor: null, comment: 'y'})
+    await repo.tx(tx => tx.delete('B'), opts)
+    await expect(reanchorThread(repo, other.threadId, null)).rejects.toThrow('Block B is missing or deleted.')
   })
 
   it('refuses a block that is not a thread root', async () => {

@@ -58,6 +58,7 @@ import {
   activateThread,
   closeComposer,
   openComposer,
+  releasePendingReanchor,
   showClosedThreads,
   startReanchor,
   toggleShowResolved,
@@ -95,7 +96,7 @@ const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
 const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
 
-const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
+export const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   return useHandle(
@@ -395,6 +396,7 @@ const ReanchorControls = ({root, state, targetContent}: {
   const pending = usePendingReanchor()
   const anchor = threadAnchorOf(root) as {kind: 'range'} & RangeAnchor
   const targetId = threadTargetIdOf(root)
+  useEffect(() => () => releasePendingReanchor(root.id), [root.id])
   if (pending?.threadId === root.id) {
     return (
       <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground" role="status">
