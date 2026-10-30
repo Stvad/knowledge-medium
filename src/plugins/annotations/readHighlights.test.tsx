@@ -189,7 +189,7 @@ describe('read-mode marks', () => {
 describe('the highlight feed', () => {
   const B = {id: 'B'} as unknown as Block
   const thread = (commentCount: number): ThreadSummary => ({
-    id: 'T', open: true, commentCount, createdAt: 0,
+    id: 'T', open: true, commentCount, quoterCount: 0, createdAt: 0,
     anchor: {kind: 'range', quote: 'moved', quoteStart: 3, prefix: 'We ', suffix: ' it'},
   })
   const config = (feed: unknown, blockContext: BlockContextType) => threadMarksMarkdownExtension({
