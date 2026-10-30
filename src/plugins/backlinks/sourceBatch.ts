@@ -104,9 +104,10 @@ export class BacklinkSourceBatcher {
       sameGroup: sameStatement,
       maxIdsPerStatement: maxTargets,
       read: async ({workspaceId, projection, recognitionParams, edges}, targets) => {
-        // Probed per statement, not per group: past the ceiling a workspace
-        // with no machinery pays one cheap probe per chunk (a positive answer
-        // is cached), and a failed probe fails only its own chunk.
+        // Per statement, not per group: once per group would need a per-group
+        // hook on `ReadBatcher` for this caller alone. Past the ceiling that
+        // costs one cheap probe per extra chunk (a yes is cached), and a failed
+        // probe fails only its own chunk.
         const machinery = await workspaceHasPropertyMachinery(db, workspaceId)
         const rows = await db.getAll<{target_id: string; id?: string; count?: number}>(
           backlinkSourcesSql(targets.length, projection, machinery, edges),

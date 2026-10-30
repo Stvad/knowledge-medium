@@ -143,11 +143,12 @@ describe('ReadBatcher shared-work reporting', () => {
   it('reports one shared read per statement that answers more than one caller', async () => {
     const {batcher, shared} = metered(2)
 
-    // Two statements of two callers each, then one caller alone.
+    // Two statements of two callers each; then a statement of two and one
+    // whose lone caller shares nothing, though its group has three.
     await Promise.all(['a', 'b', 'c', 'c'].map(id => batcher.request(id)))
-    await batcher.request('d')
+    await Promise.all(['d', 'e', 'f'].map(id => batcher.request(id)))
 
-    expect(shared()).toBe(2)
+    expect(shared()).toBe(3)
   })
 })
 

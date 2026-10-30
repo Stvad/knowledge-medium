@@ -18,16 +18,17 @@ import type { QueryReadDb } from '@/data/api'
 import { contentionFor } from './timingMetrics'
 
 export interface ReadBatchSpec<K, A> {
-  /** One statement for `ids`, all requested under `key`, giving each id's
-   *  answer. The lookup is asked only for those ids; an id the rows do not
-   *  name is the spec's to answer, so no caller sees `undefined`. Answers are
-   *  shared by every caller of one id, so they are read-only. */
+  /** One statement for `ids` (after any probe it needs), all requested under
+   *  `key`, giving each id's answer. The lookup is asked only for those ids;
+   *  an id the rows do not name is the spec's to answer, so no caller sees
+   *  `undefined`. Answers are shared by every caller of one id, so they are
+   *  read-only. */
   readonly read: (key: K, ids: readonly string[]) => Promise<(id: string) => A>
   /** Whether requests under `a` and `b` can share a statement. Default `===`. */
   readonly sameGroup?: (a: K, b: K) => boolean
   /** Ids one statement may bind; past it a group is split, one statement per
    *  chunk. Unbounded by default, for a statement that binds its ids as one
-   *  value. */
+   *  value. A positive integer, unchecked: every caller passes a constant. */
   readonly maxIdsPerStatement?: number
 }
 
