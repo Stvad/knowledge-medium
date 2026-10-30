@@ -81,6 +81,7 @@ export const createGraph = (client: BridgeClient) => {
     getSubtree: bridgeGraph.getSubtree,
     sqlAll: bridgeGraph.sqlAll,
     blockViews: bridgeGraph.blockViews,
+    comments: bridgeGraph.comments,
     setTaskProps,
     setActivity,
     setSession,

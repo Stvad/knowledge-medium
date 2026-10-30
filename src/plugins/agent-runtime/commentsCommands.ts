@@ -6,7 +6,14 @@
  * plugin; this is its agent-facing shape.
  */
 
-import { AGENT_VIEW_DEFAULTS, charBoundary } from '@knowledge-medium/agent-cli/protocol'
+import {
+  AGENT_VIEW_DEFAULTS,
+  charBoundary,
+  type CommentAuthor,
+  type CommentNode,
+  type CommentsView,
+  type CommentThreadView,
+} from '@knowledge-medium/agent-cli/protocol'
 import type { BlockData } from '@/data/api'
 import { hasBlockType } from '@/data/properties'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
@@ -35,56 +42,6 @@ const QUOTE_MAX_CHARS = 1_000
 /** Characters of target text kept on each side of a resolved quote. */
 const EXCERPT_CONTEXT_CHARS = 80
 const CONTRIBUTOR_KINDS: ReadonlySet<string> = new Set<ContributorKind>(['human', 'agent', 'automation'])
-
-export type AnchorState = 'block' | 'exact' | 'moved' | 'stale'
-
-export interface CommentAuthor {
-  /** The author's page; null for a system author. */
-  id: string | null
-  name: string
-  /** Null when the author's page is not here to say. */
-  kind: ContributorKind | null
-}
-
-export interface CommentNode {
-  id: string
-  shortId: string
-  content: string
-  /** Characters cut from `content`; get_block reads the rest. */
-  cut: number
-  author: CommentAuthor
-  createdAt: number
-  replies: CommentNode[]
-}
-
-export interface ThreadView {
-  id: string
-  shortId: string
-  /** `open` or `resolved`, or the stored value when this build can't read it. */
-  status: string
-  anchor: AnchorState
-  /** The quoted text; null for a thread on the whole block. */
-  quote: string | null
-  target: {
-    id: string
-    shortId: string
-    deleted: boolean
-    /** Root→parent labels, as a breadcrumb reads. */
-    path: string[]
-    /** The quote with some text around it, or the block's head. */
-    excerpt: string
-  } | null
-  comments: CommentNode[]
-  /** Comments past the per-thread cap, not in `comments`. */
-  omittedComments: number
-}
-
-export interface CommentsView {
-  total: number
-  offset: number
-  nextOffset: number | null
-  threads: ThreadView[]
-}
 
 export interface CommentsParams {
   scope?: string
@@ -216,7 +173,7 @@ export const buildCommentsView = async (
     shortIds(repo, [...page.map(root => root.id), ...targetIds, ...allComments.map(row => row.id)]),
   ])
 
-  const threadView = (root: BlockData): ThreadView => {
+  const threadView = (root: BlockData): CommentThreadView => {
     const anchor = threadAnchorOf(root)
     const targetId = threadTargetIdOf(root)
     const target = targetId ? targets.get(targetId) : undefined
@@ -264,7 +221,7 @@ export const buildCommentsView = async (
 
   // The page ends early once its JSON passes the views' budget; the first
   // thread is always shown, so paging advances.
-  const threads: ThreadView[] = []
+  const threads: CommentThreadView[] = []
   let chars = 0
   for (const root of page) {
     const view = threadView(root)
