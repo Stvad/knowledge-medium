@@ -1,1 +1,1 @@
-export{sH as staticDataExtensions}from"../../chunks/app-CEoA1SUN.js";
+export{RV as staticDataExtensions}from"../../chunks/app-BLQCx6nr.js";

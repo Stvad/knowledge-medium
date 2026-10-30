@@ -1,1 +1,1 @@
-export{ju as annotationsPlugin}from"../../../chunks/app-CEoA1SUN.js";
+export{Mu as annotationsPlugin}from"../../../chunks/app-BLQCx6nr.js";
