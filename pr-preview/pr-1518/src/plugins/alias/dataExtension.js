@@ -1,0 +1,1 @@
+export{wJ as aliasDataExtension}from"../../../chunks/app-D4_qqUju.js";

@@ -1,0 +1,1 @@
+export{VS as blockEditingContentRenderer}from"../../../chunks/app-D4_qqUju.js";

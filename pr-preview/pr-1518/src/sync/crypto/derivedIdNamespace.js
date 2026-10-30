@@ -1,0 +1,1 @@
+export{Aet as deriveWorkspaceIdNamespace}from"../../../chunks/app-D4_qqUju.js";

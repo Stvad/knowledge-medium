@@ -1,0 +1,1 @@
+export{tq as backlinksDataExtension}from"../../../chunks/app-D4_qqUju.js";
