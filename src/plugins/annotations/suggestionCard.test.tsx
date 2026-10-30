@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import {cleanup, render, screen} from '@testing-library/react'
+import {cleanup, fireEvent, render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
@@ -72,6 +72,13 @@ describe('SuggestionText', () => {
     expect(container.querySelector('ins')?.textContent).toBe('Thursday 9am')
   })
 
+  it('shows an open suggestion whole, since Accept applies all of it', () => {
+    const long = `${'a'.repeat(200)} and the change at the very end`
+    const r = {...root('open'), properties: {...root('open').properties, [annotationReplacementProp.name]: long}}
+    const {container} = render(<SuggestionText root={r} suggestion={threadSuggestionOf(r)!}/>)
+    expect(container.querySelector('ins')?.textContent).toBe(long)
+  })
+
   it('reads a closed one as what became of it', () => {
     expect(textOf('accepted').textContent).toBe('Replaced “Thursday” with “Thursday 9am”')
     expect(textOf('rejected').textContent).toBe('Rejected replacing “Thursday” with “Thursday 9am”')
@@ -89,6 +96,15 @@ describe('SuggestionActions', () => {
     await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
     await vi.waitFor(async () => expect((await repo.load('B'))!.content).toBe('Meet Thursday 9am'))
     expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted')
+  })
+
+  it('takes one decision at a time: both buttons wait while one is in flight', async () => {
+    const threadId = await suggestOnB()
+    renderActions(threadId)
+    fireEvent.click(screen.getByRole('button', {name: 'Accept'}))
+    expect(screen.getByRole('button', {name: 'Reject'})).toBeDisabled()
+    expect(screen.getByRole('button', {name: 'Accept'})).toBeDisabled()
+    await vi.waitFor(async () => expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted'))
   })
 
   it('rejects with a click, leaving the target alone', async () => {
