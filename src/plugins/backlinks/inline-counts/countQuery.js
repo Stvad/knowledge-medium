@@ -1,1 +1,1 @@
-export{hq as BACKLINKS_COUNT_FOR_BLOCK_QUERY,gq as backlinksCountForBlockQuery}from"../../../../chunks/app-V_lamiLq.js";
+export{gq as BACKLINKS_COUNT_FOR_BLOCK_QUERY,_q as backlinksCountForBlockQuery}from"../../../../chunks/app-CISOAGNk.js";

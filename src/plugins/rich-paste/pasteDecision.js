@@ -1,1 +1,1 @@
-export{ev as richPasteDecisionContribution}from"../../../chunks/app-V_lamiLq.js";
+export{ev as richPasteDecisionContribution}from"../../../chunks/app-CISOAGNk.js";

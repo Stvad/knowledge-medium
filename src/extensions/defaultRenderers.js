@@ -1,1 +1,1 @@
-export{SM as defaultRegistry,CM as defaultRendererContributions,wM as defaultRenderersExtension}from"../../chunks/app-V_lamiLq.js";
+export{CM as defaultRegistry,wM as defaultRendererContributions,TM as defaultRenderersExtension}from"../../chunks/app-CISOAGNk.js";

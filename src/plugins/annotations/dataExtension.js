@@ -1,1 +1,1 @@
-export{tK as annotationsDataExtension}from"../../../chunks/app-V_lamiLq.js";
+export{nK as annotationsDataExtension}from"../../../chunks/app-CISOAGNk.js";

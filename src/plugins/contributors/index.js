@@ -1,1 +1,1 @@
-export{Rd as contributorsPlugin}from"../../../chunks/app-V_lamiLq.js";
+export{Rd as contributorsPlugin}from"../../../chunks/app-CISOAGNk.js";

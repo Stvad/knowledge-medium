@@ -1,1 +1,1 @@
-export{MK as contributorsDataExtension}from"../../../chunks/app-V_lamiLq.js";
+export{NK as contributorsDataExtension}from"../../../chunks/app-CISOAGNk.js";

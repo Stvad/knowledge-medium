@@ -1,1 +1,1 @@
-export{JK as characterCounterDataExtension}from"../../../chunks/app-V_lamiLq.js";
+export{YK as characterCounterDataExtension}from"../../../chunks/app-CISOAGNk.js";

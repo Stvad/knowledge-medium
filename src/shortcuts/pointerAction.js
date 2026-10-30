@@ -1,1 +1,1 @@
-export{bj as dispatchPointerAction,xj as setPointerActionDispatcher}from"../../chunks/app-V_lamiLq.js";
+export{xj as dispatchPointerAction,Sj as setPointerActionDispatcher}from"../../chunks/app-CISOAGNk.js";

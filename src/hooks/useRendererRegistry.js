@@ -1,1 +1,1 @@
-export{SM as defaultRegistry,bM as refreshRendererRegistry,xM as useRenderer}from"../../chunks/app-V_lamiLq.js";
+export{CM as defaultRegistry,xM as refreshRendererRegistry,SM as useRenderer}from"../../chunks/app-CISOAGNk.js";

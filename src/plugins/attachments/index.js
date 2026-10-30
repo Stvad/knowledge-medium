@@ -1,1 +1,1 @@
-export{rv as attachmentsPlugin}from"../../../chunks/app-V_lamiLq.js";
+export{rv as attachmentsPlugin}from"../../../chunks/app-CISOAGNk.js";

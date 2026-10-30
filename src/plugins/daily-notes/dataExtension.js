@@ -1,1 +1,1 @@
-export{FG as dailyNotesDataExtension}from"../../../chunks/app-V_lamiLq.js";
+export{IG as dailyNotesDataExtension}from"../../../chunks/app-CISOAGNk.js";

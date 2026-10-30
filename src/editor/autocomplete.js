@@ -1,1 +1,1 @@
-export{NA as editorAutocompleteExtension}from"../../chunks/app-V_lamiLq.js";
+export{PA as editorAutocompleteExtension}from"../../chunks/app-CISOAGNk.js";

@@ -1,1 +1,1 @@
-export{XA as appUpdatePromptExtension}from"../../../chunks/app-V_lamiLq.js";
+export{ZA as appUpdatePromptExtension}from"../../../chunks/app-CISOAGNk.js";

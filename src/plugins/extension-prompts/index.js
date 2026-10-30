@@ -1,1 +1,1 @@
-export{IA as ExtensionPromptSurface,LA as extensionPromptsExtension}from"../../../chunks/app-V_lamiLq.js";
+export{LA as ExtensionPromptSurface,RA as extensionPromptsExtension}from"../../../chunks/app-CISOAGNk.js";

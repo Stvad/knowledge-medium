@@ -1,1 +1,1 @@
-export{Fj as dynamicExtensionsExtension}from"../../chunks/app-V_lamiLq.js";
+export{Ij as dynamicExtensionsExtension}from"../../chunks/app-CISOAGNk.js";

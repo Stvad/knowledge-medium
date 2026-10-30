@@ -1,1 +1,1 @@
-export{yV as usePropertySchemas}from"../../chunks/app-V_lamiLq.js";
+export{bV as usePropertySchemas}from"../../chunks/app-CISOAGNk.js";

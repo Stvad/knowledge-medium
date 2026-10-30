@@ -1,1 +1,1 @@
-export{pP as ExtensionRenderBoundary}from"../../chunks/app-V_lamiLq.js";
+export{mP as ExtensionRenderBoundary}from"../../chunks/app-CISOAGNk.js";

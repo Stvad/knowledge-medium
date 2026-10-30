@@ -1,1 +1,1 @@
-export{Pg as usePlaceSearch}from"../../../chunks/app-V_lamiLq.js";
+export{Pg as usePlaceSearch}from"../../../chunks/app-CISOAGNk.js";

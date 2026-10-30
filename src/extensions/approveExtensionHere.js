@@ -1,1 +1,1 @@
-export{GA as approveExtensionHere}from"../../chunks/app-V_lamiLq.js";
+export{KA as approveExtensionHere}from"../../chunks/app-CISOAGNk.js";

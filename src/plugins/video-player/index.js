@@ -1,1 +1,1 @@
-export{tb as videoPlayerPlugin}from"../../../chunks/app-V_lamiLq.js";
+export{tb as videoPlayerPlugin}from"../../../chunks/app-CISOAGNk.js";

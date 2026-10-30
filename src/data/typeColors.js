@@ -1,1 +1,1 @@
-export{Bk as DEFAULT_TYPE_COLORS,Vk as defaultTypeColor,Hk as pickLeastUsedTypeColor}from"../../chunks/app-V_lamiLq.js";
+export{Vk as DEFAULT_TYPE_COLORS,Hk as defaultTypeColor,Uk as pickLeastUsedTypeColor}from"../../chunks/app-CISOAGNk.js";

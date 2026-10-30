@@ -1,1 +1,1 @@
-export{Sy as useAssetObjectUrl}from"../../../chunks/app-V_lamiLq.js";
+export{Sy as useAssetObjectUrl}from"../../../chunks/app-CISOAGNk.js";

@@ -1,1 +1,1 @@
-export{vw as PendingInvitations}from"../../../chunks/app-V_lamiLq.js";
+export{vw as PendingInvitations}from"../../../chunks/app-CISOAGNk.js";
