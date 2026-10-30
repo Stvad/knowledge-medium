@@ -59,7 +59,8 @@ const perWrite = (r: InteractionRecordData): string => {
  *  main-thread summary (see `InteractionRecordData.responsiveness`). */
 const blockingPerMinute = (r: InteractionRecordData): string => {
   const main = r.responsiveness
-  if (main?.longFrames === undefined) return '—'
+  // A rate over no observed time is not a number.
+  if (main?.longFrames === undefined || !(main.observedMs > 0)) return '—'
   return `${ms(main.longFrames.blockingMs / (main.observedMs / 60_000))}/min`
 }
 

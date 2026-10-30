@@ -17,8 +17,12 @@ const both = (startedAt = 0) => new ResponsivenessTotals({ frames: true, inputs:
 const frame = (duration: number, blockingDuration: number, forced: number[] = [], startTime = 0): LongFrameEntry =>
   ({ startTime, duration, blockingDuration, scripts: forced.map((f) => ({ forcedStyleAndLayoutDuration: f })) })
 
-const input = (startTime: number, duration: number, over: Partial<InputEventEntry> = {}): InputEventEntry =>
-  ({ startTime, duration, processingStart: startTime + 4, interactionId: 0, ...over })
+/** Handlers that run for no time unless a test says otherwise, so no entry
+ *  nests inside another's processing by accident. */
+const input = (startTime: number, duration: number, over: Partial<InputEventEntry> = {}): InputEventEntry => {
+  const processingStart = over.processingStart ?? startTime + 4
+  return { startTime, duration, processingStart, processingEnd: processingStart, interactionId: 0, ...over }
+}
 
 /** Far enough past every entry that nothing is still waiting to be merged. */
 const LATER = 1_000_000
@@ -102,13 +106,50 @@ describe('slow inputs', () => {
     expect(totals.sample(LATER).slowInputs?.inputDelay?.maxMs).toBe(30)
   })
 
-  // A held-back pointerdown can be delivered after the pointerup that shares its
-  // id. The press is the input, so its delay wins even though it arrived second.
+  // Entries need not arrive in start order. The press is the input, so its
+  // delay wins even when it arrives second.
   it('takes the delay of the earliest event even when it arrives last', () => {
     const totals = both()
     totals.addInputs([input(500, 64, { interactionId: 4, processingStart: 502 })])
     totals.addInputs([input(300, 64, { interactionId: 4, processingStart: 340 })])
     expect(totals.sample(LATER).slowInputs?.inputDelay?.maxMs).toBe(40)
+  })
+
+  // One key in a contenteditable whose input handler took 80ms, as Chromium
+  // delivered it: keydown and keypress share the id; beforeinput and input carry
+  // none and start a little later, created while keypress was still being handled.
+  it('counts a keystroke once with the events its handling dispatched', () => {
+    const totals = both()
+    totals.addInputs([
+      input(48_639.1, 96, { interactionId: 9913, processingStart: 48_639.2, processingEnd: 48_639.3 }),
+      input(48_639.1, 96, { interactionId: 9913, processingStart: 48_639.3, processingEnd: 48_719.7 }),
+      input(48_639.4, 96, { processingStart: 48_639.5, processingEnd: 48_639.6 }),
+      input(48_639.6, 96, { processingStart: 48_639.7, processingEnd: 48_719.6 }),
+    ])
+    expect(countOf(totals)).toBe(1)
+    // The keystroke's own wait, not the near-zero one of the events it caused.
+    expect(totals.sample(LATER).slowInputs?.inputDelay?.maxMs).toBeCloseTo(0.1)
+  })
+
+  // A pointer moved while a slow keydown ran is stamped during that keydown but
+  // handled only after it: queued, not caused. Its wait is the stall itself.
+  it('keeps an input queued behind another one separate', () => {
+    const totals = both()
+    totals.addInputs([
+      input(1_000, 160, { interactionId: 5, processingStart: 1_001, processingEnd: 1_150 }),
+      input(1_050, 112, { processingStart: 1_150.1, processingEnd: 1_150.2 }),
+    ])
+    expect(countOf(totals)).toBe(2)
+    expect(totals.sample(LATER).slowInputs?.inputDelay?.maxMs).toBeCloseTo(100.1)
+  })
+
+  // A release whose start is already filed under its compatibility mouseup, and
+  // whose id is filed under the press: both are this one input.
+  it('joins every pending input an entry matches into one', () => {
+    const totals = both()
+    totals.addInputs([input(1_000, 64, { interactionId: 7 })])
+    totals.addInputs([input(1_200, 64), input(1_200, 64, { interactionId: 7 })])
+    expect(countOf(totals)).toBe(1)
   })
 
   // A browser ignoring `durationThreshold` reports from its own floor; what is

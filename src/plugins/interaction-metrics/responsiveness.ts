@@ -16,18 +16,20 @@ export const SLOW_MS = 50
 
 /** How long after an input's latest entry a later one may still join it (a
  *  keyup, a pointerup). Inputs are matched by identity, never by proximity, so
- *  a longer horizon cannot merge two of them — it only delays counting one. */
+ *  a longer horizon cannot merge two of them — it only delays counting one.
+ *  ACCEPTED: a press held past it with a sample in between counts twice. */
 const MERGE_HORIZON_MS = 5_000
 
 /** A span's main-thread responsiveness, as stored.
  *
  *  Covers `observedMs`, NOT the record's `sessionMs`: observation starts when
- *  the recorder does — after boot, which `startup-metrics` records — or at the
- *  last `resetMetrics()`. Normalise by this. It is wall-clock, so idle and
- *  hidden time are inside it.
+ *  the recorder's effect does — after boot, which `startup-metrics` records, at
+ *  the last `resetMetrics()`, or when a plugin toggle restarts the effect, after
+ *  which the record holds only the latest stretch. Normalise by this. It is
+ *  page time (`performance.now()`), so idle and hidden time are inside it.
  *
  *  Frame and input DURATIONS run to the next paint, so a page that cannot paint
- *  (an occluded window, a hidden pane) stretches `totalMs`, `maxMs` and
+ *  (an occluded window, a hidden pane) raises `count`, `totalMs`, `maxMs` and
  *  `slowInputs.duration` with nothing blocking. `blockingMs` and `inputDelay`
  *  count only time the thread was busy. */
 export interface ResponsivenessSample {
@@ -47,9 +49,11 @@ export interface ResponsivenessSample {
   }
   /** Inputs whose next paint came at least `SLOW_MS` later, ONE per user input:
    *  a hover's half-dozen events count once, as do a tap's pointer, mouse and
-   *  click events. Hovers count, unlike in INP. ABSENT where the browser has no
-   *  Event Timing. A browser that ignores the requested threshold reports from
-   *  its own, higher floor, so its counts are not comparable to another's. */
+   *  click events and a keystroke's key and input events. Hovers count, unlike
+   *  in INP. ABSENT where the browser has no Event Timing. Not comparable across
+   *  browsers: one that ignores the requested threshold reports from its own,
+   *  higher floor, and one without `interactionId` counts a press and its
+   *  release separately. */
   slowInputs?: {
     /** Lifetime. Slow inputs ONLY — nothing here counts the fast ones, so the
      *  distributions below are conditional on an input being slow and are
@@ -85,6 +89,7 @@ export interface InputEventEntry {
   startTime: number
   duration: number
   processingStart: number
+  processingEnd: number
   interactionId?: number
 }
 
@@ -97,7 +102,42 @@ interface PendingInput {
   /** The latest entry's start, which the merge horizon is measured from. */
   lastStart: number
   duration: number
+  /** When its handlers ran, earliest start to latest end. */
+  processingStart: number
+  processingEnd: number
 }
+
+const pendingFrom = (e: InputEventEntry): PendingInput => ({
+  firstStart: e.startTime,
+  delay: e.processingStart - e.startTime,
+  lastStart: e.startTime,
+  duration: e.duration,
+  processingStart: e.processingStart,
+  processingEnd: e.processingEnd,
+})
+
+/** Two parts of one input as one. Its wait is its FIRST event's — and among
+ *  events sharing that start, which are dispatched one after another, the
+ *  least, since a later one's includes the earlier handlers. */
+const merge = (a: PendingInput, b: PendingInput): PendingInput => {
+  const first = a.firstStart < b.firstStart || (a.firstStart === b.firstStart && a.delay <= b.delay) ? a : b
+  return {
+    firstStart: first.firstStart,
+    delay: first.delay,
+    lastStart: Math.max(a.lastStart, b.lastStart),
+    duration: Math.max(a.duration, b.duration),
+    processingStart: Math.min(a.processingStart, b.processingStart),
+    processingEnd: Math.max(a.processingEnd, b.processingEnd),
+  }
+}
+
+/** An event with no interaction of its own whose handlers ran INSIDE another
+ *  input's (beforeinput and input, dispatched while keypress is handled) is
+ *  that input's consequence. Queued behind it instead, its handlers start
+ *  only once the other's end, and it stays an input of its own. */
+const dispatchedWithin = (e: InputEventEntry, input: PendingInput): boolean =>
+  (e.interactionId ?? 0) === 0 &&
+  input.processingStart <= e.processingStart && e.processingStart < input.processingEnd
 
 const round2 = (ms: number): number => Math.round(ms * 100) / 100
 
@@ -159,24 +199,19 @@ export class ResponsivenessTotals {
       // its pointerup shares the id but not the start.
       const keys = [`t:${e.startTime}`]
       if ((e.interactionId ?? 0) > 0) keys.push(`i:${e.interactionId}`)
-      const delay = e.processingStart - e.startTime
-      let input = keys.map((k) => this.pending.get(k)).find((p) => p !== undefined)
-      if (input === undefined) {
-        input = { firstStart: e.startTime, delay, lastStart: e.startTime, duration: e.duration }
-      } else {
-        input.duration = Math.max(input.duration, e.duration)
-        input.lastStart = Math.max(input.lastStart, e.startTime)
-        // Events sharing a start are dispatched one after another, so a later
-        // one's wait includes the earlier handlers: the least one is the input's.
-        if (e.startTime < input.firstStart || (e.startTime === input.firstStart && delay < input.delay)) {
-          input.firstStart = e.startTime
-          input.delay = delay
-        }
+      const matched = new Set<PendingInput>()
+      for (const k of keys) {
+        const input = this.pending.get(k)
+        if (input) matched.add(input)
       }
+      for (const input of this.pending.values()) if (dispatchedWithin(e, input)) matched.add(input)
+      // EVERY input the entry matches is this one: its keys can name two.
+      const input = [...matched].reduce(merge, pendingFrom(e))
+      for (const [k, filed] of this.pending) if (matched.has(filed)) this.pending.set(k, input)
       for (const k of keys) this.pending.set(k, input)
     }
-    // The memory bound: `sample` settles everything regardless, so this only
-    // keeps `pending` to one horizon's inputs between samples.
+    // The memory bound, not a correctness step: `sample` settles by the same
+    // horizon. This keeps `pending` to one horizon's inputs between samples.
     this.settleBefore(newest - MERGE_HORIZON_MS)
   }
 

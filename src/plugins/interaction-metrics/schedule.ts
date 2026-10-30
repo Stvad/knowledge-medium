@@ -41,8 +41,8 @@ export const interactionMetricsEffect: AppEffect = {
     // mount, so the write consults it again at the moment it matters.
     if (metricsSessionContext(repo, workspaceId).blockedBy === 'no-persistent-client') return
     const responsiveness = observeResponsiveness() ?? undefined
-    // A reset starts a new counter span, and the summary must cover the same
-    // span as the counters stored beside it.
+    // A reset starts a new counter span, and the summary starts over with it.
+    // An effect restart starts it over too, within one span: see `observedMs`.
     const stopWatchingReset = responsiveness ? repo.onMetricsReset(responsiveness.restart) : () => {}
     const sampling = job.start(async () => { await writeInteractionSample(repo, workspaceId, responsiveness) })
     return () => {

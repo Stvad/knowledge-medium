@@ -200,6 +200,18 @@ describe('PerfTrendDialog tables', () => {
     expect(screen.getByText('4 (180ms)')).toBeInTheDocument()
   })
 
+  // A rate over no time is not a number; the cell says so rather than printing one.
+  it('shows no blocking rate for a summary that observed no time', async () => {
+    const responsiveness = {
+      observedMs: 0,
+      longFrames: { count: 1, totalMs: 90, blockingMs: 40, forcedLayoutMs: 0, maxMs: 90 },
+    }
+    expect(await writeInteractionSample(repo, WS, { sample: () => responsiveness })).toBeTruthy()
+    render(<PerfTrendDialog resolve={() => {}} cancel={() => {}} workspaceId={WS} />)
+    await waitFor(() => expect(screen.getByText('Blocking / min')).toBeInTheDocument())
+    expect(screen.queryByText(/ms\/min$/)).toBeNull()
+  })
+
   // Not measured is not zero: a browser without the entry types, or a record
   // from before they were recorded, shows no figure at all.
   it('shows no main-thread figures for a record that never measured them', async () => {
