@@ -48,10 +48,12 @@ export const annotationQuoteSuffixProp = seedProperty({
   hidden: true,
 })
 
-export type ThreadStatus = 'open' | 'resolved'
+/** `accepted` and `rejected` close an edit suggestion; `resolved` closes any
+ *  thread. */
+export type ThreadStatus = 'open' | 'resolved' | 'accepted' | 'rejected'
 
 /** Composing the todo status instead would give every thread a checkbox and
- *  put it in every todo query. Edit suggestions widen the options later. */
+ *  put it in every todo query. */
 export const annotationStatusProp = seedProperty<ThreadStatus>({
   seedKey: 'system:annotations/property/status',
   revision: 1,
@@ -60,9 +62,23 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   config: {options: [
     {value: 'open', label: 'open'},
     {value: 'resolved', label: 'resolved'},
+    {value: 'accepted', label: 'accepted'},
+    {value: 'rejected', label: 'rejected'},
   ]},
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
+})
+
+/** An edit suggestion's new text for the quote. Its presence, non-empty, is
+ *  what makes a thread a suggestion; there is no separate kind. */
+export const annotationReplacementProp = seedProperty({
+  seedKey: 'system:annotations/property/replacement',
+  revision: 1,
+  name: 'annotation:replacement',
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** Where a range thread's quote sat and what surrounded it; a whole-block
@@ -77,7 +93,7 @@ export const anchorFieldValues = (anchor: RangeAnchor) => [
 
 export const annotationPropertySeeds = [
   annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-  annotationQuoteSuffixProp, annotationStatusProp,
+  annotationQuoteSuffixProp, annotationStatusProp, annotationReplacementProp,
 ] as const
 
 export const annotationThreadType = seedType({
@@ -127,8 +143,19 @@ export const threadTargetIdOf = (root: RootRow): string | undefined => {
 
 export const threadStatusOf = (root: RootRow): ThreadStatus => decodeRowProperty(root, annotationStatusProp)
 
-/** False for resolved, and for a status this build cannot decode, such as a
- *  later build's closed states. */
+/** The replacement an edit suggestion proposes, or undefined for a thread
+ *  that is not one. Empty counts as absent, and so does a hand-edited value
+ *  that no longer decodes. */
+export const threadReplacementOf = (root: RootRow): string | undefined => {
+  try {
+    return decodeRowProperty(root, annotationReplacementProp) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** False for every closed status, and for one this build cannot decode, such
+ *  as a later build's. */
 export const threadIsOpen = (root: RootRow): boolean => {
   try {
     return threadStatusOf(root) === 'open'

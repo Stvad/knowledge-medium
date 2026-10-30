@@ -1,9 +1,10 @@
 /**
  * The thread writes: create, reply, resolve and reopen. The target block is
- * never written to.
+ * never written to here; accepting an edit suggestion (`suggestions.ts`) is
+ * the one write that changes it.
  */
 
-import {ChangeScope, propertyValue, type BlockReference} from '@/data/api'
+import {ChangeScope, propertyValue, type BlockData, type BlockReference, type Tx} from '@/data/api'
 import {createChild} from '@/data/mutators'
 import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
 import {hasBlockType} from '@/data/properties'
@@ -15,9 +16,11 @@ import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
   anchorFieldValues,
+  annotationReplacementProp,
   annotationStatusProp,
   annotationTargetProp,
   THREAD_TYPE,
+  threadTargetIdOf,
   type ThreadStatus,
 } from './schema.ts'
 
@@ -51,11 +54,45 @@ export class InvalidQuoteError extends Error {
   }
 }
 
-/** A refusal `createThread` makes before writing, for a caller to show. */
+/** The thread can't be, or isn't, an edit suggestion: one needs a quote to
+ *  replace and a replacement that changes it. */
+export class InvalidSuggestionError extends Error {
+  constructor(reason: string) {
+    super(reason)
+    this.name = 'InvalidSuggestionError'
+  }
+}
+
+/** A refusal a thread write makes before writing, for a caller to show. */
 export const isThreadRefusal = (error: unknown): error is Error =>
-  error instanceof AnchorChangedError || error instanceof UnannotatableTargetError || error instanceof InvalidQuoteError
+  error instanceof AnchorChangedError || error instanceof UnannotatableTargetError ||
+  error instanceof InvalidQuoteError || error instanceof InvalidSuggestionError
 
 export const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+
+/** The target as of `tx`, refused unless it can carry a thread. Every write
+ *  that reads a target checks it here, inside its own transaction. */
+export const annotatableTarget = async (tx: Tx, targetId: string): Promise<BlockData> => {
+  const target = await tx.get(targetId)
+  if (!target || target.deleted) throw missingTarget(targetId)
+  if (await isPropertyFieldRow(tx, target) || await isPropertyValueRow(tx, target)) {
+    throw new UnannotatableTargetError('A property row can’t be commented on.')
+  }
+  if (hasBlockType(target, THREAD_TYPE) || target.id === commentsPageBlockId(target.workspaceId)) {
+    throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
+  }
+  return target
+}
+
+/** A live thread root, and its target as `annotatableTarget` admits it, both
+ *  as of `tx`. */
+export const threadAndTarget = async (tx: Tx, threadId: string): Promise<{root: BlockData; target: BlockData}> => {
+  const root = await tx.get(threadId)
+  if (!root || root.deleted || !hasBlockType(root, THREAD_TYPE)) {
+    throw new UnannotatableTargetError(`Thread ${threadId} is missing or deleted.`)
+  }
+  return {root, target: await annotatableTarget(tx, threadTargetIdOf(root) ?? '')}
+}
 
 /** Anchors come from `captureAnchor` in the app, but agents and the bridge
  *  build their own. */
@@ -70,6 +107,14 @@ export const assertQuotable = (anchor: RangeAnchor): void => {
   }
 }
 
+const assertSuggestion = (anchor: RangeAnchor | null, replacement: string): void => {
+  if (!anchor) throw new InvalidSuggestionError('A suggestion replaces quoted text: select the text to change.')
+  if (replacement === '') {
+    throw new InvalidSuggestionError('The replacement is empty. To suggest deleting text, replace a slightly wider span.')
+  }
+  if (replacement === anchor.quote) throw new InvalidSuggestionError('The replacement is the same as the quoted text.')
+}
+
 export interface CreateThreadArgs {
   targetId: string
   /** null comments on the whole block. */
@@ -77,6 +122,8 @@ export interface CreateThreadArgs {
   /** The first comment. Absent or empty makes a highlight: a thread with no
    *  comments. */
   comment?: string
+  /** Makes the thread an edit suggestion: "replace the quote with this". */
+  replacement?: string
 }
 
 export interface CreatedThread {
@@ -97,25 +144,19 @@ export interface CreateThreadOptions {
  *  `AnchorChangedError` rather than anchoring to the wrong text. */
 export const createThread = async (
   repo: Repo,
-  {targetId, anchor, comment}: CreateThreadArgs,
+  {targetId, anchor, comment, replacement}: CreateThreadArgs,
   options: CreateThreadOptions = {},
 ): Promise<CreatedThread> => {
   if (anchor) assertQuotable(anchor)
+  if (replacement !== undefined) assertSuggestion(anchor, replacement)
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
 
   const container = await getOrCreateCommentsPage(repo, target.workspaceId)
   return repo.tx(async tx => {
-    const current = await tx.get(targetId)
-    // DEFENCE IN DEPTH: the load above already refuses a missing or deleted
-    // target; this catches a delete that lands between it and this tx.
-    if (!current || current.deleted) throw missingTarget(targetId)
-    if (await isPropertyFieldRow(tx, current) || await isPropertyValueRow(tx, current)) {
-      throw new UnannotatableTargetError('A property row can’t be commented on.')
-    }
-    if (hasBlockType(current, THREAD_TYPE) || current.id === commentsPageBlockId(current.workspaceId)) {
-      throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
-    }
+    // The load above already refused a missing or deleted target; this also
+    // catches a delete that lands between it and this tx.
+    const current = await annotatableTarget(tx, targetId)
     if (anchor && resolveAnchor(current.content, anchor).state !== 'exact') {
       throw new AnchorChangedError()
     }
@@ -133,6 +174,7 @@ export const createThread = async (
         propertyValue(annotationTargetProp, targetId),
         propertyValue(annotationStatusProp, 'open'),
         ...(anchor ? anchorFieldValues(anchor) : []),
+        ...(replacement !== undefined ? [propertyValue(annotationReplacementProp, replacement)] : []),
       ],
       references: [targetEdge],
     })
@@ -142,7 +184,8 @@ export const createThread = async (
     return {threadId, commentId}
   }, {
     scope: ChangeScope.BlockDefault,
-    description: options.description ?? (anchor ? 'comment on selection' : 'comment on block'),
+    description: options.description ??
+      (replacement !== undefined ? 'suggest edit' : anchor ? 'comment on selection' : 'comment on block'),
   })
 }
 
@@ -152,8 +195,17 @@ export const createThread = async (
 export const replyTo = (repo: Repo, parentId: string): Promise<string> =>
   repo.mutate.createChild({parentId, position: {kind: 'last'}, revealParent: true})
 
+const STATUS_DESCRIPTIONS: Record<ThreadStatus, string> = {
+  open: 'reopen thread',
+  resolved: 'resolve thread',
+  accepted: 'mark suggestion accepted',
+  rejected: 'reject suggestion',
+}
+
+/** Sets the status only: setting `accepted` this way changes no text, which
+ *  is `acceptSuggestion`'s job. */
 export const setThreadStatus = (repo: Repo, threadId: string, status: ThreadStatus): Promise<void> =>
   repo.tx(
     tx => tx.setProperty(threadId, annotationStatusProp, status),
-    {scope: ChangeScope.BlockDefault, description: status === 'resolved' ? 'resolve thread' : 'reopen thread'},
+    {scope: ChangeScope.BlockDefault, description: STATUS_DESCRIPTIONS[status]},
   )

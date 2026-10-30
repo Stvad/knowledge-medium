@@ -6,11 +6,10 @@
  */
 
 import {ChangeScope} from '@/data/api'
-import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {anchorFieldProps, anchorFieldValues, THREAD_TYPE, threadTargetIdOf} from './schema.ts'
-import {AnchorChangedError, assertQuotable, UnannotatableTargetError} from './threads.ts'
+import {anchorFieldProps, anchorFieldValues} from './schema.ts'
+import {AnchorChangedError, assertQuotable, threadAndTarget} from './threads.ts'
 
 /** The anchor that confirms `anchor` where it resolves in `content` now: the
  *  same quote, with the position and context it has there. Null once the
@@ -31,13 +30,7 @@ export const confirmedAnchor = (content: string, anchor: RangeAnchor): RangeAnch
 export const reanchorThread = async (repo: Repo, threadId: string, anchor: RangeAnchor | null): Promise<void> => {
   if (anchor) assertQuotable(anchor)
   await repo.tx(async tx => {
-    const root = await tx.get(threadId)
-    if (!root || root.deleted || !hasBlockType(root, THREAD_TYPE)) {
-      throw new UnannotatableTargetError(`Thread ${threadId} is missing or deleted.`)
-    }
-    const targetId = threadTargetIdOf(root)
-    const target = targetId ? await tx.get(targetId) : null
-    if (!target || target.deleted) throw new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
+    const {target} = await threadAndTarget(tx, threadId)
     if (anchor && resolveAnchor(target.content, anchor).state !== 'exact') throw new AnchorChangedError()
 
     await tx.update(threadId, {content: anchor?.quote ?? ''})
