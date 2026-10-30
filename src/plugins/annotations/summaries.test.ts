@@ -3,6 +3,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {EditorSelection, EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {ChangeScope} from '@/data/api'
+import {KERNEL_FIELD_RECOGNITION_CHANNEL, KERNEL_FIELD_RECOGNITION_KEY} from '@/data/invalidation'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -63,6 +64,102 @@ describe('annotations.threadsForBlock', () => {
     await setThreadStatus(repo, threadId, 'resolved')
     await vi.waitFor(() => expect(handle.peek()?.[0]?.open).toBe(false))
     unsubscribe()
+  })
+
+  it('stops counting a deleted comment', async () => {
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    const replyId = await replyTo(repo, threadId)
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    expect((await handle.load())[0].commentCount).toBe(2)
+    const unsubscribe = handle.subscribe(() => {})
+
+    await repo.tx(tx => tx.delete(replyId), opts)
+    await vi.waitFor(() => expect(handle.peek()?.[0]?.commentCount).toBe(1))
+    unsubscribe()
+  })
+
+  it('depends on field recognition, which decides which children are properties', async () => {
+    await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    await handle.load()
+    expect(handle.__depsForTest()).toContainEqual(
+      {kind: 'plugin', channel: KERNEL_FIELD_RECOGNITION_CHANNEL, key: KERNEL_FIELD_RECOGNITION_KEY})
+  })
+
+  it('re-resolves when a thread is added to a block already showing its pill', async () => {
+    const handle = repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})
+    expect(await handle.load()).toEqual([])
+    const unsubscribe = handle.subscribe(() => {})
+
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
+    await vi.waitFor(() => expect(handle.peek()?.map(s => s.id)).toEqual([threadId]))
+    unsubscribe()
+  })
+})
+
+describe('annotations.threadsForBlock, batched over a render wave', () => {
+  const statementsDuring = async <T>(run: () => Promise<T>): Promise<{result: T; statements: number}> => {
+    const spies = (['getAll', 'getOptional', 'get'] as const).map(method => vi.spyOn(db.db, method))
+    try {
+      const result = await run()
+      return {result, statements: spies.reduce((n, spy) => n + spy.mock.calls.length, 0)}
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  }
+
+  const loadWave = (ids: readonly string[]) =>
+    statementsDuring(() => Promise.all(ids.map(id => repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load())))
+
+  it('drops a root deleted between reading the thread ids and reading the roots', async () => {
+    const kept = await createThread(repo, {targetId: 'B', anchor: null, comment: 'kept'})
+    const gone = await createThread(repo, {targetId: 'B', anchor: null, comment: 'gone'})
+    await repo.awaitProcessors()
+    const getAll = db.db.getAll.bind(db.db)
+    let deleted = false
+    const spy = vi.spyOn(db.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (!deleted && sql.includes('km_comment_count')) {
+        deleted = true
+        // Lands between the two reads, as a sync-applied delete can; raw, so
+        // nothing re-resolves the handle first.
+        await db.db.writeTransaction(tx => tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [gone.threadId]))
+      }
+      return getAll(sql, params)
+    })
+    try {
+      expect((await summariesOfB()).map(s => s.id)).toEqual([kept.threadId])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('reads every block in a wave with as many statements as one block costs', async () => {
+    const targets = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+    await repo.tx(async tx => {
+      for (const [i, id] of targets.entries()) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: `b${i}`, content: TEXT})
+      }
+    }, opts)
+    const threads = []
+    for (const id of targets) threads.push(await createThread(repo, {targetId: id, anchor: null, comment: 'first'}))
+    await replyTo(repo, threads[3].threadId)
+    await repo.awaitProcessors()
+
+    const one = await loadWave(['T0'])
+    const many = await loadWave(targets.slice(1))
+    expect(many.result.map(summaries => summaries.map(s => s.commentCount))).toEqual([[1], [1], [2], [1], [1], [1], [1]])
+    expect(many.statements).toBe(one.statements)
+  })
+
+  it('counts comments only, not the property field rows of a workspace that stores properties as children', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    const {threadId} = await createThread(repo, {targetId: 'B', anchor: quoteAnchor('vendor'), comment: 'Which vendor?'})
+    await repo.awaitProcessors()
+    const children = await db.db.getAll('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [threadId])
+    expect(children.length).toBeGreaterThan(1)
+    expect((await summariesOfB()).map(s => s.commentCount)).toEqual([1])
   })
 })
 
