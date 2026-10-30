@@ -125,41 +125,14 @@ const isAutolinkLiteral = (node: RootContent): node is Link => {
     || url === text
 }
 
-// Returns the source-equivalent text for a child node when reassembling
-// `[[…]]` spans that GFM split across siblings. Non-text, non-autolink
-// nodes are opaque — we substitute a NUL placeholder so the `[[` / `]]`
-// scan can't accidentally match across them.
-//
-// `html` is transparent too. CommonMark's raw-inline-HTML rule fires on
-// anything tag-SHAPED, and a page title like `<taglike page>` is exactly
-// that (`taglike` reads as the tag name, `page` as a bare attribute), so
-// `[[<taglike page>]]` reaches us already split into
-// `text("[[") + html("<taglike page>") + text("]]")` — the same split an
-// autolink literal causes, from a different parser rule.
-//
-// Bridging it destroys nothing, because raw HTML is not RENDERED here: it
-// reaches the reader as escaped literal text, exactly like a `text` node
-// holding the same characters. That is what separates `html` from
-// `emphasis` / `link` / `inlineCode`, which stay opaque precisely because
-// folding one into an alias WOULD destroy real rendered structure.
-// (Mechanism, verified against react-markdown 10.1.0: it forces
-// `allowDangerousHtml`, so every `html` node becomes a hast `raw`, and its
-// `post()` pass rewrites any surviving `raw` back to `text`. Only a rehype
-// plugin — `rehype-raw` — turns them into elements, and `MarkdownRenderConfig`
-// has no `rehypePlugins` slot to add one. Both `rehype-raw` and `skipHtml`
-// would break this branch's premise; see the note on `MarkdownRenderConfig`.)
-//
-// Bridging is also faithful to the SOURCE in a way the opaque types can't
-// be: an html node's `value` is its verbatim source slice. Note this makes
-// the joined string source-FAITHFUL, not source-EXACT — micromark has
-// already decoded entities and backslash escapes in the `text` pieces
-// beside it, so `[[<b>&amp;]]` yields alias `<b>&` while `parseReferences`
-// (which reads raw content) stores `<b>&amp;`. That divergence is
-// pre-existing and independent of html — `[[a&amp;b]]` has it today with
-// no html in sight — so bridging adds no NEW disagreement with the index.
-//
-// Transparent is not the same as freely sliceable, though: see the
-// swallow-whole containment check in `reassembleOneCrossNodeRef`.
+// Text, GFM autolink literals and inline HTML contribute their source text.
+// Explicit `[[…]]` delimiters take precedence over complete HTML tokens inside
+// the alias; the wikilink emits literal text children before rehype runs.
+// HTML outside the span stays available to rehype plugins. Never split an HTML
+// token or scan a wikilink wholly inside one (e.g. an attribute or comment).
+// Other markdown structures stay opaque so reassembly preserves their marks.
+// Text pieces have already had entities and escapes decoded by markdown, so
+// this reconstruction is not generally byte-identical to the indexed source.
 const childSourceForReassembly = (node: RootContent): {text: string; opaque: boolean} => {
   if (node.type === 'text') return {text: (node as Literal).value, opaque: false}
   if (isAutolinkLiteral(node)) {
@@ -330,11 +303,7 @@ const reassembleOneCrossNodeRef = (
     cursor += text.length
   }
   const joined = pieces.join('')
-  // Overwhelmingly the common case, and this pass runs for EVERY parent with
-  // children, on every render. `parseOutermostReferences` walks the string
-  // two `slice(i, i + 2)` allocations at a time; a native substring search
-  // rules out the no-wikilink parent ~750x cheaper. Exact, not a heuristic:
-  // the parser only ever emits a reference after pushing a `[[`.
+  // No opener means the scanner cannot emit a reference.
   if (!joined.includes('[[')) return false
   const refs = parseOutermostReferences(joined)
   if (refs.length === 0) return false
@@ -354,18 +323,8 @@ const reassembleOneCrossNodeRef = (
 
     const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
     const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
-    // An `html` node contributes a run of raw tag source, and the splice
-    // below turns whatever falls outside the span into a plain `text` node.
-    // Slicing a tag in half that way is the one case where bridging is
-    // lossy, so the span has to SWALLOW each html child whole.
-    //
-    // Both halves of the containment test are load-bearing, and they catch
-    // DIFFERENT shapes — each has its own test:
-    //   `starts[i] >= spanStart`  the OPENER is inside the tag, so the span
-    //     begins mid-node: `Paste <a href="[[">x]] and here`.
-    //   `… <= ref.endIndex`       the CLOSER is inside the tag, so the span
-    //     ends mid-node: `[[a <!-- b]] --> c <x>`, where the `]]` lives in
-    //     the comment and the trailing ` -->` would be spliced out as text.
+    // Prefix and suffix become text, so every HTML token must be contained
+    // whole: neither delimiter may start or end inside an attribute/comment.
     let cutsHtml = false
     for (let i = startChild; i <= endChild; i++) {
       if (kids[i].type !== 'html') continue

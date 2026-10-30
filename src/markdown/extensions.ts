@@ -24,20 +24,14 @@ export interface MarkdownRenderContext {
   data: MarkdownRenderData
 }
 
-/** Note the absent `rehypePlugins` slot — it is load-bearing, not an
- *  oversight. With no rehype stage, react-markdown's `post()` rewrites every
- *  hast `raw` node back to `text`, so raw HTML in block content reaches the
- *  reader as escaped literal characters. `remark-wikilinks` relies on that to
- *  fold `html` nodes into a wikilink alias (`[[<taglike page>]]`), which is
- *  only lossless while raw HTML renders as text. Adding this slot — or
- *  `skipHtml`, which drops `raw` nodes outright — invalidates that reasoning;
- *  revisit `childSourceForReassembly` before you do. */
 export interface MarkdownRenderConfig {
   remarkPlugins: PluggableList
   /** Applied to the hast tree after remark, before it is mapped to React — so
    *  a transformation over the whole tree lives in one plugin instead of one
    *  `components` override per element type, and can add or remove nodes
-   *  rather than only render the ones it is handed. */
+   *  rather than only render the ones it is handed. Raw-HTML plugins receive
+   *  only the raw nodes left by remark; source consumed by a remark syntax
+   *  extension is already transformed and its text children stay literal. */
   rehypePlugins: PluggableList
   components: Components
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { unified } from 'unified'
+import { unified, type Plugin } from 'unified'
+import { createElement, type ReactNode } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import Markdown, { type Components } from 'react-markdown'
+import type { Root as HastRoot } from 'hast'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
@@ -7,7 +11,6 @@ import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
 import { MAX_ALIAS_LENGTH, parseReferences } from '../../../referenceParser.ts'
 import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
-import { parseReferences } from '../../../referenceParser.ts'
 
 interface WikilinkNode {
   type: 'wikilink'
@@ -445,6 +448,24 @@ describe('remarkWikilinks', () => {
       expect(parseReferences(content).map(r => r.alias)).toEqual(['<taglike page>'])
       expect(collectWikilinks(transformWithGfm(content)).map(l => l.data.hProperties.alias))
         .toEqual(['<taglike page>'])
+    })
+
+    it('passes tag-shaped aliases to rehype as literal text while preserving outside raw HTML', () => {
+      const rawValues: string[] = []
+      const inspectRaw: Plugin<[], HastRoot> = () => tree => {
+        visit(tree, 'raw', node => { rawValues.push(node.value) })
+      }
+      const html = renderToStaticMarkup(createElement(Markdown, {
+        remarkPlugins: [remarkGfm, [remarkWikilinks, {resolveAlias: () => 'target'}]],
+        rehypePlugins: [inspectRaw],
+        components: {
+          wikilink: ({children}: {children?: ReactNode}) => createElement('a', {href: '#target'}, children),
+        } as Components,
+        children: 'real <b>bold</b> then [[<taglike page>]]',
+      }))
+
+      expect(rawValues).toEqual(['<b>', '</b>'])
+      expect(html).toBe('<p>real &lt;b&gt;bold&lt;/b&gt; then <a href="#target">&lt;taglike page&gt;</a></p>')
     })
 
     it('leaves real inline HTML elsewhere in the block untouched', () => {
