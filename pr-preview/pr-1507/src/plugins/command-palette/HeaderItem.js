@@ -1,1 +1,1 @@
-export{UO as CommandPaletteHeaderItem}from"../../../chunks/app-DrRP7hpd.js";
+export{UO as CommandPaletteHeaderItem}from"../../../chunks/app-BTrYzgp5.js";

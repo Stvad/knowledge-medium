@@ -1,1 +1,1 @@
-export{OM as defaultRegistry,kM as defaultRendererContributions,AM as defaultRenderersExtension}from"../../chunks/app-DrRP7hpd.js";
+export{OM as defaultRegistry,kM as defaultRendererContributions,AM as defaultRenderersExtension}from"../../chunks/app-BTrYzgp5.js";

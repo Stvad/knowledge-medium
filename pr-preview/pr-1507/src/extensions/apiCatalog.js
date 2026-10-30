@@ -1,1 +1,1 @@
-export{Df as extensionApiCatalog,Of as extensionApiRuntimeExports}from"../../chunks/app-DrRP7hpd.js";
+export{Df as extensionApiCatalog,Of as extensionApiRuntimeExports}from"../../chunks/app-BTrYzgp5.js";

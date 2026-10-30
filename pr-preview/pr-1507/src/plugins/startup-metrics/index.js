@@ -1,1 +1,1 @@
-export{Ei as startupMetricsPlugin}from"../../../chunks/app-DrRP7hpd.js";
+export{Ei as startupMetricsPlugin}from"../../../chunks/app-BTrYzgp5.js";

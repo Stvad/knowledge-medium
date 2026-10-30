@@ -1,1 +1,1 @@
-export{hC as WorkspaceSwitcher}from"../../../chunks/app-DrRP7hpd.js";
+export{hC as WorkspaceSwitcher}from"../../../chunks/app-BTrYzgp5.js";
