@@ -1,1 +1,1 @@
-export{SU as preferredSpanReplacement}from"../../../chunks/app-tsG3kq9k.js";
+export{SU as preferredSpanReplacement}from"../../../chunks/app-DsmuRmGp.js";

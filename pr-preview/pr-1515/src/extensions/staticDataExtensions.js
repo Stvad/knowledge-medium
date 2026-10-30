@@ -1,1 +1,1 @@
-export{TH as staticDataExtensions}from"../../chunks/app-tsG3kq9k.js";
+export{TH as staticDataExtensions}from"../../chunks/app-DsmuRmGp.js";

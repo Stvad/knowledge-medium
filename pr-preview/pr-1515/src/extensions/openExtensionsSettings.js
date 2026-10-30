@@ -1,1 +1,1 @@
-export{UM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,WM as openExtensionsSettings}from"../../chunks/app-tsG3kq9k.js";
+export{UM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,WM as openExtensionsSettings}from"../../chunks/app-DsmuRmGp.js";

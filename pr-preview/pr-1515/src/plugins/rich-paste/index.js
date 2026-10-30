@@ -1,1 +1,1 @@
-export{tv as richPastePlugin}from"../../../chunks/app-tsG3kq9k.js";
+export{tv as richPastePlugin}from"../../../chunks/app-DsmuRmGp.js";

@@ -1,1 +1,1 @@
-export{fs as getSyncIndicatorView}from"../../../chunks/app-tsG3kq9k.js";
+export{fs as getSyncIndicatorView}from"../../../chunks/app-DsmuRmGp.js";
