@@ -1,1 +1,1 @@
-export{n2 as NAMES_IN_A_SENTENCE,r2 as describeNames,i2 as firstFew}from"../../chunks/app-BO0pS00y.js";
+export{n2 as NAMES_IN_A_SENTENCE,r2 as describeNames,i2 as firstFew}from"../../chunks/app-CtjI1kdO.js";

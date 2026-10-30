@@ -1,1 +1,1 @@
-export{Qk as kernelPropertyUiExtension,$k as typesPropertyUi,eA as typesPropertyUiExtension}from"../../../chunks/app-BO0pS00y.js";
+export{Qk as kernelPropertyUiExtension,$k as typesPropertyUi,eA as typesPropertyUiExtension}from"../../../chunks/app-CtjI1kdO.js";

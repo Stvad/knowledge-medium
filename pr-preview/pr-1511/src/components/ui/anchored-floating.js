@@ -1,1 +1,1 @@
-export{IV as floatingAnchorFromRect,LV as useAnchoredFloating}from"../../../chunks/app-BO0pS00y.js";
+export{IV as floatingAnchorFromRect,LV as useAnchoredFloating}from"../../../chunks/app-CtjI1kdO.js";
