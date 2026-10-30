@@ -1,1 +1,1 @@
-export{Jj as dynamicExtensionsExtension}from"../../chunks/app-CkedynFV.js";
+export{Yj as dynamicExtensionsExtension}from"../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{pv as richPasteDecisionContribution}from"../../../chunks/app-CkedynFV.js";
+export{mv as richPasteDecisionContribution}from"../../../chunks/app-nt-84GMU.js";

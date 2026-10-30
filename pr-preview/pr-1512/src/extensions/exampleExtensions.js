@@ -1,1 +1,1 @@
-export{wA as exampleExtensions,TA as insertExampleExtensionsUnder}from"../../chunks/app-CkedynFV.js";
+export{TA as exampleExtensions,EA as insertExampleExtensionsUnder}from"../../chunks/app-nt-84GMU.js";

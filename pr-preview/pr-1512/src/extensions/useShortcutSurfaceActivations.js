@@ -1,1 +1,1 @@
-export{IF as useShortcutSurfaceActivations}from"../../chunks/app-CkedynFV.js";
+export{LF as useShortcutSurfaceActivations}from"../../chunks/app-nt-84GMU.js";

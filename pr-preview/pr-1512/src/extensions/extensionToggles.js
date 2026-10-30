@@ -1,1 +1,1 @@
-export{eM as extensionDisplayName,tM as extensionName,nM as userExtensionShellToggle,rM as userExtensionToggle}from"../../chunks/app-CkedynFV.js";
+export{tM as extensionDisplayName,nM as extensionName,rM as userExtensionShellToggle,iM as userExtensionToggle}from"../../chunks/app-nt-84GMU.js";

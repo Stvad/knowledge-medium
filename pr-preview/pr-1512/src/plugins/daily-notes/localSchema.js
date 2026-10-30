@@ -1,1 +1,1 @@
-export{GG as dailyNotesLocalSchema}from"../../../chunks/app-CkedynFV.js";
+export{KG as dailyNotesLocalSchema}from"../../../chunks/app-nt-84GMU.js";

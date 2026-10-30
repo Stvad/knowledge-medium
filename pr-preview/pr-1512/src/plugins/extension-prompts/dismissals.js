@@ -1,1 +1,1 @@
-export{tj as ExtensionPromptDismissalStore,nj as extensionPromptDismissals,rj as useExtensionPromptDismissals}from"../../../chunks/app-CkedynFV.js";
+export{nj as ExtensionPromptDismissalStore,rj as extensionPromptDismissals,ij as useExtensionPromptDismissals}from"../../../chunks/app-nt-84GMU.js";

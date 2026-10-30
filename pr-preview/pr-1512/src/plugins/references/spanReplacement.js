@@ -1,1 +1,1 @@
-export{OU as preferredSpanReplacement}from"../../../chunks/app-CkedynFV.js";
+export{kU as preferredSpanReplacement}from"../../../chunks/app-nt-84GMU.js";

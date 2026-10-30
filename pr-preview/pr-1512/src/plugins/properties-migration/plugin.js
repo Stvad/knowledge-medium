@@ -1,1 +1,1 @@
-export{oa as propertiesMigrationPlugin}from"../../../chunks/app-CkedynFV.js";
+export{oa as propertiesMigrationPlugin}from"../../../chunks/app-nt-84GMU.js";

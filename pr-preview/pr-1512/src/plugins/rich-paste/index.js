@@ -1,1 +1,1 @@
-export{fv as richPastePlugin}from"../../../chunks/app-CkedynFV.js";
+export{pv as richPastePlugin}from"../../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{wC as WorkspaceSettingsDialog}from"../../../chunks/app-CkedynFV.js";
+export{TC as WorkspaceSettingsDialog}from"../../../chunks/app-nt-84GMU.js";

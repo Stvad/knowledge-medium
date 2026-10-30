@@ -1,1 +1,1 @@
-export{jH as staticDataExtensions}from"../../chunks/app-CkedynFV.js";
+export{MH as staticDataExtensions}from"../../chunks/app-nt-84GMU.js";

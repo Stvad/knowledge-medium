@@ -1,1 +1,1 @@
-export{DT as useMinuteClock}from"../../chunks/app-CkedynFV.js";
+export{OT as useMinuteClock}from"../../chunks/app-nt-84GMU.js";

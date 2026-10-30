@@ -1,1 +1,1 @@
-export{XO as CommandPaletteHeaderItem}from"../../../chunks/app-CkedynFV.js";
+export{ZO as CommandPaletteHeaderItem}from"../../../chunks/app-nt-84GMU.js";

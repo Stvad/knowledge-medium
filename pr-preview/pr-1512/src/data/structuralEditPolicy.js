@@ -1,1 +1,1 @@
-export{EA as resolveStructuralEditPolicy,DA as structuralEditPolicyForBlock}from"../../chunks/app-CkedynFV.js";
+export{DA as resolveStructuralEditPolicy,OA as structuralEditPolicyForBlock}from"../../chunks/app-nt-84GMU.js";

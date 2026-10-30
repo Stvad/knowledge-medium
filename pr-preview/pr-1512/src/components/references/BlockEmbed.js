@@ -1,1 +1,1 @@
-export{Hk as BlockEmbed}from"../../../chunks/app-CkedynFV.js";
+export{Uk as BlockEmbed}from"../../../chunks/app-nt-84GMU.js";

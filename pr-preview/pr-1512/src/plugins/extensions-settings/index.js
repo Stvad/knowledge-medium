@@ -1,1 +1,1 @@
-export{Gf as extensionsOverridesProp,Kf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CkedynFV.js";
+export{Kf as extensionsOverridesProp,qf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-nt-84GMU.js";

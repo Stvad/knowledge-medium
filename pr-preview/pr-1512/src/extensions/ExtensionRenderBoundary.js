@@ -1,1 +1,1 @@
-export{EP as ExtensionRenderBoundary}from"../../chunks/app-CkedynFV.js";
+export{DP as ExtensionRenderBoundary}from"../../chunks/app-nt-84GMU.js";

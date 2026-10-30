@@ -1,1 +1,1 @@
-export{cd as confirmThreadDeletion}from"../../../chunks/app-CkedynFV.js";
+export{sd as confirmThreadDeletion}from"../../../chunks/app-nt-84GMU.js";

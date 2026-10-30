@@ -1,1 +1,1 @@
-export{lj as appUpdatePromptExtension}from"../../../chunks/app-CkedynFV.js";
+export{uj as appUpdatePromptExtension}from"../../../chunks/app-nt-84GMU.js";

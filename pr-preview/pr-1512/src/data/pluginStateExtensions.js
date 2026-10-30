@@ -1,1 +1,1 @@
-export{Vq as pluginPrefsExtension,Hq as pluginUIStateExtension}from"../../chunks/app-CkedynFV.js";
+export{Hq as pluginPrefsExtension,Uq as pluginUIStateExtension}from"../../chunks/app-nt-84GMU.js";

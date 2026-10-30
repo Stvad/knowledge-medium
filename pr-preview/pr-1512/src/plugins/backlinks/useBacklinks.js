@@ -1,1 +1,1 @@
-export{Ug as useBacklinks}from"../../../chunks/app-CkedynFV.js";
+export{Wg as useBacklinks}from"../../../chunks/app-nt-84GMU.js";

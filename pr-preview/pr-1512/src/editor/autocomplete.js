@@ -1,1 +1,1 @@
-export{KA as editorAutocompleteExtension}from"../../chunks/app-CkedynFV.js";
+export{qA as editorAutocompleteExtension}from"../../chunks/app-nt-84GMU.js";

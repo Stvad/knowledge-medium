@@ -1,1 +1,1 @@
-export{VK as contributorsDataExtension}from"../../../chunks/app-CkedynFV.js";
+export{HK as contributorsDataExtension}from"../../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{FM as defaultRegistry,IM as defaultRendererContributions,LM as defaultRenderersExtension}from"../../chunks/app-CkedynFV.js";
+export{IM as defaultRegistry,LM as defaultRendererContributions,RM as defaultRenderersExtension}from"../../chunks/app-nt-84GMU.js";

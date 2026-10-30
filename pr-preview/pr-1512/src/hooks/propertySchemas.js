@@ -1,1 +1,1 @@
-export{OV as usePropertySchemas}from"../../chunks/app-CkedynFV.js";
+export{kV as usePropertySchemas}from"../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{YS as BreadcrumbList}from"../../../chunks/app-CkedynFV.js";
+export{XS as BreadcrumbList}from"../../../chunks/app-nt-84GMU.js";

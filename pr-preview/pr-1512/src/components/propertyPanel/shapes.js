@@ -1,1 +1,1 @@
-export{MV as propertyShapeLabel}from"../../../chunks/app-CkedynFV.js";
+export{NV as propertyShapeLabel}from"../../../chunks/app-nt-84GMU.js";

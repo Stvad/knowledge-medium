@@ -1,1 +1,1 @@
-export{DM as BlockChildren,OM as BlockComponent}from"../../chunks/app-CkedynFV.js";
+export{OM as BlockChildren,kM as BlockComponent}from"../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{pL as PropertyRow}from"../../../chunks/app-CkedynFV.js";
+export{mL as PropertyRow}from"../../../chunks/app-nt-84GMU.js";

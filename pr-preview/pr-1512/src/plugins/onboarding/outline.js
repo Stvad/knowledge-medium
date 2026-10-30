@@ -1,1 +1,1 @@
-export{rx as EXTENSIONS_PAGE_TITLE,ix as TUTORIAL_DEFAULT_TITLE,ax as TUTORIAL_VIM_TITLE,ox as extensionsPageOutline,sx as tutorialOutline}from"../../../chunks/app-CkedynFV.js";
+export{ix as EXTENSIONS_PAGE_TITLE,ax as TUTORIAL_DEFAULT_TITLE,ox as TUTORIAL_VIM_TITLE,sx as extensionsPageOutline,cx as tutorialOutline}from"../../../chunks/app-nt-84GMU.js";

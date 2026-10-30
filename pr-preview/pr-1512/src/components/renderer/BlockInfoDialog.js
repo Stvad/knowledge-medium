@@ -1,1 +1,1 @@
-export{TP as BlockInfoDialog}from"../../../chunks/app-CkedynFV.js";
+export{EP as BlockInfoDialog}from"../../../chunks/app-nt-84GMU.js";

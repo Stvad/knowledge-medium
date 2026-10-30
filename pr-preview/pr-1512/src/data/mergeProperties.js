@@ -1,1 +1,1 @@
-export{F2 as mergeProperties}from"../../chunks/app-CkedynFV.js";
+export{I2 as mergeProperties}from"../../chunks/app-nt-84GMU.js";

@@ -1,1 +1,1 @@
-export{tg as groupedBacklinksPlugin}from"../../../chunks/app-CkedynFV.js";
+export{ng as groupedBacklinksPlugin}from"../../../chunks/app-nt-84GMU.js";

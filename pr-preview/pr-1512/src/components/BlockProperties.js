@@ -1,1 +1,1 @@
-export{sL as BlockProperties}from"../../chunks/app-CkedynFV.js";
+export{cL as BlockProperties}from"../../chunks/app-nt-84GMU.js";

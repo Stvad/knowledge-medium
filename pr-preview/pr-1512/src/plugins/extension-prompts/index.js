@@ -1,1 +1,1 @@
-export{YA as ExtensionPromptSurface,XA as extensionPromptsExtension}from"../../../chunks/app-CkedynFV.js";
+export{XA as ExtensionPromptSurface,ZA as extensionPromptsExtension}from"../../../chunks/app-nt-84GMU.js";

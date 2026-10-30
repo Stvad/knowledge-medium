@@ -1,1 +1,1 @@
-export{OO as useCommandPaletteActions}from"../../../chunks/app-CkedynFV.js";
+export{kO as useCommandPaletteActions}from"../../../chunks/app-nt-84GMU.js";

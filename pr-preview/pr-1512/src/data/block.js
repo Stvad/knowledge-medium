@@ -1,1 +1,1 @@
-export{g1 as Block,_1 as requireLoadedBlock}from"../../chunks/app-CkedynFV.js";
+export{_1 as Block,v1 as requireLoadedBlock}from"../../chunks/app-nt-84GMU.js";

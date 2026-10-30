@@ -1,1 +1,1 @@
-export{og as useGroupedBacklinksConfig}from"../../../chunks/app-CkedynFV.js";
+export{sg as useGroupedBacklinksConfig}from"../../../chunks/app-nt-84GMU.js";

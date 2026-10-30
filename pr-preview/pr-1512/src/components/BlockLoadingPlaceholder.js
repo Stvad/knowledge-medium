@@ -1,1 +1,1 @@
-export{MM as BlockLoadingPlaceholder}from"../../chunks/app-CkedynFV.js";
+export{NM as BlockLoadingPlaceholder}from"../../chunks/app-nt-84GMU.js";

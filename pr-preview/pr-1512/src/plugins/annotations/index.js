@@ -1,1 +1,1 @@
-export{Mu as annotationsPlugin}from"../../../chunks/app-CkedynFV.js";
+export{Mu as annotationsPlugin}from"../../../chunks/app-nt-84GMU.js";
