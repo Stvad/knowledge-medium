@@ -20,8 +20,8 @@ import {
   threadStatusOf,
 } from './schema'
 import {confirmedAnchor, reanchorThread} from './reanchor'
-import {acceptSuggestion, appliedContent, SuggestionChangedError} from './suggestions'
-import {createThread, InvalidSuggestionError, setThreadStatus, UnannotatableTargetError} from './threads'
+import {acceptSuggestion, appliedContent} from './suggestions'
+import {AnchorChangedError, createThread, InvalidSuggestionError, setThreadStatus, UnannotatableTargetError} from './threads'
 
 const WS = 'ws'
 const MID = 'We moved the launch to Thursday because the vendor slipped.'
@@ -35,16 +35,10 @@ beforeEach(async () => {
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: {id: 'alex'}, extensions: [referencesDataExtension, annotationsDataExtension]}).repo
   repo.setActiveWorkspaceId(WS)
-  await setTarget(MID)
+  await repo.tx(tx => tx.create({id: 'B', workspaceId: WS, parentId: null, orderKey: 'a0', content: MID}), opts)
 })
 
-const setTarget = async (content: string) => {
-  const existing = await repo.load('B')
-  await repo.tx(async tx => {
-    if (existing) await tx.update('B', {content})
-    else await tx.create({id: 'B', workspaceId: WS, parentId: null, orderKey: 'a0', content})
-  }, opts)
-}
+const setTarget = (content: string) => repo.tx(tx => tx.update('B', {content}), opts)
 
 const anchorFor = (content: string, quote: string): RangeAnchor => {
   const from = content.indexOf(quote)
@@ -116,7 +110,7 @@ describe('acceptSuggestion', () => {
   it('refuses once the quoted text is gone (stale), writing nothing', async () => {
     const threadId = await suggest('Thursday', 'Thursday 9am')
     await setTarget('We moved the launch to Friday because the vendor slipped.')
-    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(SuggestionChangedError)
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(AnchorChangedError)
     expect(await targetText()).toBe('We moved the launch to Friday because the vendor slipped.')
     expect(threadStatusOf(await rootOf(threadId))).toBe('open')
   })
@@ -141,7 +135,7 @@ describe('acceptSuggestion', () => {
     await acceptSuggestion(repo, first)
     expect(await targetText()).toBe(after)
 
-    await expect(acceptSuggestion(repo, duplicate)).rejects.toBeInstanceOf(SuggestionChangedError)
+    await expect(acceptSuggestion(repo, duplicate)).rejects.toBeInstanceOf(AnchorChangedError)
     expect(await targetText()).toBe(after)
     expect(threadStatusOf(await rootOf(duplicate))).toBe('open')
   })
@@ -198,7 +192,7 @@ describe('acceptSuggestion', () => {
     const threadId = await suggest('Thursday', 'Thursday 9am')
     await acceptSuggestion(repo, threadId)
     await setThreadStatus(repo, threadId, 'open')
-    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(SuggestionChangedError)
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(AnchorChangedError)
     expect(await targetText()).toBe('Meet Thursday 9am')
   })
 

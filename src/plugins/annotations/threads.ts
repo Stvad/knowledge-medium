@@ -24,12 +24,16 @@ import {
   type ThreadStatus,
 } from './schema.ts'
 
-/** The quoted text is no longer exactly where the selection found it: the
- *  target changed between selecting and submitting. Nothing was written, so a
- *  caller keeps its draft and lets the user reselect. */
-export class AnchorChangedError extends Error {
-  constructor() {
-    super('The text changed since it was selected. Select it again to comment.')
+/** A refusal a thread write makes before writing anything, for a caller to
+ *  show. Every refusal extends it. */
+export class ThreadRefusal extends Error {}
+
+/** The quoted text is no longer exactly where the anchor was captured: the
+ *  target changed since. Nothing was written, so a caller keeps its draft and
+ *  lets the user reselect, or re-anchor. */
+export class AnchorChangedError extends ThreadRefusal {
+  constructor(message = 'The text changed since it was selected. Select it again to comment.') {
+    super(message)
     this.name = 'AnchorChangedError'
   }
 }
@@ -37,7 +41,7 @@ export class AnchorChangedError extends Error {
 /** The target cannot carry a thread: it is missing or deleted, or it is a
  *  property field or value row, which scope reads never descend into and whose
  *  content is an encoded property value. */
-export class UnannotatableTargetError extends Error {
+export class UnannotatableTargetError extends ThreadRefusal {
   constructor(reason: string) {
     super(reason)
     this.name = 'UnannotatableTargetError'
@@ -47,7 +51,7 @@ export class UnannotatableTargetError extends Error {
 /** The selection can't be a thread's quote. The quote becomes the root's
  *  content, so it must be text a block can hold as its own: never a `::` field
  *  marker, which would make the root a property field row of the container. */
-export class InvalidQuoteError extends Error {
+export class InvalidQuoteError extends ThreadRefusal {
   constructor(reason: string) {
     super(reason)
     this.name = 'InvalidQuoteError'
@@ -57,17 +61,14 @@ export class InvalidQuoteError extends Error {
 /** The thread can't be, or isn't, an edit suggestion, or can't be applied:
  *  one needs a quote to replace and a replacement that changes it, in a way
  *  its anchor can tell apart from the original. */
-export class InvalidSuggestionError extends Error {
+export class InvalidSuggestionError extends ThreadRefusal {
   constructor(reason: string) {
     super(reason)
     this.name = 'InvalidSuggestionError'
   }
 }
 
-/** A refusal a thread write makes before writing, for a caller to show. */
-export const isThreadRefusal = (error: unknown): error is Error =>
-  error instanceof AnchorChangedError || error instanceof UnannotatableTargetError ||
-  error instanceof InvalidQuoteError || error instanceof InvalidSuggestionError
+export const isThreadRefusal = (error: unknown): error is ThreadRefusal => error instanceof ThreadRefusal
 
 export const missingTarget = (targetId: string) => new UnannotatableTargetError(`Block ${targetId} is missing or deleted.`)
 
@@ -206,16 +207,16 @@ export const createThread = async (
 export const replyTo = (repo: Repo, parentId: string): Promise<string> =>
   repo.mutate.createChild({parentId, position: {kind: 'last'}, revealParent: true})
 
-const STATUS_DESCRIPTIONS: Record<ThreadStatus, string> = {
+/** `accepted` is set only by `acceptSuggestion`, with the text it applies. */
+type SettableStatus = Exclude<ThreadStatus, 'accepted'>
+
+const STATUS_DESCRIPTIONS: Record<SettableStatus, string> = {
   open: 'reopen thread',
   resolved: 'resolve thread',
-  accepted: 'mark suggestion accepted',
   rejected: 'reject suggestion',
 }
 
-/** Sets the status only: setting `accepted` this way changes no text, which
- *  is `acceptSuggestion`'s job. */
-export const setThreadStatus = (repo: Repo, threadId: string, status: ThreadStatus): Promise<void> =>
+export const setThreadStatus = (repo: Repo, threadId: string, status: SettableStatus): Promise<void> =>
   repo.tx(
     tx => tx.setProperty(threadId, annotationStatusProp, status),
     {scope: ChangeScope.BlockDefault, description: STATUS_DESCRIPTIONS[status]},
