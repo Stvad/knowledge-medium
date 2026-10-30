@@ -34,8 +34,8 @@ const clipped = (text: string): string => truncate(text, 160)
 
 /** Read off the properties: the anchor is not rewritten on accept, so the
  *  quote is the text the replacement took the place of. An open suggestion
- *  shows both texts whole, since Accept applies all of the replacement; a
- *  closed one, history only, is clipped. */
+ *  shows both texts whole, whitespace and line breaks included, since Accept
+ *  applies exactly the replacement; a closed one, history only, is clipped. */
 export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}}: {root: RootFields; suggestion: ThreadSuggestion}) => {
   const closed = closedAs(root)
   if (closed === 'accepted') {
@@ -46,9 +46,9 @@ export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}
   }
   return (
     <span className="break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>
-      <del className="text-muted-foreground decoration-red-600/70">{quote}</del>
+      <del className="whitespace-pre-wrap text-muted-foreground decoration-red-600/70">{quote}</del>
       {' '}
-      <ins className="rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins>
+      <ins className="whitespace-pre-wrap rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins>
     </span>
   )
 }
