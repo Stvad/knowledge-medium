@@ -101,10 +101,9 @@ export const getCurrentTheme = (
 ): ThemeDefinition =>
   registryById.get(root.dataset.theme ?? '') ?? registry[0] ?? FALLBACK_THEME
 
-/** The one writer of the live theme: both root attributes and both
- *  persisted keys. An absent mode clears the attribute and the key, so
- *  `dark:` falls back to light, as the `:root` palette does. */
-const writeLiveTheme = (
+/** Writes the live theme's root attributes. An absent mode clears the
+ *  attribute, so `dark:` falls back to light, as the `:root` palette does. */
+const setLiveTheme = (
   id: string,
   mode: ThemeMode | undefined,
   root: HTMLElement,
@@ -112,6 +111,11 @@ const writeLiveTheme = (
   root.dataset.theme = id
   if (mode) root.dataset.themeMode = mode
   else delete root.dataset.themeMode
+}
+
+/** Persists a chosen theme for the pre-paint script. A theme that is not
+ *  persisted keeps following the system preference on each load. */
+const persistTheme = (id: string, mode: ThemeMode | undefined): void => {
   try {
     window.localStorage?.setItem(THEME_STORAGE_KEY, id)
     if (mode) window.localStorage?.setItem(THEME_MODE_STORAGE_KEY, mode)
@@ -122,12 +126,21 @@ const writeLiveTheme = (
   }
 }
 
+const persistedThemeId = (): string | null => {
+  try {
+    return window.localStorage?.getItem(THEME_STORAGE_KEY) ?? null
+  } catch {
+    return null
+  }
+}
+
 export const applyTheme = (
   theme: ThemeDefinition | string,
   root: HTMLElement = getDocumentRoot(),
 ): ThemeDefinition => {
   const resolved = resolveTheme(theme)
-  writeLiveTheme(resolved.id, resolved.mode, root)
+  setLiveTheme(resolved.id, resolved.mode, root)
+  persistTheme(resolved.id, resolved.mode)
   return resolved
 }
 
@@ -138,15 +151,21 @@ export const applyThemeId = (
   id: string,
   root: HTMLElement = getDocumentRoot(),
 ): void => {
-  writeLiveTheme(id, registryById.get(id)?.mode, root)
+  const mode = registryById.get(id)?.mode
+  setLiveTheme(id, mode, root)
+  persistTheme(id, mode)
 }
 
 /** Re-stamps the live theme's mode from the registry, for an id that was
  *  set before it registered (pre-paint, `applyThemeId`). Leaves an
- *  unregistered live id alone: its mode was written with it. */
+ *  unregistered live id alone: its mode was written with it. Persists the
+ *  mode only beside a persisted id, so it never turns pre-paint's
+ *  system-preference default into a chosen theme. */
 export const syncLiveThemeMode = (root: HTMLElement = getDocumentRoot()): void => {
   const live = registryById.get(root.dataset.theme ?? '')
-  if (live) writeLiveTheme(live.id, live.mode, root)
+  if (!live) return
+  setLiveTheme(live.id, live.mode, root)
+  if (persistedThemeId() === live.id) persistTheme(live.id, live.mode)
 }
 
 export const toggleTheme = (

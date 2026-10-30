@@ -68,15 +68,26 @@ describe('theme mode on the document root', () => {
     expect(root.dataset.themeMode).toBe('dark')
   })
 
-  it('syncLiveThemeMode stamps the mode of a live id that registered after it was set', () => {
+  it('syncLiveThemeMode stamps and persists the mode of a persisted id that registered after it was set', () => {
     // A persisted id the pre-paint script set without a mode (nothing was
     // persisted for it yet), before the registry knew the id.
+    window.localStorage.setItem(THEME_STORAGE_KEY, WARM_DARK.id)
     root.dataset.theme = WARM_DARK.id
 
     syncLiveThemeMode()
 
     expect(root.dataset.themeMode).toBe('dark')
     expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBe('dark')
+  })
+
+  it('syncLiveThemeMode persists nothing for a default pre-paint picked from the system preference', () => {
+    root.dataset.theme = WARM_DARK.id
+
+    syncLiveThemeMode()
+
+    expect(root.dataset.themeMode).toBe('dark')
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBeNull()
   })
 
   it('syncLiveThemeMode leaves an unregistered live theme alone', () => {
