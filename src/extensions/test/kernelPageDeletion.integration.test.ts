@@ -98,6 +98,27 @@ describe('kernel page UI deletion under the static app runtime', () => {
     }
   })
 
+  // All nine point-of-use helpers take ~0.8s before full-gate contention.
+  it('refuses kernel pages when default keyboard shortcuts are disabled', async () => {
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({repo}), {
+      overrides: new Map([['system:default-actions', false]]),
+      context: {repo, workspaceId: WS, safeMode: false},
+    })
+    repo.setFacetRuntime(runtime)
+    for (const {alias, ensure} of expectedPages) {
+      const page = await ensure(repo, WS)
+      await page.load()
+      expect(await resolveDeletionRefusal(repo, page)).toContain(alias)
+      const tx = vi.spyOn(repo, 'tx')
+      try {
+        expect(await deleteBlocksThroughUi([page])).toBe(false)
+        expect(tx).not.toHaveBeenCalled()
+      } finally {
+        tx.mockRestore()
+      }
+    }
+  }, 20_000)
+
   it('deletes an ordinary page holding a thread root moved there by hand', async () => {
     const {threadId, commentId} = await createThread(repo, {targetId: 'target', anchor: null, comment: 'Comment'})
     await repo.mutate.move({id: threadId, parentId: 'page', position: {kind: 'last'}})

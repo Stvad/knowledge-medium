@@ -1,4 +1,3 @@
-import {kernelPageDeletionGuard} from '@/extensions/kernelPageDeletionGuard'
 import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
@@ -62,8 +61,7 @@ import {
 } from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { disarmCut, getArmedCut, undoOrTakeBackCut } from '@/paste/armedCut.js'
-import {
-  blockDeletionGuardsFacet, actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -1479,9 +1477,5 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     // DialogHost mounted; pull it in here. The mount's `core.dialogs` id dedupes
     // (dedupById), so DialogHost is registered once no matter how many
     // dialog-using plugins contribute it.
-  }).of([
-    ...actions.map(action => actionsFacet.of(action)),
-    blockDeletionGuardsFacet.of(kernelPageDeletionGuard, {source: 'kernel'}),
-    dialogAppMountExtension,
-  ])
+  }).of([...actions.map(action => actionsFacet.of(action)), dialogAppMountExtension])
 }

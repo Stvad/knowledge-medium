@@ -1,3 +1,5 @@
+import {blockDeletionGuardsFacet} from './core'
+import {kernelPageDeletionGuard} from './kernelPageDeletionGuard'
 import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
@@ -88,6 +90,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
   kernelDataExtension,
+  blockDeletionGuardsFacet.of(kernelPageDeletionGuard, {source: 'kernel'}),
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,
