@@ -34,6 +34,8 @@ import {
   setIsEditing,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { applyOutlineGestureToGroupInTx, type OutlineGroupGesture } from '@/data/outlineGroupGestures.js'
+import { withRowSlide } from '@/utils/flipSlide.js'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
@@ -43,6 +45,7 @@ import {
   createSharedBlockActions,
   extendSelectionDown,
   extendSelectionUp,
+  requestEditorFocusIfEditing,
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
@@ -1315,20 +1318,46 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     })
   }
 
+  /**
+   * The multi-select variant of an outline gesture: the whole selection moves
+   * as one group (`applyOutlineGestureToGroupInTx`), in one transaction, so a
+   * single undo reverts the step.
+   */
+  const groupGestureAction = (
+    action: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>,
+    gesture: OutlineGroupGesture,
+    {slide = false}: {slide?: boolean} = {},
+  ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => ({
+    ...makeMultiSelect(action),
+    description: `${action.description} (Multiple Blocks)`,
+    handler: async ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) => {
+      const ids = selectedBlocks.map(block => block.id)
+      const run = () => repo.tx(
+        tx => applyOutlineGestureToGroupInTx(tx, gesture, ids, scopeRootId),
+        {
+          scope: ChangeScope.BlockDefault,
+          description: `${action.description} (${pluralize(ids.length, 'block')})`,
+        },
+      )
+      await (slide ? withRowSlide(run) : run())
+      requestEditorFocusIfEditing(uiStateBlock)
+    },
+  })
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
     applyToAllBlocksInSelection(toggleBlockCollapseAction),
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
-    applyToAllBlocksInSelection(indentBlockAction),
-    applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
+    groupGestureAction(indentBlockAction, 'indent'),
+    groupGestureAction(outdentBlockAction, 'outdent'),
     // Not a per-block fan-out: one guarded, confirmed batch delete.
     {
       ...makeMultiSelect(deleteBlockAction),
       handler: deleteSelectedBlocks,
     },
-    applyToAllBlocksInSelection(moveBlockUpAction),
-    applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
+    groupGestureAction(moveBlockUpAction, 'moveUp', {slide: true}),
+    groupGestureAction(moveBlockDownAction, 'moveDown', {slide: true}),
     {
       id: 'clear_selection',
       description: 'Clear selection',
