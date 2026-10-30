@@ -29,7 +29,9 @@ export interface MarkdownRenderConfig {
   /** Applied to the hast tree after remark, before it is mapped to React — so
    *  a transformation over the whole tree lives in one plugin instead of one
    *  `components` override per element type, and can add or remove nodes
-   *  rather than only render the ones it is handed. */
+   *  rather than only render the ones it is handed. A raw-HTML plugin sees
+   *  only the `raw` nodes remark left: HTML a remark plugin already folded
+   *  into its own node (a wikilink alias) arrives as literal text. */
   rehypePlugins: PluggableList
   components: Components
 }

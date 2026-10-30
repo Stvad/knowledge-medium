@@ -125,19 +125,24 @@ const isAutolinkLiteral = (node: RootContent): node is Link => {
     || url === text
 }
 
-// Returns the source-equivalent text for a child node when reassembling
-// `[[…]]` spans that GFM split across siblings. Non-text, non-autolink
-// nodes are opaque — we substitute a NUL placeholder so the `[[` / `]]`
-// scan can't accidentally match across them.
+// Text, GFM autolink literals and inline HTML contribute their source text.
+// Explicit `[[…]]` delimiters take precedence over complete HTML tokens inside
+// the alias; the wikilink emits literal text children before rehype runs.
+// HTML outside the span stays available to rehype plugins. Never split an HTML
+// token or scan a wikilink wholly inside one (e.g. an attribute or comment).
+// Other markdown structures stay opaque so reassembly preserves their marks.
+// Text pieces have already had entities and escapes decoded by markdown, so
+// this reconstruction is not generally byte-identical to the indexed source.
 const childSourceForReassembly = (node: RootContent): {text: string; opaque: boolean} => {
   if (node.type === 'text') return {text: (node as Literal).value, opaque: false}
   if (isAutolinkLiteral(node)) {
     return {text: (node.children[0] as Literal).value, opaque: false}
   }
+  if (node.type === 'html') return {text: (node as Literal).value, opaque: false}
   return {text: OPAQUE_SENTINEL, opaque: true}
 }
 
-export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree) => {
+export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree, file) => {
   const resolve = (alias: string) => options?.resolveAlias?.(alias) ?? ''
 
   // First pass: rewrite `[display]([[alias]])` markdown links so the display
@@ -273,74 +278,96 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     const parent = node as Parent
     if (!Array.isArray((parent as {children?: unknown}).children)) return
 
-    while (reassembleOneCrossNodeRef(parent, resolve)) {
+    while (reassembleOneCrossNodeRef(parent, resolve, String(file))) {
       // Loop until no more cross-node refs remain.
     }
   })
 }
 
+// Preserve whole parsed nodes; only text may be split at a span boundary.
+const sliceChildren = (
+  kids: RootContent[],
+  pieces: string[],
+  starts: number[],
+  start: number,
+  end: number,
+): RootContent[] | null => {
+  const out: RootContent[] = []
+  for (let i = 0; i < kids.length; i++) {
+    const childStart = starts[i]
+    const childEnd = childStart + pieces[i].length
+    if (childEnd <= start || childStart >= end) continue
+    if (start <= childStart && childEnd <= end) {
+      out.push(kids[i])
+    } else if (kids[i].type === 'text') {
+      out.push({type: 'text', value: pieces[i].slice(Math.max(0, start - childStart), end - childStart)})
+    } else {
+      return null
+    }
+  }
+  return out
+}
+
 const reassembleOneCrossNodeRef = (
   parent: Parent,
   resolve: (alias: string) => string,
+  source: string,
 ): boolean => {
   const kids = parent.children as RootContent[]
   if (kids.length < 3) return false
 
   const pieces: string[] = []
-  const opaqueFlags: boolean[] = []
   const starts: number[] = []
   let cursor = 0
   for (const child of kids) {
     starts.push(cursor)
-    const {text, opaque} = childSourceForReassembly(child)
+    const {text} = childSourceForReassembly(child)
     pieces.push(text)
-    opaqueFlags.push(opaque)
     cursor += text.length
   }
   const joined = pieces.join('')
+  // No opener means the scanner cannot emit a reference.
+  if (!joined.includes('[[')) return false
   const refs = parseOutermostReferences(joined)
   if (refs.length === 0) return false
 
+  // Wrapper delimiters belong to text; parsed display nodes stay atomic.
+  const wrapperSource = pieces.map((piece, i) => kids[i].type === 'text'
+    ? piece
+    : OPAQUE_SENTINEL.repeat(piece.length)).join('')
   for (const ref of refs) {
-    let startChild = pieces.length - 1
-    while (startChild > 0 && starts[startChild] > ref.startIndex) startChild--
-    let endChild = startChild
-    while (endChild < pieces.length - 1 && starts[endChild + 1] < ref.endIndex) endChild++
-    if (startChild === endChild) continue  // single-node — third pass owned it
-
-    let spansOpaque = false
-    for (let i = startChild; i <= endChild; i++) {
-      if (opaqueFlags[i]) { spansOpaque = true; break }
-    }
-    if (spansOpaque) continue
-
+    const wrapper = linkFormWrapperAround(wrapperSource, ref)
     const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
     const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
-    const prefix = pieces[startChild].slice(0, spanStart - starts[startChild])
-    const suffix = pieces[endChild].slice(ref.endIndex - starts[endChild])
-    const raw = joined.slice(spanStart, ref.endIndex)
+    const aliasNodes = sliceChildren(kids, pieces, starts, spanStart, ref.endIndex)
+    if (aliasNodes === null || aliasNodes.length < 2) continue
+    if (aliasNodes.some(child => childSourceForReassembly(child).opaque)) continue
+
+    const htmlIndex = kids.findIndex((child, i) => child.type === 'html' && starts[i] >= spanStart && starts[i] < ref.endIndex)
+    if (htmlIndex !== -1) {
+      // Keep normalized HTML aliases literal rather than resolve a different
+      // indexed name; a full source-to-decoded offset map is out of scope.
+      const identity = joined.slice(spanStart, ref.endIndex)
+      const htmlOffset = kids[htmlIndex].position?.start.offset
+      const sourceStart = htmlOffset === undefined ? undefined : htmlOffset + spanStart - starts[htmlIndex]
+      const original = sourceStart === undefined ? undefined : source.slice(sourceStart, sourceStart + identity.length)
+      if (original !== identity) continue
+    }
+
+    const before = sliceChildren(kids, pieces, starts, 0, wrapper?.start ?? spanStart)
+    const display = wrapper
+      ? sliceChildren(kids, pieces, starts, wrapper.start + 1, ref.startIndex - 2)
+      : [{type: 'text' as const, value: ref.alias}]
+    const after = sliceChildren(kids, pieces, starts, wrapper?.end ?? ref.endIndex, joined.length)
+    if (before === null || display === null || after === null) continue
+
+    const raw = wrapper ? `[…]([[${ref.alias}]])` : joined.slice(spanStart, ref.endIndex)
     const parentOffset = parent.position?.start.offset ?? 0
+    const replacement: RootContent = isEmbed
+      ? buildPageEmbedNode(ref.alias, resolve(ref.alias), raw, `cross:${parentOffset + spanStart}`)
+      : buildWikilinkNode(ref.alias, resolve(ref.alias), display, raw, wrapper !== null)
 
-    const replacement: RootContent[] = []
-    if (prefix.length > 0) replacement.push({type: 'text', value: prefix})
-    replacement.push(isEmbed
-      ? buildPageEmbedNode(
-          ref.alias,
-          resolve(ref.alias),
-          raw,
-          `cross:${parentOffset + spanStart}`,
-        )
-      : buildWikilinkNode(
-          ref.alias,
-          resolve(ref.alias),
-          [{type: 'text', value: ref.alias}],
-          raw,
-          false,
-        ),
-    )
-    if (suffix.length > 0) replacement.push({type: 'text', value: suffix})
-
-    kids.splice(startChild, endChild - startChild + 1, ...replacement)
+    kids.splice(0, kids.length, ...before, replacement, ...after)
     return true
   }
 
