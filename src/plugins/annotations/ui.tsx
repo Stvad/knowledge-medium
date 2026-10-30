@@ -40,7 +40,6 @@ import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {isImeKeyEvent} from '@/shortcuts/utils.js'
-import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
@@ -60,6 +59,7 @@ import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread
 import {isThreadRefusal, replyTo, setThreadStatus} from './threads.ts'
 import {
   activateThread,
+  cardRenderScopeId,
   closeComposer,
   openComposer,
   releasePendingReanchor,
@@ -75,6 +75,7 @@ import {
   useShowResolved,
   useThreadsExpanded,
   viewKey,
+  type CardSurface,
   type ComposerState,
 } from './uiStore.ts'
 
@@ -275,9 +276,9 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
  *  distinct render scopes. */
-export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: string}) => {
+export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
   const parent = useBlockContext()
-  const renderScopeId = surfaceRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
+  const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
       <NestedBlockContextProvider overrides={{

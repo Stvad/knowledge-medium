@@ -23,6 +23,7 @@ import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {copyRangeReferenceAction} from './rangeRefs.ts'
+import {threadNavigationContribution} from './threadNavigation.ts'
 import {
   commentActionsContribution,
   commentContextMenuItem,
@@ -41,6 +42,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   annotationsDataExtension,
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   actionsFacet.of(copyRangeReferenceAction, {source: SOURCE}),
+  threadNavigationContribution,
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
