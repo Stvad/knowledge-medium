@@ -188,7 +188,6 @@ let sharedDb: TestDb
 const guard = statefulFuzzGuard()
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 

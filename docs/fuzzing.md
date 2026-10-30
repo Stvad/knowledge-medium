@@ -882,13 +882,16 @@ needs the same.
    `interruptAfterTimeLimit` resolves `fc.assert` WITHOUT awaiting the
    case that's currently executing, so the abandoned case keeps running
    — and writing — after the property "finishes". Use
-   `statefulFuzzGuard` from `@/test/fuzz`: wrap each case body in
-   `guard.run(seedOrNull, body)` (it owns the barrier-before-pin
-   ordering for `Math.random` pins), call `await guard.barrier()` at
-   the top of any canary/example test touching the shared state, and
-   add `afterAll(guard.barrier)`. Symptom if you skip this:
+   `statefulFuzzGuard` from `@/test/fuzz`, built at module or
+   `describe` scope, and wrap each case body in
+   `guard.run(seedOrNull, body)`: it owns the barrier-before-pin
+   ordering for `Math.random` pins, and registers an `afterEach` that
+   waits out the abandoned case before the test ends, so the case
+   finishes before the test's Repos are released and before the next
+   test touches the shared state. Symptom if you skip this:
    deep-tier-only, order-dependent flakes in whatever runs after the
-   property (phantom rows, duplicate-id errors).
+   property (phantom rows, duplicate-id errors, an unhandled
+   `WorkspaceRegistryUnavailableError` from a released Repo).
 7. Choose the string `unit` deliberately — the default and the usual
    correction are both narrower than "any string". `fc.string()` is
    `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the

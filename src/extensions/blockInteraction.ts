@@ -28,7 +28,6 @@ import {
   type VariantResolver,
 } from '@/facets/variantFacet.js'
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
-import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
 
 export interface BlockContentRendererSlot {
@@ -713,13 +712,21 @@ const interactiveContentSelector = [
   '[data-block-interaction="ignore"]',
 ].join(',')
 
-export const isInteractiveContentEvent = (event: { target: EventTarget | null }) => {
-  const target = event.target
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE
-    ? target as Element
-    : target.parentElement
-  return Boolean(element?.closest(interactiveContentSelector))
+const elementOf = (target: EventTarget | null): Element | null => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return null
+  return target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
+}
+
+export const isInteractiveContentEvent = (event: { target: EventTarget | null }) =>
+  Boolean(elementOf(event.target)?.closest(interactiveContentSelector))
+
+/** Whether a content-surface gesture (a swipe, a scrub, a hold) may start on
+ *  `target`: anywhere but an interactive descendant, except links and video.
+ *  Those fill much of readable content and keep their taps, since only a
+ *  gesture that completes takes the event from them. */
+export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
+  const element = elementOf(target)
+  return !element?.closest(interactiveContentSelector) || Boolean(element.closest('a[href],video'))
 }
 
 /**
@@ -825,17 +832,18 @@ export const isSelectionClick = (event: MouseEvent) =>
 
 /**
  * Build the deps a pointer-dispatched block gesture needs from a block's
- * resolve context plus the live event — the clicked/tapped block, the surface
- * boundary, and the DOM node the event targeted. `currentTarget` is read
- * synchronously here (the caller is still inside the React handler) because
- * React nulls it once the handler returns, and pointer actions (the spatial
- * selection walker) need the bound element to locate the gesture among visible
- * blocks. Shared by the block shell's click path and the content surface's
- * double-click/tap path so the supplied-deps shape stays in one place.
+ * resolve context plus the element the gesture is bound to — the clicked,
+ * tapped or held block, the surface boundary, and that element. A React
+ * caller passes `event.currentTarget`, read synchronously inside its handler
+ * because React nulls it once the handler returns; pointer actions (the
+ * spatial selection walker) need the bound element to locate the gesture
+ * among visible blocks. Shared by the block shell's click path, the content
+ * surface's double-click/tap path and the gesture recognizers, so the
+ * supplied-deps shape stays in one place.
  */
 export const blockPointerDepsFrom = (
   context: BlockResolveContext,
-  event: PointerGestureEvent,
+  targetElement: HTMLElement,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -845,7 +853,7 @@ export const blockPointerDepsFrom = (
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
+    targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
   }
 }

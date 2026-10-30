@@ -140,10 +140,9 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
  *  resets the scope root. */
 export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
 
-/** The author line of a card: the first recorded creator, which every agent
- *  write has, else the `created_by` user, because human-only writes record no
- *  attribution. `created_by` alone would be wrong for agents: bridge and MCP
- *  writes run in the tab and stamp its human user. */
+/** The author line of a card, by the rule `authorIdOf` (./author.ts)
+ *  states. A user page that is not loaded, or not created, shows the user id,
+ *  unlinked. */
 const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const {attribution, profiles} = useContributorProfiles(block)
   const meta = useHandle(block, {

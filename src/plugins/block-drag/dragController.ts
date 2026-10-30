@@ -21,7 +21,9 @@
 import type { Repo } from '@/data/repo.js'
 import type { Block } from '@/data/block'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
-import { suppressNextClick } from '@/extensions/continuousGestures.js'
+// A touch must rest on the bullet TOUCH_HOLD_MS within TOUCH_SLOP_PX to pick
+// its block up; the same slop then separates a lifted block from a drag.
+import { suppressNextClick, TOUCH_HOLD_MS, TOUCH_SLOP_PX } from '@/extensions/continuousGestures.js'
 import { focusBlock } from '@/data/properties.js'
 import { getSelectionStateSnapshot, getUIStateBlock } from '@/data/stateBlocks.js'
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
@@ -34,11 +36,6 @@ import { PANEL_SELECTOR, resolveDropTarget, ROW_SELECTOR, type DropLine, type Dr
 /** Movement before a mouse press on the bullet becomes a drag; below it
  *  the press stays a click that opens the block. */
 const DRAG_THRESHOLD_PX = 4
-/** How long a touch must rest on the bullet to pick its block up, and how
- *  far it may wander meanwhile: UIKit's long-press defaults. The same
- *  slop then separates a lifted block from a drag. */
-export const TOUCH_HOLD_MS = 500
-export const TOUCH_SLOP_PX = 10
 /** Distance from a scroll container's top/bottom edge where auto-scroll
  *  starts, and its speed at the very edge. */
 const AUTO_SCROLL_EDGE_PX = 48

@@ -24,7 +24,7 @@ import {
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
-import { createGraph } from './graph.js'
+import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
@@ -211,6 +211,7 @@ const main = async () => {
   const engine = createEngine({
     config,
     graph,
+    replies: createReplyWriter(client),
     state: createStateStore(config.statePath ?? defaultStatePath()),
     runTask: options => options.executor === 'codex'
       ? runCodex({

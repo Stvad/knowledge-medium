@@ -78,10 +78,11 @@
  *     An owner restored from a tombstone keeps every key the tx did not
  *     write (MATERIALIZE's revival re-materializes the bag rather than
  *     letting PROJECT read the tombstoned children as "unset"), unless an
- *     arrival had already waived the pair, or the tx that deleted it had
- *     also raw-written its bag or edited its children: the processors skip
- *     a tombstoned row, so that divergence was never reconciled, and the
- *     revival settles it toward the children (§5).
+ *     arrival had already waived the pair, its children were edited while
+ *     it was dead, or the tx that deleted it had also raw-written its bag or
+ *     edited its children: the processors skip a tombstoned row, so that
+ *     divergence was never reconciled, and the revival settles it toward
+ *     the children (§5).
  *  A  a rejected transaction (a legal kernel rejection, or MATERIALIZE
  *     refusing a cell value no value child can carry) leaves the db
  *     byte-identical.
@@ -422,7 +423,6 @@ beforeAll(async () => {
 })
 const guard = statefulFuzzGuard()
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -656,9 +656,10 @@ interface Waivers {
   /** `${owner}|${fieldId}` of a tombstoned owner whose cell and children for
    *  that property were never reconciled: the owner died in a tx that also
    *  wrote the pair through a deferred path (a raw bag write or a child edit —
-   *  eager writes keep the two in step), or an arrival landed in it while the
-   *  owner was dead. A revival settles such a pair toward the children, so
-   *  its key may move. Cleared when the owner comes back. */
+   *  eager writes keep the two in step), or a child edit or an arrival
+   *  reached it while the owner was dead. A revival settles such a pair
+   *  toward the children, so its key may move. Cleared when the owner comes
+   *  back. */
   unsettled: Set<string>
 }
 const pairKey = (ownerId: string, fieldId: string): string => `${ownerId}|${fieldId}`
@@ -1443,10 +1444,12 @@ const runBatch = async (
   const end = await readState()
   checkIntent(log, start, end, waivers, label)
   for (const row of end.byId.values()) {
-    if (row.deleted !== 0 && start.byId.get(row.id)?.deleted === 1) continue
+    const stayedDead = row.deleted !== 0 && start.byId.get(row.id)?.deleted === 1
     // Back, or just died: either way its pairs are decided afresh. A death
-    // leaves unsettled exactly the pairs a deferred writer reached first.
-    for (const kind of KINDS) waivers.unsettled.delete(pairKey(row.id, SCHEMAS[kind].fieldId))
+    // leaves unsettled exactly the pairs a deferred writer reached first; an
+    // owner that stayed dead keeps its waivers and gains the pairs a child
+    // edit reached under it, which PROJECT skipped for the same reason.
+    if (!stayedDead) for (const kind of KINDS) waivers.unsettled.delete(pairKey(row.id, SCHEMAS[kind].fieldId))
     if (row.deleted === 0) continue
     for (const [name, evs] of log.events.get(row.id) ?? []) {
       if (evs.some(ev => ev.cls === 'R' && ev.wrote)) {
@@ -1567,7 +1570,6 @@ const runSequence = async (repo: Repo, mode: Mode, txs: TxSpec[]): Promise<void>
 
 describe('properties-as-blocks dual representation under mixed writer sequences', () => {
   it('cell and children agree after every tx; cell writes land; processors stay quiescent', async () => {
-    await guard.barrier()
     resetStats()
     await fc.assert(
       fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
