@@ -1,1 +1,1 @@
-export{iV as floatingAnchorFromRect,aV as useAnchoredFloating}from"../../../chunks/app-PrEaXWFR.js";
+export{iV as floatingAnchorFromRect,aV as useAnchoredFloating}from"../../../chunks/app-DsPOwokX.js";

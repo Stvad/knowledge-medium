@@ -1,1 +1,1 @@
-export{XE as isWikilinkDisplayParts,ZE as resolveWikilinkDisplay,QE as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-PrEaXWFR.js";
+export{XE as isWikilinkDisplayParts,ZE as resolveWikilinkDisplay,QE as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-DsPOwokX.js";

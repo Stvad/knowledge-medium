@@ -1,1 +1,1 @@
-export{aP as ExtensionRenderBoundary}from"../../chunks/app-PrEaXWFR.js";
+export{aP as ExtensionRenderBoundary}from"../../chunks/app-DsPOwokX.js";

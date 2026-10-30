@@ -1,1 +1,1 @@
-export{mM as defaultRegistry,fM as refreshRendererRegistry,pM as useRenderer}from"../../chunks/app-PrEaXWFR.js";
+export{mM as defaultRegistry,fM as refreshRendererRegistry,pM as useRenderer}from"../../chunks/app-DsPOwokX.js";

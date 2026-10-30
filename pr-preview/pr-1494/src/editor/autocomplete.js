@@ -1,1 +1,1 @@
-export{EA as editorAutocompleteExtension}from"../../chunks/app-PrEaXWFR.js";
+export{EA as editorAutocompleteExtension}from"../../chunks/app-DsPOwokX.js";

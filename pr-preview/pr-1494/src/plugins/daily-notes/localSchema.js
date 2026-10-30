@@ -1,1 +1,1 @@
-export{SG as dailyNotesLocalSchema}from"../../../chunks/app-PrEaXWFR.js";
+export{SG as dailyNotesLocalSchema}from"../../../chunks/app-DsPOwokX.js";

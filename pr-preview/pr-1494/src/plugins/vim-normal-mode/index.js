@@ -1,1 +1,1 @@
-export{Vb as vimNormalModeInteractionExtension,Hb as vimNormalModePlugin}from"../../../chunks/app-PrEaXWFR.js";
+export{Vb as vimNormalModeInteractionExtension,Hb as vimNormalModePlugin}from"../../../chunks/app-DsPOwokX.js";

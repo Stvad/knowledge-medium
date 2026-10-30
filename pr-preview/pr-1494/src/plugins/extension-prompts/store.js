@@ -1,1 +1,1 @@
-export{NA as extensionPromptStore,PA as pendingExtensionPrompts}from"../../../chunks/app-PrEaXWFR.js";
+export{NA as extensionPromptStore,PA as pendingExtensionPrompts}from"../../../chunks/app-DsPOwokX.js";

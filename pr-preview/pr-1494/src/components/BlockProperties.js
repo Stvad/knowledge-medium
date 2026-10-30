@@ -1,1 +1,1 @@
-export{RI as BlockProperties}from"../../chunks/app-PrEaXWFR.js";
+export{RI as BlockProperties}from"../../chunks/app-DsPOwokX.js";

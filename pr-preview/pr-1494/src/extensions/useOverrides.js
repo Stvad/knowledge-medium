@@ -1,1 +1,1 @@
-export{vj as useOverrides}from"../../chunks/app-PrEaXWFR.js";
+export{vj as useOverrides}from"../../chunks/app-DsPOwokX.js";

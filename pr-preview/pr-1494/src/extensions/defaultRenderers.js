@@ -1,1 +1,1 @@
-export{mM as defaultRegistry,hM as defaultRendererContributions,gM as defaultRenderersExtension}from"../../chunks/app-PrEaXWFR.js";
+export{mM as defaultRegistry,hM as defaultRendererContributions,gM as defaultRenderersExtension}from"../../chunks/app-DsPOwokX.js";
