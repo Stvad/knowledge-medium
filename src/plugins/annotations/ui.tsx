@@ -43,7 +43,8 @@ import {isImeKeyEvent} from '@/shortcuts/utils.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {resolveAnchor, type RangeAnchor} from './anchor.ts'
+import type {RangeAnchor} from './anchor.ts'
+import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
@@ -352,23 +353,6 @@ const ActionButton = ({onClick, children}: {onClick: () => void; children: React
   </button>
 )
 
-type AnchorState = 'exact' | 'moved' | 'stale' | 'deleted'
-
-const ANCHOR_BADGES: Record<Exclude<AnchorState, 'exact'>, string> = {
-  moved: 'text around it changed',
-  stale: 'quoted text changed',
-  deleted: 'on a deleted block',
-}
-
-const useAnchorState = (root: RootFields): {state: AnchorState; targetContent: string | null} => {
-  const repo = useRepo()
-  const targetId = threadTargetIdOf(root) ?? ''
-  const targetContent = useHandle(repo.block(targetId), {selector: data => data && !data.deleted ? data.content : null})
-  if (targetContent === null) return {state: 'deleted', targetContent}
-  const anchor = threadAnchorOf(root)
-  return {state: anchor.kind === 'block' ? 'exact' : resolveAnchor(targetContent, anchor).state, targetContent}
-}
-
 const TargetLink = ({targetId}: {targetId: string}) => {
   const repo = useRepo()
   const target = repo.block(targetId)
@@ -471,12 +455,14 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
  *  outside a card: which block it is on, and what it quotes. */
 const ThreadElsewhere = ({root}: {root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
+  const {state} = useAnchorState(root)
   return (
     <div className="text-sm text-muted-foreground">
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
       <QuoteText anchor={threadAnchorOf(root)}/>
+      {state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
     </div>
   )
 }
