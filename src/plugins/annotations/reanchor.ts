@@ -9,13 +9,7 @@ import {ChangeScope} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {
-  annotationQuotePrefixProp,
-  annotationQuoteStartProp,
-  annotationQuoteSuffixProp,
-  THREAD_TYPE,
-  threadTargetIdOf,
-} from './schema.ts'
+import {anchorFieldProps, anchorFieldValues, THREAD_TYPE, threadTargetIdOf} from './schema.ts'
 import {AnchorChangedError, assertQuotable, UnannotatableTargetError} from './threads.ts'
 
 /** The anchor that confirms `anchor` where it resolves in `content` now: the
@@ -47,14 +41,6 @@ export const reanchorThread = async (repo: Repo, threadId: string, anchor: Range
     if (anchor && resolveAnchor(target.content, anchor).state !== 'exact') throw new AnchorChangedError()
 
     await tx.update(threadId, {content: anchor?.quote ?? ''})
-    if (anchor) {
-      await tx.setProperty(threadId, annotationQuoteStartProp, anchor.quoteStart)
-      await tx.setProperty(threadId, annotationQuotePrefixProp, anchor.prefix)
-      await tx.setProperty(threadId, annotationQuoteSuffixProp, anchor.suffix)
-    } else {
-      await tx.unsetProperty(threadId, annotationQuoteStartProp)
-      await tx.unsetProperty(threadId, annotationQuotePrefixProp)
-      await tx.unsetProperty(threadId, annotationQuoteSuffixProp)
-    }
+    await tx.setProperties(threadId, anchor ? {set: anchorFieldValues(anchor)} : {unset: anchorFieldProps})
   }, {scope: ChangeScope.BlockDefault, description: anchor ? 're-anchor thread' : 'anchor thread to block'})
 }

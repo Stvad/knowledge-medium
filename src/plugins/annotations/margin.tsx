@@ -36,6 +36,7 @@ import {
   setMarginShowing,
   toggleShowClosed,
   useActiveThread,
+  useMarginShowing,
   useShowClosed,
 } from './uiStore.ts'
 
@@ -407,7 +408,10 @@ export function MarginHeaderItem() {
 const MarginToggleButton = ({panelId}: {panelId: string}) => {
   const repo = useRepo()
   const [open] = usePropertyValue(repo.block(panelId), annotationMarginOpenProp)
-  const label = open ? 'Hide comments margin' : 'Show comments margin'
+  const showing = useMarginShowing(panelId)
+  const label = !open ? 'Show comments margin'
+    : showing ? 'Hide comments margin'
+      : 'Hide comments margin (no room for it in this panel)'
   return (
     <button
       type="button"

@@ -1,5 +1,6 @@
 /**
- * The slice-1 comments UI on ordinary outline blocks:
+ * The comments UI on outline blocks and in thread cards (the side margin's
+ * column is `margin.tsx`):
  *
  * - a comment pill in the gutter, after the reference pill, on every
  *   non-nested surface, the focal block included (nothing else shows a focal
@@ -148,7 +149,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
   const key = viewKey(blockContext.renderScopeId, block.id)
-  const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
+  const panelId = blockContext.panelId
   // With the margin drawn, the threads are already beside the block: the pill
   // pins its first card instead of expanding them a second time inline.
   const inMargin = useMarginShowing(panelId)
@@ -156,7 +157,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
   const onPill = () => {
-    const click = pillClick(threads, inMargin && panelId !== undefined)
+    const click = pillClick(threads, inMargin)
     if (click.kind === 'expand-inline') {
       toggleThreadsExpanded(key)
       return
@@ -304,7 +305,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
   const key = viewKey(blockContext.renderScopeId, block.id)
   const composer = useComposer(key)
   const showResolved = useShowResolved(key)
-  const inMargin = useMarginShowing(typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined)
+  const inMargin = useMarginShowing(blockContext.panelId)
   // The margin shows the threads; only a composer opened here stays inline.
   if (inMargin) {
     return composer

@@ -362,10 +362,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
       </div>
       <div
         ref={scrollRef}
-        // Stable handle for the pane's scrollport. Runtime callers find it by
+        // Stable handle for the pane's scrollport. Callers inside it find it by
         // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
-        // which is robust to wrappers; this is for tests, so they don't pin the
-        // chain depth and break when one is added.
+        // which is robust to wrappers; this handle is for tests, and for panel
+        // mounts, which sit beside the scrollport rather than inside it.
         data-panel-scrollport=""
         className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
         onPointerDownCapture={activatePanel}

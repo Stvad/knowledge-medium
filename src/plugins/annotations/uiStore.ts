@@ -1,11 +1,13 @@
 /**
- * Per-tab view state for comments: which blocks have their threads expanded
- * inline, which show resolved threads too, the open composers with their
- * drafts, each panel's margin state and a pending re-anchor. Deliberately ephemeral module state, never block data: a draft is
- * written only on submit, so an abandoned comment leaves nothing behind.
+ * Per-tab view state for comments. Deliberately ephemeral module state, never
+ * block data: a draft is written only on submit, so an abandoned comment
+ * leaves nothing behind.
  *
- * Keyed by `viewKey`, one block as shown in one render scope, so expanding or
- * commenting on a block in one panel leaves the same block in another alone.
+ * - Inline threads, resolved threads shown and open composers are keyed by
+ *   `viewKey`, one block as shown in one render scope, so expanding or
+ *   commenting on a block in one panel leaves the same block in another alone.
+ * - The margin's state is keyed by panel.
+ * - A pending re-anchor is one for the tab.
  */
 
 import {useSyncExternalStore} from 'react'
@@ -32,11 +34,15 @@ const listeners = new CallbackSet('annotations-ui')
 
 const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
 
-const toggle = (set: Set<string>, key: string): void => {
-  if (set.has(key)) set.delete(key)
-  else set.add(key)
+/** Add or remove `key`, notifying only on a change. */
+const setFlag = (set: Set<string>, key: string, on: boolean): void => {
+  if (set.has(key) === on) return
+  if (on) set.add(key)
+  else set.delete(key)
   listeners.notify()
 }
+
+const toggle = (set: Set<string>, key: string): void => setFlag(set, key, !set.has(key))
 
 export const toggleThreadsExpanded = (key: string): void => toggle(expanded, key)
 export const toggleShowResolved = (key: string): void => toggle(showingResolved, key)
@@ -84,12 +90,7 @@ const marginShowing = new Set<string>()
 const activeThreads = new Map<string, string>()
 const showingClosed = new Set<string>()
 
-export const setMarginShowing = (panelId: string, showing: boolean): void => {
-  if (marginShowing.has(panelId) === showing) return
-  if (showing) marginShowing.add(panelId)
-  else marginShowing.delete(panelId)
-  listeners.notify()
-}
+export const setMarginShowing = (panelId: string, showing: boolean): void => setFlag(marginShowing, panelId, showing)
 
 export const useMarginShowing = (panelId: string | undefined): boolean =>
   useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
@@ -107,11 +108,7 @@ export const useActiveThread = (panelId: string): string | undefined =>
 
 export const toggleShowClosed = (panelId: string): void => toggle(showingClosed, panelId)
 
-export const showClosedThreads = (panelId: string): void => {
-  if (showingClosed.has(panelId)) return
-  showingClosed.add(panelId)
-  listeners.notify()
-}
+export const showClosedThreads = (panelId: string): void => setFlag(showingClosed, panelId, true)
 export const useShowClosed = (panelId: string): boolean =>
   useSyncExternalStore(subscribe, () => showingClosed.has(panelId))
 
