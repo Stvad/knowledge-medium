@@ -1,1 +1,1 @@
-export{UI as BlockProperties}from"../../chunks/app-CaXSLrG_.js";
+export{KI as BlockProperties}from"../../chunks/app-6IOIoqPQ.js";

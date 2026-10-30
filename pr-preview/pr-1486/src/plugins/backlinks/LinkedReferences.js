@@ -1,1 +1,1 @@
-export{tg as LinkedReferences}from"../../../chunks/app-CaXSLrG_.js";
+export{ug as LinkedReferences}from"../../../chunks/app-6IOIoqPQ.js";

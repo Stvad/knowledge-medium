@@ -1,1 +1,1 @@
-export{R_ as attachmentsPlugin}from"../../../chunks/app-CaXSLrG_.js";
+export{tv as attachmentsPlugin}from"../../../chunks/app-6IOIoqPQ.js";

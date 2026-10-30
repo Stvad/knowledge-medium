@@ -1,1 +1,1 @@
-export{Pg as referencesPlugin}from"../../../chunks/app-CaXSLrG_.js";
+export{Ug as referencesPlugin}from"../../../chunks/app-6IOIoqPQ.js";

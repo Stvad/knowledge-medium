@@ -1,1 +1,1 @@
-export{WA as approveExtensionHere}from"../../chunks/app-CaXSLrG_.js";
+export{UA as approveExtensionHere}from"../../chunks/app-6IOIoqPQ.js";

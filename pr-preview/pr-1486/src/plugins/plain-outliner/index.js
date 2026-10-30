@@ -1,1 +1,1 @@
-export{RS as plainOutlinerPlugin}from"../../../chunks/app-CaXSLrG_.js";
+export{FS as plainOutlinerPlugin}from"../../../chunks/app-6IOIoqPQ.js";

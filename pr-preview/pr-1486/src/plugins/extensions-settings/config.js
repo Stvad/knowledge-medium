@@ -1,1 +1,1 @@
-export{Jf as extensionsOverridesPresetCore,Yf as extensionsOverridesProp,Xf as extensionsPrefsType,Zf as overridesCodec}from"../../../chunks/app-CaXSLrG_.js";
+export{kf as extensionsOverridesPresetCore,Af as extensionsOverridesProp,jf as extensionsPrefsType,Mf as overridesCodec}from"../../../chunks/app-6IOIoqPQ.js";
