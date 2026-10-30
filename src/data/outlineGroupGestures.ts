@@ -1,6 +1,7 @@
 import type { BlockData, Tx } from '@/data/api'
 import { indent, moveVertical, outdent } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { precedesInTree } from '@/utils/selection'
 
 interface GroupGesture {
   /** Run bottom-up. Move-down travels toward the next sibling, and outdent
@@ -26,9 +27,9 @@ const GROUP_GESTURES = {
 
 export type OutlineGroupGesture = keyof typeof GROUP_GESTURES
 
-/** `id`'s chain from a child of `scopeRootId` down to `id`, or null when `id`
- *  is not strictly inside the scope root's subtree. */
-const pathBelow = async (tx: Tx, id: string, scopeRootId: string): Promise<BlockData[] | null> => {
+/** `id`'s chain from `scopeRootId` down to `id`, or null when `id` is not
+ *  strictly inside the scope root's subtree. */
+const pathFromScopeRoot = async (tx: Tx, id: string, scopeRootId: string): Promise<BlockData[] | null> => {
   // The scope root anchors its own view and never moves within it.
   if (id === scopeRootId) return null
   // A row from another tree (a backlink entry, an embed) belongs to a surface
@@ -38,22 +39,12 @@ const pathBelow = async (tx: Tx, id: string, scopeRootId: string): Promise<Block
   // this chain.
   const path: BlockData[] = []
   let current = await tx.get(id)
-  while (current && current.id !== scopeRootId) {
+  while (current) {
     path.unshift(current)
+    if (current.id === scopeRootId) break
     current = await tx.parentOf(current.id)
   }
   return path
-}
-
-/** Tree order of two paths below one scope root: siblings as every children
- *  query sorts them (order key, then id), an ancestor before its descendants. */
-const compareTreePaths = (a: readonly BlockData[], b: readonly BlockData[]): number => {
-  for (let depth = 0; depth < Math.min(a.length, b.length); depth++) {
-    const [x, y] = [a[depth], b[depth]]
-    if (x.id === y.id) continue
-    return x.orderKey < y.orderKey || (x.orderKey === y.orderKey && x.id < y.id) ? -1 : 1
-  }
-  return a.length - b.length
 }
 
 /** Whether `member`'s sibling on the side processed just before it is in
@@ -90,10 +81,10 @@ export const applyOutlineGestureToGroupInTx = async (
   const {bottomUp, apply} = GROUP_GESTURES[gesture]
   const paths: BlockData[][] = []
   for (const id of ids) {
-    const path = await pathBelow(tx, id, scopeRootId)
+    const path = await pathFromScopeRoot(tx, id, scopeRootId)
     if (path) paths.push(path)
   }
-  paths.sort(compareTreePaths)
+  paths.sort((a, b) => (precedesInTree(a, b) ? -1 : precedesInTree(b, a) ? 1 : 0))
   if (bottomUp) paths.reverse()
 
   // `heldByGroup` reads only a member's parent from these rows, and that can't
