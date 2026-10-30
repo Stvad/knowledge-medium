@@ -1,0 +1,1 @@
+export{XF as BLOCK_TITLE_TEXT_CLASS,ZF as useBlockTitleTextClass}from"../../../chunks/app-NFsz5I4q.js";

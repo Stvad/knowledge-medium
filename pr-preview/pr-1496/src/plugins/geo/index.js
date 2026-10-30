@@ -1,0 +1,1 @@
+export{ig as geoPlugin}from"../../../chunks/app-NFsz5I4q.js";

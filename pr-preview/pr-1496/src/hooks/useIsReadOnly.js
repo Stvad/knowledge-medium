@@ -1,0 +1,1 @@
+export{Yg as useIsReadOnly}from"../../chunks/app-NFsz5I4q.js";
