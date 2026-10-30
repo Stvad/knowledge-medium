@@ -2375,6 +2375,7 @@ const executeAttributedCommand = async (
         quote: command.quote,
         occurrence: command.occurrence,
         content: command.content,
+        replacement: command.replacement,
       })
 
     case 'create-block':

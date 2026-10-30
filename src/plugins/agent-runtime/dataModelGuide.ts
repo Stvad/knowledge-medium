@@ -1,6 +1,6 @@
 import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
 import { COMMENTS_PAGE_ALIAS } from '@/plugins/annotations/container.js'
-import { annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
+import { annotationReplacementProp, annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
 import { COMMENTS_RECIPE_QUIET_MS, COMMENTS_RECIPE_SQL } from '@/plugins/annotations/scope.js'
 
 const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
@@ -261,6 +261,11 @@ for a thread on the whole block, and \`${annotationStatusProp.name}\` is \`open\
 comment it answers, to any depth. A quote is a copy, not a mention: a
 \`[[Page]]\` inside it never counts as a backlink.
 
+A thread whose root carries \`${annotationReplacementProp.name}\` is an **edit
+suggestion**: replace the quote with that text. A person accepts it in the app,
+which changes the block and sets the status \`accepted\`, or rejects it
+(\`rejected\`). Setting the status yourself changes no text.
+
 - \`comments\` (MCP \`comments\`) reads threads as JSON. \`scope\` gives every
   thread on a block under that page or block, plus the threads on their
   comments, recursively. \`block\` gives one block's threads, and \`thread\`
@@ -278,6 +283,8 @@ comment it answers, to any depth. A quote is a copy, not a mention: a
   that range. The quote and \`occurrence\` count in the block's verbatim
   content, as \`get-block\` returns it (outline views collapse whitespace); the
   result's \`quoteStart\` and \`excerpt\` show which appearance it anchored.
+  With \`replacement\`, the thread is an edit suggestion for the quote: propose
+  a change this way, and use \`edit-block\` only to change text yourself.
 - **Reply** with \`append-markdown\` whose target is the comment you are answering.
   Target the thread root only to start a new top-level comment.
 - **Resolve or reopen** with \`update-block\` on the root, properties

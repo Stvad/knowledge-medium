@@ -52,6 +52,8 @@ export interface AddCommentArgs {
   occurrence?: number
   /** The first comment; absent or empty makes a highlight. */
   comment?: string
+  /** Makes the thread an edit suggestion for the quote. */
+  replacement?: string
 }
 
 /** A thread on `targetId`, anchored to `quote` as the target reads now. If the
@@ -59,7 +61,7 @@ export interface AddCommentArgs {
  *  to the wrong text. */
 export const addComment = async (
   repo: Repo,
-  {targetId, quote, occurrence, comment}: AddCommentArgs,
+  {targetId, quote, occurrence, comment, replacement}: AddCommentArgs,
   options: CreateThreadOptions = {},
 ): Promise<CreatedThread> => {
   if (quote === undefined && occurrence !== undefined) {
@@ -68,5 +70,5 @@ export const addComment = async (
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
   const anchor = quote === undefined ? null : anchorForQuote(target.content, quote, occurrence)
-  return createThread(repo, {targetId, anchor, comment}, options)
+  return createThread(repo, {targetId, anchor, comment, replacement}, options)
 }
