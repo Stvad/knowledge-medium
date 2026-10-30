@@ -12,11 +12,21 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
+import {surfaceRenderScopeId} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
 export const viewKey = (renderScopeId: string | undefined, blockId: string): string =>
   `${renderScopeId ?? ''}\u0000${blockId}`
+
+/** Where a thread's card renders: inline under its block, or in the panel's
+ *  margin. */
+export type CardSurface = 'comments' | 'margin'
+
+/** A card's render scope, derived from the scope it renders in. The one
+ *  definition: a card renders in it, and a navigation focuses into it. */
+export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
+  surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
 
 export interface ComposerState {
   targetId: string

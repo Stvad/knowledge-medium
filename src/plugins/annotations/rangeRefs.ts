@@ -9,38 +9,32 @@ import type {Repo} from '@/data/repo'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {writeTextToClipboard} from '@/utils/copy.js'
 import {showError, showInfo} from '@/utils/toast.js'
-import {resolveAnchor, type RangeAnchor} from './anchor.ts'
+import type {RangeAnchor} from './anchor.ts'
 import {anchorFromEditor} from './actions.ts'
 import {THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
 import {createThread, isThreadRefusal, missingTarget} from './threads.ts'
 
 export const COPY_RANGE_REFERENCE_ACTION_ID = 'annotations.copyReferenceToSelection'
 
-/** Is `thread` open and anchored exactly to `anchor`'s range of `content`? */
-export const anchorsRange = (content: string, thread: ThreadSummary, anchor: RangeAnchor): boolean => {
-  if (!thread.open || thread.anchor.kind !== 'range') return false
-  const resolved = resolveAnchor(content, thread.anchor)
-  return resolved.state === 'exact' &&
-    resolved.from === anchor.quoteStart && resolved.to === anchor.quoteStart + anchor.quote.length
-}
+/** Is `thread` open and anchored exactly to `anchor`'s range? A captured
+ *  anchor is exact against the text it came from, so a thread exact on the
+ *  same range of that text has the same quote, start and context. */
+const anchorsRange = (thread: ThreadSummary, anchor: RangeAnchor): boolean =>
+  thread.open && thread.anchor.kind === 'range' &&
+  thread.anchor.quote === anchor.quote && thread.anchor.quoteStart === anchor.quoteStart &&
+  thread.anchor.prefix === anchor.prefix && thread.anchor.suffix === anchor.suffix
 
 /** The thread a reference to `anchor` should point at: the target's open
  *  thread anchored exactly there, so quoting a range twice gives one thread,
- *  or else a new highlight. `content` is the text the anchor was captured
- *  from.
+ *  or else a new highlight.
  *
  *  ACCEPTED: the lookup runs before the creating tx, so two copies of the same
  *  range racing each other can leave a second, unreferenced highlight. */
-export const threadForRange = async (
-  repo: Repo,
-  targetId: string,
-  content: string,
-  anchor: RangeAnchor,
-): Promise<string> => {
+export const threadForRange = async (repo: Repo, targetId: string, anchor: RangeAnchor): Promise<string> => {
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
   const threads = await repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: target.workspaceId, id: targetId}).load()
-  const existing = threads.find(thread => anchorsRange(content, thread, anchor))
+  const existing = threads.find(thread => anchorsRange(thread, anchor))
   if (existing) return existing.id
   const created = await createThread(repo, {targetId, anchor}, {description: 'copy reference to selection'})
   return created.threadId
@@ -61,7 +55,7 @@ export const copyRangeReferenceAction: ActionConfig<typeof ActionContextTypes.ED
     }
     let threadId: string
     try {
-      threadId = await threadForRange(block.repo, block.id, editorView.state.doc.toString(), anchor)
+      threadId = await threadForRange(block.repo, block.id, anchor)
     } catch (error) {
       if (isThreadRefusal(error)) showError(error.message)
       else throw error

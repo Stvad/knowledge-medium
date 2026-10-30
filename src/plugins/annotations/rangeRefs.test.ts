@@ -49,8 +49,8 @@ const threadsOnB = () =>
 
 describe('threadForRange', () => {
   it('copying the same range twice reuses one thread', async () => {
-    const first = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
-    const second = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
+    const first = await threadForRange(repo, 'B', anchorFor('Thursday'))
+    const second = await threadForRange(repo, 'B', anchorFor('Thursday'))
 
     expect(second).toBe(first)
     expect(await threadsOnB()).toEqual([first])
@@ -62,41 +62,59 @@ describe('threadForRange', () => {
     const {threadId} = await createThread(repo, {targetId: 'B', anchor: anchorFor('Thursday'), comment: 'Confirmed?'})
     await vi.waitFor(async () => expect(await threadsOnB()).toEqual([threadId]))
 
-    expect(await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))).toBe(threadId)
+    expect(await threadForRange(repo, 'B', anchorFor('Thursday'))).toBe(threadId)
   })
 
   it('makes a new thread for a different range of the same quote', async () => {
-    const first = await threadForRange(repo, 'B', B_TEXT, anchorFor('moves'))
+    const first = await threadForRange(repo, 'B', anchorFor('moves'))
     await vi.waitFor(async () => expect(await threadsOnB()).toEqual([first]))
     const later = B_TEXT.lastIndexOf('moves')
-    const second = await threadForRange(repo, 'B', B_TEXT, captureAnchor(B_TEXT, later, later + 'moves'.length)!)
+    const second = await threadForRange(repo, 'B', captureAnchor(B_TEXT, later, later + 'moves'.length)!)
 
     expect(second).not.toBe(first)
   })
 
   it('makes a new thread for a quote that shares only its start or its end', async () => {
-    const thurs = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thurs'))
-    const day = await threadForRange(repo, 'B', B_TEXT, anchorFor('day'))
-    const thursday = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
+    const thurs = await threadForRange(repo, 'B', anchorFor('Thurs'))
+    const day = await threadForRange(repo, 'B', anchorFor('day'))
+    const thursday = await threadForRange(repo, 'B', anchorFor('Thursday'))
 
     expect(new Set([thurs, day, thursday]).size).toBe(3)
   })
 
+  it('makes a new thread where only the context changed around a quote that stayed put', async () => {
+    const first = await threadForRange(repo, 'B', anchorFor('Thursday'))
+    for (const [from, to] of [['launch', 'lunch!'], ['the demo', 'the show']] as const) {
+      const edited = B_TEXT.replace(from, to)
+      await repo.tx(tx => tx.update('B', {content: edited}), opts)
+      expect(await threadForRange(repo, 'B', anchorFor('Thursday', edited))).not.toBe(first)
+      await repo.tx(tx => tx.update('B', {content: B_TEXT}), opts)
+    }
+  })
+
+  it('makes a new thread for a longer quote whose context reads the same', async () => {
+    const repeated = 'a'.repeat(40)
+    await repo.tx(tx => tx.update('B', {content: repeated}), opts)
+    const one = await threadForRange(repo, 'B', captureAnchor(repeated, 0, 1)!)
+
+    expect(await threadForRange(repo, 'B', captureAnchor(repeated, 0, 2)!)).not.toBe(one)
+  })
+
   it('does not reuse a resolved thread, or one whose anchor only moved', async () => {
-    const resolved = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
+    const resolved = await threadForRange(repo, 'B', anchorFor('Thursday'))
     await setThreadStatus(repo, resolved, 'resolved')
-    const reopened = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
+    const reopened = await threadForRange(repo, 'B', anchorFor('Thursday'))
     expect(reopened).not.toBe(resolved)
 
     const edited = `Note: ${B_TEXT}`
     await repo.tx(tx => tx.update('B', {content: edited}), opts)
-    expect(await threadForRange(repo, 'B', edited, anchorFor('Thursday', edited))).not.toBe(reopened)
+    expect(await threadForRange(repo, 'B', anchorFor('Thursday', edited))).not.toBe(reopened)
   })
 })
 
 describe('a range reference', () => {
   it('deleting its thread leaves the quote as plain text in the quoting block', async () => {
-    const threadId = await threadForRange(repo, 'B', B_TEXT, anchorFor('Thursday'))
+    const threadId = await threadForRange(repo, 'B', anchorFor('Thursday'))
     await repo.tx(tx => tx.create({
       id: 'X', workspaceId: WS, parentId: 'page', orderKey: 'a1',
       content: `Reading notes: ((${threadId})) is fixed now.`,
