@@ -1,1 +1,1 @@
-export{UO as commandPaletteToggle}from"../../../chunks/app-CH6w_ufQ.js";
+export{GO as commandPaletteToggle}from"../../../chunks/app-BoteRsPs.js";

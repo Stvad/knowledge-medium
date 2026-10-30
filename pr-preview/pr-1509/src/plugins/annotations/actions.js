@@ -1,1 +1,1 @@
-export{pd as COMMENT_ON_BLOCK_ACTION_ID,md as COMMENT_ON_SELECTION_ACTION_ID,hd as HIGHLIGHT_SELECTION_ACTION_ID,gd as TOGGLE_MARGIN_ACTION_ID,_d as anchorFromEditor,vd as annotationActions,yd as submitComposer}from"../../../chunks/app-CH6w_ufQ.js";
+export{fd as COMMENT_ON_BLOCK_ACTION_ID,pd as COMMENT_ON_SELECTION_ACTION_ID,md as HIGHLIGHT_SELECTION_ACTION_ID,hd as TOGGLE_MARGIN_ACTION_ID,gd as anchorFromEditor,_d as annotationActions,vd as submitComposer}from"../../../chunks/app-BoteRsPs.js";

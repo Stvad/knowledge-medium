@@ -1,1 +1,1 @@
-export{ex as vimNormalModeInteractionExtension,tx as vimNormalModePlugin}from"../../../chunks/app-CH6w_ufQ.js";
+export{tx as vimNormalModeInteractionExtension,nx as vimNormalModePlugin}from"../../../chunks/app-BoteRsPs.js";

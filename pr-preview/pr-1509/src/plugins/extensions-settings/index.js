@@ -1,1 +1,1 @@
-export{Lf as extensionsOverridesProp,Rf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CH6w_ufQ.js";
+export{If as extensionsOverridesProp,Lf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BoteRsPs.js";

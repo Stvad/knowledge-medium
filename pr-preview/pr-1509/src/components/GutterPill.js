@@ -1,1 +1,1 @@
-export{mg as GutterPill}from"../../chunks/app-CH6w_ufQ.js";
+export{pg as GutterPill}from"../../chunks/app-BoteRsPs.js";
