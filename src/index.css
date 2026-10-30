@@ -75,6 +75,13 @@
   }
 }
 
+/* Native scrollbars, form controls and pickers follow the theme's mode. */
+@layer base {
+  [data-theme-mode="dark"] {
+    color-scheme: dark;
+  }
+}
+
 /*
   Themes are selected by `data-theme` on the document root. The full
   set of palettes lives in
