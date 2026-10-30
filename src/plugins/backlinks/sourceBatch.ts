@@ -6,12 +6,9 @@
  * property machinery are always excluded. This is the one place that decides
  * what a backlink source is; the filtered route (`sources.ts`) narrows it.
  *
- * Every visible block resolves its inline badge in the same tick. Issued one
- * by one, those reads queue behind each other on a pool of one or two
- * connections, and the page's own child reads queue behind them. So the badge
- * count and the unfiltered `backlinks.forBlock` list both come from here: two
- * projections of one statement, which is also what keeps "3" on the badge
- * equal to the 3 rows the list shows on expand.
+ * The badge count and the unfiltered `backlinks.forBlock` list both come from
+ * here: two projections of one statement, which keeps "3" on the badge equal
+ * to the 3 rows the list shows on expand.
  *
  * The transport — coalescing, chunking, failure scope — is `readBatch.ts`.
  */

@@ -38,8 +38,7 @@ interface Pending<A> {
   promise: Promise<A>
   resolve: (answer: A) => void
   reject: (error: unknown) => void
-  /** How many callers await this id. Counted so the flush can report ONE
-   *  shared read once, rather than once per caller that joined. */
+  /** How many callers await this id; the flush sums them per statement. */
   callers: number
 }
 
@@ -61,7 +60,6 @@ const identical = <K>(a: K, b: K): boolean => a === b
 
 export class ReadBatcher<K, A> {
   private groups: Group<K, A>[] = []
-  private scheduled = false
   /** Undefined when the db was never wrapped for metrics (fixtures, tests). */
   private readonly pool: ReturnType<typeof contentionFor>
   private readonly sameGroup: (a: K, b: K) => boolean
@@ -76,6 +74,9 @@ export class ReadBatcher<K, A> {
   request(id: string, key: K): Promise<A> {
     let group = this.groups.find(g => this.sameGroup(g.key, key))
     if (!group) {
+      // Work avoided, not a correctness guard: only a batch's first group
+      // schedules the flush, which takes every group queued before it runs.
+      if (this.groups.length === 0) queueMicrotask(() => { void this.flush() })
       group = {key, waiting: new Map()}
       this.groups.push(group)
     }
@@ -86,12 +87,6 @@ export class ReadBatcher<K, A> {
     }
     const entry = pending<A>()
     group.waiting.set(id, entry)
-    // Work avoided, not a correctness guard: a second flush in the same tick
-    // finds the queue already drained and issues nothing.
-    if (!this.scheduled) {
-      this.scheduled = true
-      queueMicrotask(() => { void this.flush() })
-    }
     return entry.promise
   }
 
@@ -100,7 +95,6 @@ export class ReadBatcher<K, A> {
     // in flight opens the NEXT batch rather than joining one already read.
     const groups = this.groups
     this.groups = []
-    this.scheduled = false
     await Promise.all(groups.map(group => this.flushGroup(group)))
   }
 
@@ -108,13 +102,10 @@ export class ReadBatcher<K, A> {
     const ids = [...waiting.keys()]
     for (let start = 0; start < ids.length; start += this.maxIds) {
       const chunk = ids.slice(start, start + this.maxIds)
-      // Callers, not ids: three resolves awaiting one id share this statement
-      // exactly as three ids from three resolves do, and both are one read.
+      // Callers, not ids: a second caller of one id shares the statement as much
+      // as a second id does. Noted once per STATEMENT (`noteSharedWork`).
       let callers = 0
       for (const id of chunk) callers += waiting.get(id)!.callers
-      // Without it every caller looks like an independent measurement of an
-      // idle database, and the wall-clock they all record is ONE observation.
-      // Once per STATEMENT, because that is what the counter counts.
       if (callers > 1) this.pool?.noteSharedWork()
       try {
         const answerFor = await this.spec.read(key, chunk)
