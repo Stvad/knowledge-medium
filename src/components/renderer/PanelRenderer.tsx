@@ -55,8 +55,9 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
       selectedBlocks: selectionState.selectedBlockIds.map(id => repo.block(id)),
       anchorBlock: selectionState.anchorBlockId ? repo.block(selectionState.anchorBlockId) : null,
       // Multi-select operates over the panel's outline, so its scope
-      // root is the panel's zoom root. Indent, outdent and move skip
-      // selected rows outside it (applyOutlineGestureToGroupInTx).
+      // root is the panel's zoom root. Indent, outdent and move bound
+      // selected rows outside it by their own page
+      // (applyOutlineGestureToGroupInTx).
       scopeRootId,
     }
   }, [selectionState, repo, scopeRootId])

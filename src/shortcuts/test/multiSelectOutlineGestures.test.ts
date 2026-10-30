@@ -135,16 +135,26 @@ describe('multi-select outline gestures move the selection as a group', () => {
     expect(await outline(ROOT)).toBe(expected)
   })
 
-  it.each<[Gesture, string, string]>([
-    ['indent_block', 'r3', 'r1 r2(r2a r2b r3) r4'],
-    ['outdent_block', 'r2b', 'r1 r2(r2a) r2b r3 r4'],
-    ['move_block_up', 'r3', 'r1 r3 r2(r2a r2b) r4'],
-    ['move_block_down', 'r3', 'r1 r2(r2a r2b) r4 r3'],
-  ])('%s skips a selected row from outside the panel and still moves %s', async (gesture, inPanel, expected) => {
+  // A backlink or embed row: it lives in another page, which bounds it.
+  it.each<[Gesture, string, string, string]>([
+    ['indent_block', 'r3', 'r1 r2(r2a r2b r3) r4', 'o(o1(o2) o3)'],
+    ['outdent_block', 'r2b', 'r1 r2(r2a) r2b r3 r4', 'o(o1 o3) o2'],
+    ['move_block_up', 'r3', 'r1 r3 r2(r2a r2b) r4', 'o(o2 o1 o3)'],
+    ['move_block_down', 'r3', 'r1 r2(r2a r2b) r4 r3', 'o(o1 o3 o2)'],
+  ])('%s moves a selected row from another page within that page, beside %s', async (gesture, inPanel, expected, expectedOther) => {
     await run(gesture, [inPanel, 'o2'])
     expect(await outline(ROOT)).toBe(expected)
-    expect(await outline('other')).toBe('o(o1 o2 o3)')
+    expect(await outline('other')).toBe(expectedOther)
   })
+
+  // `o` is its page's only child: each of these would carry it out of the page.
+  it.each<Gesture>(['outdent_block', 'move_block_up', 'move_block_down'])(
+    '%s keeps a selected row from another page inside that page',
+    async gesture => {
+      await run(gesture, ['o'])
+      expect(await outline('other')).toBe('o(o1 o2 o3)')
+    },
+  )
 
   // The moves aren't listed: moveVertical refuses the scope root on its own.
   it.each<Gesture>(['indent_block', 'outdent_block'])(
@@ -172,9 +182,17 @@ describe('multi-select outline gestures move the selection as a group', () => {
     expect(await outline(ROOT)).toBe('r3 r4 r1')
   })
 
-  it('refuses to run without a scope root', async () => {
-    await expect(run('indent_block', ['r3'], {scopeRootId: undefined})).rejects.toThrow(/scopeRootId/)
-    expect(await outline(ROOT)).toBe(INITIAL)
+  it('without a panel scope root, bounds each row by its own page', async () => {
+    await run('indent_block', ['r3'], {scopeRootId: undefined})
+    expect(await outline(ROOT)).toBe('r1 r2(r2a r2b r3) r4')
+  })
+
+  it('leaves out a selected row on a parent cycle', async () => {
+    // A raw write, as sync can apply one: o and o1 are each other's parent.
+    await sharedDb.db.writeTransaction(tx =>
+      tx.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', ['o1', 'o']))
+    await run('indent_block', ['r3', 'o2'])
+    expect(await outline(ROOT)).toBe('r1 r2(r2a r2b r3) r4')
   })
 
   it.each<[Gesture, string[]]>([

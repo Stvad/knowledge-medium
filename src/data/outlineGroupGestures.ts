@@ -27,43 +27,61 @@ const GROUP_GESTURES = {
 
 export type OutlineGroupGesture = keyof typeof GROUP_GESTURES
 
-/** `id`'s chain from `scopeRootId` down to `id`, or null when `id` is not
- *  strictly inside the scope root's live subtree. */
-const pathFromScopeRoot = async (tx: Tx, id: string, scopeRootId: string): Promise<BlockData[] | null> => {
-  // The scope root anchors its own view and never moves within it.
-  if (id === scopeRootId) return null
-  // A row from another tree (a backlink entry, an embed) belongs to a surface
-  // rooted elsewhere; restructuring it here edits a page nothing here shows.
-  if (!(await tx.isDescendantOf(id, scopeRootId))) return null
-  // Terminates: the bounded, cycle-safe check above found the scope root on
-  // this chain.
+/** `id`'s chain down from its scope root: the panel's root when `id` is under
+ *  it, else the root of `id`'s own page (a backlink or embed row), which keeps
+ *  every gesture inside that page. Null when `id` is its own scope root, which
+ *  never moves within its own view, or when its live chain breaks first: a row
+ *  under a deleted block isn't on screen. */
+const scopedPath = async (
+  tx: Tx,
+  id: string,
+  panelRootId: string | undefined,
+): Promise<BlockData[] | null> => {
   const path: BlockData[] = []
+  const seen = new Set<string>()
   for (let current = await tx.get(id); current; current = await tx.parentOf(current.id)) {
+    // Defence in depth: sync can apply a parent cycle, which would loop forever.
+    if (seen.has(current.id)) return null
+    seen.add(current.id)
     path.unshift(current)
-    if (current.id === scopeRootId) return path
+    if (current.id === panelRootId || current.parentId === null) {
+      return path.length > 1 ? path : null
+    }
   }
-  // `isDescendantOf` walks through deleted blocks and `parentOf` stops at one:
-  // a row under a deleted block isn't on screen, so it isn't in the group.
   return null
 }
 
-/** The paths of the selected blocks the gesture moves, in tree order: each
- *  block once, only inside the scope root, and none under another selected
- *  block, which carries it along instead of it moving again. */
-const groupPaths = async (
+interface ScopeGroup {
+  scopeRootId: string
+  /** The members' paths down from `scopeRootId`, in tree order. */
+  paths: BlockData[][]
+}
+
+/** The selected blocks the gesture moves, grouped by scope root: each block
+ *  once, and none under another selected block, which carries it along
+ *  instead of it moving again. */
+const scopeGroups = async (
   tx: Tx,
   ids: readonly string[],
-  scopeRootId: string,
-): Promise<BlockData[][]> => {
-  const paths: BlockData[][] = []
+  panelRootId: string | undefined,
+): Promise<ScopeGroup[]> => {
+  const pathsByScope = new Map<string, BlockData[][]>()
   for (const id of new Set(ids)) {
-    const path = await pathFromScopeRoot(tx, id, scopeRootId)
-    if (path) paths.push(path)
+    const path = await scopedPath(tx, id, panelRootId)
+    if (!path) continue
+    const paths = pathsByScope.get(path[0].id) ?? []
+    paths.push(path)
+    pathsByScope.set(path[0].id, paths)
   }
-  const selected = new Set(paths.map(path => path[path.length - 1].id))
-  return paths
-    .filter(path => !path.slice(1, -1).some(ancestor => selected.has(ancestor.id)))
-    .sort((a, b) => (precedesInTree(a, b) ? -1 : precedesInTree(b, a) ? 1 : 0))
+  return [...pathsByScope].map(([scopeRootId, paths]) => {
+    const selected = new Set(paths.map(path => path[path.length - 1].id))
+    return {
+      scopeRootId,
+      paths: paths
+        .filter(path => !path.slice(1, -1).some(ancestor => selected.has(ancestor.id)))
+        .sort((a, b) => (precedesInTree(a, b) ? -1 : precedesInTree(b, a) ? 1 : 0)),
+    }
+  })
 }
 
 /** Whether `member`'s sibling on the side processed just before it is in
@@ -82,35 +100,35 @@ const heldByGroup = async (
 }
 
 /**
- * Apply an outline gesture to the selected blocks `ids` as one group, inside
- * `tx`, and resolve whether any block moved.
+ * Apply an outline gesture to the selected blocks `ids` as one group per scope
+ * root (see `scopedPath`), inside `tx`, and resolve whether any block moved.
  *
- * The members are `groupPaths`', in tree order whatever order `ids` lists
- * them in. A block held by the group keeps its
- * place, so a run of selected siblings moves together or not at all: at the
- * scope edge its leading block can't move and the rest stay beside it, rather
- * than swapping past it (move) or nesting under it (indent).
+ * Each group applies in tree order, whatever order `ids` lists them in. A
+ * block held by its group keeps its place, so a run of selected siblings moves
+ * together or not at all: at the scope edge its leading block can't move and
+ * the rest stay beside it, rather than swapping past it (move) or nesting
+ * under it (indent).
  */
 export const applyOutlineGestureToGroupInTx = async (
   tx: Tx,
   gesture: OutlineGroupGesture,
   ids: readonly string[],
-  scopeRootId: string,
+  panelRootId: string | undefined,
 ): Promise<boolean> => {
   const {bottomUp, apply} = GROUP_GESTURES[gesture]
-  const paths = await groupPaths(tx, ids, scopeRootId)
-  if (bottomUp) paths.reverse()
-
-  // `heldByGroup` reads only a member's parent from these rows, and that can't
-  // change before the member's own turn: members are distinct roots, each
-  // gesture moves only its own block, and re-keying a tie rewrites order keys,
-  // never parents.
-  const members = paths.map(path => path[path.length - 1])
-  const group = new Set(members.map(member => member.id))
   let moved = false
-  for (const member of members) {
-    if (await heldByGroup(tx, member, group, bottomUp)) continue
-    if (await apply(tx, member.id, scopeRootId)) moved = true
+  for (const {scopeRootId, paths} of await scopeGroups(tx, ids, panelRootId)) {
+    if (bottomUp) paths.reverse()
+    // `heldByGroup` reads only a member's parent from these rows, and that
+    // can't change before the member's own turn: members are distinct roots,
+    // each gesture moves only its own block, and re-keying a tie rewrites
+    // order keys, never parents.
+    const members = paths.map(path => path[path.length - 1])
+    const group = new Set(members.map(member => member.id))
+    for (const member of members) {
+      if (await heldByGroup(tx, member, group, bottomUp)) continue
+      if (await apply(tx, member.id, scopeRootId)) moved = true
+    }
   }
   return moved
 }

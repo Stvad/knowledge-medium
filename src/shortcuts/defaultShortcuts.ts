@@ -38,7 +38,7 @@ import { applyOutlineGestureToGroupInTx, type OutlineGroupGesture } from '@/data
 import { withRowSlide } from '@/utils/flipSlide.js'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
-import { applyToAllBlocksInSelection, makeMultiSelect, multiSelectActionId } from './utils'
+import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
 import {
   BlockAction,
   bindBlockActionContext,
@@ -1331,11 +1331,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     ...makeMultiSelect(action),
     description: `${action.description} (Multiple Blocks)`,
     handler: async ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) => {
-      // Only the bridge can dispatch without one; fail loudly rather than
-      // report a step that moved nothing.
-      if (!scopeRootId) {
-        throw new Error(`${multiSelectActionId(action.id)} needs a scopeRootId: pass it, or a panel's uiStateBlockId`)
-      }
       const ids = selectedBlocks.map(block => block.id)
       const run = () => repo.tx(
         tx => applyOutlineGestureToGroupInTx(tx, gesture, ids, scopeRootId),

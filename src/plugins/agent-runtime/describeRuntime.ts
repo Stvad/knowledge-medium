@@ -51,7 +51,7 @@ const contextDependencyCatalog: Record<string, ContextDependencySchema> = {
     acceptedKeys: ['uiStateBlock', 'selectedBlocks', 'anchorBlock', 'scopeRootId'],
     cliInputKeys: ['uiStateBlockId', 'selectedBlockIds', 'anchorBlockId', 'scopeRootId'],
     runnableFromCli: true,
-    notes: 'indent/outdent/move need scopeRootId; a panel uiStateBlockId supplies its top-level block',
+    notes: 'scopeRootId bounds indent/outdent/move to that subtree (otherwise each block by its own page); a panel uiStateBlockId supplies its top-level block',
   },
   [ActionContextTypes.EDIT_MODE_CM]: {
     acceptedKeys: ['uiStateBlock', 'block', 'editorView'],
