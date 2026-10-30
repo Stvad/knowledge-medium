@@ -4,6 +4,9 @@ import {
   applyTheme,
   FALLBACK_THEME,
   setThemeRegistry,
+  syncLiveThemeMode,
+  THEME_MODE_STORAGE_KEY,
+  THEME_STORAGE_KEY,
   type ThemeDefinition,
 } from '@/plugins/theme-toggle/theme.js'
 import { syncWolfTheme, WOLF_THEME_ID } from '../wolfTheme.ts'
@@ -35,5 +38,32 @@ describe('wolf theme mode', () => {
     syncWolfTheme(false, '2026')
     expect(root.dataset.theme).toBe(WARM_LIGHT.id)
     expect(root.dataset.themeMode).toBe('light')
+  })
+
+  it('restores a previous theme that has not registered yet, and its mode once it does', () => {
+    const lateDark: ThemeDefinition = { id: 'late-dark', label: 'Late Dark', mode: 'dark' }
+    applyTheme(lateDark)
+    syncWolfTheme(true, '2026')
+
+    syncWolfTheme(false, '2026')
+    expect(root.dataset.theme).toBe(lateDark.id)
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe(lateDark.id)
+
+    setThemeRegistry([WARM_LIGHT, lateDark])
+    syncLiveThemeMode()
+    expect(root.dataset.themeMode).toBe('dark')
+  })
+
+  it('restores the persisted theme from a tab that never showed wolf', () => {
+    // Another tab applied and persisted wolf; this tab saw the marker and
+    // kept showing the previous theme.
+    syncWolfTheme(true, '2026')
+    root.dataset.theme = WARM_LIGHT.id
+    root.dataset.themeMode = WARM_LIGHT.mode
+
+    syncWolfTheme(false, '2026')
+
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe(WARM_LIGHT.id)
+    expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBe('light')
   })
 })

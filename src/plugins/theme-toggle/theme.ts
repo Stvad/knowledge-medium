@@ -157,10 +157,15 @@ export const applyThemeId = (
 }
 
 /** Re-stamps the live theme's mode from the registry, for an id that was
- *  set before it registered (pre-paint, `applyThemeId`). Leaves an
- *  unregistered live id alone: its mode was written with it. Persists the
- *  mode only beside a persisted id, so it never turns pre-paint's
- *  system-preference default into a chosen theme. */
+ *  set before it registered (pre-paint, `applyThemeId`). Persists the mode
+ *  only beside the same persisted id, so it never turns pre-paint's
+ *  system-preference default into a chosen theme or overwrites another
+ *  tab's newer choice.
+ *
+ *  Leaves an unregistered live id alone, for the birthday wolf theme's own
+ *  dark palette. Accepted: a persisted dark theme whose plugin is gone
+ *  keeps its dark mode over the light `:root` palette until a theme is
+ *  picked. */
 export const syncLiveThemeMode = (root: HTMLElement = getDocumentRoot()): void => {
   const live = registryById.get(root.dataset.theme ?? '')
   if (!live) return
@@ -172,12 +177,11 @@ export const toggleTheme = (
   root: HTMLElement = getDocumentRoot(),
 ): ThemeDefinition => {
   if (registry.length === 0) return applyTheme(FALLBACK_THEME, root)
+  // getCurrentTheme maps an unregistered live id (a persisted plugin theme
+  // that's no longer loaded) to registry[0], whose look the `:root` palette
+  // gives it, so the first toggle moves on to registry[1].
   const current = getCurrentTheme(root)
   const idx = registry.findIndex((t) => t.id === current.id)
-  // findIndex returns -1 when the current id isn't registered (e.g. a
-  // persisted plugin theme that's no longer loaded). Treat that as
-  // "start from the top" so the first toggle lands on registry[0]
-  // rather than wrapping past the end.
   const next = registry[(idx + 1) % registry.length]
   return applyTheme(next, root)
 }

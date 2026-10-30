@@ -90,6 +90,25 @@ describe('theme mode on the document root', () => {
     expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBeNull()
   })
 
+  it('syncLiveThemeMode leaves a newer choice another tab persisted alone', () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, WARM_LIGHT.id)
+    root.dataset.theme = WARM_DARK.id
+
+    syncLiveThemeMode()
+
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe(WARM_LIGHT.id)
+    expect(window.localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('toggleTheme treats an unregistered live theme as the first registered one', () => {
+    applyTheme({ id: 'off-cycle', label: 'Off cycle', mode: 'light' })
+
+    toggleTheme()
+
+    expect(root.dataset.theme).toBe(WARM_DARK.id)
+    expect(root.dataset.themeMode).toBe('dark')
+  })
+
   it('syncLiveThemeMode leaves an unregistered live theme alone', () => {
     applyTheme({ id: 'off-cycle', label: 'Off cycle', mode: 'dark' })
 

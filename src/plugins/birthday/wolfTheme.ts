@@ -22,6 +22,7 @@
 import {
   applyTheme,
   applyThemeId,
+  THEME_STORAGE_KEY,
   type ThemeDefinition,
 } from '@/plugins/theme-toggle/theme.js'
 
@@ -197,9 +198,10 @@ export function syncWolfTheme(isBirthday: boolean, cycle: string): void {
   }
 
   if (marker) {
-    // Celebration window has passed. Restore only if untouched; if the
-    // user picked another theme during the day, that IS his choice.
-    if (liveThemeId() === WOLF_THEME_ID) {
+    // Celebration window has passed. Restore only if untouched: wolf is
+    // still live here, or still persisted by another tab that applied it.
+    // If the user picked another theme during the day, that choice stands.
+    if (liveThemeId() === WOLF_THEME_ID || read(THEME_STORAGE_KEY) === WOLF_THEME_ID) {
       applyThemeId(read(PREV_KEY) ?? DEFAULT_RESTORE)
     }
     remove(ACTIVE_KEY)
