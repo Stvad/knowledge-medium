@@ -1,5 +1,5 @@
 import {ChangeScope, propertyValue, seedProperty, seedType, type BlockData} from '@/data/api'
-import {decodeRowProperty} from '@/data/rowProperty'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
 /** A comment thread's root. Its content is the quoted text of the target (empty
@@ -69,8 +69,8 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** An edit suggestion's new text for the quote. Its presence, non-empty, is
- *  what makes a thread a suggestion; there is no separate kind. */
+/** An edit suggestion's new text for the quote; `threadSuggestionOf` says
+ *  which threads are suggestions. There is no separate kind. */
 export const annotationReplacementProp = seedProperty({
   seedKey: 'system:annotations/property/replacement',
   revision: 1,
@@ -133,25 +133,28 @@ export const threadAnchorOf = (root: RootRow): ThreadAnchor => {
   }
 }
 
-export const threadTargetIdOf = (root: RootRow): string | undefined => {
-  try {
-    return decodeRowProperty(root, annotationTargetProp) || undefined
-  } catch {
-    return undefined
-  }
-}
+export const threadTargetIdOf = (root: RootRow): string | undefined =>
+  safeDecodeRowProperty(root, annotationTargetProp) || undefined
 
 export const threadStatusOf = (root: RootRow): ThreadStatus => decodeRowProperty(root, annotationStatusProp)
 
-/** The replacement an edit suggestion proposes, or undefined for a thread
- *  that is not one. Empty counts as absent, and so does a hand-edited value
- *  that no longer decodes. */
-export const threadReplacementOf = (root: RootRow): string | undefined => {
-  try {
-    return decodeRowProperty(root, annotationReplacementProp) || undefined
-  } catch {
-    return undefined
-  }
+/** The stored replacement, if any. Empty counts as absent, and so does a
+ *  hand-edited value that no longer decodes. */
+export const threadReplacementOf = (root: RootRow): string | undefined =>
+  safeDecodeRowProperty(root, annotationReplacementProp) || undefined
+
+export interface ThreadSuggestion {
+  anchor: RangeAnchor
+  replacement: string
+}
+
+/** The edit a suggestion proposes, or null for any other thread: a range
+ *  thread with a replacement is a suggestion, and a replacement on a
+ *  whole-block thread is ignored, since there is no quote to replace. */
+export const threadSuggestionOf = (root: RootRow): ThreadSuggestion | null => {
+  const replacement = threadReplacementOf(root)
+  const anchor = threadAnchorOf(root)
+  return replacement !== undefined && anchor.kind === 'range' ? {anchor, replacement} : null
 }
 
 /** False for every closed status, and for one this build cannot decode, such
