@@ -1,1 +1,0 @@
-export{sH as staticDataExtensions}from"../../chunks/app-BRJfZeDZ.js";

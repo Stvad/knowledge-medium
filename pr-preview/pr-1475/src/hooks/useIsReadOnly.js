@@ -1,1 +1,0 @@
-export{Yg as useIsReadOnly}from"../../chunks/app-BRJfZeDZ.js";

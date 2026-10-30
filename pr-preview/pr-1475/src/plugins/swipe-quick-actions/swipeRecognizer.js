@@ -1,1 +1,0 @@
-export{VO as SWIPE_QUICK_ACTIONS_GESTURE_ID,HO as SWIPE_TRIGGER_PX,UO as swipeRecognizer}from"../../../chunks/app-BRJfZeDZ.js";

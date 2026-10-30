@@ -1,1 +1,0 @@
-export{wg as blockrefCompletionSource}from"../../chunks/app-BRJfZeDZ.js";
