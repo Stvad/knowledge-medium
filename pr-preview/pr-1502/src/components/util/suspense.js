@@ -1,0 +1,1 @@
+export{XV as SuspenseFallback}from"../../../chunks/app-D3oHRGzz.js";

@@ -1,0 +1,1 @@
+export{Kg as remarkWikilinks}from"../../../../../chunks/app-D3oHRGzz.js";

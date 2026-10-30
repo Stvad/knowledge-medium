@@ -1,0 +1,1 @@
+export{Vrt as defineQuery}from"../../../chunks/app-D3oHRGzz.js";

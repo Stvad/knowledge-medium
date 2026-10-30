@@ -1,0 +1,1 @@
+export{CK as annotationMarginOpenProp}from"../../../chunks/app-D3oHRGzz.js";

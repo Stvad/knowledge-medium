@@ -1,0 +1,1 @@
+export{ZG as annotationsDataExtension}from"../../../chunks/app-D3oHRGzz.js";
