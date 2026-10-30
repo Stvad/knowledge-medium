@@ -1,1 +1,0 @@
-export{Det as deriveWorkspaceIdNamespace}from"../../../chunks/app-DG9MuXTp.js";

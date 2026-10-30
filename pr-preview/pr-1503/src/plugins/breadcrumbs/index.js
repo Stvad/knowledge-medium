@@ -1,1 +1,0 @@
-export{IS as BreadcrumbList,NS as BreadcrumbRenderer,FS as Breadcrumbs,MS as PromotableBreadcrumbList,kS as breadcrumbRendererContribution,AS as breadcrumbsPlugin,PS as getBreadcrumbContentPreview,jS as usePromotableBreadcrumb}from"../../../chunks/app-DG9MuXTp.js";

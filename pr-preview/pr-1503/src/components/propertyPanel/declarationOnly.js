@@ -1,1 +1,0 @@
-export{wL as declarationOnlyDefinitionForName,TL as declarationOnlyStatusText}from"../../../chunks/app-DG9MuXTp.js";

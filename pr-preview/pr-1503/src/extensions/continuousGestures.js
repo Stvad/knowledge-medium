@@ -1,1 +1,0 @@
-export{EN as GESTURE_ACTIVE,DN as GESTURE_CANCEL,ON as GESTURE_IDLE,kN as TOUCH_HOLD_MS,AN as TOUCH_SLOP_PX,jN as continuousGestureRecognizersFacet,MN as createBlockGestureController,NN as enabledTouchAction,PN as suppressNextClick,FN as unionTouchAction,IN as useContinuousGestures}from"../../chunks/app-DG9MuXTp.js";

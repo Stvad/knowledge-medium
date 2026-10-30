@@ -1,1 +1,0 @@
-export{b7 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,x7 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,S7 as __resetLayoutSessionIdForTesting,C7 as getLayoutSessionId,w7 as isInstalledAppDisplayMode,T7 as readOrCreateLayoutSessionId}from"../../chunks/app-DG9MuXTp.js";

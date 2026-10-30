@@ -1,1 +1,0 @@
-export{CA as BlockPasteShellDecorator,wA as blockPasteShellDecorator}from"../../chunks/app-DG9MuXTp.js";

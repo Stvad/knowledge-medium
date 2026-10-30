@@ -1,1 +1,0 @@
-export{CV as propertyShapeLabel}from"../../../chunks/app-DG9MuXTp.js";

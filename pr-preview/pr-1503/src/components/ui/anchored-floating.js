@@ -1,1 +1,0 @@
-export{_V as floatingAnchorFromRect,vV as useAnchoredFloating}from"../../../chunks/app-DG9MuXTp.js";

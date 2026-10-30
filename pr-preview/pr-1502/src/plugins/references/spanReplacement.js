@@ -1,1 +1,0 @@
-export{_U as preferredSpanReplacement}from"../../../chunks/app-BY7pExd3.js";

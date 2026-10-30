@@ -1,1 +1,0 @@
-export{K9 as getOrCreatePropertiesPage,q9 as propertiesPageBlockId,J9 as propertiesPageSpec}from"../../chunks/app-DG9MuXTp.js";

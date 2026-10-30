@@ -1,1 +1,0 @@
-export{VT as BlockCrumbs}from"../../chunks/app-DG9MuXTp.js";

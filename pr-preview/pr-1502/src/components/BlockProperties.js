@@ -1,1 +1,0 @@
-export{XI as BlockProperties}from"../../chunks/app-BY7pExd3.js";

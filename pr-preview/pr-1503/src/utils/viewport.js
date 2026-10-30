@@ -1,1 +1,0 @@
-export{vR as MOBILE_BREAKPOINT_QUERY,yR as POINTER_COARSE_QUERY,bR as isMobileViewport,xR as isPointerCoarse}from"../../chunks/app-DG9MuXTp.js";

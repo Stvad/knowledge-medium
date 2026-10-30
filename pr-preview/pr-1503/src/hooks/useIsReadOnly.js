@@ -1,1 +1,0 @@
-export{w_ as useIsReadOnly}from"../../chunks/app-DG9MuXTp.js";

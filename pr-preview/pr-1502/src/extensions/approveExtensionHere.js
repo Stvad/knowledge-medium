@@ -1,1 +1,0 @@
-export{GA as approveExtensionHere}from"../../chunks/app-BY7pExd3.js";

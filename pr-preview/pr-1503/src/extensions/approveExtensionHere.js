@@ -1,1 +1,0 @@
-export{GA as approveExtensionHere}from"../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,0 @@
-export{TX as instrumentAdapter}from"../../../chunks/app-BY7pExd3.js";

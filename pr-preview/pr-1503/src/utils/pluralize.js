@@ -1,1 +1,0 @@
-export{M0 as agree,N0 as pluralize}from"../../chunks/app-DG9MuXTp.js";

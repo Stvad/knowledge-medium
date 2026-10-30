@@ -1,1 +1,0 @@
-export{MK as contributorsDataExtension}from"../../../chunks/app-DG9MuXTp.js";

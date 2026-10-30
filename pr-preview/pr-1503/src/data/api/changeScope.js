@@ -1,1 +1,0 @@
-export{Lit as CHANGE_SCOPE_POLICIES,Rit as ChangeScope,zit as isChangeScope,Bit as policyForScope,Vit as scopeAllowedInReadOnly,Hit as scopeIsUndoable,Uit as scopePoliciesEquivalent,Wit as scopeUploadsToServer,Git as sourceForScope}from"../../../chunks/app-DG9MuXTp.js";

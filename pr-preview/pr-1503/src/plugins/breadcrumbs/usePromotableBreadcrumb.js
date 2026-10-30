@@ -1,1 +1,0 @@
-export{jS as usePromotableBreadcrumb}from"../../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,0 @@
-export{IS as BreadcrumbList}from"../../../chunks/app-DG9MuXTp.js";

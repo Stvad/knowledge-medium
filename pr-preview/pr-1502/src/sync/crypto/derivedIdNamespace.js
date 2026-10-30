@@ -1,1 +1,0 @@
-export{Tet as deriveWorkspaceIdNamespace}from"../../../chunks/app-BY7pExd3.js";

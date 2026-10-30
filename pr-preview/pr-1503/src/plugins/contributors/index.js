@@ -1,1 +1,0 @@
-export{Rd as contributorsPlugin}from"../../../chunks/app-DG9MuXTp.js";

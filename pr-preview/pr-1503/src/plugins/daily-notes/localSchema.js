@@ -1,1 +1,0 @@
-export{IG as dailyNotesLocalSchema}from"../../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,0 @@
-export{yU as preferredSpanReplacement}from"../../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,0 @@
-export{_V as usePropertySchemas}from"../../chunks/app-BY7pExd3.js";

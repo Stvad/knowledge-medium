@@ -1,1 +1,0 @@
-export{IA as ExtensionPromptSurface,LA as extensionPromptsExtension}from"../../../chunks/app-DG9MuXTp.js";

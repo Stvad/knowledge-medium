@@ -1,1 +1,0 @@
-export{Gg as Wikilink}from"../../../../../chunks/app-DG9MuXTp.js";

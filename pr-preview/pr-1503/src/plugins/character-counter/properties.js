@@ -1,1 +1,0 @@
-export{ZK as charLimitProp,QK as charProfileProp,$K as charScopeProp}from"../../../chunks/app-DG9MuXTp.js";

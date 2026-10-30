@@ -1,1 +1,0 @@
-export{DK as annotationMarginOpenProp}from"../../../chunks/app-DG9MuXTp.js";

@@ -1,1 +1,0 @@
-export{aG as matchCharTrigger}from"../../chunks/app-DG9MuXTp.js";

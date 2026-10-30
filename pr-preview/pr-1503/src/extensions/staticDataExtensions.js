@@ -1,1 +1,0 @@
-export{SH as staticDataExtensions}from"../../chunks/app-DG9MuXTp.js";

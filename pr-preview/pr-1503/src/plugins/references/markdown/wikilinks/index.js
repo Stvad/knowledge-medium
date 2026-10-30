@@ -1,1 +1,0 @@
-export{Wg as wikilinkMarkdownExtension}from"../../../../../chunks/app-DG9MuXTp.js";
