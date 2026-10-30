@@ -1,1 +1,1 @@
-export{_C as LeftSidebarHeaderItem}from"../../../chunks/app-CkPYYLeM.js";
+export{vC as LeftSidebarHeaderItem}from"../../../chunks/app-gJEbDWla.js";

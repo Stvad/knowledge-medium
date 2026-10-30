@@ -1,1 +1,1 @@
-export{ed as SuggestionChangedError,td as acceptSuggestion}from"../../../chunks/app-CkPYYLeM.js";
+export{$u as acceptSuggestion,ed as appliedContent}from"../../../chunks/app-gJEbDWla.js";

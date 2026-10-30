@@ -1,1 +1,1 @@
-export{GA as EXTEND_BLOCK_SELECTION_ACTION_ID,KA as TOGGLE_BLOCK_SELECTION_ACTION_ID,qA as extendBlockSelectionAction,JA as toggleBlockInSelection,YA as toggleBlockSelectionAction}from"../../chunks/app-CkPYYLeM.js";
+export{KA as EXTEND_BLOCK_SELECTION_ACTION_ID,qA as TOGGLE_BLOCK_SELECTION_ACTION_ID,JA as extendBlockSelectionAction,YA as toggleBlockInSelection,XA as toggleBlockSelectionAction}from"../../chunks/app-gJEbDWla.js";

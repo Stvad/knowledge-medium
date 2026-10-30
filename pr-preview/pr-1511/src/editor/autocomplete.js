@@ -1,1 +1,1 @@
-export{XA as editorAutocompleteExtension}from"../../chunks/app-CkPYYLeM.js";
+export{ZA as editorAutocompleteExtension}from"../../chunks/app-gJEbDWla.js";

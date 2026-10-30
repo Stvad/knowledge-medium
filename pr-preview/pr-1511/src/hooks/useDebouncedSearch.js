@@ -1,1 +1,1 @@
-export{Ug as useDebouncedSearch}from"../../chunks/app-CkPYYLeM.js";
+export{Wg as useDebouncedSearch}from"../../chunks/app-gJEbDWla.js";

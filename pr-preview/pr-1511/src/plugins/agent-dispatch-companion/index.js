@@ -1,1 +1,1 @@
-export{tf as agentDispatchCompanionPlugin}from"../../../chunks/app-CkPYYLeM.js";
+export{ef as agentDispatchCompanionPlugin}from"../../../chunks/app-gJEbDWla.js";
