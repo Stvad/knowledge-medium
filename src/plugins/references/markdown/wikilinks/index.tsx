@@ -1,16 +1,16 @@
 import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
 import type { MarkdownExtension } from '@/markdown/extensions.js'
+import { useMarkdownSource } from '@/markdown/context.js'
 import { remarkWikilinks } from './remark-wikilinks.ts'
 import { Wikilink } from './Wikilink.tsx'
-import { BlockEmbed } from '@/components/references/BlockEmbed.js'
+import { EmbedComponent } from '../referenceNode.tsx'
 
 interface WikilinkNode {
   properties?: {
     alias?: unknown
     blockId?: unknown
     hasCustomDisplay?: unknown
-    occurrenceId?: unknown
   }
 }
 
@@ -19,7 +19,30 @@ interface WikilinkComponentProps {
   children?: ReactNode
 }
 
-export const wikilinkMarkdownExtension: MarkdownExtension = ({block, data}) => {
+const WikilinkComponent = ({node, children}: WikilinkComponentProps) => {
+  const {block, workspaceId} = useMarkdownSource()
+  const alias = node?.properties?.alias
+  const blockId = node?.properties?.blockId
+  if (typeof alias !== 'string') return null
+  return (
+    <Wikilink
+      alias={alias}
+      blockId={typeof blockId === 'string' ? blockId : ''}
+      sourceBlock={block}
+      workspaceId={workspaceId}
+      hasCustomDisplay={node?.properties?.hasCustomDisplay === true}
+    >
+      {children}
+    </Wikilink>
+  )
+}
+
+const components = {
+  wikilink: WikilinkComponent,
+  pageembed: EmbedComponent,
+} as unknown as Components
+
+export const wikilinkMarkdownExtension: MarkdownExtension = ({data}) => {
   // Build the alias→id map from the reactive render `data`, NOT `block.peek()`:
   // the resolver is memoized (React Compiler) on the identity-stable `block`,
   // so a peek() read would freeze with whatever references existed at first
@@ -34,42 +57,11 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block, data}) => {
       .filter(ref => ref.alias !== ref.id)
       .map(({alias, id}) => [alias, id]),
   )
-  const workspaceId = data.workspaceId
 
   return {
     remarkPlugins: [
       [remarkWikilinks, {resolveAlias: (alias: string) => refMap.get(alias)}],
     ],
-    components: {
-      wikilink: ({node, children}: WikilinkComponentProps) => {
-        const alias = node?.properties?.alias
-        const blockId = node?.properties?.blockId
-        const hasCustomDisplay = node?.properties?.hasCustomDisplay === true
-        if (typeof alias !== 'string') return null
-        return (
-          <Wikilink
-            alias={alias}
-            blockId={typeof blockId === 'string' ? blockId : ''}
-            sourceBlock={block}
-            workspaceId={workspaceId}
-            hasCustomDisplay={hasCustomDisplay}
-          >
-            {children}
-          </Wikilink>
-        )
-      },
-      pageembed: ({node}: WikilinkComponentProps) => {
-        const blockId = node?.properties?.blockId
-        if (typeof blockId !== 'string' || !blockId) return null
-        const occurrenceId = node?.properties?.occurrenceId
-        return (
-          <BlockEmbed
-            blockId={blockId}
-            sourceBlockId={block.id}
-            occurrenceId={typeof occurrenceId === 'string' && occurrenceId ? occurrenceId : 'unknown'}
-          />
-        )
-      },
-    } as unknown as Components,
+    components,
   }
 }
