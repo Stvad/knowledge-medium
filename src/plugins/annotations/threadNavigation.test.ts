@@ -10,6 +10,7 @@ import {createTestRepo} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
 import {navigate} from '@/utils/navigation'
+import {lazyBlockCacheKey, registerPendingLazyMount} from '@/components/util/lazyMountRegistry'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {captureAnchor} from './anchor'
@@ -140,6 +141,34 @@ describe('navigating into a thread', () => {
     expect((await repo.load(reply))?.properties[isCollapsedProp.name]).toBeFalsy()
   })
 
+  it('opens the reply itself for a viewer, who can’t expand the comment hiding it', async () => {
+    const {commentId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Is it confirmed?'})
+    const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Yes.'})
+    await repo.tx(tx => tx.setProperty(commentId!, isCollapsedProp, true), opts)
+    repo.setReadOnly(true)
+
+    await navigate(repo, {blockId: reply, target: 'main'})
+
+    expect((await shownPanel()).blockIds).toEqual([reply])
+  })
+
+  it('wants the rows between the landing and the block mounted, until the next landing', async () => {
+    const {commentId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Is it confirmed?'})
+    const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Yes.'})
+    const mounted = (id: string) => {
+      let wanted = false
+      registerPendingLazyMount(lazyBlockCacheKey(id), () => { wanted = true })()
+      return wanted
+    }
+
+    await navigate(repo, {blockId: reply, target: 'main'})
+    expect(mounted(commentId!)).toBe(true)
+
+    const other = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Elsewhere.'})
+    await navigate(repo, {blockId: other.threadId, target: 'main'})
+    expect(mounted(commentId!)).toBe(false)
+  })
+
   it('stays on the thread when its target is deleted', async () => {
     const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Hm.'})
     await repo.mutate.delete({id: 'B'})
@@ -178,7 +207,7 @@ describe('navigating into a thread', () => {
 
 describe('landingFocusScope', () => {
   it('puts the outermost card in the margin where the margin is drawn, and the cards inside it inline', () => {
-    const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: []}
+    const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: [], rows: []}
     const margin = cardRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
     expect(landingFocusScope('p', landing, true)).toBe(cardRenderScopeId('comments', margin, 'T2'))

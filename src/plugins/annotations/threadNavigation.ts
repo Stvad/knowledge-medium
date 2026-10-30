@@ -14,6 +14,7 @@ import {ChangeScope, type BlockData} from '@/data/api'
 import {revealChildren} from '@/data/mutators'
 import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
+import {lazyBlockCacheKey, requestLazyMount} from '@/components/util/lazyMountRegistry.js'
 import {decodeRowProperty} from '@/data/rowProperty'
 import {navigationVerb, type NavigationResult} from '@/utils/navigation'
 import {panelRenderScopeId} from '@/utils/renderScope'
@@ -29,6 +30,9 @@ export interface ThreadLanding {
   threads: {id: string; open: boolean}[]
   /** Collapsed blocks inside those cards that hide the navigated block. */
   collapsed: string[]
+  /** The rows from the navigated block out through each card, which must be
+   *  mounted for it to render. */
+  rows: string[]
 }
 
 /** The nearest thread root at or above `id`, and the blocks that must be
@@ -53,6 +57,7 @@ const threadRootOf = async (repo: Repo, id: string): Promise<{root: BlockData; a
 export const threadLanding = async (repo: Repo, blockId: string): Promise<ThreadLanding | null> => {
   const threads: ThreadLanding['threads'] = []
   const collapsed: string[] = []
+  const rows: string[] = []
   let at = blockId
   for (;;) {
     const found = await threadRootOf(repo, at)
@@ -64,10 +69,11 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
     const open = threadIsOpen(root)
     threads.unshift({id: root.id, open})
     collapsed.push(...above.filter(block => decodeRowProperty(block, isCollapsedProp)).map(block => block.id))
+    rows.push(at, ...above.map(block => block.id))
     at = targetId
     if (!open) break
   }
-  return threads.length === 0 ? null : {targetId: at, threads, collapsed}
+  return threads.length === 0 ? null : {targetId: at, threads, collapsed, rows}
 }
 
 /** The render scope `blockId` has inside the cards of `landing`, once the
@@ -80,6 +86,17 @@ export const landingFocusScope = (panelId: string, landing: ThreadLanding, inMar
     panelRenderScopeId(panelId, landing.targetId),
   )
 
+/** The last landing's rows, wanted mounted until the next landing. A card
+ *  mounts its rows lazily, and `FocusedRowLazyMount` walks a focused row's
+ *  ancestors only up to the panel's top-level block, which a comment's chain
+ *  never reaches. */
+let landingRowWants: readonly (() => void)[] = []
+
+const wantRowsMounted = (rows: readonly string[]): void => {
+  for (const withdraw of landingRowWants) withdraw()
+  landingRowWants = rows.map(id => requestLazyMount(lazyBlockCacheKey(id)))
+}
+
 const revealLanding = async (
   repo: Repo,
   {panelId}: NavigationResult,
@@ -88,6 +105,7 @@ const revealLanding = async (
 ): Promise<void> => {
   const outer = landing.threads[0]
   revealThread(panelId, viewKey(panelRenderScopeId(panelId, landing.targetId), landing.targetId), outer.id, outer.open)
+  wantRowsMounted(landing.rows)
   if (landing.collapsed.length > 0) {
     await repo.tx(async tx => {
       for (const id of landing.collapsed) await revealChildren(tx, id)
@@ -99,7 +117,9 @@ const revealLanding = async (
 
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {
   const landing = await threadLanding(request.repo, request.input.blockId)
-  if (!landing) return next(request)
+  // A viewer can't expand the comments that hide the block, so it opens the
+  // block itself.
+  if (!landing || (landing.collapsed.length > 0 && request.repo.isReadOnly)) return next(request)
   const result = await next({...request, input: {...request.input, blockId: landing.targetId}})
   if (result) await revealLanding(request.repo, result, landing, request.input.blockId)
   return result
