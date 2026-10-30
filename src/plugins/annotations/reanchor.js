@@ -1,1 +1,1 @@
-export{Id as confirmedAnchor,Ld as reanchorThread}from"../../../chunks/app-DO3tI4b2.js";
+export{Id as confirmedAnchor,Ld as reanchorThread}from"../../../chunks/app-DQWxf-Ru.js";
