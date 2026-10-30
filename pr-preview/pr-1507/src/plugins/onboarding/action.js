@@ -1,1 +1,1 @@
-export{zb as INSERT_TUTORIAL_ACTION_ID,Bb as insertTutorialAction,Vb as insertTutorialIntoWorkspace,Hb as openTutorialInActiveWorkspace}from"../../../chunks/app-OHkFEKw0.js";
+export{Vb as INSERT_TUTORIAL_ACTION_ID,Hb as insertTutorialAction,Ub as insertTutorialIntoWorkspace,Wb as openTutorialInActiveWorkspace}from"../../../chunks/app-Dt5mIL57.js";

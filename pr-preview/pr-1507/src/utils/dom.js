@@ -1,1 +1,1 @@
-export{PF as getElementScrollportBounds,FF as isEditorElement,IF as isElementProperlyVisible,LF as nearestScrollableAncestor,RF as shouldExitEditModeAfterBlur}from"../../chunks/app-OHkFEKw0.js";
+export{IF as getElementScrollportBounds,LF as isEditorElement,RF as isElementProperlyVisible,zF as nearestScrollableAncestor,BF as shouldExitEditModeAfterBlur}from"../../chunks/app-Dt5mIL57.js";
