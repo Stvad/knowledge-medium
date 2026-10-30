@@ -34,7 +34,11 @@ export class SuggestionChangedError extends Error {
  *  duplicate of an applied suggestion, or the same one reopened, still finds
  *  its quote at its offset, but the text beside it is no longer the stored
  *  context (`Thursday` → `Thursday 9am` leaves ` 9am…` after the quote), so
- *  it resolves moved and refuses instead of writing the replacement twice. */
+ *  it resolves moved and refuses instead of writing the replacement twice.
+ *  An application after which the anchor would still resolve exact is
+ *  refused, so that holds for every accepted suggestion: where the text
+ *  repeats around the quote (`very` → `very very` in `very very very …`),
+ *  the windows can't tell the result from the original. */
 export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
   repo.tx(async tx => {
     const {root, target} = await threadAndTarget(tx, threadId)
@@ -45,7 +49,12 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     }
     const resolved = resolveAnchor(target.content, anchor)
     if (resolved.state !== 'exact') throw new SuggestionChangedError()
-    const content = target.content
-    await tx.update(target.id, {content: content.slice(0, resolved.from) + replacement + content.slice(resolved.to)})
+    const content = target.content.slice(0, resolved.from) + replacement + target.content.slice(resolved.to)
+    if (resolveAnchor(content, anchor).state === 'exact') {
+      throw new InvalidSuggestionError(
+        'The text around this suggestion repeats, so accepting it could not be told from accepting it twice. Edit the block directly.',
+      )
+    }
+    await tx.update(target.id, {content})
     await tx.setProperty(threadId, annotationStatusProp, 'accepted')
   }, {scope: ChangeScope.BlockDefault, description: 'accept suggestion'})
