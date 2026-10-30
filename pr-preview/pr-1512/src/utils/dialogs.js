@@ -1,1 +1,1 @@
-export{xP as __resetDialogsForTests,SP as getDialogQueue,CP as isDialogOpenForWorkspace,wP as openDialog,TP as subscribeDialogs}from"../../chunks/app-nt-84GMU.js";
+export{wP as __resetDialogsForTests,TP as getDialogQueue,EP as isDialogOpenForWorkspace,DP as openDialog,OP as subscribeDialogs}from"../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{IX as powerSyncLogger}from"../../chunks/app-nt-84GMU.js";
+export{UX as powerSyncLogger}from"../../chunks/app-vVSufA3S.js";

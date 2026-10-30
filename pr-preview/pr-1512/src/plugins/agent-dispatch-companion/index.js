@@ -1,1 +1,1 @@
-export{rf as agentDispatchCompanionPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{rf as agentDispatchCompanionPlugin}from"../../../chunks/app-vVSufA3S.js";

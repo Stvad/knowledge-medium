@@ -1,1 +1,1 @@
-export{MD as DailyNotePicker}from"../../../chunks/app-nt-84GMU.js";
+export{FD as DailyNotePicker}from"../../../chunks/app-vVSufA3S.js";

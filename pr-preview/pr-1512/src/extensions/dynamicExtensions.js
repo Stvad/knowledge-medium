@@ -1,1 +1,1 @@
-export{Yj as dynamicExtensionsExtension}from"../../chunks/app-nt-84GMU.js";
+export{Qj as dynamicExtensionsExtension}from"../../chunks/app-vVSufA3S.js";

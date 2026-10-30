@@ -1,1 +1,1 @@
-export{tM as extensionDisplayName,nM as extensionName,rM as userExtensionShellToggle,iM as userExtensionToggle}from"../../chunks/app-nt-84GMU.js";
+export{iM as extensionDisplayName,aM as extensionName,oM as userExtensionShellToggle,sM as userExtensionToggle}from"../../chunks/app-vVSufA3S.js";

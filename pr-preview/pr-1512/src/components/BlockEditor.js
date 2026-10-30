@@ -1,1 +1,1 @@
-export{kF as BlockEditor}from"../../chunks/app-nt-84GMU.js";
+export{MF as BlockEditor}from"../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{pv as richPastePlugin}from"../../../chunks/app-nt-84GMU.js";
+export{hv as richPastePlugin}from"../../../chunks/app-vVSufA3S.js";

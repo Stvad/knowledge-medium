@@ -1,1 +1,1 @@
-export{Jh as updateIndicatorPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{Jh as updateIndicatorPlugin}from"../../../chunks/app-vVSufA3S.js";

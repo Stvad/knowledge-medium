@@ -1,1 +1,1 @@
-export{O_ as blockDragPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{A_ as blockDragPlugin}from"../../../chunks/app-vVSufA3S.js";

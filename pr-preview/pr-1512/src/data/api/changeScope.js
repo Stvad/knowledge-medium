@@ -1,1 +1,1 @@
-export{qit as CHANGE_SCOPE_POLICIES,Jit as ChangeScope,Yit as isChangeScope,Xit as policyForScope,Zit as scopeAllowedInReadOnly,Qit as scopeIsUndoable,$it as scopePoliciesEquivalent,eat as scopeUploadsToServer,tat as sourceForScope}from"../../../chunks/app-nt-84GMU.js";
+export{nat as CHANGE_SCOPE_POLICIES,rat as ChangeScope,iat as isChangeScope,aat as policyForScope,oat as scopeAllowedInReadOnly,sat as scopeIsUndoable,cat as scopePoliciesEquivalent,lat as scopeUploadsToServer,uat as sourceForScope}from"../../../chunks/app-vVSufA3S.js";

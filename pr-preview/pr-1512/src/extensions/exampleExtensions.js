@@ -1,1 +1,1 @@
-export{TA as exampleExtensions,EA as insertExampleExtensionsUnder}from"../../chunks/app-nt-84GMU.js";
+export{OA as exampleExtensions,kA as insertExampleExtensionsUnder}from"../../chunks/app-vVSufA3S.js";

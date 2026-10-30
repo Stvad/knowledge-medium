@@ -1,1 +1,1 @@
-export{Px as SpatialNavigationShellDecorator}from"../../../chunks/app-nt-84GMU.js";
+export{Ix as SpatialNavigationShellDecorator}from"../../../chunks/app-vVSufA3S.js";

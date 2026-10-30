@@ -1,1 +1,1 @@
-export{Xg as usePlaceSearch}from"../../../chunks/app-nt-84GMU.js";
+export{Xg as usePlaceSearch}from"../../../chunks/app-vVSufA3S.js";

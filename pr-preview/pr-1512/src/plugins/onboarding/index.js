@@ -1,1 +1,1 @@
-export{ix as EXTENSIONS_PAGE_TITLE,ax as TUTORIAL_DEFAULT_TITLE,ox as TUTORIAL_VIM_TITLE,Gb as onboardingPlugin,rx as seedTutorial}from"../../../chunks/app-nt-84GMU.js";
+export{ox as EXTENSIONS_PAGE_TITLE,sx as TUTORIAL_DEFAULT_TITLE,cx as TUTORIAL_VIM_TITLE,qb as onboardingPlugin,ax as seedTutorial}from"../../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{dit as CORE_BLOCK_DELETED_EVENT,fit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-nt-84GMU.js";
+export{bit as CORE_BLOCK_DELETED_EVENT,xit as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{gb as videoPlayerMarkdownExtension}from"../../../chunks/app-nt-84GMU.js";
+export{vb as videoPlayerMarkdownExtension}from"../../../chunks/app-vVSufA3S.js";

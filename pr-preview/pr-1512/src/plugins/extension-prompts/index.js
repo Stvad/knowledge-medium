@@ -1,1 +1,1 @@
-export{XA as ExtensionPromptSurface,ZA as extensionPromptsExtension}from"../../../chunks/app-nt-84GMU.js";
+export{$A as ExtensionPromptSurface,ej as extensionPromptsExtension}from"../../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{ef as contributorsPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{ef as contributorsPlugin}from"../../../chunks/app-vVSufA3S.js";

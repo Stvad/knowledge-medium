@@ -1,1 +1,1 @@
-export{yO as keybindingOverridesProp,bO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{SO as keybindingOverridesProp,CO as keybindingsPrefsType,Bn as keybindingsSettingsPlugin}from"../../../chunks/app-vVSufA3S.js";

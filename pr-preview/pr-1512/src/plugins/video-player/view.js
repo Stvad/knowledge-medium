@@ -1,1 +1,1 @@
-export{Lb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Rb as VIDEO_NOTES_VIEW_MODE,zb as videoNotesPaneRatioProp}from"../../../chunks/app-nt-84GMU.js";
+export{zb as DEFAULT_VIDEO_NOTES_PANE_RATIO,Bb as VIDEO_NOTES_VIEW_MODE,Vb as videoNotesPaneRatioProp}from"../../../chunks/app-vVSufA3S.js";

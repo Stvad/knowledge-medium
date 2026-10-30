@@ -1,1 +1,1 @@
-export{LF as useShortcutSurfaceActivations}from"../../chunks/app-nt-84GMU.js";
+export{BF as useShortcutSurfaceActivations}from"../../chunks/app-vVSufA3S.js";

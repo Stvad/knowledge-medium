@@ -1,1 +1,1 @@
-export{DP as ExtensionRenderBoundary}from"../../chunks/app-nt-84GMU.js";
+export{AP as ExtensionRenderBoundary}from"../../chunks/app-vVSufA3S.js";

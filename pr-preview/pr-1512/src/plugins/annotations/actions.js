@@ -1,1 +1,1 @@
-export{vd as COMMENT_ON_BLOCK_ACTION_ID,yd as COMMENT_ON_SELECTION_ACTION_ID,bd as HIGHLIGHT_SELECTION_ACTION_ID,xd as TOGGLE_MARGIN_ACTION_ID,Sd as anchorFromEditor,Cd as annotationActions,wd as submitComposer}from"../../../chunks/app-nt-84GMU.js";
+export{vd as COMMENT_ON_BLOCK_ACTION_ID,yd as COMMENT_ON_SELECTION_ACTION_ID,bd as HIGHLIGHT_SELECTION_ACTION_ID,xd as TOGGLE_MARGIN_ACTION_ID,Sd as anchorFromEditor,Cd as annotationActions,wd as submitComposer}from"../../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{kO as useCommandPaletteActions}from"../../../chunks/app-nt-84GMU.js";
+export{MO as useCommandPaletteActions}from"../../../chunks/app-vVSufA3S.js";

@@ -1,1 +1,1 @@
-export{Kf as extensionsOverridesProp,qf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-nt-84GMU.js";
+export{Kf as extensionsOverridesProp,qf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-vVSufA3S.js";
