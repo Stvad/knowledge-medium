@@ -12,6 +12,7 @@ import {
   type MarkdownRenderConfig,
   type MarkdownRenderContext,
 } from '@/markdown/extensions.js'
+import { MarkdownSourceContext } from '@/markdown/source.js'
 
 export type RenderMarkdownHtmlMode = 'app' | 'external'
 
@@ -62,7 +63,7 @@ const externalMarkdownConfig = (context: MarkdownRenderContext): MarkdownRenderC
 const markdownConfigFor = (
   content: string,
   options: RenderMarkdownHtmlOptions | undefined,
-): {config: MarkdownRenderConfig, mode: RenderMarkdownHtmlMode} => {
+): {config: MarkdownRenderConfig, mode: RenderMarkdownHtmlMode, context: MarkdownRenderContext} => {
   const mode = options?.mode ??
     (options?.runtime && options.context ? 'app' : 'external')
   const context = contextForContent(content, options?.context)
@@ -74,12 +75,14 @@ const markdownConfigFor = (
     return {
       config: options.runtime.read(markdownExtensionsFacet)(context),
       mode,
+      context,
     }
   }
 
   return {
     config: externalMarkdownConfig(context),
     mode,
+    context,
   }
 }
 
@@ -87,7 +90,7 @@ export const renderMarkdownHtml = (
   content: string,
   options?: RenderMarkdownHtmlOptions,
 ): string => {
-  const {config, mode} = markdownConfigFor(content, options)
+  const {config, mode, context} = markdownConfigFor(content, options)
   const components = mode === 'external'
     ? {
       ...config.components,
@@ -95,13 +98,15 @@ export const renderMarkdownHtml = (
     }
     : config.components
   const markdown = (
-    <Markdown
-      remarkPlugins={config.remarkPlugins}
-      rehypePlugins={config.rehypePlugins}
-      components={components}
-    >
-      {content}
-    </Markdown>
+    <MarkdownSourceContext value={{block: context.block, workspaceId: context.data.workspaceId}}>
+      <Markdown
+        remarkPlugins={config.remarkPlugins}
+        rehypePlugins={config.rehypePlugins}
+        components={components}
+      >
+        {content}
+      </Markdown>
+    </MarkdownSourceContext>
   )
   const element = mode === 'app' && options?.runtime
     ? (

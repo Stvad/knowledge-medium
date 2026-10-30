@@ -88,6 +88,10 @@ export type {
 } from '@/extensions/blockInteraction.js'
 
 export type {
+  MarkdownSource,
+} from '@/markdown/source.js'
+
+export type {
   OutlineNode,
   PasteDecision,
   PasteRequest,

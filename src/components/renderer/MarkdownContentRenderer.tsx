@@ -7,6 +7,7 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
 import { useMarkdownInput } from '@/markdown/input.js'
+import { MarkdownSourceContext } from '@/markdown/source.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
@@ -92,13 +93,15 @@ export function MarkdownContentRenderer({
 
   return (
     <Container className={className}>
-      <Markdown
-        remarkPlugins={markdownConfig.remarkPlugins}
-        rehypePlugins={markdownConfig.rehypePlugins}
-        components={components}
-      >
-        {content}
-      </Markdown>
+      <MarkdownSourceContext value={{block, workspaceId: renderData.workspaceId}}>
+        <Markdown
+          remarkPlugins={markdownConfig.remarkPlugins}
+          rehypePlugins={markdownConfig.rehypePlugins}
+          components={components}
+        >
+          {content}
+        </Markdown>
+      </MarkdownSourceContext>
     </Container>
   )
 }

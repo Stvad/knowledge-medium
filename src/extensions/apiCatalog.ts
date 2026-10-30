@@ -149,6 +149,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'markdown',
+    importPath: '@/markdown/source.js',
+    description: 'The block whose content the surrounding markdown renders, for markdown `components` overrides.',
+    exports: ['useMarkdownSource'],
+    types: ['MarkdownSource'],
+  },
+  {
+    category: 'markdown',
     importPath: '@/markdown/input.js',
     description: 'Reactive input for markdown extensions, provided around a block\'s content and read on `MarkdownRenderContext.input`.',
     exports: ['MarkdownInputProvider'],

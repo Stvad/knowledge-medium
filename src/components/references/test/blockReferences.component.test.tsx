@@ -130,26 +130,11 @@ describe('block reference / embed rendering through the unified pipeline', () =>
   let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
-  let originalMatchMedia: typeof window.matchMedia
 
   beforeAll(async () => {
     sharedDb = await createTestDb()
-    // jsdom lacks matchMedia; the embed renders the full default layout, whose
-    // controls call `useIsMobile()` → `matchMedia`. Stub desktop (no match).
-    originalMatchMedia = window.matchMedia
-    window.matchMedia = ((query: string) => ({
-      matches: false,
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      onchange: null,
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia
   })
   afterAll(async () => {
-    window.matchMedia = originalMatchMedia
     await sharedDb.cleanup()
   })
 
