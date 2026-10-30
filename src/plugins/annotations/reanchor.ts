@@ -8,8 +8,8 @@
 import {ChangeScope} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {anchorFieldProps, anchorFieldValues} from './schema.ts'
-import {AnchorChangedError, assertQuotable, threadAndTarget} from './threads.ts'
+import {anchorFieldProps, anchorFieldValues, threadReplacementOf} from './schema.ts'
+import {AnchorChangedError, assertQuotable, assertSuggestionAnchor, threadAndTarget} from './threads.ts'
 
 /** The anchor that confirms `anchor` where it resolves in `content` now: the
  *  same quote, with the position and context it has there. Null once the
@@ -30,7 +30,8 @@ export const confirmedAnchor = (content: string, anchor: RangeAnchor): RangeAnch
 export const reanchorThread = async (repo: Repo, threadId: string, anchor: RangeAnchor | null): Promise<void> => {
   if (anchor) assertQuotable(anchor)
   await repo.tx(async tx => {
-    const {target} = await threadAndTarget(tx, threadId)
+    const {root, target} = await threadAndTarget(tx, threadId)
+    assertSuggestionAnchor(anchor, threadReplacementOf(root))
     if (anchor && resolveAnchor(target.content, anchor).state !== 'exact') throw new AnchorChangedError()
 
     await tx.update(threadId, {content: anchor?.quote ?? ''})
