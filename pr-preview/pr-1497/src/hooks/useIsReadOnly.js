@@ -1,1 +1,1 @@
-export{Kg as useIsReadOnly}from"../../chunks/app-BQwU82a4.js";
+export{Kg as useIsReadOnly}from"../../chunks/app-CcrJF6ag.js";
