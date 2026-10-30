@@ -299,6 +299,24 @@ describe('alias.mergeCollision', () => {
     expect((await env.repo.load('canonical'))?.deleted).toBe(false)
   })
 
+  it('merges when the survivor already co-holds a name with a page outside the merge', async () => {
+    // A name the survivor holds is not a new claim, so writing it back cannot
+    // abort; only a name it would newly take from an outsider blocks the merge.
+    await createBlock('canonical', 'Journal', ['Zed'], 'a0')
+    await coClaimRaw('rival', 'Rival', 'Journal', 1_000)
+    await coClaimRaw('third', 'Third', 'Zed', 2_000)
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'canonical',
+      fromIds: ['rival'],
+      collisionAlias: 'Journal',
+      sourceIsAliasOwner: true,
+    })
+
+    expect(await env.repo.load('rival')).toBeNull()
+    expect(env.read('canonical')!.properties[aliasesProp.name]).toEqual(expect.arrayContaining(['Zed', 'Journal']))
+  })
+
   it('refuses a source that is no longer a live claimant', async () => {
     // The stored alias bag survives a soft delete, so a bag check waves a
     // tombstoned rival through — and it would then contribute its aliases and

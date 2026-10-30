@@ -989,6 +989,58 @@ describe('block_aliases trigger — UPDATE', () => {
   })
 })
 
+describe('block_aliases uniqueness — a held name is not a new claim', () => {
+  const localWrite = () =>
+    h.setTxContext({txId: 'tx-local', userId: 'user-1', scope: 'block-default', source: 'user'})
+  /** Sync-apply skips the uniqueness trigger, so two synced rows can both
+   *  claim `foo`. Inserted with no tx context, which is that same shape. */
+  const seedSyncedCoClaim = () => {
+    h.insertBlock({id: 'x', properties_json: '{"alias":["foo"]}'})
+    h.insertBlock({id: 'y', order_key: 'a1', properties_json: '{"alias":["foo"]}'})
+  }
+
+  it('lets a local write keep a name the row co-claims with a synced block', () => {
+    seedSyncedCoClaim()
+    localWrite()
+    h.updateBlock('x', {properties_json: '{"alias":["foo"],"other":"v"}'})
+    expect(aliasRows(h.db).map(r => [r.block_id, r.alias])).toEqual([['x', 'foo'], ['y', 'foo']])
+  })
+
+  it('claims only the names a local write adds next to a co-claimed one', () => {
+    seedSyncedCoClaim()
+    localWrite()
+    h.updateBlock('x', {properties_json: '{"alias":["foo","bar"]}'})
+    expect(aliasRows(h.db).map(r => [r.block_id, r.alias])).toEqual([['x', 'bar'], ['x', 'foo'], ['y', 'foo']])
+  })
+
+  it('still refuses a local write that adds a name another block holds', () => {
+    h.insertBlock({id: 'y', properties_json: '{"alias":["foo"]}'})
+    h.insertBlock({id: 'x', order_key: 'a1', properties_json: '{"alias":["bar"]}'})
+    localWrite()
+    expect(() => h.updateBlock('x', {properties_json: '{"alias":["bar","foo"]}'})).toThrow(/alias_collision/)
+    expect(aliasRows(h.db).map(r => [r.block_id, r.alias])).toEqual([['x', 'bar'], ['y', 'foo']])
+  })
+
+  it('still refuses a local revival whose bag holds a name taken while it was dead', () => {
+    h.insertBlock({id: 'x', properties_json: '{"alias":["foo"]}', deleted: 1})
+    h.insertBlock({id: 'y', order_key: 'a1', properties_json: '{"alias":["foo"]}'})
+    localWrite()
+    expect(() => h.updateBlock('x', {deleted: 0})).toThrow(/alias_collision/)
+  })
+
+  it('releases only the names that leave the bag', () => {
+    h.insertBlock({id: 'x', properties_json: '{"alias":["foo","bar"]}'})
+    h.updateBlock('x', {properties_json: '{"alias":["bar"]}'})
+    expect(aliasRows(h.db).map(r => r.alias)).toEqual(['bar'])
+  })
+
+  it('re-claims every name in the new workspace when a row moves', () => {
+    h.insertBlock({id: 'x', properties_json: '{"alias":["foo"]}'})
+    h.updateBlock('x', {workspace_id: 'ws2'})
+    expect(aliasRows(h.db)).toEqual([{block_id: 'x', workspace_id: 'ws2', alias: 'foo', alias_lower: 'foo'}])
+  })
+})
+
 describe('block_aliases trigger — DELETE', () => {
   it('clears aliases on hard-delete', () => {
     h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})

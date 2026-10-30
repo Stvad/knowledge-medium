@@ -232,7 +232,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('restore_block' satisfies KmMcpToolName, {
-    description: 'Restore one soft-deleted block. Descendants remain deleted unless restored separately.',
+    description: 'Restore one soft-deleted block. Descendants remain deleted unless restored separately; an alias another live block took meanwhile stays with that block.',
     inputSchema: {
       id: z.string(),
     },

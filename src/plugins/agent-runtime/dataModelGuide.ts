@@ -341,7 +341,8 @@ ${COMMENTS_RECIPE_SQL.trim()}
 - \`pnpm agent delete-block <id>\` — soft-delete a block and its descendants
   via the \`core.delete\` mutator.
 - \`pnpm agent restore-block <id>\` — restore one tombstoned block via the
-  \`core.restore\` mutator; descendants stay deleted unless restored separately.
+  \`core.restore\` mutator; descendants stay deleted unless restored separately,
+  and an alias another live block took meanwhile stays with that block.
 - \`pnpm agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.

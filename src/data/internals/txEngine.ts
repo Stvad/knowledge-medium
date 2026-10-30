@@ -100,8 +100,10 @@ import {
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import {
+  fieldValueChildren,
   isPropertyFieldInstance,
   propertyCellValueRejection,
+  valueChildContentToEncoded,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 import {
@@ -1470,6 +1472,35 @@ export class TxImpl implements Tx {
   }
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
+
+  /** Soft-delete the value children of property `name` on `id` that carry one
+   *  of `members`, in a child-backed workspace (a no-op elsewhere). For a write
+   *  that dropped those members from the cell raw, so skipped the dual-write:
+   *  undo replay's alias yield. Only those members go — re-deriving the whole
+   *  field from the cell instead would let a stale undo snapshot overrule the
+   *  children, which are the truth, and delete a member a peer added. */
+  async releasePropertyMembers(id: string, name: string, members: ReadonlySet<string>): Promise<void> {
+    const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
+    if (row === null || row.deleted === 1) return
+    if (!(await this.isPropertyChildBackedWorkspace(row.workspace_id))) return
+    const resolution = this.propertySchemaResolverFor(row.workspace_id).resolve(name)
+    if (resolution.status !== 'resolved') return
+    const {schema} = resolution
+    for (const field of await this.childrenOf(id, undefined)) {
+      if (field.isFieldForm !== true || field.referenceTargetId !== schema.fieldId) continue
+      for (const value of await fieldValueChildren(this, field.id)) {
+        let member: unknown
+        try {
+          member = valueChildContentToEncoded(schema, value.content)
+        } catch {
+          continue
+        }
+        if (typeof member === 'string' && members.has(member)) {
+          await deleteSubtreeInTx(this.propertyChildTx, value.id)
+        }
+      }
+    }
+  }
 
   /** Drive the row at `id` to exactly `target` (or soft-delete if target
    *  is null). Bypasses the public primitives — intentionally — because
