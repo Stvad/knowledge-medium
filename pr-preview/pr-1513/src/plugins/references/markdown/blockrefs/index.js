@@ -1,1 +1,1 @@
-export{Xg as blockrefMarkdownExtension}from"../../../../../chunks/app-CjGRzFnh.js";
+export{Xg as blockrefMarkdownExtension}from"../../../../../chunks/app-D2IvHf7e.js";

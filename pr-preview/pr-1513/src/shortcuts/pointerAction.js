@@ -1,1 +1,1 @@
-export{wj as dispatchPointerAction,Tj as setPointerActionDispatcher}from"../../chunks/app-CjGRzFnh.js";
+export{wj as dispatchPointerAction,Tj as setPointerActionDispatcher}from"../../chunks/app-D2IvHf7e.js";

@@ -1,1 +1,1 @@
-export{ng as inlineBacklinksApplies}from"../../../../chunks/app-CjGRzFnh.js";
+export{ng as inlineBacklinksApplies}from"../../../../chunks/app-D2IvHf7e.js";

@@ -1,1 +1,1 @@
-export{pF as defaultPasteDecision,mF as pasteDecisionVerb}from"../../chunks/app-CjGRzFnh.js";
+export{pF as defaultPasteDecision,mF as pasteDecisionVerb}from"../../chunks/app-D2IvHf7e.js";

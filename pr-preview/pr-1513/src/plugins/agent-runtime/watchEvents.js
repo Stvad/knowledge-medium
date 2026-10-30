@@ -1,1 +1,1 @@
-export{Zp as createWatchEventsRegistry,Qp as watchEventsRegistry}from"../../../chunks/app-CjGRzFnh.js";
+export{Zp as createWatchEventsRegistry,Qp as watchEventsRegistry}from"../../../chunks/app-D2IvHf7e.js";

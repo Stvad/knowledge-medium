@@ -1,1 +1,1 @@
-export{wx as surfaceFromContext}from"../../../chunks/app-CjGRzFnh.js";
+export{wx as surfaceFromContext}from"../../../chunks/app-D2IvHf7e.js";
