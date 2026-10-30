@@ -5,6 +5,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {annotationsDataExtension} from './dataExtension'
+import {annotationTargetProp} from './schema'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads'
 import {createThread, setThreadStatus} from './threads'
 
@@ -83,6 +84,16 @@ describe('annotations.threadsInScope', () => {
     await vi.waitFor(() => expect(handle.peek()).toEqual([]))
     await repo.tx(tx => tx.restore('A1'), opts)
     await vi.waitFor(() => expect(byThread(handle.peek())).toEqual({[deep.threadId]: {open: true, path: ['A1', 'A']}}))
+    unsubscribe()
+  })
+
+  it('takes in a thread retargeted from outside the scope', async () => {
+    const outside = await createThread(repo, {targetId: 'Q', anchor: null, comment: 'outside'})
+    const handle = handleFor('P')
+    expect(await handle.load()).toEqual([])
+    const unsubscribe = handle.subscribe(() => {})
+    await repo.tx(tx => tx.setProperty(outside.threadId, annotationTargetProp, 'B'), opts)
+    await vi.waitFor(() => expect(byThread(handle.peek())).toEqual({[outside.threadId]: {open: true, path: ['B']}}))
     unsubscribe()
   })
 

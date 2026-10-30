@@ -63,10 +63,10 @@ const scopeThreadsSchema: Schema<ScopeThread[]> = {parse: input => input as Scop
  *
  *  Walks up from each thread's target, so it costs threads × depth rather
  *  than the size of the scope. Re-resolves on a thread created, deleted or
- *  restored (its type), on a root's own edit (status, retarget), and on any
- *  block on a walked path moving, being deleted or restored (its structure
- *  key; the walk's last block's parent too, which may be restored). A content
- *  edit anywhere wakes nothing. */
+ *  restored (its type), on any root's own edit, in scope or not (its status,
+ *  or a retarget), and on any block on a walked path moving, being deleted or
+ *  restored (its structure key; the walk's last block's parent too, which may
+ *  be restored). Editing the outline's text wakes nothing. */
 export const threadsInScopeQuery = defineQuery<{workspaceId: string; scopeId: string}, ScopeThread[]>({
   name: THREADS_IN_SCOPE_QUERY,
   argsSchema: z.object({workspaceId: z.string(), scopeId: z.string()}),
@@ -89,6 +89,9 @@ export const threadsInScopeQuery = defineQuery<{workspaceId: string; scopeId: st
     })
     const paths = new Map<string, string[]>()
     for (const [threadId, walk] of walks) {
+      // Every root, in scope or not: a retarget moves its edge only when the
+      // references processor rewrites the root, after the property changed.
+      ctx.depend({kind: 'row', id: threadId})
       for (const step of walk) structure(step.id)
       const last = walk[walk.length - 1]
       if (last.id === scopeId) paths.set(threadId, walk.slice(0, -1).map(step => step.id))
