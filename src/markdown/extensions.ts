@@ -31,10 +31,11 @@ export interface MarkdownRenderConfig {
    *  `components` override per element type, and can add or remove nodes
    *  rather than only render the ones it is handed. */
   rehypePlugins: PluggableList
-  /** Define each component once, at module scope, and carry what it needs on
-   *  the node or read it from context: one built per resolve is a new element
-   *  type each time, and React remounts its subtree, an embed's open editor
-   *  included, whenever the block re-renders. */
+  /** Define each component once, at module scope, and read what it needs from
+   *  the node or from context (`useMarkdownSource()` for the block being
+   *  rendered): one built per resolve is a new element type each time, and
+   *  React remounts its subtree, an embed's open editor included, whenever the
+   *  block re-renders. */
   components: Components
 }
 
