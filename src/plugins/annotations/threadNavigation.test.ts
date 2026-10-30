@@ -2,7 +2,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {ChangeScope, type User} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
-import {peekFocusedBlockLocation, typesProp} from '@/data/properties'
+import {isCollapsedProp, peekFocusedBlockLocation, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {getLayoutSessionBlock, getUIStateBlock} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -107,6 +107,39 @@ describe('navigating into a thread', () => {
     })
   })
 
+  it('a resolved thread on a comment lands on that comment, which shows it as its own thread', async () => {
+    const outer = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Thursday is tight.'})
+    const inner = await createThread(repo, {
+      targetId: outer.commentId!, anchor: quoting('Thursday is tight.', 'tight'), comment: 'How tight?',
+    })
+    await setThreadStatus(repo, inner.threadId, 'resolved')
+
+    await navigate(repo, {blockId: inner.commentId!, target: 'main'})
+
+    const {panelId, blockIds} = await shownPanel()
+    expect(blockIds).toEqual([outer.commentId])
+    expect(peekActiveThread(panelId)).toBe(inner.threadId)
+    expect(await focused(panelId)).toEqual({
+      blockId: inner.commentId,
+      renderScopeId: cardScope(panelId, inner.threadId, panelRenderScopeId(panelId, outer.commentId!)),
+    })
+  })
+
+  it('expands the collapsed comments a reply sits under', async () => {
+    const {commentId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Is it confirmed?'})
+    const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Yes.'})
+    const nested = await repo.mutate.createChild({parentId: reply, content: 'As of today.'})
+    await repo.tx(async tx => {
+      await tx.setProperty(commentId!, isCollapsedProp, true)
+      await tx.setProperty(reply, isCollapsedProp, true)
+    }, opts)
+
+    await navigate(repo, {blockId: nested, target: 'main'})
+
+    expect((await repo.load(commentId!))?.properties[isCollapsedProp.name]).toBeFalsy()
+    expect((await repo.load(reply))?.properties[isCollapsedProp.name]).toBeFalsy()
+  })
+
   it('stays on the thread when its target is deleted', async () => {
     const {threadId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Hm.'})
     await repo.mutate.delete({id: 'B'})
@@ -145,7 +178,7 @@ describe('navigating into a thread', () => {
 
 describe('landingFocusScope', () => {
   it('puts the outermost card in the margin where the margin is drawn, and the cards inside it inline', () => {
-    const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}]}
+    const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: []}
     const margin = surfaceRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
     expect(landingFocusScope('p', landing, true)).toBe(surfaceRenderScopeId('comments', margin, 'T2'))

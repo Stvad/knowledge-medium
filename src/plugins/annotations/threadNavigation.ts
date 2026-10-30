@@ -7,9 +7,11 @@
  * and a comment's bullet.
  */
 
-import type {BlockData} from '@/data/api'
-import {hasBlockType, focusBlock} from '@/data/properties'
+import {ChangeScope, type BlockData} from '@/data/api'
+import {revealChildren} from '@/data/mutators'
+import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
+import {decodeRowProperty} from '@/data/rowProperty'
 import {navigationVerb, type NavigationResult} from '@/utils/navigation'
 import {panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
@@ -22,33 +24,47 @@ export interface ThreadLanding {
    *  anchored to a comment renders inside that comment's card, so each card is
    *  inside the one before it. */
   threads: {id: string; open: boolean}[]
+  /** Collapsed blocks inside those cards that hide the navigated block. */
+  collapsed: string[]
 }
 
-/** The nearest thread root at or above `id`; a comment's root is above it. */
-const threadRootOf = async (repo: Repo, id: string): Promise<BlockData | null> => {
+/** The nearest thread root at or above `id`, and the blocks that must be
+ *  expanded for `id` to show in the root's card: its ancestors up to the
+ *  root, the root included. */
+const threadRootOf = async (repo: Repo, id: string): Promise<{root: BlockData; above: BlockData[]} | null> => {
   const block = await repo.load(id)
   if (!block) return null
-  if (hasBlockType(block, THREAD_TYPE)) return block
+  if (hasBlockType(block, THREAD_TYPE)) return {root: block, above: []}
   const {ancestors} = await repo.query['core.ancestors']({id}).load()
-  return ancestors.find(ancestor => hasBlockType(ancestor, THREAD_TYPE)) ?? null
+  const at = ancestors.findIndex(ancestor => hasBlockType(ancestor, THREAD_TYPE))
+  return at < 0 ? null : {root: ancestors[at], above: ancestors.slice(0, at + 1)}
 }
 
 /** Where navigating to `blockId` should land instead, or null when it is in
  *  no thread, or its thread's target is missing or deleted (the thread is
- *  then the only place left to show it). */
+ *  then the only place left to show it).
+ *
+ *  The walk goes out through a thread anchored to a comment only while that
+ *  thread is open: a comment's card shows its open threads only, so a closed
+ *  one is shown on its comment as a target of its own. */
 export const threadLanding = async (repo: Repo, blockId: string): Promise<ThreadLanding | null> => {
   const threads: ThreadLanding['threads'] = []
+  const collapsed: string[] = []
   let at = blockId
   for (;;) {
-    const root = await threadRootOf(repo, at)
+    const found = await threadRootOf(repo, at)
     // A thread anchored, by hand, to a comment of itself would loop.
-    if (!root || threads.some(thread => thread.id === root.id)) break
+    if (!found || threads.some(thread => thread.id === found.root.id)) break
+    const {root, above} = found
     const targetId = threadTargetIdOf(root)
     if (!targetId || !await repo.load(targetId)) break
-    threads.unshift({id: root.id, open: threadIsOpen(root)})
+    const open = threadIsOpen(root)
+    threads.unshift({id: root.id, open})
+    collapsed.push(...above.filter(block => decodeRowProperty(block, isCollapsedProp)).map(block => block.id))
     at = targetId
+    if (!open) break
   }
-  return threads.length === 0 ? null : {targetId: at, threads}
+  return threads.length === 0 ? null : {targetId: at, threads, collapsed}
 }
 
 /** The render scope `blockId` has inside the cards of `landing`, once the
@@ -69,6 +85,11 @@ const revealLanding = async (
 ): Promise<void> => {
   const outer = landing.threads[0]
   revealThread(panelId, viewKey(panelRenderScopeId(panelId, landing.targetId), landing.targetId), outer.id, outer.open)
+  if (landing.collapsed.length > 0) {
+    await repo.tx(async tx => {
+      for (const id of landing.collapsed) await revealChildren(tx, id)
+    }, {scope: ChangeScope.BlockDefault, description: 'reveal comment'})
+  }
   // Focus is the panel's, as `writePanelContent` sets it for the landing.
   await focusBlock(repo.block(panelId), blockId, {renderScopeId: landingFocusScope(panelId, landing, peekMarginShowing(panelId))})
 }
