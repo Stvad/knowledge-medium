@@ -1,1 +1,1 @@
-export{Ku as THREAD_HIGHLIGHTS_KEY,qu as remarkAnnotationMarks,Ju as threadMarksMarkdownExtension}from"../../../chunks/app-BTtCPXjD.js";
+export{Ku as THREAD_HIGHLIGHTS_KEY,qu as remarkAnnotationMarks,Ju as threadMarksMarkdownExtension}from"../../../chunks/app-CaXSLrG_.js";

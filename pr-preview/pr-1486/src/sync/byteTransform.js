@@ -1,1 +1,1 @@
-export{BC as MAX_OBJECT_BYTES,VC as encodeBytes,HC as encodedSize,UC as fitsObjectLimit,WC as verifyObjectBytes}from"../../chunks/app-BTtCPXjD.js";
+export{VC as MAX_OBJECT_BYTES,HC as encodeBytes,UC as encodedSize,WC as fitsObjectLimit,GC as verifyObjectBytes}from"../../chunks/app-CaXSLrG_.js";

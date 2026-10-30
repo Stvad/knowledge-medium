@@ -1,1 +1,1 @@
-export{xg as geoPlugin}from"../../../chunks/app-BTtCPXjD.js";
+export{Sg as geoPlugin}from"../../../chunks/app-CaXSLrG_.js";

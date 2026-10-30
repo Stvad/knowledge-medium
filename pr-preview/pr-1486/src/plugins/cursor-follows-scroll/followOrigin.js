@@ -1,1 +1,1 @@
-export{ux as consumeFollowOnDispatch,dx as forgetFollow,fx as keepFollowOnlyAt,px as rememberFollow}from"../../../chunks/app-BTtCPXjD.js";
+export{dx as consumeFollowOnDispatch,fx as forgetFollow,px as keepFollowOnlyAt,mx as rememberFollow}from"../../../chunks/app-CaXSLrG_.js";

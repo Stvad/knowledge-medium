@@ -1,1 +1,1 @@
-export{tg as LazyBlockEntry}from"../../../chunks/app-BTtCPXjD.js";
+export{ng as LazyBlockEntry}from"../../../chunks/app-CaXSLrG_.js";

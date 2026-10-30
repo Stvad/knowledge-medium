@@ -1,1 +1,1 @@
-export{is as aggregateDiagnostics,as as useDiagnostics}from"../../../chunks/app-BTtCPXjD.js";
+export{is as aggregateDiagnostics,as as useDiagnostics}from"../../../chunks/app-CaXSLrG_.js";

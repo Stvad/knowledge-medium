@@ -1,1 +1,1 @@
-export{tC as LeftSidebar,nC as LeftSidebarCoreSection,rC as LeftSidebarShortcutsSection}from"../../../chunks/app-BTtCPXjD.js";
+export{nC as LeftSidebar,rC as LeftSidebarCoreSection,iC as LeftSidebarShortcutsSection}from"../../../chunks/app-CaXSLrG_.js";

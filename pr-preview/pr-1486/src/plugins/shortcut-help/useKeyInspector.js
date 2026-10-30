@@ -1,1 +1,1 @@
-export{VD as useKeyInspector}from"../../../chunks/app-BTtCPXjD.js";
+export{HD as useKeyInspector}from"../../../chunks/app-CaXSLrG_.js";

@@ -1,1 +1,1 @@
-export{BO as Kbd}from"../../../chunks/app-BTtCPXjD.js";
+export{VO as Kbd}from"../../../chunks/app-CaXSLrG_.js";

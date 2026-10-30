@@ -1,1 +1,1 @@
-export{BI as BlockProperties}from"../../chunks/app-BTtCPXjD.js";
+export{UI as BlockProperties}from"../../chunks/app-CaXSLrG_.js";
