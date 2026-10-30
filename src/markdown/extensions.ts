@@ -19,8 +19,9 @@ export interface MarkdownRenderContext {
   blockContext: BlockContextType
   /** Reactive input for extensions, the channel to use instead of block
    *  context. Every block renderer below memoizes its slots on block context,
-   *  so a new value there remounts embeds and block refs in the content; a new
-   *  value here re-renders the markdown below it and remounts nothing. */
+   *  so a new value there remounts every embed and block ref in the content; a
+   *  new value here only re-renders the markdown below it, and remounts just
+   *  what the new tree itself moves. */
   input: MarkdownInput
   /** The reactive snapshot the renderer is currently displaying. Extensions
    *  MUST derive rendered output (e.g. a wikilink alias→id map) from this —

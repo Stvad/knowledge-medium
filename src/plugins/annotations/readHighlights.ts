@@ -207,6 +207,9 @@ const pointsOf = (source: string) => {
   }
 }
 
+/** ACCEPTED: a mark wrapping an embed moves it under a new parent, and a mark
+ *  added before a marked embed shifts its key, so an editor open in an embed
+ *  inside a quote remounts when that paragraph's marks change. */
 const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
   type: ANNOTATION_MARK_NODE,
   children,

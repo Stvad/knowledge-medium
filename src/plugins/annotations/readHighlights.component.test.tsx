@@ -23,6 +23,7 @@ import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
+import {ThreadCard} from './ui'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -62,25 +63,12 @@ vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
 const WS = 'ws'
 const EMBEDDED = '22222222-2222-4222-8222-222222222222'
 
-describe('read-mode highlights on a block with an embed', () => {
+describe('read-mode highlights rendered by the comment UI', () => {
   let db: TestDb
   let repo: Repo
-  let originalMatchMedia: typeof window.matchMedia
 
-  beforeAll(async () => {
-    db = await createTestDb()
-    // The embed's default layout asks `useIsMobile()`; answer desktop.
-    originalMatchMedia = window.matchMedia
-    window.matchMedia = ((media: string) => ({
-      matches: false, media, onchange: null,
-      addEventListener: () => {}, removeEventListener: () => {},
-      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia
-  })
-  afterAll(async () => {
-    window.matchMedia = originalMatchMedia
-    await db.cleanup()
-  })
+  beforeAll(async () => { db = await createTestDb() })
+  afterAll(async () => { await db.cleanup() })
 
   beforeEach(async () => {
     await resetTestDb(db.db)
@@ -118,16 +106,16 @@ describe('read-mode highlights on a block with an embed', () => {
     uiStateBlockRef.current = undefined
   })
 
+  const renderInOutline = (node: ReactNode) => render(
+    <AppRuntimeContextProvider value={repo.facetRuntime!}>
+      <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: outlineRenderScopeId('page')}}>
+        <ActiveContextsProvider>{node}</ActiveContextsProvider>
+      </BlockContextProvider>
+    </AppRuntimeContextProvider>,
+  )
+
   it('draws a new highlight and leaves the embed in the content mounted', async () => {
-    render(
-      <AppRuntimeContextProvider value={repo.facetRuntime!}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: outlineRenderScopeId('page')}}>
-          <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block('host')}/>
-          </ActiveContextsProvider>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+    renderInOutline(<DefaultBlockRenderer block={repo.block('host')}/>)
     const child = await screen.findByText('Embedded child')
     const box = document.querySelector('.blockembed')!
     const shell = box.querySelector(`[data-block-id="${EMBEDDED}"][data-block-shell]`)!
@@ -138,5 +126,18 @@ describe('read-mode highlights on a block with an embed', () => {
 
     await waitFor(() => expect(document.querySelector('mark')?.textContent).toBe('quote'))
     expect([box, shell, child].map(el => el.isConnected)).toEqual([true, true, true])
+  })
+
+  it('draws the highlights on a comment inside its card', async () => {
+    const {threadId, commentId} = await addComment(repo, {targetId: 'host', comment: 'a phrase worth keeping'})
+    renderInOutline(
+      <ThreadCard thread={{id: threadId, open: true, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0}}/>,
+    )
+    await screen.findByText('a phrase worth keeping')
+    expect(document.querySelector('mark')).toBeNull()
+
+    await addComment(repo, {targetId: commentId!, quote: 'phrase'})
+
+    await waitFor(() => expect(document.querySelector('mark')?.textContent).toBe('phrase'))
   })
 })
