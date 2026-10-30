@@ -1,1 +1,1 @@
-export{UK as CHAR_COUNTER_TYPE,WK as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-CebdL9Xf.js";
+export{UK as CHAR_COUNTER_TYPE,WK as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-CpQt1K3i.js";

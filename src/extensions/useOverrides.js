@@ -1,1 +1,1 @@
-export{wj as useOverrides}from"../../chunks/app-CebdL9Xf.js";
+export{wj as useOverrides}from"../../chunks/app-CpQt1K3i.js";

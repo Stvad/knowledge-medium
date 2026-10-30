@@ -1,1 +1,1 @@
-export{Qg as backlinkCompletionSource,$g as createBacklinkAutocomplete,e_ as isInsideBacklinkBrackets}from"../../chunks/app-CebdL9Xf.js";
+export{Qg as backlinkCompletionSource,$g as createBacklinkAutocomplete,e_ as isInsideBacklinkBrackets}from"../../chunks/app-CpQt1K3i.js";

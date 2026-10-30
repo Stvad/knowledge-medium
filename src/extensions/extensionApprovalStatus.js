@@ -1,1 +1,1 @@
-export{WA as ExtensionApprovalStatusProvider,GA as ExtensionApprovalStatusStore,KA as useExtensionApprovalStatus,qA as useExtensionApprovalStatuses}from"../../chunks/app-CebdL9Xf.js";
+export{WA as ExtensionApprovalStatusProvider,GA as ExtensionApprovalStatusStore,KA as useExtensionApprovalStatus,qA as useExtensionApprovalStatuses}from"../../chunks/app-CpQt1K3i.js";
