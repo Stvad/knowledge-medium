@@ -1,1 +1,1 @@
-export{Uu as ANNOTATION_MARK_NODE,Wu as THREAD_HIGHLIGHTS_KEY,Gu as remarkAnnotationMarks,Ku as threadMarksMarkdownExtension}from"../../../chunks/app-DDaj0bNS.js";
+export{Ku as THREAD_HIGHLIGHTS_KEY,qu as remarkAnnotationMarks,Ju as threadMarksMarkdownExtension}from"../../../chunks/app-Dkz9eVj3.js";

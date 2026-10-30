@@ -1,1 +1,1 @@
-export{pv as INSERT_IMAGE_ACTION_ID,mv as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,hv as insertReferences,gv as pickAndInsertImages,_v as pickImagesIntoBlock}from"../../chunks/app-DDaj0bNS.js";
+export{gv as INSERT_IMAGE_ACTION_ID,_v as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,vv as insertReferences,yv as pickAndInsertImages,bv as pickImagesIntoBlock}from"../../chunks/app-Dkz9eVj3.js";

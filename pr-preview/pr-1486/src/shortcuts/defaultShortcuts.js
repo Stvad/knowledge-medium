@@ -1,1 +1,1 @@
-export{Bk as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,Vk as OPEN_PREFERENCES_ACTION_ID,Hk as RELOAD_IN_SAFE_MODE_ACTION_ID,Uk as defaultActionContextsExtension,Wk as defaultActionsExtension,Gk as getDefaultActionGroups,Kk as getDefaultActions}from"../../chunks/app-DDaj0bNS.js";
+export{Uk as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,Wk as OPEN_PREFERENCES_ACTION_ID,Gk as RELOAD_IN_SAFE_MODE_ACTION_ID,Kk as defaultActionContextsExtension,qk as defaultActionsExtension,Jk as getDefaultActionGroups,Yk as getDefaultActions}from"../../chunks/app-Dkz9eVj3.js";

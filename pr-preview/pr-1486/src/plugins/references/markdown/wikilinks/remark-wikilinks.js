@@ -1,1 +1,1 @@
-export{Ng as remarkWikilinks}from"../../../../../chunks/app-DDaj0bNS.js";
+export{Ig as remarkWikilinks}from"../../../../../chunks/app-Dkz9eVj3.js";

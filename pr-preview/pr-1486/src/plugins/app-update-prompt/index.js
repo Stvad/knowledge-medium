@@ -1,1 +1,1 @@
-export{GA as appUpdatePromptExtension}from"../../../chunks/app-DDaj0bNS.js";
+export{JA as appUpdatePromptExtension}from"../../../chunks/app-Dkz9eVj3.js";
