@@ -1,0 +1,1 @@
+export{xG as codeMirrorExtensionsFacet}from"../../chunks/app-Cpn5UbvN.js";

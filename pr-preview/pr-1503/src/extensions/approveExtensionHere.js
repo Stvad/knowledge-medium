@@ -1,0 +1,1 @@
+export{GA as approveExtensionHere}from"../../chunks/app-Cpn5UbvN.js";

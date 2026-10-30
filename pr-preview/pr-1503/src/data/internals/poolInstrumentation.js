@@ -1,0 +1,1 @@
+export{TX as instrumentAdapter}from"../../../chunks/app-Cpn5UbvN.js";

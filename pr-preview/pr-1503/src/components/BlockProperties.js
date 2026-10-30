@@ -1,0 +1,1 @@
+export{XI as BlockProperties}from"../../chunks/app-Cpn5UbvN.js";

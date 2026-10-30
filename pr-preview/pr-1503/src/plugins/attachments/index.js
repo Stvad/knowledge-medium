@@ -1,0 +1,1 @@
+export{rv as attachmentsPlugin}from"../../../chunks/app-Cpn5UbvN.js";

@@ -1,0 +1,1 @@
+export{TK as annotationMarginOpenProp}from"../../../chunks/app-Cpn5UbvN.js";

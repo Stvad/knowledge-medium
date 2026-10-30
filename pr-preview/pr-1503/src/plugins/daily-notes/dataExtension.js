@@ -1,0 +1,1 @@
+export{NG as dailyNotesDataExtension}from"../../../chunks/app-Cpn5UbvN.js";

@@ -1,0 +1,1 @@
+export{_U as preferredSpanReplacement}from"../../../chunks/app-Cpn5UbvN.js";

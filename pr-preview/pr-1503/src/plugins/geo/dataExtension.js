@@ -1,0 +1,1 @@
+export{kW as geoDataExtension}from"../../../chunks/app-Cpn5UbvN.js";
