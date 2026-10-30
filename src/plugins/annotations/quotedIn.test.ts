@@ -14,11 +14,17 @@ import {annotationsPlugin} from './index'
 import {pillCount, THREADS_FOR_BLOCK_QUERY} from './summaries'
 import {createThread} from './threads'
 
-const dialogs = vi.hoisted(() => ({answer: undefined as true | undefined, opened: [] as unknown[]}))
+const dialogs = vi.hoisted(() => ({
+  answer: undefined as true | undefined,
+  opened: [] as unknown[],
+  /** What happens elsewhere while the dialog is open. */
+  meanwhile: null as (() => Promise<unknown>) | null,
+}))
 vi.mock('@/utils/dialogs.js', () => ({
-  openDialog: (_component: unknown, props: unknown) => {
+  openDialog: async (_component: unknown, props: unknown) => {
     dialogs.opened.push(props)
-    return Promise.resolve(dialogs.answer)
+    await dialogs.meanwhile?.()
+    return dialogs.answer
   },
 }))
 
@@ -35,6 +41,7 @@ afterAll(async () => { await db.cleanup() })
 beforeEach(async () => {
   dialogs.answer = undefined
   dialogs.opened.length = 0
+  dialogs.meanwhile = null
   await resetTestDb(db.db)
   // `((id))` parses as a reference only when `id` is UUID-shaped.
   repo = createTestRepo({
@@ -104,6 +111,30 @@ describe('deleting a quoted thread’s last comment from its card', () => {
 
     expect(await repo.load(threadId)).toBeNull()
     expect((await repo.load('X'))?.content).toBe('As planned, Thursday is fixed.')
+  })
+
+  it('decides again once confirmed: a reply that arrived meanwhile keeps the thread', async () => {
+    await quote()
+    const comment = await lastComment()
+    dialogs.answer = true
+    dialogs.meanwhile = () => repo.mutate.createChild({parentId: comment.id, content: 'Synced in.'})
+
+    expect(await deleteCommentFromCard(comment)).toBe('blanked')
+
+    expect((await repo.load(threadId))?.deleted).toBe(false)
+    expect((await repo.load('X'))?.content).toBe(`As planned, ((${threadId})) is fixed.`)
+  })
+
+  it('decides again once confirmed: another comment that arrived meanwhile keeps the thread', async () => {
+    await quote()
+    const comment = await lastComment()
+    dialogs.answer = true
+    dialogs.meanwhile = () => repo.mutate.createChild({parentId: threadId, content: 'Me too.'})
+
+    expect(await deleteCommentFromCard(comment)).toBe('deleted')
+
+    expect((await repo.load(threadId))?.deleted).toBe(false)
+    expect(dialogs.opened).toHaveLength(1)
   })
 
   it('does not ask about a thread nothing quotes', async () => {
