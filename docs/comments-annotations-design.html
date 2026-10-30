@@ -61,7 +61,7 @@
 <body>
 
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised after an adversarial review round (2026-10-28). That round:
+<strong>Status: partially built.</strong> Slices 1–3 are merged (#1465, #1466, #1467, #1475, #1477, #1482, #1485, #1486, #1487). Slice 4 is #1507, #1508 and #1511. Slice 5 (#1509, #1510, #1512) and reading-view selection are in progress. Where code and tests differ from this doc, they are authoritative. The design was revised after an adversarial review round (2026-10-28). That round:
 <ul style="margin:.3rem 0 0">
   <li>added prefix and suffix context to anchors, after a measured wrong-occurrence case;</li>
   <li>replaced the dispatch "task host" rule with unattributed bookkeeping writes;</li>
@@ -71,7 +71,7 @@
   <li>cut the MCP tools and queries down.</li>
 </ul>
 <p style="margin:.4rem 0 0">A later revision added <a href="#range-refs">range references</a> (quoting part of a block from other text). It also moved the quote into the thread root's content. The rules now hold for <a href="#nested">nested threads</a> at any depth.</p>
-<p style="margin:.4rem 0 0">An earlier design for the same feature is open as PR #332 (<code>docs/block-range-annotations-design.html</code> on its branch); the last section compares them. <strong>Last verified against code:</strong> 2026-10-28.</p>
+<p style="margin:.4rem 0 0">An earlier design for the same feature is open as PR #332 (<code>docs/block-range-annotations-design.html</code> on its branch); the last section compares them. <strong>Last verified against code:</strong> 2026-10-30 for the Edit suggestions section; 2026-10-28 elsewhere.</p>
 </aside>
 
 <h1>Comments and annotations</h1>
