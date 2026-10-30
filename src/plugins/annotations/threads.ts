@@ -207,13 +207,13 @@ export const createThread = async (
 export const replyTo = (repo: Repo, parentId: string): Promise<string> =>
   repo.mutate.createChild({parentId, position: {kind: 'last'}, revealParent: true})
 
-/** `accepted` is set only by `acceptSuggestion`, with the text it applies. */
-type SettableStatus = Exclude<ThreadStatus, 'accepted'>
+/** A suggestion's own statuses are set by `acceptSuggestion` and
+ *  `rejectSuggestion`, which check it is still open. */
+type SettableStatus = Exclude<ThreadStatus, 'accepted' | 'rejected'>
 
 const STATUS_DESCRIPTIONS: Record<SettableStatus, string> = {
   open: 'reopen thread',
   resolved: 'resolve thread',
-  rejected: 'reject suggestion',
 }
 
 export const setThreadStatus = (repo: Repo, threadId: string, status: SettableStatus): Promise<void> =>

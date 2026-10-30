@@ -11,10 +11,11 @@
  */
 
 import {ChangeScope} from '@/data/api'
+import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {annotationStatusProp, threadIsOpen, threadSuggestionOf} from './schema.ts'
+import {annotationStatusProp, THREAD_TYPE, threadIsOpen, threadSuggestionOf} from './schema.ts'
 import {AnchorChangedError, InvalidSuggestionError, threadAndTarget} from './threads.ts'
 
 /** Does the text around `from` already read as `replacement`, with the quote
@@ -72,3 +73,15 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     await tx.update(target.id, {content: appliedContent(target.content, resolved, suggestion.anchor, suggestion.replacement)})
     await tx.setProperty(threadId, annotationStatusProp, 'accepted')
   }, {scope: ChangeScope.BlockDefault, description: 'accept suggestion'})
+
+/** Close an open suggestion as rejected, as one undo step. Only an open one,
+ *  checked in this transaction: a click queued behind an accept must not mark
+ *  the change it just applied as rejected. */
+export const rejectSuggestion = (repo: Repo, threadId: string): Promise<void> =>
+  repo.tx(async tx => {
+    const root = await tx.get(threadId)
+    if (!root || root.deleted || !hasBlockType(root, THREAD_TYPE) || !threadIsOpen(root)) {
+      throw new InvalidSuggestionError('This suggestion is no longer open.')
+    }
+    await tx.setProperty(threadId, annotationStatusProp, 'rejected')
+  }, {scope: ChangeScope.BlockDefault, description: 'reject suggestion'})
