@@ -140,10 +140,6 @@ export interface BlockContextType {
      *  layout boundary, before a panel sets it. See
      *  `resolveStructuralEditPolicy`. */
     scopeRootId?: string
-    /** Single visible panel mode: widen the panel's scroll target to the
-     *  whole layout surface while constraining its document content inside
-     *  the panel renderer. */
-    wideScrollSurface?: boolean
     /** Whether maximizing this pane would do anything, declared by the layout
      *  that owns the maximize rendering rule: false with a single pane
      *  (nothing to hide) and on mobile (`LayoutRenderer` already renders one

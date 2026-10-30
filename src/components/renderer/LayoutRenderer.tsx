@@ -26,8 +26,6 @@ type RenderSlot =
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
 const TOP_LEVEL_COLUMN_CLASS =
-  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-sm md:basis-0 md:grow md:shrink'
-const WIDE_SCROLL_COLUMN_CLASS =
   'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
   'w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
@@ -96,7 +94,6 @@ function PanelSlotView({
   canMaximizePanel,
   className,
   stacked,
-  wideScrollSurface,
   trackFocus,
   columnId,
 }: {
@@ -106,7 +103,6 @@ function PanelSlotView({
   canMaximizePanel: boolean
   className: string
   stacked: boolean
-  wideScrollSurface: boolean
   trackFocus: boolean
   // `data-layout-column-id` only goes on the *outer* column wrapper.
   // When a panel sits at the top level, this slot IS the column and
@@ -123,7 +119,6 @@ function PanelSlotView({
         canClosePanel,
         canMaximizePanel,
         stackedPanel: stacked,
-        wideScrollSurface,
         trackPanelFocus: trackFocus,
       }}
       key={slot.id}
@@ -144,7 +139,6 @@ function SlotView({
   canClosePanel,
   canMaximizePanel,
   topLevel,
-  wideScrollSurface,
   trackFocus,
 }: {
   slot: RenderSlot
@@ -152,7 +146,6 @@ function SlotView({
   canClosePanel: boolean
   canMaximizePanel: boolean
   topLevel: boolean
-  wideScrollSurface: boolean
   trackFocus: boolean
 }) {
   if (slot.kind === 'panel') {
@@ -161,26 +154,18 @@ function SlotView({
       layoutSessionBlock={layoutSessionBlock}
       canClosePanel={canClosePanel}
       canMaximizePanel={canMaximizePanel}
-      className={topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS}
+      className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
       stacked={!topLevel}
-      wideScrollSurface={wideScrollSurface}
       trackFocus={trackFocus}
       columnId={topLevel ? slot.id : undefined}
     />
   }
 
-  // A stack kept ONLY to preserve the solo pane's React parent generates no box
-  // and hands its column role to that child, which then renders exactly as the
-  // top-level pane it visually is — `stackedPanel: false` included. That last
-  // part is load-bearing rather than cosmetic: `PanelRenderer` recomputes
-  // `wideScrollSurface && !stackedPanel`, so a pane still told it is stacked
-  // gets narrow chrome AND no scrollport of its own (its real stack, the thing
-  // that used to scroll it, is no longer rendering a box).
+  // A stack kept only to preserve the solo pane's React parent generates no box
+  // and hands its column role to that child, which then owns its scrollport.
   //
-  // The wrapper must stay a <div> whose CLASS changes. Returning a Fragment
-  // instead would change the element type at this position and remount the very
-  // pane this whole path exists to preserve — the same trap `PanelRenderer`
-  // documents on its own content frame, solved the same way.
+  // Keep the div mounted when its class changes to preserve the pane's React
+  // parent across maximize and restore.
   const soloWrapper = slot.soloWrapper === true
   return (
     <div
@@ -202,7 +187,6 @@ function SlotView({
           canClosePanel={canClosePanel}
           canMaximizePanel={canMaximizePanel}
           topLevel={soloWrapper ? topLevel : false}
-          wideScrollSurface={soloWrapper ? wideScrollSurface : false}
           trackFocus={trackFocus}
         />
       ))}
@@ -247,12 +231,6 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   )
   const canClosePanel = panelSlots.length > 1
   const canMaximizePanel = maximizeWouldHideSomething(panelSlots.length, !isMobile)
-  // Counted over the panes actually RENDERED, at any depth: a solo pane is the
-  // only thing on screen whether or not a stack wrapper survives around it, and
-  // it should get the same wide surface either way. Reading the top-level slot
-  // kind instead made a maximized stacked pane keep a `max-w-3xl` column.
-  const hasOneVisiblePanel = flattenPanelSlots(slotsToRender).length === 1
-
   // ── The single writer of `activePanelIdProp` from this renderer ──
   // Two rules, in priority order, deliberately resolved BEFORE the effect
   // rather than in two effects:
@@ -294,7 +272,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
 
   return <div
     data-layout-session-id={block.id}
-    className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full"
+    className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full md:grid md:grid-flow-col md:grid-rows-1 md:auto-cols-[minmax(24rem,1fr)]"
   >
     {slotsToRender.map(slot => (
       <SlotView
@@ -304,7 +282,6 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         canClosePanel={canClosePanel}
         canMaximizePanel={canMaximizePanel}
         topLevel
-        wideScrollSurface={hasOneVisiblePanel}
         trackFocus={!isMobile}
       />
     ))}

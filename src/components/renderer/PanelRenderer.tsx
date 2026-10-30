@@ -84,7 +84,6 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const canMaximizePanel = Boolean(blockContext.canMaximizePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
-  const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
     ? blockContext.layoutSessionBlockId
     : undefined
@@ -344,18 +343,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      {/* Same always-mounted treatment as the content frame below, for the
-          same reason — a conditional wrapper here remounts the buttons on the
-          crossing, dropping keyboard focus if it happens to be on one. */}
       <div
-        className={wideScrollSurface
-          ? 'pointer-events-none absolute inset-x-0 top-1 z-10'
-          : 'pointer-events-none absolute top-1 right-0.5 z-10 flex gap-0.5'}
+        className="pointer-events-none absolute inset-x-0 top-1 z-10"
       >
         <div
-          className={wideScrollSurface
-            ? 'pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5'
-            : 'contents'}
+          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
         >
           {actionButtons}
         </div>
@@ -375,18 +367,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}
       >
-        {/* The content frame is ALWAYS mounted and swaps its class, rather
-            than wrapping conditionally. `wideScrollSurface` flips whenever the
-            layout crosses between one pane and several, and a conditional
-            wrapper changes the element type at this position — so React
-            unmounted and rebuilt the entire panel body on every first split
-            and every collapse back. That threw away scroll position, editor
-            state, and anything mid-playback, and on a big view (an agenda with
-            thousands of rows) it is visible as a full reload. `contents`
-            generates no box, so the non-wide layout is unchanged — but note it
-            is still a real node for selector matching, so a `>` or
-            `:nth-child()` rule anchored above the body must account for it. */}
-        <div className={wideScrollSurface ? 'mx-auto w-full max-w-3xl' : 'contents'}>
+        <div className="mx-auto w-full max-w-3xl">
           {panelBody}
         </div>
       </div>
