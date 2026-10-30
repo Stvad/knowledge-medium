@@ -1,0 +1,1 @@
+export{Oy as videoPlayerPlugin}from"../../../chunks/app-CheJFivW.js";

@@ -1,0 +1,1 @@
+export{E_ as richPastePlugin}from"../../../chunks/app-CheJFivW.js";

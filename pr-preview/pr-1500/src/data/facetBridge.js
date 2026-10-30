@@ -1,0 +1,1 @@
+export{BX as FacetBridge}from"../../chunks/app-CheJFivW.js";

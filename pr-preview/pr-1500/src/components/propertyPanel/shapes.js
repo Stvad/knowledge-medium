@@ -1,0 +1,1 @@
+export{WB as propertyShapeLabel}from"../../../chunks/app-CheJFivW.js";

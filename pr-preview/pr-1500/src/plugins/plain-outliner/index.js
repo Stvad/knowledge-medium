@@ -1,0 +1,1 @@
+export{uS as plainOutlinerPlugin}from"../../../chunks/app-CheJFivW.js";

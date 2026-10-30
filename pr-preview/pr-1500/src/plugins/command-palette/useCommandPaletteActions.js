@@ -1,0 +1,1 @@
+export{HD as useCommandPaletteActions}from"../../../chunks/app-CheJFivW.js";

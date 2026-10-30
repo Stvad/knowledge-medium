@@ -1,0 +1,1 @@
+export{BN as ExtensionRenderBoundary}from"../../chunks/app-CheJFivW.js";

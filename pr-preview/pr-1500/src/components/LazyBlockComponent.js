@@ -1,0 +1,1 @@
+export{Uj as LazyBlockComponent}from"../../chunks/app-CheJFivW.js";

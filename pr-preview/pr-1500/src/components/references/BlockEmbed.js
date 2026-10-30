@@ -1,0 +1,1 @@
+export{nk as BlockEmbed}from"../../../chunks/app-CheJFivW.js";

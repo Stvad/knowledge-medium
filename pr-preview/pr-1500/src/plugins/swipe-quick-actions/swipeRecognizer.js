@@ -1,0 +1,1 @@
+export{SO as SWIPE_QUICK_ACTIONS_GESTURE_ID,CO as SWIPE_TRIGGER_PX,wO as swipeRecognizer}from"../../../chunks/app-CheJFivW.js";

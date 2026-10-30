@@ -1,0 +1,1 @@
+export{UV as staticDataExtensions}from"../../chunks/app-CheJFivW.js";

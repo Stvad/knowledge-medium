@@ -1,0 +1,1 @@
+export{Eg as blockrefCompletionSource}from"../../chunks/app-CheJFivW.js";

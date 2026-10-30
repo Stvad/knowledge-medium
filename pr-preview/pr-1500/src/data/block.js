@@ -1,0 +1,1 @@
+export{C$ as Block,w$ as requireLoadedBlock}from"../../chunks/app-CheJFivW.js";

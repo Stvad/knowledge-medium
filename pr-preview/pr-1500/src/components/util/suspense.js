@@ -1,0 +1,1 @@
+export{xV as SuspenseFallback}from"../../../chunks/app-CheJFivW.js";

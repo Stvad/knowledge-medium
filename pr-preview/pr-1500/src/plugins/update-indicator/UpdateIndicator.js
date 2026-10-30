@@ -1,0 +1,1 @@
+export{ch as UpdateIndicator}from"../../../chunks/app-CheJFivW.js";

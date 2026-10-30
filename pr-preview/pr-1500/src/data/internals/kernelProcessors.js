@@ -1,0 +1,1 @@
+export{v1 as KERNEL_PROCESSORS}from"../../../chunks/app-CheJFivW.js";

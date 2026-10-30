@@ -1,0 +1,1 @@
+export{SJ as agentDispatchCompanionDataExtension}from"../../../chunks/app-CheJFivW.js";

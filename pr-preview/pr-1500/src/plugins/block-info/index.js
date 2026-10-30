@@ -1,0 +1,1 @@
+export{ah as blockInfoPlugin}from"../../../chunks/app-CheJFivW.js";

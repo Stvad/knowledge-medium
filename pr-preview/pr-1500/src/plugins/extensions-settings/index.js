@@ -1,0 +1,1 @@
+export{of as extensionsOverridesProp,sf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CheJFivW.js";

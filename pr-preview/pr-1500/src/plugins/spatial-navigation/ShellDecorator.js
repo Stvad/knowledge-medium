@@ -1,0 +1,1 @@
+export{qb as SpatialNavigationShellDecorator}from"../../../chunks/app-CheJFivW.js";

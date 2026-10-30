@@ -1,0 +1,1 @@
+export{lit as normalizeReferences}from"../../../chunks/app-CheJFivW.js";

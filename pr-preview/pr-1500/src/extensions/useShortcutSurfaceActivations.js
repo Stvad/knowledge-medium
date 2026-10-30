@@ -1,0 +1,1 @@
+export{XP as useShortcutSurfaceActivations}from"../../chunks/app-CheJFivW.js";

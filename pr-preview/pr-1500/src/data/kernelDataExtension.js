@@ -1,0 +1,1 @@
+export{E$ as kernelDataExtension}from"../../chunks/app-CheJFivW.js";

@@ -1,0 +1,1 @@
+export{sl as BlockTagsConfigEditor}from"../../../chunks/app-CheJFivW.js";

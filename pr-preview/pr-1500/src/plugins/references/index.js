@@ -1,0 +1,1 @@
+export{vg as referencesPlugin}from"../../../chunks/app-CheJFivW.js";

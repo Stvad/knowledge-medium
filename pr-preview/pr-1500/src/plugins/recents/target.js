@@ -1,0 +1,1 @@
+export{Uw as openRecentsPage}from"../../../chunks/app-CheJFivW.js";

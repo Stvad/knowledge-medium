@@ -1,0 +1,1 @@
+export{Cp as createWatchEventsRegistry,wp as watchEventsRegistry}from"../../../chunks/app-CheJFivW.js";

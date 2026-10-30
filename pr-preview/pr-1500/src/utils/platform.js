@@ -1,0 +1,1 @@
+export{Dz as isIOS,Oz as isMacPlatform}from"../../chunks/app-CheJFivW.js";

@@ -1,0 +1,1 @@
+export{kk as ensureMetricsConsoleHook}from"../../chunks/app-CheJFivW.js";

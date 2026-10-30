@@ -1,0 +1,1 @@
+export{MF as BLOCK_TITLE_TEXT_CLASS,NF as useBlockTitleTextClass}from"../../../chunks/app-CheJFivW.js";

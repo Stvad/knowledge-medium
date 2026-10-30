@@ -1,0 +1,1 @@
+export{$rt as CHANGE_SCOPE_POLICIES,eit as ChangeScope,tit as isChangeScope,nit as policyForScope,rit as scopeAllowedInReadOnly,iit as scopeIsUndoable,ait as scopePoliciesEquivalent,oit as scopeUploadsToServer,sit as sourceForScope}from"../../../chunks/app-CheJFivW.js";

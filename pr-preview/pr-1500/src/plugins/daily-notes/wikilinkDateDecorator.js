@@ -1,0 +1,1 @@
+export{kE as dailyDateWikilinkDecorator}from"../../../chunks/app-CheJFivW.js";

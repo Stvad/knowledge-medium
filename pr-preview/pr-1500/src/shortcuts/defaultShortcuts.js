@@ -1,0 +1,1 @@
+export{_k as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,vk as OPEN_PREFERENCES_ACTION_ID,yk as RELOAD_IN_SAFE_MODE_ACTION_ID,bk as defaultActionContextsExtension,xk as defaultActionsExtension,Sk as getDefaultActionGroups,Ck as getDefaultActions}from"../../chunks/app-CheJFivW.js";
