@@ -1,1 +1,1 @@
-export{LI as BlockProperties}from"../../chunks/app-D7s_tlcI.js";
+export{LI as BlockProperties}from"../../chunks/app-CEoA1SUN.js";

@@ -1,1 +1,1 @@
-export{AX as FacetBridge}from"../../chunks/app-D7s_tlcI.js";
+export{AX as FacetBridge}from"../../chunks/app-CEoA1SUN.js";

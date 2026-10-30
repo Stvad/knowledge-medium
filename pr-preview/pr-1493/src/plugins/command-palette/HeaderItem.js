@@ -1,1 +1,1 @@
-export{kO as CommandPaletteHeaderItem}from"../../../chunks/app-D7s_tlcI.js";
+export{kO as CommandPaletteHeaderItem}from"../../../chunks/app-CEoA1SUN.js";

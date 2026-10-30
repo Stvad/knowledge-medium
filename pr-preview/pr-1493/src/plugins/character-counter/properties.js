@@ -1,1 +1,1 @@
-export{TK as charLimitProp,EK as charProfileProp,DK as charScopeProp}from"../../../chunks/app-D7s_tlcI.js";
+export{TK as charLimitProp,EK as charProfileProp,DK as charScopeProp}from"../../../chunks/app-CEoA1SUN.js";

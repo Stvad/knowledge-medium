@@ -1,1 +1,1 @@
-export{OA as ExtensionPromptSurface,kA as extensionPromptsExtension}from"../../../chunks/app-D7s_tlcI.js";
+export{OA as ExtensionPromptSurface,kA as extensionPromptsExtension}from"../../../chunks/app-CEoA1SUN.js";

@@ -1,1 +1,1 @@
-export{PA as ExtensionPromptDismissalStore,FA as extensionPromptDismissals,IA as useExtensionPromptDismissals}from"../../../chunks/app-D7s_tlcI.js";
+export{PA as ExtensionPromptDismissalStore,FA as extensionPromptDismissals,IA as useExtensionPromptDismissals}from"../../../chunks/app-CEoA1SUN.js";
