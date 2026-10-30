@@ -348,10 +348,6 @@
     max-width: 100%;
     height: auto;
   }
-
-  html {
-    scrollbar-gutter: stable;
-  }
 }
 
 @layer components {
