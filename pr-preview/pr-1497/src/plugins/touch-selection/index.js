@@ -1,1 +1,1 @@
-export{Ng as BLOCK_HOLD_GESTURE,Eg as touchSelectionPlugin,kg as touchSelectionToolbarItemsFacet}from"../../../chunks/app-CcrJF6ag.js";
+export{Ng as BLOCK_HOLD_GESTURE,Eg as touchSelectionPlugin,kg as touchSelectionToolbarItemsFacet}from"../../../chunks/app-BAQvgU1U.js";

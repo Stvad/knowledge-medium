@@ -1,1 +1,1 @@
-export{My as VideoPlayerContentRenderer,Ny as VideoPlayerRenderer,Py as isPlayableVideoBlock}from"../../../chunks/app-CcrJF6ag.js";
+export{My as VideoPlayerContentRenderer,Ny as VideoPlayerRenderer,Py as isPlayableVideoBlock}from"../../../chunks/app-BAQvgU1U.js";

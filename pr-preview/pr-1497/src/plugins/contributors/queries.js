@@ -1,1 +1,1 @@
-export{HG as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,UG as contributorProfilesByIdsQuery}from"../../../chunks/app-CcrJF6ag.js";
+export{HG as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,UG as contributorProfilesByIdsQuery}from"../../../chunks/app-BAQvgU1U.js";

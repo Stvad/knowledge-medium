@@ -1,1 +1,1 @@
-export{GP as useShortcutSurfaceActivations}from"../../chunks/app-CcrJF6ag.js";
+export{GP as useShortcutSurfaceActivations}from"../../chunks/app-BAQvgU1U.js";

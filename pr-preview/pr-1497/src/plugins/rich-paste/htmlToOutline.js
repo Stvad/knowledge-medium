@@ -1,1 +1,1 @@
-export{C_ as convertClipboardHtml}from"../../../chunks/app-CcrJF6ag.js";
+export{C_ as convertClipboardHtml}from"../../../chunks/app-BAQvgU1U.js";

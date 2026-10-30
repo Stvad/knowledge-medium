@@ -1,1 +1,1 @@
-export{db as seedTutorial}from"../../../chunks/app-CcrJF6ag.js";
+export{db as seedTutorial}from"../../../chunks/app-BAQvgU1U.js";
