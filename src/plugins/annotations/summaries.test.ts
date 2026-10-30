@@ -111,6 +111,28 @@ describe('annotations.threadsForBlock, batched over a render wave', () => {
   const loadWave = (ids: readonly string[]) =>
     statementsDuring(() => Promise.all(ids.map(id => repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load())))
 
+  it('drops a root deleted between reading the thread ids and reading the roots', async () => {
+    const kept = await createThread(repo, {targetId: 'B', anchor: null, comment: 'kept'})
+    const gone = await createThread(repo, {targetId: 'B', anchor: null, comment: 'gone'})
+    await repo.awaitProcessors()
+    const getAll = db.db.getAll.bind(db.db)
+    let deleted = false
+    const spy = vi.spyOn(db.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (!deleted && sql.includes('km_comment_count')) {
+        deleted = true
+        // Lands between the two reads, as a sync-applied delete can; raw, so
+        // nothing re-resolves the handle first.
+        await db.db.writeTransaction(tx => tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [gone.threadId]))
+      }
+      return getAll(sql, params)
+    })
+    try {
+      expect((await summariesOfB()).map(s => s.id)).toEqual([kept.threadId])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('reads every block in a wave with as many statements as one block costs', async () => {
     const targets = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
     await repo.tx(async tx => {
