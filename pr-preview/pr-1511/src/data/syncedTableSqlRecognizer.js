@@ -1,0 +1,1 @@
+export{MY as SYNCED_TABLES,NY as syncedWriteTarget,PY as writeTargets}from"../../chunks/app-DiSMs6in.js";

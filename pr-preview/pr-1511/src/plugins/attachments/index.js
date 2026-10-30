@@ -1,0 +1,1 @@
+export{gv as attachmentsPlugin}from"../../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{Zt as typeChipsDecoratorContribution}from"../../../chunks/app-DiSMs6in.js";

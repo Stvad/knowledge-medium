@@ -1,0 +1,1 @@
+export{BW as geoDataExtension}from"../../../chunks/app-DiSMs6in.js";

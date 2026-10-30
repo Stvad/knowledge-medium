@@ -1,0 +1,1 @@
+export{RX as instrumentAdapter}from"../../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{EP as ExtensionRenderBoundary}from"../../chunks/app-DiSMs6in.js";

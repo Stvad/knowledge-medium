@@ -1,0 +1,1 @@
+export{Nx as SpatialNavigationShellDecorator}from"../../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{ret as getOrCreatePropertiesPage,iet as propertiesPageBlockId,aet as propertiesPageSpec}from"../../chunks/app-DiSMs6in.js";

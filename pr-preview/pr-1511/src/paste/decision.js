@@ -1,0 +1,1 @@
+export{SF as defaultPasteDecision,CF as pasteDecisionVerb}from"../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{gd as COMMENT_ON_BLOCK_ACTION_ID,_d as COMMENT_ON_SELECTION_ACTION_ID,vd as HIGHLIGHT_SELECTION_ACTION_ID,yd as TOGGLE_MARGIN_ACTION_ID,bd as anchorFromEditor,xd as annotationActions,Sd as composerReady,Cd as onOutline,wd as submitComposer}from"../../../chunks/app-DiSMs6in.js";

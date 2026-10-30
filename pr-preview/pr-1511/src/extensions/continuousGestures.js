@@ -1,0 +1,1 @@
+export{zN as GESTURE_ACTIVE,BN as GESTURE_CANCEL,VN as GESTURE_IDLE,HN as TOUCH_HOLD_MS,UN as TOUCH_SLOP_PX,WN as continuousGestureRecognizersFacet,GN as createBlockGestureController,KN as enabledTouchAction,qN as suppressNextClick,JN as unionTouchAction,YN as useContinuousGestures}from"../../chunks/app-DiSMs6in.js";

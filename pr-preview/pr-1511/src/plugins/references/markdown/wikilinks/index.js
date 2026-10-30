@@ -1,0 +1,1 @@
+export{a_ as wikilinkMarkdownExtension}from"../../../../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{Xrt as SYSTEM_AUTHOR_PREFIX,Zrt as isSystemAuthor,Qrt as systemAuthor}from"../../../chunks/app-DiSMs6in.js";

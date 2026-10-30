@@ -1,0 +1,1 @@
+export{x1 as kernelDataExtension}from"../../chunks/app-DiSMs6in.js";

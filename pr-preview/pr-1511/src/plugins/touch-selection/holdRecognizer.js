@@ -1,0 +1,1 @@
+export{w_ as BLOCK_HOLD_GESTURE,T_ as BLOCK_HOLD_RECOGNIZER_ID,E_ as blockHoldRecognizer}from"../../../chunks/app-DiSMs6in.js";

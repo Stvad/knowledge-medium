@@ -1,0 +1,1 @@
+export{IA as BlockPasteShellDecorator,LA as blockPasteShellDecorator}from"../../chunks/app-DiSMs6in.js";

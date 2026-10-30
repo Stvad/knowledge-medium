@@ -1,0 +1,1 @@
+export{KA as editorAutocompleteExtension}from"../../chunks/app-DiSMs6in.js";

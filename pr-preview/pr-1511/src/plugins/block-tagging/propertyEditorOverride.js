@@ -1,0 +1,1 @@
+export{ol as blockTagsConfigUi}from"../../../chunks/app-DiSMs6in.js";

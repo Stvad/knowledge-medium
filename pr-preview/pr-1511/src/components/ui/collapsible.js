@@ -1,0 +1,1 @@
+"use client";export{rL as Collapsible,iL as CollapsibleContent,aL as CollapsibleTrigger}from"../../../chunks/app-DiSMs6in.js";

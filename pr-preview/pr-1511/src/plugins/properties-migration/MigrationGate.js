@@ -1,0 +1,1 @@
+export{sa as MigrationGate}from"../../../chunks/app-DiSMs6in.js";

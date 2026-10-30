@@ -1,0 +1,1 @@
+export{mb as videoPlayerPlugin}from"../../../chunks/app-DiSMs6in.js";

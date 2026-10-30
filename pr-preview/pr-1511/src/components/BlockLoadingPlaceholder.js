@@ -1,0 +1,1 @@
+export{MM as BlockLoadingPlaceholder}from"../../chunks/app-DiSMs6in.js";

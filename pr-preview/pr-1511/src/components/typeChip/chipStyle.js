@@ -1,0 +1,1 @@
+export{Qk as chipStyle}from"../../../chunks/app-DiSMs6in.js";

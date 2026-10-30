@@ -1,0 +1,1 @@
+export{Xd as contributorsPlugin}from"../../../chunks/app-DiSMs6in.js";

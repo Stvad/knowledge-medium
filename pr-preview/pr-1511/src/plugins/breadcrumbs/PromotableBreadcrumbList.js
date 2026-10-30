@@ -1,0 +1,1 @@
+export{GS as PromotableBreadcrumbList}from"../../../chunks/app-DiSMs6in.js";

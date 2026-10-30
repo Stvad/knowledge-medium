@@ -1,0 +1,1 @@
+export{cq as charLimitProp,lq as charProfileProp,uq as charScopeProp}from"../../../chunks/app-DiSMs6in.js";

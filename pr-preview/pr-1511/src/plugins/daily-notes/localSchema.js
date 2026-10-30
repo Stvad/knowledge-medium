@@ -1,0 +1,1 @@
+export{GG as dailyNotesLocalSchema}from"../../../chunks/app-DiSMs6in.js";

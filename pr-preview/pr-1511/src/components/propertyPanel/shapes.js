@@ -1,0 +1,1 @@
+export{MV as propertyShapeLabel}from"../../../chunks/app-DiSMs6in.js";

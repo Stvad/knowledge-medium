@@ -1,0 +1,1 @@
+export{OO as useCommandPaletteActions}from"../../../chunks/app-DiSMs6in.js";

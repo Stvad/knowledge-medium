@@ -1,0 +1,1 @@
+export{UK as contributorsDataExtension}from"../../../chunks/app-DiSMs6in.js";

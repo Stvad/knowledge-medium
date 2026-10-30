@@ -1,0 +1,1 @@
+export{Hf as extensionsOverridesProp,Uf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-DiSMs6in.js";

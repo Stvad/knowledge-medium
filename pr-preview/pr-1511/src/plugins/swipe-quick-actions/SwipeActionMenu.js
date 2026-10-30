@@ -1,0 +1,1 @@
+export{sk as SwipeActionMenu}from"../../../chunks/app-DiSMs6in.js";

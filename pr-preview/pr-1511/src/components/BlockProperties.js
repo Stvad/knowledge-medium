@@ -1,0 +1,1 @@
+export{sL as BlockProperties}from"../../chunks/app-DiSMs6in.js";

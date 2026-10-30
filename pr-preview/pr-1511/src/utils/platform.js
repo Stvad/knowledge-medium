@@ -1,0 +1,1 @@
+export{hB as isIOS,gB as isMacPlatform}from"../../chunks/app-DiSMs6in.js";

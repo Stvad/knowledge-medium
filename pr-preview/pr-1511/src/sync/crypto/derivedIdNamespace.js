@@ -1,0 +1,1 @@
+export{Ret as deriveWorkspaceIdNamespace}from"../../../chunks/app-DiSMs6in.js";

@@ -1,0 +1,1 @@
+export{DT as useMinuteClock}from"../../chunks/app-DiSMs6in.js";

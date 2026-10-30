@@ -1,0 +1,1 @@
+export{oa as propertiesMigrationPlugin}from"../../../chunks/app-DiSMs6in.js";

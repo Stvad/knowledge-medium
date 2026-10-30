@@ -1,0 +1,1 @@
+export{Gh as blockInfoPlugin}from"../../../chunks/app-DiSMs6in.js";

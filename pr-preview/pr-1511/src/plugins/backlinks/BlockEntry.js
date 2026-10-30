@@ -1,0 +1,1 @@
+export{Eg as LazyBlockEntry}from"../../../chunks/app-DiSMs6in.js";

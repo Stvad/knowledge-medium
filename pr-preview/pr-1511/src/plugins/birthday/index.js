@@ -1,0 +1,1 @@
+export{pn as birthdayPlugin}from"../../../chunks/app-DiSMs6in.js";

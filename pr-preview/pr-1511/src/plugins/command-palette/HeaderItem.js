@@ -1,0 +1,1 @@
+export{XO as CommandPaletteHeaderItem}from"../../../chunks/app-DiSMs6in.js";

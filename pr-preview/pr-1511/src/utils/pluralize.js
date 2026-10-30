@@ -1,0 +1,1 @@
+export{U0 as agree,W0 as pluralize}from"../../chunks/app-DiSMs6in.js";

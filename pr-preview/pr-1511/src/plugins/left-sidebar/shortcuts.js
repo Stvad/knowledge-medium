@@ -1,0 +1,1 @@
+export{_C as getOrCreateShortcutsBlock,vC as journalShortcutBlockId,yC as shortcutsBlockId}from"../../../chunks/app-DiSMs6in.js";

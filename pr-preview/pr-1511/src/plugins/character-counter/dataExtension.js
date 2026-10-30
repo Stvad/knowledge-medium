@@ -1,0 +1,1 @@
+export{aq as characterCounterDataExtension}from"../../../chunks/app-DiSMs6in.js";

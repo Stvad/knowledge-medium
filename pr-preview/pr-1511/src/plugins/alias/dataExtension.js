@@ -1,0 +1,1 @@
+export{PJ as aliasDataExtension}from"../../../chunks/app-DiSMs6in.js";

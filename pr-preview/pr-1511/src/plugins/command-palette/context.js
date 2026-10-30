@@ -1,0 +1,1 @@
+export{jO as COMMAND_PALETTE_ACTION_ID,MO as COMMAND_PALETTE_CONTEXT,NO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,PO as commandPaletteActionContext}from"../../../chunks/app-DiSMs6in.js";

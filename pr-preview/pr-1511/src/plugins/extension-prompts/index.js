@@ -1,0 +1,1 @@
+export{YA as ExtensionPromptSurface,XA as extensionPromptsExtension}from"../../../chunks/app-DiSMs6in.js";

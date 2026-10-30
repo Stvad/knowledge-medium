@@ -1,0 +1,1 @@
+export{kT as openRecentsPage}from"../../../chunks/app-DiSMs6in.js";

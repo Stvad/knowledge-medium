@@ -1,0 +1,1 @@
+export{_g as DEFAULT_BACKLINKS_VIEW_ID,vg as FLAT_BACKLINKS_VIEW_ID,yg as GROUPED_BACKLINKS_VIEW_ID,bg as backlinksViewProp,xg as defaultBacklinksViewIdForBlock}from"../../../chunks/app-DiSMs6in.js";

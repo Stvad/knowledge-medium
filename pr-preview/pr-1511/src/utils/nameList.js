@@ -1,0 +1,1 @@
+export{G0 as NAMES_IN_A_SENTENCE,K0 as describeNames,q0 as firstFew}from"../../chunks/app-DiSMs6in.js";

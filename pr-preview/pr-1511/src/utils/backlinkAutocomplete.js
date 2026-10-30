@@ -1,0 +1,1 @@
+export{p_ as backlinkCompletionSource,m_ as createBacklinkAutocomplete,h_ as isInsideBacklinkBrackets}from"../../chunks/app-DiSMs6in.js";

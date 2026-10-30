@@ -1,0 +1,1 @@
+export{DR as MOBILE_BREAKPOINT_QUERY,OR as POINTER_COARSE_QUERY,kR as isMobileViewport,AR as isPointerCoarse}from"../../chunks/app-DiSMs6in.js";

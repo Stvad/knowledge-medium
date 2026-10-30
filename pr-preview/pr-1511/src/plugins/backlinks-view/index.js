@@ -1,0 +1,1 @@
+export{eg as backlinksViewPlugin}from"../../../chunks/app-DiSMs6in.js";

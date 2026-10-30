@@ -1,0 +1,1 @@
+export{VY as omnilinerNamespace}from"../../chunks/app-DiSMs6in.js";

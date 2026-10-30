@@ -1,0 +1,1 @@
+export{EA as resolveStructuralEditPolicy,DA as structuralEditPolicyForBlock}from"../../chunks/app-DiSMs6in.js";

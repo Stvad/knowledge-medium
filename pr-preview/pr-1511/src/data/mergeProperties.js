@@ -1,0 +1,1 @@
+export{L2 as mergeProperties}from"../../chunks/app-DiSMs6in.js";

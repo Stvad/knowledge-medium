@@ -1,0 +1,1 @@
+export{Gf as PROVENANCE_BLOCKS_PER_KEY,Kf as PROVENANCE_KEY_LIMIT,qf as auditPropertyRegistration,Jf as describeUnregisteredProperty}from"../../../chunks/app-DiSMs6in.js";

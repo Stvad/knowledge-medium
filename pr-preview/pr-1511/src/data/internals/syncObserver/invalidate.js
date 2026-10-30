@@ -1,0 +1,1 @@
+export{l1 as applySyncInvalidation}from"../../../../chunks/app-DiSMs6in.js";
