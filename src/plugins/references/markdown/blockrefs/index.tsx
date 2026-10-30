@@ -1,7 +1,7 @@
 import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
 import type { MarkdownExtension } from '@/markdown/extensions.js'
-import { useMarkdownSource } from '@/markdown/source.js'
+import { useMarkdownSource } from '@/markdown/context.js'
 import { remarkBlockrefs } from './remark-blockrefs.ts'
 import { BlockRef } from '@/components/references/BlockRef.js'
 import { EmbedComponent, referenceTargetOf, type ReferenceNode } from '../referenceNode.tsx'

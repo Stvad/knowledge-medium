@@ -149,8 +149,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'markdown',
-    importPath: '@/markdown/source.js',
-    description: 'The block whose content the surrounding markdown renders, for markdown `components` overrides.',
+    importPath: '@/markdown/context.js',
+    description: 'Contexts around rendered markdown: `useMarkdownSource()` is the block a `components` override renders for.',
     exports: ['useMarkdownSource'],
     types: ['MarkdownSource'],
   },
