@@ -85,7 +85,11 @@ const INITIAL = 'r1 r2(r2a r2b) r3 r4'
 type Gesture = 'indent_block' | 'outdent_block' | 'move_block_up' | 'move_block_down'
 
 /** Run the multi-select variant of `gesture` over `selectedIds`, in that order. */
-const run = async (gesture: Gesture, selectedIds: string[]): Promise<void> => {
+const run = async (
+  gesture: Gesture,
+  selectedIds: string[],
+  overrides: Partial<MultiSelectModeDependencies> = {},
+): Promise<void> => {
   const action = getDefaultActionGroups({repo}).multiSelectModeActions
     .find(each => each.id === `multi_select.${gesture}`)
   if (!action) throw new Error(`no multi_select.${gesture}`)
@@ -94,6 +98,7 @@ const run = async (gesture: Gesture, selectedIds: string[]): Promise<void> => {
     anchorBlock: null,
     uiStateBlock: repo.block('panel'),
     scopeRootId: ROOT,
+    ...overrides,
   }
   await action.handler(deps, {} as ActionTrigger)
 }
@@ -141,13 +146,36 @@ describe('multi-select outline gestures move the selection as a group', () => {
     expect(await outline('other')).toBe('o(o1 o2 o3)')
   })
 
-  it.each<Gesture>(['indent_block', 'outdent_block', 'move_block_up', 'move_block_down'])(
+  // The moves aren't listed: moveVertical refuses the scope root on its own.
+  it.each<Gesture>(['indent_block', 'outdent_block'])(
     '%s never relocates the scope root itself',
     async gesture => {
       await run(gesture, [ROOT])
       expect(await outline('outer')).toBe(`before ${ROOT}(${INITIAL})`)
     },
   )
+
+  // A selection the bridge can store raw: the UI writers dedupe and keep roots.
+  it.each<[Gesture, string[], string]>([
+    ['indent_block', ['r3', 'r3'], 'r1 r2(r2a r2b r3) r4'],
+    ['move_block_up', ['r2', 'r2b'], 'r2(r2a r2b) r1 r3 r4'],
+  ])('%s over %j moves each selected subtree once', async (gesture, selection, expected) => {
+    await run(gesture, selection)
+    expect(await outline(ROOT)).toBe(expected)
+  })
+
+  it('leaves out a selected row whose chain to the scope root crosses a deleted block', async () => {
+    // A raw write, the shape a synced remote delete has: r2 is gone, r2a still live.
+    await sharedDb.db.writeTransaction(tx =>
+      tx.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', ['r2']))
+    await run('move_block_up', ['r4', 'r2a', 'r3'])
+    expect(await outline(ROOT)).toBe('r3 r4 r1')
+  })
+
+  it('refuses to run without a scope root', async () => {
+    await expect(run('indent_block', ['r3'], {scopeRootId: undefined})).rejects.toThrow(/scopeRootId/)
+    expect(await outline(ROOT)).toBe(INITIAL)
+  })
 
   it.each<[Gesture, string[]]>([
     ['indent_block', ['r3', 'r4']],
