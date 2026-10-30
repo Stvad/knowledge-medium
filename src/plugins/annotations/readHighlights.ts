@@ -31,7 +31,7 @@
 import type {Parent, Root, RootContent} from 'mdast'
 import type {Plugin} from 'unified'
 import type {MarkdownExtension} from '@/markdown/extensions.js'
-import {HIGHLIGHT_CLASS, highlightRanges, MOVED_HIGHLIGHT_CLASS, type HighlightRange} from './highlights.ts'
+import {highlightClasses, highlightRanges, type HighlightRange} from './highlights.ts'
 import type {HighlightThread} from './summaries.ts'
 
 const ANNOTATION_MARK_NODE = 'annotationMark'
@@ -39,8 +39,6 @@ const ANNOTATION_MARK_NODE = 'annotationMark'
 type Position = NonNullable<RootContent['position']>
 type Point = Position['start']
 
-/** The editor's highlight, in utilities: plugins ship no stylesheet. */
-const MARK_CLASSES = ['bg-yellow-400/30', 'text-inherit', 'border-b-2', 'border-yellow-600/75', 'dark:bg-yellow-400/20']
 
 interface Span {
   from: number
@@ -214,7 +212,7 @@ const markNode = (moved: boolean, children: RootContent[]): RootContent => ({
   children,
   data: {
     hName: 'mark',
-    hProperties: {className: [HIGHLIGHT_CLASS, ...MARK_CLASSES, ...(moved ? [MOVED_HIGHLIGHT_CLASS, 'border-dashed'] : [])]},
+    hProperties: {className: highlightClasses(moved).split(' ')},
   },
 } as unknown as RootContent)
 

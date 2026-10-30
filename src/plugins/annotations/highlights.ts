@@ -17,6 +17,16 @@ import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type Thre
 export const HIGHLIGHT_CLASS = 'km-annotation-highlight'
 export const MOVED_HIGHLIGHT_CLASS = 'km-annotation-highlight-moved'
 
+const MARK_UTILITIES = 'bg-yellow-400/30 text-inherit border-b-2 border-yellow-600/75 dark:bg-yellow-400/20'
+
+/** A highlight's look, in the editor and in read mode alike. Utilities rather
+ *  than an editor theme: the app's dark variant follows `data-theme`, which
+ *  an editor theme's `&dark` never sees. */
+export const highlightClasses = (moved: boolean): string =>
+  moved
+    ? `${HIGHLIGHT_CLASS} ${MOVED_HIGHLIGHT_CLASS} ${MARK_UTILITIES} border-dashed`
+    : `${HIGHLIGHT_CLASS} ${MARK_UTILITIES}`
+
 export interface HighlightRange {
   from: number
   to: number
@@ -31,8 +41,8 @@ export const highlightRanges = (doc: string, threads: readonly HighlightThread[]
     return resolved.state === 'stale' ? [] : [{from: resolved.from, to: resolved.to, moved: resolved.state === 'moved'}]
   })
 
-const exactMark = Decoration.mark({class: HIGHLIGHT_CLASS})
-const movedMark = Decoration.mark({class: `${HIGHLIGHT_CLASS} ${MOVED_HIGHLIGHT_CLASS}`})
+const exactMark = Decoration.mark({class: highlightClasses(false)})
+const movedMark = Decoration.mark({class: highlightClasses(true)})
 
 const decorationsFor = (doc: string, threads: readonly ThreadSummary[]): DecorationSet =>
   Decoration.set(highlightRanges(doc, threads).map(r => (r.moved ? movedMark : exactMark).range(r.from, r.to)), true)
@@ -57,15 +67,6 @@ export const highlightField = StateField.define<HighlightState>({
   provide: field => EditorView.decorations.from(field, state => state.decorations),
 })
 
-const highlightTheme = EditorView.baseTheme({
-  [`.${HIGHLIGHT_CLASS}`]: {
-    backgroundColor: 'rgba(250, 204, 21, 0.3)',
-    borderBottom: '2px solid rgba(202, 138, 4, 0.75)',
-  },
-  [`&dark .${HIGHLIGHT_CLASS}`]: {backgroundColor: 'rgba(250, 204, 21, 0.2)'},
-  [`.${MOVED_HIGHLIGHT_CLASS}`]: {borderBottomStyle: 'dashed'},
-})
-
 /** Feeds the handle's summaries into the field. A dispatch can't run while
  *  the view is being built, so the first one waits a microtask. */
 const threadsFeed = (handle: Handle<ThreadSummary[]>) => ViewPlugin.define(view => {
@@ -79,7 +80,7 @@ const threadsFeed = (handle: Handle<ThreadSummary[]>) => ViewPlugin.define(view 
 })
 
 export const threadHighlights = (handle: Handle<ThreadSummary[]>): Extension[] =>
-  [highlightField, highlightTheme, threadsFeed(handle)]
+  [highlightField, threadsFeed(handle)]
 
 export const threadHighlightsContribution: CodeMirrorExtensionContribution = ({repo, block}) => {
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId
