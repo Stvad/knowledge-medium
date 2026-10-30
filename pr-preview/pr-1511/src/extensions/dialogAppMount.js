@@ -1,1 +1,1 @@
-export{YM as DialogHost,XM as dialogAppMountExtension}from"../../chunks/app-gJEbDWla.js";
+export{XM as DialogHost,ZM as dialogAppMountExtension}from"../../chunks/app-BO0pS00y.js";

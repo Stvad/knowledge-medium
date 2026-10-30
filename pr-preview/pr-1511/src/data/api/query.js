@@ -1,1 +1,1 @@
-export{fit as defineQuery}from"../../../chunks/app-gJEbDWla.js";
+export{pit as defineQuery}from"../../../chunks/app-BO0pS00y.js";

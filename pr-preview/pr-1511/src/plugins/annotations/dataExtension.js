@@ -1,1 +1,1 @@
-export{yK as annotationsDataExtension}from"../../../chunks/app-gJEbDWla.js";
+export{bK as annotationsDataExtension}from"../../../chunks/app-BO0pS00y.js";
