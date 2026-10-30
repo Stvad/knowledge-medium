@@ -1,1 +1,1 @@
-export{J7 as getOrCreateKernelPage,Y7 as kernelPageBlockId}from"../../chunks/app-Hs_TCcDF.js";
+export{J7 as getOrCreateKernelPage,Y7 as kernelPageBlockId}from"../../chunks/app-DIgY8EHy.js";

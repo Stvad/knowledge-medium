@@ -1,1 +1,1 @@
-export{GA as extensionPromptStore,KA as pendingExtensionPrompts}from"../../../chunks/app-Hs_TCcDF.js";
+export{GA as extensionPromptStore,KA as pendingExtensionPrompts}from"../../../chunks/app-DIgY8EHy.js";
