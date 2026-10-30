@@ -190,13 +190,13 @@ describe('PanelRenderer', () => {
     repoRef.current = undefined
   })
 
-  const panelTree = (wideScrollSurface: boolean) => (
+  const panelTree = (stackedPanel = false) => (
       <AppRuntimeContextProvider value={env.runtime}>
         <BlockContextProvider
           initialValue={{
             layoutBoundary: true,
             panelId: env.panel.id,
-            wideScrollSurface,
+            stackedPanel,
           }}
         >
           <PanelRenderer block={env.panel}/>
@@ -204,7 +204,7 @@ describe('PanelRenderer', () => {
       </AppRuntimeContextProvider>
   )
 
-  const renderPanel = (wideScrollSurface: boolean) => render(panelTree(wideScrollSurface))
+  const renderPanel = (stackedPanel = false) => render(panelTree(stackedPanel))
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
@@ -230,21 +230,23 @@ describe('PanelRenderer', () => {
     )
   }
 
-  it('constrains content inside a wide scroll surface', async () => {
-    renderPanel(true)
+  it('centers panel content inside a max-width frame', async () => {
+    renderPanel()
 
     const contentFrame = (await screen.findByTestId('panel-top-level-block')).parentElement
     expect(contentFrame?.className).toContain('mx-auto')
+    expect(contentFrame?.className).toContain('w-full')
     expect(contentFrame?.className).toContain('max-w-3xl')
   })
 
-  it('lets wide-surface chrome empty space pass clicks through to content', async () => {
-    renderPanel(true)
+  it('centers panel chrome and lets its empty space pass clicks through', async () => {
+    renderPanel()
 
     const backButton = await screen.findByLabelText('Back')
     expect(backButton.className).toContain('pointer-events-auto')
     expect(backButton.parentElement?.className).toContain('pointer-events-none')
     expect(backButton.parentElement?.parentElement?.className).toContain('pointer-events-none')
+    expect(backButton.parentElement?.className).toContain('max-w-3xl')
   })
 
   it('activates the panel from history chrome pointer events', async () => {
@@ -320,37 +322,43 @@ describe('PanelRenderer', () => {
     expect(sessionBlock.peekProperty(activePanelIdProp)).toBe('panel-b')
   })
 
-  it('keeps the panel body mounted when the wide-scroll frame toggles', async () => {
-    // Why this matters: see the content-frame comment in PanelRenderer.tsx.
-    const view = renderPanel(true)
+  it('keeps the content frame and chrome mounted when scroll ownership changes', async () => {
+    const view = renderPanel()
     const body = await screen.findByTestId('panel-top-level-block')
-    expect(body.parentElement?.className).toContain('max-w-3xl')
+    const contentFrame = body.parentElement
+    const chromeFrame = (await screen.findByLabelText('Back')).parentElement
+    expect(contentFrame?.className).toContain('max-w-3xl')
 
-    view.rerender(panelTree(false))
+    view.rerender(panelTree(true))
 
     expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
     expect(body.isConnected).toBe(true)
+    expect(body.parentElement).toBe(contentFrame)
+    expect((await screen.findByLabelText('Back')).parentElement).toBe(chromeFrame)
+    expect(contentFrame?.className).toContain('max-w-3xl')
+    expect(document.querySelector('[data-panel-scrollport]')?.className).toContain('overflow-visible')
 
-    // …and back again, which is the collapse-to-one-pane direction.
-    view.rerender(panelTree(true))
+    view.rerender(panelTree(false))
     expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+    expect(body.parentElement).toBe(contentFrame)
+    expect(document.querySelector('[data-panel-scrollport]')?.className).toContain('overflow-y-auto')
   })
 
-  it('leaves the content frame layout-neutral outside a wide scroll surface', async () => {
-    // The frame is always mounted now, so it has to generate no box when it
-    // isn't the wide surface — otherwise the multi-pane layout gains a real
-    // block box it never had. An empty className passes every other test here.
-    renderPanel(false)
+  it('keeps stacked content centered while the outer stack owns scrolling', async () => {
+    renderPanel(true)
 
     const body = await screen.findByTestId('panel-top-level-block')
-    expect(body.parentElement?.className).toBe('contents')
+    expect(body.parentElement?.className).toContain('mx-auto')
+    expect(body.parentElement?.className).toContain('max-w-3xl')
+    expect(document.querySelector('[data-panel-scrollport]')?.className).toBe('overflow-visible')
   })
 
-  it('does not add a content-width frame for normal panel columns', async () => {
-    renderPanel(false)
+  it('keeps a centered content frame in an ordinary panel column', async () => {
+    renderPanel()
 
     const topLevelBlock = await screen.findByTestId('panel-top-level-block')
-    expect(topLevelBlock.parentElement?.className).not.toContain('max-w-3xl')
+    expect(topLevelBlock.parentElement?.className).toContain('mx-auto')
+    expect(topLevelBlock.parentElement?.className).toContain('max-w-3xl')
   })
 
   it('keeps selection-state updates out of the panel body render path', async () => {
