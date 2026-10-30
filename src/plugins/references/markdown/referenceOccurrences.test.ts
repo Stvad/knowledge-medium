@@ -50,6 +50,9 @@ describe('reference occurrence identities', () => {
     expect(new Set(refs.map(ref => ref.id)).size).toBe(3)
     expect(occurrences(`prefix ${content}`)).toEqual(refs)
     expect(occurrences(`((${E})) ((${E})) ((${E}))`)).toEqual(refs)
+    const richLabel = occurrences(`[!((${E}))](((11111111-1111-4111-8111-111111111111))) !((${E}))`)
+    expect(richLabel.filter(ref => ref.kind === 'blockembed'))
+      .toEqual(occurrences(`!((${E})) !((${E}))`))
   })
 
   it('keeps unresolved aliases distinct and independent of their resolution', () => {
@@ -58,5 +61,10 @@ describe('reference occurrence identities', () => {
     expect(unresolved).toHaveLength(5)
     expect(new Set(unresolved.map(ref => ref.id)).size).toBe(5)
     expect(occurrences(`prefix ${content}`, [{alias: 'A', id: E}, {alias: 'B', id: E}])).toEqual(unresolved)
+  })
+
+  it.each([{kind: 'embed', bang: '!'}, {kind: 'ref', bang: ''}])('ignores hidden block $kind nodes inside page-embed aliases', ({bang}) => {
+    const ref = `${bang}((${E}))`
+    expect(occurrences(`![[Other ${ref}]] ${ref}`).at(-1)).toEqual(occurrences(ref)[0])
   })
 })

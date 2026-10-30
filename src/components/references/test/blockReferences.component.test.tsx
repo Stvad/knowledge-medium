@@ -382,7 +382,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     const embeddedChildren = await waitFor(() => {
       const found = screen.getAllByText('Child content')
       expect(found).toHaveLength(2)
-      return found
+      return found.map(element => element.closest('[data-block-shell]')!)
     })
     expect(ref.textContent).toContain('Embedded body')
 
@@ -395,21 +395,25 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       .toEqual([true, true, true, true, true, true])
   })
 
-  it('an embedded editor keeps edit mode, focus and caret when text is prepended to the source', async () => {
-    const content = 'see ![[Target]]'
+  it.each(['page', 'block'] as const)('an embedded editor keeps edit mode, focus and caret after a prepend (%s embed)', async kind => {
+    const embedded = '22222222-2222-4222-8222-222222222222'
+    const content = kind === 'page' ? 'see ![[Target]]' : `see !((${embedded}))`
+    const prefix = kind === 'page' ? 'prepended' : `![[Other !((${embedded}))]] prepended`
     await repo.tx(async tx => {
-      await tx.update('source', {content, references: [{id: 'target', alias: 'Target'}]})
-    }, {scope: ChangeScope.BlockDefault, description: 'create page embed'})
+      await tx.create({id: embedded, workspaceId: 'ws-1', parentId: null, orderKey: 'b0', content: 'Embedded body'})
+      await tx.create({id: 'embedded-child', workspaceId: 'ws-1', parentId: embedded, orderKey: 'a0', content: 'Child content'})
+      await tx.update('source', {content, references: [{id: embedded, alias: 'Target'}]})
+    }, {scope: ChangeScope.BlockDefault, description: 'create editable embed'})
     const host = repo.block('source')
     await host.load()
     renderInSource(<MarkdownContentRenderer block={host}/>)
-    const rowSelector = '.blockembed [data-block-id="target-child"][data-editing]'
+    const rowSelector = '.blockembed [data-block-id="embedded-child"][data-editing]'
     const row = await waitFor(() => {
       const found = document.querySelector<HTMLElement>(rowSelector)
       expect(found).not.toBeNull()
       return found!
     })
-    await act(() => focusBlock(repo.block('ui-state'), 'target-child', {
+    await act(() => focusBlock(repo.block('ui-state'), 'embedded-child', {
       edit: true, renderScopeId: row.dataset.renderScopeId,
     }))
     const editor = await waitFor(() => {
@@ -427,7 +431,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(document.activeElement).toBe(editor.contentDOM)
 
     await act(() => repo.tx(async tx => {
-      await tx.update('source', {content: `prepended ${content}`})
+      await tx.update('source', {content: `${prefix} ${content}`})
     }, {scope: ChangeScope.BlockDefault, description: 'prepend host text'}))
     await screen.findByText(/prepended/)
 
