@@ -1,1 +1,0 @@
-export{xnt as SYSTEM_AUTHOR_PREFIX,Snt as isSystemAuthor,Cnt as systemAuthor}from"../../../chunks/app-CKNkR-er.js";

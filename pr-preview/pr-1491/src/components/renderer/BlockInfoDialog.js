@@ -1,1 +1,0 @@
-export{GN as BlockInfoDialog}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{$w as openRecentsPage}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{oA as BlockPasteShellDecorator,sA as blockPasteShellDecorator}from"../../chunks/app-CKNkR-er.js";

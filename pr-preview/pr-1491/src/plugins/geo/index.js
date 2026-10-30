@@ -1,1 +1,0 @@
-export{ig as geoPlugin}from"../../../chunks/app-CKNkR-er.js";

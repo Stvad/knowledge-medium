@@ -1,1 +1,0 @@
-export{vu as getExtraRoamProps}from"../../../chunks/app-CKNkR-er.js";

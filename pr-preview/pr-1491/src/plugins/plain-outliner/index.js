@@ -1,1 +1,0 @@
-export{bS as plainOutlinerPlugin}from"../../../chunks/app-CKNkR-er.js";

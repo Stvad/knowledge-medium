@@ -1,1 +1,0 @@
-export{MA as appUpdatePromptExtension}from"../../../chunks/app-CKNkR-er.js";

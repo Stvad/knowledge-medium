@@ -1,1 +1,0 @@
-export{DW as matchCharTrigger}from"../../chunks/app-CKNkR-er.js";

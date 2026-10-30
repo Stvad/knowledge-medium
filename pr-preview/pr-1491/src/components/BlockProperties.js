@@ -1,1 +1,0 @@
-export{wI as BlockProperties}from"../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{Vg as useIsReadOnly}from"../../chunks/app-CKNkR-er.js";

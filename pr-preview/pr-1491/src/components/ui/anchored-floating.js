@@ -1,1 +1,0 @@
-export{BB as floatingAnchorFromRect,VB as useAnchoredFloating}from"../../../chunks/app-CKNkR-er.js";

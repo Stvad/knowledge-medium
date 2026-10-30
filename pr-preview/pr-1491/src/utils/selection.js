@@ -1,1 +1,0 @@
-export{gR as blockAfterSubtreeRemoval,_R as blockIdsInOrderedSelectionRange,vR as commitSelectionRange,yR as extendSelection,bR as findBestSelectionAnchorIndex,xR as getBlocksInRange,SR as getLastVisibleDescendant,CR as getRootBlock,wR as nextVisibleBlock,TR as previousVisibleBlock,ER as validateSelectionHierarchy}from"../../chunks/app-CKNkR-er.js";

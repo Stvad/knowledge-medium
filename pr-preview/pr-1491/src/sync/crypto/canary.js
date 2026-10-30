@@ -1,1 +1,0 @@
-export{GC as mintCanary,KC as validateCanary}from"../../../chunks/app-CKNkR-er.js";

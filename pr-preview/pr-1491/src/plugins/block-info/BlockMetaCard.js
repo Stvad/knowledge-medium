@@ -1,1 +1,0 @@
-export{ih as BlockMetaCard}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{CV as SuspenseFallback}from"../../../chunks/app-CKNkR-er.js";

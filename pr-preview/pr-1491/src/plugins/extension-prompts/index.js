@@ -1,1 +1,0 @@
-export{vA as ExtensionPromptSurface,yA as extensionPromptsExtension}from"../../../chunks/app-CKNkR-er.js";

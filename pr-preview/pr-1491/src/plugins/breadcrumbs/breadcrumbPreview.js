@@ -1,1 +1,0 @@
-export{_S as getBreadcrumbContentPreview}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{VA as checkForAppUpdate,HA as registerServiceWorker}from"../chunks/app-CKNkR-er.js";

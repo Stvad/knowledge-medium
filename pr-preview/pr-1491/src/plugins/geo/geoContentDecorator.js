@@ -1,1 +1,0 @@
-export{lg as geoContentDecoratorContribution}from"../../../chunks/app-CKNkR-er.js";

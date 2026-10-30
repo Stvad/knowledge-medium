@@ -1,1 +1,0 @@
-export{iK as characterCounterDataExtension}from"../../../chunks/app-CKNkR-er.js";

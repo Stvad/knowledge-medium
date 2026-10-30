@@ -1,1 +1,0 @@
-export{AG as THREAD_TYPE,jG as annotationPropertySeeds,MG as annotationQuotePrefixProp,NG as annotationQuoteStartProp,PG as annotationQuoteSuffixProp,FG as annotationStatusProp,IG as annotationTargetProp,LG as annotationThreadType,RG as threadAnchorOf,zG as threadIsOpen,BG as threadStatusOf,VG as threadTargetIdOf}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{SA as extensionPromptStore,CA as pendingExtensionPrompts}from"../../../chunks/app-CKNkR-er.js";

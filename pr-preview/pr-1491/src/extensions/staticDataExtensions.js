@@ -1,1 +1,0 @@
-export{GV as staticDataExtensions}from"../../chunks/app-CKNkR-er.js";

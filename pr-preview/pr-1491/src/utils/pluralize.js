@@ -1,1 +1,0 @@
-export{v1 as agree,y1 as pluralize}from"../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{KB as propertyShapeLabel}from"../../../chunks/app-CKNkR-er.js";

@@ -1,1 +1,0 @@
-export{Fnt as definePostCommitProcessor}from"../../../chunks/app-CKNkR-er.js";

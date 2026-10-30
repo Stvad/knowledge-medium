@@ -1,1 +1,0 @@
-export{XG as CONTRIBUTOR_TYPE,ZG as attributionCreatorsProp,QG as attributionEditorsProp,$G as contributorForProp,eK as contributorKindOf,tK as contributorKindProp,nK as contributorProfileType,rK as contributorRoleProp}from"../../../chunks/app-CKNkR-er.js";

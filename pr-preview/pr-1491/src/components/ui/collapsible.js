@@ -1,1 +1,0 @@
-"use client";export{bI as Collapsible,xI as CollapsibleContent,SI as CollapsibleTrigger}from"../../../chunks/app-CKNkR-er.js";

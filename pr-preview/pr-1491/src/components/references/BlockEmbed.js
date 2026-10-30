@@ -1,1 +1,0 @@
-export{fk as BlockEmbed}from"../../../chunks/app-CKNkR-er.js";

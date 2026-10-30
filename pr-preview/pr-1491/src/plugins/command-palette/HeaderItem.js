@@ -1,1 +1,0 @@
-export{bO as CommandPaletteHeaderItem}from"../../../chunks/app-CKNkR-er.js";

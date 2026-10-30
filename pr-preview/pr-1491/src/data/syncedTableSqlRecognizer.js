@@ -1,1 +1,0 @@
-export{cJ as SYNCED_TABLES,lJ as syncedWriteTarget,uJ as writeTargets}from"../../chunks/app-CKNkR-er.js";

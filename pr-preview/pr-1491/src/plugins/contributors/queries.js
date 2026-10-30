@@ -1,1 +1,0 @@
-export{UG as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,WG as contributorProfilesByIdsQuery}from"../../../chunks/app-CKNkR-er.js";
