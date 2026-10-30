@@ -1,0 +1,1 @@
+export{A2 as mergeProperties}from"../../chunks/app-CjGRzFnh.js";

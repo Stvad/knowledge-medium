@@ -1,0 +1,1 @@
+export{KT as useAncestorCrumbs}from"../../chunks/app-CjGRzFnh.js";

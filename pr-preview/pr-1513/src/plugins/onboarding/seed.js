@@ -1,0 +1,1 @@
+export{Kb as seedTutorial}from"../../../chunks/app-CjGRzFnh.js";

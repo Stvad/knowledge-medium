@@ -1,0 +1,1 @@
+export{QK as characterCounterDataExtension}from"../../../chunks/app-CjGRzFnh.js";

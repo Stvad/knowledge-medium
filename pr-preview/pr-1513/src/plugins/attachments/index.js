@@ -1,0 +1,1 @@
+export{ov as attachmentsPlugin}from"../../../chunks/app-CjGRzFnh.js";

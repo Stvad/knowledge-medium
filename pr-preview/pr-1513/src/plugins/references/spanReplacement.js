@@ -1,0 +1,1 @@
+export{CU as preferredSpanReplacement}from"../../../chunks/app-CjGRzFnh.js";

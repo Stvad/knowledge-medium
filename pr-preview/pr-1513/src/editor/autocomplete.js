@@ -1,0 +1,1 @@
+export{LA as editorAutocompleteExtension}from"../../chunks/app-CjGRzFnh.js";

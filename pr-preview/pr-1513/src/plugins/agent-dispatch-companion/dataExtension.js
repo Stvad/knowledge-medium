@@ -1,0 +1,1 @@
+export{uY as agentDispatchCompanionDataExtension}from"../../../chunks/app-CjGRzFnh.js";

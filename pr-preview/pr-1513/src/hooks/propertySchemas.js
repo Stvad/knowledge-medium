@@ -1,0 +1,1 @@
+export{CV as usePropertySchemas}from"../../chunks/app-CjGRzFnh.js";

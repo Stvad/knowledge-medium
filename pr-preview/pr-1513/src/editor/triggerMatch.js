@@ -1,0 +1,1 @@
+export{lG as matchCharTrigger}from"../../chunks/app-CjGRzFnh.js";

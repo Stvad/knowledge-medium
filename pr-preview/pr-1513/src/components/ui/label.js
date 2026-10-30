@@ -1,0 +1,1 @@
+export{CE as Label}from"../../../chunks/app-CjGRzFnh.js";

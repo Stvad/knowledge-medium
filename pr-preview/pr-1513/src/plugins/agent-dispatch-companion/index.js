@@ -1,0 +1,1 @@
+export{Wd as agentDispatchCompanionPlugin}from"../../../chunks/app-CjGRzFnh.js";

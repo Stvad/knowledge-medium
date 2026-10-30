@@ -1,0 +1,1 @@
+export{Uk as chipStyle}from"../../../chunks/app-CjGRzFnh.js";

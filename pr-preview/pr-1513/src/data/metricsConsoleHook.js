@@ -1,0 +1,1 @@
+export{oA as ensureMetricsConsoleHook}from"../../chunks/app-CjGRzFnh.js";

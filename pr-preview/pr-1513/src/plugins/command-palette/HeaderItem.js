@@ -1,0 +1,1 @@
+export{VO as CommandPaletteHeaderItem}from"../../../chunks/app-CjGRzFnh.js";

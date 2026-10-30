@@ -1,0 +1,1 @@
+export{Net as deriveWorkspaceIdNamespace}from"../../../chunks/app-CjGRzFnh.js";

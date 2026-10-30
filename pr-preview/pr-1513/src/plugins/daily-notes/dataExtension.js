@@ -1,0 +1,1 @@
+export{zG as dailyNotesDataExtension}from"../../../chunks/app-CjGRzFnh.js";

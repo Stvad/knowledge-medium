@@ -1,0 +1,1 @@
+export{ait as definePostCommitProcessor}from"../../../chunks/app-CjGRzFnh.js";

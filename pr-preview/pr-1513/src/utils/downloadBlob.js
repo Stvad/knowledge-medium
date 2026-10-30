@@ -1,0 +1,1 @@
+export{FP as downloadBlob}from"../../chunks/app-CjGRzFnh.js";

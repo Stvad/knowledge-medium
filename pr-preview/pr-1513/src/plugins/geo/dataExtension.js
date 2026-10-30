@@ -1,0 +1,1 @@
+export{FW as geoDataExtension}from"../../../chunks/app-CjGRzFnh.js";
