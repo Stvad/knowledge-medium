@@ -139,7 +139,6 @@ beforeAll(async () => {
   await installBlockWriteCounter(sharedDb.db)
 })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 /** Interrupt-barrier + Math.random pin — MATERIALIZE's child creates use

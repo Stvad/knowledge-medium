@@ -26,7 +26,7 @@ type RenderSlot =
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
 const TOP_LEVEL_COLUMN_CLASS =
-  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink'
+  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-sm md:basis-0 md:grow md:shrink'
 const WIDE_SCROLL_COLUMN_CLASS =
   'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
@@ -190,7 +190,9 @@ function SlotView({
       data-layout-column-id={topLevel && !soloWrapper ? slot.id : undefined}
       className={soloWrapper
         ? 'contents'
-        : `${topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
+        // A top-level stack scrolls its panes itself, so it reserves the
+        // bottom clearance a pane's own scrollport would (PANEL_BOTTOM_CLEARANCE).
+        : `${topLevel ? `${TOP_LEVEL_COLUMN_CLASS} md:pb-[var(--panel-bottom-clearance,0px)]` : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
     >
       {slot.children.map(child => (
         <SlotView

@@ -9,6 +9,7 @@ import {isReadOnlySql, type KmMcpToolName} from './mcpShared.js'
 import {
   AGENT_VIEW_DEFAULTS,
   blockHistoryCommandSchema,
+  commentsCommandSchema,
   dailyNoteCommandSchema,
   dataModelCommandSchema,
   getCommandMeta,
@@ -142,6 +143,9 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
   }),
   wireTool('block_history', 'block-history', blockHistoryCommandSchema, {
     cli: {verb: 'block-history', positional: {field: 'id', variadic: false}},
+  }),
+  wireTool('comments', 'comments', commentsCommandSchema, {
+    cli: {verb: 'comments'},
   }),
   sqlQueryTool,
 ]

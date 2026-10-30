@@ -25,6 +25,7 @@ import {
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
+import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
 import type { BlockSearchFilter } from './searchFilter.ts'
 
@@ -408,41 +409,27 @@ export const contentReferencePrefillFor = (
 }
 
 /**
- * A per-workspace singleton page that must exist EARLY — before the workspace's
- * landing/first-run seed runs. Owners (kernel + plugins) declare theirs; the
- * bootstrap materialises them all via `Repo.ensureSystemPages` before any
- * landing resolver runs.
+ * An owner-installed kernel page. The shared spec defines its deterministic
+ * identity, bootstrap creation and UI deletion refusal. Register lazy pages too:
+ * protection follows the owner even before the page's first use.
  *
- * Why eager: `[[Name]]` is auto-create (Roam-style) — the references processor
- * mints a page at an alias-"seat" id when no page with that alias exists yet.
- * Singleton pages (Journal/Properties/Types/Locations) are created elsewhere at
- * their OWN deterministic ids and claim a reserved alias, so a wiki-link that
- * resolves first auto-creates a rival claimant → two blocks, one alias →
- * `alias.collision`. Creating the canonical page first means `aliasLookup` hits
- * and no rival is minted.
+ * Eager pages are created by `Repo.ensureSystemPages` before landing/first-run
+ * seeds, so wiki-links to reserved aliases find the canonical page instead of
+ * auto-creating a rival. Lazy pages are created only at their point of use.
  *
- * `ensure` MUST be idempotent and write at a deterministic, workspace-derived
- * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
- * converging clients all land on the same row.
- *
- * It MAY be skipped: `ensureSystemPages` reports a failing `ensure` and carries
- * on, so one page cannot stop the workspace opening. Whether that skip is
- * momentary or lasts the session is YOUR consumers' doing — one that
- * get-or-creates the page at its point of use retries the moment the feature is
- * touched, while one that navigates straight to the derived id finds nothing
- * there until the next workspace open. Prefer the former.
+ * Bootstrap logs and skips a failed eager page so the workspace can still open.
+ * Consumers should get-or-create at point of use to retry a failed bootstrap.
  */
 export interface SystemPage {
-  /** Stable id, for facet dedup. */
-  readonly id: string
-  /** Returns `Promise<unknown>` so the existing get-or-create helpers
-   *  (which resolve to the created `Block`) assign directly; the result is
-   *  ignored by `ensureSystemPages`. */
-  ensure: (repo: Repo, workspaceId: string) => Promise<unknown>
+  readonly spec: KernelPageSpec
+  readonly eager: boolean
 }
 
 const isSystemPage = (value: unknown): value is SystemPage =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.ensure === 'function'
+  isRecord(value) && isRecord(value.spec) &&
+  typeof value.spec.namespace === 'string' && typeof value.spec.alias === 'string' &&
+  (value.spec.markerType === null || typeof value.spec.markerType === 'string') &&
+  typeof value.eager === 'boolean'
 
 export const systemPagesFacet = defineFacet<SystemPage, readonly SystemPage[]>({
   id: 'data.systemPages',

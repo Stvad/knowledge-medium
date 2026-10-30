@@ -1,7 +1,7 @@
 /**
- * Per-tab view state for comments. Deliberately ephemeral module state, never
- * block data: a draft is written only on submit, so an abandoned comment
- * leaves nothing behind.
+ * Per-tab view state for comments. Module state like the toggle sets
+ * (`createKeyedToggleSet`), never block data: a draft is written only on
+ * submit, so an abandoned comment leaves nothing behind.
  *
  * - Inline threads, resolved threads shown and open composers are keyed by
  *   `viewKey`, one block as shown in one render scope, so expanding or
@@ -12,6 +12,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
+import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
 export const viewKey = (renderScopeId: string | undefined, blockId: string): string =>
@@ -27,30 +28,18 @@ export interface ComposerState {
   submitting: boolean
 }
 
-const expanded = new Set<string>()
-const showingResolved = new Set<string>()
+const expanded = createKeyedToggleSet('annotations-expanded')
+const showingResolved = createKeyedToggleSet('annotations-show-resolved')
 const composers = new Map<string, ComposerState>()
 const listeners = new CallbackSet('annotations-ui')
 
 const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
 
-/** Add or remove `key`, notifying only on a change. */
-const setFlag = (set: Set<string>, key: string, on: boolean): void => {
-  if (set.has(key) === on) return
-  if (on) set.add(key)
-  else set.delete(key)
-  listeners.notify()
-}
+export const toggleThreadsExpanded = expanded.toggle
+export const toggleShowResolved = showingResolved.toggle
 
-const toggle = (set: Set<string>, key: string): void => setFlag(set, key, !set.has(key))
-
-export const toggleThreadsExpanded = (key: string): void => toggle(expanded, key)
-export const toggleShowResolved = (key: string): void => toggle(showingResolved, key)
-
-export const useThreadsExpanded = (key: string): boolean =>
-  useSyncExternalStore(subscribe, () => expanded.has(key))
-export const useShowResolved = (key: string): boolean =>
-  useSyncExternalStore(subscribe, () => showingResolved.has(key))
+export const useThreadsExpanded = expanded.useHas
+export const useShowResolved = showingResolved.useHas
 
 /** Open (or re-aim) a composer, keeping a draft already typed there: a submit
  *  refused because the text changed keeps the draft, and the user's next
@@ -88,9 +77,14 @@ export const useComposer = (key: string): ComposerState | undefined =>
 const marginShowing = new Set<string>()
 /** The thread whose card is pinned to its anchor in each panel's margin. */
 const activeThreads = new Map<string, string>()
-const showingClosed = new Set<string>()
+const showingClosed = createKeyedToggleSet('annotations-show-closed')
 
-export const setMarginShowing = (panelId: string, showing: boolean): void => setFlag(marginShowing, panelId, showing)
+export const setMarginShowing = (panelId: string, showing: boolean): void => {
+  if (marginShowing.has(panelId) === showing) return
+  if (showing) marginShowing.add(panelId)
+  else marginShowing.delete(panelId)
+  listeners.notify()
+}
 
 export const useMarginShowing = (panelId: string | undefined): boolean =>
   useSyncExternalStore(subscribe, () => panelId !== undefined && marginShowing.has(panelId))
@@ -106,14 +100,12 @@ export const peekActiveThread = (panelId: string): string | undefined => activeT
 export const useActiveThread = (panelId: string): string | undefined =>
   useSyncExternalStore(subscribe, () => activeThreads.get(panelId))
 
-export const toggleShowClosed = (panelId: string): void => toggle(showingClosed, panelId)
+export const toggleShowClosed = showingClosed.toggle
+export const showClosedThreads = showingClosed.add
+export const useShowClosed = showingClosed.useHas
 
-export const showClosedThreads = (panelId: string): void => setFlag(showingClosed, panelId, true)
-export const useShowClosed = (panelId: string): boolean =>
-  useSyncExternalStore(subscribe, () => showingClosed.has(panelId))
-
-/** Every store notification, for the margin's layout pass: a card activated
- *  or a composer opened moves cards. */
+/** The notifications that move cards without mounting or unmounting one, for
+ *  the margin's layout pass: a card activated, a composer opened. */
 export const onUiStoreChange = (listener: () => void): (() => void) => subscribe(listener)
 
 // ──── Re-anchoring by selection ────

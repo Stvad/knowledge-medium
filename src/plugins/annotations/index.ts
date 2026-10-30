@@ -5,7 +5,7 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {actionsFacet, blockDeletionGuardsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
+import {actionsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {
   blockChildrenFooterFacet,
   blockContentDecoratorsFacet,
@@ -17,7 +17,6 @@ import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import {annotationActions, COMMENT_ON_SELECTION_ACTION_ID} from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
-import {commentsPageDeletionGuard} from './container.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
@@ -37,7 +36,6 @@ export const annotationsPlugin: AppExtension = systemToggle({
   description: 'Comment on a block, or on selected text in it, in threads that live beside your notes.',
 }).of([
   annotationsDataExtension,
-  blockDeletionGuardsFacet.of(commentsPageDeletionGuard, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),

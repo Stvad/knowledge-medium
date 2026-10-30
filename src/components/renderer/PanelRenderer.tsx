@@ -367,7 +367,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
         // which is robust to wrappers; this handle is for tests, and for panel
         // mounts, which sit beside the scrollport rather than inside it.
         data-panel-scrollport=""
-        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
+        // Bottom clearance: below md the bottom nav's; from md up, whatever
+        // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
+        // (`@/utils/panelClearance`), named literally here for Tailwind.
+        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}
         onPointerDownCapture={activatePanel}
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}

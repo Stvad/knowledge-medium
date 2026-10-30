@@ -171,10 +171,10 @@ describe('authoring catalog example drift guard', () => {
       'getOrCreateKernelPage', 'getOrCreateTypedChild', 'getPluginPrefsBlock',
       'navigate', 'openDialog', 'pluginBlockId', 'propertyEditorOverridesFacet',
       'seedProperty', 'seedType', 'showError', 'showProgress', 'showSuccess',
-      'statusProp', 'typeSeedsFacet', 'useRepo',
+      'statusProp', 'systemPagesFacet', 'typeSeedsFacet', 'useRepo',
       // A type, not a runtime export — the guides name it when describing the
       // editor contract, and a rename would drift the prose the same way.
-      'PropertyEditorProps',
+      'KernelPageSpec', 'PropertyEditorProps',
     ]
 
     const catalog = describeAuthoringCatalog()

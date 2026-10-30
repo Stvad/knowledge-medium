@@ -901,6 +901,13 @@ cli
   })
 
 cli
+  .command('add-comment <json>', wireDescription('add-comment'))
+  .action(async (json: string) => {
+    const parsed = parseJson(json, 'add-comment json') as Record<string, unknown>
+    await runAndPrint({type: 'add-comment', ...parsed} as KnownCommand)
+  })
+
+cli
   .command('create-page [...name]', wireDescription('create-page'))
   .option('--date <expr>', "A daily note's date instead of a page name (today, 2026-10-15, next monday)")
   .action(async (name: unknown, options: {date?: unknown, '--'?: unknown}) => {

@@ -770,11 +770,11 @@ const isExpectedLog = (args: readonly unknown[]): boolean =>
 // rather than inventing a second one: `guard.run` serializes every
 // simulation (barrier-before-body, so a
 // new case's buffer swap can never happen until the PREVIOUS case, abandoned
-// or not, has fully finished appending to its OWN buffer), and `afterAll`
-// awaits `guard.barrier()` before restoring the spies, so a truly abandoned
-// last case still has a real console to log into while it finishes. `seed:
-// null` — nothing here pins `Math.random`, only the barrier ordering is
-// needed.
+// or not, has fully finished appending to its OWN buffer), and the guard's
+// own `afterEach` waits out an abandoned case before its test ends, so the
+// last one finishes logging into the still-mocked console before `afterAll`
+// restores it. `seed: null` — nothing here pins `Math.random`, only the
+// barrier ordering is needed.
 const guard = statefulFuzzGuard()
 
 let currentUnexpectedLogs: unknown[][] = []
@@ -1166,11 +1166,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(recordIfUnexpected)
     errorSpy = vi.spyOn(console, 'error').mockImplementation(recordIfUnexpected)
   })
-  afterAll(async () => {
-    // Barrier BEFORE restore: let a genuinely abandoned last case (see
-    // `guard` above) finish logging into a real, still-mocked console
-    // before we tear the spies down.
-    await guard.barrier()
+  afterAll(() => {
     warnSpy.mockRestore()
     errorSpy.mockRestore()
   })

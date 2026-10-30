@@ -323,7 +323,6 @@ const openOpWorkspace = (repo: Repo, op: KernelOpSpec): void => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 
@@ -406,7 +405,6 @@ describe('kernel mutator sequences', () => {
   // references_json — this pins each index non-empty under a crafted
   // sequence so that failure mode can't silently return.
   it('op set populates every trigger-maintained derived index', async () => {
-    await guard.barrier()
     await resetTestDb(sharedDb.db)
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
     repo.setActiveWorkspaceId(WS)
