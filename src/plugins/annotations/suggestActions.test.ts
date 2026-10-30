@@ -13,7 +13,7 @@ import {submitComposer} from './actions'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadReplacementOf} from './schema'
-import {suggestEditAction} from './suggestActions'
+import {openSuggestionComposer, suggestEditAction} from './suggestActions'
 import {closeComposer, openComposer, peekComposer, updateComposer, viewKey} from './uiStore'
 
 const WS = 'ws'
@@ -76,6 +76,14 @@ describe('suggesting an edit to a selection', () => {
     expect(suggestEditAction.isVisible!({renderScopeId: nested} as never)).toBe(false)
     await suggest(editorSelecting('Thursday'), nested)
     expect(peekComposer(viewKey(nested, 'B'))).toBeUndefined()
+  })
+
+  it('opens from a raw range of the text, widened to whole reference spans, as a read-mode trigger would', () => {
+    const content = 'See [[Launch plan]] for dates.'
+    expect(openSuggestionComposer('B', PANEL, {content, from: 8, to: 12})).toBe(true)
+    expect(peekComposer(KEY)).toMatchObject({anchor: {quote: '[[Launch plan]]', quoteStart: 4}, replacement: '[[Launch plan]]'})
+    expect(openSuggestionComposer('C', PANEL, {content, from: 3, to: 3})).toBe(false)
+    expect(peekComposer(viewKey(PANEL, 'C'))).toBeUndefined()
   })
 
   it('writes a suggestion with no comment, and with one', async () => {

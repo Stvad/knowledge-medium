@@ -28,13 +28,26 @@ export const HIGHLIGHT_SELECTION_ACTION_ID = 'annotations.highlightSelection'
 export const COMMENT_ON_BLOCK_ACTION_ID = 'annotations.commentOnBlock'
 export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
 
-/** The selection's anchor as the user sees it. The stored row lags the editor
- *  by its debounce, so the pending write is flushed first; it lands on the
- *  write lock ahead of the creating tx, whose exact check then reads it. */
-export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
+/** A raw range of a block's content: what an editor selection maps to, and
+ *  what any other trigger that can name a range of the text hands over. */
+export interface ContentRange {
+  content: string
+  from: number
+  to: number
+}
+
+/** The editor's selection as the user sees it. The stored row lags the
+ *  editor by its debounce, so the pending write is flushed first; it lands on
+ *  the write lock ahead of the creating tx, whose exact check then reads it. */
+export const rangeFromEditor = (view: EditorView): ContentRange => {
   flushEditorContent(view)
   const {from, to} = view.state.selection.main
-  return captureAnchor(view.state.doc.toString(), from, to)
+  return {content: view.state.doc.toString(), from, to}
+}
+
+export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
+  const {content, from, to} = rangeFromEditor(view)
+  return captureAnchor(content, from, to)
 }
 
 /** Has the composer what its submit writes: a comment, or for a suggestion
