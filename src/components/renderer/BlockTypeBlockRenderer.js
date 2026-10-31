@@ -1,1 +1,1 @@
-export{HN as BlockTypeBlockRenderer,UN as BlockTypeContentRenderer,WN as writeBlockTypeLabel}from"../../../chunks/app-BP7ml8bs.js";
+export{QN as BlockTypeBlockRenderer,$N as BlockTypeContentRenderer,eP as writeBlockTypeLabel}from"../../../chunks/app-DKFztlNx.js";

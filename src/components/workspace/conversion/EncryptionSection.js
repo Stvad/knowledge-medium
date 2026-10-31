@@ -1,1 +1,1 @@
-export{BC as EncryptionSection}from"../../../../chunks/app-BP7ml8bs.js";
+export{XC as EncryptionSection}from"../../../../chunks/app-DKFztlNx.js";

@@ -1,0 +1,1 @@
+export{Iu as quotedInFooterContribution}from"../../../chunks/app-DKFztlNx.js";

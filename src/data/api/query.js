@@ -1,1 +1,1 @@
-export{wit as defineQuery}from"../../../chunks/app-BP7ml8bs.js";
+export{Pit as defineQuery}from"../../../chunks/app-DKFztlNx.js";
