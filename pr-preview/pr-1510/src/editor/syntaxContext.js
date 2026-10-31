@@ -1,1 +1,1 @@
-export{WG as isInsideLiteralMarkdown}from"../../chunks/app-1_oXfYkI.js";
+export{GG as isInsideLiteralMarkdown}from"../../chunks/app-CfZDHsQW.js";

@@ -1,1 +1,1 @@
-export{Ng as BacklinksViewSection,Pg as backlinksViewFooterContribution}from"../../../chunks/app-1_oXfYkI.js";
+export{Pg as BacklinksViewSection,Fg as backlinksViewFooterContribution}from"../../../chunks/app-CfZDHsQW.js";

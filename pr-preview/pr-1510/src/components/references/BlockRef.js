@@ -1,1 +1,1 @@
-export{GT as BlockRef}from"../../../chunks/app-1_oXfYkI.js";
+export{KT as BlockRef}from"../../../chunks/app-CfZDHsQW.js";

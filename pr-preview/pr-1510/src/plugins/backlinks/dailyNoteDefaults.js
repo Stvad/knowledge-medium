@@ -1,1 +1,1 @@
-export{Lq as INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,Rq as backlinksPrefsType,zq as dailyNoteBacklinksDefaultsProp,Bq as defaultBacklinksFilterForBlock,Vq as effectiveBacklinksFilterForBlock,Hq as isDailyNoteBlockData}from"../../../chunks/app-1_oXfYkI.js";
+export{Rq as INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,zq as backlinksPrefsType,Bq as dailyNoteBacklinksDefaultsProp,Vq as defaultBacklinksFilterForBlock,Hq as effectiveBacklinksFilterForBlock,Uq as isDailyNoteBlockData}from"../../../chunks/app-CfZDHsQW.js";

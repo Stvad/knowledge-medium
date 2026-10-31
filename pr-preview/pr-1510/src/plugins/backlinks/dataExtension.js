@@ -1,1 +1,1 @@
-export{Iq as backlinksDataExtension}from"../../../chunks/app-1_oXfYkI.js";
+export{Lq as backlinksDataExtension}from"../../../chunks/app-CfZDHsQW.js";

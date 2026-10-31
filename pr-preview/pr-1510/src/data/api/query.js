@@ -1,1 +1,1 @@
-export{kit as defineQuery}from"../../../chunks/app-1_oXfYkI.js";
+export{Ait as defineQuery}from"../../../chunks/app-CfZDHsQW.js";
