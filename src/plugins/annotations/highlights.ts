@@ -38,13 +38,14 @@ export const highlightClasses = ({moved, suggestion}: HighlightStyle): string =>
   ...(moved ? [MOVED_HIGHLIGHT_CLASS, 'border-dashed'] : []),
 ].join(' ')
 
-/** The style of text several highlights cover: exact if any is exact, since
- *  the text there is certainly quoted, and a suggestion's if any is one,
- *  since a suggestion would change it. */
-export const coveringStyle = (covering: readonly HighlightStyle[]): HighlightStyle => ({
-  moved: covering.every(style => style.moved),
-  suggestion: covering.some(style => style.suggestion),
-})
+/** The style of text several highlights cover: a suggestion's if any is
+ *  one, since a suggestion would change it, and then exact if any of the
+ *  winning style is, since the text there is certainly quoted. */
+export const coveringStyle = (covering: readonly HighlightStyle[]): HighlightStyle => {
+  const suggestions = covering.filter(style => style.suggestion)
+  const winners = suggestions.length > 0 ? suggestions : covering
+  return {moved: winners.every(style => style.moved), suggestion: suggestions.length > 0}
+}
 
 export interface HighlightRange extends HighlightStyle {
   from: number
@@ -61,17 +62,10 @@ export const highlightRanges = (doc: string, threads: readonly HighlightThread[]
       : [{from: resolved.from, to: resolved.to, moved: resolved.state === 'moved', suggestion: thread.suggestion}]
   })
 
-/** CodeMirror nests overlapping marks itself, so each range keeps its own. */
-const markCache = new Map<string, Decoration>()
-const markFor = (style: HighlightStyle): Decoration => {
-  const className = highlightClasses(style)
-  let mark = markCache.get(className)
-  if (!mark) markCache.set(className, mark = Decoration.mark({class: className}))
-  return mark
-}
-
+/** CodeMirror nests overlapping marks itself, so each range keeps its own
+ *  style; `coveringStyle` is read mode's. */
 const decorationsFor = (doc: string, threads: readonly ThreadSummary[]): DecorationSet =>
-  Decoration.set(highlightRanges(doc, threads).map(r => markFor(r).range(r.from, r.to)), true)
+  Decoration.set(highlightRanges(doc, threads).map(r => Decoration.mark({class: highlightClasses(r)}).range(r.from, r.to)), true)
 
 const setThreads = StateEffect.define<readonly ThreadSummary[]>()
 

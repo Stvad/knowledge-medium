@@ -47,7 +47,7 @@ import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {composerReady, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
-import {showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
+import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {
   THREAD_TYPE,
@@ -242,6 +242,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
       closeComposer(composerKey)
     }
   }
+  const fieldProps = {rows: 2, readOnly: composer.submitting, onKeyDown, className: COMPOSER_FIELD}
   return (
     <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
       <div className="text-xs text-muted-foreground">
@@ -250,26 +251,20 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
       </div>
       {suggesting && (
         <textarea
+          {...fieldProps}
           ref={input}
           aria-label="Replacement"
-          rows={2}
-          readOnly={composer.submitting}
           value={composer.replacement}
           onChange={event => updateComposer(composerKey, {replacement: event.target.value, error: null})}
-          onKeyDown={onKeyDown}
-          className={COMPOSER_FIELD}
         />
       )}
       <textarea
+        {...fieldProps}
         ref={suggesting ? undefined : input}
         aria-label={suggesting ? 'Comment (optional)' : 'New comment'}
         placeholder={suggesting ? 'Why (optional)' : undefined}
-        rows={2}
-        readOnly={composer.submitting}
         value={composer.draft}
         onChange={event => updateComposer(composerKey, {draft: event.target.value, error: null})}
-        onKeyDown={onKeyDown}
-        className={COMPOSER_FIELD}
       />
       {composer.error && <p role="alert" className="text-xs text-destructive">{composer.error}</p>}
       <div className="flex gap-2 text-xs">
@@ -471,26 +466,30 @@ const ReanchorControls = ({root, state, targetContent}: {
   )
 }
 
+/** What a thread's line shows: a suggestion's change, or the quote. */
+const ThreadQuote = ({root}: {root: RootFields}) => {
+  const suggestion = threadSuggestionOf(root)
+  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)}/>
+}
+
 const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise<void>}) => {
   const repo = useRepo()
   const readOnly = useReadOnly(repo)
   const {state, targetContent} = useAnchorState(root)
   const open = threadIsOpen(root)
-  const suggestion = threadSuggestionOf(root)
+  const awaitingDecision = open && threadSuggestionOf(root) !== null
   const anchorShown = showsAnchorState(root)
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className="min-w-0 flex-1 basis-32 text-muted-foreground">
-        {suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)}/>}
-      </span>
+      <span className="min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote root={root}/></span>
       {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
       {!readOnly && <>
-        {suggestion && open && <SuggestionActions threadId={root.id}/>}
+        {awaitingDecision && <SuggestionActions threadId={root.id}/>}
         <ActionButton onClick={() => onReply().catch(reportFailure)}>Reply</ActionButton>
-        {!(suggestion && open) && (
+        {!awaitingDecision && !isAccepted(root) && (
           <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
             {open ? 'Resolve' : 'Reopen'}
           </ActionButton>
@@ -508,13 +507,12 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
  *  outside a card: which block it is on, and what it quotes. */
 const ThreadElsewhere = ({root}: {root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
-  const suggestion = threadSuggestionOf(root)
   return (
     <div className="text-sm text-muted-foreground">
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
-      {suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)}/>}
+      <ThreadQuote root={root}/>
     </div>
   )
 }

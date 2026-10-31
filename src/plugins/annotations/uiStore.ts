@@ -43,10 +43,16 @@ export const toggleShowResolved = showingResolved.toggle
 export const useThreadsExpanded = expanded.useHas
 export const useShowResolved = showingResolved.useHas
 
+/** A replacement the user changed from its prefill (the quote), worth keeping
+ *  across a re-aim; an untouched prefill follows the new quote. */
+const editedReplacement = (current: ComposerState | undefined): string | undefined =>
+  current?.replacement !== current?.anchor?.quote ? current?.replacement : undefined
+
 /** Open (or re-aim) a composer, keeping a draft already typed there: a submit
  *  refused because the text changed keeps the draft, and the user's next
- *  selection re-aims it. A suggestion's replacement is kept the same way, and
- *  otherwise starts as `replacement`. Expands the block's threads. */
+ *  selection re-aims it. A suggestion's replacement is kept the same way once
+ *  edited, and otherwise starts as `replacement`. Expands the block's
+ *  threads. */
 export const openComposer = (
   key: string,
   targetId: string,
@@ -58,7 +64,7 @@ export const openComposer = (
     targetId,
     anchor,
     draft: current?.draft ?? '',
-    replacement: replacement === undefined ? undefined : current?.replacement ?? replacement,
+    replacement: replacement === undefined ? undefined : editedReplacement(current) ?? replacement,
     error: null,
     submitting: false,
   })

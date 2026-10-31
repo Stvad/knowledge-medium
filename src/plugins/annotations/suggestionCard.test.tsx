@@ -82,6 +82,7 @@ describe('SuggestionText', () => {
   it('reads a closed one as what became of it', () => {
     expect(textOf('accepted').textContent).toBe('Replaced “Thursday” with “Thursday 9am”')
     expect(textOf('rejected').textContent).toBe('Rejected replacing “Thursday” with “Thursday 9am”')
+    expect(textOf('resolved').textContent).toBe('Closed without applying: replace “Thursday” with “Thursday 9am”')
   })
 })
 

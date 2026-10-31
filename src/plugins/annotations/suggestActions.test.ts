@@ -120,6 +120,12 @@ describe('suggesting an edit to a selection', () => {
     expect(await submitted).toBe(true)
   })
 
+  it('re-prefills an untouched replacement when the composer is re-aimed', async () => {
+    await suggest(editorSelecting('Thursday'))
+    await suggest(editorSelecting('vendor'))
+    expect(peekComposer(KEY)).toMatchObject({anchor: {quote: 'vendor'}, replacement: 'vendor'})
+  })
+
   it('keeps a typed replacement when the composer is re-aimed, and drops it for a comment', async () => {
     await suggest(editorSelecting('Thursday'))
     updateComposer(KEY, {replacement: 'Thursday 9am'})

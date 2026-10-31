@@ -7,10 +7,11 @@
 import {useState, type MouseEvent} from 'react'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
+import {safeDecodeRowProperty} from '@/data/rowProperty'
 import {useRepo} from '@/context/repo.js'
 import {truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {threadIsOpen, threadStatusOf, threadSuggestionOf, type ThreadSuggestion} from './schema.ts'
+import {annotationStatusProp, threadIsOpen, threadSuggestionOf, type ThreadStatus, type ThreadSuggestion} from './schema.ts'
 import {acceptSuggestion, rejectSuggestion} from './suggestions.ts'
 
 type RootFields = Pick<BlockData, 'content' | 'properties'>
@@ -21,14 +22,14 @@ type RootFields = Pick<BlockData, 'content' | 'properties'>
  *  it would make it applicable a second time. */
 export const showsAnchorState = (root: RootFields): boolean => threadIsOpen(root) || !threadSuggestionOf(root)
 
-const closedAs = (root: RootFields): 'accepted' | 'rejected' | null => {
-  try {
-    const status = threadStatusOf(root)
-    return status === 'accepted' || status === 'rejected' ? status : null
-  } catch {
-    return null
-  }
-}
+/** The closed status a suggestion's card reads as, or null while it is open.
+ *  `resolved` (set by hand, or before suggestions existed) reads as closed. */
+const closedAs = (root: RootFields): ThreadStatus | null =>
+  threadIsOpen(root) ? null : safeDecodeRowProperty(root, annotationStatusProp)
+
+/** An accepted suggestion stays closed (`setThreadStatus` refuses to reopen
+ *  it), so its card offers no Reopen. */
+export const isAccepted = (root: RootFields): boolean => closedAs(root) === 'accepted'
 
 const clipped = (text: string): string => truncate(text, 160)
 
@@ -43,6 +44,9 @@ export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}
   }
   if (closed === 'rejected') {
     return <span className="break-words">Rejected replacing “{clipped(quote)}” with “{clipped(replacement)}”</span>
+  }
+  if (closed) {
+    return <span className="break-words">Closed without applying: replace “{clipped(quote)}” with “{clipped(replacement)}”</span>
   }
   return (
     <span className="break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>

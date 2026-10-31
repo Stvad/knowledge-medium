@@ -169,6 +169,16 @@ describe('read-mode marks', () => {
     ])
   })
 
+  it('styles an overlap by the winning style only: a moved suggestion over an exact comment stays moved', () => {
+    const content = 'aaaaa bbbbb ccccc'
+    const ranges = [range(content, 'aaaaa bbbbb'), {...range(content, 'bbbbb ccccc', true), suggestion: true}]
+    const html = render(content, ranges)
+    expect([...html.matchAll(MARK)].map(m => [m[2], m[1].includes('-suggestion'), m[1].includes('-moved')])).toEqual([
+      ['aaaaa ', false, false],
+      ['bbbbb ccccc', true, true],
+    ])
+  })
+
   it('marks across paragraphs and list items, one mark per text run', () => {
     const content = 'First para end.\n\n- item one\n- item two'
     expect(marked(content, [range(content, 'end.\n\n- item one')]).map(m => m.html)).toEqual(['end.', 'item one'])
