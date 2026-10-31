@@ -1,1 +1,1 @@
-export{KV as propertyShapeLabel}from"../../../chunks/app-DNFTnr4v.js";
+export{KV as propertyShapeLabel}from"../../../chunks/app-BiIQ_Jyy.js";

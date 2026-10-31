@@ -1,1 +1,1 @@
-export{Zu as placeCards}from"../../../chunks/app-DNFTnr4v.js";
+export{Zu as placeCards}from"../../../chunks/app-BiIQ_Jyy.js";

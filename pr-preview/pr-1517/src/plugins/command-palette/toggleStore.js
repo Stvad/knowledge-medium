@@ -1,1 +1,1 @@
-export{ak as commandPaletteToggle}from"../../../chunks/app-DNFTnr4v.js";
+export{ak as commandPaletteToggle}from"../../../chunks/app-BiIQ_Jyy.js";

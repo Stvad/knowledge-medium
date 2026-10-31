@@ -1,1 +1,1 @@
-export{tC as Breadcrumbs}from"../../../chunks/app-DNFTnr4v.js";
+export{tC as Breadcrumbs}from"../../../chunks/app-BiIQ_Jyy.js";

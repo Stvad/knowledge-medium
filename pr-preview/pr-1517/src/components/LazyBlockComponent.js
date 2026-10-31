@@ -1,1 +1,1 @@
-export{LM as LazyBlockComponent}from"../../chunks/app-DNFTnr4v.js";
+export{LM as LazyBlockComponent}from"../../chunks/app-BiIQ_Jyy.js";

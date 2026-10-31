@@ -1,1 +1,1 @@
-export{HV as usePropertySchemas}from"../../chunks/app-DNFTnr4v.js";
+export{HV as usePropertySchemas}from"../../chunks/app-BiIQ_Jyy.js";

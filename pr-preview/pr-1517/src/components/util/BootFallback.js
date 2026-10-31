@@ -1,1 +1,1 @@
-export{SH as BootFallback}from"../../../chunks/app-DNFTnr4v.js";
+export{SH as BootFallback}from"../../../chunks/app-BiIQ_Jyy.js";

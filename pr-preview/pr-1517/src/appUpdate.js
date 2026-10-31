@@ -1,1 +1,1 @@
-export{Oj as appUpdate,kj as useAppUpdateAvailable}from"../chunks/app-DNFTnr4v.js";
+export{Oj as appUpdate,kj as useAppUpdateAvailable}from"../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,1 @@
-export{wtt as isChildBackedPropertiesWorkspace}from"../chunks/app-DNFTnr4v.js";
+export{wtt as isChildBackedPropertiesWorkspace}from"../chunks/app-BiIQ_Jyy.js";

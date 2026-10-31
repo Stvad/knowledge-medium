@@ -1,1 +1,1 @@
-export{ik as CommandPaletteHeaderItem}from"../../../chunks/app-DNFTnr4v.js";
+export{ik as CommandPaletteHeaderItem}from"../../../chunks/app-BiIQ_Jyy.js";

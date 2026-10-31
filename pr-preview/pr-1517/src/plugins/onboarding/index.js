@@ -1,1 +1,1 @@
-export{ux as EXTENSIONS_PAGE_TITLE,dx as TUTORIAL_DEFAULT_TITLE,fx as TUTORIAL_VIM_TITLE,Zb as onboardingPlugin,lx as seedTutorial}from"../../../chunks/app-DNFTnr4v.js";
+export{ux as EXTENSIONS_PAGE_TITLE,dx as TUTORIAL_DEFAULT_TITLE,fx as TUTORIAL_VIM_TITLE,Zb as onboardingPlugin,lx as seedTutorial}from"../../../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,1 @@
-export{oA as chipStyle}from"../../../chunks/app-DNFTnr4v.js";
+export{oA as chipStyle}from"../../../chunks/app-BiIQ_Jyy.js";

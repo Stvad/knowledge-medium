@@ -1,1 +1,1 @@
-export{km as buildBlockView,Am as renderBlockView}from"../../../../chunks/app-DNFTnr4v.js";
+export{km as buildBlockView,Am as renderBlockView}from"../../../../chunks/app-BiIQ_Jyy.js";

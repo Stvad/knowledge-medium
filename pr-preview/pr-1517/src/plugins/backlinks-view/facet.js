@@ -1,1 +1,1 @@
-export{Xg as backlinksViewFacet}from"../../../chunks/app-DNFTnr4v.js";
+export{Xg as backlinksViewFacet}from"../../../chunks/app-BiIQ_Jyy.js";

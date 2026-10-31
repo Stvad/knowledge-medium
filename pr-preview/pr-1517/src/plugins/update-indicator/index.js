@@ -1,1 +1,1 @@
-export{Qh as updateIndicatorPlugin}from"../../../chunks/app-DNFTnr4v.js";
+export{Qh as updateIndicatorPlugin}from"../../../chunks/app-BiIQ_Jyy.js";

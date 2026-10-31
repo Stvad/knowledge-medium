@@ -1,1 +1,1 @@
-export{wK as annotationsDataExtension}from"../../../chunks/app-DNFTnr4v.js";
+export{wK as annotationsDataExtension}from"../../../chunks/app-BiIQ_Jyy.js";

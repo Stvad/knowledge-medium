@@ -1,1 +1,1 @@
-export{or as openExtensionsSettingsAction}from"../../../chunks/app-DNFTnr4v.js";
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-BiIQ_Jyy.js";
