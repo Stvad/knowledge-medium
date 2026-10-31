@@ -9,32 +9,40 @@ import type {Repo} from '@/data/repo'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {writeTextToClipboard} from '@/utils/copy.js'
 import {showError, showInfo} from '@/utils/toast.js'
-import type {RangeAnchor} from './anchor.ts'
-import {anchorFromEditor} from './actions.ts'
+import {resolveAnchor, type AnchorResolution, type RangeAnchor} from './anchor.ts'
+import {anchorOf, rangeFromEditor} from './actions.ts'
 import {THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
 import {createThread, isThreadRefusal, missingTarget} from './threads.ts'
 
 export const COPY_RANGE_REFERENCE_ACTION_ID = 'annotations.copyReferenceToSelection'
 
-/** Is `thread` open and anchored exactly to `anchor`'s range? A captured
- *  anchor is exact against the text it came from, so a thread exact on the
- *  same range of that text has the same quote, start and context. */
-const anchorsRange = (thread: ThreadSummary, anchor: RangeAnchor): boolean =>
-  thread.open && thread.anchor.kind === 'range' &&
-  thread.anchor.quote === anchor.quote && thread.anchor.quoteStart === anchor.quoteStart &&
-  thread.anchor.prefix === anchor.prefix && thread.anchor.suffix === anchor.suffix
+const sameRange = (a: AnchorResolution, b: AnchorResolution): boolean =>
+  a.state !== 'stale' && b.state !== 'stale' && a.from === b.from && a.to === b.to
+
+/** Does `thread` highlight the text `selected` covers? Open, and its anchor
+ *  resolves onto exactly that range, exact or moved: a thread whose text only
+ *  shifted, or whose context was edited, still marks the same characters. */
+const highlights = (thread: ThreadSummary, content: string, selected: AnchorResolution): boolean =>
+  thread.open && thread.anchor.kind === 'range' && sameRange(resolveAnchor(content, thread.anchor), selected)
 
 /** The thread a reference to `anchor` should point at: the target's open
- *  thread anchored exactly there, so quoting a range twice gives one thread,
- *  or else a new highlight.
+ *  thread that highlights the same text of `content`, the text the anchor was
+ *  captured from, so quoting a range twice gives one thread; or else a new
+ *  highlight.
  *
  *  ACCEPTED: the lookup runs before the creating tx, so two copies of the same
  *  range racing each other can leave a second, unreferenced highlight. */
-export const threadForRange = async (repo: Repo, targetId: string, anchor: RangeAnchor): Promise<string> => {
+export const threadForRange = async (
+  repo: Repo,
+  targetId: string,
+  anchor: RangeAnchor,
+  content: string,
+): Promise<string> => {
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
   const threads = await repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: target.workspaceId, id: targetId}).load()
-  const existing = threads.find(thread => anchorsRange(thread, anchor))
+  const selected = resolveAnchor(content, anchor)
+  const existing = threads.find(thread => highlights(thread, content, selected))
   if (existing) return existing.id
   const created = await createThread(repo, {targetId, anchor}, {description: 'copy reference to selection'})
   return created.threadId
@@ -48,14 +56,15 @@ export const copyRangeReferenceAction: ActionConfig<typeof ActionContextTypes.ED
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: TextQuote,
   handler: async ({block, editorView}) => {
-    const anchor = anchorFromEditor(editorView)
+    const range = rangeFromEditor(editorView)
+    const anchor = anchorOf(range)
     if (!anchor) {
       showInfo('Select the text to quote.')
       return
     }
     let threadId: string
     try {
-      threadId = await threadForRange(block.repo, block.id, anchor)
+      threadId = await threadForRange(block.repo, block.id, anchor, range.content)
     } catch (error) {
       if (isThreadRefusal(error)) showError(error.message)
       else throw error
