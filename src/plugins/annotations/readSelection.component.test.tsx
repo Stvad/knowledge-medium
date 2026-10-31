@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
@@ -18,19 +18,18 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
-import {backlinkRenderScopeId, outlineRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
+import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
 import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
+import {LazyBlockEntry} from '@/plugins/backlinks/BlockEntry'
+import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
+import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
-import {
-  annotationActions,
-  COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID,
-  readSelectionTarget,
-  SUGGEST_EDIT_READ_SELECTION_ACTION_ID,
-} from './actions'
+import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
+import {ThreadCard} from './ui'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
 
 const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
@@ -106,6 +105,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
+        backlinksDataExtension,
         annotationsPlugin,
       ],
     }).repo
@@ -124,6 +124,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       await tx.create({id: 'list', workspaceId: WS, parentId: 'page', orderKey: 'a6', content: '- first item\n- second item'})
       await tx.create({id: 'trimmed', workspaceId: WS, parentId: 'page', orderKey: 'a7', content: 'first \nsecond line'})
       await tx.create({id: 'footnote', workspaceId: WS, parentId: 'page', orderKey: 'a8', content: 'see[^1]\n\n[^1]: note x'})
+      await tx.create({id: 'embed-host', workspaceId: WS, parentId: 'page', orderKey: 'a9', content: `!((${REFERENCED}))`})
       await tx.create({id: 'ui-state', workspaceId: WS, parentId: null, orderKey: 'a2',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')}})
     }, {scope: ChangeScope.BlockDefault})
@@ -131,26 +132,27 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   })
 
   afterEach(() => {
+    act(() => { document.getSelection()?.removeAllRanges() })
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
   })
 
+  const renderInOutline = (children: ReactNode, renderScopeId = panelRenderScopeId('panel', 'page')) => render(
+    <AppRuntimeContextProvider value={repo.facetRuntime!}>
+      <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId}}>
+        <ActiveContextsProvider>{children}</ActiveContextsProvider>
+      </BlockContextProvider>
+    </AppRuntimeContextProvider>,
+  )
+
   const renderIn = async (renderScopeId: string, ids: string[]) => {
     const settled = ids.includes('host') ? 'x' : ids.includes(SELF) ? 'bar' : 'Referenced words'
-    render(
-      <AppRuntimeContextProvider value={repo.facetRuntime!}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId}}>
-          <ActiveContextsProvider>
-            {ids.map(id => <DefaultBlockRenderer key={id} block={repo.block(id)}/>)}
-          </ActiveContextsProvider>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+    renderInOutline(ids.map(id => <DefaultBlockRenderer key={id} block={repo.block(id)}/>), renderScopeId)
     await screen.findAllByText(settled, {exact: false})
   }
 
-  const renderBlocks = (...ids: string[]) => renderIn(outlineRenderScopeId('page'), ids)
+  const renderBlocks = (...ids: string[]) => renderIn(panelRenderScopeId('panel', 'page'), ids)
 
   /** The text node holding `text` (its first occurrence, or the `nth`), and
    *  the offset of `text` in it. */
@@ -174,6 +176,114 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   const contentOf = (id: string) => repo.block(id).peek()?.content
   const quoteOf = (selection: ReturnType<typeof mapReadSelection>) =>
     selection?.kind === 'range' ? selection.content.slice(selection.from, selection.to) : selection
+
+  const selectText = (text: string) => {
+    const {node, offset} = at(text)
+    act(() => {
+      document.getSelection()!.setBaseAndExtent(node, offset, node, offset + text.length)
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    expect(quoteOf(mapReadSelection(document.getSelection(), contentOf))).toBe(text)
+    return node.parentElement!
+  }
+
+  it.each(['embed', 'backlink', 'comment card'] as const)('offers and runs Copy reference in a %s selection', async surface => {
+    clipboard.write.mockReset().mockResolvedValue(undefined)
+    let blockId = REFERENCED
+    if (surface === 'embed') {
+      await renderBlocks('embed-host')
+    } else if (surface === 'backlink') {
+      renderInOutline(<LazyBlockEntry block={repo.block(REFERENCED)} initialParents={[]} scopeId="entry"/>)
+    } else {
+      const {threadId, commentId} = await addComment(repo, {targetId: 'rich', comment: 'Referenced words'})
+      blockId = commentId!
+      renderInOutline(<ThreadCard thread={{id: threadId, open: true, anchor: {kind: 'block'}, commentCount: 1, quoterCount: 0, createdAt: 0, suggestion: false}}/>)
+    }
+    await screen.findByText('Referenced words')
+    const text = selectText('Referenced')
+    expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({blockId})
+
+    fireEvent.contextMenu(text)
+
+    const copy = await screen.findByRole('menuitem', {name: 'Copy reference'})
+    expect(screen.queryByRole('menuitem', {name: 'Comment'})).toBeNull()
+    expect(screen.queryByRole('menuitem', {name: 'Highlight'})).toBeNull()
+    expect(screen.queryByRole('menuitem', {name: 'Suggest edit'})).toBeNull()
+    expect(text.isConnected).toBe(true)
+    fireEvent.click(copy)
+
+    await waitFor(() => expect(clipboard.write).toHaveBeenCalledOnce())
+    const [threadId] = await repo.query['core.typedBlockIds']({
+      workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: blockId, sourceField: annotationTargetProp.name},
+    }).load()
+    expect((await repo.load(threadId))?.content).toBe('Referenced')
+    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+
+    await renderBlocks('rich')
+    fireEvent.contextMenu(selectText('Some'))
+    await screen.findByRole('menuitem', {name: 'Copy reference'})
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Comment', 'Highlight', 'Suggest edit', 'Copy reference'])
+  })
+
+  it('leaves the browser menu when no gesture runs on the selected surface', async () => {
+    const copy = readSelectionGestures.find(gesture => gesture.actionId === COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID)!
+    copy.outlineOnly = true
+    try {
+      await renderBlocks('embed-host')
+      const text = selectText('Referenced')
+      const event = new MouseEvent('contextmenu', {bubbles: true, cancelable: true})
+      fireEvent(text, event)
+      expect(event.defaultPrevented).toBe(false)
+      expect(screen.queryByRole('menu')).toBeNull()
+    } finally {
+      cleanup()
+      copy.outlineOnly = false
+    }
+  })
+
+  // Mounting the nested menus and dismissing one measured about 1.3s under load.
+  it.each(['both', 'start', 'end'] as const)('leaves the browser menu with inline reference endpoints (%s)', async inside => {
+    await repo.tx(tx => tx.update(REFERENCED, {content: `An inline ((${SAME_OFFSETS})) reference`}), {scope: ChangeScope.BlockDefault})
+    renderInOutline(<DefaultBlockRenderer block={repo.block('embed-host')}/>)
+    await screen.findByText('ab')
+    const start = at('An inline')
+    const end = at(' reference')
+    const reference = at('ab')
+    expect(reference.node.parentElement!.closest('a[data-block-id]')).not.toBeNull()
+    const select = (anchor: typeof start, focus: typeof start, length: number) => {
+      act(() => {
+        document.getSelection()!.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset + length)
+        document.dispatchEvent(new Event('selectionchange'))
+      })
+    }
+    select(start, end, ' reference'.length)
+    expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', blockId: REFERENCED})
+    fireEvent.contextMenu(reference.node.parentElement!)
+    await screen.findByRole('menuitem', {name: 'Copy reference'})
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    select(inside === 'end' ? start : reference, inside === 'start' ? end : reference, inside === 'start' ? ' reference'.length : 2)
+    expect(mapReadSelection(document.getSelection(), contentOf)).toEqual({kind: 'inexact'})
+    const event = new MouseEvent('contextmenu', {bubbles: true, cancelable: true})
+    fireEvent(reference.node.parentElement!, event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('menu')).toBeNull()
+  }, 20_000)
+
+  it('offers the menu in a full embed nested inside an inline reference', async () => {
+    await repo.tx(async tx => {
+      await tx.update(REFERENCED, {content: `An inline ((${SAME_OFFSETS})) reference`})
+      await tx.update(SAME_OFFSETS, {content: `A nested !((${SELF})) embed`})
+    }, {scope: ChangeScope.BlockDefault})
+    renderInOutline(<DefaultBlockRenderer block={repo.block('embed-host')}/>)
+    await screen.findByText('bar')
+    const text = selectText('bar')
+    expect(text.closest('a[data-block-id]')).not.toBeNull()
+    expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', blockId: SELF})
+    fireEvent.contextMenu(text)
+    await screen.findByRole('menuitem', {name: 'Copy reference'})
+  })
 
   it('maps plain text and formatted text to the raw text they render', async () => {
     await renderBlocks('rich')

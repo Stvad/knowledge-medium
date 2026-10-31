@@ -16,7 +16,9 @@ import {
   COMMENT_ON_BLOCK_ACTION_ID,
   COMMENT_ON_SELECTION_ACTION_ID,
   COPY_REFERENCE_TO_SELECTION_ACTION_ID,
+  commentOnTarget,
   copyReferenceToTarget,
+  highlightTarget,
   rangeFromEditor,
   submitComposer,
 } from './actions'
@@ -96,6 +98,18 @@ const select = (editor: EditorView, quote: string) => {
 const threadsOnB = () => repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'}).load()
 
 describe('commenting on an editor selection', () => {
+  it.each([['Comment', commentOnTarget], ['Highlight', highlightTarget]] as const)(
+    '%s refuses a nested target and runs on the outline', async (_label, step) => {
+      const renderScopeId = backlinkRenderScopeId(PANEL, 'x')
+      const from = TEXT.indexOf('Thursday')
+      const target = {block: repo.block('B'), renderScopeId, range: {content: TEXT, from, to: from + 'Thursday'.length}}
+      expect(await step(target)).toBe(false)
+      expect(peekComposer(viewKey(renderScopeId, 'B'))).toBeUndefined()
+      expect(await threadsOnB()).toEqual([])
+      expect(await step({...target, renderScopeId: PANEL})).toBe(true)
+    },
+  )
+
   it('anchors an edit still waiting in the debounce against what the editor shows', async () => {
     const editor = editorOnB()
     editor.dispatch({changes: {from: 0, insert: 'Update: '}})

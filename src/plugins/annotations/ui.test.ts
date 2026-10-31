@@ -2,6 +2,7 @@
 import {describe, expect, it} from 'vitest'
 import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
 import {quotedInFooterContribution} from './quotedIn'
+import {nestedReadSelectionMenuContribution} from './readSelectionUi'
 import {THREAD_TYPE} from './schema'
 import type {ThreadSummary} from './summaries'
 import {
@@ -24,6 +25,16 @@ const ctx = (fields: {types?: string[]; isTopLevel?: boolean; blockContext?: Rec
   ({types: fields.types ?? [], isTopLevel: fields.isTopLevel ?? false, blockContext: fields.blockContext} as unknown as BlockResolveContext)
 
 describe('where the comments UI attaches', () => {
+  it('adds a separate selection menu only to full nested block surfaces', () => {
+    expect(nestedReadSelectionMenuContribution(ctx({blockContext: {}}))).toBeNull()
+    expect(nestedReadSelectionMenuContribution(ctx({}))).toBeNull()
+    for (const surface of [{isEmbedded: true}, {isBacklink: true}, {[COMMENT_CARD_KEY]: 'card:T'}]) {
+      expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, ...surface}}))).toBeTruthy()
+    }
+    expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, isReference: true}}))).toBeNull()
+    expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, isBacklink: true, isBreadcrumb: true}}))).toBeNull()
+  })
+
   it('puts the pill and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
     expect(commentPillContribution(ctx({}))).toBeTruthy()
     expect(commentsFooterContribution(ctx({}))).toBeTruthy()

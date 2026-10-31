@@ -180,7 +180,7 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
     await reanchorToSelection(block.repo, pending.threadId, anchor)
     return false
   }
-  if (!onOutline(target)) {
+  if (!gestureRunsHere(commentGesture, target)) {
     showInfo(NOT_ON_OUTLINE)
     return false
   }
@@ -192,7 +192,7 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
  *  quote. True when it opened. The range is raw: one across formatting or
  *  list items prefills that markup, which the composer shows. */
 const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
-  if (!onOutline(target)) {
+  if (!gestureRunsHere(suggestGesture, target)) {
     showInfo('Open the block in its page to suggest an edit to it.')
     return false
   }
@@ -208,7 +208,7 @@ const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
 
 /** A thread with no comments on the target's text. True when it was made. */
 export const highlightTarget = async (target: SelectionTarget): Promise<boolean> => {
-  if (!onOutline(target)) {
+  if (!gestureRunsHere(highlightGesture, target)) {
     showInfo(NOT_ON_OUTLINE)
     return false
   }
@@ -285,7 +285,7 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MessageSquarePlus,
   defaultBinding: editModeBinding(COMMENT_KEYS),
-  isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
+  isVisible: deps => pendingReanchorIn(deps) !== null || gestureRunsHere(commentGesture, deps),
   handler: openFromEditor(commentOnTarget),
 }
 
@@ -295,7 +295,7 @@ const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: Highlighter,
   defaultBinding: editModeBinding(HIGHLIGHT_KEYS),
-  isVisible: onOutline,
+  isVisible: deps => gestureRunsHere(highlightGesture, deps),
   handler: async deps => { await highlightTarget(editorTarget(deps)) },
 }
 
@@ -305,7 +305,7 @@ const suggestEdit: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: PencilLine,
   defaultBinding: editModeBinding(SUGGEST_KEYS),
-  isVisible: onOutline,
+  isVisible: deps => gestureRunsHere(suggestGesture, deps),
   handler: openFromEditor(suggestOnTarget),
 }
 
@@ -369,26 +369,37 @@ export interface ReadSelectionGesture {
   /** In the command palette and the keybindings editor. */
   description: string
   icon: LucideIcon
+  /** Runs only where outline annotation controls render. */
+  outlineOnly: boolean
   defaultBinding?: ShortcutBindingDefaults
   step: (target: SelectionTarget) => Promise<boolean>
 }
 
+const commentGesture: ReadSelectionGesture = {
+  actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
+  icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, outlineOnly: true, step: commentOnTarget,
+}
+
+const highlightGesture: ReadSelectionGesture = {
+  actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
+  icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, outlineOnly: true, step: highlightTarget,
+}
+
+const suggestGesture: ReadSelectionGesture = {
+  actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: 'Suggest edit to selection',
+  icon: PencilLine, defaultBinding: {keys: SUGGEST_KEYS}, outlineOnly: true, step: suggestOnTarget,
+}
+
+export const gestureRunsHere = (gesture: ReadSelectionGesture, target: {renderScopeId?: string}): boolean =>
+  !gesture.outlineOnly || onOutline(target)
+
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
-  {
-    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
-    icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, step: commentOnTarget,
-  },
-  {
-    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
-    icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, step: highlightTarget,
-  },
-  {
-    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: 'Suggest edit to selection',
-    icon: PencilLine, defaultBinding: {keys: SUGGEST_KEYS}, step: suggestOnTarget,
-  },
+  commentGesture,
+  highlightGesture,
+  suggestGesture,
   {
     actionId: COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, label: 'Copy reference', description: 'Copy reference to selection',
-    icon: TextQuote, step: copyReferenceToTarget,
+    icon: TextQuote, outlineOnly: false, step: copyReferenceToTarget,
   },
 ]
 

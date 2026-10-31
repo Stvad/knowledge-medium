@@ -32,7 +32,7 @@ import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
 import {threadNavigationContribution} from './threadNavigation.ts'
-import {readSelectionShortcutsMount} from './readSelectionUi.tsx'
+import {nestedReadSelectionMenuContribution, readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
   commentActionsContribution,
   commentContextMenuItem,
@@ -57,6 +57,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
+  blockContentDecoratorsFacet.of(nestedReadSelectionMenuContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(quotedInFooterContribution, {source: SOURCE}),
