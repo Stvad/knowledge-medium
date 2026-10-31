@@ -15,6 +15,7 @@ import {
   type BaseShortcutDependencies,
   type BlockPointerDependencies,
   type CodeMirrorEditModeDependencies,
+  type ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {writeTextToClipboard} from '@/utils/copy.js'
 import {resolveActivePanelRow} from '@/utils/navigation.js'
@@ -88,7 +89,12 @@ export const rangeFromEditor = (view: EditorView): ContentRange => {
  *  on the whole block. */
 export const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
 
-export const anchorFromEditor = (view: EditorView): RangeAnchor | null => anchorOf(rangeFromEditor(view))
+/** A thread refusal, shown as the toast it carries; anything else rethrows. */
+const showRefusal = (error: unknown): false => {
+  if (!isThreadRefusal(error)) throw error
+  showError(error.message)
+  return false
+}
 
 /** A failure the user should see, as a toast. */
 export const reportFailure = (error: unknown): void => {
@@ -178,11 +184,7 @@ export const highlightTarget = async (target: SelectionTarget): Promise<boolean>
     await createThread(block.repo, {targetId: block.id, anchor})
     return true
   } catch (error) {
-    if (isThreadRefusal(error)) {
-      showError(error.message)
-      return false
-    }
-    throw error
+    return showRefusal(error)
   }
 }
 
@@ -196,16 +198,8 @@ export const copyReferenceToTarget = async ({block, range}: SelectionTarget): Pr
     showInfo('Select the text to quote.')
     return false
   }
-  let threadId: string
-  try {
-    threadId = await threadForRange(block.repo, block.id, anchor, range.content)
-  } catch (error) {
-    if (isThreadRefusal(error)) {
-      showError(error.message)
-      return false
-    }
-    throw error
-  }
+  const threadId = await threadForRange(block.repo, block.id, anchor, range.content).catch(showRefusal)
+  if (threadId === false) return false
   try {
     await writeTextToClipboard(`((${threadId}))`)
   } catch {
@@ -230,8 +224,7 @@ const reanchorToSelection = async (repo: Repo, threadId: string, anchor: RangeAn
     startReanchor(null)
     showInfo('Moved the comment to the selection.')
   } catch (error) {
-    if (isThreadRefusal(error)) showError(error.message)
-    else throw error
+    showRefusal(error)
   }
 }
 
@@ -324,18 +317,18 @@ export interface ReadSelectionGesture {
   /** In the command palette and the keybindings editor. */
   description: string
   icon: LucideIcon
-  keys?: string
+  defaultBinding?: ShortcutBindingDefaults
   step: (target: SelectionTarget) => Promise<boolean>
 }
 
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
   {
     actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
-    icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget,
+    icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, step: commentOnTarget,
   },
   {
     actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
-    icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget,
+    icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, step: highlightTarget,
   },
   {
     actionId: COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, label: 'Copy reference', description: 'Copy reference to selection',
@@ -365,7 +358,7 @@ const readSelectionActions: readonly ActionConfig[] = readSelectionGestures.map(
   description: gesture.description,
   context: READ_SELECTION_CONTEXT,
   icon: gesture.icon,
-  defaultBinding: gesture.keys === undefined ? undefined : {keys: gesture.keys},
+  defaultBinding: gesture.defaultBinding,
   isVisible: hasReadSelection,
   canDispatch: hasReadSelection,
   handler: ({uiStateBlock}: BaseShortcutDependencies) =>
