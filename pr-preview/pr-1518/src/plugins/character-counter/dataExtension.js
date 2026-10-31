@@ -1,1 +1,0 @@
-export{YK as characterCounterDataExtension}from"../../../chunks/app-D4_qqUju.js";

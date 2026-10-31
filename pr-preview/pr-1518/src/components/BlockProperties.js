@@ -1,1 +1,0 @@
-export{$I as BlockProperties}from"../../chunks/app-D4_qqUju.js";

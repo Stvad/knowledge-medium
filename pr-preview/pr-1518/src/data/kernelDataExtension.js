@@ -1,1 +1,0 @@
-export{d1 as kernelDataExtension}from"../../chunks/app-D4_qqUju.js";

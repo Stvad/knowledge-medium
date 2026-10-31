@@ -1,1 +1,0 @@
-export{oG as matchCharTrigger}from"../../chunks/app-D4_qqUju.js";

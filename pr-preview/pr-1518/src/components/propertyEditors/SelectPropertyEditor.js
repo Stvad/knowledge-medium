@@ -1,1 +1,0 @@
-export{Tk as SelectPropertyEditor}from"../../../chunks/app-D4_qqUju.js";
