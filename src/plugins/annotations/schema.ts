@@ -70,7 +70,12 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
 })
 
 /** An edit suggestion's new text for the quote; `threadSuggestionOf` says
- *  which threads are suggestions. There is no separate kind. */
+ *  which threads are suggestions. There is no separate kind.
+ *
+ *  A property, not a child block of the root, which every reader of replies
+ *  would have to skip. In a property-child-backed workspace its value row is
+ *  a block, so links in it are references; before that they stay text until
+ *  accepted. */
 export const annotationReplacementProp = seedProperty({
   seedKey: 'system:annotations/property/replacement',
   revision: 1,
