@@ -1,1 +1,1 @@
-export{vit as definePostCommitProcessor}from"../../../chunks/app-vVSufA3S.js";
+export{Bit as definePostCommitProcessor}from"../../../chunks/app-IvG-7ED8.js";

@@ -1,1 +1,1 @@
-export{WX as instrumentAdapter}from"../../../chunks/app-vVSufA3S.js";
+export{fZ as instrumentAdapter}from"../../../chunks/app-IvG-7ED8.js";

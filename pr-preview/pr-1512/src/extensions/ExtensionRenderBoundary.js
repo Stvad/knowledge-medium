@@ -1,1 +1,1 @@
-export{AP as ExtensionRenderBoundary}from"../../chunks/app-vVSufA3S.js";
+export{XP as ExtensionRenderBoundary}from"../../chunks/app-IvG-7ED8.js";

@@ -1,1 +1,1 @@
-export{gC as LeftSidebarHeaderItem}from"../../../chunks/app-vVSufA3S.js";
+export{IC as LeftSidebarHeaderItem}from"../../../chunks/app-IvG-7ED8.js";
