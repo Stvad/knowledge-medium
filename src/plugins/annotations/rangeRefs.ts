@@ -5,26 +5,21 @@
  */
 
 import type {Repo} from '@/data/repo'
-import {resolveAnchor, type AnchorResolution, type RangeAnchor} from './anchor.ts'
-import {THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import type {RangeAnchor} from './anchor.ts'
+import {highlightRange} from './highlights.ts'
+import {THREADS_FOR_BLOCK_QUERY} from './summaries.ts'
 import {createThread, missingTarget} from './threads.ts'
 
-const sameRange = (a: AnchorResolution, b: AnchorResolution): boolean =>
-  a.state !== 'stale' && b.state !== 'stale' && a.from === b.from && a.to === b.to
-
-/** Does `thread` highlight the text `selected` covers? Open, and its anchor
- *  resolves onto exactly that range, exact or moved: a thread whose text only
- *  shifted, or whose context was edited, still marks the same characters. */
-const highlights = (thread: ThreadSummary, content: string, selected: AnchorResolution): boolean =>
-  thread.open && thread.anchor.kind === 'range' && sameRange(resolveAnchor(content, thread.anchor), selected)
-
-/** The thread a reference to `anchor` should point at: the target's open
- *  thread that highlights the same text of `content`, the text the anchor was
- *  captured from, so quoting a range twice gives one thread; or else a new
- *  highlight.
+/** The thread a reference to `anchor` should point at: the target's thread
+ *  whose highlight covers exactly the selected text of `content` (the text the
+ *  anchor was captured from), so quoting a range twice gives one thread. An
+ *  exact one wins over one that only moved there. Else a new highlight.
  *
  *  ACCEPTED: the lookup runs before the creating tx, so two copies of the same
- *  range racing each other can leave a second, unreferenced highlight. */
+ *  range racing each other can leave a second, unreferenced highlight.
+ *  ACCEPTED: once the words a discussion was on are gone, its moved anchor can
+ *  settle on the same words elsewhere, and a copy there joins that discussion:
+ *  it is the highlight the block draws there. */
 export const threadForRange = async (
   repo: Repo,
   targetId: string,
@@ -34,8 +29,13 @@ export const threadForRange = async (
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
   const threads = await repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: target.workspaceId, id: targetId}).load()
-  const selected = resolveAnchor(content, anchor)
-  const existing = threads.find(thread => highlights(thread, content, selected))
+  const covering = threads.flatMap(thread => {
+    const range = highlightRange(content, thread)
+    return range && range.from === anchor.quoteStart && range.to - range.from === anchor.quote.length
+      ? [{id: thread.id, moved: range.moved}]
+      : []
+  })
+  const existing = covering.find(candidate => !candidate.moved) ?? covering[0]
   if (existing) return existing.id
   const created = await createThread(repo, {targetId, anchor}, {description: 'copy reference to selection'})
   return created.threadId

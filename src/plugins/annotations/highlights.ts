@@ -33,13 +33,16 @@ export interface HighlightRange {
   moved: boolean
 }
 
-/** Where `threads` highlight `doc`: exact and moved anchors, stale ones not. */
+/** Where `thread` highlights `doc`, its anchor exact or moved; null where it
+ *  draws nothing, a stale anchor included. */
+export const highlightRange = (doc: string, thread: HighlightThread): HighlightRange | null => {
+  if (!drawsHighlight(thread) || thread.anchor.kind !== 'range') return null
+  const resolved = resolveAnchor(doc, thread.anchor)
+  return resolved.state === 'stale' ? null : {from: resolved.from, to: resolved.to, moved: resolved.state === 'moved'}
+}
+
 export const highlightRanges = (doc: string, threads: readonly HighlightThread[]): HighlightRange[] =>
-  threads.filter(drawsHighlight).flatMap(thread => {
-    if (thread.anchor.kind !== 'range') return []
-    const resolved = resolveAnchor(doc, thread.anchor)
-    return resolved.state === 'stale' ? [] : [{from: resolved.from, to: resolved.to, moved: resolved.state === 'moved'}]
-  })
+  threads.flatMap(thread => highlightRange(doc, thread) ?? [])
 
 const exactMark = Decoration.mark({class: highlightClasses(false)})
 const movedMark = Decoration.mark({class: highlightClasses(true)})
