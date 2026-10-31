@@ -1,1 +1,1 @@
-export{GK as contributorAttributionProcessor}from"../../../chunks/app-DeDN0YIX.js";
+export{pq as contributorAttributionProcessor}from"../../../chunks/app-BZN0GW4K.js";

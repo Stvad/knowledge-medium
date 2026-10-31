@@ -1,1 +1,1 @@
-export{OL as addProperty,kL as deleteProperty,AL as writeProperty}from"../../../chunks/app-DeDN0YIX.js";
+export{XL as addProperty,ZL as deleteProperty,QL as writeProperty}from"../../../chunks/app-BZN0GW4K.js";
