@@ -80,7 +80,20 @@ describe('add-comment', () => {
     expect((await comments({thread: threadId})).threads[0]).toMatchObject({
       status: 'open', anchor: 'exact', quote: 'Thursday', replacement: 'Thursday 9am',
     })
-    await expect(asAgent({type: 'add-comment', target: BLOCK, replacement: 'x'})).rejects.toThrow(/replaces quoted text/)
+    await expect(asAgent({type: 'add-comment', target: BLOCK, replacement: 'x'})).rejects.toThrow(/needs quoted text/)
+  })
+
+  it('confirms the suggestion it stored, and carries a replacement over to a quote widened to a whole link', async () => {
+    await context.repo.tx(tx => tx.update(BLOCK, {content: 'Meet [[Alice Smith]] on Thursday'}), opts)
+    const widened = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Alice', replacement: 'Bob'}) as {
+      quote: string, replacement: string | null,
+    }
+    expect(widened).toMatchObject({quote: '[[Alice Smith]]', replacement: '[[Bob Smith]]'})
+    // Unchanged once carried over, so refused rather than replacing the link with its bare name.
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: 'Alice', replacement: 'Alice'}))
+      .rejects.toThrow(/same as the quoted text/)
+    expect(await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', content: 'Sure?'}))
+      .toMatchObject({replacement: null})
   })
 
   it('takes a printed short id as its target', async () => {

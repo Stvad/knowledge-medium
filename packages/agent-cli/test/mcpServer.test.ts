@@ -162,7 +162,8 @@ describe('createGraphMcpServer', () => {
       target: 'today', markdown: '- note', position: {kind: 'before', siblingId: 's'},
     }, {})
     await tools.edit_block.handler({id: 'b', old: 'a', new: 'b'}, {})
-    await tools.add_comment.handler({target: 'b', quote: 'a', content: 'why?', replacement: 'b'}, {})
+    // Through the tool's input schema, which strips a field it doesn't declare.
+    await tools.add_comment.handler(tools.add_comment.inputSchema.parse({target: 'b', quote: 'a', content: 'why?', replacement: 'b'}), {})
     await tools.create_page.handler({name: 'Inbox'}, {})
 
     expect(operations).toEqual([

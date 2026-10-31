@@ -113,11 +113,13 @@ export const assertQuotable = (anchor: RangeAnchor): void => {
  *  made and whenever it is re-anchored. */
 export const assertSuggestionAnchor = (anchor: RangeAnchor | null, replacement: string | undefined): void => {
   if (replacement !== undefined && !anchor) {
-    throw new InvalidSuggestionError('A suggestion replaces quoted text: select the text to change.')
+    throw new InvalidSuggestionError('A suggestion needs quoted text to replace.')
   }
 }
 
-const assertSuggestion = (anchor: RangeAnchor | null, replacement: string): void => {
+/** What every suggestion's replacement must be, checked when it is made and
+ *  again when it is accepted (a hand-set replacement skips creation). */
+export const assertSuggestion = (anchor: RangeAnchor | null, replacement: string): void => {
   assertSuggestionAnchor(anchor, replacement)
   if (!anchor) return
   if (replacement === '') {

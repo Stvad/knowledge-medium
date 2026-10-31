@@ -22,7 +22,7 @@ import { addComment } from '@/plugins/annotations/addComment.js'
 import { resolveAnchor } from '@/plugins/annotations/anchor.js'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
 import {
-  annotationStatusProp, THREAD_TYPE, threadAnchorOf, threadIsOpen, threadReplacementOf, threadStatusOf, threadTargetIdOf,
+  annotationStatusProp, THREAD_TYPE, threadAnchorOf, threadIsOpen, threadStatusOf, threadSuggestionOf, threadTargetIdOf,
 } from '@/plugins/annotations/schema.js'
 import { threadIdsInScope } from '@/plugins/annotations/scope.js'
 import { authorIdOf } from '@/plugins/contributors/author.js'
@@ -37,8 +37,8 @@ const MAX_THREAD_LIMIT = 100
 /** Comments shown per thread, in reading order; `subtree` on the root reads
  *  the rest. */
 const MAX_COMMENTS_PER_THREAD = 50
-/** A quote or replacement past this is cut in the view; get_block on the
- *  root reads it. */
+/** A quote or replacement past this is cut in the view; the root's row
+ *  (sql_query) holds both whole. */
 const QUOTE_MAX_CHARS = 1_000
 /** Characters of target text kept on each side of a resolved quote. */
 const EXCERPT_CONTEXT_CHARS = 80
@@ -176,7 +176,7 @@ export const buildCommentsView = async (
 
   const threadView = (root: BlockData): CommentThreadView => {
     const anchor = threadAnchorOf(root)
-    const replacement = threadReplacementOf(root)
+    const suggestion = threadSuggestionOf(root)
     const targetId = threadTargetIdOf(root)
     const target = targetId ? targets.get(targetId) : undefined
     const resolution = anchor.kind === 'range' && target ? resolveAnchor(target.content, anchor) : null
@@ -209,7 +209,7 @@ export const buildCommentsView = async (
       status: statusOf(root),
       anchor: anchor.kind === 'block' ? 'block' : resolution?.state ?? 'stale',
       quote: anchor.kind === 'block' ? null : clip(anchor.quote, QUOTE_MAX_CHARS).text,
-      replacement: replacement === undefined ? null : clip(replacement, QUOTE_MAX_CHARS).text,
+      replacement: suggestion ? clip(suggestion.replacement, QUOTE_MAX_CHARS).text : null,
       target: targetId ? {
         id: targetId,
         shortId: short.get(targetId) ?? targetId,
@@ -254,6 +254,9 @@ export interface AddedComment {
    *  so the caller can check it anchored the appearance it meant. */
   quoteStart: number | null
   excerpt: string | null
+  /** What a suggestion stores, so the caller can confirm one was made: null
+   *  for a plain comment, and widened with the quote. */
+  replacement: string | null
 }
 
 export const runAddComment = async (
@@ -273,5 +276,6 @@ export const runAddComment = async (
     excerpt: anchor?.kind === 'range' && quoteStart !== null && target
       ? excerptOf(target.content, {from: quoteStart, to: quoteStart + anchor.quote.length})
       : null,
+    replacement: root ? threadSuggestionOf(root)?.replacement ?? null : null,
   }
 }
