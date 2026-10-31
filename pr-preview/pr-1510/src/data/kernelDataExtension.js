@@ -1,1 +1,0 @@
-export{q1 as kernelDataExtension}from"../../chunks/app-CfZDHsQW.js";

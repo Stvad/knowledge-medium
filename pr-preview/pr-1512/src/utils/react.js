@@ -1,1 +1,0 @@
-export{WP as useIsMobile,GP as usePointerCoarse}from"../../chunks/app-hAIJWRTE.js";

@@ -1,1 +1,0 @@
-export{CK as dailyNotesLocalSchema}from"../../../chunks/app-hAIJWRTE.js";

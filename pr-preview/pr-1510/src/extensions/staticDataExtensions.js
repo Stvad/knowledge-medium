@@ -1,1 +1,0 @@
-export{aU as staticDataExtensions}from"../../chunks/app-CfZDHsQW.js";

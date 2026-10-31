@@ -1,1 +1,0 @@
-export{WF as defaultPasteDecision,GF as pasteDecisionVerb}from"../../chunks/app-CfZDHsQW.js";

@@ -1,1 +1,0 @@
-export{yq as contributorsDataExtension}from"../../../chunks/app-hAIJWRTE.js";

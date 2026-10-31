@@ -1,1 +1,0 @@
-export{pg as backlinksViewPlugin}from"../../../chunks/app-aY0kI7gs.js";

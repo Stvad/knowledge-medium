@@ -1,1 +1,0 @@
-export{ftt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CfZDHsQW.js";

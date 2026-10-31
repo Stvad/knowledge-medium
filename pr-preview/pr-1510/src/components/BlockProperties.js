@@ -1,1 +1,0 @@
-export{FL as BlockProperties}from"../../chunks/app-CfZDHsQW.js";

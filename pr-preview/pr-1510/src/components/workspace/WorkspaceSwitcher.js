@@ -1,1 +1,0 @@
-export{WC as WorkspaceSwitcher}from"../../../chunks/app-CfZDHsQW.js";

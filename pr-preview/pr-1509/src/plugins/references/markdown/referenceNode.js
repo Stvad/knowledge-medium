@@ -1,1 +1,0 @@
-export{S_ as EmbedComponent,C_ as referenceTargetOf}from"../../../../chunks/app-aY0kI7gs.js";

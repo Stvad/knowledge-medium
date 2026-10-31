@@ -1,1 +1,0 @@
-export{$w as usePendingInvitations}from"../../chunks/app-CfZDHsQW.js";

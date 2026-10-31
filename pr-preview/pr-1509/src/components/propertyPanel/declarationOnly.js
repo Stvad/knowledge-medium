@@ -1,1 +1,0 @@
-export{tR as declarationOnlyDefinitionForName,nR as declarationOnlyStatusText}from"../../../chunks/app-aY0kI7gs.js";

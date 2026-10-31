@@ -1,1 +1,0 @@
-export{ip as extensionsOverridesProp,ap as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-aY0kI7gs.js";

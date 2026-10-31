@@ -1,1 +1,0 @@
-export{PF as readClipboardContent}from"../../chunks/app-CfZDHsQW.js";

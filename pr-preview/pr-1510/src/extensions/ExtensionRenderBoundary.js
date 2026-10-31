@@ -1,1 +1,0 @@
-export{JP as ExtensionRenderBoundary}from"../../chunks/app-CfZDHsQW.js";

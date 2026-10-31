@@ -1,1 +1,0 @@
-export{jq as characterCounterDataExtension}from"../../../chunks/app-CfZDHsQW.js";

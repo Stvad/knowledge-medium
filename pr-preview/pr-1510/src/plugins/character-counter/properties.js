@@ -1,1 +1,0 @@
-export{Pq as charLimitProp,Fq as charProfileProp,Iq as charScopeProp}from"../../../chunks/app-CfZDHsQW.js";

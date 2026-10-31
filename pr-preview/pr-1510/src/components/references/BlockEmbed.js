@@ -1,1 +1,0 @@
-export{uA as BlockEmbed}from"../../../chunks/app-CfZDHsQW.js";

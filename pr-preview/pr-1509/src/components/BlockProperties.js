@@ -1,1 +1,0 @@
-export{kL as BlockProperties}from"../../chunks/app-aY0kI7gs.js";

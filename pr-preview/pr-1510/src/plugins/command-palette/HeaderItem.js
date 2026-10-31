@@ -1,1 +1,0 @@
-export{vk as CommandPaletteHeaderItem}from"../../../chunks/app-CfZDHsQW.js";

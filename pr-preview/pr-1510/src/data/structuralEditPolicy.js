@@ -1,1 +1,0 @@
-export{JA as resolveStructuralEditPolicy,YA as structuralEditPolicyForBlock}from"../../chunks/app-CfZDHsQW.js";

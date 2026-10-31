@@ -1,1 +1,0 @@
-export{xC as plainOutlinerPlugin}from"../../../chunks/app-hAIJWRTE.js";

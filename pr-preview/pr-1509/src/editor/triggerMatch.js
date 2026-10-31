@@ -1,1 +1,0 @@
-export{IG as matchCharTrigger}from"../../chunks/app-aY0kI7gs.js";

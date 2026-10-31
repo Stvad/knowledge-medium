@@ -1,1 +1,0 @@
-export{Uk as DEFAULT_QUICK_ACTION_ITEMS,Wk as SWIPE_RIGHT_BLOCK_ACTION_ID,Gk as isQuickActionItem,Kk as quickActionItemsFacet}from"../../../chunks/app-aY0kI7gs.js";

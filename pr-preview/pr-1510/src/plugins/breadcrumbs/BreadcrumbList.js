@@ -1,1 +1,0 @@
-export{gC as BreadcrumbList}from"../../../chunks/app-CfZDHsQW.js";

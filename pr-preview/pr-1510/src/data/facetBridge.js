@@ -1,1 +1,0 @@
-export{sQ as FacetBridge}from"../../chunks/app-CfZDHsQW.js";

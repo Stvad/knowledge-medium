@@ -1,1 +1,0 @@
-export{VL as PropertyRow}from"../../../chunks/app-CfZDHsQW.js";
