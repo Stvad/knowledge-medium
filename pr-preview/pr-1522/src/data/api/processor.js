@@ -1,1 +1,1 @@
-export{qit as definePostCommitProcessor}from"../../../chunks/app-B13LDrG_.js";
+export{Git as definePostCommitProcessor}from"../../../chunks/app-BpLpE3ym.js";

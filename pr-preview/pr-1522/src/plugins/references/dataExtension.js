@@ -1,1 +1,1 @@
-export{DU as referencesDataExtension}from"../../../chunks/app-B13LDrG_.js";
+export{TU as referencesDataExtension}from"../../../chunks/app-BpLpE3ym.js";

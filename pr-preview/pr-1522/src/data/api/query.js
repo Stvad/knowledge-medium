@@ -1,1 +1,1 @@
-export{zit as defineQuery}from"../../../chunks/app-B13LDrG_.js";
+export{Lit as defineQuery}from"../../../chunks/app-BpLpE3ym.js";
