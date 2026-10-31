@@ -1,1 +1,1 @@
-export{PT as useMinuteClock}from"../../chunks/app-DWjtRwiQ.js";
+export{FT as useMinuteClock}from"../../chunks/app-BbiFWStD.js";

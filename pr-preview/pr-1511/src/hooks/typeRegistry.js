@@ -1,1 +1,1 @@
-export{wz as useTypes}from"../../chunks/app-DWjtRwiQ.js";
+export{Tz as useTypes}from"../../chunks/app-BbiFWStD.js";
