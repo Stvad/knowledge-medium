@@ -1,1 +1,0 @@
-export{tq as contributorsDataExtension}from"../../../chunks/app-BiIQ_Jyy.js";

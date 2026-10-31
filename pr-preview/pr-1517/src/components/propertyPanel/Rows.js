@@ -1,1 +1,0 @@
-export{SL as MetadataRow,CL as PropertySectionLabel}from"../../../chunks/app-BiIQ_Jyy.js";

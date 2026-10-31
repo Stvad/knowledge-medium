@@ -1,1 +1,0 @@
-export{d_ as Wikilink}from"../../../../../chunks/app-BiIQ_Jyy.js";

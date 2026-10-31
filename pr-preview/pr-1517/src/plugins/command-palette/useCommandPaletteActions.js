@@ -1,1 +1,0 @@
-export{IO as useCommandPaletteActions}from"../../../chunks/app-BiIQ_Jyy.js";

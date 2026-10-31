@@ -1,1 +1,0 @@
-export{if as contributorsPlugin}from"../../../chunks/app-BiIQ_Jyy.js";

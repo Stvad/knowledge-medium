@@ -1,1 +1,0 @@
-export{bq as charLimitProp,xq as charProfileProp,Sq as charScopeProp}from"../../../chunks/app-BiIQ_Jyy.js";

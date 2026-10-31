@@ -1,1 +1,0 @@
-export{fj as approveExtensionHere}from"../../chunks/app-BiIQ_Jyy.js";

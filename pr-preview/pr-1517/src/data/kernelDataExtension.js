@@ -1,1 +1,0 @@
-export{N1 as kernelDataExtension}from"../../chunks/app-BiIQ_Jyy.js";

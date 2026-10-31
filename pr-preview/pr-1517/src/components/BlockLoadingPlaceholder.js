@@ -1,1 +1,0 @@
-export{BM as BlockLoadingPlaceholder}from"../../chunks/app-BiIQ_Jyy.js";

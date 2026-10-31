@@ -1,1 +1,0 @@
-export{KJ as aliasDataExtension}from"../../../chunks/app-BiIQ_Jyy.js";

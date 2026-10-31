@@ -1,1 +1,0 @@
-export{XC as createEncryptedWorkspace}from"../../../../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,0 @@
-export{Bx as SpatialNavigationShellDecorator}from"../../../chunks/app-BiIQ_Jyy.js";

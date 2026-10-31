@@ -1,1 +1,0 @@
-export{Qet as deriveWorkspaceIdNamespace}from"../../../chunks/app-BiIQ_Jyy.js";

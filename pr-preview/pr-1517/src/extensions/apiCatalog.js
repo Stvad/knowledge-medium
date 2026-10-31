@@ -1,1 +1,0 @@
-export{qf as extensionApiCatalog,Jf as extensionApiRuntimeExports}from"../../chunks/app-BiIQ_Jyy.js";

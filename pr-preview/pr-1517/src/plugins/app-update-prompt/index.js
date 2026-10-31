@@ -1,1 +1,0 @@
-export{_j as appUpdatePromptExtension}from"../../../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,0 @@
-export{gk as SWIPE_QUICK_ACTIONS_GESTURE_ID,Ik as SWIPE_RIGHT_BLOCK_ACTION_ID,hk as SwipeActionMenu,Rk as quickActionItemsFacet,uk as swipeQuickActionsPlugin}from"../../../chunks/app-BiIQ_Jyy.js";

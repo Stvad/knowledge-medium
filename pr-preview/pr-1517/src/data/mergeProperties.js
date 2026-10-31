@@ -1,1 +1,0 @@
-export{Y2 as mergeProperties}from"../../chunks/app-BiIQ_Jyy.js";

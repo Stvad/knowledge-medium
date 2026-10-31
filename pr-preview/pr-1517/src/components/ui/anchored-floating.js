@@ -1,1 +1,0 @@
-export{BV as floatingAnchorFromRect,VV as useAnchoredFloating}from"../../../chunks/app-BiIQ_Jyy.js";

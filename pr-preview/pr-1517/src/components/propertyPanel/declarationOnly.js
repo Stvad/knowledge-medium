@@ -1,1 +1,0 @@
-export{qL as declarationOnlyDefinitionForName,JL as declarationOnlyStatusText}from"../../../chunks/app-BiIQ_Jyy.js";

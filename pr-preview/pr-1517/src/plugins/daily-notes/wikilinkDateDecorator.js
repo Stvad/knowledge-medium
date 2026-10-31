@@ -1,1 +1,0 @@
-export{CD as dailyDateWikilinkDecorator}from"../../../chunks/app-BiIQ_Jyy.js";

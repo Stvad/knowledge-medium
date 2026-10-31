@@ -1,1 +1,0 @@
-export{GH as staticDataExtensions}from"../../chunks/app-BiIQ_Jyy.js";

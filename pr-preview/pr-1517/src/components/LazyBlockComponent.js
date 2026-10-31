@@ -1,1 +1,0 @@
-export{LM as LazyBlockComponent}from"../../chunks/app-BiIQ_Jyy.js";

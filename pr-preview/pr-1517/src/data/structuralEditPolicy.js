@@ -1,1 +1,0 @@
-export{PA as resolveStructuralEditPolicy,FA as structuralEditPolicyForBlock}from"../../chunks/app-BiIQ_Jyy.js";

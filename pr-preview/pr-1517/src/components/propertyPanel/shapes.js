@@ -1,1 +1,0 @@
-export{KV as propertyShapeLabel}from"../../../chunks/app-BiIQ_Jyy.js";

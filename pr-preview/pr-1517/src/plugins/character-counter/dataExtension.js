@@ -1,1 +1,0 @@
-export{_q as characterCounterDataExtension}from"../../../chunks/app-BiIQ_Jyy.js";

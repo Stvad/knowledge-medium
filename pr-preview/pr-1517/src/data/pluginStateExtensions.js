@@ -1,1 +1,0 @@
-export{tJ as pluginPrefsExtension,nJ as pluginUIStateExtension}from"../../chunks/app-BiIQ_Jyy.js";

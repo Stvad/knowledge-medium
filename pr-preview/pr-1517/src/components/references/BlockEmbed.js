@@ -1,1 +1,0 @@
-export{Xk as BlockEmbed}from"../../../chunks/app-BiIQ_Jyy.js";

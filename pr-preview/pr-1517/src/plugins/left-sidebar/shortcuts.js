@@ -1,1 +1,0 @@
-export{wC as getOrCreateShortcutsBlock,TC as journalShortcutBlockId,EC as shortcutsBlockId}from"../../../chunks/app-BiIQ_Jyy.js";

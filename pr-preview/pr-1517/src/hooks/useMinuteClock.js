@@ -1,1 +1,0 @@
-export{FT as useMinuteClock}from"../../chunks/app-BiIQ_Jyy.js";

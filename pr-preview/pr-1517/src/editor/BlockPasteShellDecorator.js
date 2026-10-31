@@ -1,1 +1,0 @@
-export{WA as BlockPasteShellDecorator,GA as blockPasteShellDecorator}from"../../chunks/app-BiIQ_Jyy.js";

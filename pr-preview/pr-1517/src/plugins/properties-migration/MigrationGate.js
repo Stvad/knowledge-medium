@@ -1,1 +1,0 @@
-export{sa as MigrationGate}from"../../../chunks/app-BiIQ_Jyy.js";

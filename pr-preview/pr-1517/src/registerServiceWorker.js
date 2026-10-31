@@ -1,1 +1,0 @@
-export{Ej as checkForAppUpdate,Dj as registerServiceWorker}from"../chunks/app-BiIQ_Jyy.js";

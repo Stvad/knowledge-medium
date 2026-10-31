@@ -1,1 +1,0 @@
-export{cat as CHANGE_SCOPE_POLICIES,lat as ChangeScope,uat as isChangeScope,dat as policyForScope,fat as scopeAllowedInReadOnly,pat as scopeIsUndoable,mat as scopePoliciesEquivalent,hat as scopeUploadsToServer,gat as sourceForScope}from"../../../chunks/app-BiIQ_Jyy.js";

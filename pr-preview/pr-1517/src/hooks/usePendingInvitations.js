@@ -1,1 +1,0 @@
-export{zw as usePendingInvitations}from"../../chunks/app-BiIQ_Jyy.js";

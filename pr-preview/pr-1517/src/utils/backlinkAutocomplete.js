@@ -1,1 +1,0 @@
-export{b_ as backlinkCompletionSource,x_ as createBacklinkAutocomplete,S_ as isInsideBacklinkBrackets}from"../../chunks/app-BiIQ_Jyy.js";

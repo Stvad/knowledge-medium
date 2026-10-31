@@ -1,1 +1,0 @@
-export{IF as BlockEditor}from"../../chunks/app-BiIQ_Jyy.js";

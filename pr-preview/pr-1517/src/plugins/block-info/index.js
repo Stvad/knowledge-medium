@@ -1,1 +1,0 @@
-export{Xh as blockInfoPlugin}from"../../../chunks/app-BiIQ_Jyy.js";

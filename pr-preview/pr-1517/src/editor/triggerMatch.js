@@ -1,1 +1,0 @@
-export{OG as matchCharTrigger}from"../../chunks/app-BiIQ_Jyy.js";

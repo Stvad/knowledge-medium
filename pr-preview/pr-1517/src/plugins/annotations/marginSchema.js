@@ -1,1 +1,0 @@
-export{XK as annotationMarginOpenProp}from"../../../chunks/app-BiIQ_Jyy.js";

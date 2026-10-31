@@ -1,1 +1,0 @@
-export{ej as editorAutocompleteExtension}from"../../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,0 @@
-export{jg as LazyBlockEntry}from"../../../chunks/app-BiIQ_Jyy.js";

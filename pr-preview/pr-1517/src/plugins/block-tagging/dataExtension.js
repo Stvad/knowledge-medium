@@ -1,1 +1,0 @@
-export{cl as blockTaggingDataExtension}from"../../../chunks/app-BiIQ_Jyy.js";

@@ -1,1 +1,0 @@
-export{nC as BreadcrumbList,$S as BreadcrumbRenderer,tC as Breadcrumbs,QS as PromotableBreadcrumbList,YS as breadcrumbRendererContribution,XS as breadcrumbsPlugin,eC as getBreadcrumbContentPreview,ZS as usePromotableBreadcrumb}from"../../../chunks/app-BiIQ_Jyy.js";

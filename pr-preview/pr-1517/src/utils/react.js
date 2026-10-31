@@ -1,1 +1,0 @@
-export{EP as useIsMobile,DP as usePointerCoarse}from"../../chunks/app-BiIQ_Jyy.js";

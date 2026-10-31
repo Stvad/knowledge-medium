@@ -1,1 +1,0 @@
-export{UM as defaultRegistry,VM as refreshRendererRegistry,HM as useRenderer}from"../../chunks/app-BiIQ_Jyy.js";

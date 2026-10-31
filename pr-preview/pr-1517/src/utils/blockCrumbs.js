@@ -1,1 +1,0 @@
-export{uE as CRUMB_ELLIPSIS,dE as CRUMB_MAX_CHARS,fE as CRUMB_MAX_SEGMENTS,pE as collapseCrumbs,mE as crumbsFromAncestors}from"../../chunks/app-BiIQ_Jyy.js";
