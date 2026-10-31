@@ -1,1 +1,1 @@
-export{xC as LeftSidebarHeaderItem}from"../../../chunks/app-BbiFWStD.js";
+export{xC as LeftSidebarHeaderItem}from"../../../chunks/app-B7CmRE5H.js";

@@ -1,1 +1,1 @@
-export{SA as WipeLocalDataDialog}from"../../chunks/app-BbiFWStD.js";
+export{CA as WipeLocalDataDialog}from"../../chunks/app-B7CmRE5H.js";

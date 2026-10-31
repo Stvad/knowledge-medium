@@ -1,1 +1,1 @@
-export{Zet as deriveWorkspaceIdNamespace}from"../../../chunks/app-BbiFWStD.js";
+export{ett as deriveWorkspaceIdNamespace}from"../../../chunks/app-B7CmRE5H.js";
