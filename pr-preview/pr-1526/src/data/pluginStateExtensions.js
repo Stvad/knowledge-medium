@@ -1,1 +1,1 @@
-export{GJ as pluginPrefsExtension,KJ as pluginUIStateExtension}from"../../chunks/app-BBGXNzQR.js";
+export{JJ as pluginPrefsExtension,YJ as pluginUIStateExtension}from"../../chunks/app-Bwgm2jT1.js";

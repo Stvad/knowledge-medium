@@ -1,1 +1,1 @@
-export{Lg as UpdateIndicator}from"../../../chunks/app-BBGXNzQR.js";
+export{Bg as UpdateIndicator}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,1 @@
-export{cot as normalizeReferences}from"../../../chunks/app-BBGXNzQR.js";
+export{dot as normalizeReferences}from"../../../chunks/app-Bwgm2jT1.js";

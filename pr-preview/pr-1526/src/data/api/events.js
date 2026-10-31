@@ -1,1 +1,1 @@
-export{gat as CORE_BLOCK_DELETED_EVENT,_at as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-BBGXNzQR.js";
+export{yat as CORE_BLOCK_DELETED_EVENT,bat as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-Bwgm2jT1.js";
