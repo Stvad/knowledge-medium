@@ -1,1 +1,1 @@
-export{Xg as remarkBlockrefs}from"../../../../../chunks/app-QcIgH6bK.js";
+export{g_ as remarkBlockrefs}from"../../../../../chunks/app-BCsNACdE.js";

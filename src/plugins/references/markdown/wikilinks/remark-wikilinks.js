@@ -1,1 +1,1 @@
-export{Kg as remarkWikilinks}from"../../../../../chunks/app-QcIgH6bK.js";
+export{f_ as remarkWikilinks}from"../../../../../chunks/app-BCsNACdE.js";

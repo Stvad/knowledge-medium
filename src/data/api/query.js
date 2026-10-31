@@ -1,1 +1,1 @@
-export{Jrt as defineQuery}from"../../../chunks/app-QcIgH6bK.js";
+export{git as defineQuery}from"../../../chunks/app-BCsNACdE.js";
