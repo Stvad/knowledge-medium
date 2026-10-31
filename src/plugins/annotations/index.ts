@@ -23,6 +23,7 @@ import {
   COMMENT_ON_SELECTION_ACTION_ID,
   keepSelectionOnClick,
   readSelectionContext,
+  SUGGEST_EDIT_ACTION_ID,
 } from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
@@ -75,4 +76,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   mobileKeyboardToolbarItemsFacet.of(
     {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
     {source: SOURCE, precedence: 60}),
+  mobileKeyboardToolbarItemsFacet.of(
+    {id: 'annotations.suggest', actionId: SUGGEST_EDIT_ACTION_ID, movesFocus: true},
+    {source: SOURCE, precedence: 61}),
 ])

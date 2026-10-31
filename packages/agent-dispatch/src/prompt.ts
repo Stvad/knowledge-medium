@@ -13,6 +13,9 @@ export interface ThreadPromptContext {
   /** The quoted text; null for a thread on the whole block. */
   quote: string | null
   anchor: CommentAnchorState
+  /** The text an edit suggestion would put in place of the quote; null for a
+   *  thread that suggests nothing. */
+  replacement: string | null
   /** From the thread's first comment down to the one that mentioned you;
    *  `author` is null for a comment the thread view left out. */
   chain: Array<{id: string, content: string, author: CommentAuthor | null}>
@@ -110,7 +113,14 @@ const renderThreadContext = (thread: ThreadPromptContext): string => {
   }
   lines.push(thread.quote === null
     ? 'The thread is on the whole block.'
-    : `The thread quotes: "${neutralizeDisplayText(thread.quote)}"${ANCHOR_NOTES[thread.anchor] ?? ''}`, '')
+    : `The thread quotes: "${neutralizeDisplayText(thread.quote)}"${ANCHOR_NOTES[thread.anchor] ?? ''}`)
+  if (thread.replacement !== null) {
+    lines.push(
+      `It is an edit suggestion to replace that text with: "${neutralizeDisplayText(thread.replacement)}"`,
+      'A person accepts or rejects it in the app.',
+    )
+  }
+  lines.push('')
   // One line per comment, as the subtree outline renders: a comment's text
   // can't forge another comment or its author.
   lines.push('The thread, from its first comment down to the one that mentioned you:', renderSubtreeOutline(

@@ -406,6 +406,12 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
       .resolves.toBeUndefined()
   })
 
+  it('blocks add_comment when a suggestion\'s replacement references a blocked target, which accepting writes', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'add_comment', target: 'b', quote: 'Thursday', replacement: 'ask [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+  })
+
   it('lets update_block write a block that references a blocked target — a task is completed that way', async () => {
     const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ask [[claude]] to tidy up'}])
     const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])

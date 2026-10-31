@@ -17,7 +17,7 @@ import {
 } from './ui'
 
 const thread = (id: string, open = true): ThreadSummary =>
-  ({id, open, anchor: {kind: 'block'}, commentCount: 1, quoterCount: 0, createdAt: 0})
+  ({id, open, anchor: {kind: 'block'}, suggestion: false, commentCount: 1, quoterCount: 0, createdAt: 0})
 
 /** The contributions decide from the resolve context alone, so a context with
  *  just the fields they read is enough. */

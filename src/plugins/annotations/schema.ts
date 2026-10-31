@@ -1,5 +1,5 @@
 import {ChangeScope, propertyValue, seedProperty, seedType, type BlockData} from '@/data/api'
-import {decodeRowProperty} from '@/data/rowProperty'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
 /** A comment thread's root. Its content is the quoted text of the target (empty
@@ -48,10 +48,12 @@ export const annotationQuoteSuffixProp = seedProperty({
   hidden: true,
 })
 
-export type ThreadStatus = 'open' | 'resolved'
+/** `accepted` and `rejected` close an edit suggestion; `resolved` closes any
+ *  thread. */
+export type ThreadStatus = 'open' | 'resolved' | 'accepted' | 'rejected'
 
 /** Composing the todo status instead would give every thread a checkbox and
- *  put it in every todo query. Edit suggestions widen the options later. */
+ *  put it in every todo query. */
 export const annotationStatusProp = seedProperty<ThreadStatus>({
   seedKey: 'system:annotations/property/status',
   revision: 1,
@@ -60,9 +62,28 @@ export const annotationStatusProp = seedProperty<ThreadStatus>({
   config: {options: [
     {value: 'open', label: 'open'},
     {value: 'resolved', label: 'resolved'},
+    {value: 'accepted', label: 'accepted'},
+    {value: 'rejected', label: 'rejected'},
   ]},
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
+})
+
+/** An edit suggestion's new text for the quote; `threadSuggestionOf` says
+ *  which threads are suggestions. There is no separate kind.
+ *
+ *  A property, not a child block of the root, which every reader of replies
+ *  would have to skip. In a property-child-backed workspace its value row is
+ *  a block, so links in it are references; before that they stay text until
+ *  accepted. */
+export const annotationReplacementProp = seedProperty({
+  seedKey: 'system:annotations/property/replacement',
+  revision: 1,
+  name: 'annotation:replacement',
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** Where a range thread's quote sat and what surrounded it; a whole-block
@@ -77,7 +98,7 @@ export const anchorFieldValues = (anchor: RangeAnchor) => [
 
 export const annotationPropertySeeds = [
   annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
-  annotationQuoteSuffixProp, annotationStatusProp,
+  annotationQuoteSuffixProp, annotationStatusProp, annotationReplacementProp,
 ] as const
 
 export const annotationThreadType = seedType({
@@ -117,18 +138,32 @@ export const threadAnchorOf = (root: RootRow): ThreadAnchor => {
   }
 }
 
-export const threadTargetIdOf = (root: RootRow): string | undefined => {
-  try {
-    return decodeRowProperty(root, annotationTargetProp) || undefined
-  } catch {
-    return undefined
-  }
-}
+export const threadTargetIdOf = (root: RootRow): string | undefined =>
+  safeDecodeRowProperty(root, annotationTargetProp) || undefined
 
 export const threadStatusOf = (root: RootRow): ThreadStatus => decodeRowProperty(root, annotationStatusProp)
 
-/** False for resolved, and for a status this build cannot decode, such as a
- *  later build's closed states. */
+/** The stored replacement, if any. Empty counts as absent, and so does a
+ *  hand-edited value that no longer decodes. */
+export const threadReplacementOf = (root: RootRow): string | undefined =>
+  safeDecodeRowProperty(root, annotationReplacementProp) || undefined
+
+export interface ThreadSuggestion {
+  anchor: RangeAnchor
+  replacement: string
+}
+
+/** The edit a suggestion proposes, or null for any other thread: a range
+ *  thread with a replacement is a suggestion, and a replacement on a
+ *  whole-block thread is ignored, since there is no quote to replace. */
+export const threadSuggestionOf = (root: RootRow): ThreadSuggestion | null => {
+  const replacement = threadReplacementOf(root)
+  const anchor = threadAnchorOf(root)
+  return replacement !== undefined && anchor.kind === 'range' ? {anchor, replacement} : null
+}
+
+/** False for every closed status, and for one this build cannot decode, such
+ *  as a later build's. */
 export const threadIsOpen = (root: RootRow): boolean => {
   try {
     return threadStatusOf(root) === 'open'

@@ -70,7 +70,7 @@ export type GraphMcpWriteOperation =
   | {type: 'restore_block', id: string}
   | {type: 'append_markdown', target: string, markdown: string, position?: MoveBlockPositionInput, shape?: 'outline' | 'block'}
   | {type: 'edit_block', id: string, old: string, new: string}
-  | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string}
+  | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
@@ -278,7 +278,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     description: 'Start a comment thread on a block, on quoted text of it or on the whole block, and return its root id '
     + '(write ((id)) to quote that range elsewhere). The quote is found in the block\'s current content, verbatim as '
     + 'get_block returns it; one that appears more than once needs occurrence, and the result\'s quoteStart and excerpt '
-    + 'show which appearance was anchored. No content makes a highlight. Reply to a comment with append_markdown under '
+    + 'show which appearance was anchored. No content makes a highlight. A replacement makes an edit suggestion; to '
+    + 'change text yourself, use edit_block. Reply to a comment with append_markdown under '
     + 'that comment; resolve a thread with update_block on its root, properties {"annotation:status": "resolved"}. '
     + 'comments reads threads.',
     inputSchema: {
@@ -286,6 +287,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       quote: addCommentCommandSchema.shape.quote,
       occurrence: addCommentCommandSchema.shape.occurrence,
       content: addCommentCommandSchema.shape.content,
+      replacement: addCommentCommandSchema.shape.replacement,
     },
   }, async input => {
     const comment = {...input, target: await blockId(input.target)}

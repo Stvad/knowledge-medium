@@ -14,7 +14,7 @@
  *   Delete (`CommentActions`).
  */
 
-import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent, type ReactNode} from 'react'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
@@ -44,15 +44,17 @@ import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
-import {reportFailure, submitComposer} from './actions.ts'
+import {composerReady, reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
+import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {ReadSelectionMenu} from './readSelectionUi.tsx'
 import {
   THREAD_TYPE,
   threadAnchorOf,
   threadIsOpen,
+  threadSuggestionOf,
   threadTargetIdOf,
   type ThreadAnchor,
 } from './schema.ts'
@@ -103,7 +105,7 @@ const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockC
 const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
 
 export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
-  threads?.filter(drawsHighlight).map(({id, open, anchor}) => ({id, open, anchor})) ?? NO_HIGHLIGHTS
+  threads?.filter(drawsHighlight).map(({id, open, anchor, suggestion}) => ({id, open, anchor, suggestion})) ?? NO_HIGHLIGHTS
 
 /** The block's highlights, only, for this render scope: the selection keeps
  *  its identity while just a thread's comments change, and so does the feed
@@ -206,12 +208,22 @@ const QuoteText = ({anchor}: {anchor: ThreadAnchor}) =>
     ? <span className="italic">whole block</span>
     : <span className="break-words">“{truncate(anchor.quote, 160)}”</span>
 
+const COMPOSER_FIELD = 'w-full resize-y rounded border bg-background px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
+/** A comment's composer, or an edit suggestion's: the replacement, prefilled
+ *  with the quote, and an optional comment. */
 const Composer = ({block, composerKey, composer}: {block: Block; composerKey: string; composer: ComposerState}) => {
   const input = useRef<HTMLTextAreaElement>(null)
+  const suggesting = composer.replacement !== undefined
   // A frame late, on open and on re-aim: a menu that opened the composer
-  // returns focus to its trigger as it closes.
+  // returns focus to its trigger as it closes. At the end of the text, where
+  // a prefilled replacement is usually extended.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => input.current?.focus())
+    const frame = requestAnimationFrame(() => {
+      const field = input.current
+      field?.focus()
+      field?.setSelectionRange(field.value.length, field.value.length)
+    })
     return () => cancelAnimationFrame(frame)
   }, [composer.anchor])
   const submit = async () => {
@@ -221,41 +233,51 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
       reportFailure(error)
     }
   }
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    event.stopPropagation()
+    // Escape and Enter belong to an IME composition while one is open.
+    if (isImeKeyEvent(event.nativeEvent)) return
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      void submit()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeComposer(composerKey)
+    }
+  }
+  const fieldProps = {rows: 2, readOnly: composer.submitting, onKeyDown, className: COMPOSER_FIELD}
   return (
     <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
       <div className="text-xs text-muted-foreground">
-        Comment on <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}}/>
+        {suggesting ? 'Suggest a change to' : 'Comment on'}{' '}
+        <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}}/>
       </div>
+      {suggesting && (
+        <textarea
+          {...fieldProps}
+          ref={input}
+          aria-label="Replacement"
+          value={composer.replacement}
+          onChange={event => updateComposer(composerKey, {replacement: event.target.value, error: null})}
+        />
+      )}
       <textarea
-        ref={input}
-        aria-label="New comment"
-        rows={2}
-        readOnly={composer.submitting}
+        {...fieldProps}
+        ref={suggesting ? undefined : input}
+        aria-label={suggesting ? 'Comment (optional)' : 'New comment'}
+        placeholder={suggesting ? 'Why (optional)' : undefined}
         value={composer.draft}
         onChange={event => updateComposer(composerKey, {draft: event.target.value, error: null})}
-        onKeyDown={event => {
-          event.stopPropagation()
-          // Escape and Enter belong to an IME composition while one is open.
-          if (isImeKeyEvent(event.nativeEvent)) return
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault()
-            void submit()
-          } else if (event.key === 'Escape') {
-            event.preventDefault()
-            closeComposer(composerKey)
-          }
-        }}
-        className="w-full resize-y rounded border bg-background px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       {composer.error && <p role="alert" className="text-xs text-destructive">{composer.error}</p>}
       <div className="flex gap-2 text-xs">
         <button
           type="button"
-          disabled={composer.submitting || composer.draft.trim() === ''}
+          disabled={composer.submitting || !composerReady(composer)}
           onClick={() => void submit()}
           className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50"
         >
-          Comment
+          {suggesting ? 'Suggest' : 'Comment'}
         </button>
         <button type="button" onClick={() => closeComposer(composerKey)} className="px-1 text-muted-foreground hover:text-foreground">
           Cancel
@@ -321,7 +343,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
       )}
       {closed.length > 0 && (
         <button type="button" onClick={() => toggleShowResolved(key)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
-          {showResolved ? 'Hide' : 'Show'} {closed.length} resolved
+          {showResolved ? 'Hide' : 'Show'} {closed.length} closed
         </button>
       )}
       {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
@@ -391,7 +413,8 @@ const reportRefusal = (error: unknown): void => {
 
 /** Re-anchoring a moved or stale quote: confirm it where it now sits, select
  *  new text for it (the next comment-on-selection in its block re-anchors
- *  it), or anchor it to the whole block. */
+ *  it), or anchor it to the whole block, which a suggestion can't be: it
+ *  would have nothing to replace. */
 const ReanchorControls = ({root, state, targetContent}: {
   root: RootFields
   state: 'moved' | 'stale'
@@ -422,9 +445,17 @@ const ReanchorControls = ({root, state, targetContent}: {
     <div className="flex flex-wrap gap-x-2">
       {state === 'moved' && <ActionButton onClick={confirm}>Confirm position</ActionButton>}
       {targetId && <ActionButton onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
-      <ActionButton onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
+      {!threadSuggestionOf(root) && (
+        <ActionButton onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
+      )}
     </div>
   )
+}
+
+/** What a thread's line shows: a suggestion's change, or the quote. */
+const ThreadQuote = ({root}: {root: RootFields}) => {
+  const suggestion = threadSuggestionOf(root)
+  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)}/>
 }
 
 const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise<void>}) => {
@@ -432,21 +463,26 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
   const readOnly = useReadOnly(repo)
   const {state, targetContent} = useAnchorState(root)
   const open = threadIsOpen(root)
+  const awaitingDecision = open && threadSuggestionOf(root) !== null
+  const anchorShown = showsAnchorState(root)
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className="min-w-0 flex-1 text-muted-foreground"><QuoteText anchor={threadAnchorOf(root)}/></span>
-      {state !== 'exact' && (
+      <span className="min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote root={root}/></span>
+      {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
       {!readOnly && <>
+        {awaitingDecision && <SuggestionActions threadId={root.id}/>}
         <ActionButton onClick={() => onReply().catch(reportFailure)}>Reply</ActionButton>
-        <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
-          {open ? 'Resolve' : 'Reopen'}
-        </ActionButton>
+        {!awaitingDecision && !isAccepted(root) && (
+          <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
+            {open ? 'Resolve' : 'Reopen'}
+          </ActionButton>
+        )}
       </>}
     </div>
-    {!readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
+    {anchorShown && !readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
       <ReanchorControls root={root} state={state} targetContent={targetContent}/>
     )}
     </div>
@@ -463,8 +499,8 @@ const ThreadElsewhere = ({root}: {root: RootFields}) => {
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
-      <QuoteText anchor={threadAnchorOf(root)}/>
-      {state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
+      <ThreadQuote root={root}/>
+      {showsAnchorState(root) && state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
     </div>
   )
 }

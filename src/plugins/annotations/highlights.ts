@@ -1,5 +1,6 @@
 /**
- * Edit-mode highlights: each open thread's quote, marked in the block's editor.
+ * Edit-mode highlights: each open thread's quote, marked in the block's editor,
+ * an edit suggestion's in a style of its own.
  *
  * Resolved against the editor's live doc on every change, not the stored row,
  * which lags the editor by its debounce; the offsets are exact because the
@@ -16,21 +17,39 @@ import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type Thre
 
 export const HIGHLIGHT_CLASS = 'km-annotation-highlight'
 export const MOVED_HIGHLIGHT_CLASS = 'km-annotation-highlight-moved'
+export const SUGGESTION_HIGHLIGHT_CLASS = 'km-annotation-highlight-suggestion'
 
-const MARK_UTILITIES = 'bg-yellow-400/30 text-inherit border-b-2 border-yellow-600/75 dark:bg-yellow-400/20'
+const COMMENT_UTILITIES = 'bg-yellow-400/30 text-inherit border-b-2 border-yellow-600/75 dark:bg-yellow-400/20'
+const SUGGESTION_UTILITIES = 'bg-sky-400/25 text-inherit border-b-2 border-sky-600/75 dark:bg-sky-400/20'
+
+export interface HighlightStyle {
+  /** The anchor resolved moved, not exact. */
+  moved: boolean
+  /** An edit suggestion's quote: the text it would replace. */
+  suggestion: boolean
+}
 
 /** A highlight's look, in the editor and in read mode alike. Utilities rather
  *  than an editor theme: the app's dark variant follows `data-theme-mode`, which
  *  an editor theme's `&dark` never sees. */
-export const highlightClasses = (moved: boolean): string =>
-  moved
-    ? `${HIGHLIGHT_CLASS} ${MOVED_HIGHLIGHT_CLASS} ${MARK_UTILITIES} border-dashed`
-    : `${HIGHLIGHT_CLASS} ${MARK_UTILITIES}`
+export const highlightClasses = ({moved, suggestion}: HighlightStyle): string => [
+  HIGHLIGHT_CLASS,
+  ...(suggestion ? [SUGGESTION_HIGHLIGHT_CLASS, SUGGESTION_UTILITIES] : [COMMENT_UTILITIES]),
+  ...(moved ? [MOVED_HIGHLIGHT_CLASS, 'border-dashed'] : []),
+].join(' ')
 
-export interface HighlightRange {
+/** The style of text several highlights cover: a suggestion's if any is
+ *  one, since a suggestion would change it, and then exact if any of the
+ *  winning style is, since the text there is certainly quoted. */
+export const coveringStyle = (covering: readonly HighlightStyle[]): HighlightStyle => {
+  const suggestions = covering.filter(style => style.suggestion)
+  const winners = suggestions.length > 0 ? suggestions : covering
+  return {moved: winners.every(style => style.moved), suggestion: suggestions.length > 0}
+}
+
+export interface HighlightRange extends HighlightStyle {
   from: number
   to: number
-  moved: boolean
 }
 
 /** Where `thread` highlights `doc`, its anchor exact or moved; null where it
@@ -38,17 +57,18 @@ export interface HighlightRange {
 export const highlightRange = (doc: string, thread: HighlightThread): HighlightRange | null => {
   if (!drawsHighlight(thread) || thread.anchor.kind !== 'range') return null
   const resolved = resolveAnchor(doc, thread.anchor)
-  return resolved.state === 'stale' ? null : {from: resolved.from, to: resolved.to, moved: resolved.state === 'moved'}
+  return resolved.state === 'stale'
+    ? null
+    : {from: resolved.from, to: resolved.to, moved: resolved.state === 'moved', suggestion: thread.suggestion}
 }
 
 export const highlightRanges = (doc: string, threads: readonly HighlightThread[]): HighlightRange[] =>
   threads.flatMap(thread => highlightRange(doc, thread) ?? [])
 
-const exactMark = Decoration.mark({class: highlightClasses(false)})
-const movedMark = Decoration.mark({class: highlightClasses(true)})
-
+/** CodeMirror nests overlapping marks itself, so each range keeps its own
+ *  style; `coveringStyle` is read mode's. */
 const decorationsFor = (doc: string, threads: readonly ThreadSummary[]): DecorationSet =>
-  Decoration.set(highlightRanges(doc, threads).map(r => (r.moved ? movedMark : exactMark).range(r.from, r.to)), true)
+  Decoration.set(highlightRanges(doc, threads).map(r => Decoration.mark({class: highlightClasses(r)}).range(r.from, r.to)), true)
 
 const setThreads = StateEffect.define<readonly ThreadSummary[]>()
 

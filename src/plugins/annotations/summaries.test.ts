@@ -190,7 +190,7 @@ describe('visibility', () => {
     expect(highlighted.map(s => s.id)).not.toContain(whole.threadId)
   })
 
-  it('keeps a pill, unnumbered, on a block whose threads are all resolved or highlights', async () => {
+  it('keeps a pill, unnumbered, on a block whose threads are all resolved or highlights, and counts an open suggestion', async () => {
     expect(pillCount(await summariesOfB())).toBeNull()
     const resolved = await createThread(repo, {targetId: 'B', anchor: quoteAnchor('launch'), comment: 'Done'})
     await setThreadStatus(repo, resolved.threadId, 'resolved')
@@ -198,6 +198,9 @@ describe('visibility', () => {
     expect(pillCount(await summariesOfB())).toBe(0)
     await createThread(repo, {targetId: 'B', anchor: null, comment: 'Overall'})
     expect(pillCount(await summariesOfB())).toBe(1)
+    // A suggestion waits on a decision, so it counts with no comment.
+    await createThread(repo, {targetId: 'B', anchor: quoteAnchor('vendor'), replacement: 'supplier'})
+    expect(pillCount(await summariesOfB())).toBe(2)
   })
 })
 
@@ -213,11 +216,32 @@ describe('edit-mode highlights', () => {
     const summaries = await summariesOfB()
 
     expect(highlightRanges(TEXT, summaries)).toEqual([
-      {from: 23, to: 31, moved: false},
-      {from: 44, to: 50, moved: false},
+      {from: 23, to: 31, moved: false, suggestion: false},
+      {from: 44, to: 50, moved: false, suggestion: false},
     ])
     const edited = `Update: ${TEXT.replace('vendor', 'supplier')}`
-    expect(highlightRanges(edited, summaries)).toEqual([{from: 31, to: 39, moved: true}])
+    expect(highlightRanges(edited, summaries)).toEqual([{from: 31, to: 39, moved: true, suggestion: false}])
+  })
+
+  it('marks an edit suggestion\'s quote in its own style', async () => {
+    await createThread(repo, {targetId: 'B', anchor: quoteAnchor('Thursday'), replacement: 'Thursday 9am'})
+    await createThread(repo, {targetId: 'B', anchor: quoteAnchor('vendor'), comment: 'y'})
+    const summaries = await summariesOfB()
+    expect(summaries.map(thread => thread.suggestion)).toEqual([true, false])
+    expect(highlightRanges(TEXT, summaries)).toEqual([
+      {from: 23, to: 31, moved: false, suggestion: true},
+      {from: 44, to: 50, moved: false, suggestion: false},
+    ])
+
+    view = new EditorView({
+      state: EditorState.create({
+        doc: TEXT,
+        extensions: threadHighlights(repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'})),
+      }),
+    })
+    await vi.waitFor(() => expect(view!.dom.querySelectorAll('.km-annotation-highlight')).toHaveLength(2))
+    expect([...view.dom.querySelectorAll('.km-annotation-highlight-suggestion')].map(mark => mark.textContent))
+      .toEqual(['Thursday'])
   })
 
   it('follows the editor as the user types, from the threads the handle feeds it', async () => {
