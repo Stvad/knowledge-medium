@@ -103,6 +103,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       await tx.create({id: SELF, workspaceId: WS, parentId: 'page', orderKey: 'a5', content: `**bar** ((${SELF}))`})
       await tx.create({id: 'list', workspaceId: WS, parentId: 'page', orderKey: 'a6', content: '- first item\n- second item'})
       await tx.create({id: 'trimmed', workspaceId: WS, parentId: 'page', orderKey: 'a7', content: 'first \nsecond line'})
+      await tx.create({id: 'footnote', workspaceId: WS, parentId: 'page', orderKey: 'a8', content: 'see[^1]\n\n[^1]: note x'})
       await tx.create({id: 'ui-state', workspaceId: WS, parentId: null, orderKey: 'a2',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')}})
     }, {scope: ChangeScope.BlockDefault})
@@ -260,6 +261,15 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     await renderBlocks('rich')
     at('Some').node.data = 'Sxme '
     expect(mapReadSelection(ends('Sxme', 'Sxme'), contentOf)).toEqual({kind: 'inexact'})
+  })
+
+  it('refuses an end in text the renderer extended, a footnote’s last text', async () => {
+    await renderBlocks('footnote', 'rich')
+    const {node} = at('note x')
+    // The footer appends a space to the text node itself, so the counts agree.
+    expect(node.data).toBe('note x ')
+    expect(mapReadSelection({anchorNode: node, anchorOffset: 0, focusNode: node, focusOffset: 7}, contentOf))
+      .toEqual({kind: 'inexact'})
   })
 
   it('refuses text the parser changed, a space dropped before a line break', async () => {

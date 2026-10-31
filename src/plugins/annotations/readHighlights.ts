@@ -235,7 +235,9 @@ export interface AnnotationMarksOptions {
 
 export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({content, ranges, sourceKey}) => (tree, file) => {
   const source = String(file.value ?? '')
-  if (source !== content) return
+  // The parser skips a leading byte-order mark without counting it, so every
+  // position it reports would sit one before the text it names.
+  if (source !== content || source.charCodeAt(0) === 0xfeff) return
   const spans = spansOf(tree, source)
   const segments = ranges.length === 0 ? [] : segmentsOf(ranges.filter(drawable(opaqueSpans(tree, spans, source))))
   if (segments.length > 0) drawMarks(tree, spans, segments, source)

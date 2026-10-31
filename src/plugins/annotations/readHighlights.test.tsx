@@ -258,6 +258,12 @@ describe('recorded source spans', () => {
     expect(recorded('a [ref] here\n\n[ref]: https://example.com')).toEqual(['a: B 3-6'])
   })
 
+  it('records and draws nothing after a byte-order mark, which shifts every parser position', () => {
+    const content = '\uFEFFsee [a](b)))'
+    expect(recorded(content)).toEqual([])
+    expect(marks(render(content, [range(content, '))')]))).toEqual([])
+  })
+
   it('records nothing for a static render, which has no selection to map', () => {
     const context = {block: {id: 'B'} as unknown as Block, input: {}, data: {content: 'text', references: [], workspaceId: 'ws'}}
     expect(threadMarksMarkdownExtension({...context, blockContext: {}})).toBeNull()

@@ -79,8 +79,8 @@ const offsetInText = (text: Text, offset: number, key: string, content: string):
   const span = SPAN_ENTRY.exec(entries[texts.indexOf(text)])
   if (!span) return null
   const from = Number(span[1])
-  // DEFENCE IN DEPTH: the key and the entry already say this text rendered
-  // that slice; this catches text changed in the page since (an extension).
+  // The entry is mdast's text; the renderer can still extend it in the same
+  // node (a footnote's last text gets a space), and the page can change it.
   if (content.slice(from, Number(span[2])) !== text.data) return null
   return from + offset
 }
