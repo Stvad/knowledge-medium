@@ -1,0 +1,1 @@
+export{Iu as quotedInFooterContribution}from"../../../chunks/app-Cqtkv9y5.js";

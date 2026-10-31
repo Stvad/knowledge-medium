@@ -1,0 +1,1 @@
+export{Fat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-Cqtkv9y5.js";

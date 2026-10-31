@@ -1,0 +1,1 @@
+export{xC as plainOutlinerPlugin}from"../../../chunks/app-Cqtkv9y5.js";

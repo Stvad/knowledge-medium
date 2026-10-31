@@ -1,0 +1,1 @@
+export{jg as inlineBacklinkCountsExtension}from"../../../../chunks/app-Cqtkv9y5.js";

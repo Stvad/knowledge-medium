@@ -1,0 +1,1 @@
+export{$B as withMoveTransition}from"../../chunks/app-Cqtkv9y5.js";

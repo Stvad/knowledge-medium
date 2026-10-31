@@ -1,0 +1,1 @@
+export{TC as blockEditingContentRenderer}from"../../../chunks/app-Cqtkv9y5.js";
