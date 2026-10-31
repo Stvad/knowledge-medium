@@ -12,11 +12,21 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
+import {surfaceRenderScopeId} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
 export const viewKey = (renderScopeId: string | undefined, blockId: string): string =>
   `${renderScopeId ?? ''}\u0000${blockId}`
+
+/** Where a thread's card renders: inline under its block, or in the panel's
+ *  margin. */
+export type CardSurface = 'comments' | 'margin'
+
+/** A card's render scope, derived from the scope it renders in. The one
+ *  definition: a card renders in it, and a navigation focuses into it. */
+export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
+  surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
 
 export interface ComposerState {
   targetId: string
@@ -103,6 +113,20 @@ export const useActiveThread = (panelId: string): string | undefined =>
 export const toggleShowClosed = showingClosed.toggle
 export const showClosedThreads = showingClosed.add
 export const useShowClosed = showingClosed.useHas
+
+export const peekMarginShowing = (panelId: string): boolean => marginShowing.has(panelId)
+
+/** Show `threadId`'s card for the block that `key` names in `panelId`: pinned
+ *  in the margin, and expanded inline for when the margin isn't drawn, with
+ *  closed threads shown if it is closed. */
+export const revealThread = (panelId: string, key: string, threadId: string, open: boolean): void => {
+  expanded.add(key)
+  if (!open) {
+    showingResolved.add(key)
+    showingClosed.add(panelId)
+  }
+  activateThread(panelId, threadId)
+}
 
 /** The notifications that move cards without mounting or unmounting one, for
  *  the margin's layout pass: a card activated, a composer opened. */
