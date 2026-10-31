@@ -1,1 +1,1 @@
-export{rG as matchAtTrigger,iG as placeCompletionSource,aG as planResolvedInsert}from"../../../chunks/app-PA-vUtQD.js";
+export{rG as matchAtTrigger,iG as placeCompletionSource,aG as planResolvedInsert}from"../../../chunks/app-QcIgH6bK.js";

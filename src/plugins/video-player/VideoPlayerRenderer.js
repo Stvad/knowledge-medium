@@ -1,1 +1,1 @@
-export{ub as VideoPlayerContentRenderer,db as VideoPlayerRenderer,fb as isPlayableVideoBlock}from"../../../chunks/app-PA-vUtQD.js";
+export{ub as VideoPlayerContentRenderer,db as VideoPlayerRenderer,fb as isPlayableVideoBlock}from"../../../chunks/app-QcIgH6bK.js";

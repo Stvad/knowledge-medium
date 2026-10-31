@@ -1,1 +1,1 @@
-export{RO as CommandPaletteHeaderItem}from"../../../chunks/app-PA-vUtQD.js";
+export{RO as CommandPaletteHeaderItem}from"../../../chunks/app-QcIgH6bK.js";
