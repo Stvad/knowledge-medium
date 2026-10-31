@@ -107,6 +107,22 @@ describe('themeStyleSyncEffect', () => {
     dispose()
   })
 
+  it('stamps the mode of the live theme once a contribution registers its id', () => {
+    // The live id came from pre-paint, which had no mode persisted for it.
+    document.documentElement.dataset.theme = SOLARIZED_DARK.id
+    const runtime = resolveFacetRuntimeSync([])
+    const dispose = startEffect(runtime)
+    expect(document.documentElement.dataset.themeMode).toBeUndefined()
+
+    runtime.setRuntimeContributions(themesFacet, 'runtime-source', [SOLARIZED_DARK])
+
+    expect(document.documentElement.dataset.themeMode).toBe('dark')
+
+    dispose()
+    document.documentElement.removeAttribute('data-theme')
+    document.documentElement.removeAttribute('data-theme-mode')
+  })
+
   it('removes the style element and restores the bootstrap registry on dispose', () => {
     const runtime = resolveFacetRuntimeSync([
       themesFacet.of(SOLARIZED_DARK, { source: 'test-theme' }),
