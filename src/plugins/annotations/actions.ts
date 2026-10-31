@@ -15,6 +15,7 @@ import {
   type BaseShortcutDependencies,
   type BlockPointerDependencies,
   type CodeMirrorEditModeDependencies,
+  type ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {resolveActivePanelRow} from '@/utils/navigation.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
@@ -49,8 +50,13 @@ export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
  *  ⌘⌥ and ⌘⇧ (⌘⌥M minimizes every window), and on Windows Ctrl+Alt is AltGr. */
 const COMMENT_KEYS = 'Control+Shift+Slash'
 const HIGHLIGHT_KEYS = 'Control+Shift+h'
-/** Firefox, and Edge on Windows, take this chord for a screenshot; accepted. */
+/** On Windows and Linux, Firefox and Edge bind this chord to a screenshot;
+ *  accepted. */
 const SUGGEST_KEYS = 'Control+Shift+s'
+
+/** Edit mode leaves a key's browser default on; a gesture's chord is its own,
+ *  so the default is prevented once the gesture handles it. */
+const editModeBinding = (keys: string): ShortcutBindingDefaults => ({keys, eventOptions: {preventDefault: true}})
 
 /** Home of the gestures on text selected in rendered (not edited) block
  *  content, where no editor holds a selection to read. Always active; each
@@ -187,8 +193,9 @@ export const openSuggestionComposer = (
   return true
 }
 
-/** Open the suggestion composer on the target's text: a comment's flow, with
- *  a replacement. True when it opened. */
+/** Open the suggestion composer on the target's text. True when it opened.
+ *  The range is raw: one across formatting or list items prefills that
+ *  markup, which the composer shows. */
 const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
   if (!onOutline(target)) {
     showInfo('Open the block in its page to suggest an edit to it.')
@@ -251,7 +258,7 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   description: 'Comment on selection',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MessageSquarePlus,
-  defaultBinding: {keys: COMMENT_KEYS},
+  defaultBinding: editModeBinding(COMMENT_KEYS),
   isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
   handler: async deps => {
     if (!await commentOnTarget(editorTarget(deps))) return
@@ -267,7 +274,7 @@ const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   description: 'Highlight selection',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: Highlighter,
-  defaultBinding: {keys: HIGHLIGHT_KEYS},
+  defaultBinding: editModeBinding(HIGHLIGHT_KEYS),
   isVisible: onOutline,
   handler: async deps => { await highlightTarget(editorTarget(deps)) },
 }
@@ -277,7 +284,7 @@ const suggestEdit: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   description: 'Suggest edit to selection',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: PencilLine,
-  defaultBinding: {keys: SUGGEST_KEYS},
+  defaultBinding: editModeBinding(SUGGEST_KEYS),
   isVisible: onOutline,
   handler: async deps => {
     if (!await suggestOnTarget(editorTarget(deps))) return
