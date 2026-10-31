@@ -209,6 +209,13 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe(MID)
   })
 
+  it('re-checks a replacement set by hand, which skipped creation\'s checks', async () => {
+    const threadId = await suggest('Thursday', 'Thursday 9am')
+    await repo.tx(tx => tx.setProperty(threadId, annotationReplacementProp, 'Thu\ud800'), opts)
+    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('cuts a character in half')
+    expect(await targetText()).toBe(MID)
+  })
+
   it('refuses a block that is not a thread root', async () => {
     await expect(acceptSuggestion(repo, 'B')).rejects.toThrow('Thread B is missing or deleted.')
   })

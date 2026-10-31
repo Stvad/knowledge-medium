@@ -16,7 +16,7 @@ import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {annotationStatusProp, THREAD_TYPE, threadIsOpen, threadSuggestionOf} from './schema.ts'
-import {AnchorChangedError, InvalidSuggestionError, threadAndTarget} from './threads.ts'
+import {AnchorChangedError, assertSuggestion, InvalidSuggestionError, threadAndTarget} from './threads.ts'
 
 /** Does the text around `from` already read as `replacement`, with the quote
  *  where the replacement holds it? Then this change is already there: a copy
@@ -64,6 +64,7 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     const {root, target} = await threadAndTarget(tx, threadId)
     const suggestion = threadSuggestionOf(root)
     if (!suggestion) throw new InvalidSuggestionError('This thread is not an edit suggestion.')
+    assertSuggestion(suggestion.anchor, suggestion.replacement)
     // The card offers Accept only while open, but may be stale.
     if (!threadIsOpen(root)) throw new InvalidSuggestionError('This suggestion is closed. Reopen it to accept it.')
     const resolved = resolveAnchor(target.content, suggestion.anchor)
