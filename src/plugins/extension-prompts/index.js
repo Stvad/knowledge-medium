@@ -1,1 +1,1 @@
-export{Wj as ExtensionPromptSurface,Gj as extensionPromptsExtension}from"../../../chunks/app-1twtn-s_.js";
+export{Wj as ExtensionPromptSurface,Gj as extensionPromptsExtension}from"../../../chunks/app-BCAOXzjc.js";

@@ -1,1 +1,1 @@
-export{Qet as hasSupabaseAuthConfig,$et as isAuthCallbackUrl,ett as readPersistedSession,ttt as sessionUserToAppUser,ntt as supabase}from"../../chunks/app-1twtn-s_.js";
+export{Qet as hasSupabaseAuthConfig,$et as isAuthCallbackUrl,ett as readPersistedSession,ttt as sessionUserToAppUser,ntt as supabase}from"../../chunks/app-BCAOXzjc.js";

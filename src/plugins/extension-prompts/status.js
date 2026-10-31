@@ -1,1 +1,1 @@
-export{Kj as extensionPromptDiagnosticContribution,qj as extensionPromptDiagnosticSource}from"../../../chunks/app-1twtn-s_.js";
+export{Kj as extensionPromptDiagnosticContribution,qj as extensionPromptDiagnosticSource}from"../../../chunks/app-BCAOXzjc.js";

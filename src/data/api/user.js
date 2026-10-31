@@ -1,1 +1,1 @@
-export{eat as SYSTEM_AUTHOR_PREFIX,tat as isSystemAuthor,nat as systemAuthor}from"../../../chunks/app-1twtn-s_.js";
+export{eat as SYSTEM_AUTHOR_PREFIX,tat as isSystemAuthor,nat as systemAuthor}from"../../../chunks/app-BCAOXzjc.js";

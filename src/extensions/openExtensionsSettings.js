@@ -1,1 +1,1 @@
-export{JN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,YN as openExtensionsSettings}from"../../chunks/app-1twtn-s_.js";
+export{JN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,YN as openExtensionsSettings}from"../../chunks/app-BCAOXzjc.js";

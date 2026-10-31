@@ -1,1 +1,1 @@
-export{Ol as collectTypeCandidates,kl as formatTypeCandidateReport}from"../../../chunks/app-1twtn-s_.js";
+export{Ol as collectTypeCandidates,kl as formatTypeCandidateReport}from"../../../chunks/app-BCAOXzjc.js";

@@ -1,1 +1,1 @@
-export{tet as getOrCreateKernelPage,net as kernelPageBlockId}from"../../chunks/app-1twtn-s_.js";
+export{tet as getOrCreateKernelPage,net as kernelPageBlockId}from"../../chunks/app-BCAOXzjc.js";

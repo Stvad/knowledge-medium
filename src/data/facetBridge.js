@@ -1,1 +1,1 @@
-export{LQ as FacetBridge}from"../../chunks/app-1twtn-s_.js";
+export{LQ as FacetBridge}from"../../chunks/app-BCAOXzjc.js";

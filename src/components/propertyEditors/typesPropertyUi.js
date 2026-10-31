@@ -1,1 +1,1 @@
-export{VA as kernelPropertyUiExtension,HA as typesPropertyUi,UA as typesPropertyUiExtension}from"../../../chunks/app-1twtn-s_.js";
+export{VA as kernelPropertyUiExtension,HA as typesPropertyUi,UA as typesPropertyUiExtension}from"../../../chunks/app-BCAOXzjc.js";

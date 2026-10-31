@@ -1,1 +1,1 @@
-export{jp as extensionsOverridesProp,Mp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-1twtn-s_.js";
+export{jp as extensionsOverridesProp,Mp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BCAOXzjc.js";
