@@ -1,6 +1,6 @@
 import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
 import { COMMENTS_PAGE_ALIAS } from '@/plugins/annotations/container.js'
-import { annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
+import { annotationReplacementProp, annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
 import { COMMENTS_RECIPE_QUIET_MS, COMMENTS_RECIPE_SQL } from '@/plugins/annotations/scope.js'
 
 const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
@@ -256,10 +256,16 @@ Write the way you would edit files, and let the app do the outline:
 A **comment thread** is a block typed \`${THREAD_TYPE}\`, filed under the
 \`${COMMENTS_PAGE_ALIAS}\` page. Its \`${annotationTargetProp.name}\` ref points
 at the block it annotates. Its content is the quoted text of that block, or empty
-for a thread on the whole block, and \`${annotationStatusProp.name}\` is \`open\` or
-\`resolved\`. Its children are the comments, and a reply is a child of the
+for a thread on the whole block, and \`${annotationStatusProp.name}\` is \`open\`,
+\`resolved\`, or for a suggestion \`accepted\` or \`rejected\`. Its children are the comments, and a reply is a child of the
 comment it answers, to any depth. A quote is a copy, not a mention: a
 \`[[Page]]\` inside it never counts as a backlink.
+
+A range thread whose root carries \`${annotationReplacementProp.name}\` is an
+**edit suggestion**: replace the quote with that text. A person accepts it in
+the app, which changes the block and sets the status \`accepted\`, or rejects
+it (\`rejected\`). Setting the status yourself changes no text. Propose with
+\`add-comment\` only; never set \`${annotationReplacementProp.name}\` by hand.
 
 - \`comments\` (MCP \`comments\`) reads threads as JSON. \`scope\` gives every
   thread on a block under that page or block, plus the threads on their
@@ -278,6 +284,10 @@ comment it answers, to any depth. A quote is a copy, not a mention: a
   that range. The quote and \`occurrence\` count in the block's verbatim
   content, as \`get-block\` returns it (outline views collapse whitespace); the
   result's \`quoteStart\` and \`excerpt\` show which appearance it anchored.
+  With \`replacement\` it is an edit suggestion (for just the quoted part when
+  the quote is widened); the result's \`replacement\` confirms it, and null
+  means a plain comment was made. Use \`edit-block\` only to change text
+  yourself.
 - **Reply** with \`append-markdown\` whose target is the comment you are answering.
   Target the thread root only to start a new top-level comment.
 - **Resolve or reopen** with \`update-block\` on the root, properties

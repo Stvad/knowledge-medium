@@ -401,7 +401,12 @@ export const createBlockedWikilinkWriteGuard = (
           // mention; the comment is the thread's own text. Accepted: with the
           // Comments plugin off that exclusion goes too, and a root quoting a
           // blocked page reads as a mention, one run each under runsPerHour.
+          // A replacement becomes the target's own text once a person accepts
+          // it. Accepted: only the replacement is checked, not the text it
+          // makes with what surrounds the quote, so a link split across that
+          // edge passes; a person sees the change before accepting it.
           await assertNoBlockedRefs(operation.content)
+          await assertNoBlockedRefs(operation.replacement)
           return
         case 'create_page':
           // A date's note is got or created the way opening that day does,
