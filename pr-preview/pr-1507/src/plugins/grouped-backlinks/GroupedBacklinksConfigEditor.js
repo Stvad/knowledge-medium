@@ -1,1 +1,1 @@
-export{mg as GroupedBacklinksDefaultsEditor}from"../../../chunks/app-BZN0GW4K.js";
+export{Mg as GroupedBacklinksDefaultsEditor}from"../../../chunks/app-CBbeRl0J.js";

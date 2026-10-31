@@ -1,1 +1,1 @@
-export{Eat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-BZN0GW4K.js";
+export{Wat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-CBbeRl0J.js";

@@ -1,1 +1,1 @@
-export{VM as BlockChildren,HM as BlockComponent}from"../../chunks/app-BZN0GW4K.js";
+export{aN as BlockChildren,oN as BlockComponent}from"../../chunks/app-CBbeRl0J.js";

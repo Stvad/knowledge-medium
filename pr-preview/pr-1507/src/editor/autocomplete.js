@@ -1,1 +1,1 @@
-export{oj as editorAutocompleteExtension}from"../../chunks/app-BZN0GW4K.js";
+export{wj as editorAutocompleteExtension}from"../../chunks/app-CBbeRl0J.js";
