@@ -56,7 +56,7 @@ export function CommandPalette() {
   useEditModeYieldKeepalive(open)
 
   const {actions, activeContexts, bindingsFor} = useCommandPaletteActions(
-    open ? selectionSession.selection : undefined,
+    open, selectionSession.selection,
   )
   const runAction = useRunAction()
 

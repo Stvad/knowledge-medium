@@ -25,7 +25,7 @@ export interface CommandPaletteActionsResult {
   bindingsFor: (action: Pick<ActionConfig, 'context' | 'id'>) => readonly ShortcutBinding[]
 }
 
-export function useCommandPaletteActions(selection?: SavedSelection | null): CommandPaletteActionsResult {
+export function useCommandPaletteActions(open: boolean, selection: SavedSelection | null): CommandPaletteActionsResult {
   const {actions: allActions, active, activeContexts, bindingsFor} = useActionDiscovery()
 
   const [actions, setActions] = useState<readonly ActionConfig[]>([])
@@ -33,6 +33,7 @@ export function useCommandPaletteActions(selection?: SavedSelection | null): Com
   // Selection restoration mutates the DOM, so predicates run after commit,
   // outside React render. Keep the search input's selection between reads.
   useLayoutEffect(() => {
+    if (!open) return
     const visibleActions = () => allActions.filter(action => {
       if (!active.has(action.context)) return false
       if (PALETTE_HIDDEN_FROM_PALETTE.has(action.id)) return false
@@ -46,8 +47,8 @@ export function useCommandPaletteActions(selection?: SavedSelection | null): Com
       return action.isVisible(deps as never)
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- DOM selection predicates must run after commit.
-    setActions(selection === undefined ? visibleActions() : withSelection(selection, visibleActions))
-  }, [allActions, active, selection])
+    setActions(withSelection(selection, visibleActions))
+  }, [allActions, active, open, selection])
 
   return {actions, activeContexts, bindingsFor}
 }
