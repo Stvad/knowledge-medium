@@ -1,1 +1,1 @@
-export{WA as chipStyle}from"../../../chunks/app-DXQJrMqJ.js";
+export{WA as chipStyle}from"../../../chunks/app-bGvjAJ53.js";

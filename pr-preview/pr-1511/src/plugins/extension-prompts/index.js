@@ -1,1 +1,1 @@
-export{Vj as ExtensionPromptSurface,Hj as extensionPromptsExtension}from"../../../chunks/app-DXQJrMqJ.js";
+export{Vj as ExtensionPromptSurface,Hj as extensionPromptsExtension}from"../../../chunks/app-bGvjAJ53.js";

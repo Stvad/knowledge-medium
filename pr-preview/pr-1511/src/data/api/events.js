@@ -1,1 +1,1 @@
-export{pat as CORE_BLOCK_DELETED_EVENT,mat as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DXQJrMqJ.js";
+export{pat as CORE_BLOCK_DELETED_EVENT,mat as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-bGvjAJ53.js";

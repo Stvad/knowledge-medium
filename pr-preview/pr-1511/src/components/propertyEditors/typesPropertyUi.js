@@ -1,1 +1,1 @@
-export{RA as kernelPropertyUiExtension,zA as typesPropertyUi,BA as typesPropertyUiExtension}from"../../../chunks/app-DXQJrMqJ.js";
+export{RA as kernelPropertyUiExtension,zA as typesPropertyUi,BA as typesPropertyUiExtension}from"../../../chunks/app-bGvjAJ53.js";
