@@ -1,1 +1,1 @@
-export{mg as inlineBacklinkCountsExtension}from"../../../../chunks/app-BVyWNbXJ.js";
+export{Ng as inlineBacklinkCountsExtension}from"../../../../chunks/app-BiCWxGsm.js";

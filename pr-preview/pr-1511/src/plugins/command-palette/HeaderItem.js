@@ -1,1 +1,1 @@
-export{ak as CommandPaletteHeaderItem}from"../../../chunks/app-BVyWNbXJ.js";
+export{wk as CommandPaletteHeaderItem}from"../../../chunks/app-BiCWxGsm.js";

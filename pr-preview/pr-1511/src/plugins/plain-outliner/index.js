@@ -1,1 +1,1 @@
-export{iC as plainOutlinerPlugin}from"../../../chunks/app-BVyWNbXJ.js";
+export{CC as plainOutlinerPlugin}from"../../../chunks/app-BiCWxGsm.js";

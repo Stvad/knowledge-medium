@@ -1,1 +1,1 @@
-export{ux as seedTutorial}from"../../../chunks/app-BVyWNbXJ.js";
+export{kx as seedTutorial}from"../../../chunks/app-BiCWxGsm.js";

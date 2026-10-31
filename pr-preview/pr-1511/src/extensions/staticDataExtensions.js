@@ -1,1 +1,1 @@
-export{WH as staticDataExtensions}from"../../chunks/app-BVyWNbXJ.js";
+export{dU as staticDataExtensions}from"../../chunks/app-BiCWxGsm.js";

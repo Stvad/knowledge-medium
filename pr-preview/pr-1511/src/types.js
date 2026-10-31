@@ -1,1 +1,1 @@
-export{Ett as isChildBackedPropertiesWorkspace}from"../chunks/app-BVyWNbXJ.js";
+export{qtt as isChildBackedPropertiesWorkspace}from"../chunks/app-BiCWxGsm.js";
