@@ -3,7 +3,7 @@ import {defineQuery, type Query, type Schema} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
 import {backlinkSourceCount} from '@/plugins/backlinks/sourceBatch.js'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries.ts'
-import {THREAD_TYPE, threadAnchorOf, threadIsOpen, type ThreadAnchor} from './schema.ts'
+import {THREAD_TYPE, threadAnchorOf, threadIsOpen, threadSuggestionOf, type ThreadAnchor} from './schema.ts'
 import {threadRootsWithCounts} from './summaryBatch.ts'
 
 export const THREADS_FOR_BLOCK_QUERY = 'annotations.threadsForBlock'
@@ -12,6 +12,8 @@ export interface ThreadSummary {
   id: string
   open: boolean
   anchor: ThreadAnchor
+  /** An edit suggestion, highlighted in a style of its own. */
+  suggestion: boolean
   commentCount: number
   /** Blocks quoting the thread's range through a range reference `((T))`: the
    *  root's backlinks. */
@@ -20,9 +22,10 @@ export interface ThreadSummary {
 }
 
 /** Does this thread count in its target's comment pill? Once it has comments
- *  or quoters; a pure highlight shows only as its highlight. */
+ *  or quoters, or is an open suggestion, which waits on someone to accept or
+ *  reject it; a pure highlight shows only as its highlight. */
 export const countsInPill = (thread: ThreadSummary): boolean =>
-  thread.open && (thread.commentCount > 0 || thread.quoterCount > 0)
+  thread.open && (thread.commentCount > 0 || thread.quoterCount > 0 || thread.suggestion)
 
 /** The number on a block's comment pill, or null for no pill: a block with no
  *  threads. A block whose threads are all highlights or resolved gets an
@@ -31,7 +34,7 @@ export const pillCount = (threads: readonly ThreadSummary[]): number | null =>
   threads.length === 0 ? null : threads.filter(countsInPill).length
 
 /** What a highlight reads off a thread. */
-export type HighlightThread = Pick<ThreadSummary, 'id' | 'open' | 'anchor'>
+export type HighlightThread = Pick<ThreadSummary, 'id' | 'open' | 'anchor' | 'suggestion'>
 
 /** Does this thread draw a highlight over its quote? Every open range thread
  *  does, comments or not, as decided for now; it may narrow to threads with
@@ -75,6 +78,7 @@ export const threadsForBlockQuery: Query<{workspaceId: string; id: string}, Thre
         id: root.id,
         open: threadIsOpen(root),
         anchor: threadAnchorOf(root),
+        suggestion: threadSuggestionOf(root) !== null,
         commentCount,
         quoterCount: quoters.get(root.id) ?? 0,
         createdAt: root.createdAt,

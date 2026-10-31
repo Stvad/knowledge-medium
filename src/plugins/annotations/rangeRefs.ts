@@ -13,7 +13,8 @@ import {createThread, missingTarget} from './threads.ts'
 /** The thread a reference to `anchor` should point at: the target's thread
  *  whose highlight covers exactly the selected text of `content` (the text the
  *  anchor was captured from), so quoting a range twice gives one thread. An
- *  exact one wins over one that only moved there. Else a new highlight.
+ *  exact one wins over one that only moved there. Never an edit suggestion,
+ *  whose accept replaces the text this would quote. Else a new highlight.
  *
  *  ACCEPTED: the lookup runs before the creating tx, so two copies of the same
  *  range racing each other can leave a second, unreferenced highlight.
@@ -30,7 +31,7 @@ export const threadForRange = async (
   if (!target) throw missingTarget(targetId)
   const threads = await repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId: target.workspaceId, id: targetId}).load()
   const covering = threads.flatMap(thread => {
-    const range = highlightRange(content, thread)
+    const range = thread.suggestion ? null : highlightRange(content, thread)
     return range && range.from === anchor.quoteStart && range.to - range.from === anchor.quote.length
       ? [{id: thread.id, moved: range.moved}]
       : []

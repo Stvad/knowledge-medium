@@ -35,6 +35,7 @@ import {
   startReanchor,
   updateComposer,
   viewKey,
+  type ComposerState,
 } from './uiStore.ts'
 
 export const COMMENT_ON_SELECTION_ACTION_ID = 'annotations.commentOnSelection'
@@ -101,17 +102,27 @@ export const reportFailure = (error: unknown): void => {
   showError(error instanceof Error ? error.message : String(error))
 }
 
+/** Has the composer what its submit writes: a comment, or for a suggestion
+ *  a replacement (its comment is optional). The replacement is taken as
+ *  typed, whitespace included. */
+export const composerReady = (composer: ComposerState): boolean =>
+  composer.replacement !== undefined ? composer.replacement !== '' : composer.draft.trim() !== ''
+
 /** Write the composer's draft as a new thread. A target that changed under the
  *  selection keeps the composer open with its draft and the reason, so the
  *  user can reselect and submit again. A submit while one is in flight is
  *  refused: both would capture the same draft. */
 export const submitComposer = async (repo: Repo, key: string): Promise<boolean> => {
   const composer = peekComposer(key)
-  const comment = composer?.draft.trim()
-  if (!composer || !comment || composer.submitting) return false
+  if (!composer || !composerReady(composer) || composer.submitting) return false
   updateComposer(key, {submitting: true})
   try {
-    await createThread(repo, {targetId: composer.targetId, anchor: composer.anchor, comment})
+    await createThread(repo, {
+      targetId: composer.targetId,
+      anchor: composer.anchor,
+      comment: composer.draft.trim(),
+      replacement: composer.replacement,
+    })
   } catch (error) {
     if (isThreadRefusal(error)) {
       updateComposer(key, {error: error.message, submitting: false})
@@ -127,7 +138,7 @@ export const submitComposer = async (repo: Repo, key: string): Promise<boolean> 
 /** The composer renders under outline blocks only, so the gestures run only
  *  there: in a backlinks entry, an embed or a comment card they would open a
  *  composer nothing shows. */
-const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
+export const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
   renderScopeId === undefined || isPanelRenderScopeId(renderScopeId)
 
 const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
