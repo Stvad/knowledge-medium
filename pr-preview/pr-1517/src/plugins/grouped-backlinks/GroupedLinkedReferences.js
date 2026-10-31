@@ -1,1 +1,1 @@
-export{sg as GroupedLinkedReferences}from"../../../chunks/app-Ct5QN1BQ.js";
+export{lg as GroupedLinkedReferences}from"../../../chunks/app-DNFTnr4v.js";
