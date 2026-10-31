@@ -1,1 +1,0 @@
-export{pv as BLOCK_HOLD_GESTURE,mv as BLOCK_HOLD_RECOGNIZER_ID,hv as blockHoldRecognizer}from"../../../chunks/app-C_BWmE1A.js";

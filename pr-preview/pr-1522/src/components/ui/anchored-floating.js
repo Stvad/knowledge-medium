@@ -1,1 +1,0 @@
-export{SH as floatingAnchorFromRect,CH as useAnchoredFloating}from"../../../chunks/app-C_BWmE1A.js";

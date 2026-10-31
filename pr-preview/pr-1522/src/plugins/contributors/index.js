@@ -1,1 +1,0 @@
-export{Pf as contributorsPlugin}from"../../../chunks/app-C_BWmE1A.js";

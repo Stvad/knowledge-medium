@@ -1,1 +1,0 @@
-export{zj as ExtensionPromptSurface,Bj as extensionPromptsExtension}from"../../../chunks/app-C_BWmE1A.js";

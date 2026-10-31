@@ -1,1 +1,0 @@
-export{GE as useAncestorCrumbs}from"../../chunks/app-C_BWmE1A.js";

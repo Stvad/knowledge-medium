@@ -1,1 +1,0 @@
-export{rR as BlockProperties}from"../../chunks/app-C_BWmE1A.js";

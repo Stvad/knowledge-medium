@@ -1,1 +1,0 @@
-export{VA as TypeChip}from"../../../chunks/app-C_BWmE1A.js";

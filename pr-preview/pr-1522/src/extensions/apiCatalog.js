@@ -1,1 +1,0 @@
-export{Cp as extensionApiCatalog,wp as extensionApiRuntimeExports}from"../../chunks/app-C_BWmE1A.js";

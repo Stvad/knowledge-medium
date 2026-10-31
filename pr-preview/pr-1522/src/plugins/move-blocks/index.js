@@ -1,1 +1,0 @@
-export{Av as MOVE_BLOCKS_ACTION_ID,jv as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Rv as MoveDestinationPicker,Iv as isWithinSubtreeOfAny,Mv as moveBlockAction,Nv as moveBlocksAction,Dv as moveBlocksPlugin,Lv as moveBlocksTo,Fv as unselectMovedBlocks}from"../../../chunks/app-C_BWmE1A.js";

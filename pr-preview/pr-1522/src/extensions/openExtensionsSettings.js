@@ -1,1 +1,0 @@
-export{UN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,WN as openExtensionsSettings}from"../../chunks/app-C_BWmE1A.js";

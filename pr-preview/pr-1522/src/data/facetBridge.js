@@ -1,1 +1,0 @@
-export{MQ as FacetBridge}from"../../chunks/app-C_BWmE1A.js";

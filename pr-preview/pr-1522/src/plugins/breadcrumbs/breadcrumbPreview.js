@@ -1,1 +1,0 @@
-export{IC as getBreadcrumbContentPreview}from"../../../chunks/app-C_BWmE1A.js";

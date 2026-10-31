@@ -1,1 +1,0 @@
-export{Ij as editorAutocompleteExtension}from"../../chunks/app-C_BWmE1A.js";

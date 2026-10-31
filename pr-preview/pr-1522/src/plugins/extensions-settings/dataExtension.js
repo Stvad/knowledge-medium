@@ -1,1 +1,0 @@
-export{Yn as extensionsDataExtension}from"../../../chunks/app-C_BWmE1A.js";

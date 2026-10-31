@@ -1,1 +1,0 @@
-export{SD as Label}from"../../../chunks/app-C_BWmE1A.js";

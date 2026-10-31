@@ -1,1 +1,0 @@
-export{Jj as approveExtensionHere}from"../../chunks/app-C_BWmE1A.js";

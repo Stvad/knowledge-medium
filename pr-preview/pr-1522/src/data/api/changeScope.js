@@ -1,1 +1,0 @@
-export{qat as CHANGE_SCOPE_POLICIES,Jat as ChangeScope,Yat as isChangeScope,Xat as policyForScope,Zat as scopeAllowedInReadOnly,Qat as scopeIsUndoable,$at as scopePoliciesEquivalent,eot as scopeUploadsToServer,tot as sourceForScope}from"../../../chunks/app-C_BWmE1A.js";

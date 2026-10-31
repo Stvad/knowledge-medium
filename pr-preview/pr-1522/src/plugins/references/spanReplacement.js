@@ -1,1 +1,0 @@
-export{wW as preferredSpanReplacement}from"../../../chunks/app-C_BWmE1A.js";

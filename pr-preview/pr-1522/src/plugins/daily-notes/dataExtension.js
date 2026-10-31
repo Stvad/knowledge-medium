@@ -1,1 +1,0 @@
-export{BK as dailyNotesDataExtension}from"../../../chunks/app-C_BWmE1A.js";

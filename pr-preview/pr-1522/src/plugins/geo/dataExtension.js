@@ -1,1 +1,0 @@
-export{IG as geoDataExtension}from"../../../chunks/app-C_BWmE1A.js";

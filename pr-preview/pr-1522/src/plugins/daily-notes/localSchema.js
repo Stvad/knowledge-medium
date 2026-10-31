@@ -1,1 +1,0 @@
-export{VK as dailyNotesLocalSchema}from"../../../chunks/app-C_BWmE1A.js";
