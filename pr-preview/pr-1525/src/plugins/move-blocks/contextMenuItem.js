@@ -1,1 +1,1 @@
-export{vv as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,yv as moveBlocksContextMenuItem}from"../../../chunks/app-D-1o7IaW.js";
+export{Nv as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,Pv as moveBlocksContextMenuItem}from"../../../chunks/app-BdkDflwx.js";

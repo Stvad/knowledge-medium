@@ -1,1 +1,1 @@
-export{os as RejectionDialog}from"../../../chunks/app-D-1o7IaW.js";
+export{ls as RejectionDialog}from"../../../chunks/app-BdkDflwx.js";

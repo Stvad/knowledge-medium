@@ -1,1 +1,1 @@
-export{vU as todoDataExtension}from"../../../chunks/app-D-1o7IaW.js";
+export{NU as todoDataExtension}from"../../../chunks/app-BdkDflwx.js";
