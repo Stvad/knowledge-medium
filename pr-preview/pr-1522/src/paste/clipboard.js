@@ -1,0 +1,1 @@
+export{BF as readClipboardContent}from"../../chunks/app-B13LDrG_.js";

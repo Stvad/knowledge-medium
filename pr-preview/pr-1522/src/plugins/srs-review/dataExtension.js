@@ -1,0 +1,1 @@
+export{ic as srsReviewDataExtension}from"../../../chunks/app-B13LDrG_.js";

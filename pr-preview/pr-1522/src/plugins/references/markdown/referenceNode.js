@@ -1,0 +1,1 @@
+export{P_ as EmbedComponent,F_ as referenceTargetOf}from"../../../../chunks/app-B13LDrG_.js";

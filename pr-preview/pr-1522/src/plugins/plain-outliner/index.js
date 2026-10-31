@@ -1,0 +1,1 @@
+export{CC as plainOutlinerPlugin}from"../../../chunks/app-B13LDrG_.js";

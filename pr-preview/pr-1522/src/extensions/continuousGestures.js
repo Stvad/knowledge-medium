@@ -1,0 +1,1 @@
+export{pP as GESTURE_ACTIVE,mP as GESTURE_CANCEL,hP as GESTURE_IDLE,gP as TOUCH_HOLD_MS,_P as TOUCH_SLOP_PX,vP as continuousGestureRecognizersFacet,yP as createBlockGestureController,bP as enabledTouchAction,xP as suppressNextClick,SP as unionTouchAction,CP as useContinuousGestures}from"../../chunks/app-B13LDrG_.js";

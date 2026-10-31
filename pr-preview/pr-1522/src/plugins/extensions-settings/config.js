@@ -1,0 +1,1 @@
+export{lp as extensionsOverridesPresetCore,up as extensionsOverridesProp,dp as extensionsPrefsType,fp as overridesCodec}from"../../../chunks/app-B13LDrG_.js";

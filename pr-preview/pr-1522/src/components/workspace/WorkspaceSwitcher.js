@@ -1,0 +1,1 @@
+export{XC as WorkspaceSwitcher}from"../../../chunks/app-B13LDrG_.js";

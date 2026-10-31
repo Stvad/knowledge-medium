@@ -1,0 +1,1 @@
+export{Ax as EXTENSIONS_PAGE_TITLE,jx as TUTORIAL_DEFAULT_TITLE,Mx as TUTORIAL_VIM_TITLE,_x as onboardingPlugin,kx as seedTutorial}from"../../../chunks/app-B13LDrG_.js";

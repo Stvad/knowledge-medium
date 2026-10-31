@@ -1,0 +1,1 @@
+export{wk as CommandPaletteHeaderItem}from"../../../chunks/app-B13LDrG_.js";

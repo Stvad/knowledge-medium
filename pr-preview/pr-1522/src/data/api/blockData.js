@@ -1,0 +1,1 @@
+export{Vat as normalizeReferences}from"../../../chunks/app-B13LDrG_.js";

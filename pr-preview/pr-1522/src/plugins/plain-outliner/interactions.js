@@ -1,0 +1,1 @@
+export{DC as blockEditingContentRenderer}from"../../../chunks/app-B13LDrG_.js";

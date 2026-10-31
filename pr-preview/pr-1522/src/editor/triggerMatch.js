@@ -1,0 +1,1 @@
+export{JG as matchCharTrigger}from"../../chunks/app-B13LDrG_.js";

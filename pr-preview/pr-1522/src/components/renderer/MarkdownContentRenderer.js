@@ -1,0 +1,1 @@
+export{GI as MarkdownContentRenderer}from"../../../chunks/app-B13LDrG_.js";

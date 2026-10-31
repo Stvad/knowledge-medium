@@ -1,0 +1,1 @@
+export{Pg as inlineBacklinkCountDecoratorContribution,Fg as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-B13LDrG_.js";

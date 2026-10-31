@@ -1,0 +1,1 @@
+export{Kq as backlinksDataExtension}from"../../../chunks/app-B13LDrG_.js";

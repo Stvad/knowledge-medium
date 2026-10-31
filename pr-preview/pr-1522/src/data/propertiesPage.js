@@ -1,0 +1,1 @@
+export{Bet as getOrCreatePropertiesPage,Vet as propertiesPageBlockId,Het as propertiesPageSpec}from"../../chunks/app-B13LDrG_.js";

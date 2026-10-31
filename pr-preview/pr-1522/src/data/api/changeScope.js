@@ -1,0 +1,1 @@
+export{jat as CHANGE_SCOPE_POLICIES,Mat as ChangeScope,Nat as isChangeScope,Pat as policyForScope,Fat as scopeAllowedInReadOnly,Iat as scopeIsUndoable,Lat as scopePoliciesEquivalent,Rat as scopeUploadsToServer,zat as sourceForScope}from"../../../chunks/app-B13LDrG_.js";

@@ -1,0 +1,1 @@
+export{M_ as remarkWikilinks}from"../../../../../chunks/app-B13LDrG_.js";

@@ -1,0 +1,1 @@
+export{sJ as BACKLINKS_COUNT_FOR_BLOCK_QUERY,cJ as backlinksCountForBlockQuery}from"../../../../chunks/app-B13LDrG_.js";

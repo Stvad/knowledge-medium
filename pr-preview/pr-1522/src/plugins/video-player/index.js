@@ -1,0 +1,1 @@
+export{Vb as videoPlayerPlugin}from"../../../chunks/app-B13LDrG_.js";

@@ -1,0 +1,1 @@
+export{Yt as staticAppExtensions}from"../../chunks/app-B13LDrG_.js";

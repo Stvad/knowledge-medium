@@ -1,0 +1,1 @@
+export{Pm as createWatchEventsRegistry,Fm as watchEventsRegistry}from"../../../chunks/app-B13LDrG_.js";

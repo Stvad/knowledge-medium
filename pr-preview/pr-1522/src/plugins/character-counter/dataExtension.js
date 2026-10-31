@@ -1,0 +1,1 @@
+export{Bq as characterCounterDataExtension}from"../../../chunks/app-B13LDrG_.js";

@@ -1,0 +1,1 @@
+export{n0 as kernelDataExtension}from"../../chunks/app-B13LDrG_.js";

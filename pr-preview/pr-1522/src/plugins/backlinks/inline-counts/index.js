@@ -1,0 +1,1 @@
+export{Ng as inlineBacklinkCountsExtension}from"../../../../chunks/app-B13LDrG_.js";

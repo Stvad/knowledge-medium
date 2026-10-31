@@ -1,0 +1,1 @@
+export{lf as HIGHLIGHT_CLASS,uf as MOVED_HIGHLIGHT_CLASS,df as SUGGESTION_HIGHLIGHT_CLASS,ff as coveringStyle,pf as highlightClasses,mf as highlightField,hf as highlightRanges,gf as threadHighlights,_f as threadHighlightsContribution}from"../../../chunks/app-B13LDrG_.js";

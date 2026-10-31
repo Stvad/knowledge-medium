@@ -1,0 +1,1 @@
+export{nI as BlockEditor}from"../../chunks/app-B13LDrG_.js";

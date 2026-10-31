@@ -1,0 +1,1 @@
+export{QY as agentDispatchCompanionDataExtension}from"../../../chunks/app-B13LDrG_.js";

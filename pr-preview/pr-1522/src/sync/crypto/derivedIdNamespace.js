@@ -1,0 +1,1 @@
+export{xtt as deriveWorkspaceIdNamespace}from"../../../chunks/app-B13LDrG_.js";

@@ -1,0 +1,1 @@
+export{hY as aliasDataExtension}from"../../../chunks/app-B13LDrG_.js";

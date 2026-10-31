@@ -1,0 +1,1 @@
+export{tE as useMinuteClock}from"../../chunks/app-B13LDrG_.js";

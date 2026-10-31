@@ -1,0 +1,1 @@
+export{wq as contributorsDataExtension}from"../../../chunks/app-B13LDrG_.js";

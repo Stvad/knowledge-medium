@@ -1,0 +1,1 @@
+export{uv as useIsReadOnly}from"../../chunks/app-B13LDrG_.js";

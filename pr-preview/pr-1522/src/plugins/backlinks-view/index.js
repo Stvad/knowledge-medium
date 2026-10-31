@@ -1,0 +1,1 @@
+export{Tg as backlinksViewPlugin}from"../../../chunks/app-B13LDrG_.js";
