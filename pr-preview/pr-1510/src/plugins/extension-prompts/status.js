@@ -1,1 +1,1 @@
-export{ZA as extensionPromptDiagnosticContribution,QA as extensionPromptDiagnosticSource}from"../../../chunks/app-DcRfLIAG.js";
+export{_j as extensionPromptDiagnosticContribution,vj as extensionPromptDiagnosticSource}from"../../../chunks/app-CMsaRi21.js";

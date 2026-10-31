@@ -1,1 +1,1 @@
-export{Wh as updateIndicatorPlugin}from"../../../chunks/app-DcRfLIAG.js";
+export{ug as updateIndicatorPlugin}from"../../../chunks/app-CMsaRi21.js";

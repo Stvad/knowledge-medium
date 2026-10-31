@@ -1,1 +1,1 @@
-export{mb as videoPlayerMarkdownExtension}from"../../../chunks/app-DcRfLIAG.js";
+export{Pb as videoPlayerMarkdownExtension}from"../../../chunks/app-CMsaRi21.js";

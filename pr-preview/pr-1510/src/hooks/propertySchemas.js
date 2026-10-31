@@ -1,1 +1,1 @@
-export{MV as usePropertySchemas}from"../../chunks/app-DcRfLIAG.js";
+export{eH as usePropertySchemas}from"../../chunks/app-CMsaRi21.js";

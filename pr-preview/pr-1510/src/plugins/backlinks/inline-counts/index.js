@@ -1,1 +1,1 @@
-export{ag as inlineBacklinkCountsExtension}from"../../../../chunks/app-DcRfLIAG.js";
+export{Tg as inlineBacklinkCountsExtension}from"../../../../chunks/app-CMsaRi21.js";

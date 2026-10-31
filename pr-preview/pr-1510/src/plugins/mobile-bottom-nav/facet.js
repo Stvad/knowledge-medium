@@ -1,1 +1,1 @@
-export{RS as mobileBottomNavItemsFacet}from"../../../chunks/app-DcRfLIAG.js";
+export{iC as mobileBottomNavItemsFacet}from"../../../chunks/app-CMsaRi21.js";

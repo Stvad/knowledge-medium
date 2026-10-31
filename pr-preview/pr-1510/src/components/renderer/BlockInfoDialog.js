@@ -1,1 +1,1 @@
-export{TP as BlockInfoDialog}from"../../../chunks/app-DcRfLIAG.js";
+export{GP as BlockInfoDialog}from"../../../chunks/app-CMsaRi21.js";

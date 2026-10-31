@@ -1,1 +1,1 @@
-export{nx as EXTENSIONS_PAGE_TITLE,rx as TUTORIAL_DEFAULT_TITLE,ix as TUTORIAL_VIM_TITLE,ax as extensionsPageOutline,ox as tutorialOutline}from"../../../chunks/app-DcRfLIAG.js";
+export{Sx as EXTENSIONS_PAGE_TITLE,Cx as TUTORIAL_DEFAULT_TITLE,wx as TUTORIAL_VIM_TITLE,Tx as extensionsPageOutline,Ex as tutorialOutline}from"../../../chunks/app-CMsaRi21.js";

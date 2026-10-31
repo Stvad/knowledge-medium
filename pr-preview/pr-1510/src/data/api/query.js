@@ -1,1 +1,1 @@
-export{oit as defineQuery}from"../../../chunks/app-DcRfLIAG.js";
+export{Oit as defineQuery}from"../../../chunks/app-CMsaRi21.js";

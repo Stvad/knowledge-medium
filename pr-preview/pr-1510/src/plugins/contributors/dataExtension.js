@@ -1,1 +1,1 @@
-export{GK as contributorsDataExtension}from"../../../chunks/app-DcRfLIAG.js";
+export{pq as contributorsDataExtension}from"../../../chunks/app-CMsaRi21.js";

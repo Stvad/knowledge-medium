@@ -1,1 +1,1 @@
-export{Jj as dynamicExtensionsExtension}from"../../chunks/app-DcRfLIAG.js";
+export{mM as dynamicExtensionsExtension}from"../../chunks/app-CMsaRi21.js";

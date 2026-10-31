@@ -1,1 +1,1 @@
-export{Gq as pluginPrefsExtension,Kq as pluginUIStateExtension}from"../../chunks/app-DcRfLIAG.js";
+export{pJ as pluginPrefsExtension,mJ as pluginUIStateExtension}from"../../chunks/app-CMsaRi21.js";

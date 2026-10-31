@@ -1,1 +1,1 @@
-export{wF as captureMediaVerb}from"../../chunks/app-DcRfLIAG.js";
+export{WF as captureMediaVerb}from"../../chunks/app-CMsaRi21.js";

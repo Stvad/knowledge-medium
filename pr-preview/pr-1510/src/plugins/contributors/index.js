@@ -1,1 +1,1 @@
-export{Xd as contributorsPlugin}from"../../../chunks/app-DcRfLIAG.js";
+export{gf as contributorsPlugin}from"../../../chunks/app-CMsaRi21.js";

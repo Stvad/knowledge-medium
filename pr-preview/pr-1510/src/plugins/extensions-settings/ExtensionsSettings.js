@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-DcRfLIAG.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-CMsaRi21.js";

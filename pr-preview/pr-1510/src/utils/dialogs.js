@@ -1,1 +1,1 @@
-export{bP as __resetDialogsForTests,xP as getDialogQueue,SP as isDialogOpenForWorkspace,CP as openDialog,wP as subscribeDialogs}from"../../chunks/app-DcRfLIAG.js";
+export{BP as __resetDialogsForTests,VP as getDialogQueue,HP as isDialogOpenForWorkspace,UP as openDialog,WP as subscribeDialogs}from"../../chunks/app-CMsaRi21.js";

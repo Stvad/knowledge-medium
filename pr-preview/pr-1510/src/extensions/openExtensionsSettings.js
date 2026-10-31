@@ -1,1 +1,1 @@
-export{$M as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,eN as openExtensionsSettings}from"../../chunks/app-DcRfLIAG.js";
+export{yN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,bN as openExtensionsSettings}from"../../chunks/app-CMsaRi21.js";

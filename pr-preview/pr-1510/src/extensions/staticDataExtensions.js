@@ -1,1 +1,1 @@
-export{FH as staticDataExtensions}from"../../chunks/app-DcRfLIAG.js";
+export{rU as staticDataExtensions}from"../../chunks/app-CMsaRi21.js";

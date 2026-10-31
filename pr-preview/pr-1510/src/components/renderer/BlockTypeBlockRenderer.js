@@ -1,1 +1,1 @@
-export{EN as BlockTypeBlockRenderer,DN as BlockTypeContentRenderer,ON as writeBlockTypeLabel}from"../../../chunks/app-DcRfLIAG.js";
+export{KN as BlockTypeBlockRenderer,qN as BlockTypeContentRenderer,JN as writeBlockTypeLabel}from"../../../chunks/app-CMsaRi21.js";

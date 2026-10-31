@@ -1,1 +1,1 @@
-export{KS as getBreadcrumbContentPreview}from"../../../chunks/app-DcRfLIAG.js";
+export{fC as getBreadcrumbContentPreview}from"../../../chunks/app-CMsaRi21.js";

@@ -1,1 +1,1 @@
-export{YA as ExtensionPromptSurface,XA as extensionPromptsExtension}from"../../../chunks/app-DcRfLIAG.js";
+export{hj as ExtensionPromptSurface,gj as extensionPromptsExtension}from"../../../chunks/app-CMsaRi21.js";

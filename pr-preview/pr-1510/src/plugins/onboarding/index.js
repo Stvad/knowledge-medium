@@ -1,1 +1,1 @@
-export{nx as EXTENSIONS_PAGE_TITLE,rx as TUTORIAL_DEFAULT_TITLE,ix as TUTORIAL_VIM_TITLE,Ub as onboardingPlugin,tx as seedTutorial}from"../../../chunks/app-DcRfLIAG.js";
+export{Sx as EXTENSIONS_PAGE_TITLE,Cx as TUTORIAL_DEFAULT_TITLE,wx as TUTORIAL_VIM_TITLE,lx as onboardingPlugin,xx as seedTutorial}from"../../../chunks/app-CMsaRi21.js";

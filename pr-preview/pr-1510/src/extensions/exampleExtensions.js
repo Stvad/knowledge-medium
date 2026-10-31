@@ -1,1 +1,1 @@
-export{wA as exampleExtensions,TA as insertExampleExtensionsUnder}from"../../chunks/app-DcRfLIAG.js";
+export{WA as exampleExtensions,GA as insertExampleExtensionsUnder}from"../../chunks/app-CMsaRi21.js";

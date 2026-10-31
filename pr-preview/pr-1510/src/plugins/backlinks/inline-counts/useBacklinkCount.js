@@ -1,1 +1,1 @@
-export{ug as useBacklinkCount}from"../../../../chunks/app-DcRfLIAG.js";
+export{Ag as useBacklinkCount}from"../../../../chunks/app-CMsaRi21.js";

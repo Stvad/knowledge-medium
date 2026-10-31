@@ -1,1 +1,1 @@
-export{kT as openRecentsPage}from"../../../chunks/app-DcRfLIAG.js";
+export{YT as openRecentsPage}from"../../../chunks/app-CMsaRi21.js";

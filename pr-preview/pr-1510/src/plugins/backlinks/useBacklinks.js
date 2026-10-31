@@ -1,1 +1,1 @@
-export{Bg as useBacklinks}from"../../../chunks/app-DcRfLIAG.js";
+export{o_ as useBacklinks}from"../../../chunks/app-CMsaRi21.js";

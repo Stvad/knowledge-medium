@@ -1,1 +1,1 @@
-export{WW as geoDataExtension}from"../../../chunks/app-DcRfLIAG.js";
+export{fG as geoDataExtension}from"../../../chunks/app-CMsaRi21.js";

@@ -1,1 +1,1 @@
-export{IF as useShortcutSurfaceActivations}from"../../chunks/app-DcRfLIAG.js";
+export{nI as useShortcutSurfaceActivations}from"../../chunks/app-CMsaRi21.js";

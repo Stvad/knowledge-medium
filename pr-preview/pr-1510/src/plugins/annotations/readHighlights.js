@@ -1,1 +1,1 @@
-export{ed as THREAD_HIGHLIGHTS_INPUT,td as remarkAnnotationMarks,nd as threadMarksMarkdownExtension}from"../../../chunks/app-DcRfLIAG.js";
+export{if as SOURCE_SPANS_ATTRIBUTE,af as THREAD_HIGHLIGHTS_INPUT,of as remarkAnnotationMarks,sf as renderedSourceKey,cf as threadMarksMarkdownExtension}from"../../../chunks/app-CMsaRi21.js";

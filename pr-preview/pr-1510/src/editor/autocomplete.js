@@ -1,1 +1,1 @@
-export{KA as editorAutocompleteExtension}from"../../chunks/app-DcRfLIAG.js";
+export{fj as editorAutocompleteExtension}from"../../chunks/app-CMsaRi21.js";

@@ -1,1 +1,1 @@
-export{kp as addComment,Ap as anchorForQuote}from"../../../chunks/app-DcRfLIAG.js";
+export{Yp as addComment,Xp as anchorForQuote}from"../../../chunks/app-CMsaRi21.js";

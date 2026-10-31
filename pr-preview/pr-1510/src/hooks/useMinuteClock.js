@@ -1,1 +1,1 @@
-export{DT as useMinuteClock}from"../../chunks/app-DcRfLIAG.js";
+export{qT as useMinuteClock}from"../../chunks/app-CMsaRi21.js";

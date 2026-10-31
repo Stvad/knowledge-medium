@@ -1,1 +1,1 @@
-export{XO as CommandPaletteHeaderItem}from"../../../chunks/app-DcRfLIAG.js";
+export{gk as CommandPaletteHeaderItem}from"../../../chunks/app-CMsaRi21.js";

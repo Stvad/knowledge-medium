@@ -1,1 +1,1 @@
-export{MM as BlockLoadingPlaceholder}from"../../chunks/app-DcRfLIAG.js";
+export{QM as BlockLoadingPlaceholder}from"../../chunks/app-CMsaRi21.js";

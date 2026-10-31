@@ -1,1 +1,1 @@
-export{OO as useCommandPaletteActions}from"../../../chunks/app-DcRfLIAG.js";
+export{JO as useCommandPaletteActions}from"../../../chunks/app-CMsaRi21.js";

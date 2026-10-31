@@ -1,1 +1,1 @@
-export{Qit as CHANGE_SCOPE_POLICIES,$it as ChangeScope,eat as isChangeScope,tat as policyForScope,nat as scopeAllowedInReadOnly,rat as scopeIsUndoable,iat as scopePoliciesEquivalent,aat as scopeUploadsToServer,oat as sourceForScope}from"../../../chunks/app-DcRfLIAG.js";
+export{bat as CHANGE_SCOPE_POLICIES,xat as ChangeScope,Sat as isChangeScope,Cat as policyForScope,wat as scopeAllowedInReadOnly,Tat as scopeIsUndoable,Eat as scopePoliciesEquivalent,Dat as scopeUploadsToServer,Oat as sourceForScope}from"../../../chunks/app-CMsaRi21.js";
