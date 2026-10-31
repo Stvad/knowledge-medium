@@ -1,1 +1,1 @@
-export{Lat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-DZBZYoRY.js";
+export{Kat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-D-1o7IaW.js";

@@ -1,1 +1,1 @@
-export{Jj as appUpdate,Yj as useAppUpdateAvailable}from"../chunks/app-DZBZYoRY.js";
+export{eM as appUpdate,tM as useAppUpdateAvailable}from"../chunks/app-D-1o7IaW.js";
