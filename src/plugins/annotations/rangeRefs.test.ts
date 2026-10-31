@@ -139,6 +139,13 @@ describe('threadForRange', () => {
     expect(await copy('Thursday')).not.toBe(resolved)
   })
 
+  it('does not reuse an open edit suggestion, whose accept replaces the quoted text', async () => {
+    const {threadId: suggestion} = await createThread(repo, {targetId: 'B', anchor: anchorFor('Thursday'), replacement: 'Friday'})
+    await vi.waitFor(async () => expect(await threadsOnB()).toEqual([suggestion]))
+
+    expect(await copy('Thursday')).not.toBe(suggestion)
+  })
+
   it('reuses a thread whose quote moved, only where it now highlights the selection', async () => {
     const first = await copy('moves')
     await vi.waitFor(async () => expect(await threadsOnB()).toEqual([first]))
