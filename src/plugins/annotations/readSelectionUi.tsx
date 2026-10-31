@@ -5,17 +5,16 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuPortal,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu.js'
 import {keepFocusAnItemMoved} from '@/components/renderer/DefaultBlockRenderer.js'
 import type {AppMountContribution} from '@/extensions/core.js'
 import {useActionContext} from '@/shortcuts/useActionContext.js'
-import {showError} from '@/utils/toast.js'
 import {
   READ_SELECTION_CONTEXT,
   readSelectionGestures,
   readSelectionTarget,
+  reportFailure,
   runOnReadTarget,
   type SelectionTarget,
 } from './actions.ts'
@@ -54,26 +53,21 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
       <ContextMenuTrigger asChild disabled={!holds} style={{WebkitTouchCallout: 'inherit'}}>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuPortal>
-        <ContextMenuContent
-          className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
-          onCloseAutoFocus={keepFocusAnItemMoved}
-        >
-          {readSelectionGestures.map(gesture => (
-            <ContextMenuItem
-              key={gesture.actionId}
-              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => {
-                runOnReadTarget(target, gesture.step)
-                  .catch(error => showError(error instanceof Error ? error.message : String(error)))
-              }}
-            >
-              <gesture.icon className="mr-2 h-4 w-4"/>
-              {gesture.label}
-            </ContextMenuItem>
-          ))}
-        </ContextMenuContent>
-      </ContextMenuPortal>
+      <ContextMenuContent
+        className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
+        onCloseAutoFocus={keepFocusAnItemMoved}
+      >
+        {readSelectionGestures.map(gesture => (
+          <ContextMenuItem
+            key={gesture.actionId}
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => { runOnReadTarget(target, gesture.step).catch(reportFailure) }}
+          >
+            <gesture.icon className="mr-2 h-4 w-4"/>
+            {gesture.label}
+          </ContextMenuItem>
+        ))}
+      </ContextMenuContent>
     </ContextMenu>
   )
 }

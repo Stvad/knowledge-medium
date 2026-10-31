@@ -7,8 +7,10 @@
  */
 
 import {useSyncExternalStore} from 'react'
-import {BLOCK_BOUNDARY_SELECTOR, BLOCK_SHELL_ATTRIBUTE} from '@/extensions/blockInteraction.js'
+import {BLOCK_BOUNDARY_SELECTOR, BLOCK_SHELL_ATTRIBUTE, elementOf} from '@/extensions/blockInteraction.js'
+import {CallbackSet} from '@/utils/callbackSet.js'
 import {renderedSourceKey, SOURCE_SPANS_ATTRIBUTE} from './readHighlights.ts'
+import {viewKey} from './uiStore.ts'
 
 /** The endpoints of a selection, as `Selection` reports them. */
 export interface SelectionEnds {
@@ -36,9 +38,6 @@ export type ReadSelection =
   | {kind: 'several'}
   | {kind: 'inexact'}
   | null
-
-const elementOf = (node: Node): Element | null =>
-  node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
 
 /** The block whose content slot holds `node`, or null outside every slot. An
  *  editor's text is edit mode, not read mode. */
@@ -123,39 +122,39 @@ export const holdsSelection = (element: Element): boolean => {
     selection.getRangeAt(0).intersectsNode(element)
 }
 
-// ──── Where the selection is, as a store ────
+// ──── Which row holds the selection, as a store ────
 
-let located: ReadSelectionLocation = null
-const listeners = new Set<() => void>()
-
-const sameLocation = (a: ReadSelectionLocation, b: ReadSelectionLocation): boolean =>
-  a?.kind === 'block' && b?.kind === 'block'
-    ? a.blockId === b.blockId && a.renderScopeId === b.renderScopeId
-    : a?.kind === b?.kind
-
-const relocate = () => {
-  const next = locateReadSelection(document.getSelection())
-  if (sameLocation(located, next)) return
-  located = next
-  for (const listener of listeners) listener()
+/** The `viewKey` of the row whose rendered content holds the whole selection,
+ *  or null: all its one reader asks is "is it this row?". */
+const holderOf = (ends: SelectionEnds | null): string | null => {
+  const location = locateReadSelection(ends)
+  return location?.kind === 'block' ? viewKey(location.renderScopeId, location.blockId) : null
 }
 
-/** Listens to the document only while someone reads the location, and
- *  notifies only when the block holding the selection changes, not on every
- *  caret move. */
+let holder: string | null = null
+const listeners = new CallbackSet('annotations.read-selection')
+
+const rehold = () => {
+  const next = holderOf(document.getSelection())
+  if (next === holder) return
+  holder = next
+  listeners.notify()
+}
+
+/** Listens to the document only while someone reads the holder, and notifies
+ *  only when it changes, not on every caret move. */
 const subscribe = (listener: () => void) => {
   if (listeners.size === 0) {
-    located = locateReadSelection(document.getSelection())
-    document.addEventListener('selectionchange', relocate)
+    holder = holderOf(document.getSelection())
+    document.addEventListener('selectionchange', rehold)
   }
-  listeners.add(listener)
+  const remove = listeners.add(listener)
   return () => {
-    listeners.delete(listener)
-    if (listeners.size === 0) document.removeEventListener('selectionchange', relocate)
+    remove()
+    if (listeners.size === 0) document.removeEventListener('selectionchange', rehold)
   }
 }
 
 /** Does the read-mode selection sit in this block, as rendered in this scope? */
 export const useHoldsReadSelection = (blockId: string, renderScopeId: string | undefined): boolean =>
-  useSyncExternalStore(subscribe, () =>
-    located?.kind === 'block' && located.blockId === blockId && located.renderScopeId === renderScopeId)
+  useSyncExternalStore(subscribe, () => holder === viewKey(renderScopeId, blockId))

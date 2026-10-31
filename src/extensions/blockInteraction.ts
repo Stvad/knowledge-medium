@@ -726,7 +726,7 @@ const interactiveContentSelector = [
   '[data-block-interaction="ignore"]',
 ].join(',')
 
-const elementOf = (target: EventTarget | null): Element | null => {
+export const elementOf = (target: EventTarget | null): Element | null => {
   if (typeof Node === 'undefined' || !(target instanceof Node)) return null
   return target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
 }

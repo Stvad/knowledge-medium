@@ -80,9 +80,15 @@ export const rangeFromEditor = (view: EditorView): ContentRange => {
   return {content: view.state.doc.toString(), from, to}
 }
 
-export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
-  const {content, from, to} = rangeFromEditor(view)
-  return captureAnchor(content, from, to)
+/** Widened to whole reference spans; null for an empty range, which comments
+ *  on the whole block. */
+const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
+
+export const anchorFromEditor = (view: EditorView): RangeAnchor | null => anchorOf(rangeFromEditor(view))
+
+/** A failure the user should see, as a toast. */
+export const reportFailure = (error: unknown): void => {
+  showError(error instanceof Error ? error.message : String(error))
 }
 
 /** Write the composer's draft as a new thread. A target that changed under the
@@ -134,16 +140,11 @@ export interface SelectionTarget {
   range: ContentRange
 }
 
-/** Widened to whole reference spans; null for an empty range, which comments
- *  on the whole block. */
-const anchorOf = ({range: {content, from, to}}: SelectionTarget): RangeAnchor | null =>
-  captureAnchor(content, from, to)
-
 /** Open a composer on the target, or move the thread waiting for new text in
  *  its block there instead. True when a composer opened. */
 export const commentOnTarget = async (target: SelectionTarget): Promise<boolean> => {
   const {block, renderScopeId} = target
-  const anchor = anchorOf(target)
+  const anchor = anchorOf(target.range)
   const pending = pendingReanchorIn(target)
   if (pending) {
     await reanchorToSelection(block.repo, pending.threadId, anchor)
@@ -159,12 +160,12 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
 
 /** A thread with no comments on the target's text. True when it was made. */
 export const highlightTarget = async (target: SelectionTarget): Promise<boolean> => {
-  const {block, renderScopeId} = target
-  if (!onOutline({renderScopeId})) {
+  if (!onOutline(target)) {
     showInfo(NOT_ON_OUTLINE)
     return false
   }
-  const anchor = anchorOf(target)
+  const {block} = target
+  const anchor = anchorOf(target.range)
   if (!anchor) {
     showInfo('Select some text to highlight.')
     return false
@@ -289,8 +290,7 @@ export const readSelectionGestures: readonly ReadSelectionGesture[] = [
 /** The click that ends a drag-select in rendered content would enter edit
  *  mode and swap the selected text for an editor. While the clicked block
  *  holds a selection the click does nothing; the next click, which collapses
- *  it, edits. Contributed outermost, so a mode that replaces click-to-edit
- *  (vim's click-to-focus) is held back too. */
+ *  it, edits. */
 export const keepSelectionOnClick: ActionDispatchDecorator = {
   actionId: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
   context: ActionContextTypes.BLOCK_POINTER,

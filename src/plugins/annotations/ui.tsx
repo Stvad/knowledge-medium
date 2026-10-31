@@ -44,7 +44,7 @@ import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import {resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {submitComposer} from './actions.ts'
+import {reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
@@ -91,10 +91,6 @@ const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
 
 const useReadOnly = (repo: Repo): boolean =>
   useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
-
-const reportFailure = (error: unknown): void => {
-  showError(error instanceof Error ? error.message : String(error))
-}
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
