@@ -1,1 +1,0 @@
-export{lj as checkForAppUpdate,uj as registerServiceWorker}from"../chunks/app-D4uB9gAS.js";

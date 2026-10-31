@@ -1,1 +1,0 @@
-export{$O as SWIPE_QUICK_ACTIONS_GESTURE_ID,ek as SWIPE_TRIGGER_PX,tk as swipeRecognizer}from"../../../chunks/app-D4uB9gAS.js";
