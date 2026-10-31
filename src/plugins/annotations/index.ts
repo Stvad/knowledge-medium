@@ -5,7 +5,7 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {actionsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
+import {actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {
   blockChildrenFooterFacet,
@@ -17,7 +17,13 @@ import {
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
-import {annotationActions, COMMENT_ON_SELECTION_ACTION_ID} from './actions.ts'
+import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
+import {
+  annotationActions,
+  COMMENT_ON_SELECTION_ACTION_ID,
+  keepSelectionOnClick,
+  readSelectionContext,
+} from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
@@ -26,6 +32,7 @@ import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
 import {copyRangeReferenceAction} from './rangeRefs.ts'
 import {threadNavigationContribution} from './threadNavigation.ts'
+import {readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
   commentActionsContribution,
   commentContextMenuItem,
@@ -43,9 +50,13 @@ export const annotationsPlugin: AppExtension = systemToggle({
 }).of([
   annotationsDataExtension,
   dialogAppMountExtension, // asking before deleting a quoted thread
+  actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   actionsFacet.of(copyRangeReferenceAction, {source: SOURCE}),
   threadNavigationContribution,
+  appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
+  // Outside every other wrap of click-to-edit (vim's click-to-focus included).
+  actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
