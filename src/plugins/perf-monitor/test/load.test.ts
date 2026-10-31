@@ -459,6 +459,42 @@ describe('loadRecords', () => {
     expect(isUsableInteractionRecord({ ...ok, queries: { q: null } })).toBe(false)
   })
 
+  // The trend table divides by `observedMs` and prints the blocking total and
+  // the slow-input p95, so those are what a present summary must carry. Absent
+  // at any level is "not measured" — the shape of every older record, and of a
+  // browser without the entry type — and must not cost the row.
+  it('accepts a main-thread summary absent at any level', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    expect(isUsableInteractionRecord(ok)).toBe(true)
+    expect(isUsableInteractionRecord({ ...ok, responsiveness: { observedMs: 0 } })).toBe(true)
+    expect(isUsableInteractionRecord({ ...ok, responsiveness: { observedMs: 1, slowInputs: { count: 0 } } }))
+      .toBe(true)
+    expect(isUsableInteractionRecord({
+      ...ok,
+      responsiveness: {
+        observedMs: 60_000,
+        longFrames: { count: 1, totalMs: 90, blockingMs: 40, forcedLayoutMs: 0, maxMs: 90 },
+        slowInputs: { count: 2, duration: { p50Ms: 60, p95Ms: 80, maxMs: 80 }, inputDelay: { p50Ms: 1, p95Ms: 2, maxMs: 2 } },
+      },
+    })).toBe(true)
+  })
+
+  it('rejects a main-thread summary whose rendered fields are unusable', () => {
+    const ok = { recordedAt: 1, writes: 1, blockCount: 1, queries: {}, fanout: {} }
+    const withR = (responsiveness: unknown) => ({ ...ok, responsiveness })
+    expect(isUsableInteractionRecord(withR(null))).toBe(false)
+    expect(isUsableInteractionRecord(withR({}))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: '60000' }))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, longFrames: null }))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, longFrames: { blockingMs: -1 } }))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, slowInputs: null }))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, slowInputs: { count: 'many' } }))).toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, slowInputs: { count: 2, duration: null } })))
+      .toBe(false)
+    expect(isUsableInteractionRecord(withR({ observedMs: 1, slowInputs: { count: 2, duration: { p95Ms: NaN } } })))
+      .toBe(false)
+  })
+
   // Validation happens after the JSON parse, so a limit applied to ROWS lets
   // unreadable ones at the front of the window push real history out of reach —
   // and the monitor reports an insufficient baseline while the group holds
