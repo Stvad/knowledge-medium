@@ -64,7 +64,7 @@ const workspacesWithMachinery = new WeakMap<ProbeDb, Set<string>>()
  *  mint machinery at any moment.
  *
  *  Callers racing the first probe each ask; not coalesced here because the
- *  badges already share one probe per wave, and joining an in-flight read
+ *  badges already share one probe per statement, and joining an in-flight read
  *  would hand a caller a no read before it asked.
  */
 export const workspaceHasPropertyMachinery = async (

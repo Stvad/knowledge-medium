@@ -30,7 +30,7 @@ export interface HighlightStyle {
 }
 
 /** A highlight's look, in the editor and in read mode alike. Utilities rather
- *  than an editor theme: the app's dark variant follows `data-theme`, which
+ *  than an editor theme: the app's dark variant follows `data-theme-mode`, which
  *  an editor theme's `&dark` never sees. */
 export const highlightClasses = ({moved, suggestion}: HighlightStyle): string => [
   HIGHLIGHT_CLASS,
