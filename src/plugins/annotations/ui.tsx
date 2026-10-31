@@ -44,10 +44,11 @@ import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
-import {submitComposer} from './actions.ts'
+import {reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
+import {ReadSelectionMenu} from './readSelectionUi.tsx'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -92,10 +93,6 @@ const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
 
 const useReadOnly = (repo: Repo): boolean =>
   useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
-
-const reportFailure = (error: unknown): void => {
-  showError(error instanceof Error ? error.message : String(error))
-}
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
@@ -174,11 +171,13 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-          <Inner block={block}/>
-        </MarkdownInputProvider>
-      </div>
+      <ReadSelectionMenu block={block}>
+        <div className="min-w-0 flex-1">
+          <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+            <Inner block={block}/>
+          </MarkdownInputProvider>
+        </div>
+      </ReadSelectionMenu>
       {(count !== null || expanded) && (
         <GutterPill
           count={count}
