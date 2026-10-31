@@ -187,11 +187,13 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe('oops')
   })
 
-  it('never reopens an applied suggestion, which re-anchored could apply again elsewhere', async () => {
+  it('never moves an applied suggestion out of accepted, which reopened could apply again elsewhere', async () => {
     await setTarget('the cat sat. the cat sat.')
     const threadId = await suggest('cat', 'dog')
     await acceptSuggestion(repo, threadId)
     await expect(setThreadStatus(repo, threadId, 'open')).rejects.toBeInstanceOf(InvalidSuggestionError)
+    // A stale card's Resolve: resolved, it could then be reopened.
+    await expect(setThreadStatus(repo, threadId, 'resolved')).rejects.toBeInstanceOf(InvalidSuggestionError)
     expect(threadStatusOf(await rootOf(threadId))).toBe('accepted')
     // A rejected one can be reopened: its text was never applied.
     const other = await suggest('sat. the', 'sat; the')
