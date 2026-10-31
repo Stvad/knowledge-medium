@@ -131,12 +131,12 @@ const merge = (a: PendingInput, b: PendingInput): PendingInput => {
   }
 }
 
-/** An event with no interaction of its own whose handlers ran INSIDE another
- *  input's (beforeinput and input, dispatched while keypress is handled) is
- *  that input's consequence. Queued behind it instead, its handlers start
- *  only once the other's end, and it stays an input of its own. */
+/** An event whose handlers ran INSIDE another input's (beforeinput and input,
+ *  dispatched while keypress is handled) is that input's consequence: each
+ *  user input is a task of its own, so nothing else can run there. Queued
+ *  behind it instead, its handlers start only once the other's end, and it
+ *  stays an input of its own. */
 const dispatchedWithin = (e: InputEventEntry, input: PendingInput): boolean =>
-  (e.interactionId ?? 0) === 0 &&
   input.processingStart <= e.processingStart && e.processingStart < input.processingEnd
 
 const round2 = (ms: number): number => Math.round(ms * 100) / 100

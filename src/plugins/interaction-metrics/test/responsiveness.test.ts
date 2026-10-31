@@ -143,6 +143,15 @@ describe('slow inputs', () => {
     expect(totals.sample(LATER).slowInputs?.inputDelay?.maxMs).toBeCloseTo(100.1)
   })
 
+  // Handled before the pending input began, and delivered after it: an earlier
+  // input of its own, not something the later one dispatched.
+  it('keeps an earlier input delivered late separate', () => {
+    const totals = both()
+    totals.addInputs([input(1_000, 160, { interactionId: 5, processingStart: 1_001, processingEnd: 1_150 })])
+    totals.addInputs([input(950, 64, { processingStart: 960, processingEnd: 990 })])
+    expect(countOf(totals)).toBe(2)
+  })
+
   // A release whose start is already filed under its compatibility mouseup, and
   // whose id is filed under the press: both are this one input.
   it('joins every pending input an entry matches into one', () => {
