@@ -1,1 +1,0 @@
-export{sl as BlockTagsConfigEditor}from"../../../chunks/app-6gCIPtD3.js";

@@ -1,1 +1,0 @@
-export{dR as declarationOnlyDefinitionForName,fR as declarationOnlyStatusText}from"../../../chunks/app-6gCIPtD3.js";

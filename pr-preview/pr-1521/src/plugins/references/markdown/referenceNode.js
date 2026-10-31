@@ -1,1 +1,0 @@
-export{M_ as EmbedComponent,N_ as referenceTargetOf}from"../../../../chunks/app-6gCIPtD3.js";

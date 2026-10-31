@@ -1,1 +1,0 @@
-export{QP as ExtensionRenderBoundary}from"../../chunks/app-6gCIPtD3.js";

@@ -1,1 +1,0 @@
-export{Sk as CommandPaletteHeaderItem}from"../../../chunks/app-6gCIPtD3.js";

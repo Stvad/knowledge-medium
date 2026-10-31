@@ -1,1 +1,0 @@
-export{Eat as CHANGE_SCOPE_POLICIES,Dat as ChangeScope,Oat as isChangeScope,kat as policyForScope,Aat as scopeAllowedInReadOnly,jat as scopeIsUndoable,Mat as scopePoliciesEquivalent,Nat as scopeUploadsToServer,Pat as sourceForScope}from"../../../chunks/app-6gCIPtD3.js";

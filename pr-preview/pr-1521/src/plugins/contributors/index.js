@@ -1,1 +1,0 @@
-export{Sf as contributorsPlugin}from"../../../chunks/app-6gCIPtD3.js";

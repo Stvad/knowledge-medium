@@ -1,1 +1,0 @@
-export{mp as extensionsOverridesProp,hp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-6gCIPtD3.js";

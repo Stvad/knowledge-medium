@@ -1,1 +1,0 @@
-export{fm as adoptTypedBlock,pm as createTypedChild,Wtt as derivedBlockId,mm as getOrCreateTypedChild}from"../../chunks/app-6gCIPtD3.js";

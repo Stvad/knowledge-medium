@@ -1,1 +1,0 @@
-export{qB as isIOS,JB as isMacPlatform}from"../../chunks/app-6gCIPtD3.js";

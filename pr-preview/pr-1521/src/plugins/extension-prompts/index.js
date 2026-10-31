@@ -1,1 +1,0 @@
-export{xj as ExtensionPromptSurface,Sj as extensionPromptsExtension}from"../../../chunks/app-6gCIPtD3.js";

@@ -1,1 +1,0 @@
-export{Vq as backlinksDataExtension}from"../../../chunks/app-6gCIPtD3.js";

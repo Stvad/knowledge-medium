@@ -1,1 +1,0 @@
-export{Y_ as BLOCK_HOLD_GESTURE,X_ as BLOCK_HOLD_RECOGNIZER_ID,Z_ as blockHoldRecognizer}from"../../../chunks/app-6gCIPtD3.js";

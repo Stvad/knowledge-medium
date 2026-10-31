@@ -1,1 +1,0 @@
-export{BL as MetadataRow,VL as PropertySectionLabel}from"../../../chunks/app-6gCIPtD3.js";

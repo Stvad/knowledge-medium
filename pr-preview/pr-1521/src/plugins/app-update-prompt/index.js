@@ -1,1 +1,0 @@
-export{Fj as appUpdatePromptExtension}from"../../../chunks/app-6gCIPtD3.js";

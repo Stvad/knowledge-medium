@@ -1,1 +1,0 @@
-export{oa as propertiesMigrationPlugin}from"../../../chunks/app-6gCIPtD3.js";

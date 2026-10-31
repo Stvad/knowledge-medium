@@ -1,1 +1,0 @@
-export{cX as SYNCED_TABLES,lX as syncedWriteTarget,uX as writeTargets}from"../../chunks/app-6gCIPtD3.js";

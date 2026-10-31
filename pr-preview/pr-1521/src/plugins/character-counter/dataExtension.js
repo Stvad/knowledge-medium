@@ -1,1 +1,0 @@
-export{Fq as characterCounterDataExtension}from"../../../chunks/app-6gCIPtD3.js";

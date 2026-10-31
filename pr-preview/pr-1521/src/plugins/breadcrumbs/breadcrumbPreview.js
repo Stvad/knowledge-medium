@@ -1,1 +1,0 @@
-export{vC as getBreadcrumbContentPreview}from"../../../chunks/app-6gCIPtD3.js";

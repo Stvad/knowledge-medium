@@ -1,1 +1,0 @@
-export{Iu as quotedInFooterContribution}from"../../../chunks/app-6gCIPtD3.js";

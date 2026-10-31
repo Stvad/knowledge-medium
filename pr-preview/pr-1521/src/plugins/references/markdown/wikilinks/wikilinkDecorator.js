@@ -1,1 +1,0 @@
-export{UD as isWikilinkDisplayParts,WD as resolveWikilinkDisplay,GD as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-6gCIPtD3.js";

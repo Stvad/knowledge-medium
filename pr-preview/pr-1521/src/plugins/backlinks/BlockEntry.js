@@ -1,1 +1,0 @@
-export{Yg as LazyBlockEntry}from"../../../chunks/app-6gCIPtD3.js";

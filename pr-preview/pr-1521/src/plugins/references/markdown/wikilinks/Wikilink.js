@@ -1,1 +1,0 @@
-export{k_ as Wikilink}from"../../../../../chunks/app-6gCIPtD3.js";

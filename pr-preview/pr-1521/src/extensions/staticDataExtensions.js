@@ -1,1 +1,0 @@
-export{lU as staticDataExtensions}from"../../chunks/app-6gCIPtD3.js";

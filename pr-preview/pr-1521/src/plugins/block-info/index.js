@@ -1,1 +1,0 @@
-export{mg as blockInfoPlugin}from"../../../chunks/app-6gCIPtD3.js";

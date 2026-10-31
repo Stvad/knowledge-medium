@@ -1,1 +1,0 @@
-export{GC as isLeftSidebarSectionContribution,KC as leftSidebarSectionsFacet}from"../../../chunks/app-6gCIPtD3.js";

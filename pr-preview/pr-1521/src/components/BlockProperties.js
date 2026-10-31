@@ -1,1 +1,0 @@
-export{zL as BlockProperties}from"../../chunks/app-6gCIPtD3.js";
