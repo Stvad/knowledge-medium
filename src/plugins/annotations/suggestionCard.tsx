@@ -27,8 +27,8 @@ export const showsAnchorState = (root: RootFields): boolean => threadIsOpen(root
 const closedAs = (root: RootFields): ThreadStatus | null =>
   threadIsOpen(root) ? null : safeDecodeRowProperty(root, annotationStatusProp)
 
-/** An accepted suggestion stays closed (`setThreadStatus` refuses to reopen
- *  it), so its card offers no Reopen. */
+/** An accepted suggestion keeps its status (`setThreadStatus` refuses any
+ *  change to it), so its card offers no Reopen. */
 export const isAccepted = (root: RootFields): boolean => closedAs(root) === 'accepted'
 
 const clipped = (text: string): string => truncate(text, 160)

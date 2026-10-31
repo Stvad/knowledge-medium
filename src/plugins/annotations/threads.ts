@@ -221,14 +221,15 @@ const STATUS_DESCRIPTIONS: Record<SettableStatus, string> = {
   resolved: 'resolve thread',
 }
 
-/** An accepted suggestion is never reopened: its change is in the text, and
- *  reopened it could be applied again elsewhere once re-anchored. Undo
- *  reverts an accept, change and status together. */
+/** An accepted suggestion keeps its status: its change is in the text, and
+ *  reopened (directly, or after a resolve) it could be applied again
+ *  elsewhere once re-anchored. Undo reverts an accept, change and status
+ *  together. */
 export const setThreadStatus = (repo: Repo, threadId: string, status: SettableStatus): Promise<void> =>
   repo.tx(async tx => {
     const root = await tx.get(threadId)
-    if (status === 'open' && root && safeDecodeRowProperty(root, annotationStatusProp) === 'accepted') {
-      throw new InvalidSuggestionError('An accepted suggestion stays closed: its change is already in the text.')
+    if (root && safeDecodeRowProperty(root, annotationStatusProp) === 'accepted') {
+      throw new InvalidSuggestionError('An accepted suggestion stays accepted: its change is already in the text.')
     }
     await tx.setProperty(threadId, annotationStatusProp, status)
   }, {scope: ChangeScope.BlockDefault, description: STATUS_DESCRIPTIONS[status]})
