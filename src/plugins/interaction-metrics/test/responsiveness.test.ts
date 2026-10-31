@@ -10,7 +10,7 @@ import {
   type InputEventEntry,
   type LongFrameEntry,
 } from '../responsiveness'
-import { observation, stubPerformanceObserver } from './fakePerformanceObserver'
+import { observation, stubPerformanceObserver } from '@/test/fakePerformanceObserver'
 
 const both = (startedAt = 0) => new ResponsivenessTotals({ frames: true, inputs: true, startedAt })
 
