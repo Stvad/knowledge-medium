@@ -1,5 +1,5 @@
 import type {EditorView} from '@codemirror/view'
-import {MessageSquarePlus, Highlighter, PanelRight, type LucideIcon} from 'lucide-react'
+import {MessageSquarePlus, Highlighter, PanelRight, TextQuote, type LucideIcon} from 'lucide-react'
 import {Block} from '@/data/block'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BLOCK_SHELL_ATTRIBUTE} from '@/extensions/blockInteraction.js'
@@ -15,12 +15,15 @@ import {
   type BaseShortcutDependencies,
   type BlockPointerDependencies,
   type CodeMirrorEditModeDependencies,
+  type ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
+import {writeTextToClipboard} from '@/utils/copy.js'
 import {resolveActivePanelRow} from '@/utils/navigation.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {showError, showInfo} from '@/utils/toast.js'
 import {captureAnchor, type RangeAnchor} from './anchor.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
+import {threadForRange} from './rangeRefs.ts'
 import {holdsSelection, locateReadSelection, mapReadSelection, type SelectionEnds} from './readSelection.ts'
 import {reanchorThread} from './reanchor.ts'
 import {createThread, isThreadRefusal} from './threads.ts'
@@ -37,9 +40,11 @@ import {
 
 export const COMMENT_ON_SELECTION_ACTION_ID = 'annotations.commentOnSelection'
 export const HIGHLIGHT_SELECTION_ACTION_ID = 'annotations.highlightSelection'
+export const COPY_REFERENCE_TO_SELECTION_ACTION_ID = 'annotations.copyReferenceToSelection'
 export const COMMENT_ON_BLOCK_ACTION_ID = 'annotations.commentOnBlock'
 export const COMMENT_ON_READ_SELECTION_ACTION_ID = 'annotations.commentOnReadSelection'
 export const HIGHLIGHT_READ_SELECTION_ACTION_ID = 'annotations.highlightReadSelection'
+export const COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID = 'annotations.copyReferenceToReadSelection'
 export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
 
 /** One chord per gesture, the same in every mode it runs in. Control+Shift
@@ -83,9 +88,14 @@ export const rangeFromEditor = (view: EditorView): ContentRange => {
 
 /** Widened to whole reference spans; null for an empty range, which comments
  *  on the whole block. */
-const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
+export const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
 
-export const anchorFromEditor = (view: EditorView): RangeAnchor | null => anchorOf(rangeFromEditor(view))
+/** A thread refusal, shown as the toast it carries; anything else rethrows. */
+const showRefusal = (error: unknown): false => {
+  if (!isThreadRefusal(error)) throw error
+  showError(error.message)
+  return false
+}
 
 /** A failure the user should see, as a toast. */
 export const reportFailure = (error: unknown): void => {
@@ -185,12 +195,31 @@ export const highlightTarget = async (target: SelectionTarget): Promise<boolean>
     await createThread(block.repo, {targetId: block.id, anchor})
     return true
   } catch (error) {
-    if (isThreadRefusal(error)) {
-      showError(error.message)
-      return false
-    }
-    throw error
+    return showRefusal(error)
   }
+}
+
+/** Put `((T))` on the clipboard, T the thread that highlights the target's
+ *  text, made here when there is none. It opens no composer, so unlike the
+ *  steps above it runs wherever the block shows: an embed, a backlink entry,
+ *  a comment in a card. True once the reference is copied. */
+export const copyReferenceToTarget = async ({block, range}: SelectionTarget): Promise<boolean> => {
+  const anchor = anchorOf(range)
+  if (!anchor) {
+    showInfo('Select the text to quote.')
+    return false
+  }
+  const threadId = await threadForRange(block.repo, block.id, anchor, range.content).catch(showRefusal)
+  if (threadId === false) return false
+  try {
+    await writeTextToClipboard(`((${threadId}))`)
+  } catch {
+    // The highlight stays, and the next copy of this range reuses it.
+    showError('The browser refused to write to the clipboard. Try again.')
+    return false
+  }
+  showInfo('Copied a reference to the selection.')
+  return true
 }
 
 /** A thread waiting for new text (Reselect on its card) takes the selection
@@ -206,8 +235,7 @@ const reanchorToSelection = async (repo: Repo, threadId: string, anchor: RangeAn
     startReanchor(null)
     showInfo('Moved the comment to the selection.')
   } catch (error) {
-    if (isThreadRefusal(error)) showError(error.message)
-    else throw error
+    showRefusal(error)
   }
 }
 
@@ -238,6 +266,14 @@ const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   defaultBinding: {keys: HIGHLIGHT_KEYS},
   isVisible: onOutline,
   handler: async deps => { await highlightTarget(editorTarget(deps)) },
+}
+
+const copyReferenceToSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+  id: COPY_REFERENCE_TO_SELECTION_ACTION_ID,
+  description: 'Copy reference to selection',
+  context: ActionContextTypes.EDIT_MODE_CM,
+  icon: TextQuote,
+  handler: async deps => { await copyReferenceToTarget(editorTarget(deps)) },
 }
 
 const commentOnBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
@@ -287,15 +323,28 @@ export const runOnReadTarget = async (
  *  context menu. */
 export interface ReadSelectionGesture {
   actionId: string
+  /** On the context menu. */
   label: string
+  /** In the command palette and the keybindings editor. */
+  description: string
   icon: LucideIcon
-  keys: string
+  defaultBinding?: ShortcutBindingDefaults
   step: (target: SelectionTarget) => Promise<boolean>
 }
 
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
-  {actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget},
-  {actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget},
+  {
+    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
+    icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, step: commentOnTarget,
+  },
+  {
+    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
+    icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, step: highlightTarget,
+  },
+  {
+    actionId: COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, label: 'Copy reference', description: 'Copy reference to selection',
+    icon: TextQuote, step: copyReferenceToTarget,
+  },
 ]
 
 /** The click that ends a drag-select in rendered content would enter edit
@@ -317,10 +366,10 @@ const hasReadSelection = (): boolean => locateReadSelection(document.getSelectio
 
 const readSelectionActions: readonly ActionConfig[] = readSelectionGestures.map(gesture => ({
   id: gesture.actionId,
-  description: `${gesture.label} selection`,
+  description: gesture.description,
   context: READ_SELECTION_CONTEXT,
   icon: gesture.icon,
-  defaultBinding: {keys: gesture.keys},
+  defaultBinding: gesture.defaultBinding,
   isVisible: hasReadSelection,
   canDispatch: hasReadSelection,
   handler: ({uiStateBlock}: BaseShortcutDependencies) =>
@@ -343,5 +392,5 @@ const toggleMargin: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 }
 
 export const annotationActions: readonly ActionConfig[] = [
-  commentOnSelection, highlightSelection, commentOnBlock, ...readSelectionActions, toggleMargin,
+  commentOnSelection, highlightSelection, copyReferenceToSelection, commentOnBlock, ...readSelectionActions, toggleMargin,
 ]
