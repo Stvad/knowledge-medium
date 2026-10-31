@@ -1,0 +1,1 @@
+export{id as confirmThreadDeletion}from"../../../chunks/app-DZBZYoRY.js";

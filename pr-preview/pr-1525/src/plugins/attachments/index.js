@@ -1,0 +1,1 @@
+export{Uv as attachmentsPlugin}from"../../../chunks/app-DZBZYoRY.js";

@@ -1,0 +1,1 @@
+export{WK as annotationsDataExtension}from"../../../chunks/app-DZBZYoRY.js";

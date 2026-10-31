@@ -1,0 +1,1 @@
+export{Let as getOrCreatePropertiesPage,Ret as propertiesPageBlockId,zet as propertiesPageSpec}from"../../chunks/app-DZBZYoRY.js";

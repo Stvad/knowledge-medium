@@ -1,0 +1,1 @@
+export{ak as COMMAND_PALETTE_ACTION_ID,ok as COMMAND_PALETTE_CONTEXT,sk as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,ck as commandPaletteActionContext}from"../../../chunks/app-DZBZYoRY.js";

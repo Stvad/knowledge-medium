@@ -1,0 +1,1 @@
+export{SM as dynamicExtensionsExtension}from"../../chunks/app-DZBZYoRY.js";

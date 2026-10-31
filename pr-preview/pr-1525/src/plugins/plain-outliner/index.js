@@ -1,0 +1,1 @@
+export{CC as plainOutlinerPlugin}from"../../../chunks/app-DZBZYoRY.js";

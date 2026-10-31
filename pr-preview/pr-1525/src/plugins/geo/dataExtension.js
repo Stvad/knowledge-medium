@@ -1,0 +1,1 @@
+export{bG as geoDataExtension}from"../../../chunks/app-DZBZYoRY.js";

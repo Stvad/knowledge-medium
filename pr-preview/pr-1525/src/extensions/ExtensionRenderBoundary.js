@@ -1,0 +1,1 @@
+export{eF as ExtensionRenderBoundary}from"../../chunks/app-DZBZYoRY.js";

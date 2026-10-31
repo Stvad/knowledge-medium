@@ -1,0 +1,1 @@
+export{Oat as CHANGE_SCOPE_POLICIES,kat as ChangeScope,Aat as isChangeScope,jat as policyForScope,Mat as scopeAllowedInReadOnly,Nat as scopeIsUndoable,Pat as scopePoliciesEquivalent,Fat as scopeUploadsToServer,Iat as sourceForScope}from"../../../chunks/app-DZBZYoRY.js";

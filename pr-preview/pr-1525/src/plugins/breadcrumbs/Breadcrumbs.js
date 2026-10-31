@@ -1,0 +1,1 @@
+export{xC as Breadcrumbs}from"../../../chunks/app-DZBZYoRY.js";

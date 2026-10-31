@@ -1,0 +1,1 @@
+export{Im as MAX_SQL_ROWS,Lm as SQL_CELL_CHARS,Rm as boundSqlRows,zm as limitedSelectSql}from"../../../../chunks/app-DZBZYoRY.js";

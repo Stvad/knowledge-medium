@@ -1,0 +1,1 @@
+export{Fk as SwipeActionMenu}from"../../../chunks/app-DZBZYoRY.js";

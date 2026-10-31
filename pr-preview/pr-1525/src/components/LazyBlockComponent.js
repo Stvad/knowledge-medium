@@ -1,0 +1,1 @@
+export{rN as LazyBlockComponent}from"../../chunks/app-DZBZYoRY.js";

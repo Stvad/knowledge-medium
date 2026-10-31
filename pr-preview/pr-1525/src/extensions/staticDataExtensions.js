@@ -1,0 +1,1 @@
+export{dU as staticDataExtensions}from"../../chunks/app-DZBZYoRY.js";

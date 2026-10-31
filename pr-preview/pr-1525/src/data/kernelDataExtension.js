@@ -1,0 +1,1 @@
+export{$1 as kernelDataExtension}from"../../chunks/app-DZBZYoRY.js";

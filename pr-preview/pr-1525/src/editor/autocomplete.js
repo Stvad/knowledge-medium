@@ -1,0 +1,1 @@
+export{bj as editorAutocompleteExtension}from"../../chunks/app-DZBZYoRY.js";

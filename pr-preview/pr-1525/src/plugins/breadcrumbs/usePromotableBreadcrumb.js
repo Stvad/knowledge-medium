@@ -1,0 +1,1 @@
+export{_C as usePromotableBreadcrumb}from"../../../chunks/app-DZBZYoRY.js";

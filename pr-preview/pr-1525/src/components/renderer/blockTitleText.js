@@ -1,0 +1,1 @@
+export{KI as BLOCK_TITLE_TEXT_CLASS,qI as useBlockTitleTextClass}from"../../../chunks/app-DZBZYoRY.js";

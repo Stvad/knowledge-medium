@@ -1,0 +1,1 @@
+export{wf as contributorsPlugin}from"../../../chunks/app-DZBZYoRY.js";

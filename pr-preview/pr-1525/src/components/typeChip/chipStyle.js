@@ -1,0 +1,1 @@
+export{EA as chipStyle}from"../../../chunks/app-DZBZYoRY.js";

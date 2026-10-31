@@ -1,0 +1,1 @@
+export{mv as MOVE_BLOCKS_ACTION_ID,hv as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,Sv as MoveDestinationPicker,bv as isWithinSubtreeOfAny,gv as moveBlockAction,_v as moveBlocksAction,dv as moveBlocksPlugin,xv as moveBlocksTo,yv as unselectMovedBlocks}from"../../../chunks/app-DZBZYoRY.js";

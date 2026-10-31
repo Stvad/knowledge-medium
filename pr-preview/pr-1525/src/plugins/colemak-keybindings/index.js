@@ -1,0 +1,1 @@
+export{Wx as COLEMAK_KEYBINDINGS_PLUGIN_ID,Gx as colemakKeybindingsPlugin,Kx as colemakMovementKeybindingOverrides}from"../../../chunks/app-DZBZYoRY.js";

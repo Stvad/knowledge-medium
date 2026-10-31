@@ -1,0 +1,1 @@
+export{Tk as commandPaletteToggle}from"../../../chunks/app-DZBZYoRY.js";

@@ -1,0 +1,1 @@
+export{TK as dailyNotesLocalSchema}from"../../../chunks/app-DZBZYoRY.js";

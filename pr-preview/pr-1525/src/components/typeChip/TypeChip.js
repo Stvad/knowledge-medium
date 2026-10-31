@@ -1,0 +1,1 @@
+export{TA as TypeChip}from"../../../chunks/app-DZBZYoRY.js";

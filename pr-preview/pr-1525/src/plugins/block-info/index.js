@@ -1,0 +1,1 @@
+export{gg as blockInfoPlugin}from"../../../chunks/app-DZBZYoRY.js";

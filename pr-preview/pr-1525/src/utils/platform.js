@@ -1,0 +1,1 @@
+export{YB as isIOS,XB as isMacPlatform}from"../../chunks/app-DZBZYoRY.js";

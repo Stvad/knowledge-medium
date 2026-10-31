@@ -1,0 +1,1 @@
+export{Z_ as BLOCK_HOLD_GESTURE,Q_ as BLOCK_HOLD_RECOGNIZER_ID,$_ as blockHoldRecognizer}from"../../../chunks/app-DZBZYoRY.js";

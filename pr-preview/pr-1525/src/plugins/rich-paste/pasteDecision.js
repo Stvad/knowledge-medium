@@ -1,0 +1,1 @@
+export{Bv as richPasteDecisionContribution}from"../../../chunks/app-DZBZYoRY.js";

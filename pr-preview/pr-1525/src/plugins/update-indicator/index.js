@@ -1,0 +1,1 @@
+export{vg as updateIndicatorPlugin}from"../../../chunks/app-DZBZYoRY.js";

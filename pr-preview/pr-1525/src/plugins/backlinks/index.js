@@ -1,0 +1,1 @@
+export{Mg as backlinksPlugin}from"../../../chunks/app-DZBZYoRY.js";

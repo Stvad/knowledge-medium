@@ -1,0 +1,1 @@
+export{Lj as appUpdatePromptExtension}from"../../../chunks/app-DZBZYoRY.js";

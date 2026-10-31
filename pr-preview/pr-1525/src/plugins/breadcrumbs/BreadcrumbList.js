@@ -1,0 +1,1 @@
+export{SC as BreadcrumbList}from"../../../chunks/app-DZBZYoRY.js";

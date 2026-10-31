@@ -1,0 +1,1 @@
+export{Wit as definePostCommitProcessor}from"../../../chunks/app-DZBZYoRY.js";

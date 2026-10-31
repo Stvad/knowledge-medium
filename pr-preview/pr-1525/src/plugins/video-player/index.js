@@ -1,0 +1,1 @@
+export{Vb as videoPlayerPlugin}from"../../../chunks/app-DZBZYoRY.js";

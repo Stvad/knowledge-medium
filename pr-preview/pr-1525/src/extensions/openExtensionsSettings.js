@@ -1,0 +1,1 @@
+export{DN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,ON as openExtensionsSettings}from"../../chunks/app-DZBZYoRY.js";
