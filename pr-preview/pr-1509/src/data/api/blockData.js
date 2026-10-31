@@ -1,1 +1,1 @@
-export{nat as normalizeReferences}from"../../../chunks/app-BXe3NkND.js";
+export{wat as normalizeReferences}from"../../../chunks/app-D_jBRWoU.js";

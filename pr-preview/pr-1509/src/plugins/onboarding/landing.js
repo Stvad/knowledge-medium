@@ -1,1 +1,1 @@
-export{Jb as onboardingLanding}from"../../../chunks/app-BXe3NkND.js";
+export{mx as onboardingLanding}from"../../../chunks/app-D_jBRWoU.js";

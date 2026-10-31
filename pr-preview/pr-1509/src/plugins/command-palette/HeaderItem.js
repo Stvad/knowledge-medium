@@ -1,1 +1,1 @@
-export{WO as CommandPaletteHeaderItem}from"../../../chunks/app-BXe3NkND.js";
+export{uk as CommandPaletteHeaderItem}from"../../../chunks/app-D_jBRWoU.js";

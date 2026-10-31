@@ -1,1 +1,1 @@
-export{Zu as THREAD_HIGHLIGHTS_INPUT,Qu as remarkAnnotationMarks,$u as threadMarksMarkdownExtension}from"../../../chunks/app-BXe3NkND.js";
+export{Qd as SOURCE_SPANS_ATTRIBUTE,$d as THREAD_HIGHLIGHTS_INPUT,ef as remarkAnnotationMarks,tf as renderedSourceKey,nf as threadMarksMarkdownExtension}from"../../../chunks/app-D_jBRWoU.js";
