@@ -1,1 +1,1 @@
-export{PR as AddPropertyForm}from"../../../chunks/app-D_UaMBbX.js";
+export{LR as AddPropertyForm}from"../../../chunks/app-CWRU_Kki.js";

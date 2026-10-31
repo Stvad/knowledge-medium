@@ -1,1 +1,1 @@
-export{Gg as groupedBacklinksPlugin}from"../../../chunks/app-D_UaMBbX.js";
+export{Gg as groupedBacklinksPlugin}from"../../../chunks/app-CWRU_Kki.js";

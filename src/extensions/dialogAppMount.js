@@ -1,1 +1,1 @@
-export{LN as DialogHost,RN as dialogAppMountExtension}from"../../chunks/app-D_UaMBbX.js";
+export{BN as DialogHost,VN as dialogAppMountExtension}from"../../chunks/app-CWRU_Kki.js";

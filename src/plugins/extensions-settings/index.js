@@ -1,1 +1,1 @@
-export{kp as extensionsOverridesProp,Ap as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-D_UaMBbX.js";
+export{kp as extensionsOverridesProp,Ap as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CWRU_Kki.js";

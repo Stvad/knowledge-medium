@@ -1,1 +1,1 @@
-export{TN as BlockLoadingPlaceholder}from"../../chunks/app-D_UaMBbX.js";
+export{ON as BlockLoadingPlaceholder}from"../../chunks/app-CWRU_Kki.js";

@@ -1,1 +1,1 @@
-export{VM as dynamicExtensionsExtension}from"../../chunks/app-D_UaMBbX.js";
+export{WM as dynamicExtensionsExtension}from"../../chunks/app-CWRU_Kki.js";

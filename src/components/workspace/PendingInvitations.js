@@ -1,1 +1,1 @@
-export{CT as PendingInvitations}from"../../../chunks/app-D_UaMBbX.js";
+export{CT as PendingInvitations}from"../../../chunks/app-CWRU_Kki.js";

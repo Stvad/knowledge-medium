@@ -1,1 +1,1 @@
-export{la as propertiesMigrationPlugin}from"../../../chunks/app-D_UaMBbX.js";
+export{la as propertiesMigrationPlugin}from"../../../chunks/app-CWRU_Kki.js";

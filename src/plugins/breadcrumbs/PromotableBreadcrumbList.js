@@ -1,1 +1,1 @@
-export{LC as PromotableBreadcrumbList}from"../../../chunks/app-D_UaMBbX.js";
+export{LC as PromotableBreadcrumbList}from"../../../chunks/app-CWRU_Kki.js";

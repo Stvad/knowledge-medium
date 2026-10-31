@@ -1,1 +1,1 @@
-export{FA as BlockEmbed}from"../../../chunks/app-D_UaMBbX.js";
+export{RA as BlockEmbed}from"../../../chunks/app-CWRU_Kki.js";

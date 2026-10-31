@@ -1,1 +1,1 @@
-export{bk as CommandPalette}from"../../../chunks/app-D_UaMBbX.js";
+export{bk as CommandPalette}from"../../../chunks/app-CWRU_Kki.js";
