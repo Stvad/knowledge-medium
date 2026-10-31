@@ -7,10 +7,25 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, type RangeAnchor} from './anchor'
+import {copyReferenceToTarget} from './actions'
 import {annotationsPlugin} from './index'
 import {threadForRange} from './rangeRefs'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {createThread, setThreadStatus} from './threads'
+
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+const toasts = vi.hoisted(() => ({info: vi.fn(), error: vi.fn()}))
+
+vi.mock('@/utils/copy.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/copy.js')>(),
+  writeTextToClipboard: clipboard.write,
+}))
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: toasts.info,
+  showError: toasts.error,
+}))
 
 const WS = 'ws'
 const B_TEXT = 'As planned, the launch moves to Thursday, and the demo moves too.'
@@ -22,6 +37,9 @@ beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
 beforeEach(async () => {
+  clipboard.write.mockReset().mockResolvedValue(undefined)
+  toasts.info.mockReset()
+  toasts.error.mockReset()
   await resetTestDb(db.db)
   // `((id))` parses as a reference only when `id` is UUID-shaped.
   repo = createTestRepo({
@@ -124,6 +142,44 @@ describe('threadForRange', () => {
     expect(await copy('moves', edited)).toBe(first)
     const later = edited.lastIndexOf('moves')
     expect(await copyAt(later, later + 'moves'.length, edited)).not.toBe(first)
+  })
+})
+
+describe('copying a reference to a selection', () => {
+  const target = (quote: string) => {
+    const from = B_TEXT.indexOf(quote)
+    return {block: repo.block('B'), renderScopeId: undefined, range: {content: B_TEXT, from, to: from + quote.length}}
+  }
+
+  it('puts a reference to the thread on the text on the clipboard, the same one each time', async () => {
+    expect(await copyReferenceToTarget(target('Thursday'))).toBe(true)
+    const [threadId] = await threadsOnB()
+    expect(clipboard.write).toHaveBeenLastCalledWith(`((${threadId}))`)
+
+    expect(await copyReferenceToTarget(target('Thursday'))).toBe(true)
+    expect(clipboard.write).toHaveBeenLastCalledWith(`((${threadId}))`)
+    expect(await threadsOnB()).toEqual([threadId])
+  })
+
+  it('copies nothing for an empty selection', async () => {
+    const at = B_TEXT.indexOf('Thursday')
+
+    expect(await copyReferenceToTarget({...target('Thursday'), range: {content: B_TEXT, from: at, to: at}})).toBe(false)
+    expect(toasts.info).toHaveBeenCalledWith('Select the text to quote.')
+    expect(clipboard.write).not.toHaveBeenCalled()
+    expect(await threadsOnB()).toEqual([])
+  })
+
+  it('keeps the highlight when the browser refuses the clipboard, and the retry reuses it', async () => {
+    clipboard.write.mockRejectedValueOnce(new DOMException('Document is not focused.', 'NotAllowedError'))
+
+    expect(await copyReferenceToTarget(target('Thursday'))).toBe(false)
+    expect(toasts.error).toHaveBeenCalledWith('The browser refused to write to the clipboard. Try again.')
+    const [threadId] = await threadsOnB()
+    expect(threadId).toBeDefined()
+
+    expect(await copyReferenceToTarget(target('Thursday'))).toBe(true)
+    expect(clipboard.write).toHaveBeenLastCalledWith(`((${threadId}))`)
   })
 })
 

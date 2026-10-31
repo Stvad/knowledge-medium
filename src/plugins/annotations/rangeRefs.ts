@@ -4,17 +4,10 @@
  * as the quote wherever it is referenced (`quotedRange.tsx`).
  */
 
-import {TextQuote} from 'lucide-react'
 import type {Repo} from '@/data/repo'
-import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
-import {writeTextToClipboard} from '@/utils/copy.js'
-import {showError, showInfo} from '@/utils/toast.js'
 import {resolveAnchor, type AnchorResolution, type RangeAnchor} from './anchor.ts'
-import {anchorOf, rangeFromEditor} from './actions.ts'
 import {THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
-import {createThread, isThreadRefusal, missingTarget} from './threads.ts'
-
-export const COPY_RANGE_REFERENCE_ACTION_ID = 'annotations.copyReferenceToSelection'
+import {createThread, missingTarget} from './threads.ts'
 
 const sameRange = (a: AnchorResolution, b: AnchorResolution): boolean =>
   a.state !== 'stale' && b.state !== 'stale' && a.from === b.from && a.to === b.to
@@ -46,37 +39,4 @@ export const threadForRange = async (
   if (existing) return existing.id
   const created = await createThread(repo, {targetId, anchor}, {description: 'copy reference to selection'})
   return created.threadId
-}
-
-/** Unlike commenting, this opens no composer, so it works wherever the block
- *  is edited: an embed, a backlink entry, a comment in a card. */
-export const copyRangeReferenceAction: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
-  id: COPY_RANGE_REFERENCE_ACTION_ID,
-  description: 'Copy reference to selection',
-  context: ActionContextTypes.EDIT_MODE_CM,
-  icon: TextQuote,
-  handler: async ({block, editorView}) => {
-    const range = rangeFromEditor(editorView)
-    const anchor = anchorOf(range)
-    if (!anchor) {
-      showInfo('Select the text to quote.')
-      return
-    }
-    let threadId: string
-    try {
-      threadId = await threadForRange(block.repo, block.id, anchor, range.content)
-    } catch (error) {
-      if (isThreadRefusal(error)) showError(error.message)
-      else throw error
-      return
-    }
-    try {
-      await writeTextToClipboard(`((${threadId}))`)
-    } catch {
-      // The highlight stays, and the next copy of this range reuses it.
-      showError('The browser refused to write to the clipboard. Try again.')
-      return
-    }
-    showInfo('Copied a reference to the selection.')
-  },
 }

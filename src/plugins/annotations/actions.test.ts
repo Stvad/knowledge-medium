@@ -10,13 +10,27 @@ import {editorContentFlushFacet} from '@/editor/contentFlush.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
-import {anchorFromEditor, annotationActions, COMMENT_ON_BLOCK_ACTION_ID, COMMENT_ON_SELECTION_ACTION_ID, submitComposer} from './actions'
+import {
+  anchorFromEditor,
+  annotationActions,
+  COMMENT_ON_BLOCK_ACTION_ID,
+  COMMENT_ON_SELECTION_ACTION_ID,
+  COPY_REFERENCE_TO_SELECTION_ACTION_ID,
+  submitComposer,
+} from './actions'
 import {resolveAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
 import {createThread} from './threads'
 import {closeComposer, openComposer, peekComposer, peekPendingReanchor, releasePendingReanchor, startReanchor, updateComposer, viewKey} from './uiStore'
+
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+
+vi.mock('@/utils/copy.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/copy.js')>(),
+  writeTextToClipboard: clipboard.write,
+}))
 
 const WS = 'ws'
 const TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -197,5 +211,25 @@ describe('commenting on an editor selection', () => {
     const editor = editorOnB()
     editor.dispatch({selection: EditorSelection.single(5)})
     expect(anchorFromEditor(editor)).toBeNull()
+  })
+})
+
+describe('copying a reference to an editor selection', () => {
+  it('quotes what the editor shows, in a backlink entry too, where commenting does not run', async () => {
+    clipboard.write.mockReset().mockResolvedValue(undefined)
+    const editor = editorOnB()
+    editor.dispatch({changes: {from: 0, insert: 'Update: '}})
+    select(editor, 'Thursday')
+    const copy = annotationActions.find(action => action.id === COPY_REFERENCE_TO_SELECTION_ACTION_ID)!
+    const deps = {block: repo.block('B'), uiStateBlock: repo.block('B'), renderScopeId: backlinkRenderScopeId(PANEL, 'x'), editorView: editor}
+
+    await copy.handler(deps as never, new CustomEvent('test'))
+
+    const [threadId] = await threadsOnB()
+    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    const anchor = threadAnchorOf((await repo.load(threadId))!)
+    if (anchor.kind !== 'range') throw new Error('expected a range anchor')
+    expect(anchor).toMatchObject({quote: 'Thursday', quoteStart: 31})
+    expect(resolveAnchor((await repo.load('B'))!.content, anchor).state).toBe('exact')
   })
 })
