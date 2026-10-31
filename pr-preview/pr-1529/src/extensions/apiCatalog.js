@@ -1,0 +1,1 @@
+export{Ep as extensionApiCatalog,Dp as extensionApiRuntimeExports}from"../../chunks/app-ChZ5snIn.js";

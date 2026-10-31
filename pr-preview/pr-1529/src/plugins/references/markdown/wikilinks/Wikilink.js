@@ -1,0 +1,1 @@
+export{X_ as Wikilink}from"../../../../../chunks/app-ChZ5snIn.js";

@@ -1,0 +1,1 @@
+export{nM as appUpdatePromptExtension}from"../../../chunks/app-ChZ5snIn.js";

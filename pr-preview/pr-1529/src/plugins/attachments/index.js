@@ -1,0 +1,1 @@
+export{cy as attachmentsPlugin}from"../../../chunks/app-ChZ5snIn.js";

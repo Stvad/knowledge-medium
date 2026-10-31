@@ -1,0 +1,1 @@
+export{PY as aliasDataExtension}from"../../../chunks/app-ChZ5snIn.js";

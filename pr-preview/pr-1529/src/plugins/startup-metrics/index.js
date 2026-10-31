@@ -1,0 +1,1 @@
+export{ki as startupMetricsPlugin}from"../../../chunks/app-ChZ5snIn.js";

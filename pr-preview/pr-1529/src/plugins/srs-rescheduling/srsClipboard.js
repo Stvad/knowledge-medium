@@ -1,0 +1,1 @@
+export{zc as clearSrsClipboard,Bc as getSrsClipboard,Vc as setSrsClipboard,Hc as subscribeSrsClipboard}from"../../../chunks/app-ChZ5snIn.js";

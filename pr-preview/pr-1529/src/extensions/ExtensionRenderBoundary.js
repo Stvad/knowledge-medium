@@ -1,0 +1,1 @@
+export{yF as ExtensionRenderBoundary}from"../../chunks/app-ChZ5snIn.js";

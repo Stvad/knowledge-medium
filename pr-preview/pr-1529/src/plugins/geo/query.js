@@ -1,0 +1,1 @@
+export{BG as PLACES_UNDER_BLOCK_QUERY,VG as placesUnderBlockQuery}from"../../../chunks/app-ChZ5snIn.js";

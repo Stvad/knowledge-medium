@@ -1,0 +1,1 @@
+export{pM as appUpdate,mM as useAppUpdateAvailable}from"../chunks/app-ChZ5snIn.js";

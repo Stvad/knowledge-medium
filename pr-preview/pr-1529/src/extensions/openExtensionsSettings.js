@@ -1,0 +1,1 @@
+export{KN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,qN as openExtensionsSettings}from"../../chunks/app-ChZ5snIn.js";

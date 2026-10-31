@@ -1,0 +1,1 @@
+export{$m as createWatchEventsRegistry,eh as watchEventsRegistry}from"../../../chunks/app-ChZ5snIn.js";

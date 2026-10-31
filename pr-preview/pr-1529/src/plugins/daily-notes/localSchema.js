@@ -1,0 +1,1 @@
+export{WK as dailyNotesLocalSchema}from"../../../chunks/app-ChZ5snIn.js";

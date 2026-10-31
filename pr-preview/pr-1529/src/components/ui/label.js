@@ -1,0 +1,1 @@
+export{TD as Label}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,0 +1,1 @@
+export{Rq as annotationMarginOpenProp}from"../../../chunks/app-ChZ5snIn.js";

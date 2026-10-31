@@ -1,0 +1,1 @@
+export{GA as chipStyle}from"../../../chunks/app-ChZ5snIn.js";

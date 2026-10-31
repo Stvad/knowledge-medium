@@ -1,0 +1,1 @@
+export{sx as videoPlayerMarkdownExtension}from"../../../chunks/app-ChZ5snIn.js";

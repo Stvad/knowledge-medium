@@ -1,0 +1,1 @@
+export{oR as BlockProperties}from"../../chunks/app-ChZ5snIn.js";

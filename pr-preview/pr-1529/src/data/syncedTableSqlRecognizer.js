@@ -1,0 +1,1 @@
+export{MX as SYNCED_TABLES,NX as syncedWriteTarget,PX as writeTargets}from"../../chunks/app-ChZ5snIn.js";

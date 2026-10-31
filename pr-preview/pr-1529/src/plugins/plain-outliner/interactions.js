@@ -1,0 +1,1 @@
+export{KC as blockEditingContentRenderer}from"../../../chunks/app-ChZ5snIn.js";

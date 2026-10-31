@@ -1,0 +1,1 @@
+export{ox as videoPlayerPlugin}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,0 +1,1 @@
+export{Wg as backlinksViewPlugin}from"../../../chunks/app-ChZ5snIn.js";
