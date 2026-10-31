@@ -1,1 +1,1 @@
-export{Ex as onboardingLanding}from"../../../chunks/app-BpLpE3ym.js";
+export{Wx as onboardingLanding}from"../../../chunks/app-C_BWmE1A.js";

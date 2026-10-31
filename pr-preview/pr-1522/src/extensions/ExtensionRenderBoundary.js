@@ -1,1 +1,1 @@
-export{QP as ExtensionRenderBoundary}from"../../chunks/app-BpLpE3ym.js";
+export{gF as ExtensionRenderBoundary}from"../../chunks/app-C_BWmE1A.js";

@@ -1,1 +1,1 @@
-export{SG as CurrentLocationError,CG as getCurrentPosition}from"../../../chunks/app-BpLpE3ym.js";
+export{BG as CurrentLocationError,VG as getCurrentPosition}from"../../../chunks/app-C_BWmE1A.js";

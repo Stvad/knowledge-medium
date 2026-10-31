@@ -1,1 +1,1 @@
-export{DX as scanForZeroPages}from"../../chunks/app-BpLpE3ym.js";
+export{GX as scanForZeroPages}from"../../chunks/app-C_BWmE1A.js";

@@ -1,1 +1,1 @@
-export{D_ as referencesPlugin}from"../../../chunks/app-BpLpE3ym.js";
+export{G_ as referencesPlugin}from"../../../chunks/app-C_BWmE1A.js";
