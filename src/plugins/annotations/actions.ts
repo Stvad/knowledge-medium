@@ -138,7 +138,7 @@ export const submitComposer = async (repo: Repo, key: string): Promise<boolean> 
 /** The composer renders under outline blocks only, so the gestures run only
  *  there: in a backlinks entry, an embed or a comment card they would open a
  *  composer nothing shows. */
-export const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
+const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
   renderScopeId === undefined || isPanelRenderScopeId(renderScopeId)
 
 const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
@@ -179,32 +179,21 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
   return true
 }
 
-/** Open the suggestion composer on a raw range of `targetId`'s content,
- *  widened to whole reference spans, with the replacement prefilled with the
- *  quote. False for an empty range, which has nothing to replace. */
-export const openSuggestionComposer = (
-  targetId: string,
-  renderScopeId: string | undefined,
-  {content, from, to}: ContentRange,
-): boolean => {
-  const anchor = captureAnchor(content, from, to)
-  if (!anchor) return false
-  openComposer(viewKey(renderScopeId, targetId), targetId, anchor, {replacement: anchor.quote})
-  return true
-}
-
-/** Open the suggestion composer on the target's text. True when it opened.
- *  The range is raw: one across formatting or list items prefills that
- *  markup, which the composer shows. */
+/** A composer on the target's text, its replacement prefilled with the
+ *  quote. True when it opened. The range is raw: one across formatting or
+ *  list items prefills that markup, which the composer shows. */
 const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
   if (!onOutline(target)) {
     showInfo('Open the block in its page to suggest an edit to it.')
     return false
   }
-  if (!openSuggestionComposer(target.block.id, target.renderScopeId, target.range)) {
+  const {block, renderScopeId} = target
+  const anchor = anchorOf(target.range)
+  if (!anchor) {
     showInfo('Select the text to suggest a change to.')
     return false
   }
+  openComposer(viewKey(renderScopeId, block.id), block.id, anchor, {replacement: anchor.quote})
   return true
 }
 
@@ -253,6 +242,16 @@ const reanchorToSelection = async (repo: Repo, threadId: string, anchor: RangeAn
 const editorTarget = ({block, renderScopeId, editorView}: CodeMirrorEditModeDependencies): SelectionTarget =>
   ({block, renderScopeId, range: rangeFromEditor(editorView)})
 
+/** Run a composer-opening `step` on the editor's selection. Once a composer
+ *  is open, leave edit mode so the editor does not stay mounted behind it,
+ *  where keys typed after it closes would still reach it (a bare Enter would
+ *  split the block at the quote). */
+const openFromEditor = (step: (target: SelectionTarget) => Promise<boolean>) =>
+  async (deps: CodeMirrorEditModeDependencies): Promise<void> => {
+    if (!await step(editorTarget(deps))) return
+    void exitEditModeForBlock(deps.uiStateBlock, deps.block.id, deps.renderScopeId)
+  }
+
 const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   id: COMMENT_ON_SELECTION_ACTION_ID,
   description: 'Comment on selection',
@@ -260,13 +259,7 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   icon: MessageSquarePlus,
   defaultBinding: editModeBinding(COMMENT_KEYS),
   isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
-  handler: async deps => {
-    if (!await commentOnTarget(editorTarget(deps))) return
-    // The anchor is captured; leave edit mode so the editor does not stay
-    // mounted behind the composer, where keys typed after it closes would
-    // still reach it (a bare Enter would split the block at the quote).
-    void exitEditModeForBlock(deps.uiStateBlock, deps.block.id, deps.renderScopeId)
-  },
+  handler: openFromEditor(commentOnTarget),
 }
 
 const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
@@ -286,11 +279,7 @@ const suggestEdit: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   icon: PencilLine,
   defaultBinding: editModeBinding(SUGGEST_KEYS),
   isVisible: onOutline,
-  handler: async deps => {
-    if (!await suggestOnTarget(editorTarget(deps))) return
-    // As for a comment: the editor must not stay mounted behind the composer.
-    void exitEditModeForBlock(deps.uiStateBlock, deps.block.id, deps.renderScopeId)
-  },
+  handler: openFromEditor(suggestOnTarget),
 }
 
 const commentOnBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
@@ -340,10 +329,9 @@ export const runOnReadTarget = async (
  *  context menu. */
 export interface ReadSelectionGesture {
   actionId: string
-  /** The menu item's. */
+  /** On the context menu. */
   label: string
-  /** The command's, in the palette and the keybindings editor: its
-   *  edit-mode twin's. */
+  /** In the command palette and the keybindings editor. */
   description: string
   icon: LucideIcon
   keys: string
@@ -352,15 +340,15 @@ export interface ReadSelectionGesture {
 
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
   {
-    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: commentOnSelection.description,
+    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
     icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget,
   },
   {
-    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: highlightSelection.description,
+    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
     icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget,
   },
   {
-    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: suggestEdit.description,
+    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: 'Suggest edit to selection',
     icon: PencilLine, keys: SUGGEST_KEYS, step: suggestOnTarget,
   },
 ]

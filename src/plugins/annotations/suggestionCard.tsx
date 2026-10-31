@@ -10,7 +10,7 @@ import type {Repo} from '@/data/repo'
 import {safeDecodeRowProperty} from '@/data/rowProperty'
 import {useRepo} from '@/context/repo.js'
 import {truncate} from '@/utils/string.js'
-import {showError} from '@/utils/toast.js'
+import {reportFailure} from './actions.ts'
 import {annotationStatusProp, threadIsOpen, threadSuggestionOf, type ThreadStatus, type ThreadSuggestion} from './schema.ts'
 import {acceptSuggestion, rejectSuggestion} from './suggestions.ts'
 
@@ -55,10 +55,6 @@ export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}
       <ins className="whitespace-pre-wrap rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins>
     </span>
   )
-}
-
-const reportFailure = (error: unknown): void => {
-  showError(error instanceof Error ? error.message : String(error))
 }
 
 /** Accept is a click, which blurs the target's editor and so flushes its

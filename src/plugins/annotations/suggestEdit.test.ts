@@ -10,7 +10,7 @@ import {createTestRepo} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope.js'
 import {showInfo} from '@/utils/toast.js'
-import {annotationActions, openSuggestionComposer, SUGGEST_EDIT_ACTION_ID, submitComposer} from './actions'
+import {annotationActions, SUGGEST_EDIT_ACTION_ID, submitComposer} from './actions'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadReplacementOf} from './schema'
@@ -85,7 +85,7 @@ describe('suggesting an edit to a selection', () => {
     await suggest(view)
     expect(peekComposer(KEY)).toBeUndefined()
     expect(showInfo).toHaveBeenCalledWith('Select the text to suggest a change to.')
-    expect(exitEditModeForBlock).not.toHaveBeenCalled()
+    expect(vi.mocked(exitEditModeForBlock).mock.calls.map(([, blockId]) => blockId)).toEqual([])
 
     const nested = backlinkRenderScopeId(PANEL, 'x')
     expect(suggestEditAction.isVisible!({renderScopeId: nested} as never)).toBe(false)
@@ -93,12 +93,10 @@ describe('suggesting an edit to a selection', () => {
     expect(peekComposer(viewKey(nested, 'B'))).toBeUndefined()
   })
 
-  it('opens from a raw range of the text, widened to whole reference spans, as a read-mode trigger would', () => {
-    const content = 'See [[Launch plan]] for dates.'
-    expect(openSuggestionComposer('B', PANEL, {content, from: 8, to: 12})).toBe(true)
+  it('widens the selection to whole reference spans', async () => {
+    view = new EditorView({state: EditorState.create({doc: 'See [[Launch plan]] for dates.', selection: EditorSelection.single(8, 12)})})
+    await suggest(view)
     expect(peekComposer(KEY)).toMatchObject({anchor: {quote: '[[Launch plan]]', quoteStart: 4}, replacement: '[[Launch plan]]'})
-    expect(openSuggestionComposer('C', PANEL, {content, from: 3, to: 3})).toBe(false)
-    expect(peekComposer(viewKey(PANEL, 'C'))).toBeUndefined()
   })
 
   it('writes a suggestion with no comment, and with one', async () => {

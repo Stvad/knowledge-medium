@@ -18,7 +18,7 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
-import {outlineRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
+import {backlinkRenderScopeId, outlineRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
 import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
@@ -291,14 +291,9 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     const suggest = annotationActions.find(action => action.id === SUGGEST_EDIT_READ_SELECTION_ACTION_ID)!
     const dispatch = () => suggest.handler({uiStateBlock: repo.block('ui-state')} as never, new KeyboardEvent('keydown'))
 
-    /** From the start of `from` to the end of `to`, as a drag leaves it. */
     const select = (from: string, to: string) => {
-      const start = at(from)
-      const end = at(to)
-      act(() => {
-        document.getSelection()!.setBaseAndExtent(start.node, start.offset, end.node, end.offset + to.length)
-        document.dispatchEvent(new Event('selectionchange'))
-      })
+      const {anchorNode, anchorOffset, focusNode, focusOffset} = ends(from, to)
+      act(() => { document.getSelection()!.setBaseAndExtent(anchorNode!, anchorOffset, focusNode!, focusOffset) })
     }
 
     afterEach(() => {
@@ -331,12 +326,12 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     })
 
     it('refuses off the outline, where no composer renders', async () => {
-      await renderBlocks('rich')
+      const backlink = backlinkRenderScopeId(PANEL, 'x')
+      await renderIn(backlink, ['rich'])
       select('Some', 'text')
-      const selection = mapReadSelection(document.getSelection(), contentOf)
-      expect(selection).toMatchObject({kind: 'range', from: 0, to: 18})
+      expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', renderScopeId: backlink, from: 0, to: 18})
       await dispatch()
-      expect(peekComposer(viewKey(selection?.kind === 'range' ? selection.renderScopeId : '', 'rich'))).toBeUndefined()
+      expect(peekComposer(viewKey(backlink, 'rich'))).toBeUndefined()
       expect(showInfo).toHaveBeenCalledWith('Open the block in its page to suggest an edit to it.')
     })
   })
