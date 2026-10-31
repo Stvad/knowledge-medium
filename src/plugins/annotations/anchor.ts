@@ -151,7 +151,11 @@ export const captureAnchor = (content: string, from: number, to: number): RangeA
   }
 }
 
+/** `start` must be a position in the text: `startsWith` reads a negative or
+ *  fractional one as another position than the windows slice from, so a
+ *  hand-made anchor could match text it does not sit on. */
 const isExactAt = (content: string, anchor: RangeAnchor, start: number): boolean =>
+  Number.isInteger(start) && start >= 0 &&
   content.startsWith(anchor.quote, start) &&
   contextBefore(content, start) === anchor.prefix &&
   contextAfter(content, start + anchor.quote.length) === anchor.suffix

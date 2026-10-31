@@ -111,6 +111,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:annotations/property/quote-prefix', 'annotation:quotePrefix', 'optional-string', 'string'],
   ['system:annotations/property/quote-start', 'annotation:quoteStart', 'optional-number', 'number'],
   ['system:annotations/property/quote-suffix', 'annotation:quoteSuffix', 'optional-string', 'string'],
+  ['system:annotations/property/replacement', 'annotation:replacement', 'optional-string', 'string'],
   ['system:annotations/property/status', 'annotation:status', 'strict-enum', 'enum'],
   ['system:annotations/property/target', 'annotation:target', 'ref', 'ref'],
   ['system:attachments/property/media-filename', 'media:filename', 'optional-string', 'string'],
