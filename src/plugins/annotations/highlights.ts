@@ -20,7 +20,7 @@ export const MOVED_HIGHLIGHT_CLASS = 'km-annotation-highlight-moved'
 const MARK_UTILITIES = 'bg-yellow-400/30 text-inherit border-b-2 border-yellow-600/75 dark:bg-yellow-400/20'
 
 /** A highlight's look, in the editor and in read mode alike. Utilities rather
- *  than an editor theme: the app's dark variant follows `data-theme`, which
+ *  than an editor theme: the app's dark variant follows `data-theme-mode`, which
  *  an editor theme's `&dark` never sees. */
 export const highlightClasses = (moved: boolean): string =>
   moved

@@ -82,6 +82,29 @@
   }
 }
 
+/* Sonner's neutral surfaces use the palette; its semantic colours follow
+ * the root colour-scheme. Outrank Sonner's injected light-theme variables. */
+[data-theme-mode] [data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: hsl(var(--popover));
+  --normal-border: hsl(var(--border));
+  --normal-text: hsl(var(--popover-foreground));
+  --gray2: hsl(var(--muted));
+  --gray5: hsl(var(--border));
+
+  --success-bg: light-dark(hsl(143 85% 96%), hsl(150 100% 6%));
+  --success-border: light-dark(hsl(145 92% 87%), hsl(147 100% 12%));
+  --success-text: light-dark(hsl(140 100% 27%), hsl(150 86% 65%));
+  --info-bg: light-dark(hsl(208 100% 97%), hsl(215 100% 6%));
+  --info-border: light-dark(hsl(221 91% 93%), hsl(223 43% 17%));
+  --info-text: light-dark(hsl(210 92% 45%), hsl(216 87% 65%));
+  --warning-bg: light-dark(hsl(49 100% 97%), hsl(64 100% 6%));
+  --warning-border: light-dark(hsl(49 91% 84%), hsl(60 100% 9%));
+  --warning-text: light-dark(hsl(31 92% 45%), hsl(46 87% 65%));
+  --error-bg: light-dark(hsl(359 100% 97%), hsl(358 76% 10%));
+  --error-border: light-dark(hsl(359 100% 94%), hsl(357 89% 16%));
+  --error-text: light-dark(hsl(360 100% 45%), hsl(358 100% 81%));
+}
+
 /*
   Themes are selected by `data-theme` on the document root. The full
   set of palettes lives in
@@ -347,10 +370,6 @@
   img {
     max-width: 100%;
     height: auto;
-  }
-
-  html {
-    scrollbar-gutter: stable;
   }
 }
 
