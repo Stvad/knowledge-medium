@@ -1,1 +1,0 @@
-export{zf as contributorsPlugin}from"../../../chunks/app-DTt7lHjc.js";

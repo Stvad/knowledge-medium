@@ -1,1 +1,0 @@
-export{VG as geoDataExtension}from"../../../chunks/app-DTt7lHjc.js";

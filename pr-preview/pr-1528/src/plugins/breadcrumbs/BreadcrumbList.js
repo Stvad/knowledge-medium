@@ -1,1 +1,0 @@
-export{UC as BreadcrumbList}from"../../../chunks/app-DTt7lHjc.js";

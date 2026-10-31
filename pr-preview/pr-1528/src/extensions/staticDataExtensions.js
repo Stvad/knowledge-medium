@@ -1,1 +1,0 @@
-export{MU as staticDataExtensions}from"../../chunks/app-DTt7lHjc.js";

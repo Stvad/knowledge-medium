@@ -1,1 +1,0 @@
-export{YM as extensionDisplayName,XM as extensionName,ZM as userExtensionShellToggle,QM as userExtensionToggle}from"../../chunks/app-DTt7lHjc.js";
