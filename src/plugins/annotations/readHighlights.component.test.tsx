@@ -131,7 +131,7 @@ describe('read-mode highlights rendered by the comment UI', () => {
   it('draws the highlights on a comment inside its card', async () => {
     const {threadId, commentId} = await addComment(repo, {targetId: 'host', comment: 'a phrase worth keeping'})
     renderInOutline(
-      <ThreadCard thread={{id: threadId, open: true, anchor: {kind: 'block'}, suggestion: false, commentCount: 1, createdAt: 0}}/>,
+      <ThreadCard thread={{id: threadId, open: true, anchor: {kind: 'block'}, suggestion: false, commentCount: 1, quoterCount: 0, createdAt: 0}}/>,
     )
     await screen.findByText('a phrase worth keeping')
     expect(document.querySelector('mark')).toBeNull()

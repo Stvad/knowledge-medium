@@ -11,6 +11,16 @@ import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {anchorFieldProps, anchorFieldValues, threadReplacementOf} from './schema.ts'
 import {AnchorChangedError, assertQuotable, assertSuggestionAnchor, threadAndTarget} from './threads.ts'
 
+/** A quoted thread keeps a quote. Its quoters show the root's content, so
+ *  anchored to the whole block they would show the target's first line
+ *  instead, and deleting the thread would then leave them nothing. */
+export class QuotedThreadError extends Error {
+  constructor() {
+    super('This thread is quoted elsewhere, so it keeps a quote. Select new text for it instead.')
+    this.name = 'QuotedThreadError'
+  }
+}
+
 /** The anchor that confirms `anchor` where it resolves in `content` now: the
  *  same quote, with the position and context it has there. Null once the
  *  quote is stale, or when its new surroundings would widen it (the quote
@@ -26,13 +36,14 @@ export const confirmedAnchor = (content: string, anchor: RangeAnchor): RangeAnch
  *  one undo step. The new anchor must resolve exact against the target in
  *  this transaction's snapshot, as every anchor write must, so text that
  *  changed after the user looked refuses with `AnchorChangedError` and writes
- *  nothing. */
+ *  nothing. A quoted thread refuses the whole block (`QuotedThreadError`). */
 export const reanchorThread = async (repo: Repo, threadId: string, anchor: RangeAnchor | null): Promise<void> => {
   if (anchor) assertQuotable(anchor)
   await repo.tx(async tx => {
     const {root, target} = await threadAndTarget(tx, threadId)
     assertSuggestionAnchor(anchor, threadReplacementOf(root))
     if (anchor && resolveAnchor(target.content, anchor).state !== 'exact') throw new AnchorChangedError()
+    if (!anchor && await tx.hasLiveReferrer(threadId, root.workspaceId)) throw new QuotedThreadError()
 
     await tx.update(threadId, {content: anchor?.quote ?? ''})
     await tx.setProperties(threadId, anchor ? {set: anchorFieldValues(anchor)} : {unset: anchorFieldProps})

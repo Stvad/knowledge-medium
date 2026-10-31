@@ -7,6 +7,7 @@ import {isCollapsedProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {COMMENTS_PAGE_ALIAS, commentsPageBlockId} from './container'
@@ -33,7 +34,7 @@ let repo: Repo
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
-const setUp = async (extensions = [referencesDataExtension, annotationsPlugin]) => {
+const setUp = async (extensions = [referencesDataExtension, backlinksDataExtension, annotationsPlugin]) => {
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: {id: 'alex', name: 'Alex'}, extensions}).repo
   repo.setActiveWorkspaceId(WS)

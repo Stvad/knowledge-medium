@@ -23,9 +23,22 @@ import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {annotationsPlugin} from './index'
-import {annotationActions, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
+import {
+  annotationActions,
+  COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID,
+  readSelectionTarget,
+  SUGGEST_EDIT_READ_SELECTION_ACTION_ID,
+} from './actions'
+import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
+
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+
+vi.mock('@/utils/copy.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/copy.js')>(),
+  writeTextToClipboard: clipboard.write,
+}))
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -286,6 +299,23 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     expect(mapReadSelection(ends('second', 'line'), contentOf)).toEqual({kind: 'inexact'})
   })
 
+  it('copies a reference to the selected text, through the read-mode gesture', async () => {
+    clipboard.write.mockReset().mockResolvedValue(undefined)
+    await renderBlocks('rich')
+    const {node, offset} = at('bold')
+    document.getSelection()!.setBaseAndExtent(node, offset, node, offset + 'bold'.length)
+    const copy = annotationActions.find(action => action.id === COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID)!
+
+    await copy.handler({uiStateBlock: repo.block('ui-state')} as never, {} as never)
+
+    const [threadId] = await repo.query['core.typedBlockIds']({
+      workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: 'rich', sourceField: annotationTargetProp.name},
+    }).load()
+    expect((await repo.load(threadId))?.content).toBe('bold')
+    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    expect(document.getSelection()!.isCollapsed).toBe(true)
+  })
+
   describe('suggesting an edit', () => {
     const PANEL = panelRenderScopeId('panel', 'page')
     const suggest = annotationActions.find(action => action.id === SUGGEST_EDIT_READ_SELECTION_ACTION_ID)!
@@ -296,10 +326,10 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       act(() => { document.getSelection()!.setBaseAndExtent(anchorNode!, anchorOffset, focusNode!, focusOffset) })
     }
 
+    beforeEach(() => { vi.mocked(showInfo).mockClear() })
     afterEach(() => {
       document.getSelection()?.removeAllRanges()
       closeComposer(viewKey(PANEL, 'rich'))
-      vi.mocked(showInfo).mockClear()
     })
 
     it('opens the composer from the context menu on exactly the selected raw text', async () => {
