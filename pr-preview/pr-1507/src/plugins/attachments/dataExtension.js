@@ -1,1 +1,1 @@
-export{VJ as attachmentCleanerIOContribution,HJ as attachmentsDataExtension}from"../../../chunks/app-BTrYzgp5.js";
+export{HJ as attachmentCleanerIOContribution,UJ as attachmentsDataExtension}from"../../../chunks/app-Mtt69Qno.js";

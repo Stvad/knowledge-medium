@@ -1,1 +1,1 @@
-export{kF as useShortcutSurfaceActivations}from"../../chunks/app-BTrYzgp5.js";
+export{AF as useShortcutSurfaceActivations}from"../../chunks/app-Mtt69Qno.js";

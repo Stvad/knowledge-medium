@@ -1,1 +1,1 @@
-export{Bg as pickCurrentLocation}from"../../../chunks/app-BTrYzgp5.js";
+export{Vg as pickCurrentLocation}from"../../../chunks/app-Mtt69Qno.js";
