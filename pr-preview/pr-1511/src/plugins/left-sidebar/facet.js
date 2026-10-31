@@ -1,1 +1,1 @@
-export{OC as isLeftSidebarSectionContribution,kC as leftSidebarSectionsFacet}from"../../../chunks/app-B7CmRE5H.js";
+export{OC as isLeftSidebarSectionContribution,kC as leftSidebarSectionsFacet}from"../../../chunks/app-BVyWNbXJ.js";

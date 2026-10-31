@@ -1,1 +1,1 @@
-export{vit as defineQuery}from"../../../chunks/app-B7CmRE5H.js";
+export{vit as defineQuery}from"../../../chunks/app-BVyWNbXJ.js";

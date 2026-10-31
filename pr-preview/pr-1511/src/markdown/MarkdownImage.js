@@ -1,1 +1,1 @@
-export{XM as MarkdownImage}from"../../chunks/app-B7CmRE5H.js";
+export{XM as MarkdownImage}from"../../chunks/app-BVyWNbXJ.js";

@@ -1,1 +1,1 @@
-export{VU as preferredSpanReplacement}from"../../../chunks/app-B7CmRE5H.js";
+export{VU as preferredSpanReplacement}from"../../../chunks/app-BVyWNbXJ.js";
