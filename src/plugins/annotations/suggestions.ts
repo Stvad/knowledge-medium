@@ -66,7 +66,7 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     if (!suggestion) throw new InvalidSuggestionError('This thread is not an edit suggestion.')
     assertSuggestion(suggestion.anchor, suggestion.replacement)
     // The card offers Accept only while open, but may be stale.
-    if (!threadIsOpen(root)) throw new InvalidSuggestionError('This suggestion is closed. Reopen it to accept it.')
+    if (!threadIsOpen(root)) throw new InvalidSuggestionError('This suggestion is closed.')
     const resolved = resolveAnchor(target.content, suggestion.anchor)
     if (resolved.state !== 'exact') {
       throw new AnchorChangedError('The text changed since this was suggested. Confirm its position, or reselect it, to accept.')
