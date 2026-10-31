@@ -1,1 +1,0 @@
-export{mq as annotationsDataExtension}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{LC as PromotableBreadcrumbList}from"../../../chunks/app-ChZ5snIn.js";

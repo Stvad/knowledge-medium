@@ -1,1 +1,0 @@
-export{SI as captureMediaVerb}from"../../chunks/app-Bwgm2jT1.js";

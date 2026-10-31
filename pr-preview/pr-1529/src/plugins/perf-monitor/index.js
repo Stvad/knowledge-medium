@@ -1,1 +1,0 @@
-export{sr as perfMonitorPlugin}from"../../../chunks/app-ChZ5snIn.js";

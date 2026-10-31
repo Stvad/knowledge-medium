@@ -1,1 +1,0 @@
-export{VC as BreadcrumbList}from"../../../chunks/app-ChZ5snIn.js";

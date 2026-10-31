@@ -1,1 +1,0 @@
-export{ua as MigrationGate}from"../../../chunks/app-Bwgm2jT1.js";

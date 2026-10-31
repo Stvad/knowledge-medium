@@ -1,1 +1,0 @@
-export{BA as BlockEmbed}from"../../../chunks/app-Bwgm2jT1.js";

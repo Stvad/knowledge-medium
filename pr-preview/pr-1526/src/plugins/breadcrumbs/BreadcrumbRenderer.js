@@ -1,1 +1,0 @@
-export{BC as BreadcrumbRenderer}from"../../../chunks/app-Bwgm2jT1.js";

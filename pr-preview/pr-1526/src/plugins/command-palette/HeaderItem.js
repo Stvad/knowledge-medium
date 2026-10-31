@@ -1,1 +1,0 @@
-export{Jk as CommandPaletteHeaderItem}from"../../../chunks/app-Bwgm2jT1.js";

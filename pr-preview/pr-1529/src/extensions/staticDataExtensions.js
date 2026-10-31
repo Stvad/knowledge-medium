@@ -1,1 +1,0 @@
-export{AU as staticDataExtensions}from"../../chunks/app-ChZ5snIn.js";

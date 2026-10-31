@@ -1,1 +1,0 @@
-export{HC as plainOutlinerPlugin}from"../../../chunks/app-ChZ5snIn.js";

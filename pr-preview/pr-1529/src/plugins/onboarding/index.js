@@ -1,1 +1,0 @@
-export{Yx as EXTENSIONS_PAGE_TITLE,Xx as TUTORIAL_DEFAULT_TITLE,Zx as TUTORIAL_VIM_TITLE,Ix as onboardingPlugin,Jx as seedTutorial}from"../../../chunks/app-ChZ5snIn.js";

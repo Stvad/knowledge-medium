@@ -1,1 +1,0 @@
-export{Gtt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Bwgm2jT1.js";

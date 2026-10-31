@@ -1,1 +1,0 @@
-export{KA as DEFAULT_TYPE_COLORS,qA as defaultTypeColor,JA as pickLeastUsedTypeColor}from"../../chunks/app-ChZ5snIn.js";

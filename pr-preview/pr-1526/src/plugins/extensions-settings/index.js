@@ -1,1 +1,0 @@
-export{jp as extensionsOverridesProp,Mp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{Lg as updateIndicatorPlugin}from"../../../chunks/app-ChZ5snIn.js";

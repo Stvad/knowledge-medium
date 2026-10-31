@@ -1,1 +1,0 @@
-export{IC as usePromotableBreadcrumb}from"../../../chunks/app-ChZ5snIn.js";

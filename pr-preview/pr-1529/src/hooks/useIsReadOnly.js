@@ -1,1 +1,0 @@
-export{kv as useIsReadOnly}from"../../chunks/app-ChZ5snIn.js";

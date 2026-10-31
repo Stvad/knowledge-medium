@@ -1,1 +1,0 @@
-export{FA as BlockEmbed}from"../../../chunks/app-ChZ5snIn.js";

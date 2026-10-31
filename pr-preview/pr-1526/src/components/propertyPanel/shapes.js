@@ -1,1 +1,0 @@
-export{IH as propertyShapeLabel}from"../../../chunks/app-Bwgm2jT1.js";

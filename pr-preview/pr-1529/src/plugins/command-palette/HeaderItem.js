@@ -1,1 +1,0 @@
-export{Uk as CommandPaletteHeaderItem}from"../../../chunks/app-ChZ5snIn.js";

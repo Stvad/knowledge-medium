@@ -1,1 +1,0 @@
-export{Bg as UpdateIndicator}from"../../../chunks/app-Bwgm2jT1.js";

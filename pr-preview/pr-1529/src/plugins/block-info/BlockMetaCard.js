@@ -1,1 +1,0 @@
-export{Ig as BlockMetaCard}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{XQ as ClientContext}from"../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{XA as chipStyle}from"../../../chunks/app-Bwgm2jT1.js";

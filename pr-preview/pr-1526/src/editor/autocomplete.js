@@ -1,1 +1,0 @@
-export{Wj as editorAutocompleteExtension}from"../../chunks/app-Bwgm2jT1.js";

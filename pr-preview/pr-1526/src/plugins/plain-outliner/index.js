@@ -1,1 +1,0 @@
-export{WC as plainOutlinerPlugin}from"../../../chunks/app-Bwgm2jT1.js";

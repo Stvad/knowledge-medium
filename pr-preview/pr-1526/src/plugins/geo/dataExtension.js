@@ -1,1 +1,0 @@
-export{WG as geoDataExtension}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{jC as mobileBottomNavItemsFacet}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{ua as MigrationGate}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{qM as extensionDisplayName,JM as extensionName,YM as userExtensionShellToggle,XM as userExtensionToggle}from"../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{lS as COLEMAK_KEYBINDINGS_PLUGIN_ID,uS as colemakKeybindingsPlugin,dS as colemakMovementKeybindingOverrides}from"../../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{X_ as referencesPlugin}from"../../../chunks/app-Bwgm2jT1.js";

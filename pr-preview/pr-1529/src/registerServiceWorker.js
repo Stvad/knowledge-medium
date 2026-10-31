@@ -1,1 +1,0 @@
-export{dM as checkForAppUpdate,fM as registerServiceWorker}from"../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{cU as SuspenseFallback}from"../../../chunks/app-ChZ5snIn.js";

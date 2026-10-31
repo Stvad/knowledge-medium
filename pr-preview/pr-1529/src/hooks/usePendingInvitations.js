@@ -1,1 +1,0 @@
-export{wT as usePendingInvitations}from"../../chunks/app-ChZ5snIn.js";

@@ -1,1 +1,0 @@
-export{KX as omnilinerNamespace}from"../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{Uq as annotationMarginOpenProp}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{ki as startupMetricsPlugin}from"../../../chunks/app-Bwgm2jT1.js";

@@ -1,1 +1,0 @@
-export{fw as isLeftSidebarSectionContribution,pw as leftSidebarSectionsFacet}from"../../../chunks/app-ChZ5snIn.js";

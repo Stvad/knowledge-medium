@@ -1,1 +1,0 @@
-export{YA as TypeChip}from"../../../chunks/app-Bwgm2jT1.js";
