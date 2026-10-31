@@ -23,6 +23,8 @@ export interface ComposerState {
   /** null comments on the whole block. */
   anchor: RangeAnchor | null
   draft: string
+  /** Present for an edit suggestion: the text to replace the quote with. */
+  replacement?: string
   error: string | null
   /** A submit is in flight; another one would write the same draft twice. */
   submitting: boolean
@@ -41,22 +43,42 @@ export const toggleShowResolved = showingResolved.toggle
 export const useThreadsExpanded = expanded.useHas
 export const useShowResolved = showingResolved.useHas
 
+/** A replacement the user changed from its prefill (the quote), worth keeping
+ *  across a re-aim; an untouched prefill follows the new quote. */
+const editedReplacement = (current: ComposerState | undefined): string | undefined =>
+  current?.replacement !== current?.anchor?.quote ? current?.replacement : undefined
+
 /** Open (or re-aim) a composer, keeping a draft already typed there: a submit
  *  refused because the text changed keeps the draft, and the user's next
- *  selection re-aims it. Expands the block's threads. */
-export const openComposer = (key: string, targetId: string, anchor: RangeAnchor | null): void => {
-  composers.set(key, {targetId, anchor, draft: composers.get(key)?.draft ?? '', error: null, submitting: false})
+ *  selection re-aims it. A suggestion's replacement is kept the same way once
+ *  edited, and otherwise starts as `replacement`. Expands the block's
+ *  threads. */
+export const openComposer = (
+  key: string,
+  targetId: string,
+  anchor: RangeAnchor | null,
+  {replacement}: {replacement?: string} = {},
+): void => {
+  const current = composers.get(key)
+  composers.set(key, {
+    targetId,
+    anchor,
+    draft: current?.draft ?? '',
+    replacement: replacement === undefined ? undefined : editedReplacement(current) ?? replacement,
+    error: null,
+    submitting: false,
+  })
   expanded.add(key)
   listeners.notify()
 }
 
-/** The draft is frozen while a submit is in flight: the submit already took
- *  the text, and closes the composer when it lands, so later typing would be
+/** The text is frozen while a submit is in flight: the submit already took
+ *  it, and closes the composer when it lands, so later typing would be
  *  dropped unsaved. */
 export const updateComposer = (key: string, patch: Partial<Omit<ComposerState, 'targetId'>>): void => {
   const current = composers.get(key)
   if (!current) return
-  if (current.submitting && patch.draft !== undefined) return
+  if (current.submitting && (patch.draft !== undefined || patch.replacement !== undefined)) return
   composers.set(key, {...current, ...patch})
   listeners.notify()
 }

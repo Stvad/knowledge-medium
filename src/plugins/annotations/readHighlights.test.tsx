@@ -43,12 +43,14 @@ const render = (content: string, ranges: readonly HighlightRange[] | null, resol
 const MARK = /<mark class="([^"]*)">([\s\S]*?)<\/mark>/g
 const stripMarks = (html: string) => html.replace(/<mark class="[^"]*">|<\/mark>/g, '')
 const marks = (html: string) => [...html.matchAll(MARK)].map(m => ({moved: m[1].includes("km-annotation-highlight-moved"), html: m[2]}))
+const suggestionMarks = (html: string) =>
+  [...html.matchAll(MARK)].map(m => ({suggestion: m[1].includes('km-annotation-highlight-suggestion'), html: m[2]}))
 
 const range = (content: string, quote: string, moved = false, nth = 0): HighlightRange => {
   let from = -1
   for (let i = 0; i <= nth; i++) from = content.indexOf(quote, from + 1)
   if (from < 0) throw new Error(`no ${quote}`)
-  return {from, to: from + quote.length, moved}
+  return {from, to: from + quote.length, moved, suggestion: false}
 }
 
 /** The marks change nothing else: the same tree renders once they are taken
@@ -134,7 +136,7 @@ describe('read-mode marks', () => {
   it('draws nothing inside text whose rendered value differs from its source', () => {
     const content = 'A \\*literal\\* star &amp; more.'
     expect(marked(content, [range(content, 'literal')])).toEqual([])
-    expect(marked(content, [{from: 0, to: content.length, moved: false}]).map(m => m.html)).toEqual(['A *literal* star &amp; more.'])
+    expect(marked(content, [{from: 0, to: content.length, moved: false, suggestion: false}]).map(m => m.html)).toEqual(['A *literal* star &amp; more.'])
   })
 
   it('marks text the autolink literal split, by its recovered position', () => {
@@ -156,6 +158,27 @@ describe('read-mode marks', () => {
     expect(result).toEqual([{moved: false, html: 'one two three'}, {moved: true, html: ' four'}])
   })
 
+  it('styles a suggestion\'s quote as its own, and wins where it overlaps a comment\'s', () => {
+    const content = 'one two three four'
+    const ranges = [range(content, 'one two'), {...range(content, 'two three'), suggestion: true}]
+    const html = render(content, ranges)
+    expect(stripMarks(html)).toBe(render(content, null))
+    expect(suggestionMarks(html)).toEqual([
+      {suggestion: false, html: 'one '},
+      {suggestion: true, html: 'two three'},
+    ])
+  })
+
+  it('styles an overlap by the winning style only: a moved suggestion over an exact comment stays moved', () => {
+    const content = 'aaaaa bbbbb ccccc'
+    const ranges = [range(content, 'aaaaa bbbbb'), {...range(content, 'bbbbb ccccc', true), suggestion: true}]
+    const html = render(content, ranges)
+    expect([...html.matchAll(MARK)].map(m => [m[2], m[1].includes('-suggestion'), m[1].includes('-moved')])).toEqual([
+      ['aaaaa ', false, false],
+      ['bbbbb ccccc', true, true],
+    ])
+  })
+
   it('marks across paragraphs and list items, one mark per text run', () => {
     const content = 'First para end.\n\n- item one\n- item two'
     expect(marked(content, [range(content, 'end.\n\n- item one')]).map(m => m.html)).toEqual(['end.', 'item one'])
@@ -167,9 +190,9 @@ describe('read-mode marks', () => {
     const entity = 'See [[P]]&amp;amp;'
     expect(marked(entity, [range(entity, '&amp;')])).toEqual([])
     const escapes = 'Share \\\\[[Server]]'
-    expect(marked(escapes, [{from: 6, to: 8, moved: false}])).toEqual([])
+    expect(marked(escapes, [{from: 6, to: 8, moved: false, suggestion: false}])).toEqual([])
     const quoted = '> a 1:23\n> \\>[[P]] z'
-    expect(marked(quoted, [{from: 9, to: 11, moved: false}])).toEqual([])
+    expect(marked(quoted, [{from: 9, to: 11, moved: false, suggestion: false}])).toEqual([])
     // Plain text beside a token still draws.
     const plain = 'Tom & Jerry [[P]] later'
     expect(marked(plain, [range(plain, 'Jerry')]).map(m => m.html)).toEqual(['Jerry'])
@@ -189,7 +212,7 @@ describe('read-mode marks', () => {
 describe('the highlight feed', () => {
   const B = {id: 'B'} as unknown as Block
   const thread = (commentCount: number): ThreadSummary => ({
-    id: 'T', open: true, commentCount, createdAt: 0,
+    id: 'T', open: true, suggestion: false, commentCount, createdAt: 0,
     anchor: {kind: 'range', quote: 'moved', quoteStart: 3, prefix: 'We ', suffix: ' it'},
   })
   const config = (feed: unknown, blockContext: BlockContextType) => threadMarksMarkdownExtension({

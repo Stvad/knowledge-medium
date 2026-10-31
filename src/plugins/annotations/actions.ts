@@ -20,6 +20,7 @@ import {
   startReanchor,
   updateComposer,
   viewKey,
+  type ComposerState,
 } from './uiStore.ts'
 
 export const COMMENT_ON_SELECTION_ACTION_ID = 'annotations.commentOnSelection'
@@ -27,14 +28,33 @@ export const HIGHLIGHT_SELECTION_ACTION_ID = 'annotations.highlightSelection'
 export const COMMENT_ON_BLOCK_ACTION_ID = 'annotations.commentOnBlock'
 export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
 
-/** The selection's anchor as the user sees it. The stored row lags the editor
- *  by its debounce, so the pending write is flushed first; it lands on the
- *  write lock ahead of the creating tx, whose exact check then reads it. */
-export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
+/** A raw range of a block's content: what an editor selection maps to, and
+ *  what any other trigger that can name a range of the text hands over. */
+export interface ContentRange {
+  content: string
+  from: number
+  to: number
+}
+
+/** The editor's selection as the user sees it. The stored row lags the
+ *  editor by its debounce, so the pending write is flushed first; it lands on
+ *  the write lock ahead of the creating tx, whose exact check then reads it. */
+export const rangeFromEditor = (view: EditorView): ContentRange => {
   flushEditorContent(view)
   const {from, to} = view.state.selection.main
-  return captureAnchor(view.state.doc.toString(), from, to)
+  return {content: view.state.doc.toString(), from, to}
 }
+
+export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
+  const {content, from, to} = rangeFromEditor(view)
+  return captureAnchor(content, from, to)
+}
+
+/** Has the composer what its submit writes: a comment, or for a suggestion
+ *  a replacement (its comment is optional). The replacement is taken as
+ *  typed, whitespace included. */
+export const composerReady = (composer: ComposerState): boolean =>
+  composer.replacement !== undefined ? composer.replacement !== '' : composer.draft.trim() !== ''
 
 /** Write the composer's draft as a new thread. A target that changed under the
  *  selection keeps the composer open with its draft and the reason, so the
@@ -42,11 +62,15 @@ export const anchorFromEditor = (view: EditorView): RangeAnchor | null => {
  *  refused: both would capture the same draft. */
 export const submitComposer = async (repo: Repo, key: string): Promise<boolean> => {
   const composer = peekComposer(key)
-  const comment = composer?.draft.trim()
-  if (!composer || !comment || composer.submitting) return false
+  if (!composer || !composerReady(composer) || composer.submitting) return false
   updateComposer(key, {submitting: true})
   try {
-    await createThread(repo, {targetId: composer.targetId, anchor: composer.anchor, comment})
+    await createThread(repo, {
+      targetId: composer.targetId,
+      anchor: composer.anchor,
+      comment: composer.draft.trim(),
+      replacement: composer.replacement,
+    })
   } catch (error) {
     if (isThreadRefusal(error)) {
       updateComposer(key, {error: error.message, submitting: false})
@@ -62,7 +86,7 @@ export const submitComposer = async (repo: Repo, key: string): Promise<boolean> 
 /** The composer renders under outline blocks only, so the gestures run only
  *  there: in a backlinks entry, an embed or a comment card they would open a
  *  composer nothing shows. */
-const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
+export const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
   renderScopeId === undefined || isPanelRenderScopeId(renderScopeId)
 
 const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
