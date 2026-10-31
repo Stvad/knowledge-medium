@@ -1,1 +1,1 @@
-export{Wk as TypeChip}from"../../../chunks/app-Ck98Y4aE.js";
+export{Wk as TypeChip}from"../../../chunks/app-B7z8yLF8.js";

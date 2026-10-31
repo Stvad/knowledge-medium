@@ -1,1 +1,1 @@
-export{TV as usePropertySchemas}from"../../chunks/app-Ck98Y4aE.js";
+export{TV as usePropertySchemas}from"../../chunks/app-B7z8yLF8.js";

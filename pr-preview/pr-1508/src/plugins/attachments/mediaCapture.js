@@ -1,1 +1,1 @@
-export{py as DEFAULT_MAX_CAPTURE_BYTES,my as captureMedia,hy as mediaBlockId}from"../../../chunks/app-Ck98Y4aE.js";
+export{py as DEFAULT_MAX_CAPTURE_BYTES,my as captureMedia,hy as mediaBlockId}from"../../../chunks/app-B7z8yLF8.js";
