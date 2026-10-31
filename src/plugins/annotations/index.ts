@@ -11,6 +11,7 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContextMenuItemsFacet,
+  blockLayoutFacet,
 } from '@/extensions/blockInteraction.js'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
@@ -26,6 +27,8 @@ import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
+import {quotedRangeLayoutContribution} from './quotedRange.tsx'
+import {copyRangeReferenceAction} from './rangeRefs.ts'
 import {readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
   commentActionsContribution,
@@ -45,6 +48,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   annotationsDataExtension,
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
+  actionsFacet.of(copyRangeReferenceAction, {source: SOURCE}),
   appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
@@ -52,6 +56,8 @@ export const annotationsPlugin: AppExtension = systemToggle({
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
   blockContentRendererFacet.of(threadRootContentContribution, {source: SOURCE}),
+  // Over the references plugin's reference layout, which it replaces for roots.
+  blockLayoutFacet.of(quotedRangeLayoutContribution, {source: SOURCE, precedence: 10}),
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
   // After every other markdown extension (default precedence), so its
