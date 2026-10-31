@@ -1,1 +1,1 @@
-export{VC as BreadcrumbList}from"../../../chunks/app-CWRU_Kki.js";
+export{UC as BreadcrumbList}from"../../../chunks/app-DSbkyl0t.js";

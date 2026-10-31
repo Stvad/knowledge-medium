@@ -1,1 +1,1 @@
-export{ux as default}from"../../../chunks/app-CWRU_Kki.js";
+export{fx as default}from"../../../chunks/app-DSbkyl0t.js";

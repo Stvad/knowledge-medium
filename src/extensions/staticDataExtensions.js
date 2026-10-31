@@ -1,1 +1,1 @@
-export{NU as staticDataExtensions}from"../../chunks/app-CWRU_Kki.js";
+export{FU as staticDataExtensions}from"../../chunks/app-DSbkyl0t.js";

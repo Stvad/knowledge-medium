@@ -1,1 +1,1 @@
-export{or as openExtensionsSettingsAction}from"../../../chunks/app-CWRU_Kki.js";
+export{or as openExtensionsSettingsAction}from"../../../chunks/app-DSbkyl0t.js";

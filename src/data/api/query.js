@@ -1,1 +1,1 @@
-export{sat as defineQuery}from"../../../chunks/app-CWRU_Kki.js";
+export{lat as defineQuery}from"../../../chunks/app-DSbkyl0t.js";

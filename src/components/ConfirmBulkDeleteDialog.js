@@ -1,1 +1,1 @@
-export{AP as ConfirmBulkDeleteDialog}from"../../chunks/app-CWRU_Kki.js";
+export{MP as ConfirmBulkDeleteDialog}from"../../chunks/app-DSbkyl0t.js";

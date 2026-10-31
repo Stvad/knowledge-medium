@@ -1,1 +1,1 @@
-export{gw as WorkspaceSettingsDialog}from"../../../chunks/app-CWRU_Kki.js";
+export{vw as WorkspaceSettingsDialog}from"../../../chunks/app-DSbkyl0t.js";

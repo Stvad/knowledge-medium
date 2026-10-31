@@ -1,1 +1,1 @@
-export{ON as BlockLoadingPlaceholder}from"../../chunks/app-CWRU_Kki.js";
+export{AN as BlockLoadingPlaceholder}from"../../chunks/app-DSbkyl0t.js";

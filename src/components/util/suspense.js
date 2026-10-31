@@ -1,1 +1,1 @@
-export{dU as SuspenseFallback}from"../../../chunks/app-CWRU_Kki.js";
+export{pU as SuspenseFallback}from"../../../chunks/app-DSbkyl0t.js";

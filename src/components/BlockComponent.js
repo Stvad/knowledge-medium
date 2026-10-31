@@ -1,1 +1,1 @@
-export{CN as BlockChildren,wN as BlockComponent}from"../../chunks/app-CWRU_Kki.js";
+export{TN as BlockChildren,EN as BlockComponent}from"../../chunks/app-DSbkyl0t.js";

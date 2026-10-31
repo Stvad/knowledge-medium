@@ -1,1 +1,1 @@
-export{ox as videoPlayerPlugin}from"../../../chunks/app-CWRU_Kki.js";
+export{cx as videoPlayerPlugin}from"../../../chunks/app-DSbkyl0t.js";
