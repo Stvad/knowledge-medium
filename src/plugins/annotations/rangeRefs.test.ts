@@ -108,6 +108,30 @@ describe('threadForRange', () => {
     expect(await copyAt(0, 2, repeated)).not.toBe(one)
   })
 
+  it('prefers a thread exact on the text over one that only moved onto it', async () => {
+    const {threadId: moved} = await createThread(repo, {targetId: 'B', anchor: anchorFor('Thursday'), comment: 'Confirmed?'})
+    const edited = `Note: ${B_TEXT}`
+    await repo.tx(tx => tx.update('B', {content: edited}), opts)
+    const {threadId: exact} = await createThread(repo, {targetId: 'B', anchor: anchorFor('Thursday', edited)})
+    await vi.waitFor(async () => expect(await threadsOnB()).toHaveLength(2))
+
+    expect(await copy('Thursday', edited)).toBe(exact)
+    expect(moved).not.toBe(exact)
+  })
+
+  it('reads the selection’s text, which can run ahead of the stored row', async () => {
+    const first = await copy('Thursday')
+
+    expect(await copy('Thursday', `Note: ${B_TEXT}`)).toBe(first)
+  })
+
+  it('passes over a whole-block thread', async () => {
+    const {threadId: whole} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'About all of it'})
+    await vi.waitFor(async () => expect(await threadsOnB()).toEqual([whole]))
+
+    expect(await copy('Thursday')).not.toBe(whole)
+  })
+
   it('does not reuse a resolved thread', async () => {
     const resolved = await copy('Thursday')
     await setThreadStatus(repo, resolved, 'resolved')
