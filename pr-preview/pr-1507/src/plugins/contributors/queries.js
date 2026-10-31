@@ -1,1 +1,1 @@
-export{UK as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,WK as contributorProfilesByIdsQuery}from"../../../chunks/app-wA_ZKG6o.js";
+export{UK as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,WK as contributorProfilesByIdsQuery}from"../../../chunks/app-DeDN0YIX.js";

@@ -1,1 +1,1 @@
-export{set as AliasSeatNamespaceUnavailableError,cet as aliasSeatNamespacesInTx,let as resolveAliasSeatNamespaces}from"../../chunks/app-wA_ZKG6o.js";
+export{set as AliasSeatNamespaceUnavailableError,cet as aliasSeatNamespacesInTx,let as resolveAliasSeatNamespaces}from"../../chunks/app-DeDN0YIX.js";

@@ -1,1 +1,1 @@
-export{tet as getOrCreateTypesPage,net as typesPageBlockId,ret as typesPageSpec}from"../../chunks/app-wA_ZKG6o.js";
+export{tet as getOrCreateTypesPage,net as typesPageBlockId,ret as typesPageSpec}from"../../chunks/app-DeDN0YIX.js";

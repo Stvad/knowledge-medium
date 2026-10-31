@@ -1,1 +1,1 @@
-export{rit as defineQuery}from"../../../chunks/app-wA_ZKG6o.js";
+export{rit as defineQuery}from"../../../chunks/app-DeDN0YIX.js";

@@ -1,1 +1,1 @@
-export{Hj as dynamicExtensionsExtension}from"../../chunks/app-wA_ZKG6o.js";
+export{Hj as dynamicExtensionsExtension}from"../../chunks/app-DeDN0YIX.js";

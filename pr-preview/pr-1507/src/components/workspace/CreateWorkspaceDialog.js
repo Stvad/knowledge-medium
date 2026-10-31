@@ -1,1 +1,1 @@
-export{FC as CreateWorkspaceDialog}from"../../../chunks/app-wA_ZKG6o.js";
+export{FC as CreateWorkspaceDialog}from"../../../chunks/app-DeDN0YIX.js";
