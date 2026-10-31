@@ -72,6 +72,21 @@ const openWithSelection = async () => {
 }
 
 describe('command palette document selection', () => {
+  it.each(['number', 'date', 'email'])('opens from a focused %s input without native selection support', async type => {
+    render(<><input aria-label="Property value" type={type}/><CommandPalette/></>)
+    const prior = screen.getByLabelText('Property value')
+    prior.focus()
+    expect(document.activeElement).toBe(prior)
+    expect((prior as HTMLInputElement).selectionStart).toBeNull()
+
+    act(() => commandPaletteToggle.open())
+
+    const input = await screen.findByPlaceholderText('Type a command or search...')
+    expect(document.activeElement).toBe(input)
+    fireEvent.click(await screen.findByText('Inspect selection'))
+    expect(state.selected).toHaveBeenCalledWith('')
+  })
+
   it('lists and runs a selection action after autofocus, context updates and searching', async () => {
     const {view, input} = await openWithSelection()
     // Context activation can invalidate discovery after the input took focus.

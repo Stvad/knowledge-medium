@@ -38,7 +38,7 @@ export const restoreSelection = (saved: SavedSelection | null): void => {
 export const withSelection = <T>(saved: SavedSelection | null, read: () => T): T => {
   const current = captureRange()
   const focused = document.activeElement
-  const inputSelection = focused instanceof HTMLInputElement ? {
+  const inputSelection = focused instanceof HTMLInputElement && focused.selectionStart !== null ? {
     input: focused, start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection,
   } : null
   try {
