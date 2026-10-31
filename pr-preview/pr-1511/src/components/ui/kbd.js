@@ -1,1 +1,1 @@
-export{ok as Kbd}from"../../../chunks/app-CtjI1kdO.js";
+export{sk as Kbd}from"../../../chunks/app-DWjtRwiQ.js";

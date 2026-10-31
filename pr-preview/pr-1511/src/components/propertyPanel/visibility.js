@@ -1,1 +1,1 @@
-export{Vz as isPropertyPanelHiddenProperty,Hz as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-CtjI1kdO.js";
+export{Hz as isPropertyPanelHiddenProperty,Uz as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-DWjtRwiQ.js";

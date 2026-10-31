@@ -1,1 +1,1 @@
-export{YX as instrumentAdapter}from"../../../chunks/app-CtjI1kdO.js";
+export{XX as instrumentAdapter}from"../../../chunks/app-DWjtRwiQ.js";

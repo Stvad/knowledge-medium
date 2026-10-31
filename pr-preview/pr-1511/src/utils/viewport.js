@@ -1,1 +1,1 @@
-export{LR as MOBILE_BREAKPOINT_QUERY,RR as POINTER_COARSE_QUERY,zR as isMobileViewport,BR as isPointerCoarse}from"../../chunks/app-CtjI1kdO.js";
+export{RR as MOBILE_BREAKPOINT_QUERY,zR as POINTER_COARSE_QUERY,BR as isMobileViewport,VR as isPointerCoarse}from"../../chunks/app-DWjtRwiQ.js";
