@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {cleanup, render, screen} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
@@ -18,13 +18,20 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
-import {outlineRenderScopeId} from '@/utils/renderScope'
+import {backlinkRenderScopeId, outlineRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
+import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {annotationsPlugin} from './index'
-import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionTarget} from './actions'
+import {
+  annotationActions,
+  COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID,
+  readSelectionTarget,
+  SUGGEST_EDIT_READ_SELECTION_ACTION_ID,
+} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
+import {closeComposer, peekComposer, viewKey} from './uiStore'
 
 const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
 
@@ -62,6 +69,11 @@ vi.mock('@/data/globalState.ts', async () => {
     useIsSelected: (): boolean => false,
   }
 })
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: vi.fn(),
+}))
 
 vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
   LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
@@ -124,11 +136,11 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderBlocks = async (...ids: string[]) => {
+  const renderIn = async (renderScopeId: string, ids: string[]) => {
     const settled = ids.includes('host') ? 'x' : ids.includes(SELF) ? 'bar' : 'Referenced words'
     render(
       <AppRuntimeContextProvider value={repo.facetRuntime!}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: outlineRenderScopeId('page')}}>
+        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId}}>
           <ActiveContextsProvider>
             {ids.map(id => <DefaultBlockRenderer key={id} block={repo.block(id)}/>)}
           </ActiveContextsProvider>
@@ -137,6 +149,8 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     )
     await screen.findAllByText(settled, {exact: false})
   }
+
+  const renderBlocks = (...ids: string[]) => renderIn(outlineRenderScopeId('page'), ids)
 
   /** The text node holding `text` (its first occurrence, or the `nth`), and
    *  the offset of `text` in it. */
@@ -300,5 +314,55 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     expect((await repo.load(threadId))?.content).toBe('bold')
     expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
     expect(document.getSelection()!.isCollapsed).toBe(true)
+  })
+
+  describe('suggesting an edit', () => {
+    const PANEL = panelRenderScopeId('panel', 'page')
+    const suggest = annotationActions.find(action => action.id === SUGGEST_EDIT_READ_SELECTION_ACTION_ID)!
+    const dispatch = () => suggest.handler({uiStateBlock: repo.block('ui-state')} as never, new KeyboardEvent('keydown'))
+
+    const select = (from: string, to: string) => {
+      const {anchorNode, anchorOffset, focusNode, focusOffset} = ends(from, to)
+      act(() => { document.getSelection()!.setBaseAndExtent(anchorNode!, anchorOffset, focusNode!, focusOffset) })
+    }
+
+    beforeEach(() => { vi.mocked(showInfo).mockClear() })
+    afterEach(() => {
+      document.getSelection()?.removeAllRanges()
+      closeComposer(viewKey(PANEL, 'rich'))
+    })
+
+    it('opens the composer from the context menu on exactly the selected raw text', async () => {
+      await renderIn(PANEL, ['rich'])
+      select('old', 'and')
+      fireEvent.contextMenu(at('old').node.parentElement!)
+      fireEvent.click(await screen.findByRole('menuitem', {name: 'Suggest edit'}))
+      const quote = 'old** text, see [[Launch plan]] and'
+      expect(await screen.findByLabelText('Replacement')).toHaveProperty('value', quote)
+      expect(peekComposer(viewKey(PANEL, 'rich'))?.anchor).toMatchObject({quote, quoteStart: RICH.indexOf(quote)})
+    })
+
+    it('refuses a selection across blocks, or ending inside a rendered reference', async () => {
+      await renderIn(PANEL, ['rich', 'other'])
+      select('Some', 'Another')
+      await dispatch()
+      select('see', 'Launch')
+      await dispatch()
+      expect(vi.mocked(showInfo).mock.calls).toEqual([
+        ['Select text within one block.'],
+        [expect.stringMatching(/^Can’t tell exactly which text that is/)],
+      ])
+      expect(peekComposer(viewKey(PANEL, 'rich'))).toBeUndefined()
+    })
+
+    it('refuses off the outline, where no composer renders', async () => {
+      const backlink = backlinkRenderScopeId(PANEL, 'x')
+      await renderIn(backlink, ['rich'])
+      select('Some', 'text')
+      expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', renderScopeId: backlink, from: 0, to: 18})
+      await dispatch()
+      expect(peekComposer(viewKey(backlink, 'rich'))).toBeUndefined()
+      expect(showInfo).toHaveBeenCalledWith('Open the block in its page to suggest an edit to it.')
+    })
   })
 })

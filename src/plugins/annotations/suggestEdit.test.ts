@@ -3,18 +3,28 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {EditorSelection, EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {ChangeScope} from '@/data/api'
-import {focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
+import {exitEditModeForBlock, focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope.js'
-import {submitComposer} from './actions'
+import {showInfo} from '@/utils/toast.js'
+import {annotationActions, SUGGEST_EDIT_ACTION_ID, submitComposer} from './actions'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadReplacementOf} from './schema'
-import {openSuggestionComposer, suggestEditAction} from './suggestActions'
 import {closeComposer, openComposer, peekComposer, updateComposer, viewKey} from './uiStore'
+
+vi.mock('@/data/properties.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/data/properties.js')>()
+  return {...actual, exitEditModeForBlock: vi.fn(actual.exitEditModeForBlock)}
+})
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: vi.fn(),
+}))
 
 const WS = 'ws'
 const TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -40,6 +50,7 @@ afterEach(() => {
   view?.destroy()
   view = null
   closeComposer(KEY)
+  vi.clearAllMocks()
 })
 
 const editorSelecting = (quote: string) => {
@@ -48,6 +59,8 @@ const editorSelecting = (quote: string) => {
   view.dispatch({selection: EditorSelection.single(from, from + quote.length)})
   return view
 }
+
+const suggestEditAction = annotationActions.find(action => action.id === SUGGEST_EDIT_ACTION_ID)!
 
 const suggest = (editor: EditorView, renderScopeId = PANEL) => suggestEditAction.handler(
   {block: repo.block('B'), uiStateBlock: repo.block('ui'), renderScopeId, editorView: editor} as never,
@@ -71,6 +84,8 @@ describe('suggesting an edit to a selection', () => {
     view = new EditorView({state: EditorState.create({doc: TEXT})})
     await suggest(view)
     expect(peekComposer(KEY)).toBeUndefined()
+    expect(showInfo).toHaveBeenCalledWith('Select the text to suggest a change to.')
+    expect(vi.mocked(exitEditModeForBlock).mock.calls.map(([, blockId]) => blockId)).toEqual([])
 
     const nested = backlinkRenderScopeId(PANEL, 'x')
     expect(suggestEditAction.isVisible!({renderScopeId: nested} as never)).toBe(false)
@@ -78,12 +93,10 @@ describe('suggesting an edit to a selection', () => {
     expect(peekComposer(viewKey(nested, 'B'))).toBeUndefined()
   })
 
-  it('opens from a raw range of the text, widened to whole reference spans, as a read-mode trigger would', () => {
-    const content = 'See [[Launch plan]] for dates.'
-    expect(openSuggestionComposer('B', PANEL, {content, from: 8, to: 12})).toBe(true)
+  it('widens the selection to whole reference spans', async () => {
+    view = new EditorView({state: EditorState.create({doc: 'See [[Launch plan]] for dates.', selection: EditorSelection.single(8, 12)})})
+    await suggest(view)
     expect(peekComposer(KEY)).toMatchObject({anchor: {quote: '[[Launch plan]]', quoteStart: 4}, replacement: '[[Launch plan]]'})
-    expect(openSuggestionComposer('C', PANEL, {content, from: 3, to: 3})).toBe(false)
-    expect(peekComposer(viewKey(PANEL, 'C'))).toBeUndefined()
   })
 
   it('writes a suggestion with no comment, and with one', async () => {

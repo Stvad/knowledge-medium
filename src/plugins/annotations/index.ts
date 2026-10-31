@@ -23,9 +23,9 @@ import {
   COMMENT_ON_SELECTION_ACTION_ID,
   keepSelectionOnClick,
   readSelectionContext,
+  SUGGEST_EDIT_ACTION_ID,
 } from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
-import {SUGGEST_EDIT_ACTION_ID, suggestEditAction} from './suggestActions.ts'
 import {threadHighlightsContribution} from './highlights.ts'
 import {CommentMargin, MarginHeaderItem} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
@@ -52,7 +52,6 @@ export const annotationsPlugin: AppExtension = systemToggle({
   dialogAppMountExtension, // asking before deleting a quoted thread
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
-  actionsFacet.of(suggestEditAction, {source: SOURCE}),
   threadNavigationContribution,
   appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
