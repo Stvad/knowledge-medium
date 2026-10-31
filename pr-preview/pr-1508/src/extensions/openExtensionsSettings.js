@@ -1,1 +1,1 @@
-export{KM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,qM as openExtensionsSettings}from"../../chunks/app-B7z8yLF8.js";
+export{qM as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,JM as openExtensionsSettings}from"../../chunks/app-DJj5Jum9.js";
