@@ -9,9 +9,12 @@ import {
 } from '@/components/ui/context-menu.js'
 import {keepFocusAnItemMoved} from '@/components/renderer/DefaultBlockRenderer.js'
 import type {AppMountContribution} from '@/extensions/core.js'
+import {cachedContentDecorator, type BlockContentDecoratorContribution} from '@/extensions/blockInteraction.js'
+import type {BlockRenderer} from '@/types.js'
 import {useActionContext} from '@/shortcuts/useActionContext.js'
 import {
   READ_SELECTION_CONTEXT,
+  gestureRunsHere,
   readSelectionGestures,
   readSelectionTarget,
   reportFailure,
@@ -43,6 +46,7 @@ export const readSelectionShortcutsMount: AppMountContribution = {
  */
 export const ReadSelectionMenu = ({block, children}: {block: Block; children: ReactElement}) => {
   const {renderScopeId} = useBlockContext()
+  const gestures = readSelectionGestures.filter(gesture => gestureRunsHere(gesture, {renderScopeId}))
   const holds = useHoldsReadSelection(block.id, renderScopeId)
   const [target, setTarget] = useState<SelectionTarget | string | null>(null)
   return (
@@ -50,14 +54,14 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
       {/* Radix sets a touch-callout of none on its trigger, for a menu of
           its own on long-press; this trigger is the content, which keeps the
           callout its ancestors give it (touch selection turns it off). */}
-      <ContextMenuTrigger asChild disabled={!holds} style={{WebkitTouchCallout: 'inherit'}}>
+      <ContextMenuTrigger asChild disabled={!holds || gestures.length === 0} style={{WebkitTouchCallout: 'inherit'}}>
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent
         className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
         onCloseAutoFocus={keepFocusAnItemMoved}
       >
-        {readSelectionGestures.map(gesture => (
+        {gestures.map(gesture => (
           <ContextMenuItem
             key={gesture.actionId}
             className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
@@ -71,3 +75,14 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
     </ContextMenu>
   )
 }
+
+const NestedReadSelectionMenu = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => (
+  <ReadSelectionMenu block={block}>
+    <div className="min-w-0 w-full"><Inner block={block}/></div>
+  </ReadSelectionMenu>
+)
+
+const decorateNestedMenu = cachedContentDecorator(NestedReadSelectionMenu, 'WithReadSelectionMenu')
+
+export const nestedReadSelectionMenuContribution: BlockContentDecoratorContribution = ({blockContext}) =>
+  blockContext?.isNestedSurface && !blockContext.isReference && !blockContext.isBreadcrumb ? decorateNestedMenu : null

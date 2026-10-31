@@ -160,7 +160,7 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
     await reanchorToSelection(block.repo, pending.threadId, anchor)
     return false
   }
-  if (!onOutline(target)) {
+  if (!gestureRunsHere(commentGesture, target)) {
     showInfo(NOT_ON_OUTLINE)
     return false
   }
@@ -170,7 +170,7 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
 
 /** A thread with no comments on the target's text. True when it was made. */
 export const highlightTarget = async (target: SelectionTarget): Promise<boolean> => {
-  if (!onOutline(target)) {
+  if (!gestureRunsHere(highlightGesture, target)) {
     showInfo(NOT_ON_OUTLINE)
     return false
   }
@@ -237,7 +237,7 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MessageSquarePlus,
   defaultBinding: {keys: COMMENT_KEYS},
-  isVisible: deps => pendingReanchorIn(deps) !== null || onOutline(deps),
+  isVisible: deps => pendingReanchorIn(deps) !== null || gestureRunsHere(commentGesture, deps),
   handler: async deps => {
     if (!await commentOnTarget(editorTarget(deps))) return
     // The anchor is captured; leave edit mode so the editor does not stay
@@ -253,7 +253,7 @@ const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: Highlighter,
   defaultBinding: {keys: HIGHLIGHT_KEYS},
-  isVisible: onOutline,
+  isVisible: deps => gestureRunsHere(highlightGesture, deps),
   handler: async deps => { await highlightTarget(editorTarget(deps)) },
 }
 
@@ -317,22 +317,31 @@ export interface ReadSelectionGesture {
   /** In the command palette and the keybindings editor. */
   description: string
   icon: LucideIcon
+  /** Runs only where outline annotation controls render. */
+  outlineOnly: boolean
   defaultBinding?: ShortcutBindingDefaults
   step: (target: SelectionTarget) => Promise<boolean>
 }
 
+const commentGesture: ReadSelectionGesture = {
+  actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
+  icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, outlineOnly: true, step: commentOnTarget,
+}
+
+const highlightGesture: ReadSelectionGesture = {
+  actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
+  icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, outlineOnly: true, step: highlightTarget,
+}
+
+export const gestureRunsHere = (gesture: ReadSelectionGesture, target: {renderScopeId?: string}): boolean =>
+  !gesture.outlineOnly || onOutline(target)
+
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
-  {
-    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment selection',
-    icon: MessageSquarePlus, defaultBinding: {keys: COMMENT_KEYS}, step: commentOnTarget,
-  },
-  {
-    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
-    icon: Highlighter, defaultBinding: {keys: HIGHLIGHT_KEYS}, step: highlightTarget,
-  },
+  commentGesture,
+  highlightGesture,
   {
     actionId: COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, label: 'Copy reference', description: 'Copy reference to selection',
-    icon: TextQuote, step: copyReferenceToTarget,
+    icon: TextQuote, outlineOnly: false, step: copyReferenceToTarget,
   },
 ]
 
