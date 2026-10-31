@@ -231,6 +231,50 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     }
   })
 
+  // Mounting the nested menus and dismissing one measured about 1.3s under load.
+  it.each(['both', 'start', 'end'] as const)('leaves the browser menu with inline reference endpoints (%s)', async inside => {
+    await repo.tx(tx => tx.update(REFERENCED, {content: `An inline ((${SAME_OFFSETS})) reference`}), {scope: ChangeScope.BlockDefault})
+    renderInOutline(<DefaultBlockRenderer block={repo.block('embed-host')}/>)
+    await screen.findByText('ab')
+    const start = at('An inline')
+    const end = at(' reference')
+    const reference = at('ab')
+    expect(reference.node.parentElement!.closest('a[data-block-id]')).not.toBeNull()
+    const select = (anchor: typeof start, focus: typeof start, length: number) => {
+      act(() => {
+        document.getSelection()!.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset + length)
+        document.dispatchEvent(new Event('selectionchange'))
+      })
+    }
+    select(start, end, ' reference'.length)
+    expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', blockId: REFERENCED})
+    fireEvent.contextMenu(reference.node.parentElement!)
+    await screen.findByRole('menuitem', {name: 'Copy reference'})
+    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    select(inside === 'end' ? start : reference, inside === 'start' ? end : reference, inside === 'start' ? ' reference'.length : 2)
+    expect(mapReadSelection(document.getSelection(), contentOf)).toEqual({kind: 'inexact'})
+    const event = new MouseEvent('contextmenu', {bubbles: true, cancelable: true})
+    fireEvent(reference.node.parentElement!, event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('menu')).toBeNull()
+  }, 20_000)
+
+  it('offers the menu in a full embed nested inside an inline reference', async () => {
+    await repo.tx(async tx => {
+      await tx.update(REFERENCED, {content: `An inline ((${SAME_OFFSETS})) reference`})
+      await tx.update(SAME_OFFSETS, {content: `A nested !((${SELF})) embed`})
+    }, {scope: ChangeScope.BlockDefault})
+    renderInOutline(<DefaultBlockRenderer block={repo.block('embed-host')}/>)
+    await screen.findByText('bar')
+    const text = selectText('bar')
+    expect(text.closest('a[data-block-id]')).not.toBeNull()
+    expect(mapReadSelection(document.getSelection(), contentOf)).toMatchObject({kind: 'range', blockId: SELF})
+    fireEvent.contextMenu(text)
+    await screen.findByRole('menuitem', {name: 'Copy reference'})
+  })
+
   it('maps plain text and formatted text to the raw text they render', async () => {
     await renderBlocks('rich')
     expect(mapReadSelection(ends('Some', 'Some'), contentOf)).toMatchObject({

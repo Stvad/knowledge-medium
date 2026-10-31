@@ -124,11 +124,19 @@ export const holdsSelection = (element: Element): boolean => {
 
 // ──── Which row holds the selection, as a store ────
 
-/** The `viewKey` of the row whose rendered content holds the whole selection,
+/** Inline references have no shell, so their text belongs to the reference
+ *  unless a full nested block supplies a nearer content boundary. */
+const inInlineReference = (node: Node | null): boolean => {
+  const boundary = node && elementOf(node)?.closest(`.blockref, ${BLOCK_BOUNDARY_SELECTOR}`)
+  return boundary?.matches('.blockref') === true
+}
+
+/** The `viewKey` of the row whose own content holds both selection endpoints,
  *  or null: all its one reader asks is "is it this row?". */
 const holderOf = (ends: SelectionEnds | null): string | null => {
   const location = locateReadSelection(ends)
-  return location?.kind === 'block' ? viewKey(location.renderScopeId, location.blockId) : null
+  return location?.kind === 'block' && !inInlineReference(ends!.anchorNode) && !inInlineReference(ends!.focusNode)
+    ? viewKey(location.renderScopeId, location.blockId) : null
 }
 
 let holder: string | null = null
