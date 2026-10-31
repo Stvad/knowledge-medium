@@ -26,8 +26,8 @@ const ctx = (fields: {types?: string[]; isTopLevel?: boolean; blockContext?: Rec
 
 describe('where the comments UI attaches', () => {
   it('adds a separate selection menu only to full nested block surfaces', () => {
-    expect(nestedReadSelectionMenuContribution(ctx({}))).toBeNull()
     expect(nestedReadSelectionMenuContribution(ctx({blockContext: {}}))).toBeNull()
+    expect(nestedReadSelectionMenuContribution(ctx({}))).toBeNull()
     for (const surface of [{isEmbedded: true}, {isBacklink: true}, {[COMMENT_CARD_KEY]: 'card:T'}]) {
       expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, ...surface}}))).toBeTruthy()
     }
