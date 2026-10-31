@@ -1,9 +1,9 @@
 /**
  * What a mention inside a comment thread adds to its prompt: the annotated
- * block, the quote, the block's page path, and the chain of comments from the
- * thread's first one down to the mention, each with its author. A chain
- * rather than the whole thread keeps the prompt bounded on a long thread; the
- * run can read the rest with the comments tool.
+ * block, the quote and any replacement it suggests, the block's page path,
+ * and the chain of comments from the thread's first one down to the mention,
+ * each with its author. A chain rather than the whole thread keeps the prompt
+ * bounded on a long thread; the run can read the rest with the comments tool.
  */
 import {
   AGENT_VIEW_DEFAULTS,
@@ -49,6 +49,8 @@ export const loadThreadContext = async (
     target: target && thread.target ? {content: bounded(target.content), path: thread.target.path} : null,
     quote: thread.quote,
     anchor: thread.anchor,
+    // Absent from the view of an app older than edit suggestions.
+    replacement: thread.replacement ?? null,
     chain: [...ancestors.slice(0, rootIndex).reverse(), source].map(block => ({
       id: block.id,
       content: bounded(block.content),

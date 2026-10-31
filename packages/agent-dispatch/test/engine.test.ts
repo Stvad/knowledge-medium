@@ -221,6 +221,20 @@ describe('mention inside a comment thread', () => {
       '    - [c3] Alex (human): [[claude]] can you check the venue too?',
     ].join('\n'))
     expect(prompt).not.toContain('unrelated sibling')
+    // The seed's view has no replacement, as an app older than suggestions sends.
+    expect(prompt).not.toContain('edit suggestion')
+  })
+
+  it('says what an edit suggestion proposes', async () => {
+    const seed = threadSeed()
+    seed.threads!.root = {...seed.threads!.root, replacement: 'Friday'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('The thread quotes: "Thursday"\nIt is an edit suggestion to replace that text with: "Friday"')
   })
 
   it('answers the mention without the thread when the thread cannot be read', async () => {
