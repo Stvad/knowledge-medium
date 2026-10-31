@@ -1,1 +1,1 @@
-export{fb as useAssetObjectUrl}from"../../../chunks/app-Dl0L3FGe.js";
+export{fb as useAssetObjectUrl}from"../../../chunks/app-BHyzhE7o.js";

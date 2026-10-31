@@ -1,1 +1,1 @@
-export{jq as contributorAttributionProcessor}from"../../../chunks/app-Dl0L3FGe.js";
+export{jq as contributorAttributionProcessor}from"../../../chunks/app-BHyzhE7o.js";
