@@ -1,1 +1,1 @@
-export{Rq as characterCounterDataExtension}from"../../../chunks/app-BXINHKxV.js";
+export{sJ as characterCounterDataExtension}from"../../../chunks/app-BBGXNzQR.js";

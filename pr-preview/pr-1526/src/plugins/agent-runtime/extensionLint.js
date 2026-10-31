@@ -1,1 +1,1 @@
-export{Lp as lintExtensionSource}from"../../../chunks/app-BXINHKxV.js";
+export{Zp as lintExtensionSource}from"../../../chunks/app-BBGXNzQR.js";

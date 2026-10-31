@@ -1,1 +1,1 @@
-export{XC as EncryptionSection}from"../../../../chunks/app-BXINHKxV.js";
+export{gw as EncryptionSection}from"../../../../chunks/app-BBGXNzQR.js";
