@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -22,6 +22,7 @@ import { groupBy } from 'lodash-es'
 import { commandPaletteToggle } from './toggleStore.ts'
 import { COMMAND_PALETTE_CONTEXT } from './context.ts'
 import { useCommandPaletteActions } from './useCommandPaletteActions.ts'
+import { captureSelection, restoreSelection } from './selection.ts'
 
 const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
   if (!bindings || bindings.length === 0) {
@@ -38,6 +39,13 @@ export function CommandPalette() {
     commandPaletteToggle.isOpen,
     commandPaletteToggle.isOpen,
   )
+  const [selectionSession, setSelectionSession] = useState(() => ({
+    open,
+    selection: open ? captureSelection() : null,
+  }))
+  if (selectionSession.open !== open) {
+    setSelectionSession({open, selection: open ? captureSelection() : null})
+  }
 
   const shortcutDependencies = useMemo(() => ({}), [])
 
@@ -47,7 +55,9 @@ export function CommandPalette() {
   // palette was opened from edit mode — see the hook for the full contract.
   useEditModeYieldKeepalive(open)
 
-  const {actions, activeContexts, bindingsFor} = useCommandPaletteActions()
+  const {actions, activeContexts, bindingsFor} = useCommandPaletteActions(
+    open ? selectionSession.selection : undefined,
+  )
   const runAction = useRunAction()
 
   const {activeContextsInfo, groupedActions} = useMemo(() => {
@@ -63,6 +73,7 @@ export function CommandPalette() {
     const logFailure = (error: unknown) =>
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
     try {
+      restoreSelection(selectionSession.selection)
       // `runAction` returns the handler's `void | Promise<void>`. The try/catch
       // only catches a synchronous throw (e.g. resolve failing), so attach a
       // `.catch` to surface an async handler rejection too rather than leaking
