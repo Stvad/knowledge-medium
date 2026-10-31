@@ -1,1 +1,1 @@
-export{UO as useCommandPaletteActions}from"../../../chunks/app-DguZaG3n.js";
+export{WO as useCommandPaletteActions}from"../../../chunks/app-aY0kI7gs.js";

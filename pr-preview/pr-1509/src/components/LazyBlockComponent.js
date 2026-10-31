@@ -1,1 +1,1 @@
-export{WM as LazyBlockComponent}from"../../chunks/app-DguZaG3n.js";
+export{GM as LazyBlockComponent}from"../../chunks/app-aY0kI7gs.js";
