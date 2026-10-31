@@ -1,1 +1,1 @@
-export{id as placeCards}from"../../../chunks/app-BiCWxGsm.js";
+export{pd as placeCards}from"../../../chunks/app-DXQJrMqJ.js";

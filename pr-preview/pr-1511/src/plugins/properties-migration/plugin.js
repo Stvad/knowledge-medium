@@ -1,1 +1,1 @@
-export{oa as propertiesMigrationPlugin}from"../../../chunks/app-BiCWxGsm.js";
+export{oa as propertiesMigrationPlugin}from"../../../chunks/app-DXQJrMqJ.js";

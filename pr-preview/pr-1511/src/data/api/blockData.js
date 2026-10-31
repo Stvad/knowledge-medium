@@ -1,1 +1,1 @@
-export{Vat as normalizeReferences}from"../../../chunks/app-BiCWxGsm.js";
+export{aot as normalizeReferences}from"../../../chunks/app-DXQJrMqJ.js";

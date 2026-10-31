@@ -1,1 +1,1 @@
-export{DX as DbForensics,OX as dbForensics}from"../../chunks/app-BiCWxGsm.js";
+export{GX as DbForensics,KX as dbForensics}from"../../chunks/app-DXQJrMqJ.js";

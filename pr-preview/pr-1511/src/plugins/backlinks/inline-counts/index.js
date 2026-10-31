@@ -1,1 +1,1 @@
-export{Ng as inlineBacklinkCountsExtension}from"../../../../chunks/app-BiCWxGsm.js";
+export{Zg as inlineBacklinkCountsExtension}from"../../../../chunks/app-DXQJrMqJ.js";

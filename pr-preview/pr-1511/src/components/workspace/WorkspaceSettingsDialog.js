@@ -1,1 +1,1 @@
-export{ZC as WorkspaceSettingsDialog}from"../../../chunks/app-BiCWxGsm.js";
+export{hw as WorkspaceSettingsDialog}from"../../../chunks/app-DXQJrMqJ.js";
