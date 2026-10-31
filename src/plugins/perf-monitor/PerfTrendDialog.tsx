@@ -55,8 +55,7 @@ const perWrite = (r: InteractionRecordData): string => {
 }
 
 /** Long-frame blocking per minute OBSERVED — the stored total only grows with
- *  how long the tab stayed open. Display only: `series.ts` compares none of the
- *  main-thread summary (see `InteractionRecordData.responsiveness`). */
+ *  how long the tab stayed open. Display only (`InteractionRecordData.responsiveness`). */
 const blockingPerMinute = (r: InteractionRecordData): string => {
   const main = r.responsiveness
   // A rate over no observed time is not a number.

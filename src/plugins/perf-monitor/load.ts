@@ -27,15 +27,16 @@ import {
 // STEADY rather than catching it; same rule for the startup marks below.
 const isCount = (v: unknown): boolean => Number.isFinite(v) && (v as number) >= 0
 const isAbsentOrCount = (v: unknown): boolean => v === undefined || isCount(v)
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
 /** One distribution's three dereferenced fields. ONE owner: a query sample
  *  carries two of these — its wall-clock and its uncontended subset — and a
  *  second copy of the rule is how the two would come to be validated
  *  differently. */
 const isDistribution = (v: unknown): boolean =>
-  typeof v === 'object' && v !== null &&
-  isCount((v as { calls?: unknown }).calls) &&
-  isCount((v as { p95Ms?: unknown }).p95Ms) &&
+  isObject(v) &&
+  isCount(v.calls) &&
+  isCount(v.p95Ms) &&
   // `p50Ms` is dereferenced by the clustered-tail caveat, and a numeric STRING
   // would compare against p95 by coercion rather than being rejected.
   //
@@ -43,8 +44,8 @@ const isDistribution = (v: unknown): boolean =>
   // mandatory the ordering clause already implies `p95Ms >= 0`, so the p95
   // `isCount` above now earns its place only on non-finite and non-numeric
   // values. Both are pinned by cases chosen for that.
-  isCount((v as { p50Ms?: unknown }).p50Ms) &&
-  (v as { p50Ms: number }).p50Ms <= (v as { p95Ms: number }).p95Ms
+  isCount(v.p50Ms) &&
+  (v.p50Ms as number) <= (v.p95Ms as number)
 
 /** A stored query sample: its wall-clock distribution, plus the uncontended
  *  subset when the session recorded one. ABSENT is valid — records predate the
@@ -55,8 +56,6 @@ const isTimingSample = (v: unknown): boolean =>
   isDistribution(v) &&
   ((v as { uncontended?: unknown }).uncontended === undefined ||
     isDistribution((v as { uncontended: unknown }).uncontended))
-
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
 /** The main-thread fields the trend table renders. ABSENT at any level is
  *  valid — not measured — but a present one is dereferenced. `observedMs` is
@@ -86,12 +85,11 @@ export const isUsableInteractionRecord = (r: {
   isAbsentOrString(r.appSha) &&
   isCount(r.writes) && isCount(r.blockCount) &&
   isUsableResponsiveness(r.responsiveness) &&
-  typeof r.queries === 'object' && r.queries !== null &&
-  Object.values(r.queries as Record<string, unknown>).every(isTimingSample) &&
-  typeof r.fanout === 'object' && r.fanout !== null &&
+  isObject(r.queries) && Object.values(r.queries).every(isTimingSample) &&
+  isObject(r.fanout) &&
   // Counter VALUES too: a string yields NaN (neither branch), a negative one
   // yields a silently-steady rate.
-  Object.values(r.fanout as Record<string, unknown>).every(isAbsentOrCount)
+  Object.values(r.fanout).every(isAbsentOrCount)
 
 /** `.slice`d by the trend table — a number or object throws mid-render. */
 const isAbsentOrString = (v: unknown): boolean => v === undefined || typeof v === 'string'

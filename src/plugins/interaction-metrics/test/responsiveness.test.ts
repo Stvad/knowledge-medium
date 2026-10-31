@@ -235,43 +235,18 @@ describe('coverage', () => {
     expect(both(1_000).sample(61_000).observedMs).toBe(60_000)
   })
 
-  // `resetMetrics()` starts a new counter span; the summary must describe the
-  // same span as every other field in the record.
-  it('starts over on restart', () => {
-    const totals = both(0)
-    totals.addFrames([frame(80, 30)])
-    totals.addInputs([input(100, 64)])
-    totals.restart(50_000)
-    const sample = totals.sample(LATER)
-    expect(sample.observedMs).toBe(LATER - 50_000)
-    expect(sample.longFrames?.count).toBe(0)
-    expect(sample.slowInputs).toEqual({ count: 0 })
-  })
-
-  // The observer keeps delivering after a restart: a callback already queued,
-  // or an entry still waiting for its paint. Begun before the restart, it
-  // belongs to the span being retired, however late it arrives.
-  it('drops entries that began before the restart, delivered after it', () => {
-    const totals = both(0)
-    totals.restart(50_000)
+  // An entry delivered after its span ended (a callback already queued, or one
+  // still waiting for its paint) belongs to the span it began in.
+  it('drops entries that began before the span', () => {
+    const totals = both(50_000)
     totals.addFrames([frame(120, 70, [30], 49_900)])
     totals.addInputs([input(49_950, 88)])
     const sample = totals.sample(LATER)
     expect(sample.longFrames?.count).toBe(0)
     expect(sample.slowInputs).toEqual({ count: 0 })
-    // ...while one that began inside the new span still counts.
+    // ...while one that began inside it still counts.
     totals.addFrames([frame(120, 70, [30], 50_000)])
     expect(totals.sample(LATER).longFrames?.count).toBe(1)
-  })
-
-  // An input still pending at the restart belongs to the old span.
-  it('drops an input still pending at the restart', () => {
-    const totals = both(0)
-    totals.addInputs([input(1_000, 64, { interactionId: 5 })])
-    totals.restart(1_500)
-    totals.addInputs([input(1_600, 56, { interactionId: 5 })])
-    expect(totals.sample(LATER).slowInputs?.count).toBe(1)
-    expect(totals.sample(LATER).slowInputs?.duration?.maxMs).toBe(56)
   })
 })
 
@@ -316,6 +291,20 @@ describe('observeResponsiveness', () => {
   it('returns nothing where the browser observes neither', () => {
     stubPerformanceObserver(['mark', 'measure', 'longtask'])
     expect(observeResponsiveness()).toBeNull()
+  })
+
+  // `resetMetrics()` starts a new counter span, and the observer keeps
+  // delivering across it: what began before belongs to the span retired.
+  it('starts over on restart, dropping what began before it', () => {
+    const live = stubPerformanceObserver(['long-animation-frame', 'event'])
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)
+    const observer = observeResponsiveness()!
+    observation(live, 'long-animation-frame').deliver([frame(90, 40, [], 2_000)])
+    now.mockReturnValue(50_000)
+    observer.restart()
+    observation(live, 'long-animation-frame').deliver([frame(90, 40, [], 49_900), frame(90, 40, [], 50_100)])
+    now.mockReturnValue(60_000)
+    expect(observer.sample()).toMatchObject({ observedMs: 10_000, longFrames: { count: 1 } })
   })
 
   it('disconnects on stop', () => {

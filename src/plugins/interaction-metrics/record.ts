@@ -161,13 +161,8 @@ export interface InteractionRecordData extends InteractionComparable {
   /** Whether the main thread was free while the timings above were taken; its
    *  declaration holds what each field means. ABSENT on records written before
    *  this existed and where the browser observes neither entry type: not
-   *  measured, never zero.
-   *
-   *  Stored for diagnosis and NOT compared by `series.ts`: main-thread time
-   *  moves with what the user did and with everything else on the device —
-   *  other tabs, thermal and power state — and nothing here can filter that out
-   *  the way `uncontended` filters the pool's queue. A ratio over it would
-   *  alarm on a busy afternoon. */
+   *  measured, never zero. Diagnosis only, NOT compared by `series.ts`: it moves
+   *  with the user's activity and the device's load, which nothing here filters. */
   responsiveness?: ResponsivenessSample
 }
 

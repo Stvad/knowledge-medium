@@ -249,16 +249,6 @@ describe('buildInteractionRecord', () => {
     })
   })
 
-  it('stores the main-thread summary it is given', () => {
-    const responsiveness = {
-      observedMs: 60_000,
-      longFrames: { count: 2, totalMs: 300, blockingMs: 200, forcedLayoutMs: 90, maxMs: 180 },
-      slowInputs: { count: 0 },
-    }
-    expect(buildInteractionRecord(metricsFixture(), META, responsiveness).responsiveness)
-      .toEqual(responsiveness)
-  })
-
   // Absent, not empty: a reader distinguishes "not measured" from "measured
   // nothing" by the key's presence.
   it('stores no main-thread key when nothing observed it', () => {

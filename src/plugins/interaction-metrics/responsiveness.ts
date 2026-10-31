@@ -8,7 +8,7 @@
  * thread, so a slow one cannot say whether the pool queued it or the thread
  * was too busy to run its continuation. These entries can.
  */
-import { TimingReservoir } from '@/data/internals/timingMetrics.js'
+import { TimingReservoir, type TimingSnapshot } from '@/data/internals/timingMetrics.js'
 
 /** What "slow" means for both entry types: LoAF's own definition of a long
  *  frame, and the floor Event Timing is asked to report inputs from. */
@@ -141,17 +141,16 @@ const dispatchedWithin = (e: InputEventEntry, input: PendingInput): boolean =>
 
 const round2 = (ms: number): number => Math.round(ms * 100) / 100
 
-const timings = (window: TimingReservoir, maxMs: number): InputTimings => {
-  const s = window.snapshot()
-  return { p50Ms: round2(s.p50Ms), p95Ms: round2(s.p95Ms), maxMs: round2(maxMs) }
-}
+const timings = (s: TimingSnapshot, maxMs: number): InputTimings =>
+  ({ p50Ms: round2(s.p50Ms), p95Ms: round2(s.p95Ms), maxMs: round2(maxMs) })
 
 /** The fold, with no observer in it, so a test drives it with plain entries.
- *  Times are on the performance timeline, the one entries are stamped on. */
+ *  Times are on the performance timeline, the one entries are stamped on. One
+ *  per span: a restart builds a new one rather than resetting this. */
 export class ResponsivenessTotals {
   private readonly frames: boolean
   private readonly inputs: boolean
-  private startedAt = 0
+  private readonly startedAt: number
   private frameCount = 0
   private frameMs = 0
   private blockingMs = 0
@@ -168,7 +167,7 @@ export class ResponsivenessTotals {
   constructor(opts: { frames: boolean; inputs: boolean; startedAt: number }) {
     this.frames = opts.frames
     this.inputs = opts.inputs
-    this.restart(opts.startedAt)
+    this.startedAt = opts.startedAt
   }
 
   /** An entry belongs to the span it BEGAN in. The observer keeps delivering
@@ -239,7 +238,8 @@ export class ResponsivenessTotals {
    *  left for a later sample rather than counted twice. */
   sample(now: number): ResponsivenessSample {
     this.settleBefore(now - MERGE_HORIZON_MS)
-    const count = this.durations.snapshot().calls
+    const durations = this.durations.snapshot()
+    const count = durations.calls
     return {
       observedMs: round2(now - this.startedAt),
       ...(this.frames
@@ -259,28 +259,12 @@ export class ResponsivenessTotals {
             ? { count }
             : {
               count,
-              duration: timings(this.durations, this.maxDurationMs),
-              inputDelay: timings(this.delays, this.maxDelayMs),
+              duration: timings(durations, this.maxDurationMs),
+              inputDelay: timings(this.delays.snapshot(), this.maxDelayMs),
             },
         }
         : {}),
     }
-  }
-
-  /** Forget everything, an input still pending included: it began in the span
-   *  being retired. */
-  restart(now: number): void {
-    this.startedAt = now
-    this.frameCount = 0
-    this.frameMs = 0
-    this.blockingMs = 0
-    this.forcedLayoutMs = 0
-    this.maxFrameMs = 0
-    this.pending.clear()
-    this.durations.reset()
-    this.delays.reset()
-    this.maxDurationMs = 0
-    this.maxDelayMs = 0
   }
 }
 
@@ -306,7 +290,9 @@ export const observeResponsiveness = (): ResponsivenessObserver | null => {
   const frames = supported.includes('long-animation-frame')
   const inputs = supported.includes('event')
   if (!frames && !inputs) return null
-  const totals = new ResponsivenessTotals({ frames, inputs, startedAt: performance.now() })
+  const fresh = () => new ResponsivenessTotals({ frames, inputs, startedAt: performance.now() })
+  // Read at each callback, so a restart redirects the observers to the new span.
+  let totals = fresh()
   const observers: PerformanceObserver[] = []
   if (frames) {
     const observer = new PerformanceObserver((list) => {
@@ -325,7 +311,8 @@ export const observeResponsiveness = (): ResponsivenessObserver | null => {
   }
   return {
     sample: () => totals.sample(performance.now()),
-    restart: () => totals.restart(performance.now()),
+    // An input still pending goes with the old span: it began there.
+    restart: () => { totals = fresh() },
     stop: () => { for (const observer of observers) observer.disconnect() },
   }
 }
