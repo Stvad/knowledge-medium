@@ -80,16 +80,18 @@ import {
   type ComposerState,
 } from './uiStore.ts'
 
-/** Set to the thread id on a card's nested surface; read by the root's header
- *  renderer and by the per-comment actions. */
+/** Set to the card's render scope on a card's nested surface; read by the
+ *  root's header renderer, the per-comment actions and "Quoted in". */
 export const COMMENT_CARD_KEY = 'annotations.commentCard'
 
-/** Inside a thread's card, and not inside a nested surface within it: block
- *  context is inherited, but every nested surface (an embed in a comment, say)
- *  resets the scope root, so the card's blocks are those whose scope root is
- *  the thread the card was opened for. */
-const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
-  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.scopeRootId
+/** A block of a thread's card, not of a surface nested in it. Block context is
+ *  inherited, but every nested surface (an embed, a reference, a backlink
+ *  entry under "Quoted in") sets a render scope of its own, so the card's
+ *  blocks are those still in the card's. Breadcrumbs keep their surface's
+ *  scope, so they are excluded by name. */
+export const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
+  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.renderScopeId &&
+  blockContext.isBreadcrumb !== true
 
 const useReadOnly = (repo: Repo): boolean =>
   useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
@@ -285,7 +287,7 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
         layoutBoundary: false,
         renderScopeId,
         scopeRootId: thread.id,
-        [COMMENT_CARD_KEY]: thread.id,
+        [COMMENT_CARD_KEY]: renderScopeId,
         [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
         [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
       }}>
