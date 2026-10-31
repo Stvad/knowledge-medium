@@ -1,0 +1,1 @@
+export{Gtt as isChildBackedPropertiesWorkspace}from"../chunks/app-BXINHKxV.js";

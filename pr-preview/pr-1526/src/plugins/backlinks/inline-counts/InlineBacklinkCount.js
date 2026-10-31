@@ -1,0 +1,1 @@
+export{Mg as inlineBacklinkCountDecoratorContribution,Ng as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-BXINHKxV.js";

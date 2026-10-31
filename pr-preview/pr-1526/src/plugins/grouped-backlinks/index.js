@@ -1,0 +1,1 @@
+export{wg as groupedBacklinksPlugin}from"../../../chunks/app-BXINHKxV.js";

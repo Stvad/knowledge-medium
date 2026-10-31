@@ -1,0 +1,1 @@
+export{Tk as CommandPaletteHeaderItem}from"../../../chunks/app-BXINHKxV.js";

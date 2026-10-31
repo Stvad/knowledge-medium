@@ -1,0 +1,1 @@
+export{Sf as contributorsPlugin}from"../../../chunks/app-BXINHKxV.js";

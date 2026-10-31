@@ -1,0 +1,1 @@
+export{_g as UpdateIndicator}from"../../../chunks/app-BXINHKxV.js";

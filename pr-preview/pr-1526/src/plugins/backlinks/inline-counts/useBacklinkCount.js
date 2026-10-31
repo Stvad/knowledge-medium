@@ -1,0 +1,1 @@
+export{Ig as useBacklinkCount}from"../../../../chunks/app-BXINHKxV.js";

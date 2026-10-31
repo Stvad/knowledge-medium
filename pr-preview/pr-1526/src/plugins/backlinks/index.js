@@ -1,0 +1,1 @@
+export{Ag as backlinksPlugin}from"../../../chunks/app-BXINHKxV.js";

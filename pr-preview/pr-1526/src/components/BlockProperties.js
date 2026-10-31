@@ -1,0 +1,1 @@
+export{HL as BlockProperties}from"../../chunks/app-BXINHKxV.js";

@@ -1,0 +1,1 @@
+export{cv as useIsReadOnly}from"../../chunks/app-BXINHKxV.js";

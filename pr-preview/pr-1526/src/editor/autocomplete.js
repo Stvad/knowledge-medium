@@ -1,0 +1,1 @@
+export{xj as editorAutocompleteExtension}from"../../chunks/app-BXINHKxV.js";

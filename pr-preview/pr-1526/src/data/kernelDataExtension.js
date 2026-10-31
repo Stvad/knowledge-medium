@@ -1,0 +1,1 @@
+export{e0 as kernelDataExtension}from"../../chunks/app-BXINHKxV.js";

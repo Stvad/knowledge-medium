@@ -1,0 +1,1 @@
+export{WA as ensureMetricsConsoleHook}from"../../chunks/app-BXINHKxV.js";

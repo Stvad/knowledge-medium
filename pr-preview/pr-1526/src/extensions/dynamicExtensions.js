@@ -1,0 +1,1 @@
+export{CM as dynamicExtensionsExtension}from"../../chunks/app-BXINHKxV.js";

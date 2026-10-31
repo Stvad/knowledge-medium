@@ -1,0 +1,1 @@
+export{hC as usePromotableBreadcrumb}from"../../../chunks/app-BXINHKxV.js";

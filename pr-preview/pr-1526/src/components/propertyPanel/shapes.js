@@ -1,0 +1,1 @@
+export{pH as propertyShapeLabel}from"../../../chunks/app-BXINHKxV.js";

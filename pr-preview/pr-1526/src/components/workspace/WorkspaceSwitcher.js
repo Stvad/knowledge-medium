@@ -1,0 +1,1 @@
+export{JC as WorkspaceSwitcher}from"../../../chunks/app-BXINHKxV.js";
