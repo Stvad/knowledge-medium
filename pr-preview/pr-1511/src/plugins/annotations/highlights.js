@@ -1,1 +1,0 @@
-export{Ef as HIGHLIGHT_CLASS,Df as MOVED_HIGHLIGHT_CLASS,Of as SUGGESTION_HIGHLIGHT_CLASS,kf as coveringStyle,Af as highlightClasses,jf as highlightField,Mf as highlightRange,Nf as highlightRanges,Pf as threadHighlights,Ff as threadHighlightsContribution}from"../../../chunks/app-bGvjAJ53.js";

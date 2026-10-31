@@ -1,1 +1,0 @@
-export{WC as LeftSidebarHeaderItem}from"../../../chunks/app-BHyzhE7o.js";

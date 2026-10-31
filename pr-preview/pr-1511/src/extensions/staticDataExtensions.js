@@ -1,1 +1,0 @@
-export{kU as staticDataExtensions}from"../../chunks/app-bGvjAJ53.js";

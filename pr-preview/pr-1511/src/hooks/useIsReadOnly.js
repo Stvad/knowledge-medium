@@ -1,1 +1,0 @@
-export{Ov as useIsReadOnly}from"../../chunks/app-bGvjAJ53.js";

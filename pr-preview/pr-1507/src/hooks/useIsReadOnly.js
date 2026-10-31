@@ -1,1 +1,0 @@
-export{mv as useIsReadOnly}from"../../chunks/app-Bc4bBrHO.js";

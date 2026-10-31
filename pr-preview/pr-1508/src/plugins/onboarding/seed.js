@@ -1,1 +1,0 @@
-export{Nx as seedTutorial}from"../../../chunks/app-BHyzhE7o.js";

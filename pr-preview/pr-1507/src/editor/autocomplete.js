@@ -1,1 +1,0 @@
-export{wj as editorAutocompleteExtension}from"../../chunks/app-Bc4bBrHO.js";

@@ -1,1 +1,0 @@
-export{DC as plainOutlinerPlugin}from"../../../chunks/app-Bc4bBrHO.js";

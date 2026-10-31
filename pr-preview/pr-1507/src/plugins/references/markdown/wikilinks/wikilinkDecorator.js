@@ -1,1 +1,0 @@
-export{YD as isWikilinkDisplayParts,XD as resolveWikilinkDisplay,ZD as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-Bc4bBrHO.js";

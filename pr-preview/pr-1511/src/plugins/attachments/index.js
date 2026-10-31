@@ -1,1 +1,0 @@
-export{sy as attachmentsPlugin}from"../../../chunks/app-bGvjAJ53.js";

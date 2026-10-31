@@ -1,1 +1,0 @@
-export{JK as annotationsDataExtension}from"../../../chunks/app-Bc4bBrHO.js";

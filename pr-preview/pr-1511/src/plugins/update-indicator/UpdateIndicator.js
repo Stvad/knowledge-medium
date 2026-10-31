@@ -1,1 +1,0 @@
-export{Lg as UpdateIndicator}from"../../../chunks/app-bGvjAJ53.js";

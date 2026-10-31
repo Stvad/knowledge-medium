@@ -1,1 +1,0 @@
-export{rat as defineQuery}from"../../../chunks/app-bGvjAJ53.js";

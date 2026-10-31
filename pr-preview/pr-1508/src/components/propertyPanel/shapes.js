@@ -1,1 +1,0 @@
-export{gH as propertyShapeLabel}from"../../../chunks/app-BHyzhE7o.js";

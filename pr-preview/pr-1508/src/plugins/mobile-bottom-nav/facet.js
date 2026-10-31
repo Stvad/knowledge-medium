@@ -1,1 +1,0 @@
-export{gC as mobileBottomNavItemsFacet}from"../../../chunks/app-BHyzhE7o.js";

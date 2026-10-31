@@ -1,1 +1,0 @@
-export{Xq as backlinksDataExtension}from"../../../chunks/app-Bc4bBrHO.js";

@@ -1,1 +1,0 @@
-export{Sg as updateIndicatorPlugin}from"../../../chunks/app-Bc4bBrHO.js";

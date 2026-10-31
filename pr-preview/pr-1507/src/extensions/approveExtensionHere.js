@@ -1,1 +1,0 @@
-export{Ij as approveExtensionHere}from"../../chunks/app-Bc4bBrHO.js";

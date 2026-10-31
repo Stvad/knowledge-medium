@@ -1,1 +1,0 @@
-export{qv as attachmentsPlugin}from"../../../chunks/app-BHyzhE7o.js";

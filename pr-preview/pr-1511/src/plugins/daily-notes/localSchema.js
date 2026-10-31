@@ -1,1 +1,0 @@
-export{UK as dailyNotesLocalSchema}from"../../../chunks/app-bGvjAJ53.js";

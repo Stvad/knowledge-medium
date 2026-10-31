@@ -1,1 +1,0 @@
-export{bg as blockInfoPlugin}from"../../../chunks/app-Bc4bBrHO.js";

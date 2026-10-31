@@ -1,1 +1,0 @@
-export{Ok as CommandPaletteHeaderItem}from"../../../chunks/app-Bc4bBrHO.js";

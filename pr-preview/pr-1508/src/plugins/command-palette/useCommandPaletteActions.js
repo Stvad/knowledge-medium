@@ -1,1 +1,0 @@
-export{ok as useCommandPaletteActions}from"../../../chunks/app-BHyzhE7o.js";

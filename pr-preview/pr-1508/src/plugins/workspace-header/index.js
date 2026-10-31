@@ -1,1 +1,0 @@
-export{MC as WorkspaceSwitcherSidebarSection,NC as pendingInvitationsHeaderItem,PC as workspaceHeaderPlugin,FC as workspaceSwitcherSidebarSection}from"../../../chunks/app-BHyzhE7o.js";

@@ -1,1 +1,0 @@
-export{wC as getBreadcrumbContentPreview}from"../../../chunks/app-BHyzhE7o.js";

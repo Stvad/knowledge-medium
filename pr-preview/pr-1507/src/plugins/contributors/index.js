@@ -1,1 +1,0 @@
-export{Sf as contributorsPlugin}from"../../../chunks/app-Bc4bBrHO.js";

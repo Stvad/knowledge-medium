@@ -1,1 +1,0 @@
-export{Hk as CommandPaletteHeaderItem}from"../../../chunks/app-bGvjAJ53.js";
