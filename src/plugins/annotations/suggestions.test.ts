@@ -187,13 +187,23 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe('oops')
   })
 
-  it('refuses the same suggestion reopened after it was applied', async () => {
-    await setTarget('Meet Thursday')
-    const threadId = await suggest('Thursday', 'Thursday 9am')
+  it('never reopens an applied suggestion, which re-anchored could apply again elsewhere', async () => {
+    await setTarget('the cat sat. the cat sat.')
+    const threadId = await suggest('cat', 'dog')
     await acceptSuggestion(repo, threadId)
-    await setThreadStatus(repo, threadId, 'open')
-    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(AnchorChangedError)
-    expect(await targetText()).toBe('Meet Thursday 9am')
+    await expect(setThreadStatus(repo, threadId, 'open')).rejects.toBeInstanceOf(InvalidSuggestionError)
+    expect(threadStatusOf(await rootOf(threadId))).toBe('accepted')
+    // A rejected one can be reopened: its text was never applied.
+    const other = await suggest('sat. the', 'sat; the')
+    await rejectSuggestion(repo, other)
+    await setThreadStatus(repo, other, 'open')
+    expect(threadStatusOf(await rootOf(other))).toBe('open')
+  })
+
+  it('tells a refused suggestion to be made again as a suggestion, not a comment', async () => {
+    const anchor = anchorFor(MID, 'Thursday')
+    await setTarget(`Update: ${MID}`)
+    await expect(createThread(repo, {targetId: 'B', anchor, replacement: 'Thursday 9am'})).rejects.toThrow('Suggest edit')
   })
 
   it('refuses a thread that is not a suggestion', async () => {
