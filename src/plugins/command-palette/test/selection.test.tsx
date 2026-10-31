@@ -9,11 +9,11 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@/shortcuts/useActionDiscovery.js', () => {
   const actions = [{
-      id: 'selection', description: 'Use selected text', context: 'global',
-      isVisible: () => document.getSelection()?.toString() === 'selected words',
-    }, {
-      id: 'inspect', description: 'Inspect selection', context: 'global',
-    }]
+    id: 'selection', description: 'Use selected text', context: 'global',
+    isVisible: () => document.getSelection()?.toString() === 'selected words',
+  }, {
+    id: 'inspect', description: 'Inspect selection', context: 'global',
+  }]
   return {useActionDiscovery: () => ({
     active: state.active,
     actions,
@@ -35,6 +35,7 @@ vi.mock('@/shortcuts/ActiveContexts.js', () => ({
 
 import {CommandPalette} from '../CommandPalette.tsx'
 import {commandPaletteToggle} from '../toggleStore.ts'
+import {captureSelection, restoreSelection} from '../selection.ts'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -92,6 +93,68 @@ describe('command palette document selection', () => {
     const {text} = await openWithSelection()
     text.parentNode!.removeChild(text)
     expect(text.isConnected).toBe(false)
+
+    fireEvent.click(await screen.findByText('Inspect selection'))
+
+    expect(state.selected).toHaveBeenCalledWith('')
+  })
+
+  it.each(['start', 'end'] as const)('rejects a range relocated by removing and reinserting its %s node', endpoint => {
+    render(<p><span>start</span><span>end</span></p>)
+    const start = screen.getByText('start').firstChild!
+    const end = screen.getByText('end').firstChild!
+    document.getSelection()!.setBaseAndExtent(start, 0, end, 3)
+    const saved = captureSelection()!
+    const node = endpoint === 'start' ? start : end
+    const parent = node.parentNode!
+    parent.removeChild(node)
+    // Native Ranges relocate when nodes are removed; happy-dom does not.
+    if (endpoint === 'start') saved.range.setStart(parent, 0)
+    else saved.range.setEnd(parent, 0)
+    parent.appendChild(node)
+    expect(node.isConnected).toBe(true)
+    expect(saved.range.commonAncestorContainer.isConnected).toBe(true)
+    expect(endpoint === 'start' ? saved.range.startContainer : saved.range.endContainer).not.toBe(node)
+
+    restoreSelection(saved)
+
+    expect(document.getSelection()!.rangeCount).toBe(0)
+  })
+
+  it('preserves the search input native selection when visibility refreshes', async () => {
+    const {view, input} = await openWithSelection()
+    const search = input as HTMLInputElement
+    fireEvent.change(search, {target: {value: 'selected'}})
+    search.setSelectionRange(2, 5, 'backward')
+    const addRange = Selection.prototype.addRange
+    // Chromium resets native input offsets when a document range is restored.
+    vi.spyOn(Selection.prototype, 'addRange').mockImplementation(function(this: Selection, range) {
+      addRange.call(this, range)
+      search.setSelectionRange(0, 0)
+    })
+    state.active = new Map(state.active)
+
+    view.rerender(<><p>Some selected words here</p><CommandPalette/></>)
+
+    expect(search.selectionStart).toBe(2)
+    expect(search.selectionEnd).toBe(5)
+    expect(search.selectionDirection).toBe('backward')
+    expect(document.activeElement).toBe(search)
+  })
+
+  it.each(['start', 'end', 'both'])('leaves a selection with editable %s to editor state', async endpoint => {
+    render(<>
+      <span contentEditable={endpoint !== 'end'} suppressContentEditableWarning>selected </span>
+      <span contentEditable={endpoint !== 'start'} suppressContentEditableWarning>words</span>
+      <CommandPalette/>
+    </>)
+    const start = screen.getByText('selected').firstChild!
+    const end = screen.getByText('words').firstChild!
+    document.getSelection()!.setBaseAndExtent(start, 0, end, 5)
+    act(() => commandPaletteToggle.open())
+    const input = await screen.findByPlaceholderText('Type a command or search...')
+    // Model the document-selection collapse even though happy-dom does not.
+    document.getSelection()!.collapse(input.parentNode, 0)
 
     fireEvent.click(await screen.findByText('Inspect selection'))
 
