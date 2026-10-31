@@ -72,6 +72,30 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(0)
   })
 
+  it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
+    const {threadId} = await asAgent({
+      type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',
+    }) as {threadId: string}
+    expect((await context.repo.load(BLOCK))!.content).toBe(TEXT)
+    expect((await comments({thread: threadId})).threads[0]).toMatchObject({
+      status: 'open', anchor: 'exact', quote: 'Thursday', replacement: 'Thursday 9am',
+    })
+    await expect(asAgent({type: 'add-comment', target: BLOCK, replacement: 'x'})).rejects.toThrow(/needs quoted text/)
+  })
+
+  it('confirms the suggestion it stored, and carries a replacement over to a quote widened to a whole link', async () => {
+    await context.repo.tx(tx => tx.update(BLOCK, {content: 'Meet [[Alice Smith]] on Thursday'}), opts)
+    const widened = await asAgent({type: 'add-comment', target: BLOCK, quote: 'Alice', replacement: 'Bob'}) as {
+      quote: string, replacement: string | null,
+    }
+    expect(widened).toMatchObject({quote: '[[Alice Smith]]', replacement: '[[Bob Smith]]'})
+    // Unchanged once carried over, so refused rather than replacing the link with its bare name.
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: 'Alice', replacement: 'Alice'}))
+      .rejects.toThrow(/same as the quoted text/)
+    expect(await asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', content: 'Sure?'}))
+      .toMatchObject({replacement: null})
+  })
+
   it('takes a printed short id as its target', async () => {
     const created = await asAgent({type: 'add-comment', target: `^${BLOCK.slice(0, 8)}`, content: 'On the whole block'}) as {threadId: string}
     expect((await comments({thread: created.threadId})).threads[0]?.target?.id).toBe(BLOCK)
@@ -101,7 +125,7 @@ describe('comments', () => {
     expect(view.total).toBe(1)
     const [thread] = view.threads
     expect(thread).toMatchObject({
-      id: threadId, status: 'open', anchor: 'exact', quote: 'Thursday',
+      id: threadId, status: 'open', anchor: 'exact', quote: 'Thursday', replacement: null,
       target: {id: BLOCK, deleted: false, path: ['Launch plan']},
     })
     expect(thread.target?.excerpt).toContain('Thursday')

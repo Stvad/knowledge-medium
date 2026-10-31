@@ -319,7 +319,9 @@ export const editBlockCommandSchema = z.looseObject({
 
 /** Start a comment thread on a block: on `quote` (text of the block, the
  *  `occurrence`th appearance when it appears more than once), or on the
- *  whole block. No `content` makes a highlight, a thread with no comments. */
+ *  whole block. No `content` makes a highlight, a thread with no comments; a
+ *  `replacement` makes an edit suggestion, which a person accepts or rejects
+ *  in the app. */
 export const addCommentCommandSchema = z.looseObject({
   type: z.literal('add-comment'),
   target: z.string().describe('The block to comment on: a full id or a printed ^shortid'),
@@ -333,6 +335,11 @@ export const addCommentCommandSchema = z.looseObject({
     + 'The result\'s quoteStart and excerpt show which one was anchored',
   ),
   content: z.string().optional().describe('The first comment; omit for a highlight with no comments'),
+  replacement: z.string().optional().describe(
+    'Makes the thread an edit suggestion: the new text for the quote (for just the quoted part when the quote is '
+    + 'widened to a whole link). Needs a quote; must be non-empty and change it. A person accepts or rejects it in the '
+    + 'app; nothing changes the block until then. The result\'s replacement confirms it (null means a plain comment)',
+  ),
   ...exactIdsField,
   ...contributorField,
   ...commandIdField,
@@ -741,7 +748,7 @@ export const commentsCommandSchema = z.looseObject({
   ),
   block: z.string().optional().describe('Threads on this one block (same forms as a block ref)'),
   thread: z.string().optional().describe("One thread, by its root's id, whatever its status"),
-  includeClosed: z.boolean().optional().describe('Include resolved threads (default: open only)'),
+  includeClosed: z.boolean().optional().describe('Include closed threads (default: open only)'),
   limit: viewLimitField('threads', AGENT_VIEW_DEFAULTS.commentsLimit),
   offset: viewOffsetField('threads'),
   workspaceId: viewFields.workspaceId,
@@ -778,11 +785,14 @@ export interface CommentNode {
 export interface CommentThreadView {
   id: string
   shortId: string
-  /** `open` or `resolved`, or the stored value when this build can't read it. */
+  /** `open` or `resolved`, `accepted` or `rejected` for an edit suggestion,
+   *  or the stored value when this build can't read it. */
   status: string
   anchor: CommentAnchorState
   /** The quoted text; null for a thread on the whole block. */
   quote: string | null
+  /** An edit suggestion's text for the quote; null for any other thread. */
+  replacement: string | null
   target: {
     id: string
     shortId: string
@@ -1321,11 +1331,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'add-comment': {
-    usage: "kmagent add-comment '<json>'   ({target, quote?, occurrence?, content?})",
+    usage: "kmagent add-comment '<json>'   ({target, quote?, occurrence?, content?, replacement?})",
     description: 'Start a comment thread on a block. It anchors to quoted text of the block, or to the whole block, '
       + 'and returns the thread\'s root id (write ((id)) to quote that range elsewhere). The quote is found in the block\'s current text, and '
       + 'refused when absent, or when it appears more than once without occurrence. A quote that cuts a [[link]] or '
-      + '((ref)) is widened to the whole of it. No content makes a highlight. Refuses property field and value rows.',
+      + '((ref)) is widened to the whole of it. No content makes a highlight. Refuses property field and value rows. '
+      + 'A replacement makes an edit suggestion; a person accepts or rejects it in the app.',
     readOnly: false,
   },
   'watch-events': {
