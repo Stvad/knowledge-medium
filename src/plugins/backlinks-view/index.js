@@ -1,1 +1,1 @@
-export{Ug as backlinksViewPlugin}from"../../../chunks/app-B_whfYiJ.js";
+export{Kg as backlinksViewPlugin}from"../../../chunks/app-1twtn-s_.js";

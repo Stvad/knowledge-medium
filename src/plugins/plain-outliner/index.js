@@ -1,1 +1,1 @@
-export{VC as plainOutlinerPlugin}from"../../../chunks/app-B_whfYiJ.js";
+export{WC as plainOutlinerPlugin}from"../../../chunks/app-1twtn-s_.js";

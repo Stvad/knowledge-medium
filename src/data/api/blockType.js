@@ -1,1 +1,1 @@
-export{iot as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-B_whfYiJ.js";
+export{sot as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-1twtn-s_.js";
