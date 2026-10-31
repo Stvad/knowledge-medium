@@ -1,0 +1,1 @@
+export{KA as TypeChip}from"../../../chunks/app-DTt7lHjc.js";

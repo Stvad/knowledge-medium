@@ -1,0 +1,1 @@
+export{qA as chipStyle}from"../../../chunks/app-DTt7lHjc.js";

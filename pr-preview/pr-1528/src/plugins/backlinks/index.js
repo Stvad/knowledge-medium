@@ -1,0 +1,1 @@
+export{$g as backlinksPlugin}from"../../../chunks/app-DTt7lHjc.js";

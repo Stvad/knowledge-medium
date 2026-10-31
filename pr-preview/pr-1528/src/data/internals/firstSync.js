@@ -1,0 +1,1 @@
+export{C2 as onFirstSync,w2 as onSyncSettled}from"../../../chunks/app-DTt7lHjc.js";

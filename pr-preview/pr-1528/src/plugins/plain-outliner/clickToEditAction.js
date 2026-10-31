@@ -1,0 +1,1 @@
+export{GC as ENTER_BLOCK_EDIT_MODE_ACTION_ID,KC as enterBlockEditModeOnClickAction}from"../../../chunks/app-DTt7lHjc.js";

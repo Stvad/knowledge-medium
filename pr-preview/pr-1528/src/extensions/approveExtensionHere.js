@@ -1,0 +1,1 @@
+export{$j as approveExtensionHere}from"../../chunks/app-DTt7lHjc.js";

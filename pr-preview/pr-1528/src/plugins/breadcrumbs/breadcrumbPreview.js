@@ -1,0 +1,1 @@
+export{VC as getBreadcrumbContentPreview}from"../../../chunks/app-DTt7lHjc.js";

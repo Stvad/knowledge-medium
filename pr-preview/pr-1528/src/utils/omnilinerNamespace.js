@@ -1,0 +1,1 @@
+export{UX as omnilinerNamespace}from"../../chunks/app-DTt7lHjc.js";

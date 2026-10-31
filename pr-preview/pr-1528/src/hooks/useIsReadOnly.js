@@ -1,0 +1,1 @@
+export{jv as useIsReadOnly}from"../../chunks/app-DTt7lHjc.js";

@@ -1,0 +1,1 @@
+export{Htt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DTt7lHjc.js";

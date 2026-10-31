@@ -1,0 +1,1 @@
+export{h2 as KERNEL_PROCESSORS}from"../../../chunks/app-DTt7lHjc.js";

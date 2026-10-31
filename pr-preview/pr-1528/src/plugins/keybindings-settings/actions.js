@@ -1,0 +1,1 @@
+export{uk as openKeybindingsSettingsAction}from"../../../chunks/app-DTt7lHjc.js";

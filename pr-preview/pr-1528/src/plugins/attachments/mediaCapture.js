@@ -1,0 +1,1 @@
+export{mb as DEFAULT_MAX_CAPTURE_BYTES,hb as captureMedia,gb as mediaBlockId}from"../../../chunks/app-DTt7lHjc.js";
