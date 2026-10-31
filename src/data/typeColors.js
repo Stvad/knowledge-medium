@@ -1,1 +1,1 @@
-export{KA as DEFAULT_TYPE_COLORS,qA as defaultTypeColor,JA as pickLeastUsedTypeColor}from"../../chunks/app-CnUOLQNC.js";
+export{KA as DEFAULT_TYPE_COLORS,qA as defaultTypeColor,JA as pickLeastUsedTypeColor}from"../../chunks/app-D_UaMBbX.js";

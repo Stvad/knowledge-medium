@@ -1,1 +1,1 @@
-export{GA as chipStyle}from"../../../chunks/app-CnUOLQNC.js";
+export{GA as chipStyle}from"../../../chunks/app-D_UaMBbX.js";

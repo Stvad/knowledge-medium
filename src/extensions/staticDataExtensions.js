@@ -1,1 +1,1 @@
-export{AU as staticDataExtensions}from"../../chunks/app-CnUOLQNC.js";
+export{AU as staticDataExtensions}from"../../chunks/app-D_UaMBbX.js";

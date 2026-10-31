@@ -1,1 +1,1 @@
-export{MX as SYNCED_TABLES,NX as syncedWriteTarget,PX as writeTargets}from"../../chunks/app-CnUOLQNC.js";
+export{MX as SYNCED_TABLES,NX as syncedWriteTarget,PX as writeTargets}from"../../chunks/app-D_UaMBbX.js";

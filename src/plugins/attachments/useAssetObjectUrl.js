@@ -1,1 +1,1 @@
-export{Db as useAssetObjectUrl}from"../../../chunks/app-CnUOLQNC.js";
+export{Db as useAssetObjectUrl}from"../../../chunks/app-D_UaMBbX.js";
