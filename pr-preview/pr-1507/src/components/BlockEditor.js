@@ -1,1 +1,1 @@
-export{SF as BlockEditor}from"../../chunks/app-Mtt69Qno.js";
+export{SF as BlockEditor}from"../../chunks/app-wA_ZKG6o.js";
