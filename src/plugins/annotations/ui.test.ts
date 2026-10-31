@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
+import {quotedInFooterContribution} from './quotedIn'
 import {THREAD_TYPE} from './schema'
 import type {ThreadSummary} from './summaries'
 import {
@@ -9,9 +10,13 @@ import {
   commentContextMenuItem,
   commentPillContribution,
   commentsFooterContribution,
+  inCard,
   pillClick,
   threadsUnderComment,
 } from './ui'
+
+const thread = (id: string, open = true): ThreadSummary =>
+  ({id, open, anchor: {kind: 'block'}, commentCount: 1, quoterCount: 0, createdAt: 0})
 
 /** The contributions decide from the resolve context alone, so a context with
  *  just the fields they read is enough. */
@@ -31,20 +36,31 @@ describe('where the comments UI attaches', () => {
   })
 
   it('gives Reply and Delete to comments inside a card, not to the root or to blocks outside one', () => {
-    const card = {[COMMENT_CARD_KEY]: 'T', scopeRootId: 'T', isNestedSurface: true}
+    const card = {[COMMENT_CARD_KEY]: 'card:T', renderScopeId: 'card:T', scopeRootId: 'T', isNestedSurface: true}
     expect(commentActionsContribution(ctx({blockContext: card}))).toBeTruthy()
     expect(commentActionsContribution(ctx({types: [THREAD_TYPE], blockContext: card}))).toBeNull()
     expect(commentActionsContribution(ctx({}))).toBeNull()
   })
 
   it('stops at a nested surface inside a card, such as a note embedded in a comment', () => {
-    // The embed inherits the card's keys but resets the scope root.
-    const embedInCard = {[COMMENT_CARD_KEY]: 'T', scopeRootId: 'X', isNestedSurface: true, isEmbedded: true}
+    // The embed inherits the card's keys but sets a render scope of its own.
+    const embedInCard = {[COMMENT_CARD_KEY]: 'card:T', renderScopeId: 'embed:X', scopeRootId: 'X', isNestedSurface: true, isEmbedded: true}
     expect(commentActionsContribution(ctx({blockContext: embedInCard}))).toBeNull()
   })
 
+  it('stops at a surface nested in the card that shows the card’s own thread again', () => {
+    const root = {[COMMENT_CARD_KEY]: 'card:T', renderScopeId: 'card:T', scopeRootId: 'T'}
+    expect(quotedInFooterContribution(ctx({types: [THREAD_TYPE], blockContext: root}))).toBeTruthy()
+    // A comment embedding its thread, or a quoter listed under "Quoted in".
+    expect(inCard({...root, renderScopeId: 'embed:T', isNestedSurface: true, isEmbedded: true})).toBe(false)
+    // A quoter that is a comment of the thread, with its breadcrumb promoted
+    // to the root inside its backlink entry.
+    expect(inCard({...root, renderScopeId: 'backlink:X', isNestedSurface: true, isBacklink: true})).toBe(false)
+    // That entry's breadcrumb, which keeps the card's scope.
+    expect(inCard({...root, isBreadcrumb: true})).toBe(false)
+  })
+
   it('shows a comment\u2019s open threads under it, but never a thread whose card already encloses it', () => {
-    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
     const onComment = [thread('T'), thread('U'), thread('V', false)]
     // A thread anchored to a comment of itself would otherwise render itself
     // inside its own card, forever.
@@ -52,7 +68,6 @@ describe('where the comments UI attaches', () => {
   })
 
   it('pins a card from the pill when the margin is drawn, revealing closed threads when they are all there is', () => {
-    const thread = (id: string, open = true): ThreadSummary => ({id, open, anchor: {kind: 'block'}, commentCount: 1, createdAt: 0})
     expect(pillClick([thread('R', false), thread('O')], true)).toEqual({kind: 'activate', threadId: 'O', revealClosed: false})
     expect(pillClick([thread('R', false)], true)).toEqual({kind: 'activate', threadId: 'R', revealClosed: true})
     expect(pillClick([thread('O')], false)).toEqual({kind: 'expand-inline'})

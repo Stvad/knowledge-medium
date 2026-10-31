@@ -10,13 +10,36 @@ import {editorContentFlushFacet} from '@/editor/contentFlush.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
-import {anchorFromEditor, annotationActions, COMMENT_ON_BLOCK_ACTION_ID, COMMENT_ON_SELECTION_ACTION_ID, submitComposer} from './actions'
+import {
+  anchorOf,
+  annotationActions,
+  COMMENT_ON_BLOCK_ACTION_ID,
+  COMMENT_ON_SELECTION_ACTION_ID,
+  COPY_REFERENCE_TO_SELECTION_ACTION_ID,
+  copyReferenceToTarget,
+  rangeFromEditor,
+  submitComposer,
+} from './actions'
 import {resolveAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
 import {createThread} from './threads'
 import {closeComposer, openComposer, peekComposer, peekPendingReanchor, releasePendingReanchor, startReanchor, updateComposer, viewKey} from './uiStore'
+
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+const toasts = vi.hoisted(() => ({info: vi.fn(), error: vi.fn()}))
+
+vi.mock('@/utils/copy.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/copy.js')>(),
+  writeTextToClipboard: clipboard.write,
+}))
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: toasts.info,
+  showError: toasts.error,
+}))
 
 const WS = 'ws'
 const TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -79,7 +102,7 @@ describe('commenting on an editor selection', () => {
     expect((await repo.load('B'))!.content).toBe(TEXT)
 
     select(editor, 'Thursday')
-    openComposer(KEY, 'B', anchorFromEditor(editor))
+    openComposer(KEY, 'B', anchorOf(rangeFromEditor(editor)))
     updateComposer(KEY, {draft: 'Is Thursday confirmed?'})
     expect(await submitComposer(repo, KEY)).toBe(true)
 
@@ -94,7 +117,7 @@ describe('commenting on an editor selection', () => {
   it('refuses when the target changed under the selection, keeping the draft', async () => {
     const editor = editorOnB()
     select(editor, 'Thursday')
-    openComposer(KEY, 'B', anchorFromEditor(editor))
+    openComposer(KEY, 'B', anchorOf(rangeFromEditor(editor)))
     updateComposer(KEY, {draft: 'Is Thursday confirmed?'})
 
     await repo.tx(tx => tx.update('B', {content: `Elsewhere: ${TEXT}`}), opts)
@@ -192,10 +215,51 @@ describe('commenting on an editor selection', () => {
     releasePendingReanchor('T')
     expect(peekPendingReanchor()).toBeNull()
   })
+})
 
-  it('comments on the whole block when nothing is selected', () => {
+describe('copying a reference to a selection', () => {
+  beforeEach(() => {
+    clipboard.write.mockReset().mockResolvedValue(undefined)
+    toasts.info.mockReset()
+    toasts.error.mockReset()
+  })
+
+  const target = (from: number, to: number) => ({block: repo.block('B'), renderScopeId: undefined, range: {content: TEXT, from, to}})
+  const thursday = TEXT.indexOf('Thursday')
+
+  it('quotes what the editor shows, in a backlink entry too, where commenting does not run', async () => {
     const editor = editorOnB()
-    editor.dispatch({selection: EditorSelection.single(5)})
-    expect(anchorFromEditor(editor)).toBeNull()
+    editor.dispatch({changes: {from: 0, insert: 'Update: '}})
+    select(editor, 'Thursday')
+    const copy = annotationActions.find(action => action.id === COPY_REFERENCE_TO_SELECTION_ACTION_ID)!
+    const deps = {block: repo.block('B'), uiStateBlock: repo.block('B'), renderScopeId: backlinkRenderScopeId(PANEL, 'x'), editorView: editor}
+
+    await copy.handler(deps as never, new CustomEvent('test'))
+
+    const [threadId] = await threadsOnB()
+    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    const anchor = threadAnchorOf((await repo.load(threadId))!)
+    if (anchor.kind !== 'range') throw new Error('expected a range anchor')
+    expect(anchor).toMatchObject({quote: 'Thursday', quoteStart: 31})
+    expect(resolveAnchor((await repo.load('B'))!.content, anchor).state).toBe('exact')
+  })
+
+  it('copies nothing for an empty selection', async () => {
+    expect(await copyReferenceToTarget(target(thursday, thursday))).toBe(false)
+    expect(toasts.info).toHaveBeenCalled()
+    expect(clipboard.write).not.toHaveBeenCalled()
+    expect(await threadsOnB()).toEqual([])
+  })
+
+  it('keeps the highlight when the browser refuses the clipboard, and the retry reuses it', async () => {
+    clipboard.write.mockRejectedValueOnce(new DOMException('Document is not focused.', 'NotAllowedError'))
+
+    expect(await copyReferenceToTarget(target(thursday, thursday + 'Thursday'.length))).toBe(false)
+    expect(toasts.error).toHaveBeenCalled()
+    const [threadId] = await threadsOnB()
+    expect(threadId).toBeDefined()
+
+    expect(await copyReferenceToTarget(target(thursday, thursday + 'Thursday'.length))).toBe(true)
+    expect(clipboard.write).toHaveBeenLastCalledWith(`((${threadId}))`)
   })
 })

@@ -40,14 +40,15 @@ import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {isImeKeyEvent} from '@/shortcuts/utils.js'
-import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {submitComposer} from './actions.ts'
+import type {RangeAnchor} from './anchor.ts'
+import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
+import {reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
+import {ReadSelectionMenu} from './readSelectionUi.tsx'
 import {
   THREAD_TYPE,
   threadAnchorOf,
@@ -59,6 +60,7 @@ import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread
 import {isThreadRefusal, replyTo, setThreadStatus} from './threads.ts'
 import {
   activateThread,
+  cardRenderScopeId,
   closeComposer,
   openComposer,
   releasePendingReanchor,
@@ -74,26 +76,25 @@ import {
   useShowResolved,
   useThreadsExpanded,
   viewKey,
+  type CardSurface,
   type ComposerState,
 } from './uiStore.ts'
 
-/** Set to the thread id on a card's nested surface; read by the root's header
- *  renderer and by the per-comment actions. */
+/** Set to the card's render scope on a card's nested surface; read by the
+ *  root's header renderer, the per-comment actions and "Quoted in". */
 export const COMMENT_CARD_KEY = 'annotations.commentCard'
 
-/** Inside a thread's card, and not inside a nested surface within it: block
- *  context is inherited, but every nested surface (an embed in a comment, say)
- *  resets the scope root, so the card's blocks are those whose scope root is
- *  the thread the card was opened for. */
-const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
-  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.scopeRootId
+/** A block of a thread's card, not of a surface nested in it. Block context is
+ *  inherited, but every nested surface (an embed, a reference, a backlink
+ *  entry under "Quoted in") sets a render scope of its own, so the card's
+ *  blocks are those still in the card's. Breadcrumbs keep their surface's
+ *  scope, so they are excluded by name. */
+export const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
+  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.renderScopeId &&
+  blockContext.isBreadcrumb !== true
 
 const useReadOnly = (repo: Repo): boolean =>
   useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
-
-const reportFailure = (error: unknown): void => {
-  showError(error instanceof Error ? error.message : String(error))
-}
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
@@ -172,11 +173,13 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const highlights = useHighlightFeed(block)
   return (
     <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-          <Inner block={block}/>
-        </MarkdownInputProvider>
-      </div>
+      <ReadSelectionMenu block={block}>
+        <div className="min-w-0 flex-1">
+          <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+            <Inner block={block}/>
+          </MarkdownInputProvider>
+        </div>
+      </ReadSelectionMenu>
       {(count !== null || expanded) && (
         <GutterPill
           count={count}
@@ -274,9 +277,9 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
  *  distinct render scopes. */
-export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: string}) => {
+export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
   const parent = useBlockContext()
-  const renderScopeId = surfaceRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
+  const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
       <NestedBlockContextProvider overrides={{
@@ -284,7 +287,7 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
         layoutBoundary: false,
         renderScopeId,
         scopeRootId: thread.id,
-        [COMMENT_CARD_KEY]: thread.id,
+        [COMMENT_CARD_KEY]: renderScopeId,
         [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
         [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
       }}>
@@ -351,23 +354,6 @@ const ActionButton = ({onClick, children}: {onClick: () => void; children: React
     {children}
   </button>
 )
-
-type AnchorState = 'exact' | 'moved' | 'stale' | 'deleted'
-
-const ANCHOR_BADGES: Record<Exclude<AnchorState, 'exact'>, string> = {
-  moved: 'text around it changed',
-  stale: 'quoted text changed',
-  deleted: 'on a deleted block',
-}
-
-const useAnchorState = (root: RootFields): {state: AnchorState; targetContent: string | null} => {
-  const repo = useRepo()
-  const targetId = threadTargetIdOf(root) ?? ''
-  const targetContent = useHandle(repo.block(targetId), {selector: data => data && !data.deleted ? data.content : null})
-  if (targetContent === null) return {state: 'deleted', targetContent}
-  const anchor = threadAnchorOf(root)
-  return {state: anchor.kind === 'block' ? 'exact' : resolveAnchor(targetContent, anchor).state, targetContent}
-}
 
 const TargetLink = ({targetId}: {targetId: string}) => {
   const repo = useRepo()
@@ -471,12 +457,14 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
  *  outside a card: which block it is on, and what it quotes. */
 const ThreadElsewhere = ({root}: {root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
+  const {state} = useAnchorState(root)
   return (
     <div className="text-sm text-muted-foreground">
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
       <QuoteText anchor={threadAnchorOf(root)}/>
+      {state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
     </div>
   )
 }
