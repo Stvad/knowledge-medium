@@ -1,1 +1,1 @@
-export{C0 as kernelDataExtension}from"../../chunks/app-BCAOXzjc.js";
+export{x0 as kernelDataExtension}from"../../chunks/app-CnUOLQNC.js";

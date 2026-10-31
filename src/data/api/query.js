@@ -1,1 +1,1 @@
-export{oat as defineQuery}from"../../../chunks/app-BCAOXzjc.js";
+export{iat as defineQuery}from"../../../chunks/app-CnUOLQNC.js";

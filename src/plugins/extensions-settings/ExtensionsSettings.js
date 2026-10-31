@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-BCAOXzjc.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-CnUOLQNC.js";
