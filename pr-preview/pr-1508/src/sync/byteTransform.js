@@ -1,1 +1,1 @@
-export{GC as MAX_OBJECT_BYTES,KC as encodeBytes,qC as encodedSize,JC as fitsObjectLimit,YC as verifyObjectBytes}from"../../chunks/app-DIgY8EHy.js";
+export{KC as MAX_OBJECT_BYTES,qC as encodeBytes,JC as encodedSize,YC as fitsObjectLimit,XC as verifyObjectBytes}from"../../chunks/app-Ck98Y4aE.js";

@@ -1,1 +1,1 @@
-export{WM as ConfirmDefinitionChangeDialog}from"../../../chunks/app-DIgY8EHy.js";
+export{GM as ConfirmDefinitionChangeDialog}from"../../../chunks/app-Ck98Y4aE.js";

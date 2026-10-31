@@ -1,1 +1,1 @@
-export{FX as instrumentAdapter}from"../../../chunks/app-DIgY8EHy.js";
+export{IX as instrumentAdapter}from"../../../chunks/app-Ck98Y4aE.js";

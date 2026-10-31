@@ -1,1 +1,1 @@
-export{cl as blockTaggingDataExtension}from"../../../chunks/app-DIgY8EHy.js";
+export{cl as blockTaggingDataExtension}from"../../../chunks/app-Ck98Y4aE.js";

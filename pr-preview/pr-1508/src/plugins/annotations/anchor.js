@@ -1,1 +1,1 @@
-export{Ip as ANCHOR_CONTEXT_LENGTH,Lp as captureAnchor,Rp as resolveAnchor,zp as widenToReferenceSpans,Bp as widenToSpans}from"../../../chunks/app-DIgY8EHy.js";
+export{Lp as ANCHOR_CONTEXT_LENGTH,Rp as captureAnchor,zp as resolveAnchor,Bp as widenToReferenceSpans,Vp as widenToSpans}from"../../../chunks/app-Ck98Y4aE.js";

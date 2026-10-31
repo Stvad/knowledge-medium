@@ -1,1 +1,1 @@
-export{VD as SHORTCUT_HELP_ACTION_ID,GD as ShortcutHelpOverlay,HD as shortcutHelpAction,UD as shortcutHelpMount,WD as shortcutHelpPlugin}from"../../../chunks/app-DIgY8EHy.js";
+export{HD as SHORTCUT_HELP_ACTION_ID,KD as ShortcutHelpOverlay,UD as shortcutHelpAction,WD as shortcutHelpMount,GD as shortcutHelpPlugin}from"../../../chunks/app-Ck98Y4aE.js";

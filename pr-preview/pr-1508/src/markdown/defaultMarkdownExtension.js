@@ -1,1 +1,1 @@
-export{AM as gfmMarkdownExtension,jM as isExternalHref}from"../../chunks/app-DIgY8EHy.js";
+export{jM as gfmMarkdownExtension,MM as isExternalHref}from"../../chunks/app-Ck98Y4aE.js";
