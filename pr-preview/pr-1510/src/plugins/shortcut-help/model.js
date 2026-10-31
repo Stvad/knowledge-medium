@@ -1,1 +1,1 @@
-export{SO as actionSourcesFromRuntime,CO as buildShortcutHelpModel,wO as describeHandler}from"../../../chunks/app-CMsaRi21.js";
+export{CO as actionSourcesFromRuntime,wO as buildShortcutHelpModel,TO as describeHandler}from"../../../chunks/app-1_oXfYkI.js";

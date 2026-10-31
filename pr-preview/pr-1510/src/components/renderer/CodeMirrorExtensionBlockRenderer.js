@@ -1,1 +1,1 @@
-export{BN as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-CMsaRi21.js";
+export{VN as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-1_oXfYkI.js";

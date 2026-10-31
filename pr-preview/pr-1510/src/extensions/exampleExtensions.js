@@ -1,1 +1,1 @@
-export{WA as exampleExtensions,GA as insertExampleExtensionsUnder}from"../../chunks/app-CMsaRi21.js";
+export{GA as exampleExtensions,KA as insertExampleExtensionsUnder}from"../../chunks/app-1_oXfYkI.js";

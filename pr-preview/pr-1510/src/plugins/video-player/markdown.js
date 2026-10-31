@@ -1,1 +1,1 @@
-export{Pb as videoPlayerMarkdownExtension}from"../../../chunks/app-CMsaRi21.js";
+export{Fb as videoPlayerMarkdownExtension}from"../../../chunks/app-1_oXfYkI.js";

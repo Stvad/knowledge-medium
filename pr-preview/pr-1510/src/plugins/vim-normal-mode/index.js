@@ -1,1 +1,1 @@
-export{Dx as vimNormalModeInteractionExtension,Ox as vimNormalModePlugin}from"../../../chunks/app-CMsaRi21.js";
+export{Ox as vimNormalModeInteractionExtension,kx as vimNormalModePlugin}from"../../../chunks/app-1_oXfYkI.js";

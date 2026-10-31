@@ -1,1 +1,1 @@
-export{bet as hasSupabaseAuthConfig,xet as isAuthCallbackUrl,Set as readPersistedSession,Cet as sessionUserToAppUser,wet as supabase}from"../../chunks/app-CMsaRi21.js";
+export{xet as hasSupabaseAuthConfig,Set as isAuthCallbackUrl,Cet as readPersistedSession,wet as sessionUserToAppUser,Tet as supabase}from"../../chunks/app-1_oXfYkI.js";

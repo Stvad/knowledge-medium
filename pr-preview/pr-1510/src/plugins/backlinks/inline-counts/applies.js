@@ -1,1 +1,1 @@
-export{jg as inlineBacklinksApplies}from"../../../../chunks/app-CMsaRi21.js";
+export{Mg as inlineBacklinksApplies}from"../../../../chunks/app-1_oXfYkI.js";

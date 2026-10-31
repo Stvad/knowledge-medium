@@ -1,1 +1,1 @@
-export{cg as blockInfoPlugin}from"../../../chunks/app-CMsaRi21.js";
+export{lg as blockInfoPlugin}from"../../../chunks/app-1_oXfYkI.js";

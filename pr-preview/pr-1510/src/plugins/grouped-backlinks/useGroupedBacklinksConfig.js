@@ -1,1 +1,1 @@
-export{Cg as useGroupedBacklinksConfig}from"../../../chunks/app-CMsaRi21.js";
+export{wg as useGroupedBacklinksConfig}from"../../../chunks/app-1_oXfYkI.js";

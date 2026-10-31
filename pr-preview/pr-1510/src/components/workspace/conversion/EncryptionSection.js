@@ -1,1 +1,1 @@
-export{WC as EncryptionSection}from"../../../../chunks/app-CMsaRi21.js";
+export{GC as EncryptionSection}from"../../../../chunks/app-1_oXfYkI.js";

@@ -1,1 +1,1 @@
-export{HC as WorkspaceSwitcher}from"../../../chunks/app-CMsaRi21.js";
+export{UC as WorkspaceSwitcher}from"../../../chunks/app-1_oXfYkI.js";

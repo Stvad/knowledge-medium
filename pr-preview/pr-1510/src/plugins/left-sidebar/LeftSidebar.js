@@ -1,1 +1,1 @@
-export{NC as LeftSidebar,PC as LeftSidebarCoreSection,FC as LeftSidebarShortcutsSection}from"../../../chunks/app-CMsaRi21.js";
+export{PC as LeftSidebar,FC as LeftSidebarCoreSection,IC as LeftSidebarShortcutsSection}from"../../../chunks/app-1_oXfYkI.js";

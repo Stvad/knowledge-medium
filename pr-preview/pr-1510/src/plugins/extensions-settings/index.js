@@ -1,1 +1,1 @@
-export{cp as extensionsOverridesProp,lp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-CMsaRi21.js";
+export{lp as extensionsOverridesProp,up as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-1_oXfYkI.js";

@@ -1,1 +1,1 @@
-export{KN as BlockTypeBlockRenderer,qN as BlockTypeContentRenderer,JN as writeBlockTypeLabel}from"../../../chunks/app-CMsaRi21.js";
+export{qN as BlockTypeBlockRenderer,JN as BlockTypeContentRenderer,YN as writeBlockTypeLabel}from"../../../chunks/app-1_oXfYkI.js";

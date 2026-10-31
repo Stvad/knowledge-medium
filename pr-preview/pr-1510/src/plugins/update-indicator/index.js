@@ -1,1 +1,1 @@
-export{ug as updateIndicatorPlugin}from"../../../chunks/app-CMsaRi21.js";
+export{dg as updateIndicatorPlugin}from"../../../chunks/app-1_oXfYkI.js";

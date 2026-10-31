@@ -1,1 +1,1 @@
-export{Bx as PanelCursorFollowsScroll}from"../../../chunks/app-CMsaRi21.js";
+export{Vx as PanelCursorFollowsScroll}from"../../../chunks/app-1_oXfYkI.js";

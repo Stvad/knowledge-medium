@@ -1,1 +1,1 @@
-export{lm as ANCHOR_CONTEXT_LENGTH,um as captureAnchor,dm as resolveAnchor,fm as widenToReferenceSpans,pm as widenToSpans}from"../../../chunks/app-CMsaRi21.js";
+export{um as ANCHOR_CONTEXT_LENGTH,dm as captureAnchor,fm as resolveAnchor,pm as widenToReferenceSpans,mm as widenToSpans}from"../../../chunks/app-1_oXfYkI.js";

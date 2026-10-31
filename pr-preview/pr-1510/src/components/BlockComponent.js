@@ -1,1 +1,1 @@
-export{qM as BlockChildren,JM as BlockComponent}from"../../chunks/app-CMsaRi21.js";
+export{JM as BlockChildren,YM as BlockComponent}from"../../chunks/app-1_oXfYkI.js";

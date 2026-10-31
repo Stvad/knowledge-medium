@@ -1,1 +1,1 @@
-export{fj as editorAutocompleteExtension}from"../../chunks/app-CMsaRi21.js";
+export{pj as editorAutocompleteExtension}from"../../chunks/app-1_oXfYkI.js";

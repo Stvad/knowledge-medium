@@ -1,1 +1,1 @@
-export{ap as extensionApiCatalog,op as extensionApiRuntimeExports}from"../../chunks/app-CMsaRi21.js";
+export{op as extensionApiCatalog,sp as extensionApiRuntimeExports}from"../../chunks/app-1_oXfYkI.js";

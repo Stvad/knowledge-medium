@@ -1,1 +1,1 @@
-export{BP as __resetDialogsForTests,VP as getDialogQueue,HP as isDialogOpenForWorkspace,UP as openDialog,WP as subscribeDialogs}from"../../chunks/app-CMsaRi21.js";
+export{VP as __resetDialogsForTests,HP as getDialogQueue,UP as isDialogOpenForWorkspace,WP as openDialog,GP as subscribeDialogs}from"../../chunks/app-1_oXfYkI.js";
