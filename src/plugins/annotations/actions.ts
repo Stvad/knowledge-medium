@@ -335,7 +335,8 @@ export interface ReadSelectionGesture {
   actionId: string
   /** The menu item's. */
   label: string
-  /** The command's, in the palette and the keybindings editor. */
+  /** The command's, in the palette and the keybindings editor: its
+   *  edit-mode twin's. */
   description: string
   icon: LucideIcon
   keys: string
@@ -344,15 +345,15 @@ export interface ReadSelectionGesture {
 
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
   {
-    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment on selection',
+    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: commentOnSelection.description,
     icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget,
   },
   {
-    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
+    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: highlightSelection.description,
     icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget,
   },
   {
-    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: 'Suggest edit to selection',
+    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: suggestEdit.description,
     icon: PencilLine, keys: SUGGEST_KEYS, step: suggestOnTarget,
   },
 ]
