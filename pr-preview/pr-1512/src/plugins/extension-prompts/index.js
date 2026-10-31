@@ -1,1 +1,1 @@
-export{yj as ExtensionPromptSurface,bj as extensionPromptsExtension}from"../../../chunks/app-IvG-7ED8.js";
+export{bj as ExtensionPromptSurface,xj as extensionPromptsExtension}from"../../../chunks/app-B5hg_Bsz.js";

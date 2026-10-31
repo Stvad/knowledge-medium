@@ -1,1 +1,1 @@
-export{Nat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-IvG-7ED8.js";
+export{Pat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-B5hg_Bsz.js";

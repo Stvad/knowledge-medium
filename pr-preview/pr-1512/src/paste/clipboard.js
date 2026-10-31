@@ -1,1 +1,1 @@
-export{IF as readClipboardContent}from"../../chunks/app-IvG-7ED8.js";
+export{LF as readClipboardContent}from"../../chunks/app-B5hg_Bsz.js";

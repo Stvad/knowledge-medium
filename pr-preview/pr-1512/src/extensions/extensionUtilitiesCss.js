@@ -1,1 +1,1 @@
-export{WM as ensureExtensionUtilitiesCss}from"../../chunks/app-IvG-7ED8.js";
+export{GM as ensureExtensionUtilitiesCss}from"../../chunks/app-B5hg_Bsz.js";

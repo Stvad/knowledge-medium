@@ -1,1 +1,1 @@
-export{Mg as toggleBacklinkExpansion,Ng as useBacklinkExpansion}from"../../../../chunks/app-IvG-7ED8.js";
+export{Ng as toggleBacklinkExpansion,Pg as useBacklinkExpansion}from"../../../../chunks/app-B5hg_Bsz.js";
