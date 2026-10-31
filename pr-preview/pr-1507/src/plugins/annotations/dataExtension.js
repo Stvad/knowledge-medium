@@ -1,1 +1,1 @@
-export{JK as annotationsDataExtension}from"../../../chunks/app-CBbeRl0J.js";
+export{JK as annotationsDataExtension}from"../../../chunks/app-Bc4bBrHO.js";

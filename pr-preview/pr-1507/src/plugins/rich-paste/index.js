@@ -1,1 +1,1 @@
-export{Uv as richPastePlugin}from"../../../chunks/app-CBbeRl0J.js";
+export{Uv as richPastePlugin}from"../../../chunks/app-Bc4bBrHO.js";

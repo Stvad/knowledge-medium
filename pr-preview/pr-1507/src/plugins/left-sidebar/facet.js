@@ -1,1 +1,1 @@
-export{ZC as isLeftSidebarSectionContribution,QC as leftSidebarSectionsFacet}from"../../../chunks/app-CBbeRl0J.js";
+export{ZC as isLeftSidebarSectionContribution,QC as leftSidebarSectionsFacet}from"../../../chunks/app-Bc4bBrHO.js";

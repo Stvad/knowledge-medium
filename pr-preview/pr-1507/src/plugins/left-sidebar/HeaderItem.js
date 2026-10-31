@@ -1,1 +1,1 @@
-export{WC as LeftSidebarHeaderItem}from"../../../chunks/app-CBbeRl0J.js";
+export{WC as LeftSidebarHeaderItem}from"../../../chunks/app-Bc4bBrHO.js";

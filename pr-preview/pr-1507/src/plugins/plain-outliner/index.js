@@ -1,1 +1,1 @@
-export{DC as plainOutlinerPlugin}from"../../../chunks/app-CBbeRl0J.js";
+export{DC as plainOutlinerPlugin}from"../../../chunks/app-Bc4bBrHO.js";
