@@ -1,1 +1,0 @@
-export{PX as SYNCED_TABLES,FX as syncedWriteTarget,IX as writeTargets}from"../../chunks/app-BdkDflwx.js";

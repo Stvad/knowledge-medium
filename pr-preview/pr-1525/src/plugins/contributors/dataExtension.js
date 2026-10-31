@@ -1,1 +1,0 @@
-export{Gq as contributorsDataExtension}from"../../../chunks/app-BdkDflwx.js";

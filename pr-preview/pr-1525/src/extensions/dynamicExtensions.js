@@ -1,1 +1,0 @@
-export{UM as dynamicExtensionsExtension}from"../../chunks/app-BdkDflwx.js";

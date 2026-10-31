@@ -1,1 +1,0 @@
-export{UX as omnilinerNamespace}from"../../chunks/app-BdkDflwx.js";

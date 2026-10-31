@@ -1,1 +1,0 @@
-export{MC as MobileBottomNavButton}from"../../../chunks/app-BdkDflwx.js";

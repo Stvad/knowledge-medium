@@ -1,1 +1,0 @@
-export{C0 as kernelDataExtension}from"../../chunks/app-BdkDflwx.js";

@@ -1,1 +1,0 @@
-export{oat as defineQuery}from"../../../chunks/app-BdkDflwx.js";

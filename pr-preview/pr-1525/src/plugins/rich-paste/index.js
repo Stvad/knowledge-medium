@@ -1,1 +1,0 @@
-export{oy as richPastePlugin}from"../../../chunks/app-BdkDflwx.js";

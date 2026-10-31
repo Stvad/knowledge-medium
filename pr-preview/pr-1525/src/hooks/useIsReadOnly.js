@@ -1,1 +1,0 @@
-export{jv as useIsReadOnly}from"../../chunks/app-BdkDflwx.js";

@@ -1,1 +1,0 @@
-export{LQ as FacetBridge}from"../../chunks/app-BdkDflwx.js";

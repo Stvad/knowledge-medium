@@ -1,1 +1,0 @@
-export{uy as attachmentsPlugin}from"../../../chunks/app-BdkDflwx.js";

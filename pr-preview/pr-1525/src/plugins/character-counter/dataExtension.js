@@ -1,1 +1,0 @@
-export{sJ as characterCounterDataExtension}from"../../../chunks/app-BdkDflwx.js";

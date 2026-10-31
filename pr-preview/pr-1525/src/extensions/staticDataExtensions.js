@@ -1,1 +1,0 @@
-export{MU as staticDataExtensions}from"../../chunks/app-BdkDflwx.js";

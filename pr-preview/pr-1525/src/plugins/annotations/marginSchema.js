@@ -1,1 +1,0 @@
-export{Bq as annotationMarginOpenProp}from"../../../chunks/app-BdkDflwx.js";

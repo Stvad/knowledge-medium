@@ -1,1 +1,0 @@
-export{gs as appVersion}from"../chunks/app-BdkDflwx.js";

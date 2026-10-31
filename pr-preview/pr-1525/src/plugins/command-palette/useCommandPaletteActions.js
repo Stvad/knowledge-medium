@@ -1,1 +1,0 @@
-export{Ck as useCommandPaletteActions}from"../../../chunks/app-BdkDflwx.js";

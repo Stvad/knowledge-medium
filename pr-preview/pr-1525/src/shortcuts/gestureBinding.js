@@ -1,1 +1,0 @@
-export{EM as gestureBindingDescriptor,DM as matchesGestureEvent}from"../../chunks/app-BdkDflwx.js";
