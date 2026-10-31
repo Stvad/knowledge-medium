@@ -23,7 +23,7 @@ import {
 } from '../sessionContext'
 import { pageRecordFor } from '../sessionContext'
 import { drainInteractionSamples, interactionMetricsEffect } from '../schedule'
-import { observation, stubPerformanceObserver } from './fakePerformanceObserver'
+import { observation, stubPerformanceObserver } from '@/test/fakePerformanceObserver'
 
 const WS = 'ws-1'
 const USER: User = { id: 'user-1', name: 'Alice' }
