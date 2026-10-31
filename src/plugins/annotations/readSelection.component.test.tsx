@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {cleanup, render, screen} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
@@ -18,12 +18,14 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
-import {outlineRenderScopeId} from '@/utils/renderScope'
+import {outlineRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
+import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {annotationsPlugin} from './index'
-import {readSelectionTarget} from './actions'
+import {annotationActions, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
+import {closeComposer, peekComposer, viewKey} from './uiStore'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -54,6 +56,11 @@ vi.mock('@/data/globalState.ts', async () => {
     useIsSelected: (): boolean => false,
   }
 })
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showInfo: vi.fn(),
+}))
 
 vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
   LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
@@ -116,11 +123,11 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderBlocks = async (...ids: string[]) => {
+  const renderIn = async (renderScopeId: string, ids: string[]) => {
     const settled = ids.includes('host') ? 'x' : ids.includes(SELF) ? 'bar' : 'Referenced words'
     render(
       <AppRuntimeContextProvider value={repo.facetRuntime!}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: outlineRenderScopeId('page')}}>
+        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId}}>
           <ActiveContextsProvider>
             {ids.map(id => <DefaultBlockRenderer key={id} block={repo.block(id)}/>)}
           </ActiveContextsProvider>
@@ -129,6 +136,8 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     )
     await screen.findAllByText(settled, {exact: false})
   }
+
+  const renderBlocks = (...ids: string[]) => renderIn(outlineRenderScopeId('page'), ids)
 
   /** The text node holding `text` (its first occurrence, or the `nth`), and
    *  the offset of `text` in it. */
@@ -275,5 +284,60 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   it('refuses text the parser changed, a space dropped before a line break', async () => {
     await renderBlocks('trimmed', 'rich')
     expect(mapReadSelection(ends('second', 'line'), contentOf)).toEqual({kind: 'inexact'})
+  })
+
+  describe('suggesting an edit', () => {
+    const PANEL = panelRenderScopeId('panel', 'page')
+    const suggest = annotationActions.find(action => action.id === SUGGEST_EDIT_READ_SELECTION_ACTION_ID)!
+    const dispatch = () => suggest.handler({uiStateBlock: repo.block('ui-state')} as never, new KeyboardEvent('keydown'))
+
+    /** From the start of `from` to the end of `to`, as a drag leaves it. */
+    const select = (from: string, to: string) => {
+      const start = at(from)
+      const end = at(to)
+      act(() => {
+        document.getSelection()!.setBaseAndExtent(start.node, start.offset, end.node, end.offset + to.length)
+        document.dispatchEvent(new Event('selectionchange'))
+      })
+    }
+
+    afterEach(() => {
+      document.getSelection()?.removeAllRanges()
+      closeComposer(viewKey(PANEL, 'rich'))
+      vi.mocked(showInfo).mockClear()
+    })
+
+    it('opens the composer from the context menu on exactly the selected raw text', async () => {
+      await renderIn(PANEL, ['rich'])
+      select('old', 'and')
+      fireEvent.contextMenu(at('old').node.parentElement!)
+      fireEvent.click(await screen.findByRole('menuitem', {name: 'Suggest edit'}))
+      const quote = 'old** text, see [[Launch plan]] and'
+      expect(await screen.findByLabelText('Replacement')).toHaveProperty('value', quote)
+      expect(peekComposer(viewKey(PANEL, 'rich'))?.anchor).toMatchObject({quote, quoteStart: RICH.indexOf(quote)})
+    })
+
+    it('refuses a selection across blocks, or ending inside a rendered reference', async () => {
+      await renderIn(PANEL, ['rich', 'other'])
+      select('Some', 'Another')
+      await dispatch()
+      select('see', 'Launch')
+      await dispatch()
+      expect(vi.mocked(showInfo).mock.calls).toEqual([
+        ['Select text within one block.'],
+        [expect.stringMatching(/^Can’t tell exactly which text that is/)],
+      ])
+      expect(peekComposer(viewKey(PANEL, 'rich'))).toBeUndefined()
+    })
+
+    it('refuses off the outline, where no composer renders', async () => {
+      await renderBlocks('rich')
+      select('Some', 'text')
+      const selection = mapReadSelection(document.getSelection(), contentOf)
+      expect(selection).toMatchObject({kind: 'range', from: 0, to: 18})
+      await dispatch()
+      expect(peekComposer(viewKey(selection?.kind === 'range' ? selection.renderScopeId : '', 'rich'))).toBeUndefined()
+      expect(showInfo).toHaveBeenCalledWith('Open the block in its page to suggest an edit to it.')
+    })
   })
 })

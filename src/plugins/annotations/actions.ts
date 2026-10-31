@@ -1,5 +1,5 @@
 import type {EditorView} from '@codemirror/view'
-import {MessageSquarePlus, Highlighter, PanelRight, type LucideIcon} from 'lucide-react'
+import {MessageSquarePlus, Highlighter, PanelRight, PencilLine, type LucideIcon} from 'lucide-react'
 import {Block} from '@/data/block'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BLOCK_SHELL_ATTRIBUTE} from '@/extensions/blockInteraction.js'
@@ -37,9 +37,11 @@ import {
 
 export const COMMENT_ON_SELECTION_ACTION_ID = 'annotations.commentOnSelection'
 export const HIGHLIGHT_SELECTION_ACTION_ID = 'annotations.highlightSelection'
+export const SUGGEST_EDIT_ACTION_ID = 'annotations.suggestEdit'
 export const COMMENT_ON_BLOCK_ACTION_ID = 'annotations.commentOnBlock'
 export const COMMENT_ON_READ_SELECTION_ACTION_ID = 'annotations.commentOnReadSelection'
 export const HIGHLIGHT_READ_SELECTION_ACTION_ID = 'annotations.highlightReadSelection'
+export const SUGGEST_EDIT_READ_SELECTION_ACTION_ID = 'annotations.suggestEditReadSelection'
 export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
 
 /** One chord per gesture, the same in every mode it runs in. Control+Shift
@@ -47,6 +49,8 @@ export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
  *  ⌘⌥ and ⌘⇧ (⌘⌥M minimizes every window), and on Windows Ctrl+Alt is AltGr. */
 const COMMENT_KEYS = 'Control+Shift+Slash'
 const HIGHLIGHT_KEYS = 'Control+Shift+h'
+/** Firefox, and Edge on Windows, take this chord for a screenshot; accepted. */
+const SUGGEST_KEYS = 'Control+Shift+s'
 
 /** Home of the gestures on text selected in rendered (not edited) block
  *  content, where no editor holds a selection to read. Always active; each
@@ -169,6 +173,34 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
   return true
 }
 
+/** Open the suggestion composer on a raw range of `targetId`'s content,
+ *  widened to whole reference spans, with the replacement prefilled with the
+ *  quote. False for an empty range, which has nothing to replace. */
+export const openSuggestionComposer = (
+  targetId: string,
+  renderScopeId: string | undefined,
+  {content, from, to}: ContentRange,
+): boolean => {
+  const anchor = captureAnchor(content, from, to)
+  if (!anchor) return false
+  openComposer(viewKey(renderScopeId, targetId), targetId, anchor, {replacement: anchor.quote})
+  return true
+}
+
+/** Open the suggestion composer on the target's text: a comment's flow, with
+ *  a replacement. True when it opened. */
+const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
+  if (!onOutline(target)) {
+    showInfo('Open the block in its page to suggest an edit to it.')
+    return false
+  }
+  if (!openSuggestionComposer(target.block.id, target.renderScopeId, target.range)) {
+    showInfo('Select the text to suggest a change to.')
+    return false
+  }
+  return true
+}
+
 /** A thread with no comments on the target's text. True when it was made. */
 export const highlightTarget = async (target: SelectionTarget): Promise<boolean> => {
   if (!onOutline(target)) {
@@ -240,6 +272,20 @@ const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   handler: async deps => { await highlightTarget(editorTarget(deps)) },
 }
 
+const suggestEdit: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+  id: SUGGEST_EDIT_ACTION_ID,
+  description: 'Suggest edit to selection',
+  context: ActionContextTypes.EDIT_MODE_CM,
+  icon: PencilLine,
+  defaultBinding: {keys: SUGGEST_KEYS},
+  isVisible: onOutline,
+  handler: async deps => {
+    if (!await suggestOnTarget(editorTarget(deps))) return
+    // As for a comment: the editor must not stay mounted behind the composer.
+    void exitEditModeForBlock(deps.uiStateBlock, deps.block.id, deps.renderScopeId)
+  },
+}
+
 const commentOnBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: COMMENT_ON_BLOCK_ACTION_ID,
   description: 'Comment on block',
@@ -287,15 +333,28 @@ export const runOnReadTarget = async (
  *  context menu. */
 export interface ReadSelectionGesture {
   actionId: string
+  /** The menu item's. */
   label: string
+  /** The command's, in the palette and the keybindings editor. */
+  description: string
   icon: LucideIcon
   keys: string
   step: (target: SelectionTarget) => Promise<boolean>
 }
 
 export const readSelectionGestures: readonly ReadSelectionGesture[] = [
-  {actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget},
-  {actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget},
+  {
+    actionId: COMMENT_ON_READ_SELECTION_ACTION_ID, label: 'Comment', description: 'Comment on selection',
+    icon: MessageSquarePlus, keys: COMMENT_KEYS, step: commentOnTarget,
+  },
+  {
+    actionId: HIGHLIGHT_READ_SELECTION_ACTION_ID, label: 'Highlight', description: 'Highlight selection',
+    icon: Highlighter, keys: HIGHLIGHT_KEYS, step: highlightTarget,
+  },
+  {
+    actionId: SUGGEST_EDIT_READ_SELECTION_ACTION_ID, label: 'Suggest edit', description: 'Suggest edit to selection',
+    icon: PencilLine, keys: SUGGEST_KEYS, step: suggestOnTarget,
+  },
 ]
 
 /** The click that ends a drag-select in rendered content would enter edit
@@ -317,7 +376,7 @@ const hasReadSelection = (): boolean => locateReadSelection(document.getSelectio
 
 const readSelectionActions: readonly ActionConfig[] = readSelectionGestures.map(gesture => ({
   id: gesture.actionId,
-  description: `${gesture.label} selection`,
+  description: gesture.description,
   context: READ_SELECTION_CONTEXT,
   icon: gesture.icon,
   defaultBinding: {keys: gesture.keys},
@@ -343,5 +402,5 @@ const toggleMargin: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 }
 
 export const annotationActions: readonly ActionConfig[] = [
-  commentOnSelection, highlightSelection, commentOnBlock, ...readSelectionActions, toggleMargin,
+  commentOnSelection, highlightSelection, suggestEdit, commentOnBlock, ...readSelectionActions, toggleMargin,
 ]
