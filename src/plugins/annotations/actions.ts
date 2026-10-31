@@ -82,7 +82,7 @@ export const rangeFromEditor = (view: EditorView): ContentRange => {
 
 /** Widened to whole reference spans; null for an empty range, which comments
  *  on the whole block. */
-const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
+export const anchorOf = ({content, from, to}: ContentRange): RangeAnchor | null => captureAnchor(content, from, to)
 
 export const anchorFromEditor = (view: EditorView): RangeAnchor | null => anchorOf(rangeFromEditor(view))
 
