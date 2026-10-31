@@ -1,1 +1,1 @@
-export{tm as addComment,nm as anchorForQuote}from"../../../chunks/app-BWwieDVT.js";
+export{hm as addComment,gm as anchorForQuote}from"../../../chunks/app-B_whfYiJ.js";
