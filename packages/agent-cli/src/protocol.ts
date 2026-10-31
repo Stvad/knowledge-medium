@@ -336,8 +336,9 @@ export const addCommentCommandSchema = z.looseObject({
   ),
   content: z.string().optional().describe('The first comment; omit for a highlight with no comments'),
   replacement: z.string().optional().describe(
-    'Makes the thread an edit suggestion: the text to replace the quote with. Needs a quote, and must be non-empty '
-    + 'and differ from it. A person accepts or rejects it in the app; nothing changes the block until then',
+    'Makes the thread an edit suggestion: the new text for the quote (for just the quoted part when the quote is '
+    + 'widened to a whole link). Needs a quote; must be non-empty and change it. A person accepts or rejects it in the '
+    + 'app; nothing changes the block until then. The result\'s replacement confirms it (null means a plain comment)',
   ),
   ...exactIdsField,
   ...contributorField,
@@ -747,7 +748,7 @@ export const commentsCommandSchema = z.looseObject({
   ),
   block: z.string().optional().describe('Threads on this one block (same forms as a block ref)'),
   thread: z.string().optional().describe("One thread, by its root's id, whatever its status"),
-  includeClosed: z.boolean().optional().describe('Include resolved threads (default: open only)'),
+  includeClosed: z.boolean().optional().describe('Include closed threads (default: open only)'),
   limit: viewLimitField('threads', AGENT_VIEW_DEFAULTS.commentsLimit),
   offset: viewOffsetField('threads'),
   workspaceId: viewFields.workspaceId,
