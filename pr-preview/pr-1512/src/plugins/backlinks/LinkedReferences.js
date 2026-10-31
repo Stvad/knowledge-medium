@@ -1,1 +1,1 @@
-export{qg as LinkedReferences}from"../../../chunks/app-B5hg_Bsz.js";
+export{Jg as LinkedReferences}from"../../../chunks/app-hAIJWRTE.js";

@@ -1,1 +1,1 @@
-export{Ip as lintExtensionSource}from"../../../chunks/app-B5hg_Bsz.js";
+export{Lp as lintExtensionSource}from"../../../chunks/app-hAIJWRTE.js";

@@ -1,1 +1,1 @@
-export{BO as openKeybindingsSettingsAction}from"../../../chunks/app-B5hg_Bsz.js";
+export{VO as openKeybindingsSettingsAction}from"../../../chunks/app-hAIJWRTE.js";

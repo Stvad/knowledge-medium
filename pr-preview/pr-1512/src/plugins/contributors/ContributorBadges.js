@@ -1,1 +1,1 @@
-export{Sf as CONTRIBUTOR_CARD_MODE_KEY,Cf as contributorBadgesDecoratorContribution}from"../../../chunks/app-B5hg_Bsz.js";
+export{Cf as CONTRIBUTOR_CARD_MODE_KEY,wf as contributorBadgesDecoratorContribution}from"../../../chunks/app-hAIJWRTE.js";

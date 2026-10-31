@@ -1,1 +1,1 @@
-export{HG as matchAtTrigger,UG as placeCompletionSource,WG as planResolvedInsert}from"../../../chunks/app-B5hg_Bsz.js";
+export{UG as matchAtTrigger,WG as placeCompletionSource,GG as planResolvedInsert}from"../../../chunks/app-hAIJWRTE.js";
