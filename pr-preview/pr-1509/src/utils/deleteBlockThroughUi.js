@@ -1,1 +1,1 @@
-export{WN as BULK_DELETE_CONFIRM_THRESHOLD,GN as deleteBlockThroughUi,KN as deleteBlocksThroughUi,qN as ensureDeletableThroughUi}from"../../chunks/app-D_jBRWoU.js";
+export{GN as BULK_DELETE_CONFIRM_THRESHOLD,KN as deleteBlockThroughUi,qN as deleteBlocksThroughUi,JN as ensureDeletableThroughUi}from"../../chunks/app-DguZaG3n.js";

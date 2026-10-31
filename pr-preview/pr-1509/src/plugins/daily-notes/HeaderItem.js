@@ -1,1 +1,1 @@
-export{WD as DailyNotePickerHeaderItem}from"../../../chunks/app-D_jBRWoU.js";
+export{GD as DailyNotePickerHeaderItem}from"../../../chunks/app-DguZaG3n.js";

@@ -1,1 +1,1 @@
-export{Tg as inlineBacklinksApplies}from"../../../../chunks/app-D_jBRWoU.js";
+export{Eg as inlineBacklinksApplies}from"../../../../chunks/app-DguZaG3n.js";
