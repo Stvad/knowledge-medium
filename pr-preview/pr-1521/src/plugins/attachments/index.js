@@ -1,1 +1,1 @@
-export{Vv as attachmentsPlugin}from"../../../chunks/app-Cqtkv9y5.js";
+export{Vv as attachmentsPlugin}from"../../../chunks/app-6gCIPtD3.js";
