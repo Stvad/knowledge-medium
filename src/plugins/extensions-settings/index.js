@@ -1,1 +1,1 @@
-export{Xf as extensionsOverridesProp,Zf as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BCsNACdE.js";
+export{ip as extensionsOverridesProp,ap as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-BP7ml8bs.js";

@@ -1,1 +1,1 @@
-export{IO as useCommandPaletteActions}from"../../../chunks/app-BCsNACdE.js";
+export{WO as useCommandPaletteActions}from"../../../chunks/app-BP7ml8bs.js";

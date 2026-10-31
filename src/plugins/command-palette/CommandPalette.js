@@ -1,1 +1,1 @@
-export{FO as CommandPalette}from"../../../chunks/app-BCsNACdE.js";
+export{UO as CommandPalette}from"../../../chunks/app-BP7ml8bs.js";
