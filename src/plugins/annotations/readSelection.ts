@@ -8,7 +8,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {BLOCK_BOUNDARY_SELECTOR, BLOCK_SHELL_ATTRIBUTE} from '@/extensions/blockInteraction.js'
-import {SOURCE_SPANS_ATTRIBUTE} from './readHighlights.ts'
+import {renderedSourceKey, SOURCE_SPANS_ATTRIBUTE} from './readHighlights.ts'
 
 /** The endpoints of a selection, as `Selection` reports them. */
 export interface SelectionEnds {
@@ -68,31 +68,33 @@ export const locateReadSelection = (ends: SelectionEnds | null): ReadSelectionLo
 const SPAN_ENTRY = /^(\d+)-(\d+)$/
 
 /** The raw offset of `offset` in `text`, read from its element's recorded
- *  spans: the element must have recorded them for `blockId`, hold exactly as
- *  many text nodes as it recorded, and this one must still be its slice of
- *  `content` (a render that lags the content refuses). */
-const offsetInText = (text: Text, offset: number, blockId: string, content: string): number | null => {
+ *  spans: the element must have recorded them under `key` (this row's block
+ *  and scope, rendering exactly `content`), hold exactly as many text nodes as
+ *  it recorded, and this one must be its slice of `content`. */
+const offsetInText = (text: Text, offset: number, key: string, content: string): number | null => {
   const holder = text.parentElement
-  const [source, ...entries] = holder?.getAttribute(SOURCE_SPANS_ATTRIBUTE)?.split(' ') ?? []
-  if (source !== blockId) return null
+  const [recordedKey, ...entries] = holder?.getAttribute(SOURCE_SPANS_ATTRIBUTE)?.split(' ') ?? []
+  if (recordedKey !== key) return null
   const texts = [...holder!.childNodes].filter(node => node.nodeType === Node.TEXT_NODE)
   if (texts.length !== entries.length) return null
   const span = SPAN_ENTRY.exec(entries[texts.indexOf(text)])
   if (!span) return null
   const from = Number(span[1])
+  // DEFENCE IN DEPTH: the key and the entry already say this text rendered
+  // that slice; this catches text changed in the page since (an extension).
   if (content.slice(from, Number(span[2])) !== text.data) return null
   return from + offset
 }
 
 /** A point between two nodes maps through the text on either side of it. */
-const offsetAt = (node: Node, offset: number, blockId: string, content: string): number | null => {
-  if (node.nodeType === Node.TEXT_NODE) return offsetInText(node as Text, offset, blockId, content)
+const offsetAt = (node: Node, offset: number, key: string, content: string): number | null => {
+  if (node.nodeType === Node.TEXT_NODE) return offsetInText(node as Text, offset, key, content)
   const before = node.childNodes[offset - 1]
   if (before?.nodeType === Node.TEXT_NODE) {
-    return offsetInText(before as Text, (before as Text).length, blockId, content)
+    return offsetInText(before as Text, (before as Text).length, key, content)
   }
   const after = node.childNodes[offset]
-  return after?.nodeType === Node.TEXT_NODE ? offsetInText(after as Text, 0, blockId, content) : null
+  return after?.nodeType === Node.TEXT_NODE ? offsetInText(after as Text, 0, key, content) : null
 }
 
 /** The selection as a raw range of one block's text. `contentOf` reads the
@@ -106,8 +108,9 @@ export const mapReadSelection = (
   if (location?.kind !== 'block') return location
   const content = contentOf(location.blockId)
   if (content === undefined) return {kind: 'inexact'}
-  const anchor = offsetAt(ends!.anchorNode!, ends!.anchorOffset, location.blockId, content)
-  const focus = offsetAt(ends!.focusNode!, ends!.focusOffset, location.blockId, content)
+  const key = renderedSourceKey(location.blockId, location.renderScopeId, content)
+  const anchor = offsetAt(ends!.anchorNode!, ends!.anchorOffset, key, content)
+  const focus = offsetAt(ends!.focusNode!, ends!.focusOffset, key, content)
   if (anchor === null || focus === null) return {kind: 'inexact'}
   const {blockId, renderScopeId} = location
   return {kind: 'range', blockId, renderScopeId, content, from: Math.min(anchor, focus), to: Math.max(anchor, focus)}

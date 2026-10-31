@@ -49,9 +49,9 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
   return (
     <ContextMenu onOpenChange={open => setTarget(open ? readSelectionTarget(block.repo, document.getSelection()) : null)}>
       {/* Radix sets a touch-callout of none on its trigger, for a menu of
-          its own on long-press; this one is the content, whose links keep
-          theirs. */}
-      <ContextMenuTrigger asChild disabled={!holds} style={{WebkitTouchCallout: 'default'}}>
+          its own on long-press; this trigger is the content, which keeps the
+          callout its ancestors give it (touch selection turns it off). */}
+      <ContextMenuTrigger asChild disabled={!holds} style={{WebkitTouchCallout: 'inherit'}}>
         {children}
       </ContextMenuTrigger>
       <ContextMenuPortal>

@@ -16,9 +16,11 @@ import type {BlockContextType} from '@/types.js'
 import {
   remarkAnnotationMarks,
   THREAD_HIGHLIGHTS_INPUT,
+  renderedSourceKey,
   threadMarksMarkdownExtension,
   type AnnotationMarksOptions,
 } from './readHighlights.ts'
+import {fnv1a32Hex} from '@/utils/fnv1a.js'
 import type {ThreadSummary} from './summaries.ts'
 import {highlightsOf} from './ui.tsx'
 
@@ -200,7 +202,7 @@ describe('recorded source spans', () => {
         [remarkWikilinks, {resolveAlias: (alias: string) => `id-${alias}`}],
         remarkBlockrefs,
         ...before,
-        [remarkAnnotationMarks, {content, ranges, sourceBlockId: 'B'}],
+        [remarkAnnotationMarks, {content, ranges, sourceKey: 'B'}],
       ] as PluggableList,
       rehypePlugins: [rehypeTrimBlockSeparators],
       components,
@@ -240,6 +242,16 @@ describe('recorded source spans', () => {
     expect(recorded('plain words', [], [leadingEmptyText])).toEqual(['p: B 0-11'])
   })
 
+  it('records a tight list item’s text on the item, where its paragraph is unwrapped', () => {
+    expect(recorded('- first item\n- second **one**')).toEqual(['li: B 2-12', 'li: B 15-22', 'strong: B 24-27'])
+    // A loose list keeps its paragraphs.
+    expect(recorded('- first\n\n- second')).toEqual(['p: B 2-7', 'p: B 11-17'])
+    // A task item adds a checkbox and a space of its own.
+    expect(recorded('- [ ] task')).toEqual([])
+    // An item holding a nested list gets newlines around it: only the inner item records.
+    expect(recorded('- outer\n  - inner')).toEqual(['li: B 12-17'])
+  })
+
   it('records nothing where the rendered text count is not knowable', () => {
     expect(recorded('a <b>raw</b> tag')).toEqual([])
     // The paragraph holding the reference, not the reference itself.
@@ -250,7 +262,12 @@ describe('recorded source spans', () => {
     const context = {block: {id: 'B'} as unknown as Block, input: {}, data: {content: 'text', references: [], workspaceId: 'ws'}}
     expect(threadMarksMarkdownExtension({...context, blockContext: {}})).toBeNull()
     expect(threadMarksMarkdownExtension({...context, blockContext: {renderScopeId: 'panel:p:B'}}))
-      .toMatchObject({remarkPlugins: [[remarkAnnotationMarks, {sourceBlockId: 'B', ranges: []}]]})
+      .toMatchObject({remarkPlugins: [[remarkAnnotationMarks, {sourceKey: renderedSourceKey('B', 'panel:p:B', 'text'), ranges: []}]]})
+  })
+
+  it('keys the render apart from one of another length even where their hashes collide', () => {
+    expect(fnv1a32Hex('B\npanel:p:B\nxoeglo')).toBe(fnv1a32Hex('B\npanel:p:B\nrioms'))
+    expect(renderedSourceKey('B', 'panel:p:B', 'xoeglo')).not.toBe(renderedSourceKey('B', 'panel:p:B', 'rioms'))
   })
 })
 

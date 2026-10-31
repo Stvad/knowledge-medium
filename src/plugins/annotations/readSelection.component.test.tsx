@@ -64,6 +64,8 @@ const REFERENCED = '33333333-3333-4333-8333-333333333333'
 const RICH = `Some **bold** text, see [[Launch plan]] and ((${REFERENCED})) after https://example.com then end.`
 // The referenced block's `ab` sits at the same offsets, 4–6, as the host's.
 const SAME_OFFSETS = '44444444-4444-4444-8444-444444444444'
+// A block shown inside itself: its copy's `bar` sits at its own `bar`'s offsets.
+const SELF = '55555555-5555-4555-8555-555555555555'
 
 describe('a read-mode selection, mapped to raw offsets', () => {
   let db: TestDb
@@ -98,6 +100,9 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       await tx.create({id: 'escaped', workspaceId: WS, parentId: 'page', orderKey: 'a2', content: 'A \\*literal\\* star'})
       await tx.create({id: 'host', workspaceId: WS, parentId: 'page', orderKey: 'a3', content: `See ab ((${SAME_OFFSETS}))`})
       await tx.create({id: SAME_OFFSETS, workspaceId: WS, parentId: null, orderKey: 'a4', content: 'x **ab**'})
+      await tx.create({id: SELF, workspaceId: WS, parentId: 'page', orderKey: 'a5', content: `**bar** ((${SELF}))`})
+      await tx.create({id: 'list', workspaceId: WS, parentId: 'page', orderKey: 'a6', content: '- first item\n- second item'})
+      await tx.create({id: 'trimmed', workspaceId: WS, parentId: 'page', orderKey: 'a7', content: 'first \nsecond line'})
       await tx.create({id: 'ui-state', workspaceId: WS, parentId: null, orderKey: 'a2',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')}})
     }, {scope: ChangeScope.BlockDefault})
@@ -111,7 +116,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   })
 
   const renderBlocks = async (...ids: string[]) => {
-    const settled = ids.includes('host') ? 'x' : 'Referenced words'
+    const settled = ids.includes('host') ? 'x' : ids.includes(SELF) ? 'bar' : 'Referenced words'
     render(
       <AppRuntimeContextProvider value={repo.facetRuntime!}>
         <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: outlineRenderScopeId('page')}}>
@@ -121,7 +126,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
-    await screen.findByText(settled, {exact: false})
+    await screen.findAllByText(settled, {exact: false})
   }
 
   /** The text node holding `text` (its first occurrence, or the `nth`), and
@@ -227,8 +232,38 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     expect(mapReadSelection(ends('Some', 'Some'), contentOf)).toEqual({kind: 'inexact'})
   })
 
-  it('refuses text that is no longer the slice of the content it was rendered from', async () => {
+  it('refuses a render the content has moved past, even where both ends still match', async () => {
     await renderBlocks('rich')
-    expect(mapReadSelection(ends('Some', 'Some'), () => `X${RICH}`)).toEqual({kind: 'inexact'})
+    // Same length, changed between the ends: each end's own text is intact.
+    const moved = RICH.replace('**bold**', '**cold**')
+    expect(mapReadSelection(ends('Some', 'text'), () => RICH)).toMatchObject({kind: 'range'})
+    expect(mapReadSelection(ends('Some', 'text'), () => moved)).toEqual({kind: 'inexact'})
+  })
+
+  it('refuses an end in the copy of a block shown inside itself', async () => {
+    await renderBlocks(SELF)
+    const copy = at('bar', 1)
+    expect(copy.node.parentElement!.closest('.markdown-content-inline')).not.toBeNull()
+    const start = at('bar')
+    expect(mapReadSelection(
+      {anchorNode: start.node, anchorOffset: 0, focusNode: copy.node, focusOffset: 2},
+      contentOf,
+    )).toEqual({kind: 'inexact'})
+  })
+
+  it('maps text in a tight list item, whose paragraph the renderer unwraps', async () => {
+    await renderBlocks('list', 'rich')
+    expect(quoteOf(mapReadSelection(ends('second', 'second item'), contentOf))).toBe('second item')
+  })
+
+  it('refuses text changed in the page after it rendered', async () => {
+    await renderBlocks('rich')
+    at('Some').node.data = 'Sxme '
+    expect(mapReadSelection(ends('Sxme', 'Sxme'), contentOf)).toEqual({kind: 'inexact'})
+  })
+
+  it('refuses text the parser changed, a space dropped before a line break', async () => {
+    await renderBlocks('trimmed', 'rich')
+    expect(mapReadSelection(ends('second', 'line'), contentOf)).toEqual({kind: 'inexact'})
   })
 })
