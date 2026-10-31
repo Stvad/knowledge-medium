@@ -1,1 +1,1 @@
-export{L_ as blockrefCompletionSource}from"../../chunks/app-DKFztlNx.js";
+export{U_ as blockrefCompletionSource}from"../../chunks/app-BWwieDVT.js";

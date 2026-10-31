@@ -1,1 +1,1 @@
-export{UI as MarkdownContentRenderer}from"../../../chunks/app-DKFztlNx.js";
+export{YI as MarkdownContentRenderer}from"../../../chunks/app-BWwieDVT.js";

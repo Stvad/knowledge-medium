@@ -1,1 +1,1 @@
-export{Fat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-DKFztlNx.js";
+export{Wat as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-BWwieDVT.js";

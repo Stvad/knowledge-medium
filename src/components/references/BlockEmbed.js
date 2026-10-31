@@ -1,1 +1,1 @@
-export{mA as BlockEmbed}from"../../../chunks/app-DKFztlNx.js";
+export{bA as BlockEmbed}from"../../../chunks/app-BWwieDVT.js";
