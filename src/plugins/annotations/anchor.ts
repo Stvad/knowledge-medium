@@ -151,6 +151,14 @@ export const captureAnchor = (content: string, from: number, to: number): RangeA
   }
 }
 
+/** `quote`'s anchor captured again at `from` in `content`, or null when the
+ *  capture there is other text: the range runs past the end of `content`, or a
+ *  reference span `content` parses widens it. */
+export const recaptureAnchor = (content: string, from: number, quote: string): RangeAnchor | null => {
+  const captured = captureAnchor(content, from, from + quote.length)
+  return captured?.quote === quote ? captured : null
+}
+
 /** `start` must be a position in the text: `startsWith` reads a negative or
  *  fractional one as another position than the windows slice from, so a
  *  hand-made anchor could match text it does not sit on. */

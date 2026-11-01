@@ -4,7 +4,7 @@
  * the one write that changes it.
  */
 
-import {ChangeScope, propertyValue, type BlockData, type BlockReference, type Tx} from '@/data/api'
+import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api'
 import {createChild} from '@/data/mutators'
 import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
 import {hasBlockType} from '@/data/properties'
@@ -21,6 +21,7 @@ import {
   annotationStatusProp,
   annotationTargetProp,
   THREAD_TYPE,
+  threadTargetEdge,
   threadTargetIdOf,
   type ThreadStatus,
 } from './schema.ts'
@@ -178,11 +179,6 @@ export const createThread = async (
         : 'The text changed since it was selected. Select it again and choose Suggest edit to selection.')
     }
 
-    // Passed so the thread is discoverable as soon as this commits, without
-    // waiting on the post-commit reference projection.
-    const targetEdge: BlockReference = {
-      id: targetId, alias: targetId, sourceField: annotationTargetProp.name,
-    }
     const threadId = await createTypedChild(repo, tx, {
       parentId: container.id,
       content: anchor?.quote ?? '',
@@ -193,7 +189,7 @@ export const createThread = async (
         ...(anchor ? anchorFieldValues(anchor) : []),
         ...(replacement !== undefined ? [propertyValue(annotationReplacementProp, replacement)] : []),
       ],
-      references: [targetEdge],
+      references: [threadTargetEdge(targetId)],
     })
     const commentId = comment
       ? await tx.run(createChild, {parentId: threadId, content: comment})

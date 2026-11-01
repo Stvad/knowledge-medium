@@ -37,6 +37,31 @@ export interface CoreBlockMergedEvent {
   aliasRewrites: readonly BlockMergeAliasRewrite[]
 }
 
+export const CORE_BLOCK_SPLIT_EVENT = 'core.blockSplit' as const
+
+/** A stretch of a split block's text and the block that now holds it, as its
+ *  whole content. */
+export interface BlockSplitPiece {
+  blockId: string
+  /** `[start, end)` of the split's `content`. */
+  start: number
+  end: number
+}
+
+/** One block's text cut into pieces, each now the whole content of a block;
+ *  one piece keeps the split block's id. Lets whatever addresses a block's
+ *  text by id and offset follow that text in the split's own transaction. */
+export interface CoreBlockSplitEvent {
+  workspaceId: string
+  /** The block that was split. */
+  blockId: string
+  /** Its text as the split cut it: the caller's live text, which can be ahead
+   *  of the stored row. */
+  content: string
+  /** In text order, covering `content` exactly. */
+  pieces: readonly BlockSplitPiece[]
+}
+
 export const CORE_BLOCK_DELETED_EVENT = 'core.blockDeleted' as const
 
 export interface CoreBlockDeletedEvent {
@@ -50,6 +75,7 @@ export interface CoreBlockDeletedEvent {
 declare module './sameTxProcessor' {
   interface SameTxEventRegistry {
     'core.blockMerged': CoreBlockMergedEvent
+    'core.blockSplit': CoreBlockSplitEvent
     'core.blockDeleted': CoreBlockDeletedEvent
   }
 }

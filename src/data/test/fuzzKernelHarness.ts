@@ -25,6 +25,7 @@ import { cycleScanSql } from '@/data/internals/treeQueries'
 import type { TestDb } from '@/data/test/createTestDb'
 import { aliasesProp, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
+import { SPLIT_PLACEMENTS, type SplitPlacement } from '@/data/mutators'
 
 // ──── legal-rejection allowlist ────
 
@@ -125,7 +126,7 @@ export type KernelOpSpec =
   | {op: 'setContent'; id: IdSel; content: string}
   | {op: 'indent' | 'outdent' | 'deleteBlock' | 'restoreBlock'; id: IdSel}
   | {op: 'moveVertical'; id: IdSel; direction: -1 | 1}
-  | {op: 'split'; id: IdSel; before: string; after: string}
+  | {op: 'split'; id: IdSel; before: string; after: string; placement?: SplitPlacement}
   | {op: 'merge'; into: IdSel; from: IdSel}
   | {op: 'setAlias'; id: IdSel; alias: number; clear: boolean}
   | {op: 'setType'; id: IdSel; type: number; clear: boolean}
@@ -193,7 +194,7 @@ export const kernelOpArb = (
     {kinds: ['indent', 'outdent'], weight: 3, arbitrary: fc.record({op: fc.constantFrom('indent' as const, 'outdent' as const), id: idSel})},
     {kinds: ['deleteBlock', 'restoreBlock'], weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: idSel})},
     {kinds: ['moveVertical'], weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: idSel, direction: fc.constantFrom(-1 as const, 1 as const)})},
-    {kinds: ['split'], weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: idSel, before: text, after: text})},
+    {kinds: ['split'], weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: idSel, before: text, after: text, placement: fc.constantFrom(...SPLIT_PLACEMENTS)})},
     {kinds: ['merge'], weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: idSel, from: idSel})},
     {kinds: ['setAlias'], weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: idSel, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
     {kinds: ['setType'], weight: 2, arbitrary: fc.record({op: fc.constant('setType' as const), id: idSel, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
@@ -282,7 +283,7 @@ export const applyKernelOp = async (
       await repo.mutate.moveVertical({id: pickNonRootFromPools(op.id, pools), direction: op.direction})
       return []
     case 'split':
-      return [{id: await repo.mutate.split({id: pickNonRootFromPools(op.id, pools), before: op.before, after: op.after}), pool: op.id.pool}]
+      return [{id: await repo.mutate.split({id: pickNonRootFromPools(op.id, pools), before: op.before, after: op.after, placement: op.placement}), pool: op.id.pool}]
     case 'merge':
       await repo.mutate.merge({intoId: pickFromPools(op.into, pools), fromId: pickNonRootFromPools(op.from, pools)})
       return []
