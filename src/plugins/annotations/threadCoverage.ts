@@ -4,6 +4,7 @@ import {annotationTargetProp, THREAD_TYPE} from './schema.ts'
  *  downward walk through ordinary children and threads targeting covered
  *  blocks. A nested thread root enters only through its target, so moving it
  *  under another thread never transfers ownership of its comments.
+ *  A hand-moved root may also render physically in that thread's card; duplicate display is accepted.
  *
  *  UNION deduplicates complete rows and terminates cycles. The parent index
  *  avoids a workspace scan per child step. Workspace equalities are defence

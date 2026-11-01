@@ -8,7 +8,7 @@ import {useWorkspaceId} from '@/hooks/block.js'
 import {BreadcrumbList} from '@/plugins/breadcrumbs/BreadcrumbList.js'
 import {BacklinksDialog} from '@/plugins/backlinks/BacklinksDialog.js'
 import {ContributorCardView} from '@/plugins/contributors/ContributorBadges.js'
-import {useOpenBlock} from '@/utils/navigation.js'
+import {useBlockOpener, useOpenBlock} from '@/utils/navigation.js'
 import {openDialog} from '@/utils/dialogs.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import type {MarginMentions} from './mentionsQuery.js'
@@ -35,6 +35,7 @@ const MentionSourceCard = ({blockId, parentIds, parentRenderScopeId}: {blockId: 
   const repo = useRepo()
   const source = repo.block(blockId)
   const workspaceId = useWorkspaceId(source, repo.activeWorkspaceId ?? '')
+  const openBlock = useBlockOpener()
   const parents = parentIds.map(id => repo.block(id))
   const renderScopeId = useMemo(
     () => surfaceRenderScopeId('mentions', parentRenderScopeId, blockId),
@@ -53,6 +54,7 @@ const MentionSourceCard = ({blockId, parentIds, parentRenderScopeId}: {blockId: 
           parents={parents}
           workspaceId={workspaceId}
           overrides={BREADCRUMB_CONTEXT}
+          onLinkClick={(event, parent) => openBlock(event, {blockId: parent.id, workspaceId})}
           className="mb-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
           itemClassName="max-w-[24ch] cursor-pointer truncate no-underline hover:text-foreground"
           separatorClassName="mx-1 text-muted-foreground/40"
@@ -74,7 +76,7 @@ export const MentionCards = ({blockId, panelId, mentions}: {blockId: string; pan
       ))}
       {moreCount > 0 && (
         <button type="button" onClick={() => void openDialog(BacklinksDialog, {blockId, panelId})} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:underline">
-          {moreCount} more
+          All references
         </button>
       )}
     </section>

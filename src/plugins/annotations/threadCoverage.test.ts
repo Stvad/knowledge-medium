@@ -31,6 +31,13 @@ const staleType = (id: string) => db.db.execute(
   'INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES (?, ?, ?)', [id, WS, THREAD_TYPE],
 )
 
+it('drives thread coverage seeds from the requested roots without workspace statistics', async () => {
+  const plan = await db.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${THREAD_COMMENTS_SQL}`, ['[]', WS])
+  const seedSteps = plan.slice(0, plan.findIndex(row => row.detail === 'RECURSIVE STEP')).map(row => row.detail)
+  expect(seedSteps).toContain('SCAN j VIRTUAL TABLE INDEX 1:')
+  expect(seedSteps).toContain('SEARCH root USING INDEX sqlite_autoindex_blocks_1 (id=?)')
+})
+
 it('deduplicates a cycle through a scope comment and the thread targeting it', async () => {
   const thread = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Reply'})
   await repo.tx(tx => tx.move(TARGET, {parentId: thread.threadId, orderKey: 'a1'}), opts)

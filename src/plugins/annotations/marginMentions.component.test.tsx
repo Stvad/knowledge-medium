@@ -106,7 +106,7 @@ class TestResizeObserver {
   disconnect() {}
 }
 
-const createRuntime = (contributorsEnabled = true) => resolveAppRuntimeSync(
+const createRuntime = ({contributors = true, backlinks = true, breadcrumbs = true} = {}) => resolveAppRuntimeSync(
   [
     kernelDataExtension,
     kernelPropertyUiExtension,
@@ -121,7 +121,11 @@ const createRuntime = (contributorsEnabled = true) => resolveAppRuntimeSync(
     contributorsPlugin,
     annotationsPlugin,
   ],
-  {overrides: new Map([['system:contributors', contributorsEnabled]])},
+  {overrides: new Map([
+    ['system:contributors', contributors],
+    ['system:backlinks', backlinks],
+    ['system:breadcrumbs', breadcrumbs],
+  ])},
 )
 
 const createRepo = () => {
@@ -235,7 +239,7 @@ afterEach(() => {
 describe('CommentMargin mention cards', () => {
   it('renders mention content and its author with Contributors disabled', async () => {
     await seedGraph(1)
-    repo.setFacetRuntime(createRuntime(false))
+    repo.setFacetRuntime(createRuntime({contributors: false}))
     const view = makeView()
     await turnMentionsOn()
 
@@ -243,6 +247,47 @@ describe('CommentMargin mention cards', () => {
     await waitFor(() => expect(mention.querySelector('strong')?.textContent).toBe('Mention body 1'))
     expect(await within(mention).findByRole('link', {name: 'Alex'})).toBeVisible()
     expect(within(mention).getByRole('link', {name: 'Open mention'})).toHaveAttribute('href', '#ws/mention-source-1')
+    view.unmount()
+  })
+
+  it('opens the full reference list with Backlinks disabled', async () => {
+    await seedGraph(4)
+    repo.setFacetRuntime(createRuntime({backlinks: false}))
+    const view = makeView()
+    await turnMentionsOn()
+    const allReferences = await screen.findByRole('button', {name: 'All references'})
+    await act(async () => { fireEvent.click(allReferences) })
+    const dialog = await screen.findByRole('dialog', {name: 'Linked References'})
+    for (let index = 1; index <= 4; index++) {
+      await within(dialog).findByText(`Mention body ${index}`, {selector: 'strong'})
+    }
+    view.unmount()
+  })
+
+  it('renders only the ancestor preview with Breadcrumbs disabled', async () => {
+    await seedGraph(1)
+    await repo.tx(tx => tx.create({id: 'unrelated', workspaceId: WS, parentId: PAGE, orderKey: 'z0', content: 'Unrelated sibling'}), BLOCK_DEFAULT)
+    repo.setFacetRuntime(createRuntime({breadcrumbs: false}))
+    const view = makeView()
+    await turnMentionsOn()
+    const mention = await screen.findByLabelText('Mentions')
+    await waitFor(() => {
+      const crumb = mention.querySelector(`a[href="#${WS}/${PAGE}"]`)
+      expect(crumb?.textContent).toBe('Mention location')
+    })
+    view.unmount()
+  })
+
+  it('prevents native breadcrumb navigation and navigates the hosting panel', async () => {
+    await seedGraph(1)
+    const view = makeView()
+    await turnMentionsOn()
+    const mention = await screen.findByLabelText('Mentions')
+    const crumb = await within(mention).findByRole('link', {name: 'Mention location'})
+    const click = new MouseEvent('click', {bubbles: true, cancelable: true, button: 0})
+    fireEvent(crumb, click)
+    expect(click.defaultPrevented).toBe(true)
+    await waitFor(() => expect(repo.block(PANEL).peekProperty(topLevelBlockIdProp)).toBe(PAGE))
     view.unmount()
   })
 
@@ -257,7 +302,7 @@ describe('CommentMargin mention cards', () => {
     expect(mention.textContent).toContain('Alex')
     expect(mention.querySelectorAll('button, input, textarea, [role="button"]')).toHaveLength(0)
     expect(mention.querySelector('.cm-editor')).toBeNull()
-    expect(screen.queryByRole('button', {name: /more$/})).toBeNull()
+    expect(screen.queryByRole('button', {name: 'All references'})).toBeNull()
 
     const sourceLink = screen.getByRole('link', {name: 'Open mention'})
     const previewId = sourceLink.getAttribute('aria-describedby')
@@ -288,7 +333,7 @@ describe('CommentMargin mention cards', () => {
 
     await screen.findByLabelText('Mentions')
     await waitFor(() => expect(screen.getAllByRole('link', {name: 'Open mention'})).toHaveLength(3))
-    const more = screen.getByRole('button', {name: '1 more'})
+    const more = screen.getByRole('button', {name: 'All references'})
     fireEvent.click(more)
     const dialog = await screen.findByRole('dialog', {name: 'Linked References'})
     for (let index = 1; index <= 4; index++) {
