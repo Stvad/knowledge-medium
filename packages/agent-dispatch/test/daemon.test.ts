@@ -144,6 +144,7 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
 
     const mcpConfig = JSON.parse(await fs.readFile(path.join(tempDir, 'agent-dispatch-mcp.json'), 'utf8'))
     expect(mcpConfig.mcpServers.km.env).toMatchObject({AGENT_RUNTIME_CONTRIBUTOR_ID: 'contributor-agent'})
+    expect(mcpConfig.mcpServers.km.alwaysLoad).toBe(true)
     // The token was found: the run reached the bridge.
     expect(commands.map(command => command.type)).toContain('update-block')
   })
