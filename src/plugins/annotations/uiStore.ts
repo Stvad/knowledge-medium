@@ -110,6 +110,7 @@ const marginShowing = new Set<string>()
 /** The thread whose card is pinned to its anchor in each panel's margin. */
 const activeThreads = new Map<string, string>()
 const showingClosed = createKeyedToggleSet('annotations-show-closed')
+const showingMentions = createKeyedToggleSet('annotations-show-mentions')
 
 export const setMarginShowing = (panelId: string, showing: boolean): void => {
   if (marginShowing.has(panelId) === showing) return
@@ -135,6 +136,8 @@ export const useActiveThread = (panelId: string): string | undefined =>
 export const toggleShowClosed = showingClosed.toggle
 export const showClosedThreads = showingClosed.add
 export const useShowClosed = showingClosed.useHas
+export const toggleShowMentions = showingMentions.toggle
+export const useShowMentions = showingMentions.useHas
 
 export const peekMarginShowing = (panelId: string): boolean => marginShowing.has(panelId)
 

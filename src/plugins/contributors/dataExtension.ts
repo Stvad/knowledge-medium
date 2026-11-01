@@ -7,11 +7,13 @@ import {
   contributorKindProp, contributorProfileType, contributorRoleProp,
 } from './schema'
 
+export const contributorProfilesQueryExtension = queriesFacet.of(contributorProfilesByIdsQuery, {source: 'contributors'})
+
 export const contributorsDataExtension: AppExtension = [
   [attributionCreatorsProp, attributionEditorsProp, contributorForProp,
     contributorKindProp, contributorRoleProp].map(prop =>
     definitionSeedsFacet.of(prop, {source: 'contributors'})),
   typeSeedsFacet.of(contributorProfileType, {source: 'contributors'}),
-  queriesFacet.of(contributorProfilesByIdsQuery, {source: 'contributors'}),
+  contributorProfilesQueryExtension,
   sameTxProcessorsFacet.of(contributorAttributionProcessor, {source: 'contributors'}),
 ]

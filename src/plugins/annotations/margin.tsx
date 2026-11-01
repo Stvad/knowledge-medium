@@ -27,6 +27,8 @@ import {runActionByIdSafely} from '@/shortcuts/runAction.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
+import {MentionCards} from './mentions.tsx'
+import {MENTIONS_FOR_BLOCK_QUERY, type MarginMentions} from './mentionsQuery.ts'
 import {placeCards} from './placement.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
 import {ThreadCard, useThreadSummaries} from './ui.tsx'
@@ -36,9 +38,11 @@ import {
   peekActiveThread,
   setMarginShowing,
   toggleShowClosed,
+  toggleShowMentions,
   useActiveThread,
   useMarginShowing,
   useShowClosed,
+  useShowMentions,
 } from './uiStore.ts'
 
 /** The column's width bounds, and the space kept between it and the text. A
@@ -236,6 +240,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     {selector: threads => threads ?? NO_SCOPE_THREADS},
   )
   const showClosed = useShowClosed(panelId)
+  const showMentions = useShowMentions(panelId)
   const hosts = useMemo(
     () => marginHosts(scopeThreads, rows, topLevelBlockId, showClosed),
     [scopeThreads, rows, topLevelBlockId, showClosed],
@@ -261,8 +266,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         >
           <MarginRegistryContext value={registry}>
             <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
-              {scopeThreads.length > 0 && <ShowClosedToggle panelId={panelId}/>}
+              <MarginDisplayOptions panelId={panelId} hasThreads={scopeThreads.length > 0}/>
               {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
+              {showMentions && rows.map(blockId => <MarginMentionsRow key={blockId} blockId={blockId}/>)}
               {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
             </NestedBlockContextProvider>
           </MarginRegistryContext>
@@ -273,6 +279,22 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 }
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
+const NO_MENTIONS: MarginMentions = Object.freeze({ids: [], total: 0})
+
+const MarginMentionsRow = ({blockId}: {blockId: string}) => {
+  const registry = useContext(MarginRegistryContext)!
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(repo.block(blockId), repo.activeWorkspaceId ?? '')
+  const mentions = useHandle(repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId, id: blockId}), {
+    selector: result => result ?? NO_MENTIONS,
+  })
+  if (mentions.ids.length === 0) return null
+  return (
+    <CardSlot slotKey={`mentions:${blockId}`} blockId={blockId} order={-0.5}>
+      <MentionCards blockId={blockId} panelId={registry.panelId} mentions={mentions}/>
+    </CardSlot>
+  )
+}
 
 export interface MarginHosts {
   /** Rendered rows with cards of their own, in outline order. */
@@ -369,18 +391,29 @@ const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) =
   )
 }
 
-/** Floats at the column's foot: closed threads are hidden unless asked for. */
-const ShowClosedToggle = ({panelId}: {panelId: string}) => {
+const DisplayToggle = ({pressed, onToggle, children}: {pressed: boolean; onToggle: () => void; children: ReactNode}) => (
+  <button
+    type="button"
+    onClick={onToggle}
+    aria-pressed={pressed}
+    className="pointer-events-auto rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+  >
+    {children}
+  </button>
+)
+
+/** Per-reader display options, floating at the column's foot. */
+const MarginDisplayOptions = ({panelId, hasThreads}: {panelId: string; hasThreads: boolean}) => {
   const showClosed = useShowClosed(panelId)
+  const showMentions = useShowMentions(panelId)
   return (
-    <div className="pointer-events-none absolute bottom-2 right-1 z-10">
-      <button
-        type="button"
-        onClick={() => toggleShowClosed(panelId)}
-        className="pointer-events-auto rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-      >
+    <div className="pointer-events-none absolute bottom-2 right-1 z-10 flex gap-1">
+      <DisplayToggle pressed={showMentions} onToggle={() => toggleShowMentions(panelId)}>
+        {showMentions ? 'Hide mentions' : 'Show mentions'}
+      </DisplayToggle>
+      {hasThreads && <DisplayToggle pressed={showClosed} onToggle={() => toggleShowClosed(panelId)}>
         {showClosed ? 'Hide closed' : 'Show closed'}
-      </button>
+      </DisplayToggle>}
     </div>
   )
 }

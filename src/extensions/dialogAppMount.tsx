@@ -13,6 +13,7 @@
  * path happens after the runtime mounts and lands here cleanly.
  */
 import { useSyncExternalStore } from 'react'
+import { ErrorBoundary } from 'react-error-boundary'
 import { appMountsFacet } from './core.ts'
 import type { AppExtension } from '@/facets/facet.js'
 import {
@@ -40,12 +41,20 @@ export const DialogHost = () => {
       {queue.map(entry => {
         const Component = entry.Component
         return (
-          <Component
+          <ErrorBoundary
             key={entry.id}
-            {...entry.props}
-            resolve={(value: unknown) => entry.finalize(value)}
-            cancel={() => entry.finalize(null)}
-          />
+            fallback={null}
+            onError={error => {
+              console.error('[dialogs] dialog render failed', error)
+              entry.finalize(null)
+            }}
+          >
+            <Component
+              {...entry.props}
+              resolve={(value: unknown) => entry.finalize(value)}
+              cancel={() => entry.finalize(null)}
+            />
+          </ErrorBoundary>
         )
       })}
     </>
