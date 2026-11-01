@@ -1,13 +1,17 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ReferenceLink } from '../ReferenceLink'
 import { Wikilink } from '@/plugins/references/markdown/wikilinks/Wikilink'
+import { continuousGestureRecognizersFacet, useContinuousGestures } from '@/extensions/continuousGestures'
+import type { BlockResolveContext } from '@/extensions/blockInteraction'
+import { setGestureActionDispatcher } from '@/shortcuts/gestureAction'
+import { blockHoldRecognizer, BLOCK_HOLD_GESTURE } from '@/plugins/touch-selection/holdRecognizer'
 
 const {navigate, openBlock, outerPointerDown, repo} = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -24,6 +28,21 @@ vi.mock('@/utils/navigation', async importOriginal => ({
 }))
 
 const runtime = resolveFacetRuntimeSync([])
+const holdContext = {
+  block: {id: 'holding-block'},
+  uiStateBlock: {
+    id: 'source-panel', repo: {isReadOnly: false},
+    peek: () => ({properties: {}}), peekProperty: () => undefined,
+  },
+  scopeRootId: 'source-root', blockContext: {},
+} as unknown as BlockResolveContext
+
+const HoldSurface = ({children}: {children: ReactNode}) => {
+  const elementRef = useRef<HTMLElement | null>(null)
+  const gestureRef = useContinuousGestures(holdContext, elementRef)
+  return <div className="block-content" ref={gestureRef}>{children}</div>
+}
+
 const renderLinks = (children?: ReactNode) => render(
   <AppRuntimeContextProvider value={runtime}>
     <BlockContextProvider initialValue={{panelId: 'source-panel'}}>
@@ -40,6 +59,8 @@ afterEach(() => {
   navigate.mockClear()
   openBlock.mockClear()
   outerPointerDown.mockClear()
+  setGestureActionDispatcher(null)
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
@@ -108,21 +129,32 @@ describe('link context menus', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
-  it('opens on a touch long-press on link text but leaves reference media alone', async () => {
-    renderLinks(<img alt="Embedded image" src="image.png"/>)
+  it('leaves a link hold with the existing block-hold recognizer', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({matches: true}))
     vi.useFakeTimers()
+    const dispatch = vi.fn(() => true)
+    setGestureActionDispatcher(dispatch)
+    const holdRuntime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(blockHoldRecognizer),
+    ])
+    render(
+      <AppRuntimeContextProvider value={holdRuntime}>
+        <HoldSurface>
+          <Wikilink alias="Page" blockId="page-target" workspaceId="link-workspace">Held link</Wikilink>
+        </HoldSurface>
+      </AppRuntimeContextProvider>,
+    )
     await act(async () => {
-      fireEvent.pointerDown(screen.getByText('Page link'), {pointerType: 'touch'})
+      fireEvent.pointerDown(screen.getByText('Held link'), {
+        pointerType: 'touch', pointerId: 1, clientX: 10, clientY: 10,
+      })
       vi.advanceTimersByTime(750)
     })
-    expect(screen.getByRole('menu')).toBeTruthy()
-    fireEvent.keyDown(screen.getByRole('menu'), {key: 'Escape'})
-    expect(screen.queryByRole('menu')).toBeNull()
-
-    await act(async () => {
-      fireEvent.pointerDown(screen.getByAltText('Embedded image'), {pointerType: 'touch'})
-      vi.advanceTimersByTime(750)
-    })
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      BLOCK_HOLD_GESTURE,
+      expect.objectContaining({block: holdContext.block}),
+      expect.anything(),
+    )
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })

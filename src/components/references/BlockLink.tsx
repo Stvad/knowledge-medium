@@ -19,19 +19,17 @@ const ownsLinkMenuGesture = (event: MouseEvent): boolean =>
   && classifyLinkInteraction(event) === null
   && window.getSelection()?.isCollapsed !== false
 
-/** Filter before Radix prevents the native menu or arms its touch long-press. */
-function LinkMenuAnchor({onContextMenu, onPointerDown, style, ...props}: ComponentProps<'a'>) {
+/** Touch holds belong to the content gesture recognizers, so Radix must not
+ * arm a competing long-press or override the surface's inherited callout style. */
+function LinkMenuAnchor({onContextMenu, style, ...props}: ComponentProps<'a'>) {
   return <a
     {...props}
-    style={{...style, WebkitTouchCallout: 'default'}}
+    style={{...style, WebkitTouchCallout: undefined}}
+    onPointerDown={undefined}
     onContextMenu={event => {
       if (!ownsLinkMenuGesture(event)) return
       event.stopPropagation()
       onContextMenu?.(event)
-    }}
-    onPointerDown={event => {
-      if (!ownsLinkMenuGesture(event)) return
-      onPointerDown?.(event)
     }}
   />
 }
