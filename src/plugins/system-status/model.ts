@@ -7,6 +7,7 @@ export type SyncIndicatorState =
   | 'pending'
   | 'connecting'
   | 'offline'
+  | 'other-tab'
   | 'synced'
   | 'starting'
 
@@ -36,6 +37,10 @@ export interface SyncIndicatorInput {
    *  Defaults to 0 so callers that don't pipe it in stay unaffected. */
   materializingChanges?: number
   materializingChangesApproximate?: boolean
+  /** Another client holds this database's sync stream lock (see
+   *  `syncStreamLockName`), so this tab's own sync loop is queued while the
+   *  device keeps syncing through it. Read only while disconnected. */
+  syncingInOtherTab?: boolean
   downloadFraction?: number | null
   errorMessage?: string | null
   lastSyncedAt?: Date
@@ -125,6 +130,7 @@ const baseSyncIndicatorView = ({
   rejectedChanges = 0,
   materializingChanges = 0,
   materializingChangesApproximate = false,
+  syncingInOtherTab = false,
   downloadFraction,
   errorMessage,
   lastSyncedAt,
@@ -251,6 +257,21 @@ const baseSyncIndicatorView = ({
   }
 
   if (!connected) {
+    if (syncingInOtherTab) {
+      return {
+        state: 'other-tab',
+        tone: 'neutral',
+        icon: 'check',
+        label: 'Syncing in another tab',
+        title: appendRejectedTitle(
+          'Another open tab is syncing for this device. Close or reload your other tabs to sync from this one.',
+          rejectedChanges,
+        ),
+        pendingLabel,
+        progressPercent: null,
+        spinning: false,
+      }
+    }
     return {
       state: 'offline',
       tone: 'neutral',

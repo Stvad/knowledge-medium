@@ -7,6 +7,8 @@ import {
 } from '@/plugins/data-integrity/store'
 import { SystemStatusHeaderItem } from '../SystemStatusHeaderItem.tsx'
 import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
+import { dbFilenameForUser } from '@/data/localDbStorage'
+import { syncStreamLockName } from '@/data/syncStreamLock'
 import {
   uploadQueueCountCap,
   uploadQueueExactCountSql,
@@ -47,6 +49,7 @@ vi.mock('@powersync/react', () => ({
 
 vi.mock('@/components/Login.js', () => ({
   useIsLocalOnly: () => mocks.localOnly,
+  useUser: () => ({id: 'user-1'}),
 }))
 
 // The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
@@ -120,6 +123,18 @@ const setDeviceOnline = (online: boolean) => {
   Object.defineProperty(navigator, 'onLine', {configurable: true, value: online})
 }
 
+// Web Locks as another client sees them: each name held, nothing queued.
+const setHeldLocks = (names: string[] | null) => {
+  const query = vi.fn(async () => ({
+    held: (names ?? []).map(name => ({name, mode: 'exclusive' as const, clientId: 'other'})),
+    pending: [],
+  }))
+  Object.defineProperty(navigator, 'locks', {configurable: true, value: names ? {query} : undefined})
+  return query
+}
+
+const thisDatabaseSyncLock = () => syncStreamLockName(dbFilenameForUser('user-1'))
+
 describe('SystemStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
@@ -139,6 +154,7 @@ describe('SystemStatusHeaderItem', () => {
   afterEach(() => {
     cleanup()
     setDeviceOnline(true)
+    setHeldLocks(null)
     resetConsistencyAuditStore()
   })
 
@@ -227,6 +243,61 @@ describe('SystemStatusHeaderItem', () => {
     const label = screen.getByRole('button').getAttribute('aria-label') ?? ''
     expect(label.toLowerCase()).toContain('offline')
     expect(label).not.toContain('WebSocket')
+  })
+
+  it('says another tab is syncing instead of offline while another client holds this database\'s sync lock', async () => {
+    mocks.status = {...defaultStatus(), connected: false}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/another open tab/i)
+    })
+    expect(screen.getByRole('button').getAttribute('aria-label')).not.toMatch(/offline/i)
+  })
+
+  it('falls back to offline when the device goes offline while another tab held the sync lock', async () => {
+    mocks.status = {...defaultStatus(), connected: false}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    setHeldLocks([thisDatabaseSyncLock()])
+    render(<SystemStatusHeaderItem/>)
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/another open tab/i)
+    })
+
+    act(() => {
+      setDeviceOnline(false)
+      window.dispatchEvent(new Event('offline'))
+    })
+
+    expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/offline/i)
+  })
+
+  it.each([
+    ['connected', {connected: true}, true],
+    ['connecting', {connected: false, connecting: true}, true],
+    ['the device is offline', {connected: false}, false],
+  ])('does not consult Web Locks while %s', (_case, status, online) => {
+    setDeviceOnline(online)
+    mocks.status = {...defaultStatus(), ...status}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    const query = setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('does not consult Web Locks for the local-only header state', () => {
+    mocks.localOnly = true
+    mocks.status = {...defaultStatus(), connected: false}
+    const query = setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    expect(query).not.toHaveBeenCalled()
   })
 
   it('surfaces a persistent sync error when the device is online but sync is disconnected', () => {
