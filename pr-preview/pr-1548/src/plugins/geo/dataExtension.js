@@ -1,0 +1,1 @@
+export{CG as geoDataExtension}from"../../../chunks/app-DqsUurDO.js";

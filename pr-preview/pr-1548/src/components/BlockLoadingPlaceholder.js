@@ -1,0 +1,1 @@
+export{kN as BlockLoadingPlaceholder}from"../../chunks/app-DqsUurDO.js";

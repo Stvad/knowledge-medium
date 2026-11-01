@@ -1,0 +1,1 @@
+export{UM as resolveAppRuntime,WM as resolveAppRuntimeSync}from"../../chunks/app-DqsUurDO.js";

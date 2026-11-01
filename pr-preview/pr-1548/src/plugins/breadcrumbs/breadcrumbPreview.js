@@ -1,0 +1,1 @@
+export{BC as getBreadcrumbContentPreview}from"../../../chunks/app-DqsUurDO.js";

@@ -1,0 +1,1 @@
+export{uR as BlockProperties}from"../../chunks/app-DqsUurDO.js";

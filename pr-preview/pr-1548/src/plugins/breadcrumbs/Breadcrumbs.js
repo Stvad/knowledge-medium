@@ -1,0 +1,1 @@
+export{VC as Breadcrumbs}from"../../../chunks/app-DqsUurDO.js";

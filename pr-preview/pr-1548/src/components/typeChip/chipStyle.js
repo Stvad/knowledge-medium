@@ -1,0 +1,1 @@
+export{YA as chipStyle}from"../../../chunks/app-DqsUurDO.js";

@@ -1,0 +1,1 @@
+export{fU as SuspenseFallback}from"../../../chunks/app-DqsUurDO.js";

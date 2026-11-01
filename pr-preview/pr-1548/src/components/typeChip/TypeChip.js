@@ -1,0 +1,1 @@
+export{JA as TypeChip}from"../../../chunks/app-DqsUurDO.js";

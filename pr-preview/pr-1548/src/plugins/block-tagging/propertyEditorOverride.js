@@ -1,0 +1,1 @@
+export{dl as blockTagsConfigUi}from"../../../chunks/app-DqsUurDO.js";

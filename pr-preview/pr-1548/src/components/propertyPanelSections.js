@@ -1,0 +1,1 @@
+export{MR as buildPropertyPanelSections}from"../../chunks/app-DqsUurDO.js";

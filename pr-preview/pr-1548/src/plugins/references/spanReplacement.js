@@ -1,0 +1,1 @@
+export{jW as preferredSpanReplacement}from"../../../chunks/app-DqsUurDO.js";

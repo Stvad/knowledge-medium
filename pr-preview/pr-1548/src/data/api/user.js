@@ -1,0 +1,1 @@
+export{pat as SYSTEM_AUTHOR_PREFIX,mat as isSystemAuthor,hat as systemAuthor}from"../../../chunks/app-DqsUurDO.js";

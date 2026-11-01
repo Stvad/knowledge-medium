@@ -1,0 +1,1 @@
+export{LC as usePromotableBreadcrumb}from"../../../chunks/app-DqsUurDO.js";

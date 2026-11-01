@@ -1,0 +1,1 @@
+export{Av as useIsReadOnly}from"../../chunks/app-DqsUurDO.js";

@@ -1,0 +1,1 @@
+export{KX as SYNCED_TABLES,qX as syncedWriteTarget,JX as writeTargets}from"../../chunks/app-DqsUurDO.js";

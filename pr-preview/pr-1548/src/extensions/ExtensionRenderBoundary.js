@@ -1,0 +1,1 @@
+export{CF as ExtensionRenderBoundary}from"../../chunks/app-DqsUurDO.js";

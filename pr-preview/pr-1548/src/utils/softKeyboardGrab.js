@@ -1,0 +1,1 @@
+export{KC as grabSoftKeyboard}from"../../chunks/app-DqsUurDO.js";

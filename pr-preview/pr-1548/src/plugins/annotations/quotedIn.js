@@ -1,0 +1,1 @@
+export{Vu as quotedInFooterContribution}from"../../../chunks/app-DqsUurDO.js";

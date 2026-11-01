@@ -1,0 +1,1 @@
+export{F0 as kernelDataExtension}from"../../chunks/app-DqsUurDO.js";

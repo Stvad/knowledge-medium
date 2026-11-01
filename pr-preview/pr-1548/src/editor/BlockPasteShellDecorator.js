@@ -1,0 +1,1 @@
+export{Nj as BlockPasteShellDecorator,Pj as blockPasteShellDecorator}from"../../chunks/app-DqsUurDO.js";

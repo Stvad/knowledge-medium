@@ -1,0 +1,1 @@
+export{tnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DqsUurDO.js";

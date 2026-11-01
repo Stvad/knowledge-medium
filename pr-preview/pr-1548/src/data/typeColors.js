@@ -1,0 +1,1 @@
+export{XA as DEFAULT_TYPE_COLORS,ZA as defaultTypeColor,QA as pickLeastUsedTypeColor}from"../../chunks/app-DqsUurDO.js";

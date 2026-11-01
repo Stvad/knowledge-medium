@@ -1,0 +1,1 @@
+export{Lg as UpdateIndicator}from"../../../chunks/app-DqsUurDO.js";

@@ -1,0 +1,1 @@
+export{btt as getOrCreatePropertiesPage,xtt as propertiesPageBlockId,Stt as propertiesPageSpec}from"../../chunks/app-DqsUurDO.js";

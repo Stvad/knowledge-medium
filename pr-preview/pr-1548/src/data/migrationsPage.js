@@ -1,0 +1,1 @@
+export{uet as MIGRATIONS_PAGE_ALIAS,det as getOrCreateMigrationsPage,fet as migrationsPageBlockId,pet as migrationsPageSpec}from"../../chunks/app-DqsUurDO.js";

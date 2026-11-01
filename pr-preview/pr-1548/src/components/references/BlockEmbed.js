@@ -1,0 +1,1 @@
+export{zA as BlockEmbed}from"../../../chunks/app-DqsUurDO.js";
