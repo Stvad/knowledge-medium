@@ -1,8 +1,7 @@
 import {z} from 'zod'
-import {defineQuery, type BlockData, type Query, type Schema} from '@/data/api'
-import {hasBlockType} from '@/data/properties'
+import {defineQuery, type Query, type Schema} from '@/data/api'
 import {backlinkSourceIds} from '@/plugins/backlinks/sourceBatch.js'
-import {THREAD_TYPE, threadTargetIdOf} from './schema.ts'
+import {mentionThreadBlockIds} from './mentionThreads.ts'
 
 export const MENTIONS_FOR_BLOCK_QUERY = 'annotations.mentionsForBlock'
 const MENTION_CARD_LIMIT = 3
@@ -10,46 +9,32 @@ const MENTION_CARD_LIMIT = 3
 export interface MarginMentions {
   ids: string[]
   total: number
-  /** Root-first locations, from the same walks that decide membership. */
+  /** Root-first locations of only the displayed sources. */
   parentsBySource: Record<string, string[]>
 }
 
 const resultSchema: Schema<MarginMentions> = {parse: input => input as MarginMentions}
 
-/** Both reads already coalesce through ReadBatcher: backlink sources, then
- *  their ancestor walks. Filter before capping so comments already in this
- *  target's threads neither consume a card nor inflate the remaining count.
- *  The nearest root owns a comment; nested threads belong through their
- *  target, regardless of where their roots are stored. Inherited ancestor
- *  row dependencies keep moves and retargets reactive. */
+/** Filter the source owner's list against the target's thread subtrees before
+ *  capping. Only displayed sources need ancestor walks for their breadcrumbs;
+ *  both the source and thread-subtree reads coalesce across a render wave. */
 export const mentionsForBlockQuery: Query<{workspaceId: string; id: string}, MarginMentions> = defineQuery({
   name: MENTIONS_FOR_BLOCK_QUERY,
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
   resultSchema,
   resolve: async ({workspaceId, id}, ctx) => {
-    const sources = await backlinkSourceIds(ctx, workspaceId, id)
-    const walks = await Promise.all(sources.map(sourceId => ctx.run('core.ancestors', {id: sourceId})))
-    const inTargetThread = async (ancestors: readonly BlockData[], seen: Set<string>): Promise<boolean> => {
-      for (const root of ancestors) {
-        if (!hasBlockType(root, THREAD_TYPE)) continue
-        const targetId = threadTargetIdOf(root)
-        if (!targetId) return false
-        if (seen.has(root.id)) return false
-        if (targetId === id) return true
-        seen.add(root.id)
-        const next = await ctx.run('core.ancestors', {id: targetId})
-        return inTargetThread(next.ancestors, seen)
-      }
-      return false
-    }
-    const duplicate = await Promise.all(walks.map(walk => inTargetThread(walk.ancestors, new Set())))
-    const ids = sources.filter((_, i) => !duplicate[i])
+    const [sources, ownThreads] = await Promise.all([
+      backlinkSourceIds(ctx, workspaceId, id),
+      mentionThreadBlockIds(ctx, workspaceId, id),
+    ])
+    const ids = sources.filter(sourceId => !ownThreads.has(sourceId))
     const cards = ids.slice(0, MENTION_CARD_LIMIT)
+    const walks = await Promise.all(cards.map(sourceId => ctx.run('core.ancestors', {id: sourceId})))
     return {
       ids: cards,
       total: ids.length,
-      parentsBySource: Object.fromEntries(cards.map(sourceId => [
-        sourceId, walks[sources.indexOf(sourceId)].ancestors.map(parent => parent.id).reverse(),
+      parentsBySource: Object.fromEntries(cards.map((sourceId, i) => [
+        sourceId, walks[i].ancestors.map(parent => parent.id).reverse(),
       ])),
     }
   },

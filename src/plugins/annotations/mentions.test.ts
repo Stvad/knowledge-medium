@@ -37,6 +37,15 @@ beforeEach(async () => {
 
 const mentions = (id = TARGET) => repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId: WS, id}).load()
 
+const crowdCards = async () => {
+  await repo.tx(async tx => {
+    for (let i = 0; i < 5; i++) await tx.create({id: `!early-${i}`, workspaceId: WS, parentId: 'page', orderKey: `b${i}`, content: `Source ((${TARGET}))`})
+  }, opts)
+  await repo.awaitProcessors()
+  // Equal timestamps make the bounded order depend only on deterministic ids.
+  await db.db.execute('UPDATE blocks SET created_at = 1 WHERE workspace_id = ?', [WS])
+}
+
 describe('margin mentions', () => {
   it('shows ordinary sources but excludes thread target edges and copied quotes', async () => {
     const {threadId} = await createThread(repo, {targetId: OTHER, anchor: captureAnchor('See [[Target]]', 0, 14)})
@@ -127,9 +136,10 @@ describe('margin mentions', () => {
     try {
       const answers = await Promise.all([mentions(TARGET), mentions(OTHER)])
       expect(answers.every(answer => answer.ids.includes('mention'))).toBe(true)
-      const sql = reads.mock.calls.map(([statement]) => statement)
-      expect(sql.filter(statement => statement.includes('SELECT DISTINCT br.target_id'))).toHaveLength(1)
-      expect(sql.filter(statement => statement.includes('chain_start_id'))).toHaveLength(1)
+      const sourceReads = reads.mock.calls.filter(([statement]) => statement.includes('SELECT DISTINCT br.target_id'))
+      expect(sourceReads.filter(([statement]) => !statement.includes('br.source_field = ?'))).toHaveLength(1)
+      expect(sourceReads.filter(([statement]) => statement.includes('br.source_field = ?'))).toHaveLength(1)
+      expect(reads.mock.calls.filter(([statement]) => statement.includes('chain_start_id'))).toHaveLength(1)
     } finally {
       reads.mockRestore()
     }
@@ -145,5 +155,73 @@ describe('margin mentions', () => {
     await repo.tx(tx => tx.move('mention', {parentId: 'page', orderKey: 'a2'}), opts)
     await vi.waitFor(() => expect(handle.peek()?.ids).toContain('mention'))
     unsubscribe()
+  })
+
+  it('recounts an unshown source moved into a target thread without walking its ancestry', async () => {
+    const {threadId} = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Discussion'})
+    await repo.tx(async tx => {
+      for (let i = 0; i < 5; i++) await tx.create({id: `early-${i}`, workspaceId: WS, parentId: 'page', orderKey: `b${i}`, content: `Source ((${TARGET}))`})
+    }, opts)
+    await repo.awaitProcessors()
+    const handle = repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId: WS, id: TARGET})
+    const unsubscribe = handle.subscribe(() => {})
+    const before = await handle.load()
+    const hidden = (await repo.query['backlinks.forBlock']({workspaceId: WS, id: TARGET}).load()).find(id => !before.ids.includes(id))!
+    expect(hidden).toBeDefined()
+    expect(before.total).toBe(7)
+    await repo.tx(tx => tx.move(hidden, {parentId: threadId, orderKey: 'z0'}), opts)
+    await vi.waitFor(() => expect(handle.peek()?.total).toBe(6))
+    unsubscribe()
+  })
+
+  it('recounts an existing external thread retargeted onto a covered comment', async () => {
+    const outer = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Discussion'})
+    const external = await createThread(repo, {targetId: OTHER, anchor: null, comment: `Elsewhere ((${TARGET}))`})
+    await crowdCards()
+    const handle = repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId: WS, id: TARGET})
+    const unsubscribe = handle.subscribe(() => {})
+    const before = await handle.load()
+    expect(before.ids).not.toContain(external.commentId)
+    expect(before.total).toBe(8)
+    await repo.block(external.threadId).set(annotationTargetProp, outer.commentId!)
+    await vi.waitFor(() => expect(handle.peek()?.total).toBe(7))
+    unsubscribe()
+  })
+
+  it('recounts when an ordinary target-ref holder becomes a thread root', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'untyped-root', workspaceId: WS, parentId: 'page', orderKey: 'z0'})
+      await tx.setProperty('untyped-root', annotationTargetProp, TARGET)
+      await tx.move('mention', {parentId: 'untyped-root', orderKey: 'a0'})
+    }, opts)
+    await crowdCards()
+    const handle = repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId: WS, id: TARGET})
+    const unsubscribe = handle.subscribe(() => {})
+    const before = await handle.load()
+    expect(before.ids).not.toContain('mention')
+    expect(before.total).toBe(7)
+    await repo.block('untyped-root').set(typesProp, [THREAD_TYPE])
+    await vi.waitFor(() => expect(handle.peek()?.total).toBe(6))
+    unsubscribe()
+  })
+
+  it('retains sources under an untyped referrer of a covered comment', async () => {
+    const outer = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Discussion'})
+    await repo.tx(async tx => {
+      await tx.create({id: 'untyped-root', workspaceId: WS, parentId: 'page', orderKey: 'z0'})
+      await tx.setProperty('untyped-root', annotationTargetProp, outer.commentId!)
+      await tx.move('mention', {parentId: 'untyped-root', orderKey: 'a0'})
+    }, opts)
+    await repo.awaitProcessors()
+    expect((await mentions()).ids).toContain('mention')
+  })
+
+  it('follows target edges rather than copied content links to a covered comment', async () => {
+    const outer = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Discussion'})
+    const text = `See [[Target]] and ((${outer.commentId}))`
+    await repo.block(OTHER).setContent(text)
+    const elsewhere = await createThread(repo, {targetId: OTHER, anchor: captureAnchor(text, 0, text.length), comment: `Elsewhere ((${TARGET}))`})
+    await repo.awaitProcessors()
+    expect((await mentions()).ids).toContain(elsewhere.commentId)
   })
 })

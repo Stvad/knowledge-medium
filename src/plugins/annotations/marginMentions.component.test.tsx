@@ -277,6 +277,35 @@ describe('CommentMargin mention cards', () => {
     view.unmount()
   })
 
+  it('walks ancestors only for the three shown mentions with fifty sources', async () => {
+    await seedGraph(50)
+    const ancestorReads = vi.spyOn(db.db, 'getAll')
+    try {
+      const view = makeView()
+      await turnMentionsOn()
+
+      const mention = await screen.findByLabelText('Mentions')
+      await waitFor(() => expect(within(mention).getAllByRole('link', {name: 'Open mention'})).toHaveLength(3))
+      const shownSourceIds = within(mention).getAllByRole('link', {name: 'Open mention'}).map(link =>
+        link.getAttribute('href')!.split('/').at(-1)!,
+      )
+      const result = await repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId: WS, id: TARGET}).load()
+      expect(result.total).toBe(50)
+      expect(result.ids).toEqual(shownSourceIds)
+
+      const ancestorSeedIds = ancestorReads.mock.calls.flatMap(([statement, params]) =>
+        statement.includes('chain_start_id') ? params as string[] : [],
+      )
+      expect(ancestorSeedIds.length).toBeGreaterThan(0)
+      expect(ancestorSeedIds).toHaveLength(3)
+      expect(new Set(ancestorSeedIds)).toEqual(new Set(shownSourceIds))
+
+      view.unmount()
+    } finally {
+      ancestorReads.mockRestore()
+    }
+  })
+
   it('does not dispatch the mentions query while the option is off', async () => {
     await seedGraph(1)
     const resolver = vi.spyOn(mentionsForBlockQuery, 'resolve')
