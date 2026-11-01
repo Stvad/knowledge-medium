@@ -1473,13 +1473,12 @@ describe('parseReferences — alias claimed between plan build and apply (write-
   })
 
   it('a latent duplicate alias on the target must not abort the parse batch via the claim', async () => {
-    // Cross-client dupes are a standing V1 condition: sync-apply skips
-    // the uniqueness trigger (tx_context.source IS NULL), so two devices
-    // claiming the same alias offline both keep it. The claim write
-    // re-inserts ALL of the target's aliases (blocks_alias_update
-    // deletes+re-inserts), so the PRE-EXISTING duped alias would RAISE —
-    // pre-fix that rolled back the whole parse tx: references for the
-    // source were permanently dropped and re-aborted on every re-edit.
+    // Sync-apply skips the uniqueness trigger (tx_context.source IS NULL),
+    // so two devices claiming the same alias offline both keep it. The
+    // claim write keeps the target's duped alias while adding the literal;
+    // if keeping it re-checked it as a new claim, the abort would roll back
+    // the whole parse tx — references for the source dropped, and dropped
+    // again on every re-edit.
     await env.repo.tx(async tx => {
       await tx.create({id: 'older', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'O'})
       await tx.setProperty('older', aliasesProp, ['2026-06-12'])
@@ -1506,11 +1505,11 @@ describe('parseReferences — alias claimed between plan build and apply (write-
       refs.some(ref => ref.alias === 'June 12th, 2026' && ref.id === 'older'),
       `references written despite the latent dupe (refs: ${JSON.stringify(refs)})`,
     ).toBe(true)
-    // ...and the claim itself was skipped, leaving the target untouched.
+    // ...and the claim landed beside the duped name.
     expect(
       JSON.parse((await env.read('older'))!.properties_json)[aliasesProp.name],
-      'claim skipped on the dupe-carrying target',
-    ).toEqual(['2026-06-12'])
+      'literal claimed on the dupe-carrying target',
+    ).toEqual(['2026-06-12', 'June 12th, 2026'])
   })
 })
 

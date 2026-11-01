@@ -482,7 +482,11 @@ export interface Tx {
    *  for local user txs, so sync-applied rows can land duplicates. A
    *  caller that vetoes on "any claimant that isn't mine" gets the wrong
    *  answer from the single-row form whenever the row it recognizes
-   *  happens to be the oldest. Sees this tx's own writes. */
+   *  happens to be the oldest. Sees this tx's own writes.
+   *
+   *  Whether a write claiming `alias` would ABORT is a narrower question —
+   *  a name a row already holds is not a new claim, co-claimed or not — and
+   *  `aliasClaimConflicts` (`@/data/aliasClaim`) is what answers it. */
   aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
 
   /** Every alias `blockId` claims, straight out of the trigger-maintained

@@ -1165,7 +1165,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'restore-block': {
     usage: 'kmagent restore-block <id>',
-    description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately.',
+    description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately; an alias another live block took meanwhile stays with that block.',
     readOnly: false,
   },
   'append-markdown': {
