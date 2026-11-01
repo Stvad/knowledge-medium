@@ -1,1 +1,1 @@
-export{EI as BlockEditor}from"../../chunks/app-iBLMol86.js";
+export{EI as BlockEditor}from"../../chunks/app-CeEieG8f.js";

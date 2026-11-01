@@ -1,1 +1,1 @@
-export{fl as BlockTagsConfigEditor}from"../../../chunks/app-iBLMol86.js";
+export{fl as BlockTagsConfigEditor}from"../../../chunks/app-CeEieG8f.js";

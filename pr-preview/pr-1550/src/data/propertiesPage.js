@@ -1,1 +1,1 @@
-export{wtt as getOrCreatePropertiesPage,Ttt as propertiesPageBlockId,Ett as propertiesPageSpec}from"../../chunks/app-iBLMol86.js";
+export{wtt as getOrCreatePropertiesPage,Ttt as propertiesPageBlockId,Ett as propertiesPageSpec}from"../../chunks/app-CeEieG8f.js";

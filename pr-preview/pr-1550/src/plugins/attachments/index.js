@@ -1,1 +1,1 @@
-export{ly as attachmentsPlugin}from"../../../chunks/app-iBLMol86.js";
+export{ly as attachmentsPlugin}from"../../../chunks/app-CeEieG8f.js";
