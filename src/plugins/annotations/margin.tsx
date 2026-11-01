@@ -279,7 +279,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 }
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
-const NO_MENTIONS: MarginMentions = Object.freeze({ids: [], total: 0, parentsBySource: {}})
+const NO_MENTIONS: MarginMentions = Object.freeze({ids: [], total: 0})
 
 const MarginMentionsRow = ({blockId}: {blockId: string}) => {
   const registry = useContext(MarginRegistryContext)!
@@ -391,27 +391,29 @@ const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) =
   )
 }
 
+const DisplayToggle = ({pressed, onToggle, children}: {pressed: boolean; onToggle: () => void; children: ReactNode}) => (
+  <button
+    type="button"
+    onClick={onToggle}
+    aria-pressed={pressed}
+    className="pointer-events-auto rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
+  >
+    {children}
+  </button>
+)
+
 /** Per-reader display options, floating at the column's foot. */
 const MarginDisplayOptions = ({panelId, hasThreads}: {panelId: string; hasThreads: boolean}) => {
   const showClosed = useShowClosed(panelId)
   const showMentions = useShowMentions(panelId)
   return (
     <div className="pointer-events-none absolute bottom-2 right-1 z-10 flex gap-1">
-      <button
-        type="button"
-        onClick={() => toggleShowMentions(panelId)}
-        aria-pressed={showMentions}
-        className="pointer-events-auto rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-      >
+      <DisplayToggle pressed={showMentions} onToggle={() => toggleShowMentions(panelId)}>
         {showMentions ? 'Hide mentions' : 'Show mentions'}
-      </button>
-      {hasThreads && <button
-        type="button"
-        onClick={() => toggleShowClosed(panelId)}
-        className="pointer-events-auto rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-      >
+      </DisplayToggle>
+      {hasThreads && <DisplayToggle pressed={showClosed} onToggle={() => toggleShowClosed(panelId)}>
         {showClosed ? 'Hide closed' : 'Show closed'}
-      </button>}
+      </DisplayToggle>}
     </div>
   )
 }

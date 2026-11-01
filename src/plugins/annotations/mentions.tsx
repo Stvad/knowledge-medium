@@ -4,7 +4,7 @@ import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
 import {useRepo} from '@/context/repo.js'
 import type {Block} from '@/data/block'
-import {useWorkspaceId} from '@/hooks/block.js'
+import {useParents, useWorkspaceId} from '@/hooks/block.js'
 import {BreadcrumbList} from '@/plugins/breadcrumbs/BreadcrumbList.js'
 import {BacklinksDialog} from '@/plugins/backlinks/BacklinksDialog.js'
 import {ContributorCardView} from '@/plugins/contributors/ContributorBadges.js'
@@ -31,12 +31,12 @@ const SourceBody = ({block}: {block: Block}) => {
   )
 }
 
-const MentionSourceCard = ({blockId, parentIds, parentRenderScopeId}: {blockId: string; parentIds: readonly string[]; parentRenderScopeId: string}) => {
+const MentionSourceCard = ({blockId, parentRenderScopeId}: {blockId: string; parentRenderScopeId: string}) => {
   const repo = useRepo()
   const source = repo.block(blockId)
   const workspaceId = useWorkspaceId(source, repo.activeWorkspaceId ?? '')
   const openBlock = useBlockOpener()
-  const parents = parentIds.map(id => repo.block(id))
+  const parents = useParents(source)
   const renderScopeId = useMemo(
     () => surfaceRenderScopeId('mentions', parentRenderScopeId, blockId),
     [parentRenderScopeId, blockId],
@@ -72,7 +72,7 @@ export const MentionCards = ({blockId, panelId, mentions}: {blockId: string; pan
   return (
     <section aria-label="Mentions" className="space-y-2">
       {mentions.ids.map(sourceId => (
-        <MentionSourceCard key={sourceId} blockId={sourceId} parentIds={mentions.parentsBySource[sourceId]} parentRenderScopeId={parentRenderScopeId}/>
+        <MentionSourceCard key={sourceId} blockId={sourceId} parentRenderScopeId={parentRenderScopeId}/>
       ))}
       {moreCount > 0 && (
         <button type="button" onClick={() => void openDialog(BacklinksDialog, {blockId, panelId})} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:underline">

@@ -125,11 +125,9 @@ describe('margin mentions', () => {
     expect(answer.total - answer.ids.length).toBe(4)
     const sources = await repo.query['backlinks.forBlock']({workspaceId: WS, id: TARGET}).load()
     expect(answer.ids).toEqual(sources.slice(0, 3))
-    expect(Object.keys(answer.parentsBySource)).toEqual(answer.ids)
-    expect(Object.values(answer.parentsBySource)).toEqual([['page'], ['page'], ['page']])
   })
 
-  it('batches the source and ancestor reads across a wave of target blocks', async () => {
+  it('batches source and thread-root reads across a wave of target blocks', async () => {
     await repo.tx(tx => tx.update('mention', {content: `Both ((${TARGET})) and ((${OTHER}))`}), opts)
     await repo.awaitProcessors()
     const reads = vi.spyOn(db.db, 'getAll')
@@ -139,7 +137,6 @@ describe('margin mentions', () => {
       const sourceReads = reads.mock.calls.filter(([statement]) => statement.includes('SELECT DISTINCT br.target_id'))
       expect(sourceReads.filter(([statement]) => !statement.includes('br.source_field = ?'))).toHaveLength(1)
       expect(sourceReads.filter(([statement]) => statement.includes('br.source_field = ?'))).toHaveLength(1)
-      expect(reads.mock.calls.filter(([statement]) => statement.includes('chain_start_id'))).toHaveLength(1)
     } finally {
       reads.mockRestore()
     }

@@ -36,6 +36,7 @@ import {CommentMargin} from './margin'
 import {annotationMarginOpenProp} from './marginSchema'
 import {MENTIONS_FOR_BLOCK_QUERY, mentionsForBlockQuery} from './mentionsQuery'
 import {toggleShowMentions} from './uiStore'
+import {createThread} from './threads'
 
 const mocks = vi.hoisted(() => ({
   repoRef: {current: undefined as Repo | undefined},
@@ -237,6 +238,44 @@ afterEach(() => {
 })
 
 describe('CommentMargin mention cards', () => {
+  it('exposes the closed-thread display preference as a pressed toggle', async () => {
+    await seedGraph(1)
+    await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Discussion'})
+    const view = makeView()
+    const closed = await screen.findByRole('button', {name: 'Show closed'})
+    expect(closed).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(closed)
+    const hideClosed = screen.getByRole('button', {name: 'Hide closed'})
+    expect(hideClosed).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(hideClosed)
+    view.unmount()
+  })
+
+  it('updates shown content and breadcrumbs without reloading mention membership', async () => {
+    await seedGraph(1)
+    const resolver = vi.spyOn(mentionsForBlockQuery, 'resolve')
+    try {
+      const view = makeView()
+      await turnMentionsOn()
+      const mention = await screen.findByLabelText('Mentions')
+      await within(mention).findByRole('link', {name: 'Mention location'})
+      await waitFor(() => expect(mention.querySelector('strong')?.textContent).toBe('Mention body 1'))
+      expect(resolver).toHaveBeenCalled()
+      const loads = resolver.mock.calls.length
+
+      await repo.tx(async tx => {
+        await tx.update(PAGE, {content: 'Renamed location'})
+        await tx.update('mention-source-1', {content: `**Changed mention body** and ((${TARGET}))`})
+      }, BLOCK_DEFAULT)
+      await within(mention).findByRole('link', {name: 'Renamed location'})
+      await waitFor(() => expect(mention.querySelector('strong')?.textContent).toBe('Changed mention body'))
+      expect(resolver).toHaveBeenCalledTimes(loads)
+      view.unmount()
+    } finally {
+      resolver.mockRestore()
+    }
+  })
+
   it('renders mention content and its author with Contributors disabled', async () => {
     await seedGraph(1)
     repo.setFacetRuntime(createRuntime({contributors: false}))
@@ -362,6 +401,7 @@ describe('CommentMargin mention cards', () => {
       expect(result.total).toBe(50)
       expect(result.ids).toEqual(shownSourceIds)
 
+      await waitFor(() => expect(within(mention).getAllByRole('link', {name: 'Mention location'})).toHaveLength(3))
       const ancestorSeedIds = ancestorReads.mock.calls.flatMap(([statement, params]) =>
         statement.includes('chain_start_id') ? params as string[] : [],
       )
