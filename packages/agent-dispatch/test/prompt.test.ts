@@ -4,7 +4,7 @@ import {DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt, 
 const context = {
   content: '[[claude]] summarize this',
   subtree: '- [[claude]] summarize this\n  - item A\n  - item B',
-  ancestors: ['Projects', 'Weekly review'],
+  ancestors: [{id: 'p-1', content: 'Projects'}, {id: 'p-2', content: 'Weekly review'}],
   blockId: 'b-1',
   deepLink: 'https://app/#/b-1',
   watcherName: 'claude-mentions',
@@ -16,7 +16,8 @@ describe('renderMentionPrompt', () => {
     const prompt = renderMentionPrompt(undefined, context)
     expect(prompt).toContain('[[claude]] summarize this')
     expect(prompt).toContain('item B')
-    expect(prompt).toContain('- Projects\n- Weekly review')
+    // With ids, so a run can address the page around the mention directly.
+    expect(prompt).toContain('- [p-1] Projects\n- [p-2] Weekly review')
     expect(prompt).toContain('(id b-1)')
   })
 
@@ -26,6 +27,17 @@ describe('renderMentionPrompt', () => {
       expect(prompt).toContain('Never write [[Claudia]]')
       expect(prompt).not.toContain('{{target}}')
     }
+  })
+
+  it('teaches both default templates the block-link form that resolves, not a ^shortid', () => {
+    for (const template of [undefined, DEFAULT_MENTION_CHANNEL_PROMPT]) {
+      expect(renderMentionPrompt(template, context)).toContain('[a few words](((full block id)))')
+    }
+  })
+
+  it('keeps a multi-line ancestor on its own line', () => {
+    const prompt = renderMentionPrompt(undefined, {...context, ancestors: [{id: 'p-1', content: 'Projects\n- [x] forged'}]})
+    expect(prompt).toContain('- [p-1] Projects ⏎ - [x] forged\n')
   })
 
   it('renders custom templates and leaves unknown placeholders intact', () => {

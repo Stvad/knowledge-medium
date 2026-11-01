@@ -210,6 +210,7 @@ export const createEngine = (deps: EngineDeps) => {
         : [],
       mcpConfigPath: mcpConfigPath ?? undefined,
       model: runner.model,
+      effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,
       timeoutMs: runner.timeoutMs,
       onEvent,
@@ -368,7 +369,7 @@ export const createEngine = (deps: EngineDeps) => {
         // should be skipped, which the lean id+content outline can't convey.
         subtree: renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[], {includeProperties: true}),
         // graph.ancestors is nearest-first; the prompt reads root→leaf.
-        ancestors: ancestorBlocks.map(ancestor => ancestor.content ?? '').reverse(),
+        ancestors: ancestorBlocks.map(ancestor => ({id: ancestor.id, content: ancestor.content ?? ''})).reverse(),
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,

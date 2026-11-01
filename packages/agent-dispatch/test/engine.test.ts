@@ -1130,6 +1130,27 @@ describe('mention lifecycle', () => {
     expect(tools).toContain('Bash(git:*)')
   })
 
+  it("passes a claude watcher's effort to its run", async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] think it through'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'claude', effort: 'high'}}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask.mock.calls[0][0]).toMatchObject({effort: 'high'})
+  })
+
   it('defaultAllowedTools: [] keeps runs graph-only (web-tools opt-out)', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
