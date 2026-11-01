@@ -1,1 +1,1 @@
-export{Go as requestPersistenceActionContribution}from"../../../chunks/app-gyv1ylX2.js";
+export{Go as requestPersistenceActionContribution}from"../../../chunks/app-DNHROp-f.js";

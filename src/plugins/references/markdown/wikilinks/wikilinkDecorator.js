@@ -1,1 +1,1 @@
-export{mO as isWikilinkDisplayParts,hO as resolveWikilinkDisplay,gO as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-gyv1ylX2.js";
+export{mO as isWikilinkDisplayParts,hO as resolveWikilinkDisplay,gO as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-DNHROp-f.js";

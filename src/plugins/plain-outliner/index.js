@@ -1,1 +1,1 @@
-export{KC as plainOutlinerPlugin}from"../../../chunks/app-gyv1ylX2.js";
+export{KC as plainOutlinerPlugin}from"../../../chunks/app-DNHROp-f.js";
