@@ -7,7 +7,7 @@
 
 import {ChangeScope} from '@/data/api'
 import type {Repo} from '@/data/repo'
-import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {anchorFieldProps, anchorFieldValues, threadReplacementOf} from './schema.ts'
 import {AnchorChangedError, assertQuotable, assertSuggestionAnchor, threadAndTarget} from './threads.ts'
 
@@ -27,9 +27,7 @@ export class QuotedThreadError extends Error {
  *  would then be text the user never confirmed). */
 export const confirmedAnchor = (content: string, anchor: RangeAnchor): RangeAnchor | null => {
   const resolved = resolveAnchor(content, anchor)
-  if (resolved.state === 'stale') return null
-  const confirmed = captureAnchor(content, resolved.from, resolved.to)
-  return confirmed?.quote === anchor.quote ? confirmed : null
+  return resolved.state === 'stale' ? null : recaptureAnchor(content, resolved.from, anchor.quote)
 }
 
 /** Rewrite `threadId`'s anchor to `anchor`, or to the whole block for null, as

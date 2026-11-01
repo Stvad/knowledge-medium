@@ -3,7 +3,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
-import { ChangeScope, type User } from '@/data/api'
+import {
+  ChangeScope,
+  CORE_BLOCK_MERGED_EVENT,
+  CORE_BLOCK_SPLIT_EVENT,
+  defineSameTxProcessor,
+  ProcessorRejection,
+  type User,
+} from '@/data/api'
+import { sameTxProcessorsFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -1178,6 +1186,38 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.doc.toString()).toBe('current')
   })
 
+  it('puts the editor text back when a Delete merge is refused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-merge', [defineSameTxProcessor({
+      name: 'test.refuseMerge',
+      watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    // Left merged, the editor's next flush would copy `next` into this block.
+    expect(editorView.state.doc.toString()).toBe('current')
+    expect(editorView.state.selection.main.head).toBe('current'.length)
+  })
+
   it('a guarded block is not merged away by Backspace at offset 0', async () => {
     // The Backspace twin of the above: this branch merges the CURRENT block
     // into the previous one, which destroys the current block.
@@ -1666,6 +1706,42 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.doc.toString()).toBe('left ')
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(suffixId)
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({blockId: suffixId, start: 0})
+  })
+
+  // Each split re-arms the editor with the half its block keeps before the
+  // split's transaction runs, so a refused split must put the rest back, or
+  // the editor's next flush would save only that half.
+  it.each([
+    ['a mid-text split', 'root'],
+    ['a scope-root split', 'current'],
+  ])('puts the whole text back in the editor when %s is refused', async (_shape, scopeRootId) => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'left right'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-split', [defineSameTxProcessor({
+      name: 'test.refuseSplit',
+      watches: {kind: 'event', events: [CORE_BLOCK_SPLIT_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'current')
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(editorView.state.doc.toString()).toBe('left right')
+    expect(editorView.state.selection.main.head).toBe('left '.length)
+    expect(env.repo.block('current').peek()?.content).toBe('left right')
+    expect(await childIds('root')).toEqual(['current'])
   })
 
   it('makes Tab a no-op on a scope-root block', async () => {

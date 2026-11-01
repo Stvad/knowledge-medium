@@ -26,8 +26,8 @@ export interface MentionPromptContext {
   content: string
   /** Rendered outline of the mention block's subtree. */
   subtree: string
-  /** Ancestor contents, nearest last (path from root to the block). */
-  ancestors: string[]
+  /** Path from the root to the block, nearest last. */
+  ancestors: Array<{id: string, content: string}>
   blockId: string
   deepLink: string
   watcherName: string
@@ -40,6 +40,10 @@ export interface MentionPromptContext {
    *  threads naturally (the "prompting" half of the feature). */
   splitReply?: boolean
 }
+
+/** Only a full UUID in one of these forms parses as a block reference; the
+ *  ^shortids the km tools print are display text. */
+const BLOCK_LINK_RULE = 'write [a few words](((full block id))) to link a block, with the id in full as get_block prints it in parentheses (a ^shortid is how the tools print an id, not a link)'
 
 export const DEFAULT_MENTION_PROMPT = `You were mentioned as [[{{target}}]] in the user's Knowledge Medium notes, an outliner where blocks nest under blocks. Read the mention as a request addressed to you.
 
@@ -57,7 +61,7 @@ How to work:
 - Your final message is posted for you as the reply under the mention. Don't also post it with a write tool, or it appears twice.
 - Change the notes only when the request asks you to, and say in the reply what you changed. Add new material with append_markdown under the block it belongs to. To change text the user wrote, propose the edit with add_comment (a quote plus its replacement) for them to accept or reject; edit it yourself (edit_block) only when the request plainly asks you to make the change.
 - If the request is ambiguous, ask one short question in the reply instead of guessing: a mention of [[{{target}}]] under your reply continues this conversation.
-- Cite what you used: link web sources, and write [[Page name]] for pages in the notes.
+- Cite what you used: link web sources, write [[Page name]] for a page, and ${BLOCK_LINK_RULE}.
 - Never write [[{{target}}]], or another watched page, into the notes: it would start another run, so the write is refused.
 
 Reply in concise, notes-style markdown, with no preamble.`
@@ -95,7 +99,7 @@ Path from the page root (nearest last):
 
 Handle it now, then close the task out yourself:
 1. Do the work with the km tools.
-2. Post your answer with create_block: parentId {{blockId}}, your reply as content, and properties {"agent:reply": true}.
+2. Post your answer with create_block: parentId {{blockId}}, your reply as content, and properties {"agent:reply": true}. In it, ${BLOCK_LINK_RULE}.
 3. Mark the task finished with update_block on {{blockId}}: properties {"agent:status": "done"} (or "error" plus {"agent:error": "<why>"} if you could not complete it).
 Never write [[{{target}}]], or another watched page, anywhere: it would start another run, so the write is refused.`
 
@@ -152,7 +156,9 @@ export const renderMentionPrompt = (
     thread: thread ? `\n${thread}\n` : '',
     content: context.content,
     subtree: context.subtree,
-    ancestors: context.ancestors.length > 0 ? context.ancestors.map(line => `- ${line}`).join('\n') : '(top level)',
+    ancestors: context.ancestors.length > 0
+      ? renderSubtreeOutline(context.ancestors.map(ancestor => ({...ancestor, parentId: null, depth: 0})))
+      : '(top level)',
     blockId: context.blockId,
     deepLink: context.deepLink,
     watcherName: context.watcherName,
