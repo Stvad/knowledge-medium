@@ -1,1 +1,1 @@
-export{bat as defineMutator}from"../../../chunks/app-SUI1vXZe.js";
+export{Eat as defineMutator}from"../../../chunks/app-Q0Qe5S7a.js";

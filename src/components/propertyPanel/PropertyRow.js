@@ -1,1 +1,1 @@
-export{yR as PropertyRow}from"../../../chunks/app-SUI1vXZe.js";
+export{mR as PropertyRow}from"../../../chunks/app-Q0Qe5S7a.js";

@@ -1,1 +1,1 @@
-export{VR as AddPropertyForm}from"../../../chunks/app-SUI1vXZe.js";
+export{IR as AddPropertyForm}from"../../../chunks/app-Q0Qe5S7a.js";
