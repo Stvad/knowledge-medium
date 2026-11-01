@@ -1,1 +1,0 @@
-export{lM as appUpdatePromptExtension}from"../../../chunks/app-W-TBGkY5.js";

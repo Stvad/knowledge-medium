@@ -1,1 +1,0 @@
-export{fJ as characterCounterDataExtension}from"../../../chunks/app-W-TBGkY5.js";

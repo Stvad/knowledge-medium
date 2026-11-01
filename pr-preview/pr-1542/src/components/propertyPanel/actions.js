@@ -1,1 +1,0 @@
-export{IR as addProperty,LR as deleteProperty,RR as writeProperty}from"../../../chunks/app-W-TBGkY5.js";

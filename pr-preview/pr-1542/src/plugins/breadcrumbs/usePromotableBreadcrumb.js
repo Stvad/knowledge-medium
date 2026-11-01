@@ -1,1 +1,0 @@
-export{BC as usePromotableBreadcrumb}from"../../../chunks/app-W-TBGkY5.js";
