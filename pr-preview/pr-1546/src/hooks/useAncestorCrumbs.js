@@ -1,1 +1,1 @@
-export{QE as useAncestorCrumbs}from"../../chunks/app-Cacmv_-I.js";
+export{QE as useAncestorCrumbs}from"../../chunks/app-D8MSukCt.js";

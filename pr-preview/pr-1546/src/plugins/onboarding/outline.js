@@ -1,1 +1,1 @@
-export{$x as EXTENSIONS_PAGE_TITLE,eS as TUTORIAL_DEFAULT_TITLE,tS as TUTORIAL_VIM_TITLE,nS as extensionsPageOutline,rS as tutorialOutline}from"../../../chunks/app-Cacmv_-I.js";
+export{$x as EXTENSIONS_PAGE_TITLE,eS as TUTORIAL_DEFAULT_TITLE,tS as TUTORIAL_VIM_TITLE,nS as extensionsPageOutline,rS as tutorialOutline}from"../../../chunks/app-D8MSukCt.js";

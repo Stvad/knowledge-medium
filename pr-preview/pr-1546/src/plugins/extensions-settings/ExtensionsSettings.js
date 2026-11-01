@@ -1,1 +1,1 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-Cacmv_-I.js";
+export{tr as ExtensionsSettings}from"../../../chunks/app-D8MSukCt.js";

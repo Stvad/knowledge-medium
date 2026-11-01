@@ -1,1 +1,1 @@
-export{la as propertiesMigrationPlugin}from"../../../chunks/app-Cacmv_-I.js";
+export{la as propertiesMigrationPlugin}from"../../../chunks/app-D8MSukCt.js";

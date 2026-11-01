@@ -1,1 +1,1 @@
-export{ZA as TypeChip}from"../../../chunks/app-Cacmv_-I.js";
+export{ZA as TypeChip}from"../../../chunks/app-D8MSukCt.js";

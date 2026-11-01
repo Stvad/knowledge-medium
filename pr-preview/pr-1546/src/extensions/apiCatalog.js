@@ -1,1 +1,1 @@
-export{Np as extensionApiCatalog,Pp as extensionApiRuntimeExports}from"../../chunks/app-Cacmv_-I.js";
+export{Np as extensionApiCatalog,Pp as extensionApiRuntimeExports}from"../../chunks/app-D8MSukCt.js";

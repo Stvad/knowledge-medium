@@ -1,1 +1,1 @@
-export{Bl as computePromotedFromChildren,Vl as detectInlineAttribute}from"../../../chunks/app-Cacmv_-I.js";
+export{Bl as computePromotedFromChildren,Vl as detectInlineAttribute}from"../../../chunks/app-D8MSukCt.js";

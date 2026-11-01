@@ -1,1 +1,1 @@
-export{hU as SuspenseFallback}from"../../../chunks/app-Cacmv_-I.js";
+export{hU as SuspenseFallback}from"../../../chunks/app-D8MSukCt.js";

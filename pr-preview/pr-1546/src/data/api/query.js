@@ -1,1 +1,1 @@
-export{Dat as defineQuery}from"../../../chunks/app-Cacmv_-I.js";
+export{Oat as defineQuery}from"../../../chunks/app-D8MSukCt.js";

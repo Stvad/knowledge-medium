@@ -1,1 +1,1 @@
-export{zX as agentDispatchCompanionDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{BX as agentDispatchCompanionDataExtension}from"../../../chunks/app-D8MSukCt.js";

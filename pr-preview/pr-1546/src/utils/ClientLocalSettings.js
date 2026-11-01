@@ -1,1 +1,1 @@
-export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-Cacmv_-I.js";
+export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-D8MSukCt.js";

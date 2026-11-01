@@ -1,1 +1,1 @@
-export{MH as floatingAnchorFromRect,NH as useAnchoredFloating}from"../../../chunks/app-Cacmv_-I.js";
+export{MH as floatingAnchorFromRect,NH as useAnchoredFloating}from"../../../chunks/app-D8MSukCt.js";

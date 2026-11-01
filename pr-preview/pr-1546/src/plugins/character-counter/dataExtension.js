@@ -1,1 +1,1 @@
-export{DJ as characterCounterDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{OJ as characterCounterDataExtension}from"../../../chunks/app-D8MSukCt.js";

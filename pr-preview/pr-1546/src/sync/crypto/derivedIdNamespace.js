@@ -1,1 +1,1 @@
-export{lnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Cacmv_-I.js";
+export{unt as deriveWorkspaceIdNamespace}from"../../../chunks/app-D8MSukCt.js";

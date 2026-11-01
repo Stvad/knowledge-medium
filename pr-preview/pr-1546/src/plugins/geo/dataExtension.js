@@ -1,1 +1,1 @@
-export{EG as geoDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{EG as geoDataExtension}from"../../../chunks/app-D8MSukCt.js";

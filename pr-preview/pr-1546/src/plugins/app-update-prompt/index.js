@@ -1,1 +1,1 @@
-export{lM as appUpdatePromptExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{lM as appUpdatePromptExtension}from"../../../chunks/app-D8MSukCt.js";

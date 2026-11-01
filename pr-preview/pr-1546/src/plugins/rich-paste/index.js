@@ -1,1 +1,1 @@
-export{cy as richPastePlugin}from"../../../chunks/app-Cacmv_-I.js";
+export{cy as richPastePlugin}from"../../../chunks/app-D8MSukCt.js";

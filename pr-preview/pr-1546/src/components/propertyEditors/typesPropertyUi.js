@@ -1,1 +1,1 @@
-export{KA as kernelPropertyUiExtension,qA as typesPropertyUi,JA as typesPropertyUiExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{KA as kernelPropertyUiExtension,qA as typesPropertyUi,JA as typesPropertyUiExtension}from"../../../chunks/app-D8MSukCt.js";

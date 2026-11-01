@@ -1,1 +1,1 @@
-export{tv as remarkWikilinks}from"../../../../../chunks/app-Cacmv_-I.js";
+export{tv as remarkWikilinks}from"../../../../../chunks/app-D8MSukCt.js";

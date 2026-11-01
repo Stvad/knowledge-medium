@@ -1,1 +1,1 @@
-export{LU as staticDataExtensions}from"../../chunks/app-Cacmv_-I.js";
+export{LU as staticDataExtensions}from"../../chunks/app-D8MSukCt.js";

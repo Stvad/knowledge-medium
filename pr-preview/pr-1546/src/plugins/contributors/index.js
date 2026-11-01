@@ -1,1 +1,1 @@
-export{Uf as contributorsPlugin}from"../../../chunks/app-Cacmv_-I.js";
+export{Uf as contributorsPlugin}from"../../../chunks/app-D8MSukCt.js";

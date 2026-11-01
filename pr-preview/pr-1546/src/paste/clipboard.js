@@ -1,1 +1,1 @@
-export{fI as readClipboardContent}from"../../chunks/app-Cacmv_-I.js";
+export{fI as readClipboardContent}from"../../chunks/app-D8MSukCt.js";

@@ -1,1 +1,1 @@
-export{t_ as inlineBacklinkCountDecoratorContribution,n_ as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-Cacmv_-I.js";
+export{t_ as inlineBacklinkCountDecoratorContribution,n_ as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-D8MSukCt.js";

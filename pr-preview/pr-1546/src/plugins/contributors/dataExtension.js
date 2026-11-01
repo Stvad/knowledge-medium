@@ -1,1 +1,1 @@
-export{dJ as contributorsDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{dJ as contributorProfilesQueryExtension,fJ as contributorsDataExtension}from"../../../chunks/app-D8MSukCt.js";

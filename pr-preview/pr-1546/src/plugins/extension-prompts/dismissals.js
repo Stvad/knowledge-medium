@@ -1,1 +1,1 @@
-export{tM as ExtensionPromptDismissalStore,nM as extensionPromptDismissals,rM as useExtensionPromptDismissals}from"../../../chunks/app-Cacmv_-I.js";
+export{tM as ExtensionPromptDismissalStore,nM as extensionPromptDismissals,rM as useExtensionPromptDismissals}from"../../../chunks/app-D8MSukCt.js";

@@ -1,1 +1,1 @@
-export{bw as WorkspaceSettingsDialog}from"../../../chunks/app-Cacmv_-I.js";
+export{bw as WorkspaceSettingsDialog}from"../../../chunks/app-D8MSukCt.js";

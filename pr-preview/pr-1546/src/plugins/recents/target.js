@@ -1,1 +1,1 @@
-export{EE as openRecentsPage}from"../../../chunks/app-Cacmv_-I.js";
+export{EE as openRecentsPage}from"../../../chunks/app-D8MSukCt.js";

@@ -1,1 +1,1 @@
-export{cm as BLOCK_HISTORY_CONTENT_CHARS,lm as LISTED_PROPERTY_NAMES,um as MAX_LISTED_CHANGES,dm as blockHistory,fm as recentChanges}from"../../../chunks/app-Cacmv_-I.js";
+export{cm as BLOCK_HISTORY_CONTENT_CHARS,lm as LISTED_PROPERTY_NAMES,um as MAX_LISTED_CHANGES,dm as blockHistory,fm as recentChanges}from"../../../chunks/app-D8MSukCt.js";

@@ -1,1 +1,1 @@
-export{Fu as annotationsPlugin}from"../../../chunks/app-Cacmv_-I.js";
+export{Fu as annotationsPlugin}from"../../../chunks/app-D8MSukCt.js";

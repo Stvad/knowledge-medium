@@ -1,1 +1,1 @@
-export{UC as getBreadcrumbContentPreview}from"../../../chunks/app-Cacmv_-I.js";
+export{UC as getBreadcrumbContentPreview}from"../../../chunks/app-D8MSukCt.js";

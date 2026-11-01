@@ -1,1 +1,1 @@
-export{F2 as KERNEL_PROCESSORS}from"../../../chunks/app-Cacmv_-I.js";
+export{I2 as KERNEL_PROCESSORS}from"../../../chunks/app-D8MSukCt.js";

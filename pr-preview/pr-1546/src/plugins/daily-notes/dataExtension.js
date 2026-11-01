@@ -1,1 +1,1 @@
-export{AK as dailyNotesDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{AK as dailyNotesDataExtension}from"../../../chunks/app-D8MSukCt.js";

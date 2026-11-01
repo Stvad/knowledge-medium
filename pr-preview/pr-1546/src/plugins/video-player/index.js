@@ -1,1 +1,1 @@
-export{ux as videoPlayerPlugin}from"../../../chunks/app-Cacmv_-I.js";
+export{ux as videoPlayerPlugin}from"../../../chunks/app-D8MSukCt.js";

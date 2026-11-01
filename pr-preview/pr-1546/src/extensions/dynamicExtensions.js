@@ -1,1 +1,1 @@
-export{JM as dynamicExtensionsExtension}from"../../chunks/app-Cacmv_-I.js";
+export{JM as dynamicExtensionsExtension}from"../../chunks/app-D8MSukCt.js";

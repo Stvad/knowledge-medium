@@ -1,1 +1,1 @@
-export{VR as AddPropertyForm}from"../../../chunks/app-Cacmv_-I.js";
+export{VR as AddPropertyForm}from"../../../chunks/app-D8MSukCt.js";

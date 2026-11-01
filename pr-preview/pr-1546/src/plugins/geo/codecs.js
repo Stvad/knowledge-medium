@@ -1,2 +1,2 @@
-import{Hat as e}from"../../../chunks/app-Cacmv_-I.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{Uat as e}from"../../../chunks/app-D8MSukCt.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

@@ -1,1 +1,1 @@
-export{Yj as ExtensionPromptSurface,Xj as extensionPromptsExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{Yj as ExtensionPromptSurface,Xj as extensionPromptsExtension}from"../../../chunks/app-D8MSukCt.js";

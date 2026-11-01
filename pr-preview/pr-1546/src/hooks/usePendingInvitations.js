@@ -1,1 +1,1 @@
-export{OT as usePendingInvitations}from"../../chunks/app-Cacmv_-I.js";
+export{OT as usePendingInvitations}from"../../chunks/app-D8MSukCt.js";

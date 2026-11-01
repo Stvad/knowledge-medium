@@ -1,1 +1,1 @@
-export{Nat as ProcessorRejection,Pat as defineSameTxProcessor}from"../../../chunks/app-Cacmv_-I.js";
+export{Pat as ProcessorRejection,Fat as defineSameTxProcessor}from"../../../chunks/app-D8MSukCt.js";

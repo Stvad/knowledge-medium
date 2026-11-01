@@ -1,1 +1,1 @@
-export{dY as pluginPrefsExtension,fY as pluginUIStateExtension}from"../../chunks/app-Cacmv_-I.js";
+export{fY as pluginPrefsExtension,pY as pluginUIStateExtension}from"../../chunks/app-D8MSukCt.js";

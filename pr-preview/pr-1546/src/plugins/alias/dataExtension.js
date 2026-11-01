@@ -1,1 +1,1 @@
-export{nX as aliasDataExtension}from"../../../chunks/app-Cacmv_-I.js";
+export{rX as aliasDataExtension}from"../../../chunks/app-D8MSukCt.js";

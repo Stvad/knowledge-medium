@@ -1,1 +1,1 @@
-export{ZG as matchAtTrigger,QG as placeCompletionSource,$G as planResolvedInsert}from"../../../chunks/app-Cacmv_-I.js";
+export{ZG as matchAtTrigger,QG as placeCompletionSource,$G as planResolvedInsert}from"../../../chunks/app-D8MSukCt.js";

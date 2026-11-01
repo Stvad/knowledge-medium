@@ -1,1 +1,1 @@
-export{bv as BLOCK_HOLD_GESTURE,pv as touchSelectionPlugin,gv as touchSelectionToolbarItemsFacet}from"../../../chunks/app-Cacmv_-I.js";
+export{bv as BLOCK_HOLD_GESTURE,pv as touchSelectionPlugin,gv as touchSelectionToolbarItemsFacet}from"../../../chunks/app-D8MSukCt.js";

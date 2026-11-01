@@ -1,1 +1,1 @@
-export{RH as propertyShapeLabel}from"../../../chunks/app-Cacmv_-I.js";
+export{RH as propertyShapeLabel}from"../../../chunks/app-D8MSukCt.js";

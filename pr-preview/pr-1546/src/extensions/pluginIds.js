@@ -1,2 +1,2 @@
-import{Lnt as e}from"../../chunks/app-Cacmv_-I.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
+import{Rnt as e}from"../../chunks/app-D8MSukCt.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
 //# sourceMappingURL=pluginIds.js.map

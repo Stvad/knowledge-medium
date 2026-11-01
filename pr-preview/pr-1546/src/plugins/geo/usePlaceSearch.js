@@ -1,1 +1,1 @@
-export{V_ as usePlaceSearch}from"../../../chunks/app-Cacmv_-I.js";
+export{V_ as usePlaceSearch}from"../../../chunks/app-D8MSukCt.js";
