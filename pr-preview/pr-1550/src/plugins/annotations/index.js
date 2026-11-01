@@ -1,1 +1,1 @@
-export{Lu as annotationsPlugin}from"../../../chunks/app-CeEieG8f.js";
+export{Lu as annotationsPlugin}from"../../../chunks/app-BxFg9ez0.js";

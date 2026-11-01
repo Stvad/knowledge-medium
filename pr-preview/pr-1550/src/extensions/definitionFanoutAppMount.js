@@ -1,1 +1,1 @@
-export{BN as DefinitionFanoutProgress,VN as definitionFanoutAppMountExtension}from"../../chunks/app-CeEieG8f.js";
+export{BN as DefinitionFanoutProgress,VN as definitionFanoutAppMountExtension}from"../../chunks/app-BxFg9ez0.js";
