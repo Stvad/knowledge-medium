@@ -1,1 +1,0 @@
-export{vF as useIsMobile,yF as usePointerCoarse}from"../../chunks/app-DBFguILO.js";

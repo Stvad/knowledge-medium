@@ -1,1 +1,0 @@
-export{Tk as useCommandPaletteActions}from"../../../chunks/app-DBFguILO.js";

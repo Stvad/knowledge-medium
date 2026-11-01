@@ -1,1 +1,0 @@
-export{hU as SuspenseFallback}from"../../../chunks/app-DBFguILO.js";

@@ -1,1 +1,0 @@
-export{Gq as annotationMarginOpenProp}from"../../../chunks/app-DBFguILO.js";

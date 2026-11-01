@@ -1,1 +1,0 @@
-export{RH as propertyShapeLabel}from"../../../chunks/app-DBFguILO.js";

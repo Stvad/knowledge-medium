@@ -1,1 +1,0 @@
-export{FC as mobileBottomNavItemsFacet}from"../../../chunks/app-DBFguILO.js";

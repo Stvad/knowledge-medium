@@ -1,1 +1,0 @@
-export{VC as PromotableBreadcrumbList}from"../../../chunks/app-DBFguILO.js";

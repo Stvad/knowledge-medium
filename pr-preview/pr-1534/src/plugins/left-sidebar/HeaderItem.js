@@ -1,1 +1,0 @@
-export{lw as LeftSidebarHeaderItem}from"../../../chunks/app-DBFguILO.js";

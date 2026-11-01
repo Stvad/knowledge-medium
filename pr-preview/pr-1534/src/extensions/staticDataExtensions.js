@@ -1,1 +1,0 @@
-export{LU as staticDataExtensions}from"../../chunks/app-DBFguILO.js";

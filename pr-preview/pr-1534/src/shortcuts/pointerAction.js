@@ -1,1 +1,0 @@
-export{NM as dispatchPointerAction,PM as setPointerActionDispatcher}from"../../chunks/app-DBFguILO.js";

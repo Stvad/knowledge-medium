@@ -1,1 +1,0 @@
-export{cy as richPastePlugin}from"../../../chunks/app-DBFguILO.js";

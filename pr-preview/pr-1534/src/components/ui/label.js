@@ -1,1 +1,0 @@
-export{kD as Label}from"../../../chunks/app-DBFguILO.js";

@@ -1,1 +1,0 @@
-export{IH as PropertyShapeButton,LH as PropertyShapeGlyph}from"../../../chunks/app-DBFguILO.js";

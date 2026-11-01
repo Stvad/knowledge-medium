@@ -1,1 +1,0 @@
-export{fJ as characterCounterDataExtension}from"../../../chunks/app-DBFguILO.js";

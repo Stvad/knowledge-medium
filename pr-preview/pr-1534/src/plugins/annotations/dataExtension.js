@@ -1,1 +1,0 @@
-export{gq as annotationsDataExtension}from"../../../chunks/app-DBFguILO.js";

@@ -1,1 +1,0 @@
-export{mR as MetadataRow,hR as PropertySectionLabel}from"../../../chunks/app-DBFguILO.js";

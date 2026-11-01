@@ -1,1 +1,0 @@
-export{Xq as contributorsDataExtension}from"../../../chunks/app-DBFguILO.js";
