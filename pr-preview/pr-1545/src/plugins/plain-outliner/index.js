@@ -1,1 +1,0 @@
-export{VC as plainOutlinerPlugin}from"../../../chunks/app-eGf5FJNy.js";

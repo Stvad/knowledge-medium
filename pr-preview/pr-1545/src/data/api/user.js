@@ -1,1 +1,0 @@
-export{dat as SYSTEM_AUTHOR_PREFIX,fat as isSystemAuthor,pat as systemAuthor}from"../../../chunks/app-eGf5FJNy.js";

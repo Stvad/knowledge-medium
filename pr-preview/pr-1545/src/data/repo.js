@@ -1,1 +1,0 @@
-export{GQ as Repo}from"../../chunks/app-eGf5FJNy.js";

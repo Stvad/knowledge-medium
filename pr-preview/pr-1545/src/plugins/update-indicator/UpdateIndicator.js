@@ -1,1 +1,0 @@
-export{Fg as UpdateIndicator}from"../../../chunks/app-eGf5FJNy.js";

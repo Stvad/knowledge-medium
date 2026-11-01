@@ -1,1 +1,0 @@
-export{N0 as kernelDataExtension}from"../../chunks/app-eGf5FJNy.js";
