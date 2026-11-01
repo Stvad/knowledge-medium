@@ -11,6 +11,8 @@ import type {Repo} from '@/data/repo'
 import {userPageBlockId} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {kernelDataExtension} from '@/data/kernelDataExtension'
+import {resolveAppRuntimeSync} from '@/facets/resolveAppRuntime'
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {BlockContextProvider} from '@/context/block'
@@ -104,11 +106,9 @@ class TestResizeObserver {
   disconnect() {}
 }
 
-const createRepo = () => createTestRepo({
-  db: db.db,
-  newId: () => crypto.randomUUID(),
-  user: {id: 'alex', name: 'Alex'},
-  extensions: [
+const createRuntime = (contributorsEnabled = true) => resolveAppRuntimeSync(
+  [
+    kernelDataExtension,
     kernelPropertyUiExtension,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
     kernelValuePresetsExtension,
@@ -121,7 +121,18 @@ const createRepo = () => createTestRepo({
     contributorsPlugin,
     annotationsPlugin,
   ],
-}).repo
+  {overrides: new Map([['system:contributors', contributorsEnabled]])},
+)
+
+const createRepo = () => {
+  const result = createTestRepo({
+    db: db.db,
+    newId: () => crypto.randomUUID(),
+    user: {id: 'alex', name: 'Alex'},
+  }).repo
+  result.setFacetRuntime(createRuntime())
+  return result
+}
 
 const seedGraph = async (mentionCount: number) => {
   await repo.tx(async tx => {
@@ -222,6 +233,19 @@ afterEach(() => {
 })
 
 describe('CommentMargin mention cards', () => {
+  it('renders mention content and its author with Contributors disabled', async () => {
+    await seedGraph(1)
+    repo.setFacetRuntime(createRuntime(false))
+    const view = makeView()
+    await turnMentionsOn()
+
+    const mention = await screen.findByLabelText('Mentions')
+    await waitFor(() => expect(mention.querySelector('strong')?.textContent).toBe('Mention body 1'))
+    expect(await within(mention).findByRole('link', {name: 'Alex'})).toBeVisible()
+    expect(within(mention).getByRole('link', {name: 'Open mention'})).toHaveAttribute('href', '#ws/mention-source-1')
+    view.unmount()
+  })
+
   it('renders a read-only source preview, its location and author, and navigates to the source', async () => {
     await seedGraph(1)
     const view = makeView()
