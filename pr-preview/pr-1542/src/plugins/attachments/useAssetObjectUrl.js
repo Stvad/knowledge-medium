@@ -1,1 +1,1 @@
-export{jb as useAssetObjectUrl}from"../../../chunks/app-CbYNAwqN.js";
+export{jb as useAssetObjectUrl}from"../../../chunks/app-OqmdUJdY.js";

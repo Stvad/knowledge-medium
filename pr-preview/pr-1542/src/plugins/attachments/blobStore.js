@@ -1,1 +1,1 @@
-export{nx as ATTACHMENTS_BUCKET,rx as BlobPutError,ix as createSupabaseBlobStore,ax as isAlreadyExists}from"../../../chunks/app-CbYNAwqN.js";
+export{nx as ATTACHMENTS_BUCKET,rx as BlobPutError,ix as createSupabaseBlobStore,ax as isAlreadyExists}from"../../../chunks/app-OqmdUJdY.js";

@@ -1,1 +1,1 @@
-export{pR as BlockProperties}from"../../chunks/app-CbYNAwqN.js";
+export{pR as BlockProperties}from"../../chunks/app-OqmdUJdY.js";

@@ -1,1 +1,1 @@
-export{Qx as seedTutorial}from"../../../chunks/app-CbYNAwqN.js";
+export{Qx as seedTutorial}from"../../../chunks/app-OqmdUJdY.js";
