@@ -1,1 +1,1 @@
-export{yw as WorkspaceSwitcher}from"../../../chunks/app-DNHROp-f.js";
+export{yw as WorkspaceSwitcher}from"../../../chunks/app-CYhyruRi.js";

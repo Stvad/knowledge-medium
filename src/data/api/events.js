@@ -1,1 +1,1 @@
-export{xat as CORE_BLOCK_DELETED_EVENT,Sat as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-DNHROp-f.js";
+export{xat as CORE_BLOCK_DELETED_EVENT,Sat as CORE_BLOCK_MERGED_EVENT}from"../../../chunks/app-CYhyruRi.js";

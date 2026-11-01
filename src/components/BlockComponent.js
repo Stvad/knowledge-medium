@@ -1,1 +1,1 @@
-export{DN as BlockChildren,ON as BlockComponent}from"../../chunks/app-DNHROp-f.js";
+export{DN as BlockChildren,ON as BlockComponent}from"../../chunks/app-CYhyruRi.js";

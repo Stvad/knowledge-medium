@@ -1,1 +1,1 @@
-export{Kj as editorAutocompleteExtension}from"../../chunks/app-DNHROp-f.js";
+export{Kj as editorAutocompleteExtension}from"../../chunks/app-CYhyruRi.js";

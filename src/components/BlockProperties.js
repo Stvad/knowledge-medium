@@ -1,1 +1,1 @@
-export{pR as BlockProperties}from"../../chunks/app-DNHROp-f.js";
+export{pR as BlockProperties}from"../../chunks/app-CYhyruRi.js";

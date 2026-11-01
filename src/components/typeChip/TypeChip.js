@@ -1,1 +1,1 @@
-export{ZA as TypeChip}from"../../../chunks/app-DNHROp-f.js";
+export{ZA as TypeChip}from"../../../chunks/app-CYhyruRi.js";

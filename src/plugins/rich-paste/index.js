@@ -1,1 +1,1 @@
-export{cy as richPastePlugin}from"../../../chunks/app-DNHROp-f.js";
+export{cy as richPastePlugin}from"../../../chunks/app-CYhyruRi.js";

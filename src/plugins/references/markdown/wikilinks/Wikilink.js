@@ -1,1 +1,1 @@
-export{ev as Wikilink}from"../../../../../chunks/app-DNHROp-f.js";
+export{ev as Wikilink}from"../../../../../chunks/app-CYhyruRi.js";

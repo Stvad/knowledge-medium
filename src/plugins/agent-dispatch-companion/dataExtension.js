@@ -1,1 +1,1 @@
-export{wX as agentDispatchCompanionDataExtension}from"../../../chunks/app-DNHROp-f.js";
+export{wX as agentDispatchCompanionDataExtension}from"../../../chunks/app-CYhyruRi.js";

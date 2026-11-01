@@ -1,1 +1,1 @@
-export{Nv as useIsReadOnly}from"../../chunks/app-DNHROp-f.js";
+export{Nv as useIsReadOnly}from"../../chunks/app-CYhyruRi.js";

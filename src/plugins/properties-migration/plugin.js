@@ -1,1 +1,1 @@
-export{la as propertiesMigrationPlugin}from"../../../chunks/app-DNHROp-f.js";
+export{la as propertiesMigrationPlugin}from"../../../chunks/app-CYhyruRi.js";
