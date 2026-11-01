@@ -1,1 +1,0 @@
-export{lR as MetadataRow,uR as PropertySectionLabel}from"../../../chunks/app-BoSGqwNV.js";
