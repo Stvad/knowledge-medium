@@ -11,7 +11,7 @@ const NOW = 1_800_000_000_000
 
 interface FakeGraphSeed {
   pageId?: string
-  backlinks?: Array<{id: string, deepLink?: string}>
+  backlinks?: Array<{id: string, deepLink?: string, sourceFields?: string[]}>
   blocks?: Record<string, Partial<BlockData>>
   /** What `comments({thread})` answers, by root id. */
   threads?: Record<string, CommentThreadView>
@@ -36,8 +36,8 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const graph: Graph & ReplyWriter = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
-      (seed.backlinks ?? []).map(({id, deepLink}) => ({
-        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
+      (seed.backlinks ?? []).map(({id, deepLink, sourceFields}) => ({
+        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: sourceFields ?? [''],
       }))),
     getBlock: async id => blocks.get(id) ?? null,
     ancestors: async id => {
@@ -593,6 +593,27 @@ describe('mention lifecycle', () => {
 
     expect(runTask).toHaveBeenCalledTimes(1)
     expect(reconciles).toHaveLength(1)
+  })
+
+  it('does not treat a block that only credits the target page as its author as a mention', async () => {
+    // The target page doubling as the run's contributor: everything the run
+    // writes outside its reply then references the target through attribution.
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [
+        {id: 'authored', sourceFields: ['attribution:creators', 'attribution:editors']},
+        {id: 'linked', sourceFields: ['', 'attribution:editors']},
+      ],
+      blocks: {'authored': {content: 'a block the run wrote'}, 'linked': {content: '[[claude]] and this'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(propWrites.map(write => write.id)).not.toContain('authored')
+    expect(propWrites.map(write => write.id)).toContain('linked')
   })
 
   it('waits for the quiet period before claiming a just-edited mention', async () => {

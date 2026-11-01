@@ -13,7 +13,7 @@ import type { Graph, ReplyWriter } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
@@ -372,6 +372,7 @@ export const createEngine = (deps: EngineDeps) => {
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,
+        target: watcher.target,
         thread: thread ?? undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
@@ -568,7 +569,7 @@ export const createEngine = (deps: EngineDeps) => {
       pageIdCache.set(watcher.target, {id: targetId, resolvedAt: now()})
     }
 
-    const sources = await graph.backlinkSources(targetId)
+    const sources = (await graph.backlinkSources(targetId)).filter(source => isMention(source.sourceFields))
 
     // First sight of this watcher: record the baseline and fire nothing.
     // Pointing a watcher at an established page must not claim (and

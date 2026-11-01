@@ -8,6 +8,7 @@ const context = {
   blockId: 'b-1',
   deepLink: 'https://app/#/b-1',
   watcherName: 'claude-mentions',
+  target: 'claude',
 }
 
 describe('renderMentionPrompt', () => {
@@ -16,9 +17,15 @@ describe('renderMentionPrompt', () => {
     expect(prompt).toContain('[[claude]] summarize this')
     expect(prompt).toContain('item B')
     expect(prompt).toContain('- Projects\n- Weekly review')
-    expect(prompt).toContain('Block id: b-1')
-    // Loop guard must ship in the default prompt.
-    expect(prompt).toContain('Never write the literal token [[claude]]')
+    expect(prompt).toContain('(id b-1)')
+  })
+
+  it("names the watcher's own target in the loop guard of both default templates", () => {
+    for (const template of [undefined, DEFAULT_MENTION_CHANNEL_PROMPT]) {
+      const prompt = renderMentionPrompt(template, {...context, target: 'Claudia'})
+      expect(prompt).toContain('Never write [[Claudia]]')
+      expect(prompt).not.toContain('{{target}}')
+    }
   })
 
   it('renders custom templates and leaves unknown placeholders intact', () => {
