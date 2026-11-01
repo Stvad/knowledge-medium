@@ -1,0 +1,1 @@
+export{XC as blockEditingContentRenderer}from"../../../chunks/app-CbYNAwqN.js";

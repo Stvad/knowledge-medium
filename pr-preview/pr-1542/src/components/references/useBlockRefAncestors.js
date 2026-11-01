@@ -1,0 +1,1 @@
+export{UA as useBlockRefAncestors}from"../../../chunks/app-CbYNAwqN.js";

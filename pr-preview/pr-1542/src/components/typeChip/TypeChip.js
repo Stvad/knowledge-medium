@@ -1,0 +1,1 @@
+export{ZA as TypeChip}from"../../../chunks/app-CbYNAwqN.js";

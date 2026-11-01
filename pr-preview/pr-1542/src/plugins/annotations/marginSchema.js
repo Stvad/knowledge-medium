@@ -1,0 +1,1 @@
+export{Gq as annotationMarginOpenProp}from"../../../chunks/app-CbYNAwqN.js";

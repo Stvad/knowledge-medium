@@ -1,0 +1,1 @@
+export{KC as plainOutlinerPlugin}from"../../../chunks/app-CbYNAwqN.js";
