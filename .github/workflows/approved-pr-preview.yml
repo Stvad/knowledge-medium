@@ -46,7 +46,7 @@ jobs:
               throw new Error('Run this workflow from master, not the PR branch');
             }
       - name: Checkout trusted approval code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -83,7 +83,7 @@ jobs:
       VITE_GOOGLE_MAPS_API_KEY: ${{ vars.VITE_GOOGLE_MAPS_API_KEY || secrets.VITE_GOOGLE_MAPS_API_KEY }}
     steps:
       - name: Checkout only the approved commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ needs.approve.outputs.repository }}
           ref: ${{ needs.approve.outputs.sha }}
@@ -131,7 +131,7 @@ jobs:
     steps:
       # This runner must never check out or execute the PR's scripts/dependencies.
       - name: Checkout trusted publishing code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
