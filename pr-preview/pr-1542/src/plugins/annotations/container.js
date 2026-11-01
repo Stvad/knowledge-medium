@@ -1,1 +1,1 @@
-export{Kq as COMMENTS_PAGE_ALIAS,qq as commentsPageBlockId,Jq as commentsPageSpec,Yq as getOrCreateCommentsPage}from"../../../chunks/app-OqmdUJdY.js";
+export{Kq as COMMENTS_PAGE_ALIAS,qq as commentsPageBlockId,Jq as commentsPageSpec,Yq as getOrCreateCommentsPage}from"../../../chunks/app-BiuJAngH.js";

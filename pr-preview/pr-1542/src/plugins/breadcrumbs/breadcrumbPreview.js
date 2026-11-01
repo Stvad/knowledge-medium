@@ -1,1 +1,1 @@
-export{UC as getBreadcrumbContentPreview}from"../../../chunks/app-OqmdUJdY.js";
+export{UC as getBreadcrumbContentPreview}from"../../../chunks/app-BiuJAngH.js";

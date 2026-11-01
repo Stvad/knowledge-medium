@@ -1,1 +1,1 @@
-export{KC as plainOutlinerPlugin}from"../../../chunks/app-OqmdUJdY.js";
+export{KC as plainOutlinerPlugin}from"../../../chunks/app-BiuJAngH.js";

@@ -1,1 +1,1 @@
-export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-OqmdUJdY.js";
+export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-BiuJAngH.js";

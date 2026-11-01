@@ -1,1 +1,1 @@
-export{QA as chipStyle}from"../../../chunks/app-OqmdUJdY.js";
+export{QA as chipStyle}from"../../../chunks/app-BiuJAngH.js";

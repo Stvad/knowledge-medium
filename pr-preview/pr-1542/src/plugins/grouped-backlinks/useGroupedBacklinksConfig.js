@@ -1,1 +1,1 @@
-export{Qg as useGroupedBacklinksConfig}from"../../../chunks/app-OqmdUJdY.js";
+export{Qg as useGroupedBacklinksConfig}from"../../../chunks/app-BiuJAngH.js";

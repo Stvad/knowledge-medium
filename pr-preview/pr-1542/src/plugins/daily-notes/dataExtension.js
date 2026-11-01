@@ -1,1 +1,1 @@
-export{XK as dailyNotesDataExtension}from"../../../chunks/app-OqmdUJdY.js";
+export{XK as dailyNotesDataExtension}from"../../../chunks/app-BiuJAngH.js";
