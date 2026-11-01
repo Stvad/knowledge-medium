@@ -760,7 +760,8 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
  *  - `firstChild`: the original's first child, holding `after`; the original
  *    keeps `before`. For a scope root, whose preceding sibling is outside the
  *    surface the user is looking at. */
-export type SplitPlacement = 'siblingBefore' | 'firstChild'
+export const SPLIT_PLACEMENTS = ['siblingBefore', 'firstChild'] as const
+export type SplitPlacement = typeof SPLIT_PLACEMENTS[number]
 
 interface SplitArgs {
   id: string
@@ -810,7 +811,7 @@ export const split = defineMutator<SplitArgs, string>({
     id: z.string(),
     before: z.string(),
     after: z.string(),
-    placement: z.enum(['siblingBefore', 'firstChild']).optional(),
+    placement: z.enum(SPLIT_PLACEMENTS).optional(),
   }),
   resultSchema: z.string(),
   scope: ChangeScope.BlockDefault,
@@ -818,8 +819,7 @@ export const split = defineMutator<SplitArgs, string>({
   // Callers pass the live `before`/`after` strings (e.g. from CodeMirror's
   // current doc, sliced at the cursor). The mutator does NOT slice
   // self.content — debounced editors can leave SQL stale, and slicing
-  // there would split the wrong text and lose the live edits. See
-  // §13.3 / phase-1 review feedback.
+  // there would split the wrong text and lose the live edits.
   apply: async (tx, {id, before, after, placement = 'siblingBefore'}) => {
     const self = await requireBlock(tx, id)
     const newId = placement === 'firstChild'
