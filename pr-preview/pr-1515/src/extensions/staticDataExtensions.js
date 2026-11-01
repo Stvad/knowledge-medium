@@ -1,1 +1,0 @@
-export{TH as staticDataExtensions}from"../../chunks/app-DsmuRmGp.js";

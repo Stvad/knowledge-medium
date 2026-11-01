@@ -1,1 +1,0 @@
-export{EV as propertyShapeLabel}from"../../../chunks/app-DsmuRmGp.js";

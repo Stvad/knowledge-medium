@@ -1,1 +1,0 @@
-export{cG as matchCharTrigger}from"../../chunks/app-DsmuRmGp.js";

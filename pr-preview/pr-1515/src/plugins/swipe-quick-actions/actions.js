@@ -1,1 +1,0 @@
-export{_k as DEFAULT_QUICK_ACTION_ITEMS,vk as SWIPE_RIGHT_BLOCK_ACTION_ID,yk as isQuickActionItem,bk as quickActionItemsFacet}from"../../../chunks/app-DsmuRmGp.js";

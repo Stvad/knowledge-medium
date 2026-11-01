@@ -1,1 +1,0 @@
-export{DL as declarationOnlyDefinitionForName,OL as declarationOnlyStatusText}from"../../../chunks/app-DsmuRmGp.js";

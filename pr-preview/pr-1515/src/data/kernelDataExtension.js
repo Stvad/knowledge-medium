@@ -1,1 +1,0 @@
-export{p1 as kernelDataExtension}from"../../chunks/app-DsmuRmGp.js";

@@ -1,1 +1,0 @@
-export{aD as dailyDateWikilinkDecorator}from"../../../chunks/app-DsmuRmGp.js";

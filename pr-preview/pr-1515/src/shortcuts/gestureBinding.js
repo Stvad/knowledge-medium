@@ -1,1 +1,0 @@
-export{xj as gestureBindingDescriptor,Sj as matchesGestureEvent}from"../../chunks/app-DsmuRmGp.js";

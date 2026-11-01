@@ -1,1 +1,0 @@
-export{lB as isIOS,uB as isMacPlatform}from"../../chunks/app-DsmuRmGp.js";

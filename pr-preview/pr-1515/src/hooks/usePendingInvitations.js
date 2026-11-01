@@ -1,1 +1,0 @@
-export{xw as usePendingInvitations}from"../../chunks/app-DsmuRmGp.js";

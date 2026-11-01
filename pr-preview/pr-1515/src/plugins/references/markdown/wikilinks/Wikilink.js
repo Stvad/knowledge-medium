@@ -1,1 +1,0 @@
-export{qg as Wikilink}from"../../../../../chunks/app-DsmuRmGp.js";

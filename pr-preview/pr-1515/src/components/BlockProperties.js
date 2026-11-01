@@ -1,1 +1,0 @@
-export{tL as BlockProperties}from"../../chunks/app-DsmuRmGp.js";

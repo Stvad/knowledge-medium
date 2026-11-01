@@ -1,1 +1,0 @@
-export{$A as appUpdatePromptExtension}from"../../../chunks/app-DsmuRmGp.js";

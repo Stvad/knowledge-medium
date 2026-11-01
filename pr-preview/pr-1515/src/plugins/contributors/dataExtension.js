@@ -1,1 +1,0 @@
-export{FK as contributorsDataExtension}from"../../../chunks/app-DsmuRmGp.js";

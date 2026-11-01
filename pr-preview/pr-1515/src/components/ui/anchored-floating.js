@@ -1,1 +1,0 @@
-export{bV as floatingAnchorFromRect,xV as useAnchoredFloating}from"../../../chunks/app-DsmuRmGp.js";

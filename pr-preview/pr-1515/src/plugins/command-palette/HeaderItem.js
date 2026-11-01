@@ -1,1 +1,0 @@
-export{BO as CommandPaletteHeaderItem}from"../../../chunks/app-DsmuRmGp.js";

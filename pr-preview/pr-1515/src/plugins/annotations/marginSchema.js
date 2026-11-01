@@ -1,1 +1,0 @@
-export{AK as annotationMarginOpenProp}from"../../../chunks/app-DsmuRmGp.js";

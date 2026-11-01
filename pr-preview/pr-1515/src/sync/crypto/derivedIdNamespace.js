@@ -1,1 +1,0 @@
-export{Met as deriveWorkspaceIdNamespace}from"../../../chunks/app-DsmuRmGp.js";

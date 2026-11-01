@@ -1,1 +1,0 @@
-export{xO as COMMAND_PALETTE_ACTION_ID,SO as COMMAND_PALETTE_CONTEXT,CO as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,wO as commandPaletteActionContext}from"../../../chunks/app-DsmuRmGp.js";

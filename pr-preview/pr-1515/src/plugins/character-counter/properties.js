@@ -1,1 +1,0 @@
-export{eq as charLimitProp,tq as charProfileProp,nq as charScopeProp}from"../../../chunks/app-DsmuRmGp.js";

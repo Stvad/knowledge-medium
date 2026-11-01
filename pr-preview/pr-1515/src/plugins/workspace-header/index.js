@@ -1,1 +1,0 @@
-export{WS as WorkspaceSwitcherSidebarSection,GS as pendingInvitationsHeaderItem,KS as workspaceHeaderPlugin,qS as workspaceSwitcherSidebarSection}from"../../../chunks/app-DsmuRmGp.js";

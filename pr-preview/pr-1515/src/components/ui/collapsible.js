@@ -1,1 +1,0 @@
-"use client";export{ZI as Collapsible,QI as CollapsibleContent,$I as CollapsibleTrigger}from"../../../chunks/app-DsmuRmGp.js";

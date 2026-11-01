@@ -1,1 +1,0 @@
-export{E_ as useIsReadOnly}from"../../chunks/app-DsmuRmGp.js";

@@ -1,1 +1,0 @@
-export{Kg as wikilinkMarkdownExtension}from"../../../../../chunks/app-DsmuRmGp.js";

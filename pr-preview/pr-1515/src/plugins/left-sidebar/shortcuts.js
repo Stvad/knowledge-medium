@@ -1,1 +1,0 @@
-export{oC as getOrCreateShortcutsBlock,sC as journalShortcutBlockId,cC as shortcutsBlockId}from"../../../chunks/app-DsmuRmGp.js";

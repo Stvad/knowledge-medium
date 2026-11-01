@@ -1,1 +1,0 @@
-export{NS as usePromotableBreadcrumb}from"../../../chunks/app-DsmuRmGp.js";

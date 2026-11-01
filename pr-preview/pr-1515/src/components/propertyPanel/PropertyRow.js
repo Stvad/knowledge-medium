@@ -1,1 +1,0 @@
-export{sL as PropertyRow}from"../../../chunks/app-DsmuRmGp.js";

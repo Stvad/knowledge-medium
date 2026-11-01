@@ -1,1 +1,0 @@
-export{wY as SYNCED_TABLES,TY as syncedWriteTarget,EY as writeTargets}from"../../chunks/app-DsmuRmGp.js";

@@ -1,1 +1,0 @@
-export{F0 as agree,I0 as pluralize}from"../../chunks/app-DsmuRmGp.js";

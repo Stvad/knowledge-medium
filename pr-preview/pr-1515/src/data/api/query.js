@@ -1,1 +1,0 @@
-export{Xrt as defineQuery}from"../../../chunks/app-DsmuRmGp.js";

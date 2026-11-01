@@ -1,1 +1,0 @@
-export{cP as useIsMobile,lP as usePointerCoarse}from"../../chunks/app-DsmuRmGp.js";

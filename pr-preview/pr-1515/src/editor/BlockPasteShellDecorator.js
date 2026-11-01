@@ -1,1 +1,0 @@
-export{EA as BlockPasteShellDecorator,DA as blockPasteShellDecorator}from"../../chunks/app-DsmuRmGp.js";

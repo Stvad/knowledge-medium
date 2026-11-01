@@ -1,1 +1,0 @@
-export{UA as extensionPromptStore,WA as pendingExtensionPrompts}from"../../../chunks/app-DsmuRmGp.js";

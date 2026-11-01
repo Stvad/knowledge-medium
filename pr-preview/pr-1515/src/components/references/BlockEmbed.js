@@ -1,1 +1,0 @@
-export{Mk as BlockEmbed}from"../../../chunks/app-DsmuRmGp.js";

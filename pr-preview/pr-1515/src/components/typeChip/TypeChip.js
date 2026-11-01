@@ -1,1 +1,0 @@
-export{Vk as TypeChip}from"../../../chunks/app-DsmuRmGp.js";
