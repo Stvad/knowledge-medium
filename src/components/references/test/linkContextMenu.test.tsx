@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
-import { useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
@@ -12,6 +12,10 @@ import { continuousGestureRecognizersFacet, useContinuousGestures } from '@/exte
 import type { BlockResolveContext } from '@/extensions/blockInteraction'
 import { setGestureActionDispatcher } from '@/shortcuts/gestureAction'
 import { blockHoldRecognizer, BLOCK_HOLD_GESTURE } from '@/plugins/touch-selection/holdRecognizer'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core'
+import { ActiveContextsProvider, useActiveContextsDispatch } from '@/shortcuts/ActiveContexts'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
+import { ActionContextTypes, type BaseShortcutDependencies } from '@/shortcuts/types'
 
 const {navigate, openBlock, outerPointerDown, repo} = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -41,6 +45,15 @@ const HoldSurface = ({children}: {children: ReactNode}) => {
   const elementRef = useRef<HTMLElement | null>(null)
   const gestureRef = useContinuousGestures(holdContext, elementRef)
   return <div className="block-content" ref={gestureRef}>{children}</div>
+}
+
+const BackgroundShortcuts = () => {
+  const dispatch = useActiveContextsDispatch()
+  useEffect(() => {
+    const claim = dispatch.claim(ActionContextTypes.NORMAL_MODE, {} as BaseShortcutDependencies)
+    return () => dispatch.release(claim)
+  }, [dispatch])
+  return <HotkeyReconciler/>
 }
 
 const renderLinks = (children?: ReactNode) => render(
@@ -127,6 +140,74 @@ describe('link context menus', () => {
     fireEvent(link, event)
     expect(event.defaultPrevented).toBe(false)
     expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('returns keyboard focus to the link when its menu is dismissed with Escape', async () => {
+    renderLinks()
+    const link = screen.getByText('Page link')
+    link.focus()
+    expect(document.activeElement).toBe(link)
+    fireEvent.keyDown(link, {key: 'ContextMenu'})
+    fireEvent.contextMenu(link)
+    const menu = await screen.findByRole('menu')
+    await vi.waitFor(() => expect(menu.contains(document.activeElement)).toBe(true))
+    fireEvent.keyDown(document.activeElement!, {key: 'Escape'})
+    await vi.waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await vi.waitFor(() => expect(document.activeElement).toBe(link))
+  })
+
+  it('keeps focus that a navigation action moves outside the menu', async () => {
+    renderLinks()
+    render(<textarea aria-label="Navigation destination"/>)
+    const destination = screen.getByRole('textbox', {name: 'Navigation destination'})
+    const link = screen.getByText('Page link')
+    link.focus()
+    fireEvent.contextMenu(link)
+    const menu = await screen.findByRole('menu')
+    const closed = vi.fn()
+    menu.addEventListener('focusScope.autoFocusOnUnmount', closed, {once: true})
+    navigate.mockImplementationOnce(async () => {
+      await Promise.resolve()
+      destination.focus()
+    })
+    fireEvent.click(within(menu).getByRole('menuitem', {name: /Open in new panel/}))
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce())
+    expect(document.activeElement).toBe(destination)
+  })
+
+  it.each(['keydown', 'keyup'] as const)('keeps menu %s events from background shortcuts', async phase => {
+    const background = vi.fn()
+    const keyboardRuntime = resolveFacetRuntimeSync([
+      actionContextsFacet.of({
+        type: ActionContextTypes.NORMAL_MODE,
+        displayName: 'Normal mode',
+        validateDependencies: (deps): deps is BaseShortcutDependencies => typeof deps === 'object' && deps !== null,
+      }),
+      actionsFacet.of({
+        id: `background.${phase}`, context: ActionContextTypes.NORMAL_MODE,
+        description: 'Background action', defaultBinding: {keys: 'ArrowDown', phase},
+        handler: background,
+      }),
+    ])
+    render(
+      <AppRuntimeContextProvider value={keyboardRuntime}>
+        <ActiveContextsProvider>
+          <BackgroundShortcuts/>
+          <Wikilink alias="Page" blockId="page-target" workspaceId="link-workspace">Keyboard link</Wikilink>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+    const link = screen.getByText('Keyboard link')
+    const press = phase === 'keydown' ? fireEvent.keyDown : fireEvent.keyUp
+    press(link, {key: 'ArrowDown', code: 'ArrowDown'})
+    expect(background).toHaveBeenCalledOnce()
+    background.mockClear()
+
+    fireEvent.contextMenu(link)
+    const menu = await screen.findByRole('menu')
+    await vi.waitFor(() => expect(menu.contains(document.activeElement)).toBe(true))
+    press(document.activeElement!, {key: 'ArrowDown', code: 'ArrowDown'})
+    expect(background).not.toHaveBeenCalled()
   })
 
   it('leaves a link hold with the existing block-hold recognizer', async () => {

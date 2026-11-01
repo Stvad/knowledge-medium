@@ -7,7 +7,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu.js'
-import {keepFocusAnItemMoved} from '@/components/renderer/DefaultBlockRenderer.js'
 import type {AppMountContribution} from '@/extensions/core.js'
 import {cachedContentDecorator, type BlockContentDecoratorContribution} from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
@@ -59,7 +58,6 @@ export const ReadSelectionMenu = ({block, children}: {block: Block; children: Re
       </ContextMenuTrigger>
       <ContextMenuContent
         className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
-        onCloseAutoFocus={keepFocusAnItemMoved}
       >
         {gestures.map(gesture => (
           <ContextMenuItem

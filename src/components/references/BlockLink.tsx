@@ -47,7 +47,6 @@ export function BlockLink({blockId, workspaceId, ...props}: ComponentProps<'a'> 
         <LinkMenuAnchor {...props}/>
       </ContextMenuTrigger>
       <ContextMenuContent
-        onCloseAutoFocus={event => event.preventDefault()}
         onPointerDown={event => event.stopPropagation()}
         onClick={event => event.stopPropagation()}
       >
