@@ -1,46 +1,13 @@
-import { ReactNode, type MouseEvent } from 'react'
+import { ReactNode } from 'react'
 import { Block } from '@/data/block'
 import { useRepo } from '@/context/repo'
 import { useWorkspaceId } from '@/hooks/block'
 import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useOpenBlock } from '@/utils/navigation'
 
-// Non-anchor content that drives its OWN click inside a reference via a JS
-// handler: a media image's zoom lightbox, a video player's controls/iframe, a
-// button, an explicit opt-out. (Anchors are handled separately — see below.)
-const RICH_CONTENT_SELECTOR =
-  'img, video, audio, iframe, canvas, button, [role="button"], [data-block-interaction="ignore"]'
-
-/**
- * Classify a click inside the reference link. Walk from the click target up to —
- * but NOT including — the reference link itself (`currentTarget`). Excluding
- * `currentTarget` is essential: the reference's OWN `<a href>` is an ancestor of
- * every click, so counting it would mishandle plain text.
- *
- *  - `'anchor'`: an enclosing nested `<a href>` (a markdown link, a nested
- *    reference). A link is explicitly meant to be followed, so it wins over a
- *    rich descendant it wraps (a LINKED image `[![](img)](url)` follows the link,
- *    not the lightbox). It navigates via its NATIVE default action / own handler,
- *    so the reference must do nothing and must NOT `preventDefault`, or the inner
- *    link's navigation dies with it.
- *  - `'rich'`: non-anchor interactive/media content NOT wrapped in a link. It
- *    handled its own click (lightbox / play / button), so the reference suppresses
- *    its OWN navigation (`preventDefault`) but doesn't open the target.
- *  - `null`: plain content — the reference navigates to its target.
- */
-export const classifyReferenceClick = (event: MouseEvent): 'anchor' | 'rich' | null => {
-  const { target, currentTarget } = event
-  if (!(target instanceof Element)) return null
-  let rich = false
-  for (let el: Element | null = target; el && el !== currentTarget; el = el.parentElement) {
-    // An enclosing link owns the click even when a rich descendant (the linked
-    // image) sits closer to the target — keep walking past the rich match to see
-    // if a link wraps it.
-    if (el.matches('a[href]')) return 'anchor'
-    if (!rich && el.matches(RICH_CONTENT_SELECTOR)) rich = true
-  }
-  return rich ? 'rich' : null
-}
+import { BlockLink } from './BlockLink'
+import { classifyLinkInteraction } from './linkInteraction'
+export { classifyLinkInteraction as classifyReferenceClick } from './linkInteraction'
 
 /**
  * A click that concludes a TEXT SELECTION anchored inside the reference (a
@@ -70,7 +37,9 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
   const href = useAppHashInContext(workspaceId, block.id)
 
   return (
-    <a
+    <BlockLink
+      blockId={block.id}
+      workspaceId={workspaceId}
       href={href}
       className="blockref text-inherit underline decoration-dotted decoration-muted-foreground/60 underline-offset-[0.18em] cursor-pointer rounded-sm px-0.5 hover:bg-muted/60 hover:decoration-muted-foreground/75"
       data-block-id={block.id}
@@ -80,18 +49,9 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
       // so the rich content's own pointer gestures work.
       draggable={false}
       onClick={(event) => {
-        // Classify FIRST — whatever sits under the click owns it, modified click
-        // or not. A nested link navigates natively (do nothing — NOT
-        // preventDefault, or its nav dies too, in this tab or a new one). Other
-        // rich content (an image's lightbox, video controls) ALREADY ran its own
-        // handler on the bubble up and we can't un-run it, so the reference must
-        // suppress its OWN navigation EVEN on a modified click — otherwise a
-        // cmd-click fires the lightbox AND opens the target in a new tab (the
-        // reference's own `<a href>` is the nearest anchor). Only plain content,
-        // with no owner, reaches the opener; `openBlock` reads the modifier itself
-        // (cmd/ctrl → new tab, shift/alt → new panel/window) so a modified click
-        // on the link's text/chrome still opens the target out-of-place.
-        const owner = classifyReferenceClick(event)
+        // Nested links keep their navigation. Other interactive content owns
+        // the gesture, so suppress this reference's href even with modifiers.
+        const owner = classifyLinkInteraction(event)
         if (owner === 'anchor') return
         if (owner === 'rich') {
           event.preventDefault()
@@ -104,6 +64,6 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
       }}
     >
       {children}
-    </a>
+    </BlockLink>
   )
 }
