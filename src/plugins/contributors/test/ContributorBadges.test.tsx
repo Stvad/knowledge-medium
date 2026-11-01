@@ -77,11 +77,12 @@ describe('contributor badges', () => {
     })
     setProfiles(profile('agent', 'Research Agent', 'agent', 'research'))
     const view = render(<Decorated block={block}/>)
-    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research'})).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent'}).textContent).toBe('Research Agent')
 
     act(() => setProfiles(profile('agent', 'Updated Agent', 'automation', 'summarizer')))
     view.rerender(<Decorated block={block}/>)
-    expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent · summarizer'})).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent'}).textContent).toBe('Updated Agent')
+    expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent'}).getAttribute('title')).toBe('By Updated Agent')
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')
     expect(screen.getByText('automation · summarizer')).toBeTruthy()
@@ -115,7 +116,19 @@ describe('contributor badges', () => {
     })
     setProfiles(profile('agent', 'Research Agent', 'agent', 'research'), profile('other', 'Writer Bot', 'automation', 'writer'))
     render(<Decorated block={block}/>)
-    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research +1'})).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent, Writer Bot'}).textContent).toBe('Research Agent+1')
+  })
+
+  it('uses the first non-human editor as the badge primary when there is no non-human creator', () => {
+    const Decorated = decorate({
+      [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['human']),
+      [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['writer']),
+    })
+    setProfiles(profile('human', 'Alice', 'human'), profile('writer', 'Writer Bot', 'automation', 'writer'))
+    render(<Decorated block={block}/>)
+    const badge = screen.getByRole('button', {name: 'Authorship details: Edited by Writer Bot'})
+    expect(badge.textContent).toBe('Writer Bot')
+    expect(badge.querySelector('svg')).toBeTruthy()
   })
 
   it('omits a creator from the editor summary but keeps mixed editor attribution in details', async () => {
@@ -131,13 +144,16 @@ describe('contributor badges', () => {
     )
     render(<Decorated block={block}/>)
     const badge = screen.getByRole('button', {name: /Authorship details/})
-    expect(badge.textContent).toBe('By Research Agent · research · Edited by Writer Bot · writer +1')
+    expect(badge.textContent).toBe('Research Agent+2')
+    expect(badge.getAttribute('title')).toBe('By Research Agent · Edited by Writer Bot, Review Bot')
 
     fireEvent.pointerDown(badge, {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')
     expect(screen.getAllByRole('menuitem', {name: /Research Agent/})).toHaveLength(2)
     expect(screen.getByRole('menuitem', {name: /Alice human/})).toBeTruthy()
     expect(screen.getByRole('menuitem', {name: /Review Bot agent · reviewer/})).toBeTruthy()
+    expect(badge.textContent).not.toContain('research')
+    expect(badge.textContent).not.toContain('writer')
   })
 
   it('shows each contributor once in the badge while retaining creator/editor detail records', async () => {
@@ -146,7 +162,7 @@ describe('contributor badges', () => {
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent']),
     })
     render(<Decorated block={block}/>)
-    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research'}).textContent).toBe('By Research Agent · research')
+    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent'}).textContent).toBe('Research Agent')
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')
 
