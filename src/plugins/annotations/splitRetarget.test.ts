@@ -1,5 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {ChangeScope} from '@/data/api'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertyFieldContent} from '@/data/propertyChildren'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -145,5 +147,30 @@ describe('anchorAfterSplit', () => {
     expect(captureAnchor(content.slice(3), 3, 5)!.quote).toBe('[[[]]')
     const pieces = [{blockId: 'before', start: 0, end: 3}, {blockId: 'after', start: 3, end: content.length}]
     expect(anchorAfterSplit({content, pieces}, anchor)).toBeNull()
+  })
+})
+
+describe('a split, in a workspace whose properties are child blocks', () => {
+  beforeEach(() => db.db.execute(`INSERT INTO workspaces
+    (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+    VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS]))
+
+  it('moves the target’s field row with the cell, and undo moves both back', async () => {
+    const thread = await threadOn('Draft the plan')
+    const fieldId = propertyDefinitionBlockId(WS, annotationTargetProp.seedKey)
+    const targetValues = async () => {
+      const field = await db.db.get<{id: string}>(
+        'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0', [thread, propertyFieldContent(fieldId)])
+      return (await db.db.getAll<{content: string}>(
+        'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])).map(row => row.content)
+    }
+    expect(await targetValues()).toEqual(['((B))'])
+
+    const sibling = await split()
+    expect(await placeOf(thread)).toEqual({target: sibling, state: 'exact', quoteStart: 0})
+    expect(await targetValues()).toEqual([`((${sibling}))`])
+
+    expect(await repo.undo()).toBe(true)
+    expect(await targetValues()).toEqual(['((B))'])
   })
 })
