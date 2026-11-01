@@ -1,1 +1,1 @@
-export{Bi as appendClientRecord,Vi as clientGroupId,Hi as clientSeriesQuery,Ui as updateClientRecord}from"../../../chunks/app-Q0Qe5S7a.js";
+export{Bi as appendClientRecord,Vi as clientGroupId,Hi as clientSeriesQuery,Ui as updateClientRecord}from"../../../chunks/app-D3IA5HLB.js";
