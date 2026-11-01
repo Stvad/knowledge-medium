@@ -1,1 +1,1 @@
-export{xG as geoDataExtension}from"../../../chunks/app-D3IA5HLB.js";
+export{xG as geoDataExtension}from"../../../chunks/app-CTYcEqam.js";
