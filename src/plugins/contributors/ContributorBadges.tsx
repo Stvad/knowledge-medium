@@ -143,7 +143,7 @@ export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
 /** The author line of a card, by the rule `authorIdOf` (./author.ts)
  *  states. A user page that is not loaded, or not created, shows the user id,
  *  unlinked. */
-const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+export const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const {attribution, profiles} = useContributorProfiles(block)
   const meta = useHandle(block, {
     selector: data => data ? {createdBy: data.createdBy, createdAt: data.createdAt, workspaceId: data.workspaceId} : undefined,
