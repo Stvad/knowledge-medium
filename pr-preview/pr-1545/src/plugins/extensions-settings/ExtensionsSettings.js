@@ -1,0 +1,1 @@
+export{tr as ExtensionsSettings}from"../../../chunks/app-eGf5FJNy.js";

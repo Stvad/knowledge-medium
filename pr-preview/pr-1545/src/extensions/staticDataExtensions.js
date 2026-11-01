@@ -1,0 +1,1 @@
+export{MU as staticDataExtensions}from"../../chunks/app-eGf5FJNy.js";

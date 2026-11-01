@@ -1,0 +1,1 @@
+export{LA as BlockEmbed}from"../../../chunks/app-eGf5FJNy.js";

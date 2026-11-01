@@ -1,0 +1,1 @@
+export{cS as COLEMAK_KEYBINDINGS_PLUGIN_ID,lS as colemakKeybindingsPlugin,uS as colemakMovementKeybindingOverrides}from"../../../chunks/app-eGf5FJNy.js";

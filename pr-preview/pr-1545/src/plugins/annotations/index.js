@@ -1,0 +1,1 @@
+export{Fu as annotationsPlugin}from"../../../chunks/app-eGf5FJNy.js";

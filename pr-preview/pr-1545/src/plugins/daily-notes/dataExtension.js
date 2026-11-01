@@ -1,0 +1,1 @@
+export{TK as dailyNotesDataExtension}from"../../../chunks/app-eGf5FJNy.js";

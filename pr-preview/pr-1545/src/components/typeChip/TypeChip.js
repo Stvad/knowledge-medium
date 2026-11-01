@@ -1,0 +1,1 @@
+export{KA as TypeChip}from"../../../chunks/app-eGf5FJNy.js";

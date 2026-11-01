@@ -1,0 +1,1 @@
+export{G_ as referencesPlugin}from"../../../chunks/app-eGf5FJNy.js";
