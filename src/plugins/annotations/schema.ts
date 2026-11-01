@@ -1,4 +1,4 @@
-import {ChangeScope, propertyValue, seedProperty, seedType, type BlockData} from '@/data/api'
+import {ChangeScope, propertyValue, seedProperty, seedType, type BlockData, type BlockReference} from '@/data/api'
 import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -16,6 +16,13 @@ export const annotationTargetProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
   hidden: true,
+})
+
+/** The `references` entry `annotationTargetProp` projects. A write that sets
+ *  the target writes this too, so the thread is discoverable on its target as
+ *  soon as the write commits, without waiting on the post-commit projection. */
+export const threadTargetEdge = (targetId: string): BlockReference => ({
+  id: targetId, alias: targetId, sourceField: annotationTargetProp.name,
 })
 
 export const annotationQuoteStartProp = seedProperty({

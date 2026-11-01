@@ -12,11 +12,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import {
-  merge as mergeMutator,
-  setContent as setContentMutator,
-  createChild as createChildMutator,
-} from '@/data/mutators'
+import { merge as mergeMutator } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -130,12 +126,13 @@ const splitCodeMirrorBlockAtCursor = async (
 
 /**
  * Mid-text split when the edited block is the *scope root* (a backlink
- * entry, embed, or zoomed panel root). `core.split` would push the
+ * entry, embed, or zoomed panel root). The default split would push the
  * before-cursor text into a preceding sibling — which lives outside the
  * visible surface, silently burying the first half (the same class as
  * the "invisible block" bug for `o`/`O`). Instead the root keeps the
- * before-text and the continuation becomes its first child, mirroring
- * the reading order (root = first half, child = the rest).
+ * before-text and the continuation becomes its first child
+ * (`placement: 'firstChild'`), mirroring the reading order (root = first
+ * half, child = the rest).
  *
  * Returns the new child's id.
  */
@@ -157,15 +154,7 @@ const splitScopeRootIntoFirstChild = async (
     selection: EditorSelection.cursor(beforeCursor.length),
   })
 
-  return repo.tx(async tx => {
-    await tx.run(setContentMutator, {id: block.id, content: beforeCursor})
-    return tx.run(createChildMutator, {
-      parentId: block.id,
-      content: afterCursor,
-      position: {kind: 'first'},
-      revealParent: true,
-    })
-  }, {scope: ChangeScope.BlockDefault, description: 'split scope root into first child'})
+  return repo.mutate.split({id: block.id, before: beforeCursor, after: afterCursor, placement: 'firstChild'})
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
