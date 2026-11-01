@@ -3,9 +3,8 @@
  * markdown by a remark transform that runs after every other remark plugin.
  *
  * Last, because marking first would change what those plugins see: a split
- * through a timestamp or a reference turns it into a different token, and a
- * node wrapped in a mark loses the position a page embed's occurrence id is
- * computed from. Running last, every token is already a node, and the rule is
+ * through a timestamp or a reference turns it into a different token.
+ * Running last, every token is already a node, and the rule is
  * one: plain text may be cut, anything else is marked whole or not at all.
  *
  * A quote is raw-content offsets; the tree knows only source spans. The

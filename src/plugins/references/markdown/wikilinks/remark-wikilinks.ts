@@ -83,14 +83,13 @@ const buildPageEmbedNode = (
   alias: string,
   blockId: string,
   raw: string,
-  occurrenceId: string,
 ): RootContent => ({
   type: 'pageembed',
   value: raw,
   children: [{type: 'text', value: raw}],
   data: {
     hName: 'pageembed',
-    hProperties: {alias, blockId, occurrenceId},
+    hProperties: {alias, blockId},
   },
 } as unknown as RootContent)
 
@@ -248,7 +247,6 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
             ref.alias,
             resolve(ref.alias),
             raw,
-            `text:${(node.position?.start.offset ?? 0) + spanStart}`,
           )
         : buildWikilinkNode(
             ref.alias,
@@ -362,9 +360,8 @@ const reassembleOneCrossNodeRef = (
     if (before === null || display === null || after === null) continue
 
     const raw = wrapper ? `[…]([[${ref.alias}]])` : joined.slice(spanStart, ref.endIndex)
-    const parentOffset = parent.position?.start.offset ?? 0
     const replacement: RootContent = isEmbed
-      ? buildPageEmbedNode(ref.alias, resolve(ref.alias), raw, `cross:${parentOffset + spanStart}`)
+      ? buildPageEmbedNode(ref.alias, resolve(ref.alias), raw)
       : buildWikilinkNode(ref.alias, resolve(ref.alias), display, raw, wrapper !== null)
 
     kids.splice(0, kids.length, ...before, replacement, ...after)
