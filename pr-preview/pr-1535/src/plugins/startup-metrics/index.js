@@ -1,0 +1,1 @@
+export{ki as startupMetricsPlugin}from"../../../chunks/app-D4FVv0ou.js";

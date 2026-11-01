@@ -1,0 +1,1 @@
+export{pot as normalizeReferences}from"../../../chunks/app-D4FVv0ou.js";
