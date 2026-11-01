@@ -1,1 +1,0 @@
-export{GZ as instrumentAdapter}from"../../../chunks/app-CxRXYR2I.js";

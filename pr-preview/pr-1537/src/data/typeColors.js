@@ -1,1 +1,0 @@
-export{$A as DEFAULT_TYPE_COLORS,ej as defaultTypeColor,tj as pickLeastUsedTypeColor}from"../../chunks/app-CxRXYR2I.js";

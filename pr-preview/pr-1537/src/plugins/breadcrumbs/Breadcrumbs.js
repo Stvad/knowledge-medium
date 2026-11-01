@@ -1,1 +1,0 @@
-export{WC as Breadcrumbs}from"../../../chunks/app-CxRXYR2I.js";

@@ -1,1 +1,0 @@
-export{QA as chipStyle}from"../../../chunks/app-CxRXYR2I.js";

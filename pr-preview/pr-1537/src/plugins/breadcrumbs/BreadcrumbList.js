@@ -1,1 +1,0 @@
-export{GC as BreadcrumbList}from"../../../chunks/app-CxRXYR2I.js";

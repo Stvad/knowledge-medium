@@ -1,1 +1,0 @@
-export{gw as isLeftSidebarSectionContribution,_w as leftSidebarSectionsFacet}from"../../../chunks/app-CxRXYR2I.js";
