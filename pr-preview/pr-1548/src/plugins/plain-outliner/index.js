@@ -1,1 +1,0 @@
-export{UC as plainOutlinerPlugin}from"../../../chunks/app-DqsUurDO.js";

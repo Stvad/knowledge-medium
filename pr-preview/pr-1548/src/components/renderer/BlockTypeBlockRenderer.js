@@ -1,1 +1,0 @@
-export{CP as BlockTypeBlockRenderer,wP as BlockTypeContentRenderer,TP as writeBlockTypeLabel}from"../../../chunks/app-DqsUurDO.js";

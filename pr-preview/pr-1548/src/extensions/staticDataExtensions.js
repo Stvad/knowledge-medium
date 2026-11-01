@@ -1,1 +1,0 @@
-export{PU as staticDataExtensions}from"../../chunks/app-DqsUurDO.js";

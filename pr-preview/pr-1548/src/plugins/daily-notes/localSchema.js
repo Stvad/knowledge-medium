@@ -1,1 +1,0 @@
-export{OK as dailyNotesLocalSchema}from"../../../chunks/app-DqsUurDO.js";

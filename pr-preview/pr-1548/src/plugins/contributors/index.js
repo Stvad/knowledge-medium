@@ -1,1 +1,0 @@
-export{Vf as contributorsPlugin}from"../../../chunks/app-DqsUurDO.js";

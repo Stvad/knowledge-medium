@@ -1,1 +1,0 @@
-export{MC as mobileBottomNavItemsFacet}from"../../../chunks/app-DqsUurDO.js";

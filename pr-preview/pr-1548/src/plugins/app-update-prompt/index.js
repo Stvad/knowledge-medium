@@ -1,1 +1,0 @@
-export{oM as appUpdatePromptExtension}from"../../../chunks/app-DqsUurDO.js";

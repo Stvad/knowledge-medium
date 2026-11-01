@@ -1,1 +1,0 @@
-export{ZM as extensionDisplayName,QM as extensionName,$M as userExtensionShellToggle,eN as userExtensionToggle}from"../../chunks/app-DqsUurDO.js";

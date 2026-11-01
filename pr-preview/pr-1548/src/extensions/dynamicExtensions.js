@@ -1,1 +1,0 @@
-export{GM as dynamicExtensionsExtension}from"../../chunks/app-DqsUurDO.js";

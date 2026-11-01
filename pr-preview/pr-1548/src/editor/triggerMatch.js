@@ -1,1 +1,0 @@
-export{ZG as matchCharTrigger}from"../../chunks/app-DqsUurDO.js";

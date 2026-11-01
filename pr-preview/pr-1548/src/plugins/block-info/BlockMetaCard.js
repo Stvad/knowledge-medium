@@ -1,1 +1,0 @@
-export{Fg as BlockMetaCard}from"../../../chunks/app-DqsUurDO.js";

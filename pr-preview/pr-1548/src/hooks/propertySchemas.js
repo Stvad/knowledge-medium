@@ -1,1 +1,0 @@
-export{jH as usePropertySchemas}from"../../chunks/app-DqsUurDO.js";

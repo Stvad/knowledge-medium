@@ -1,1 +1,0 @@
-export{XN as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,ZN as openExtensionsSettings}from"../../chunks/app-DqsUurDO.js";

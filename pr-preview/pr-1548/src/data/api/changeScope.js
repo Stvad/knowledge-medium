@@ -1,1 +1,0 @@
-export{fot as CHANGE_SCOPE_POLICIES,pot as ChangeScope,mot as isChangeScope,hot as policyForScope,got as scopeAllowedInReadOnly,_ot as scopeIsUndoable,vot as scopePoliciesEquivalent,yot as scopeUploadsToServer,bot as sourceForScope}from"../../../chunks/app-DqsUurDO.js";
