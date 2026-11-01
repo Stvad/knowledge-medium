@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { appVersion } from '@/appVersion.js'
-import { useIsLocalOnly } from '@/components/Login.js'
+import { useIsLocalOnly, useUser } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
   DropdownMenu,
@@ -23,6 +23,8 @@ import {
   type SyncIndicatorTone,
 } from './model.ts'
 import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog.js'
+import { dbFilenameForUser } from '@/data/localDbStorage.js'
+import { isSyncStreamLockHeld } from '@/data/syncStreamLock.js'
 import {
   formatPendingChanges,
   uploadQueueCountCap,
@@ -89,6 +91,32 @@ function useIsDeviceOnline(): boolean {
     }
   }, [])
   return online
+}
+
+// Web Locks has no change event, so the hold is re-read on this interval.
+const syncStreamLockPollMs = 5_000
+
+// Whether another client holds this database's sync stream lock, re-read while
+// `active`. Never true while inactive: the last reading is kept, not cleared.
+function useSyncingInOtherTab(dbFilename: string, active: boolean): boolean {
+  const [held, setHeld] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const check = () => {
+      isSyncStreamLockHeld(dbFilename).then(
+        (next) => { if (!cancelled) setHeld(next) },
+        () => {},
+      )
+    }
+    check()
+    const timer = setInterval(check, syncStreamLockPollMs)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [dbFilename, active])
+  return active && held
 }
 
 type SyncStatus = ReturnType<typeof useStatus>
@@ -252,6 +280,13 @@ function SyncStatusHeaderContent({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const deviceOnline = useIsDeviceOnline()
+  const user = useUser()
+  // Only the state the chip would otherwise call Offline: a device that is
+  // really offline stays Offline.
+  const syncingInOtherTab = useSyncingInOtherTab(
+    dbFilenameForUser(user.id),
+    !localOnly && deviceOnline && !status.connected && !status.connecting,
+  )
   // Decide whether a sync error is worth showing. When the *device* is
   // offline, any upload/download error is just connectivity noise — show the
   // calm "Offline" chip, not a raw websocket/fetch error. But when the
@@ -293,6 +328,7 @@ function SyncStatusHeaderContent({
     pendingChangesApproximate,
     rejectedChanges: rejectedCount,
     materializingChanges,
+    syncingInOtherTab,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
