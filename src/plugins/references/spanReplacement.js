@@ -1,1 +1,1 @@
-export{PW as preferredSpanReplacement}from"../../../chunks/app-CYhyruRi.js";
+export{PW as preferredSpanReplacement}from"../../../chunks/app-SUI1vXZe.js";

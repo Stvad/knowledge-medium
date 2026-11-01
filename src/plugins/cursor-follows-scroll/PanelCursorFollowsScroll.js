@@ -1,1 +1,1 @@
-export{_S as PanelCursorFollowsScroll}from"../../../chunks/app-CYhyruRi.js";
+export{_S as PanelCursorFollowsScroll}from"../../../chunks/app-SUI1vXZe.js";

@@ -1,1 +1,1 @@
-export{ln as characterCountDecoratorContribution}from"../../../chunks/app-CYhyruRi.js";
+export{ln as characterCountDecoratorContribution}from"../../../chunks/app-SUI1vXZe.js";

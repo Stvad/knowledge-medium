@@ -1,1 +1,1 @@
-export{zc as clearSrsClipboard,Bc as getSrsClipboard,Vc as setSrsClipboard,Hc as subscribeSrsClipboard}from"../../../chunks/app-CYhyruRi.js";
+export{zc as clearSrsClipboard,Bc as getSrsClipboard,Vc as setSrsClipboard,Hc as subscribeSrsClipboard}from"../../../chunks/app-SUI1vXZe.js";

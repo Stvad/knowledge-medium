@@ -1,1 +1,1 @@
-export{VC as PromotableBreadcrumbList}from"../../../chunks/app-CYhyruRi.js";
+export{VC as PromotableBreadcrumbList}from"../../../chunks/app-SUI1vXZe.js";
