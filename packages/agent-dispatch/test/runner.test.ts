@@ -25,11 +25,12 @@ describe('buildClaudeArgs', () => {
     ])
   })
 
-  it('threads resume/model/mcp/tools through, pinning strict mcp config', () => {
+  it('threads resume/model/effort/mcp/tools through, pinning strict mcp config', () => {
     const args = buildClaudeArgs({
       ...baseOptions,
       resumeSessionId: 'sess-1',
       model: 'claude-sonnet-5',
+      effort: 'high',
       mcpConfigPath: '/tmp/km.json',
       allowedTools: ['mcp__km__get_block', 'mcp__km__search'],
     })
@@ -40,6 +41,7 @@ describe('buildClaudeArgs', () => {
       '--include-partial-messages',
       '--resume', 'sess-1',
       '--model', 'claude-sonnet-5',
+      '--effort', 'high',
       '--mcp-config', '/tmp/km.json', '--strict-mcp-config',
       '--allowedTools', 'mcp__km__get_block,mcp__km__search',
     ])

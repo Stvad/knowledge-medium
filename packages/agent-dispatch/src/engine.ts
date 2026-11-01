@@ -210,6 +210,7 @@ export const createEngine = (deps: EngineDeps) => {
         : [],
       mcpConfigPath: mcpConfigPath ?? undefined,
       model: runner.model,
+      effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,
       timeoutMs: runner.timeoutMs,
       onEvent,
