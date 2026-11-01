@@ -1,1 +1,1 @@
-export{aw as LeftSidebar,ow as LeftSidebarCoreSection,sw as LeftSidebarShortcutsSection}from"../../../chunks/app-CTYcEqam.js";
+export{aw as LeftSidebar,ow as LeftSidebarCoreSection,sw as LeftSidebarShortcutsSection}from"../../../chunks/app-D0uEdM_L.js";

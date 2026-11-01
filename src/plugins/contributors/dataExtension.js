@@ -1,1 +1,1 @@
-export{tJ as contributorsDataExtension}from"../../../chunks/app-CTYcEqam.js";
+export{tJ as contributorsDataExtension}from"../../../chunks/app-D0uEdM_L.js";

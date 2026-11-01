@@ -1,1 +1,1 @@
-export{Ng as BlockMetaCard}from"../../../chunks/app-CTYcEqam.js";
+export{Ng as BlockMetaCard}from"../../../chunks/app-D0uEdM_L.js";
