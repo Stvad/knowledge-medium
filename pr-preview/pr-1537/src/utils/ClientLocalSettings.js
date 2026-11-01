@@ -1,0 +1,1 @@
+export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-CxRXYR2I.js";

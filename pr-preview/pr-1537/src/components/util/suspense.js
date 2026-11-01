@@ -1,0 +1,1 @@
+export{hU as SuspenseFallback}from"../../../chunks/app-CxRXYR2I.js";

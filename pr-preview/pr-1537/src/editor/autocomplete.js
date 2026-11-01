@@ -1,0 +1,1 @@
+export{Kj as editorAutocompleteExtension}from"../../chunks/app-CxRXYR2I.js";

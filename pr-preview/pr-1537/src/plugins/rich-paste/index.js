@@ -1,0 +1,1 @@
+export{cy as richPastePlugin}from"../../../chunks/app-CxRXYR2I.js";

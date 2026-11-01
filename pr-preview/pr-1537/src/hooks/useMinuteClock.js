@@ -1,0 +1,1 @@
+export{wE as useMinuteClock}from"../../chunks/app-CxRXYR2I.js";

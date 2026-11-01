@@ -1,0 +1,1 @@
+export{wX as agentDispatchCompanionDataExtension}from"../../../chunks/app-CxRXYR2I.js";

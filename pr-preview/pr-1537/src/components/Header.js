@@ -1,0 +1,1 @@
+export{YN as Header}from"../../chunks/app-CxRXYR2I.js";

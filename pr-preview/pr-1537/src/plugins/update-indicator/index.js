@@ -1,0 +1,1 @@
+export{zg as updateIndicatorPlugin}from"../../../chunks/app-CxRXYR2I.js";

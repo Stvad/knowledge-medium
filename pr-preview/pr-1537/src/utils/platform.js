@@ -1,0 +1,1 @@
+export{xV as isIOS,SV as isMacPlatform}from"../../chunks/app-CxRXYR2I.js";
