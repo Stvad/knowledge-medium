@@ -31,10 +31,14 @@ export const anchorAfterSplit = (
 ): {blockId: string; anchor: RangeAnchor} | null => {
   const resolved = resolveAnchor(split.content, anchor)
   if (resolved.state !== 'exact') return null
-  const piece = split.pieces.find(p => p.start <= resolved.from && resolved.to <= p.end)
+  // The piece the quote starts in, since `pieces` are in text order.
+  const piece = split.pieces.find(p => resolved.from < p.end)
   if (!piece) return null
   const captured = captureAnchor(
     split.content.slice(piece.start, piece.end), resolved.from - piece.start, resolved.to - piece.start)
+  // Captured again in its piece, the quote must be the same text: so it lies
+  // wholly inside the piece, and no reference span the piece parses on its own
+  // widens it.
   return captured?.quote === anchor.quote ? {blockId: piece.blockId, anchor: captured} : null
 }
 
