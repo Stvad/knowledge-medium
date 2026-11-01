@@ -1,1 +1,1 @@
-export{Qm as createWatchEventsRegistry,$m as watchEventsRegistry}from"../../../chunks/app-CgaWN1nF.js";
+export{Qm as createWatchEventsRegistry,$m as watchEventsRegistry}from"../../../chunks/app-iBLMol86.js";

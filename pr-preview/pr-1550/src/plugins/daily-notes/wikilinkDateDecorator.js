@@ -1,1 +1,1 @@
-export{uO as dailyDateWikilinkDecorator}from"../../../chunks/app-CgaWN1nF.js";
+export{uO as dailyDateWikilinkDecorator}from"../../../chunks/app-iBLMol86.js";

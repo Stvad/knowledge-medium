@@ -1,1 +1,1 @@
-export{EJ as charLimitProp,DJ as charProfileProp,OJ as charScopeProp}from"../../../chunks/app-CgaWN1nF.js";
+export{EJ as charLimitProp,DJ as charProfileProp,OJ as charScopeProp}from"../../../chunks/app-iBLMol86.js";

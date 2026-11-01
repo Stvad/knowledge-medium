@@ -1,1 +1,1 @@
-export{Jk as CommandPaletteHeaderItem}from"../../../chunks/app-CgaWN1nF.js";
+export{Jk as CommandPaletteHeaderItem}from"../../../chunks/app-iBLMol86.js";

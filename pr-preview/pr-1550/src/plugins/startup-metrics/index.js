@@ -1,1 +1,1 @@
-export{ki as startupMetricsPlugin}from"../../../chunks/app-CgaWN1nF.js";
+export{ki as startupMetricsPlugin}from"../../../chunks/app-iBLMol86.js";
