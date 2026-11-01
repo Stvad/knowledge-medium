@@ -7,7 +7,6 @@ import { useOpenBlock } from '@/utils/navigation'
 
 import { BlockLink } from './BlockLink'
 import { classifyLinkInteraction } from './linkInteraction'
-export { classifyLinkInteraction as classifyReferenceClick } from './linkInteraction'
 
 /**
  * A click that concludes a TEXT SELECTION anchored inside the reference (a

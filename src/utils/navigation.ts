@@ -57,8 +57,6 @@ import {
   visiblePanelRows,
 } from '@/utils/panelLayoutProjection'
 
-export { blockLinkClickIntent, type BlockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
-
 export type NavigateInput =
   | NavigatePanelInput
   | NavigateMainInput
