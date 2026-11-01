@@ -1,0 +1,1 @@
+export{cot as CHANGE_SCOPE_POLICIES,lot as ChangeScope,uot as isChangeScope,dot as policyForScope,fot as scopeAllowedInReadOnly,pot as scopeIsUndoable,mot as scopePoliciesEquivalent,hot as scopeUploadsToServer,got as sourceForScope}from"../../../chunks/app-BCSI1fXt.js";

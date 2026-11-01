@@ -1,0 +1,1 @@
+export{Jg as backlinksPlugin}from"../../../chunks/app-BCSI1fXt.js";

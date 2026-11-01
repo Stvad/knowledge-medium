@@ -1,0 +1,1 @@
+export{RC as getBreadcrumbContentPreview}from"../../../chunks/app-BCSI1fXt.js";

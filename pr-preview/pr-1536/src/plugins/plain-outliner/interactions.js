@@ -1,0 +1,1 @@
+export{GC as blockEditingContentRenderer}from"../../../chunks/app-BCSI1fXt.js";

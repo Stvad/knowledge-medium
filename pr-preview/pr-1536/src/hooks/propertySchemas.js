@@ -1,0 +1,1 @@
+export{kH as usePropertySchemas}from"../../chunks/app-BCSI1fXt.js";

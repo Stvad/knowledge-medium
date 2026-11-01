@@ -1,0 +1,1 @@
+export{sk as openKeybindingsSettingsAction}from"../../../chunks/app-BCSI1fXt.js";

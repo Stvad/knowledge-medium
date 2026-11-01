@@ -1,0 +1,1 @@
+export{k8 as parsePropertyDefinitionMetadata,A8 as propertySchemaOriginForSeedKey}from"../../chunks/app-BCSI1fXt.js";

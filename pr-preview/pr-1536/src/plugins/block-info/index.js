@@ -1,0 +1,1 @@
+export{Mg as blockInfoPlugin}from"../../../chunks/app-BCSI1fXt.js";

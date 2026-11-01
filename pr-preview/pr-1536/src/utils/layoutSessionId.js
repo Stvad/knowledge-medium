@@ -1,0 +1,1 @@
+export{W9 as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,G9 as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,K9 as __resetLayoutSessionIdForTesting,q9 as getLayoutSessionId,J9 as isInstalledAppDisplayMode,Y9 as readOrCreateLayoutSessionId}from"../../chunks/app-BCSI1fXt.js";

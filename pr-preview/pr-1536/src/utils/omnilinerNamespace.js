@@ -1,0 +1,1 @@
+export{QX as omnilinerNamespace}from"../../chunks/app-BCSI1fXt.js";

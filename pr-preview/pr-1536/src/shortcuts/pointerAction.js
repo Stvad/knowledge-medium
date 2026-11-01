@@ -1,0 +1,1 @@
+export{OM as dispatchPointerAction,kM as setPointerActionDispatcher}from"../../chunks/app-BCSI1fXt.js";

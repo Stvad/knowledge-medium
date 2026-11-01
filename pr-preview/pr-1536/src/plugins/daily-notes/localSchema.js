@@ -1,0 +1,1 @@
+export{EK as dailyNotesLocalSchema}from"../../../chunks/app-BCSI1fXt.js";

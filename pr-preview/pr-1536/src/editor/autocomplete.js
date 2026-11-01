@@ -1,0 +1,1 @@
+export{Vj as editorAutocompleteExtension}from"../../chunks/app-BCSI1fXt.js";

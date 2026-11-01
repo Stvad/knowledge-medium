@@ -1,0 +1,1 @@
+export{Go as requestPersistenceActionContribution}from"../../../chunks/app-BCSI1fXt.js";

@@ -1,0 +1,1 @@
+export{MU as staticDataExtensions}from"../../chunks/app-BCSI1fXt.js";

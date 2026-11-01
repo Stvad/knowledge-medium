@@ -1,0 +1,1 @@
+export{bk as useCommandPaletteActions}from"../../../chunks/app-BCSI1fXt.js";

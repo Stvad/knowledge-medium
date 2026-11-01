@@ -1,0 +1,1 @@
+export{IH as appRuntimeUpdateEvent,LH as refreshAppRuntime}from"../../chunks/app-BCSI1fXt.js";

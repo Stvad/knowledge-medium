@@ -1,0 +1,1 @@
+export{c2 as emitKernelInvalidations,l2 as kernelInvalidationRule}from"../../../chunks/app-BCSI1fXt.js";

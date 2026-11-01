@@ -1,0 +1,1 @@
+export{zf as contributorsPlugin}from"../../../chunks/app-BCSI1fXt.js";

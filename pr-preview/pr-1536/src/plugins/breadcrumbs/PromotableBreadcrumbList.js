@@ -1,0 +1,1 @@
+export{IC as PromotableBreadcrumbList}from"../../../chunks/app-BCSI1fXt.js";

@@ -1,0 +1,1 @@
+export{sy as attachmentsPlugin}from"../../../chunks/app-BCSI1fXt.js";

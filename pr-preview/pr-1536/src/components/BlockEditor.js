@@ -1,0 +1,1 @@
+export{CI as BlockEditor}from"../../chunks/app-BCSI1fXt.js";

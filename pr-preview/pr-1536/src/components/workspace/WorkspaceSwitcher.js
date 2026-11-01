@@ -1,0 +1,1 @@
+export{mw as WorkspaceSwitcher}from"../../../chunks/app-BCSI1fXt.js";

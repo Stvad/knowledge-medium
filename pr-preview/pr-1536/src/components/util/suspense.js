@@ -1,0 +1,1 @@
+export{uU as SuspenseFallback}from"../../../chunks/app-BCSI1fXt.js";

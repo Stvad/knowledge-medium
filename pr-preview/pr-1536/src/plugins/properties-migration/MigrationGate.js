@@ -1,0 +1,1 @@
+export{ua as MigrationGate}from"../../../chunks/app-BCSI1fXt.js";

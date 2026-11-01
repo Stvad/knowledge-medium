@@ -1,0 +1,1 @@
+export{TK as dailyNotesDataExtension}from"../../../chunks/app-BCSI1fXt.js";

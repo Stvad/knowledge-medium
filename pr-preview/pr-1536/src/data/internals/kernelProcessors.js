@@ -1,0 +1,1 @@
+export{w2 as KERNEL_PROCESSORS}from"../../../chunks/app-BCSI1fXt.js";

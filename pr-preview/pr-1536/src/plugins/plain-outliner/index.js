@@ -1,0 +1,1 @@
+export{VC as plainOutlinerPlugin}from"../../../chunks/app-BCSI1fXt.js";

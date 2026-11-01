@@ -1,0 +1,1 @@
+export{Ov as useIsReadOnly}from"../../chunks/app-BCSI1fXt.js";

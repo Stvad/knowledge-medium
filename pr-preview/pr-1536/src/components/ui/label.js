@@ -1,0 +1,1 @@
+export{wD as Label}from"../../../chunks/app-BCSI1fXt.js";

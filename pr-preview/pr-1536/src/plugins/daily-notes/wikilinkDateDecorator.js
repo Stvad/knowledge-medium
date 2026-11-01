@@ -1,0 +1,1 @@
+export{sO as dailyDateWikilinkDecorator}from"../../../chunks/app-BCSI1fXt.js";

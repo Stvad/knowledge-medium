@@ -1,0 +1,1 @@
+export{M0 as kernelDataExtension}from"../../chunks/app-BCSI1fXt.js";

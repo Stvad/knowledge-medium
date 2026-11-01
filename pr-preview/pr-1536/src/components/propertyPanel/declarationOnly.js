@@ -1,0 +1,1 @@
+export{PR as declarationOnlyDefinitionForName,FR as declarationOnlyStatusText}from"../../../chunks/app-BCSI1fXt.js";

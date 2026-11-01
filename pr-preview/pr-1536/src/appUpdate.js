@@ -1,0 +1,1 @@
+export{hM as appUpdate,gM as useAppUpdateAvailable}from"../chunks/app-BCSI1fXt.js";

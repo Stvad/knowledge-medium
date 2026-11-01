@@ -1,0 +1,1 @@
+export{wN as LazyBlockComponent}from"../../chunks/app-BCSI1fXt.js";

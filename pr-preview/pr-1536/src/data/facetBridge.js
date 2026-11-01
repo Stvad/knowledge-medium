@@ -1,0 +1,1 @@
+export{KQ as FacetBridge}from"../../chunks/app-BCSI1fXt.js";

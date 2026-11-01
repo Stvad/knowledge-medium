@@ -1,0 +1,1 @@
+export{yE as useMinuteClock}from"../../chunks/app-BCSI1fXt.js";

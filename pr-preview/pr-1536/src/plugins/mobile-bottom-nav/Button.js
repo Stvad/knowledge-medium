@@ -1,0 +1,1 @@
+export{kC as MobileBottomNavButton}from"../../../chunks/app-BCSI1fXt.js";

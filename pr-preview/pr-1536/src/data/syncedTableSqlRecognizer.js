@@ -1,0 +1,1 @@
+export{UX as SYNCED_TABLES,WX as syncedWriteTarget,GX as writeTargets}from"../../chunks/app-BCSI1fXt.js";

@@ -1,0 +1,1 @@
+export{k0 as Block,A0 as requireLoadedBlock}from"../../chunks/app-BCSI1fXt.js";

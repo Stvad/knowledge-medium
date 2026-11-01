@@ -1,0 +1,1 @@
+export{Ztt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BCSI1fXt.js";

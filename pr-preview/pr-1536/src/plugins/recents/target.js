@@ -1,0 +1,1 @@
+export{xE as openRecentsPage}from"../../../chunks/app-BCSI1fXt.js";

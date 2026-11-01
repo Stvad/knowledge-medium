@@ -1,0 +1,1 @@
+export{KA as TypeChip}from"../../../chunks/app-BCSI1fXt.js";

@@ -1,0 +1,1 @@
+export{CS as spatialNavigationShellDecorator}from"../../../chunks/app-BCSI1fXt.js";

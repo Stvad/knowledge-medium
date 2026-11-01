@@ -1,0 +1,1 @@
+export{xG as geoDataExtension}from"../../../chunks/app-BCSI1fXt.js";

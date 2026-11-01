@@ -1,0 +1,1 @@
+export{gV as isIOS,_V as isMacPlatform}from"../../chunks/app-BCSI1fXt.js";

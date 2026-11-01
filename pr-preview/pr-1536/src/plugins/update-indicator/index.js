@@ -1,0 +1,1 @@
+export{Pg as updateIndicatorPlugin}from"../../../chunks/app-BCSI1fXt.js";

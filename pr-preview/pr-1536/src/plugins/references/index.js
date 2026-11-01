@@ -1,0 +1,1 @@
+export{G_ as referencesPlugin}from"../../../chunks/app-BCSI1fXt.js";

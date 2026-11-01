@@ -1,0 +1,1 @@
+export{Yq as annotationMarginOpenProp}from"../../../chunks/app-BCSI1fXt.js";

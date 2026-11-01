@@ -1,0 +1,1 @@
+export{lU as BootFallback}from"../../../chunks/app-BCSI1fXt.js";

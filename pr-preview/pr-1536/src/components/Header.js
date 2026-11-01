@@ -1,0 +1,1 @@
+export{WN as Header}from"../../chunks/app-BCSI1fXt.js";

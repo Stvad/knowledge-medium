@@ -1,0 +1,1 @@
+export{pa as migratePropertiesToBlocksAction,la as propertiesMigrationPlugin}from"../../../chunks/app-BCSI1fXt.js";

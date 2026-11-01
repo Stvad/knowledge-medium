@@ -1,0 +1,1 @@
+export{yJ as charLimitProp,bJ as charProfileProp,xJ as charScopeProp}from"../../../chunks/app-BCSI1fXt.js";

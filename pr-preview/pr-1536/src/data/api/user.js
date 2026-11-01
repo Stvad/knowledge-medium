@@ -1,0 +1,1 @@
+export{lat as SYSTEM_AUTHOR_PREFIX,uat as isSystemAuthor,dat as systemAuthor}from"../../../chunks/app-BCSI1fXt.js";

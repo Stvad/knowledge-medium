@@ -1,0 +1,1 @@
+export{GY as aliasDataExtension}from"../../../chunks/app-BCSI1fXt.js";

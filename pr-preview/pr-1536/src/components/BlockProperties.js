@@ -1,0 +1,1 @@
+export{cR as BlockProperties}from"../../chunks/app-BCSI1fXt.js";

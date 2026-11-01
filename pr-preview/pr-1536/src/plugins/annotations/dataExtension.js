@@ -1,0 +1,1 @@
+export{GK as annotationsDataExtension}from"../../../chunks/app-BCSI1fXt.js";

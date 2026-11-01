@@ -1,0 +1,1 @@
+export{Fg as UpdateIndicator}from"../../../chunks/app-BCSI1fXt.js";
