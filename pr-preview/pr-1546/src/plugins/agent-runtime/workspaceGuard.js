@@ -1,1 +1,1 @@
-export{Zm as assertActiveWorkspace}from"../../../chunks/app-D8MSukCt.js";
+export{Zm as assertActiveWorkspace}from"../../../chunks/app-BGWFrtUY.js";

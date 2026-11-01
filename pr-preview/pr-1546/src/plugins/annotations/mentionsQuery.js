@@ -1,1 +1,1 @@
-export{Fq as MENTIONS_FOR_BLOCK_QUERY,Iq as mentionsForBlockQuery}from"../../../chunks/app-D8MSukCt.js";
+export{Iq as MENTIONS_FOR_BLOCK_QUERY,Lq as mentionsForBlockQuery}from"../../../chunks/app-BGWFrtUY.js";

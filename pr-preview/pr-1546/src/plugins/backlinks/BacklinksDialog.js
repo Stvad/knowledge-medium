@@ -1,1 +1,1 @@
-export{yd as BacklinksDialog}from"../../../chunks/app-D8MSukCt.js";
+export{yd as BacklinksDialog}from"../../../chunks/app-BGWFrtUY.js";

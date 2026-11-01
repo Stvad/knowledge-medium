@@ -1,1 +1,1 @@
-export{OI as BlockEditor}from"../../chunks/app-D8MSukCt.js";
+export{kI as BlockEditor}from"../../chunks/app-BGWFrtUY.js";

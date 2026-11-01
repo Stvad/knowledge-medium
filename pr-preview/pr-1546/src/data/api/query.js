@@ -1,1 +1,1 @@
-export{Oat as defineQuery}from"../../../chunks/app-D8MSukCt.js";
+export{kat as defineQuery}from"../../../chunks/app-BGWFrtUY.js";

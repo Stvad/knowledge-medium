@@ -1,1 +1,1 @@
-export{wk as CommandPalette}from"../../../chunks/app-D8MSukCt.js";
+export{Tk as CommandPalette}from"../../../chunks/app-BGWFrtUY.js";

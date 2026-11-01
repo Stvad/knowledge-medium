@@ -1,1 +1,1 @@
-export{NR as Checkbox}from"../../../chunks/app-D8MSukCt.js";
+export{PR as Checkbox}from"../../../chunks/app-BGWFrtUY.js";

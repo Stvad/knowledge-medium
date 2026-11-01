@@ -1,1 +1,1 @@
-export{zg as updateIndicatorPlugin}from"../../../chunks/app-D8MSukCt.js";
+export{zg as updateIndicatorPlugin}from"../../../chunks/app-BGWFrtUY.js";

@@ -1,1 +1,1 @@
-export{BX as agentDispatchCompanionDataExtension}from"../../../chunks/app-D8MSukCt.js";
+export{VX as agentDispatchCompanionDataExtension}from"../../../chunks/app-BGWFrtUY.js";

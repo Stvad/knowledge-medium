@@ -1,1 +1,1 @@
-export{bP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-D8MSukCt.js";
+export{xP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BGWFrtUY.js";

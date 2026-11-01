@@ -1,1 +1,1 @@
-export{vd as MentionCards}from"../../../chunks/app-D8MSukCt.js";
+export{vd as MentionCards}from"../../../chunks/app-BGWFrtUY.js";

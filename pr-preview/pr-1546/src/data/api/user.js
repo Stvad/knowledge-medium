@@ -1,1 +1,1 @@
-export{Sat as SYSTEM_AUTHOR_PREFIX,Cat as isSystemAuthor,wat as systemAuthor}from"../../../chunks/app-D8MSukCt.js";
+export{Cat as SYSTEM_AUTHOR_PREFIX,wat as isSystemAuthor,Tat as systemAuthor}from"../../../chunks/app-BGWFrtUY.js";

@@ -1,1 +1,1 @@
-export{H8 as parsePropertyDefinitionMetadata,U8 as propertySchemaOriginForSeedKey}from"../../chunks/app-D8MSukCt.js";
+export{U8 as parsePropertyDefinitionMetadata,W8 as propertySchemaOriginForSeedKey}from"../../chunks/app-BGWFrtUY.js";

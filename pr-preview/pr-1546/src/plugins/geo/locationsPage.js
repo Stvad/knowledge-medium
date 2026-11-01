@@ -1,1 +1,1 @@
-export{LG as getOrCreateLocationsPage,RG as locationsPageBlockId,zG as locationsPageSpec}from"../../../chunks/app-D8MSukCt.js";
+export{RG as getOrCreateLocationsPage,zG as locationsPageBlockId,BG as locationsPageSpec}from"../../../chunks/app-BGWFrtUY.js";
