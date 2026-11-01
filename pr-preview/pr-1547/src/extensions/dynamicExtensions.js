@@ -1,0 +1,1 @@
+export{UM as dynamicExtensionsExtension}from"../../chunks/app-BoSGqwNV.js";

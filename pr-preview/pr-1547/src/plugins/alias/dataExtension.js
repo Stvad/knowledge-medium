@@ -1,0 +1,1 @@
+export{KY as aliasDataExtension}from"../../../chunks/app-BoSGqwNV.js";

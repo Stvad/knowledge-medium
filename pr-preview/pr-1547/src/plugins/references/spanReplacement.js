@@ -1,0 +1,1 @@
+export{kW as preferredSpanReplacement}from"../../../chunks/app-BoSGqwNV.js";

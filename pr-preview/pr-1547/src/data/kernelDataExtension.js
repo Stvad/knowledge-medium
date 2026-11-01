@@ -1,0 +1,1 @@
+export{N0 as kernelDataExtension}from"../../chunks/app-BoSGqwNV.js";
