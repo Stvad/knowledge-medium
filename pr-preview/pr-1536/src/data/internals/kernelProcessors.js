@@ -1,1 +1,1 @@
-export{w2 as KERNEL_PROCESSORS}from"../../../chunks/app-BCSI1fXt.js";
+export{T2 as KERNEL_PROCESSORS}from"../../../chunks/app-DR8xAQNq.js";

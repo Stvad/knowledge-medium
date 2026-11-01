@@ -1,1 +1,1 @@
-export{ig as runHealthCommand}from"../../../chunks/app-BCSI1fXt.js";
+export{ig as runHealthCommand}from"../../../chunks/app-DR8xAQNq.js";

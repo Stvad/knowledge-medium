@@ -1,1 +1,1 @@
-export{xk as captureSelection,Sk as restoreSelection,Ck as withSelection}from"../../../chunks/app-BCSI1fXt.js";
+export{xk as captureSelection,Sk as restoreSelection,Ck as withSelection}from"../../../chunks/app-DR8xAQNq.js";

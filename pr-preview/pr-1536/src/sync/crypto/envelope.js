@@ -1,1 +1,1 @@
-export{f8 as ENVELOPE_PREFIX,p8 as GCM_TAG_BYTES,m8 as NONCE_BYTES,h8 as SCHEMA_VERSION,g8 as decodeEnvelope,_8 as encodeEnvelope,v8 as hasEnvelopePrefix}from"../../../chunks/app-BCSI1fXt.js";
+export{m8 as ENVELOPE_PREFIX,h8 as GCM_TAG_BYTES,g8 as NONCE_BYTES,_8 as SCHEMA_VERSION,v8 as decodeEnvelope,y8 as encodeEnvelope,b8 as hasEnvelopePrefix}from"../../../chunks/app-DR8xAQNq.js";

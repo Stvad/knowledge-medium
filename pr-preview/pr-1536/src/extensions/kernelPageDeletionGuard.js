@@ -1,1 +1,1 @@
-export{_M as kernelPageDeletionGuard}from"../../chunks/app-BCSI1fXt.js";
+export{_M as kernelPageDeletionGuard}from"../../chunks/app-DR8xAQNq.js";

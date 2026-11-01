@@ -1,1 +1,1 @@
-export{wb as MediaBlockRenderer,Tb as MediaContentRenderer}from"../../../chunks/app-BCSI1fXt.js";
+export{wb as MediaBlockRenderer,Tb as MediaContentRenderer}from"../../../chunks/app-DR8xAQNq.js";

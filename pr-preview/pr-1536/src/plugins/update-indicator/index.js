@@ -1,1 +1,1 @@
-export{Pg as updateIndicatorPlugin}from"../../../chunks/app-BCSI1fXt.js";
+export{Pg as updateIndicatorPlugin}from"../../../chunks/app-DR8xAQNq.js";

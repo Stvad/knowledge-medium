@@ -1,1 +1,1 @@
-export{IQ as Button}from"../../../chunks/app-BCSI1fXt.js";
+export{LQ as Button}from"../../../chunks/app-DR8xAQNq.js";
