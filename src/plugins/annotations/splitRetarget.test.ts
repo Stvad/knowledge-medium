@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import type {SplitPlacement} from '@/data/mutators'
 import {propertyFieldContent} from '@/data/propertyChildren'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -53,7 +54,7 @@ const placeOf = async (threadId: string) => {
   return {target, state: resolved.state, quoteStart: anchor.quoteStart}
 }
 
-const split = (placement?: 'siblingBefore' | 'firstChild', before = TEXT.slice(0, CUT), after = TEXT.slice(CUT)) =>
+const split = (placement?: SplitPlacement, before = TEXT.slice(0, CUT), after = TEXT.slice(CUT)) =>
   repo.mutate.split({id: 'B', before, after, placement})
 
 describe('a split of the target', () => {
@@ -104,12 +105,36 @@ describe('a split of the target', () => {
     expect(await placeOf(thread)).toEqual({target: 'B', state: 'exact', quoteStart: 0})
   })
 
-  it('leaves a thread that is not exact in the text the split cut, which can be ahead of the stored row', async () => {
+  it('carries a moved thread to its text, still moved, rather than leave it on a repeat of its quote', async () => {
+    const repeated = 'Draft the plan on Monday. Review the plan on Monday.'
+    await repo.tx(tx => tx.update('B', {content: repeated}), opts)
+    const thread = (await createThread(repo, {targetId: 'B', anchor: anchorAt(repeated, 'Monday'), comment: 'x'})).threadId
+    const edited = `Note: ${repeated}`
+    await repo.tx(tx => tx.update('B', {content: edited}), opts)
+    const cut = edited.indexOf('Review')
+
+    const sibling = await split('siblingBefore', edited.slice(0, cut), edited.slice(cut))
+
+    expect(await placeOf(thread)).toEqual({target: sibling, state: 'moved', quoteStart: repeated.indexOf('Monday')})
+    const root = (await repo.load(thread))!
+    const from = edited.indexOf('Monday')
+    expect(resolveAnchor((await repo.load(sibling))!.content, threadAnchorOf(root) as RangeAnchor))
+      .toEqual({state: 'moved', from, to: from + 'Monday'.length})
+  })
+
+  it('places a thread by the text the split cut, which can be ahead of the stored row', async () => {
     const thread = await threadOn('Draft the plan')
     // The editor's live text, not yet flushed: it moved the quote.
     const live = `Note: ${TEXT}`
+    const sibling = await split('siblingBefore', live.slice(0, CUT + 6), live.slice(CUT + 6))
+    expect(await placeOf(thread)).toEqual({target: sibling, state: 'moved', quoteStart: 0})
+  })
+
+  it('leaves a moved quote across the cut on the original', async () => {
+    const thread = await threadOn('Monday. Review')
+    const live = `Note: ${TEXT}`
     await split('siblingBefore', live.slice(0, CUT + 6), live.slice(CUT + 6))
-    expect(await placeOf(thread)).toEqual({target: 'B', state: 'stale', quoteStart: 0})
+    expect(await placeOf(thread)).toEqual({target: 'B', state: 'stale', quoteStart: TEXT.indexOf('Monday')})
   })
 
   it('leaves a thread whose target is another block, whatever its edges say', async () => {

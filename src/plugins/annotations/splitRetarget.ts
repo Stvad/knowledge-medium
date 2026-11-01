@@ -1,13 +1,14 @@
 /**
  * A split cuts a block's text into pieces on separate blocks
- * (`CORE_BLOCK_SPLIT_EVENT`). A thread follows its quote when the quote sat
- * exactly, and wholly, inside one piece: its target becomes that piece's block
- * and its anchor is captured again in the piece's text, so it stays exact. This
- * runs in the split's own transaction, so one undo reverts both.
+ * (`CORE_BLOCK_SPLIT_EVENT`). A thread follows its quote to the piece holding
+ * the text the quote resolves to, in the split's own transaction, so one undo
+ * reverts both:
+ * - an exact anchor is captured again in that piece's text, so it stays exact;
+ * - a moved one changes only its target. Its position was never confirmed, so
+ *   it stays flagged there until the user confirms it, as after a merge.
  *
- * Every other thread stays as it was. A quote across the cut is in neither
- * block, so it goes stale; a moved anchor's position was never confirmed, so
- * it is not carried anywhere.
+ * A quote across the cut is in neither block, so it stays where it was, as
+ * does a stale one.
  */
 
 import {
@@ -18,28 +19,35 @@ import {
   type CoreBlockSplitEvent,
   type SameTxCtx,
 } from '@/data/api'
-import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {anchorFieldValues, annotationTargetProp, threadAnchorOf, threadTargetEdge, threadTargetIdOf} from './schema.ts'
 
 export const FOLLOW_SPLIT_PROCESSOR = 'annotations.followSplit'
+
+export interface FollowedAnchor {
+  blockId: string
+  /** The anchor captured again in the piece, for an exact one; null keeps a
+   *  moved one as it is. */
+  anchor: RangeAnchor | null
+}
 
 /** Where a thread anchored by `anchor` belongs once `split` has run, or null
  *  when it stays as it is. */
 export const anchorAfterSplit = (
   split: Pick<CoreBlockSplitEvent, 'content' | 'pieces'>,
   anchor: RangeAnchor,
-): {blockId: string; anchor: RangeAnchor} | null => {
+): FollowedAnchor | null => {
   const resolved = resolveAnchor(split.content, anchor)
-  if (resolved.state !== 'exact') return null
+  if (resolved.state === 'stale') return null
   // The piece the quote starts in, since `pieces` are in text order.
   const piece = split.pieces.find(p => resolved.from < p.end)
-  if (!piece) return null
-  const captured = captureAnchor(
-    split.content.slice(piece.start, piece.end), resolved.from - piece.start, resolved.to - piece.start)
-  // Captured again in its piece, the quote must be the same text: so it lies
-  // wholly inside the piece, and no reference span the piece parses on its own
-  // widens it.
-  return captured?.quote === anchor.quote ? {blockId: piece.blockId, anchor: captured} : null
+  if (!piece || resolved.to > piece.end) return null
+  if (resolved.state === 'moved') return {blockId: piece.blockId, anchor: null}
+  // Null where a reference span the piece parses on its own would widen the
+  // quote, which would then be text nobody selected.
+  const recaptured = recaptureAnchor(
+    split.content.slice(piece.start, piece.end), resolved.from - piece.start, anchor.quote)
+  return recaptured ? {blockId: piece.blockId, anchor: recaptured} : null
 }
 
 const LIVE_THREAD_ROOTS_ON_SQL = `
@@ -64,7 +72,10 @@ const followSplit = async (split: CoreBlockSplitEvent, {db, tx}: SameTxCtx): Pro
     if (!followed) continue
     // The split's bookkeeping, not an edit of the thread.
     await tx.setProperties(id, {
-      set: [propertyValue(annotationTargetProp, followed.blockId), ...anchorFieldValues(followed.anchor)],
+      set: [
+        propertyValue(annotationTargetProp, followed.blockId),
+        ...(followed.anchor ? anchorFieldValues(followed.anchor) : []),
+      ],
     }, {skipMetadata: true})
     await tx.update(id, {
       references: root.references.map(ref =>
