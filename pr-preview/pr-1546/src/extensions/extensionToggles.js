@@ -1,1 +1,1 @@
-export{eN as extensionDisplayName,tN as extensionName,nN as userExtensionShellToggle,rN as userExtensionToggle}from"../../chunks/app-9c7nestc.js";
+export{eN as extensionDisplayName,tN as extensionName,nN as userExtensionShellToggle,rN as userExtensionToggle}from"../../chunks/app-Cacmv_-I.js";

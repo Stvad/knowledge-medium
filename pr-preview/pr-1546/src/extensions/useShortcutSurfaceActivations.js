@@ -1,1 +1,1 @@
-export{II as useShortcutSurfaceActivations}from"../../chunks/app-9c7nestc.js";
+export{II as useShortcutSurfaceActivations}from"../../chunks/app-Cacmv_-I.js";

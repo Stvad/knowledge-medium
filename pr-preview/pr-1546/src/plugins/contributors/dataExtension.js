@@ -1,1 +1,1 @@
-export{cJ as contributorsDataExtension}from"../../../chunks/app-9c7nestc.js";
+export{dJ as contributorsDataExtension}from"../../../chunks/app-Cacmv_-I.js";

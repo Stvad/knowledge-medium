@@ -1,1 +1,1 @@
-export{zR as declarationOnlyDefinitionForName,BR as declarationOnlyStatusText}from"../../../chunks/app-9c7nestc.js";
+export{zR as declarationOnlyDefinitionForName,BR as declarationOnlyStatusText}from"../../../chunks/app-Cacmv_-I.js";

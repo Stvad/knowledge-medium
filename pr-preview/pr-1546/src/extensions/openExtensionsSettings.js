@@ -1,1 +1,1 @@
-export{$N as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,eP as openExtensionsSettings}from"../../chunks/app-9c7nestc.js";
+export{$N as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,eP as openExtensionsSettings}from"../../chunks/app-Cacmv_-I.js";

@@ -1,1 +1,1 @@
-export{gx as VideoNotesLayout,_x as VideoNotesRenderer,vx as videoNotesLayoutContribution}from"../../../chunks/app-9c7nestc.js";
+export{gx as VideoNotesLayout,_x as VideoNotesRenderer,vx as videoNotesLayoutContribution}from"../../../chunks/app-Cacmv_-I.js";

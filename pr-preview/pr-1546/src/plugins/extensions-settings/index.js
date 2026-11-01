@@ -1,1 +1,1 @@
-export{Ip as extensionsOverridesProp,Lp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-9c7nestc.js";
+export{Ip as extensionsOverridesProp,Lp as extensionsPrefsType,Jn as extensionsSettingsPlugin}from"../../../chunks/app-Cacmv_-I.js";

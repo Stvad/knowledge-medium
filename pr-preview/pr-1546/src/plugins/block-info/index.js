@@ -1,1 +1,1 @@
-export{Lg as blockInfoPlugin}from"../../../chunks/app-9c7nestc.js";
+export{Lg as blockInfoPlugin}from"../../../chunks/app-Cacmv_-I.js";

@@ -1,1 +1,1 @@
-export{XC as blockEditingContentRenderer}from"../../../chunks/app-9c7nestc.js";
+export{XC as blockEditingContentRenderer}from"../../../chunks/app-Cacmv_-I.js";

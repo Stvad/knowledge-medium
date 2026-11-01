@@ -1,1 +1,1 @@
-export{ev as Wikilink}from"../../../../../chunks/app-9c7nestc.js";
+export{ev as Wikilink}from"../../../../../chunks/app-Cacmv_-I.js";

@@ -1,1 +1,1 @@
-export{XK as annotationsDataExtension}from"../../../chunks/app-9c7nestc.js";
+export{XK as annotationsDataExtension}from"../../../chunks/app-Cacmv_-I.js";

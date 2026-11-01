@@ -1,1 +1,1 @@
-export{_ot as CHANGE_SCOPE_POLICIES,vot as ChangeScope,yot as isChangeScope,bot as policyForScope,xot as scopeAllowedInReadOnly,Sot as scopeIsUndoable,Cot as scopePoliciesEquivalent,wot as scopeUploadsToServer,Tot as sourceForScope}from"../../../chunks/app-9c7nestc.js";
+export{bot as CHANGE_SCOPE_POLICIES,xot as ChangeScope,Sot as isChangeScope,Cot as policyForScope,wot as scopeAllowedInReadOnly,Tot as scopeIsUndoable,Eot as scopePoliciesEquivalent,Dot as scopeUploadsToServer,Oot as sourceForScope}from"../../../chunks/app-Cacmv_-I.js";

@@ -1,1 +1,1 @@
-export{EP as BlockTypeBlockRenderer,DP as BlockTypeContentRenderer,OP as writeBlockTypeLabel}from"../../../chunks/app-9c7nestc.js";
+export{EP as BlockTypeBlockRenderer,DP as BlockTypeContentRenderer,OP as writeBlockTypeLabel}from"../../../chunks/app-Cacmv_-I.js";

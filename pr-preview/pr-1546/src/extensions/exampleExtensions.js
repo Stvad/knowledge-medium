@@ -1,1 +1,1 @@
-export{wj as exampleExtensions,Tj as insertExampleExtensionsUnder}from"../../chunks/app-9c7nestc.js";
+export{wj as exampleExtensions,Tj as insertExampleExtensionsUnder}from"../../chunks/app-Cacmv_-I.js";

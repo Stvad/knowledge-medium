@@ -1,1 +1,1 @@
-export{mO as isWikilinkDisplayParts,hO as resolveWikilinkDisplay,gO as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-9c7nestc.js";
+export{mO as isWikilinkDisplayParts,hO as resolveWikilinkDisplay,gO as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-Cacmv_-I.js";

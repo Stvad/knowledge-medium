@@ -1,1 +1,1 @@
-export{WC as Breadcrumbs}from"../../../chunks/app-9c7nestc.js";
+export{WC as Breadcrumbs}from"../../../chunks/app-Cacmv_-I.js";
