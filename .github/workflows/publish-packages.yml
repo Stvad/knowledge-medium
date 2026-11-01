@@ -51,7 +51,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Build the exact commit Run Tests validated (falls back to the ref a
           # manual dispatch selected).
@@ -121,7 +121,7 @@ jobs:
       id-token: write # OIDC trusted publishing; auto-attaches provenance
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
