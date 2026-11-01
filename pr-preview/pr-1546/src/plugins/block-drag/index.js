@@ -1,0 +1,1 @@
+export{Cv as blockDragPlugin}from"../../../chunks/app-9c7nestc.js";

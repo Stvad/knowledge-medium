@@ -1,0 +1,1 @@
+export{Sm as authorIdOf}from"../../../chunks/app-9c7nestc.js";

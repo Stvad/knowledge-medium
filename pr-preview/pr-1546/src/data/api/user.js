@@ -1,0 +1,1 @@
+export{vat as SYSTEM_AUTHOR_PREFIX,yat as isSystemAuthor,bat as systemAuthor}from"../../../chunks/app-9c7nestc.js";

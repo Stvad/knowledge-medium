@@ -1,0 +1,1 @@
+export{VC as PromotableBreadcrumbList}from"../../../chunks/app-9c7nestc.js";

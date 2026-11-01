@@ -1,0 +1,1 @@
+export{ki as startupMetricsPlugin}from"../../../chunks/app-9c7nestc.js";

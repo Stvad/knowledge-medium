@@ -1,0 +1,1 @@
+export{Yt as staticAppExtensions}from"../../chunks/app-9c7nestc.js";

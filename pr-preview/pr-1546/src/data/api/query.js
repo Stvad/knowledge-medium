@@ -1,0 +1,1 @@
+export{wat as defineQuery}from"../../../chunks/app-9c7nestc.js";

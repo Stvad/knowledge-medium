@@ -1,0 +1,1 @@
+export{DJ as charLimitProp,OJ as charProfileProp,kJ as charScopeProp}from"../../../chunks/app-9c7nestc.js";

@@ -1,0 +1,1 @@
+export{tr as ExtensionsSettings}from"../../../chunks/app-9c7nestc.js";

@@ -1,0 +1,1 @@
+export{WM as ClientLocalSettings,GM as clientLocalSettings}from"../../chunks/app-9c7nestc.js";

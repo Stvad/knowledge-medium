@@ -1,0 +1,1 @@
+export{mU as BootFallback}from"../../../chunks/app-9c7nestc.js";

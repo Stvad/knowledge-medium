@@ -1,0 +1,1 @@
+export{Ott as AliasSeatNamespaceUnavailableError,ktt as aliasSeatNamespacesInTx,Att as resolveAliasSeatNamespaces}from"../../chunks/app-9c7nestc.js";

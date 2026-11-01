@@ -1,0 +1,1 @@
+export{Ttt as getOrCreatePropertiesPage,Ett as propertiesPageBlockId,Dtt as propertiesPageSpec}from"../../chunks/app-9c7nestc.js";

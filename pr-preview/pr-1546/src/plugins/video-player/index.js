@@ -1,0 +1,1 @@
+export{ux as videoPlayerPlugin}from"../../../chunks/app-9c7nestc.js";
