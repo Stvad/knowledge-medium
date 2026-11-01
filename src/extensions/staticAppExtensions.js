@@ -1,1 +1,1 @@
-export{Yt as staticAppExtensions}from"../../chunks/app-DSbkyl0t.js";
+export{Yt as staticAppExtensions}from"../../chunks/app-gyv1ylX2.js";

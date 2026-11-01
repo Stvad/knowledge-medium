@@ -1,1 +1,1 @@
-export{ov as blockrefCompletionSource}from"../../chunks/app-DSbkyl0t.js";
+export{cv as blockrefCompletionSource}from"../../chunks/app-gyv1ylX2.js";
