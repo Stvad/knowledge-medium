@@ -5,6 +5,7 @@ import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import {
   ChangeScope,
+  CORE_BLOCK_MERGED_EVENT,
   CORE_BLOCK_SPLIT_EVENT,
   defineSameTxProcessor,
   ProcessorRejection,
@@ -1183,6 +1184,38 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.content).toBe('current')
     // No half-applied merge parked in the editor waiting to be flushed.
     expect(editorView.state.doc.toString()).toBe('current')
+  })
+
+  it('puts the editor text back when a Delete merge is refused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-merge', [defineSameTxProcessor({
+      name: 'test.refuseMerge',
+      watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    // Left merged, the editor's next flush would copy `next` into this block.
+    expect(editorView.state.doc.toString()).toBe('current')
+    expect(editorView.state.selection.main.head).toBe('current'.length)
   })
 
   it('a guarded block is not merged away by Backspace at offset 0', async () => {

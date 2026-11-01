@@ -93,8 +93,37 @@ import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
 
 /**
- * Split the edited block at the cursor; returns the id of the block that now
- * holds the text after it, which takes focus.
+ * Run `write` with the editor showing `text` (caret at `cursor`), the text its
+ * block holds once `write` lands. The editor is re-armed BEFORE `write` runs,
+ * so its debounced pushChange can't later flush the old text over what
+ * `write` stored. A `write` that fails puts the old text and caret back, or
+ * that flush would save the re-armed text over a block `write` never changed.
+ */
+const writeWithEditorRearmed = async <T>(
+  editorView: EditorView,
+  text: string,
+  cursor: number,
+  write: () => Promise<T>,
+): Promise<T> => {
+  const rearm = (next: string, caret: number) => editorView.dispatch({
+    changes: {from: 0, to: editorView.state.doc.length, insert: next},
+    selection: EditorSelection.cursor(caret),
+  })
+  const previous = editorView.state.doc.toString()
+  const previousCursor = editorView.state.selection.main.head
+  rearm(text, cursor)
+  try {
+    return await write()
+  } catch (error) {
+    rearm(previous, previousCursor)
+    throw error
+  }
+}
+
+/**
+ * Split the edited block at the cursor, passing the live text (a debounced
+ * editor can be ahead of SQL); returns the id of the block that now holds the
+ * text after the cursor, which takes focus.
  *
  * At the scope root (a backlink entry, embed, or zoomed panel root) the
  * default split would push the before-cursor text into a preceding sibling —
@@ -102,12 +131,6 @@ import { panelRenderScopeId } from '@/utils/renderScope.js'
  * (the same class as the "invisible block" bug for `o`/`O`). There the root
  * keeps the before-text and the continuation becomes its first child,
  * mirroring the reading order (root = first half, child = the rest).
- *
- * The split gets the live text, which a debounced editor can hold ahead of
- * SQL. The editor is re-armed with the half its block keeps BEFORE the split
- * runs, so its pending pushChange can't later flush the pre-split text over
- * what the split wrote; a refused split puts the whole text back, or that
- * flush would save only the one half.
  */
 const splitAtCursor = async (
   block: Block,
@@ -118,19 +141,10 @@ const splitAtCursor = async (
   const before = editorView.state.doc.sliceString(0, cursorPos)
   const after = editorView.state.doc.sliceString(cursorPos)
   const keepsBefore = placement === 'firstChild'
-  const rearm = (text: string, cursor: number) => editorView.dispatch({
-    changes: {from: 0, to: editorView.state.doc.length, insert: text},
-    selection: EditorSelection.cursor(cursor),
-  })
-
-  rearm(keepsBefore ? before : after, keepsBefore ? before.length : 0)
-  try {
-    const newId = await block.repo.mutate.split({id: block.id, before, after, placement})
-    return keepsBefore ? newId : block.id
-  } catch (error) {
-    rearm(before + after, cursorPos)
-    throw error
-  }
+  const newId = await writeWithEditorRearmed(
+    editorView, keepsBefore ? before : after, keepsBefore ? before.length : 0,
+    () => block.repo.mutate.split({id: block.id, before, after, placement}))
+  return keepsBefore ? newId : block.id
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -1090,24 +1104,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const fromContent = nextVisible.peek()?.content ?? ''
         const fromId = nextVisible.id
 
-        // Re-arm the editor synchronously with the merged text (caret parked
-        // at the join) so its debounced pushChange carries the post-merge
-        // content. Unlike Backspace — which hands focus to the previous
+        // The editor shows the merged text (caret parked at the join) while
+        // the merge runs. Unlike Backspace — which hands focus to the previous
         // block's editor — Delete keeps the caret in *this* editor, so a
         // pending flush of the pre-merge text would otherwise clobber the
-        // fold core.merge wrote to SQL. Same precaution as
-        // splitAtCursor.
-        editorView.dispatch({
-          changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
-          selection: EditorSelection.cursor(joinOffset),
-        })
-
+        // fold core.merge wrote to SQL.
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.
-        await repo.tx(async tx => {
-          await tx.update(block.id, {content: liveContent})
-          await tx.run(mergeMutator, {intoId: block.id, fromId})
-        }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'})
+        await writeWithEditorRearmed(editorView, liveContent + fromContent, joinOffset, () =>
+          repo.tx(async tx => {
+            await tx.update(block.id, {content: liveContent})
+            await tx.run(mergeMutator, {intoId: block.id, fromId})
+          }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
 
         await uiStateBlock.set(editorSelection, {
           blockId: block.id,
