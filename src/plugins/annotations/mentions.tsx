@@ -1,13 +1,15 @@
-import {useMemo} from 'react'
+import {useId, useMemo} from 'react'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
 import {useRepo} from '@/context/repo.js'
 import type {Block} from '@/data/block'
-import {useParents, useWorkspaceId} from '@/hooks/block.js'
+import {useWorkspaceId} from '@/hooks/block.js'
 import {BreadcrumbList} from '@/plugins/breadcrumbs/BreadcrumbList.js'
+import {BacklinksDialog} from '@/plugins/backlinks/BacklinksDialog.js'
 import {ContributorCardView} from '@/plugins/contributors/ContributorBadges.js'
 import {useOpenBlock} from '@/utils/navigation.js'
+import {openDialog} from '@/utils/dialogs.js'
 import {surfaceRenderScopeId} from '@/utils/renderScope.js'
 import type {MarginMentions} from './mentionsQuery.js'
 
@@ -15,24 +17,25 @@ const CARD_CONTEXT = {isNestedSurface: true, layoutBoundary: false}
 const BREADCRUMB_CONTEXT = {isNestedSurface: true, isBreadcrumb: true}
 
 const SourceBody = ({block}: {block: Block}) => {
+  const previewId = useId()
   const workspaceId = useWorkspaceId(block, block.repo.activeWorkspaceId ?? '')
   const openSource = useOpenBlock({blockId: block.id, workspaceId})
   const href = useAppHashInContext(workspaceId, block.id)
   return (
     <div className="relative rounded-sm hover:bg-muted/40">
-      <div inert className="pointer-events-none">
+      <div id={previewId} className="pointer-events-none">
         <MarkdownContentRenderer block={block}/>
       </div>
-      <a href={href} onClick={openSource} aria-label="Open mention" className="absolute inset-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"/>
+      <a href={href} onClick={openSource} aria-label="Open mention" aria-describedby={previewId} className="absolute inset-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"/>
     </div>
   )
 }
 
-const MentionSourceCard = ({blockId, parentRenderScopeId}: {blockId: string; parentRenderScopeId: string}) => {
+const MentionSourceCard = ({blockId, parentIds, parentRenderScopeId}: {blockId: string; parentIds: readonly string[]; parentRenderScopeId: string}) => {
   const repo = useRepo()
   const source = repo.block(blockId)
   const workspaceId = useWorkspaceId(source, repo.activeWorkspaceId ?? '')
-  const parents = useParents(source)
+  const parents = parentIds.map(id => repo.block(id))
   const renderScopeId = useMemo(
     () => surfaceRenderScopeId('mentions', parentRenderScopeId, blockId),
     [parentRenderScopeId, blockId],
@@ -60,26 +63,19 @@ const MentionSourceCard = ({blockId, parentRenderScopeId}: {blockId: string; par
   )
 }
 
-export const MentionCards = ({blockId, mentions}: {blockId: string; mentions: MarginMentions}) => {
-  const repo = useRepo()
-  const target = repo.block(blockId)
-  const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
+export const MentionCards = ({blockId, panelId, mentions}: {blockId: string; panelId: string; mentions: MarginMentions}) => {
   const blockContext = useBlockContext()
-  const parentRenderScopeId = typeof blockContext.renderScopeId === 'string'
-    ? blockContext.renderScopeId
-    : 'annotations-margin'
-  const openTarget = useOpenBlock({blockId, workspaceId})
-  const targetHref = useAppHashInContext(workspaceId, blockId)
+  const parentRenderScopeId = surfaceRenderScopeId('mention-target', blockContext.renderScopeId ?? '', blockId)
   const moreCount = mentions.total - mentions.ids.length
   return (
     <section aria-label="Mentions" className="space-y-2">
       {mentions.ids.map(sourceId => (
-        <MentionSourceCard key={sourceId} blockId={sourceId} parentRenderScopeId={parentRenderScopeId}/>
+        <MentionSourceCard key={sourceId} blockId={sourceId} parentIds={mentions.parentsBySource[sourceId]} parentRenderScopeId={parentRenderScopeId}/>
       ))}
       {moreCount > 0 && (
-        <a href={targetHref} onClick={openTarget} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:underline">
+        <button type="button" onClick={() => void openDialog(BacklinksDialog, {blockId, panelId})} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:underline">
           {moreCount} more
-        </a>
+        </button>
       )}
     </section>
   )

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
+import {Suspense, type ReactNode} from 'react'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
@@ -16,11 +17,18 @@ import {BlockContextProvider} from '@/context/block'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
+import {DialogHost} from '@/extensions/dialogAppMount'
+import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
+import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
+import {actionContextsFacet} from '@/extensions/core'
+import {__resetDialogsForTests} from '@/utils/dialogs'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {breadcrumbsPlugin} from '@/plugins/breadcrumbs'
 import {contributorsPlugin} from '@/plugins/contributors'
 import {referencesPlugin} from '@/plugins/references'
+import {backlinksPlugin} from '@/plugins/backlinks'
+import {LinkedReferences} from '@/plugins/backlinks/LinkedReferences'
 import {annotationsPlugin} from './index'
 import {CommentMargin} from './margin'
 import {annotationMarginOpenProp} from './marginSchema'
@@ -41,10 +49,19 @@ vi.mock('@/context/repo.tsx', () => ({
   },
 }))
 
+vi.mock('@/components/Login.tsx', async importOriginal => ({
+  ...await importOriginal<typeof import('@/components/Login')>(),
+  useUser: () => ({id: 'alex', name: 'Alex'}),
+}))
+
 vi.mock('@/utils/navigation.js', async () => {
   const actual = await vi.importActual<typeof import('@/utils/navigation.js')>('@/utils/navigation.js')
   return {...actual, useOpenBlock: mocks.useOpenBlock}
 })
+
+vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
+  LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
+}))
 
 vi.mock('@/data/globalState.ts', async () => {
   const actual = await vi.importActual<typeof import('@/data/globalState.js')>('@/data/globalState.ts')
@@ -93,11 +110,13 @@ const createRepo = () => createTestRepo({
   user: {id: 'alex', name: 'Alex'},
   extensions: [
     kernelPropertyUiExtension,
+    defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
     kernelValuePresetsExtension,
     defaultEditorInteractionExtension,
     defaultRenderersExtension,
     plainOutlinerPlugin,
     referencesPlugin,
+    backlinksPlugin,
     breadcrumbsPlugin,
     contributorsPlugin,
     annotationsPlugin,
@@ -142,16 +161,20 @@ const seedGraph = async (mentionCount: number) => {
   mocks.uiStateBlockRef.current = repo.block('mentions-ui-state')
 }
 
-const makeView = () => render(
+const makeView = ({withBacklinks = false}: {withBacklinks?: boolean} = {}) => render(
   <AppRuntimeContextProvider value={repo.facetRuntime!}>
+    <ActiveContextsProvider>
     <BlockContextProvider initialValue={{panelId: PANEL, scopeRootId: TARGET, renderScopeId: SCOPE}}>
       <div data-panel-id={PANEL}>
         <div data-panel-scrollport>
           <div data-block-shell data-block-id={TARGET} data-render-scope-id={SCOPE}>Target row</div>
         </div>
         <CommentMargin block={repo.block(PANEL)}/>
+        {withBacklinks && <Suspense fallback="Loading references…"><LinkedReferences block={repo.block(TARGET)}/></Suspense>}
       </div>
     </BlockContextProvider>
+      <DialogHost/>
+    </ActiveContextsProvider>
   </AppRuntimeContextProvider>,
 )
 
@@ -188,6 +211,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup()
+  __resetDialogsForTests()
   if (mentionsVisible) toggleShowMentions(PANEL)
   mentionsVisible = false
   mocks.repoRef.current = undefined
@@ -209,8 +233,15 @@ describe('CommentMargin mention cards', () => {
     expect(mention.textContent).toContain('Alex')
     expect(mention.querySelectorAll('button, input, textarea, [role="button"]')).toHaveLength(0)
     expect(mention.querySelector('.cm-editor')).toBeNull()
+    expect(screen.queryByRole('button', {name: /more$/})).toBeNull()
 
     const sourceLink = screen.getByRole('link', {name: 'Open mention'})
+    const previewId = sourceLink.getAttribute('aria-describedby')
+    expect(previewId).toBeTruthy()
+    const preview = document.getElementById(previewId!)!
+    expect(preview.textContent).toContain('Mention body 1')
+    expect(preview.closest('[inert], [aria-hidden="true"]')).toBeNull()
+    expect(sourceLink).toHaveAccessibleDescription('Mention body 1 and Target')
     const authorLink = screen.getByRole('link', {name: 'Alex'})
     expect(sourceLink.getAttribute('href')).toBe('#ws/mention-source-1')
     expect(authorLink.getAttribute('href')).not.toBe(sourceLink.getAttribute('href'))
@@ -222,17 +253,26 @@ describe('CommentMargin mention cards', () => {
     view.unmount()
   })
 
-  it('caps source cards at three and links the remaining count to the target', async () => {
+  it('caps source cards at three and opens all backlinks even when the focal target’s view is collapsed', async () => {
     await seedGraph(4)
-    const view = makeView()
+    let view!: ReturnType<typeof makeView>
+    await act(async () => { view = makeView({withBacklinks: true}) })
+    const existingBacklinks = await screen.findByRole('button', {name: /Linked References.*4/})
+    fireEvent.click(existingBacklinks)
+    expect(existingBacklinks.textContent).toContain('▸')
     await turnMentionsOn()
 
     await screen.findByLabelText('Mentions')
     await waitFor(() => expect(screen.getAllByRole('link', {name: 'Open mention'})).toHaveLength(3))
-    const more = screen.getByRole('link', {name: '1 more'})
-    expect(more.getAttribute('href')).toBe(`#ws/${TARGET}`)
+    const more = screen.getByRole('button', {name: '1 more'})
     fireEvent.click(more)
-    expect(mocks.opened).toHaveBeenCalledWith({blockId: TARGET, workspaceId: WS})
+    const dialog = await screen.findByRole('dialog', {name: 'Linked References'})
+    for (let index = 1; index <= 4; index++) {
+      await within(dialog).findByText(`Mention body ${index}`, {selector: 'strong'})
+    }
+    expect(existingBacklinks.textContent).toContain('▸')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Close'}))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
     view.unmount()
   })

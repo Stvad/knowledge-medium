@@ -12,7 +12,7 @@ import {annotationsDataExtension} from './dataExtension'
 import {captureAnchor} from './anchor'
 import {MENTIONS_FOR_BLOCK_QUERY} from './mentionsQuery'
 import {createThread} from './threads'
-import {annotationTargetProp} from './schema'
+import {annotationTargetProp, THREAD_TYPE} from './schema'
 
 const WS = 'ws'
 const TARGET = '00000000-0000-4000-8000-000000000001'
@@ -73,6 +73,39 @@ describe('margin mentions', () => {
     expect((await mentions()).ids).toContain('mention')
   })
 
+  it('excludes a quote reply linked through a comment’s target rather than its physical parent', async () => {
+    const outer = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Outer commentary'})
+    const inner = await createThread(repo, {targetId: outer.commentId!, anchor: captureAnchor('Outer commentary', 0, 5), comment: `Nested ((${TARGET}))`})
+    await repo.awaitProcessors()
+    expect(await repo.query['backlinks.forBlock']({workspaceId: WS, id: TARGET}).load()).toContain(inner.commentId)
+    expect((await mentions()).ids).not.toContain(inner.commentId)
+    expect((await mentions()).total).toBe(2)
+  })
+
+  it('keeps the nearest thread’s ownership when its root is moved under another thread', async () => {
+    const outer = await createThread(repo, {targetId: TARGET, anchor: null, comment: 'Outer'})
+    const independent = await createThread(repo, {targetId: OTHER, anchor: null, comment: `Elsewhere ((${TARGET}))`})
+    await repo.tx(tx => tx.move(independent.threadId, {parentId: outer.commentId!, orderKey: 'a0'}), opts)
+    await repo.awaitProcessors()
+    expect((await mentions()).ids).toContain(independent.commentId)
+  })
+
+  it('retains a mention in a thread whose target is missing', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'untargeted-thread', workspaceId: WS, parentId: 'page', orderKey: 'a3', properties: {[typesProp.name]: [THREAD_TYPE]}})
+      await tx.move('mention', {parentId: 'untargeted-thread', orderKey: 'a0'})
+    }, opts)
+    expect((await mentions()).ids).toContain('mention')
+  })
+
+  it('terminates a cycle of threads targeting each other’s comments', async () => {
+    const first = await createThread(repo, {targetId: OTHER, anchor: null, comment: `First ((${TARGET}))`})
+    const second = await createThread(repo, {targetId: first.commentId!, anchor: null, comment: 'Second'})
+    await repo.block(first.threadId).set(annotationTargetProp, second.commentId!)
+    await repo.awaitProcessors()
+    expect((await mentions()).ids).toContain(first.commentId)
+  })
+
   it('caps cards at three and reports the remaining sources', async () => {
     await repo.tx(async tx => {
       for (let i = 0; i < 5; i++) await tx.create({id: `source-${i}`, workspaceId: WS, parentId: 'page', orderKey: `b${i}`, content: `Source ((${TARGET}))`})
@@ -83,6 +116,8 @@ describe('margin mentions', () => {
     expect(answer.total - answer.ids.length).toBe(4)
     const sources = await repo.query['backlinks.forBlock']({workspaceId: WS, id: TARGET}).load()
     expect(answer.ids).toEqual(sources.slice(0, 3))
+    expect(Object.keys(answer.parentsBySource)).toEqual(answer.ids)
+    expect(Object.values(answer.parentsBySource)).toEqual([['page'], ['page'], ['page']])
   })
 
   it('batches the source and ancestor reads across a wave of target blocks', async () => {

@@ -279,9 +279,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 }
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
-const NO_MENTIONS: MarginMentions = Object.freeze({ids: [], total: 0})
+const NO_MENTIONS: MarginMentions = Object.freeze({ids: [], total: 0, parentsBySource: {}})
 
 const MarginMentionsRow = ({blockId}: {blockId: string}) => {
+  const registry = useContext(MarginRegistryContext)!
   const repo = useRepo()
   const workspaceId = useWorkspaceId(repo.block(blockId), repo.activeWorkspaceId ?? '')
   const mentions = useHandle(repo.query[MENTIONS_FOR_BLOCK_QUERY]({workspaceId, id: blockId}), {
@@ -290,7 +291,7 @@ const MarginMentionsRow = ({blockId}: {blockId: string}) => {
   if (mentions.ids.length === 0) return null
   return (
     <CardSlot slotKey={`mentions:${blockId}`} blockId={blockId} order={-0.5}>
-      <MentionCards blockId={blockId} mentions={mentions}/>
+      <MentionCards blockId={blockId} panelId={registry.panelId} mentions={mentions}/>
     </CardSlot>
   )
 }
