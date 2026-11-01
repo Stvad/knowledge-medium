@@ -1,0 +1,1 @@
+export{DN as LazyBlockComponent}from"../../chunks/app-CgaWN1nF.js";

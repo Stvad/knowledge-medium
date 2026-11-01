@@ -1,0 +1,1 @@
+export{XE as useAncestorCrumbs}from"../../chunks/app-CgaWN1nF.js";

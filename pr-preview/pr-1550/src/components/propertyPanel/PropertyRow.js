@@ -1,0 +1,1 @@
+export{_R as PropertyRow}from"../../../chunks/app-CgaWN1nF.js";

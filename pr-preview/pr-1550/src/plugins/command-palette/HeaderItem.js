@@ -1,0 +1,1 @@
+export{Jk as CommandPaletteHeaderItem}from"../../../chunks/app-CgaWN1nF.js";

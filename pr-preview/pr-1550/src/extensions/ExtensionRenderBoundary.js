@@ -1,0 +1,1 @@
+export{wF as ExtensionRenderBoundary}from"../../chunks/app-CgaWN1nF.js";

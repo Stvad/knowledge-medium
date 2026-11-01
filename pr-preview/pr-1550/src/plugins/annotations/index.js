@@ -1,0 +1,1 @@
+export{Lu as annotationsPlugin}from"../../../chunks/app-CgaWN1nF.js";

@@ -1,0 +1,1 @@
+export{Ig as updateIndicatorPlugin}from"../../../chunks/app-CgaWN1nF.js";

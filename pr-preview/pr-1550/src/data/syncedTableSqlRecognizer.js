@@ -1,0 +1,1 @@
+export{XX as SYNCED_TABLES,ZX as syncedWriteTarget,QX as writeTargets}from"../../chunks/app-CgaWN1nF.js";

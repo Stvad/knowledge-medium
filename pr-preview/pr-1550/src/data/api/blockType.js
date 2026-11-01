@@ -1,0 +1,1 @@
+export{Tot as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-CgaWN1nF.js";

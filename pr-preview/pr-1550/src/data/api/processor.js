@@ -1,0 +1,1 @@
+export{jat as definePostCommitProcessor}from"../../../chunks/app-CgaWN1nF.js";

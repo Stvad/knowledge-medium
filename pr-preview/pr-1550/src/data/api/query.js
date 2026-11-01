@@ -1,0 +1,1 @@
+export{Cat as defineQuery}from"../../../chunks/app-CgaWN1nF.js";

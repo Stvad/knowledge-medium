@@ -1,0 +1,1 @@
+export{QL as isFocalRender,$L as useIsFocalRender}from"../../chunks/app-CgaWN1nF.js";

@@ -1,0 +1,1 @@
+export{CF as BlockInfoDialog}from"../../../chunks/app-CgaWN1nF.js";

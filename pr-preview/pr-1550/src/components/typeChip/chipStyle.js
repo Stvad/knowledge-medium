@@ -1,0 +1,1 @@
+export{XA as chipStyle}from"../../../chunks/app-CgaWN1nF.js";

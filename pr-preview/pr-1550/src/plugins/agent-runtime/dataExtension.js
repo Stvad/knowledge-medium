@@ -1,0 +1,1 @@
+export{NX as agentRuntimeDataExtension}from"../../../chunks/app-CgaWN1nF.js";
