@@ -109,6 +109,15 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExem
   return {pending: true, reason: 'pending'}
 }
 
+/** Reference fields through which the app credits a block's contributors. */
+const ATTRIBUTION_FIELDS = new Set(['attribution:creators', 'attribution:editors'])
+
+/** A backlink is a mention unless attribution is its only reference to the
+ *  target: were the target page the run's contributor, every block the run
+ *  writes would summon it again. No reported fields counts as a mention. */
+export const isMention = (sourceFields: readonly string[] | undefined): boolean =>
+  !sourceFields?.length || sourceFields.some(field => !ATTRIBUTION_FIELDS.has(field))
+
 /** Nearest ancestor session id (the "thread" a follow-up mention joins). */
 export const findThreadSession = (source: BlockView, ancestors: BlockView[]): string | null => {
   for (const block of [source, ...ancestors]) {
