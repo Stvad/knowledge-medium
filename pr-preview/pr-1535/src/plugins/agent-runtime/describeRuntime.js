@@ -1,1 +1,0 @@
-export{Sp as DATA_MODEL_GUIDE_ID,Cp as describeFacets,wp as describeRuntime,Tp as describeRuntimeSummary,Ep as getApiSurface,Dp as pingRuntime}from"../../../chunks/app-D4FVv0ou.js";

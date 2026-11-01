@@ -1,1 +1,0 @@
-export{MN as BlockLoadingPlaceholder}from"../../chunks/app-D4FVv0ou.js";

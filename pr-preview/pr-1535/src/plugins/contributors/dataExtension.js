@@ -1,1 +1,0 @@
-export{Xq as contributorsDataExtension}from"../../../chunks/app-D4FVv0ou.js";
