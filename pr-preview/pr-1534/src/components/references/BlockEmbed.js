@@ -1,0 +1,1 @@
+export{HA as BlockEmbed}from"../../../chunks/app-DBFguILO.js";

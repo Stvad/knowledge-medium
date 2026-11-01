@@ -1,0 +1,1 @@
+export{Fu as annotationsPlugin}from"../../../chunks/app-DBFguILO.js";

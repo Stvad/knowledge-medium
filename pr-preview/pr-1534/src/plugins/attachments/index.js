@@ -1,0 +1,1 @@
+export{fy as attachmentsPlugin}from"../../../chunks/app-DBFguILO.js";

@@ -1,0 +1,1 @@
+export{Nv as useIsReadOnly}from"../../chunks/app-DBFguILO.js";

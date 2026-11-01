@@ -1,0 +1,1 @@
+export{Xk as CommandPaletteHeaderItem}from"../../../chunks/app-DBFguILO.js";

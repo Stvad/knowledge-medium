@@ -1,0 +1,1 @@
+export{fk as openKeybindingsSettingsAction}from"../../../chunks/app-DBFguILO.js";

@@ -1,0 +1,1 @@
+export{GC as BreadcrumbList,HC as BreadcrumbRenderer,WC as Breadcrumbs,VC as PromotableBreadcrumbList,RC as breadcrumbRendererContribution,zC as breadcrumbsPlugin,UC as getBreadcrumbContentPreview,BC as usePromotableBreadcrumb}from"../../../chunks/app-DBFguILO.js";

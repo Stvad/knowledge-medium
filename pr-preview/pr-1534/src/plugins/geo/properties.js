@@ -1,0 +1,1 @@
+export{DK as GEO_PROPERTY_SCHEMAS,OK as PLACE_PROPERTY_SCHEMAS,kK as locationProp,AK as placeAddressProp,jK as placeCategoriesProp,MK as placeGoogleMapsUrlProp,NK as placeGooglePlaceIdProp,PK as placeLatProp,FK as placeLngProp,IK as placePhoneProp,LK as placeWebsiteProp}from"../../../chunks/app-DBFguILO.js";

@@ -1,0 +1,1 @@
+export{PC as MobileBottomNavButton}from"../../../chunks/app-DBFguILO.js";

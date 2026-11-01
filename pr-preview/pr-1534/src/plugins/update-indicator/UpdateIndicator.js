@@ -1,0 +1,1 @@
+export{Bg as UpdateIndicator}from"../../../chunks/app-DBFguILO.js";

@@ -1,0 +1,1 @@
+export{qtt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DBFguILO.js";

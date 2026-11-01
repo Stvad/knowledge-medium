@@ -1,0 +1,1 @@
+export{lM as appUpdatePromptExtension}from"../../../chunks/app-DBFguILO.js";

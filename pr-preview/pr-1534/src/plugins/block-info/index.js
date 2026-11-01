@@ -1,0 +1,1 @@
+export{Lg as blockInfoPlugin}from"../../../chunks/app-DBFguILO.js";

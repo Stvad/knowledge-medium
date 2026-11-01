@@ -1,0 +1,1 @@
+export{kN as LazyBlockComponent}from"../../chunks/app-DBFguILO.js";

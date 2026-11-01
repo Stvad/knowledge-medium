@@ -1,0 +1,1 @@
+export{gs as appVersion}from"../chunks/app-DBFguILO.js";

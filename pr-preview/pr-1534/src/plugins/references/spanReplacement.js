@@ -1,0 +1,1 @@
+export{PW as preferredSpanReplacement}from"../../../chunks/app-DBFguILO.js";

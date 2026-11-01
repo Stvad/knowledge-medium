@@ -1,0 +1,1 @@
+export{QA as chipStyle}from"../../../chunks/app-DBFguILO.js";

@@ -1,0 +1,1 @@
+export{vM as checkForAppUpdate,yM as registerServiceWorker}from"../chunks/app-DBFguILO.js";

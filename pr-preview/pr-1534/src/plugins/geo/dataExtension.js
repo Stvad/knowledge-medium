@@ -1,0 +1,1 @@
+export{KG as geoDataExtension}from"../../../chunks/app-DBFguILO.js";

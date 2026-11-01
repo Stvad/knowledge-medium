@@ -1,0 +1,1 @@
+export{MN as BlockLoadingPlaceholder}from"../../chunks/app-DBFguILO.js";

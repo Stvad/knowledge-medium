@@ -1,0 +1,1 @@
+export{GC as BreadcrumbList}from"../../../chunks/app-DBFguILO.js";

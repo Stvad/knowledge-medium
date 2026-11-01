@@ -1,0 +1,1 @@
+export{sB as blockAfterSubtreeRemoval,cB as blockIdsInOrderedSelectionRange,lB as commitSelectionRange,uB as extendSelection,dB as findBestSelectionAnchorIndex,fB as getBlocksInRange,pB as getLastVisibleDescendant,mB as getRootBlock,hB as insertInDocumentOrder,gB as nextVisibleBlock,_B as previousVisibleBlock,vB as validateSelectionHierarchy}from"../../chunks/app-DBFguILO.js";

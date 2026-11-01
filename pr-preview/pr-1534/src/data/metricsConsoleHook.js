@@ -1,0 +1,1 @@
+export{hj as ensureMetricsConsoleHook}from"../../chunks/app-DBFguILO.js";
