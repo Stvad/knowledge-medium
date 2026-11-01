@@ -1,1 +1,1 @@
-export{Xq as annotationMarginOpenProp}from"../../../chunks/app-D0uEdM_L.js";
+export{Qq as annotationMarginOpenProp}from"../../../chunks/app-eImBBUcU.js";

@@ -1,1 +1,1 @@
-export{dj as bindBlockActionContext,fj as createSharedBlockActions,pj as enterEditMode,mj as extendSelectionDown,hj as extendSelectionUp,gj as requestEditorFocusIfEditing}from"../../chunks/app-D0uEdM_L.js";
+export{pj as bindBlockActionContext,mj as createSharedBlockActions,hj as enterEditMode,gj as extendSelectionDown,_j as extendSelectionUp,vj as requestEditorFocusIfEditing}from"../../chunks/app-eImBBUcU.js";
