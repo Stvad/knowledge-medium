@@ -12,7 +12,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { merge as mergeMutator } from '@/data/mutators'
+import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -92,69 +92,45 @@ import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
 
-const splitCodeMirrorBlockAtCursor = async (
-  block: Block,
-  editorView: EditorView,
-): Promise<Block> => {
-  const doc = editorView.state.doc
-  const cursorPos = editorView.state.selection.main.head
-
-  const beforeCursor = doc.sliceString(0, cursorPos)
-  const afterCursor = doc.sliceString(cursorPos)
-  const repo = block.repo
-
-  // Push the suffix into the editor synchronously so its debounced
-  // pushChange re-arms with the post-split text. Without this the
-  // pending debounce would later flush the pre-split full content
-  // and clobber the suffix that core.split wrote to SQL.
-  editorView.dispatch({
-    changes: {from: 0, to: doc.length, insert: afterCursor},
-    selection: EditorSelection.cursor(0),
-  })
-
-  // core.split creates a new sibling BEFORE self with before-text, and
-  // leaves self as the after-text block. Pass the live before/after
-  // strings — the mutator does NOT slice persisted content, since a
-  // debounced editor can leave SQL stale.
-  await repo.mutate.split({
-    id: block.id,
-    before: beforeCursor,
-    after: afterCursor,
-  })
-  return block
-}
-
 /**
- * Mid-text split when the edited block is the *scope root* (a backlink
- * entry, embed, or zoomed panel root). The default split would push the
- * before-cursor text into a preceding sibling — which lives outside the
- * visible surface, silently burying the first half (the same class as
- * the "invisible block" bug for `o`/`O`). Instead the root keeps the
- * before-text and the continuation becomes its first child
- * (`placement: 'firstChild'`), mirroring the reading order (root = first
- * half, child = the rest).
+ * Split the edited block at the cursor; returns the id of the block that now
+ * holds the text after it, which takes focus.
  *
- * Returns the new child's id.
+ * At the scope root (a backlink entry, embed, or zoomed panel root) the
+ * default split would push the before-cursor text into a preceding sibling —
+ * which lives outside the visible surface, silently burying the first half
+ * (the same class as the "invisible block" bug for `o`/`O`). There the root
+ * keeps the before-text and the continuation becomes its first child,
+ * mirroring the reading order (root = first half, child = the rest).
+ *
+ * The split gets the live text, which a debounced editor can hold ahead of
+ * SQL. The editor is re-armed with the half its block keeps BEFORE the split
+ * runs, so its pending pushChange can't later flush the pre-split text over
+ * what the split wrote; a refused split puts the whole text back, or that
+ * flush would save only the one half.
  */
-const splitScopeRootIntoFirstChild = async (
+const splitAtCursor = async (
   block: Block,
   editorView: EditorView,
+  placement: SplitPlacement,
 ): Promise<string> => {
-  const doc = editorView.state.doc
   const cursorPos = editorView.state.selection.main.head
-  const beforeCursor = doc.sliceString(0, cursorPos)
-  const afterCursor = doc.sliceString(cursorPos)
-  const repo = block.repo
-
-  // Re-arm the editor (and its debounced pushChange) with the prefix that
-  // stays in the root, so a later flush can't clobber the SQL we write
-  // below — same precaution as splitCodeMirrorBlockAtCursor.
-  editorView.dispatch({
-    changes: {from: 0, to: doc.length, insert: beforeCursor},
-    selection: EditorSelection.cursor(beforeCursor.length),
+  const before = editorView.state.doc.sliceString(0, cursorPos)
+  const after = editorView.state.doc.sliceString(cursorPos)
+  const keepsBefore = placement === 'firstChild'
+  const rearm = (text: string, cursor: number) => editorView.dispatch({
+    changes: {from: 0, to: editorView.state.doc.length, insert: text},
+    selection: EditorSelection.cursor(cursor),
   })
 
-  return repo.mutate.split({id: block.id, before: beforeCursor, after: afterCursor, placement: 'firstChild'})
+  rearm(keepsBefore ? before : after, keepsBefore ? before.length : 0)
+  try {
+    const newId = await block.repo.mutate.split({id: block.id, before, after, placement})
+    return keepsBefore ? newId : block.id
+  } catch (error) {
+    rearm(before + after, cursorPos)
+    throw error
+  }
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -749,21 +725,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
-          // At the scope root a normal split would bury the before-text in
-          // an invisible preceding sibling — keep it in the root and push
-          // the continuation into a new first child instead.
-          if (policy.isScopeRoot) {
-            const childId = await splitScopeRootIntoFirstChild(block, editorView)
-            await uiStateBlock.set(editorSelection, {blockId: childId, start: 0})
-            await focusBlock(uiStateBlock, childId, {edit: true, renderScopeId: deps.renderScopeId})
-          } else {
-            const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView)
-            await uiStateBlock.set(editorSelection, {
-              blockId: blockInFocus.id,
-              start: 0,
-            })
-            await focusBlock(uiStateBlock, blockInFocus.id, {edit: true, renderScopeId: deps.renderScopeId})
-          }
+          const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
+          await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
+          await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})
         }
         // Case 2: Cursor at end and the new block belongs as a first
         // child — either the block shows children, or it's the scope
@@ -1132,7 +1096,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // block's editor — Delete keeps the caret in *this* editor, so a
         // pending flush of the pre-merge text would otherwise clobber the
         // fold core.merge wrote to SQL. Same precaution as
-        // splitCodeMirrorBlockAtCursor.
+        // splitAtCursor.
         editorView.dispatch({
           changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
           selection: EditorSelection.cursor(joinOffset),
