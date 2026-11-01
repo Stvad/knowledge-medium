@@ -1,1 +1,1 @@
-export{Vn as keybindingsSettingsDataExtension}from"../../../chunks/app-BiuJAngH.js";
+export{Vn as keybindingsSettingsDataExtension}from"../../../chunks/app-W-TBGkY5.js";

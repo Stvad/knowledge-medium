@@ -1,1 +1,1 @@
-export{kc as archiveSrsBlock,Ac as srsSwipeRightDecorator,jc as srsTodoCycleDecorators}from"../../../chunks/app-BiuJAngH.js";
+export{kc as archiveSrsBlock,Ac as srsSwipeRightDecorator,jc as srsTodoCycleDecorators}from"../../../chunks/app-W-TBGkY5.js";
