@@ -1,1 +1,0 @@
-export{Pg as updateIndicatorPlugin}from"../../../chunks/app-DR8xAQNq.js";

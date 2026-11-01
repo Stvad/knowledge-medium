@@ -1,1 +1,0 @@
-export{YG as matchCharTrigger}from"../../chunks/app-DR8xAQNq.js";

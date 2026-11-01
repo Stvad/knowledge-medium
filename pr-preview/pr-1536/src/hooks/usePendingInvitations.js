@@ -1,1 +1,0 @@
-export{CT as usePendingInvitations}from"../../chunks/app-DR8xAQNq.js";

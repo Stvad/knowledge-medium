@@ -1,1 +1,0 @@
-export{Xq as annotationMarginOpenProp}from"../../../chunks/app-DR8xAQNq.js";

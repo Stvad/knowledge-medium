@@ -1,1 +1,0 @@
-export{wD as Label}from"../../../chunks/app-DR8xAQNq.js";
