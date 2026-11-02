@@ -16,45 +16,14 @@ import {registryRecognitionParams} from '@/data/internals/kernelQueries.js'
 import {recognizedFieldRowSql} from '@/data/internals/treeQueries.js'
 import type {Repo} from '@/data/repo'
 import {attributionCreatorsProp, contributorKindProp} from '@/plugins/contributors/schema.js'
-import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.ts'
+import {annotationStatusProp} from './schema.ts'
+import {threadCoverageCte} from './threadCoverage.ts'
 
-/** `covered(id, thread_id, workspace_id)`: the scope root, its visible
- *  descendants, each thread root anchored to a covered block, and that root's
- *  visible descendants, its comments. `thread_id` is the thread a row belongs
- *  to (the root's own id on the root), NULL for the scope's own blocks.
- *  UNION dedups, so a cycle ends. Binds the scope id, then what `fieldRow`
- *  binds.
- *
- *  The descent stops at a thread root: a root is covered only through its
- *  target, so one moved by hand under another thread's comment keeps its own
- *  comments to itself.
- *
- *  The `INDEXED BY` is load-bearing, as on `SUBTREE_SQL` (treeQueries.ts):
- *  without it the workspace equality below leads the planner to scan the
- *  workspace index for every covered row.
- *
- *  DEFENCE IN DEPTH: the `workspace_id` equalities. Sync applies parent ids
- *  and rewrites `workspace_id` verbatim, so a covered block's child or
- *  referrer can sit in another workspace. */
-const coveredCte = (fieldRow: (rowRef: string) => string): string => `
-  WITH RECURSIVE covered(id, thread_id, workspace_id) AS (
-    SELECT id, NULL, workspace_id FROM blocks WHERE id = ? AND deleted = 0
-    UNION
-    SELECT child.id, covered.thread_id, covered.workspace_id
-      FROM covered
-      JOIN blocks child INDEXED BY idx_blocks_parent_order ON child.parent_id = covered.id
-     WHERE child.deleted = 0 AND child.workspace_id = covered.workspace_id
-       AND NOT (${fieldRow('child')})
-       AND NOT EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = child.id AND t.type = '${THREAD_TYPE}')
-    UNION
-    SELECT root.id, root.id, covered.workspace_id
-      FROM covered
-      JOIN block_references edge
-        ON edge.target_id = covered.id AND edge.source_field = '${annotationTargetProp.name}'
-      JOIN blocks root ON root.id = edge.source_id
-     WHERE root.deleted = 0 AND root.workspace_id = covered.workspace_id
-       AND EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = root.id AND t.type = '${THREAD_TYPE}')
-  )`
+/** The scope's own blocks have no owning thread. Binds the scope id, then
+ *  what `fieldRow` binds. */
+const coveredCte = (fieldRow: (rowRef: string) => string): string => threadCoverageCte(
+  'SELECT id, id, NULL, workspace_id FROM blocks WHERE id = ? AND deleted = 0', fieldRow,
+)
 
 const THREAD_IDS_IN_SCOPE_SQL = `${coveredCte(recognizedFieldRowSql)}
   SELECT covered.id FROM covered

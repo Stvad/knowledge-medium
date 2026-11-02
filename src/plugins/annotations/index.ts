@@ -17,6 +17,9 @@ import {
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
+import {contributorProfilesQueryExtension} from '@/plugins/contributors/dataExtension.js'
+import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
+import {breadcrumbRendererExtension} from '@/plugins/breadcrumbs/index.js'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
 import {
   annotationActions,
@@ -49,6 +52,10 @@ export const annotationsPlugin: AppExtension = systemToggle({
   description: 'Comment on a block, or on selected text in it, in threads that live beside your notes.',
 }).of([
   annotationsDataExtension,
+  // Card authors need profile reads even when the Contributors badges are off.
+  contributorProfilesQueryExtension,
+  backlinksDataExtension,
+  breadcrumbRendererExtension,
   dialogAppMountExtension, // asking before deleting a quoted thread
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),

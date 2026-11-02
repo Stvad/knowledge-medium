@@ -17,12 +17,14 @@ export const breadcrumbRendererContribution: RendererContribution = {
   renderer: BreadcrumbRenderer,
 }
 
+export const breadcrumbRendererExtension = blockRenderersFacet.of(breadcrumbRendererContribution, {source: 'breadcrumbs'})
+
 export const breadcrumbsPlugin: AppExtension = systemToggle({
   id: 'system:breadcrumbs',
   name: 'Breadcrumbs',
   description: 'Ancestor chain rendered above each panel.',
 }).of([
-  blockRenderersFacet.of(breadcrumbRendererContribution, {source: 'breadcrumbs'}),
+  breadcrumbRendererExtension,
   // Header section: top-level breadcrumbs. Self-gates on isTopLevel so
   // non-top-level blocks pay no header cost.
   blockHeaderFacet.of(

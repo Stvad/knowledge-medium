@@ -5,7 +5,6 @@ import {typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {BACKLINKS_COUNT_FOR_BLOCK_QUERY} from '@/plugins/backlinks/inline-counts/countQuery.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
@@ -47,7 +46,7 @@ beforeEach(async () => {
   // `((id))` parses as a reference only when `id` is UUID-shaped.
   repo = createTestRepo({
     db: db.db, user: {id: 'alex', name: 'Alex'}, newId: () => crypto.randomUUID(),
-    extensions: [referencesDataExtension, backlinksDataExtension, annotationsPlugin],
+    extensions: [referencesDataExtension, annotationsPlugin],
   }).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
