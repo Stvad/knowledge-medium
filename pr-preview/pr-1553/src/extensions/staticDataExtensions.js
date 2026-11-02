@@ -1,0 +1,1 @@
+export{QU as staticDataExtensions}from"../../chunks/app-BPbufCqP.js";

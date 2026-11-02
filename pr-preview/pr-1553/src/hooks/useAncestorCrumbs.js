@@ -1,0 +1,1 @@
+export{ZE as useAncestorCrumbs}from"../../chunks/app-BPbufCqP.js";

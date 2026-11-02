@@ -1,0 +1,1 @@
+export{Oet as MIGRATIONS_PAGE_ALIAS,ket as getOrCreateMigrationsPage,Aet as migrationsPageBlockId,jet as migrationsPageSpec}from"../../chunks/app-BPbufCqP.js";

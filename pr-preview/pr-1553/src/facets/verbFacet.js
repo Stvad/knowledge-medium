@@ -1,0 +1,1 @@
+export{KX as defineVerbFacet}from"../../chunks/app-BPbufCqP.js";

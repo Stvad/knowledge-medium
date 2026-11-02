@@ -1,0 +1,1 @@
+export{WC as plainOutlinerPlugin}from"../../../chunks/app-BPbufCqP.js";

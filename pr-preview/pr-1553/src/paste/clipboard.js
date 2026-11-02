@@ -1,0 +1,1 @@
+export{wI as readClipboardContent}from"../../chunks/app-BPbufCqP.js";

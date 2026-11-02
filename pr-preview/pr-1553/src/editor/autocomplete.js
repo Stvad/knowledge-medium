@@ -1,0 +1,1 @@
+export{iM as editorAutocompleteExtension}from"../../chunks/app-BPbufCqP.js";

@@ -1,0 +1,1 @@
+export{OD as Label}from"../../../chunks/app-BPbufCqP.js";

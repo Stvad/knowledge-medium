@@ -1,0 +1,1 @@
+export{Dj as ensureMetricsConsoleHook}from"../../chunks/app-BPbufCqP.js";

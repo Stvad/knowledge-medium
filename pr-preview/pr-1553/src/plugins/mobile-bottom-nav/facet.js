@@ -1,0 +1,1 @@
+export{NC as mobileBottomNavItemsFacet}from"../../../chunks/app-BPbufCqP.js";

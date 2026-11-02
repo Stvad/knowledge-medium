@@ -1,0 +1,1 @@
+export{WN as BlockLoadingPlaceholder}from"../../chunks/app-BPbufCqP.js";

@@ -1,0 +1,1 @@
+export{YX as agentDispatchCompanionDataExtension}from"../../../chunks/app-BPbufCqP.js";

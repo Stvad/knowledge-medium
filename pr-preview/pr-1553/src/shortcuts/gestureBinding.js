@@ -1,0 +1,1 @@
+export{UM as gestureBindingDescriptor,WM as matchesGestureEvent}from"../../chunks/app-BPbufCqP.js";

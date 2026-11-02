@@ -1,0 +1,1 @@
+export{XE as BlockCrumbs}from"../../chunks/app-BPbufCqP.js";

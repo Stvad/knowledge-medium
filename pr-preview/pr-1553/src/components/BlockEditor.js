@@ -1,0 +1,1 @@
+export{BI as BlockEditor}from"../../chunks/app-BPbufCqP.js";

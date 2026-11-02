@@ -1,0 +1,1 @@
+export{Ik as useCommandPaletteActions}from"../../../chunks/app-BPbufCqP.js";

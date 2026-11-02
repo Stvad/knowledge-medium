@@ -1,0 +1,1 @@
+export{xM as appUpdatePromptExtension}from"../../../chunks/app-BPbufCqP.js";

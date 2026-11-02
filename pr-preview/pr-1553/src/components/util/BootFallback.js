@@ -1,0 +1,1 @@
+export{kU as BootFallback}from"../../../chunks/app-BPbufCqP.js";

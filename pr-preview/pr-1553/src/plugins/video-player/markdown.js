@@ -1,0 +1,1 @@
+export{yx as videoPlayerMarkdownExtension}from"../../../chunks/app-BPbufCqP.js";

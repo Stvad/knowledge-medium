@@ -1,0 +1,1 @@
+export{fn as RAW_CHARACTER_COUNT_PROFILE_ID,pn as WORDS_COUNT_PROFILE_ID,mn as builtinCountProfiles,hn as characterCountProfilesFacet,gn as profileFrom,_n as profileLabel,vn as rawCharacterCountProfile,yn as textCountProfile,bn as wordsCountProfile}from"../../../chunks/app-BPbufCqP.js";

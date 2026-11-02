@@ -1,0 +1,1 @@
+export{JC as blockEditingContentRenderer}from"../../../chunks/app-BPbufCqP.js";

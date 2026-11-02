@@ -1,0 +1,1 @@
+export{lj as TypeChip}from"../../../chunks/app-BPbufCqP.js";
