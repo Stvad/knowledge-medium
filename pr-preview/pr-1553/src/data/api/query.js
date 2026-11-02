@@ -1,1 +1,1 @@
-export{Lat as defineQuery}from"../../../chunks/app-BPbufCqP.js";
+export{Lat as defineQuery}from"../../../chunks/app-Mxn_IgfC.js";
