@@ -42,7 +42,7 @@ export const shortcutHelpMount: AppMountContribution = {
  *  text — it opens the overlay from edit mode too. */
 export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: SHORTCUT_HELP_ACTION_ID,
-  description: 'Show keyboard shortcuts',
+  description: 'Show shortcuts & gestures',
   context: ActionContextTypes.GLOBAL,
   icon: Keyboard,
   handler: (_deps, trigger) => {
@@ -64,7 +64,7 @@ export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> 
 export const shortcutHelpPlugin: AppExtension = systemToggle({
   id: 'system:shortcut-help',
   name: 'Shortcut help',
-  description: "'?' overlay listing the currently-active keyboard shortcuts by context; press any chord while it's open to inspect what it would run.",
+  description: "'?' overlay listing the currently-active shortcuts and link click gestures; press any chord while it's open to inspect what it would run.",
 }).of([
   appMountsFacet.of(shortcutHelpMount, {source: 'shortcut-help'}),
   actionsFacet.of(shortcutHelpAction, {source: 'shortcut-help'}),

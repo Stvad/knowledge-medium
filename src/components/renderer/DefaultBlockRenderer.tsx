@@ -81,14 +81,6 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
   contentShowsOtherBlocks?: boolean;
 }
 
-/** An item that moved focus out of the menu, such as into a composer it
- *  opened, keeps it; otherwise the menu returns focus to the bullet. */
-export const keepFocusAnItemMoved = (event: Event) => {
-  const active = document.activeElement
-  const menu = event.currentTarget
-  if (active && active !== document.body && menu instanceof Node && !menu.contains(active)) event.preventDefault()
-}
-
 /** Todo plausibly the following 2 things should be "actions" too
  * and would be nice to have the mechanism to invoke arbitrary action?
  *   e.g. have a custom event like 'trigger-action' with appropriate deps
@@ -216,7 +208,6 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
         <ContextMenuPortal>
           <ContextMenuContent
             className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
-            onCloseAutoFocus={keepFocusAnItemMoved}
           >
             {hasHoverSections && (
               <>

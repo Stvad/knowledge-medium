@@ -21,6 +21,11 @@ import { runActionById } from '@/shortcuts/runAction.js'
 import { useActionDiscovery } from '@/shortcuts/useActionDiscovery.js'
 import type { ActionConfig, ActionContextType } from '@/shortcuts/types.js'
 import { openKeybindingsSettingsAction } from '@/plugins/keybindings-settings/actions.ts'
+import {
+  formatLinkClickGesture,
+  linkClickActions,
+  nativeLinkClickGesture,
+} from '@/utils/linkClickGestures.js'
 import { overrideEntryKey, type StoredKeybindingOverride } from '@/plugins/keybindings-settings/config.ts'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import {
@@ -145,6 +150,30 @@ const ContextGroupSection = ({group, onSelect}: {
       {rowsOf(group).map(bindings => (
         <ActionRow key={bindings[0]!.action.id} bindings={bindings} onSelect={onSelect}/>
       ))}
+    </div>
+  </section>
+)
+
+const LinkClickGestures = () => (
+  <section className="mb-3 break-inside-avoid" aria-labelledby="link-click-gestures-heading">
+    <h3 id="link-click-gestures-heading" className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      Link click gestures
+    </h3>
+    <p className="mb-1 px-2 text-xs text-muted-foreground">
+      For page links and block references. Shift-clicking ordinary block text selects blocks.
+    </p>
+    <div className="px-2 text-sm">
+      <div className="flex items-center justify-between gap-2 py-1">
+        <span>Click</span><span>Open in current panel</span>
+      </div>
+      {linkClickActions.map(action => (
+        <div key={action.target} className="flex items-center justify-between gap-2 py-1">
+          <span>{formatLinkClickGesture(action.modifiers)}</span><span>{action.label}</span>
+        </div>
+      ))}
+      <div className="flex items-center justify-between gap-2 py-1">
+        <span>{nativeLinkClickGesture()}</span><span>Open in new browser tab</span>
+      </div>
     </div>
   </section>
 )
@@ -533,7 +562,7 @@ export function ShortcutHelpOverlay() {
     <Dialog open={open} onOpenChange={shortcutHelpToggle.set}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogTitle>Shortcuts &amp; gestures</DialogTitle>
           <DialogDescription>{status}</DialogDescription>
         </DialogHeader>
         {state.matches && (
@@ -555,6 +584,7 @@ export function ShortcutHelpOverlay() {
           />
         )}
         <div className="min-w-0 max-h-[60vh] overflow-y-auto sm:columns-2 sm:gap-6">
+          <LinkClickGestures/>
           {visibleGroups.map(group => (
             <ContextGroupSection key={group.config.type} group={group} onSelect={handleSelect}/>
           ))}
