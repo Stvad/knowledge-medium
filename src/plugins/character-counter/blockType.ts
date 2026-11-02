@@ -1,6 +1,6 @@
 /** Character-counter block type. `CHAR_COUNTER_TYPE` is a generic,
  *  user-applicable tag — add it to any block (a tweet draft, an abstract,
- *  a summary field) to get a live character count below its content. The
+ *  a summary field, an essay's root) to get a live character or word count. The
  *  `char:*` fields are lifted onto the type so `addType` seeds defaults and
  *  the property panel surfaces them in the type section, mirroring the geo
  *  plugin's lift of `place:*` fields. */
@@ -16,7 +16,7 @@ export const CHAR_COUNTER_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
     revision: 1,
     id: CHAR_COUNTER_TYPE,
     label: 'Character counter',
-    description: 'Shows a live character count below the block. Set an optional limit to see `count / limit` and an over-limit warning.',
+    description: 'Shows a live count below the block: characters or words (`char:profile`), for the block, each direct child, or the whole subtree (`char:scope`). Set an optional limit to see `count / limit` and an over-limit warning.',
     properties: [charLimitProp, charScopeProp, charProfileProp],
   }),
 ]

@@ -44,10 +44,12 @@ const useBlueskySocialCount = (block: any): number =>
 
 export const twitterCountProfile: CharacterCountProfile = {
   id: TWITTER_COUNT_PROFILE_ID,
+  label: 'Twitter',
   useCount: useTwitterSocialCount,
 }
 
 export const blueskyCountProfile: CharacterCountProfile = {
   id: BLUESKY_COUNT_PROFILE_ID,
+  label: 'Bluesky',
   useCount: useBlueskySocialCount,
 }

@@ -1,8 +1,9 @@
-/** Block content decorator that overlays live character counts. A tagged block
- *  can count itself (`char:scope=self`) or configure counters for its direct
- *  children (`char:scope=children`). The decorator stays generic by resolving
- *  count behavior through `characterCountProfilesFacet`; plugins persist only
- *  the profile id in `char:profile`.
+/** Block content decorator that overlays live counts. A tagged block can count
+ *  itself (`char:scope=self`), configure counters for its direct children
+ *  (`char:scope=children`), or show one total for its whole subtree
+ *  (`char:scope=subtree`). The decorator stays generic by resolving count
+ *  behavior through `characterCountProfilesFacet`; plugins persist only the
+ *  profile id in `char:profile`.
  *
  *  A decorator (not a renderer override) so it composes with whatever content
  *  renderer the block already uses. Counts are absolutely positioned at the
@@ -15,10 +16,11 @@
  *  so React keeps a stable component identity and never unmounts the inner
  *  subtree on a parent re-render (same invariant as geoContentDecorator). */
 
+import { useCallback } from 'react'
 import type { Block } from '@/data/block.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { useContent, useHandle, useProperty } from '@/hooks/block.js'
+import { useHandle, useProperty } from '@/hooks/block.js'
 import {
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
@@ -29,13 +31,16 @@ import { charLimitProp, charProfileProp, charScopeProp } from './properties'
 import { charCountDisplay } from './charCount'
 import {
   characterCountProfilesFacet,
-  RAW_CHARACTER_COUNT_PROFILE_ID,
+  profileFrom,
+  profileLabel,
   type CharacterCountProfile,
 } from './profiles'
 
 interface CounterConfig {
   limit: number | undefined
   profileId: string | undefined
+  /** Sum over the block's subtree instead of counting the block alone. */
+  subtreeTotal: boolean
 }
 
 interface CharacterCountDecoratorProps {
@@ -48,42 +53,53 @@ const blockInfoSelector = (data: ReturnType<Block['peek']>) => ({
   types: data ? getBlockTypes(data) : [],
 })
 
-const useRawCharacterCount = (block: Block): number => useContent(block).length
-
-const rawCharacterCountProfile: CharacterCountProfile = {
-  id: RAW_CHARACTER_COUNT_PROFILE_ID,
-  useCount: useRawCharacterCount,
-}
-
-const profileFrom = (
-  profiles: ReadonlyMap<string, CharacterCountProfile>,
-  id: string | undefined,
-): CharacterCountProfile =>
-  (id ? profiles.get(id) : undefined) ?? rawCharacterCountProfile
-
-interface ResolvedCounterConfig extends CounterConfig {
-  profile: CharacterCountProfile
-}
-
-const ProfileCountBadge = ({
-  block,
-  config,
+const BadgeText = ({
+  profile,
+  text,
+  over = false,
 }: {
-  block: Block
-  config: ResolvedCounterConfig
-}) => {
-  const profile = config.profile
-  const length = profile.useCount(block)
-  const {text, over} = charCountDisplay(length, config.limit)
+  profile: CharacterCountProfile
+  text: string
+  over?: boolean
+}) => (
+  <span
+    className={`pointer-events-none absolute bottom-0 right-0 select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
+    aria-label={`${profileLabel(profile)} count`}
+  >
+    {text}
+  </span>
+)
 
-  return (
-    <span
-      className={`pointer-events-none absolute bottom-0 right-0 select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
-      aria-label="Character count"
-    >
-      {text}
-    </span>
+interface BadgeProps {
+  block: Block
+  profile: CharacterCountProfile
+  limit: number | undefined
+}
+
+const BlockCountBadge = ({block, profile, limit}: BadgeProps) => {
+  const {text, over} = charCountDisplay(profile.useCount(block), limit)
+  return <BadgeText profile={profile} text={text} over={over}/>
+}
+
+const SubtreeCountBadge = ({
+  block,
+  profile,
+  limit,
+  countText,
+}: BadgeProps & {countText: (content: string) => number}) => {
+  const sumRows = useCallback(
+    (rows: readonly {content: string}[] | undefined) =>
+      rows?.reduce((sum, row) => sum + countText(row.content), 0),
+    [countText],
   )
+  const total = useHandle(
+    block.repo.query.subtree({id: block.id, hidePropertyChildren: true}),
+    {selector: sumRows},
+  )
+  // Nothing until the subtree has loaded: an empty sum would read as a real 0.
+  if (total === undefined) return null
+  const {text, over} = charCountDisplay(total, limit)
+  return <BadgeText profile={profile} text={text} over={over}/>
 }
 
 const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {
@@ -91,11 +107,20 @@ const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {
   const profiles = runtime.read(characterCountProfilesFacet)
   const profile = profileFrom(profiles, config.profileId)
 
+  if (!config.subtreeTotal) {
+    // Keyed by profile id: profiles' `useCount` hooks differ, so switching
+    // profiles must remount rather than change the hook sequence in place.
+    return <BlockCountBadge key={profile.id} block={block} profile={profile} limit={config.limit}/>
+  }
+  if (!profile.countText) {
+    return <BadgeText profile={profile} text={`${profileLabel(profile)}: no subtree total`}/>
+  }
   return (
-    <ProfileCountBadge
-      key={profile.id}
+    <SubtreeCountBadge
       block={block}
-      config={{...config, profile}}
+      profile={profile}
+      limit={config.limit}
+      countText={profile.countText}
     />
   )
 }
@@ -137,7 +162,7 @@ const InheritedCharacterCountDecorator = ({
     <CounterFrame
       block={block}
       Inner={Inner}
-      config={{limit: parentLimit, profileId: parentProfileId}}
+      config={{limit: parentLimit, profileId: parentProfileId, subtreeTotal: false}}
     />
   )
 }
@@ -149,14 +174,14 @@ const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) =
   const [profileId] = useProperty(block, charProfileProp)
   const selfApplies =
     info.types.includes(CHAR_COUNTER_TYPE) &&
-    scope === 'self'
+    (scope === 'self' || scope === 'subtree')
 
   if (selfApplies) {
     return (
       <CounterFrame
         block={block}
         Inner={Inner}
-        config={{limit, profileId}}
+        config={{limit, profileId, subtreeTotal: scope === 'subtree'}}
       />
     )
   }
