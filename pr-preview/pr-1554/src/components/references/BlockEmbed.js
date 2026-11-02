@@ -1,0 +1,1 @@
+export{XA as BlockEmbed}from"../../../chunks/app-DqKZ4Spc.js";

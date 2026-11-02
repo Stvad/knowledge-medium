@@ -1,0 +1,1 @@
+export{Ri as startupMetricsPlugin}from"../../../chunks/app-DqKZ4Spc.js";

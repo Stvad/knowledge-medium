@@ -1,0 +1,1 @@
+export{FS as SpatialNavigationShellDecorator}from"../../../chunks/app-DqKZ4Spc.js";

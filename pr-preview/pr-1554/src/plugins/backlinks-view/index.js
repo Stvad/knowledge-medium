@@ -1,0 +1,1 @@
+export{Qg as backlinksViewPlugin}from"../../../chunks/app-DqKZ4Spc.js";

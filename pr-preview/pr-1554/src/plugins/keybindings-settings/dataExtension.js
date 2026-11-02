@@ -1,0 +1,1 @@
+export{Xn as keybindingsSettingsDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

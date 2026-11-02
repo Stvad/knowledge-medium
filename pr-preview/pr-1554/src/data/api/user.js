@@ -1,0 +1,1 @@
+export{Pat as SYSTEM_AUTHOR_PREFIX,Fat as isSystemAuthor,Iat as systemAuthor}from"../../../chunks/app-DqKZ4Spc.js";

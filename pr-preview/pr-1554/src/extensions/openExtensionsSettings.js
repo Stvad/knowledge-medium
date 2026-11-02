@@ -1,0 +1,1 @@
+export{sP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,cP as openExtensionsSettings}from"../../chunks/app-DqKZ4Spc.js";

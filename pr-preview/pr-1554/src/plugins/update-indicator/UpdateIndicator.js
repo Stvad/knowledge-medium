@@ -1,0 +1,1 @@
+export{Kg as UpdateIndicator}from"../../../chunks/app-DqKZ4Spc.js";

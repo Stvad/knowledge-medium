@@ -1,0 +1,1 @@
+export{Sx as VideoNotesLayout,Cx as VideoNotesRenderer,wx as videoNotesLayoutContribution}from"../../../chunks/app-DqKZ4Spc.js";

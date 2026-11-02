@@ -1,0 +1,1 @@
+export{Ug as blockInfoPlugin}from"../../../chunks/app-DqKZ4Spc.js";

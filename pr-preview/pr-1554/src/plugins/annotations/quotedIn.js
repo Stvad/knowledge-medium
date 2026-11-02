@@ -1,0 +1,1 @@
+export{Xu as quotedInFooterContribution}from"../../../chunks/app-DqKZ4Spc.js";

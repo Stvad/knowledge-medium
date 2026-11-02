@@ -1,0 +1,1 @@
+export{VK as dailyNotesDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

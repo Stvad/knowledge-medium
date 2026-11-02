@@ -1,0 +1,1 @@
+export{gx as videoPlayerPlugin}from"../../../chunks/app-DqKZ4Spc.js";

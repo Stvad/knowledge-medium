@@ -1,0 +1,1 @@
+export{_x as videoPlayerMarkdownExtension}from"../../../chunks/app-DqKZ4Spc.js";

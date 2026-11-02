@@ -1,0 +1,1 @@
+export{Hp as extensionsOverridesProp,Up as extensionsPrefsType,rr as extensionsSettingsPlugin}from"../../../chunks/app-DqKZ4Spc.js";

@@ -1,0 +1,1 @@
+export{vB as blockAfterSubtreeRemoval,yB as blockIdsInOrderedSelectionRange,bB as commitSelectionRange,xB as extendSelection,SB as findBestSelectionAnchorIndex,CB as getBlocksInRange,wB as getLastVisibleDescendant,TB as getRootBlock,EB as insertInDocumentOrder,DB as nextVisibleBlock,OB as previousVisibleBlock,kB as validateSelectionHierarchy}from"../../chunks/app-DqKZ4Spc.js";

@@ -1,0 +1,1 @@
+export{OF as __resetDialogsForTests,kF as getDialogQueue,AF as isDialogOpenForWorkspace,jF as openDialog,MF as subscribeDialogs}from"../../chunks/app-DqKZ4Spc.js";

@@ -1,0 +1,1 @@
+export{uW as referencesDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

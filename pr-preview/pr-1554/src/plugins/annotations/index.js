@@ -1,0 +1,1 @@
+export{Ku as annotationsPlugin}from"../../../chunks/app-DqKZ4Spc.js";

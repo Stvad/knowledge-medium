@@ -1,0 +1,1 @@
+export{ur as ExtensionsSettings}from"../../../chunks/app-DqKZ4Spc.js";

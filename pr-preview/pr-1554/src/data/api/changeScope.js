@@ -1,0 +1,1 @@
+export{Not as CHANGE_SCOPE_POLICIES,Pot as ChangeScope,Fot as isChangeScope,Iot as policyForScope,Lot as scopeAllowedInReadOnly,Rot as scopeIsUndoable,zot as scopePoliciesEquivalent,Bot as scopeUploadsToServer,Vot as sourceForScope}from"../../../chunks/app-DqKZ4Spc.js";

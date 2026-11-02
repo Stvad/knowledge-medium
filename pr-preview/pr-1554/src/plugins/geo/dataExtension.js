@@ -1,0 +1,1 @@
+export{LG as geoDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

@@ -1,0 +1,1 @@
+export{UN as defaultRegistry,WN as defaultRendererContributions,GN as defaultRenderersExtension}from"../../chunks/app-DqKZ4Spc.js";

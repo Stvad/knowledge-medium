@@ -1,0 +1,1 @@
+export{bg as DATA_MODEL_GUIDE,xg as dataModelGuide}from"../../../chunks/app-DqKZ4Spc.js";

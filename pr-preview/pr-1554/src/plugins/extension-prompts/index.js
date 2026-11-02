@@ -1,0 +1,1 @@
+export{rM as ExtensionPromptSurface,iM as extensionPromptsExtension}from"../../../chunks/app-DqKZ4Spc.js";

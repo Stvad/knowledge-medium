@@ -1,0 +1,1 @@
+export{VC as mobileBottomNavItemsFacet}from"../../../chunks/app-DqKZ4Spc.js";

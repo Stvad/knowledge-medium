@@ -1,0 +1,1 @@
+export{Vtt as getOrCreatePropertiesPage,Htt as propertiesPageBlockId,Utt as propertiesPageSpec}from"../../chunks/app-DqKZ4Spc.js";

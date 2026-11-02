@@ -1,0 +1,1 @@
+export{Xf as contributorsPlugin}from"../../../chunks/app-DqKZ4Spc.js";

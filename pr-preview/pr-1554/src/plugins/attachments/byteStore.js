@@ -1,0 +1,1 @@
+export{ex as ASSETS_ROOT,tx as InMemoryByteStore,nx as OpfsByteStore,rx as assetPathSegments,ix as createByteStore,ax as getByteStore}from"../../../chunks/app-DqKZ4Spc.js";

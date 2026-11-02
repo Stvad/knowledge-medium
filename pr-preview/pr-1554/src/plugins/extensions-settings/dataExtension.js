@@ -1,0 +1,1 @@
+export{ir as extensionsDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

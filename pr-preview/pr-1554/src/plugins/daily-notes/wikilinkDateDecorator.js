@@ -1,0 +1,1 @@
+export{yO as dailyDateWikilinkDecorator}from"../../../chunks/app-DqKZ4Spc.js";

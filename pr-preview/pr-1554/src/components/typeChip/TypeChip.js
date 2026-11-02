@@ -1,0 +1,1 @@
+export{aj as TypeChip}from"../../../chunks/app-DqKZ4Spc.js";

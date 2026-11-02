@@ -1,0 +1,1 @@
+export{JU as staticDataExtensions}from"../../chunks/app-DqKZ4Spc.js";

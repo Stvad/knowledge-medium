@@ -1,0 +1,1 @@
+export{VM as dispatchPointerAction,HM as setPointerActionDispatcher}from"../../chunks/app-DqKZ4Spc.js";

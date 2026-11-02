@@ -1,0 +1,1 @@
+export{PS as spatialNavigationShellDecorator}from"../../../chunks/app-DqKZ4Spc.js";

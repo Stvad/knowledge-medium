@@ -1,0 +1,1 @@
+export{WI as useShortcutSurfaceActivations}from"../../chunks/app-DqKZ4Spc.js";

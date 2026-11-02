@@ -1,0 +1,1 @@
+export{QM as ClientLocalSettings,$M as clientLocalSettings}from"../../chunks/app-DqKZ4Spc.js";

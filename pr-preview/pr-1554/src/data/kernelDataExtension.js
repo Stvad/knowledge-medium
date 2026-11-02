@@ -1,0 +1,1 @@
+export{n2 as kernelDataExtension}from"../../chunks/app-DqKZ4Spc.js";

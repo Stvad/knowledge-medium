@@ -1,0 +1,1 @@
+export{GW as preferredSpanReplacement}from"../../../chunks/app-DqKZ4Spc.js";

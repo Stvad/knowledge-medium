@@ -1,0 +1,1 @@
+export{Gg as updateIndicatorPlugin}from"../../../chunks/app-DqKZ4Spc.js";

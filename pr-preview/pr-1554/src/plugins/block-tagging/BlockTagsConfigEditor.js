@@ -1,0 +1,1 @@
+export{xl as BlockTagsConfigEditor}from"../../../chunks/app-DqKZ4Spc.js";

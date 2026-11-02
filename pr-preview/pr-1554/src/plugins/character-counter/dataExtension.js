@@ -1,0 +1,1 @@
+export{NJ as characterCounterDataExtension}from"../../../chunks/app-DqKZ4Spc.js";

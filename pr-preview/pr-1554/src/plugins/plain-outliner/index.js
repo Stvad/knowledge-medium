@@ -1,0 +1,1 @@
+export{QC as plainOutlinerPlugin}from"../../../chunks/app-DqKZ4Spc.js";

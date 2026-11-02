@@ -1,0 +1,1 @@
+export{J2 as KERNEL_PROCESSORS}from"../../../chunks/app-DqKZ4Spc.js";

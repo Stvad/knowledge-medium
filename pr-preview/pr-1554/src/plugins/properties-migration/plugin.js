@@ -1,0 +1,1 @@
+export{va as propertiesMigrationPlugin}from"../../../chunks/app-DqKZ4Spc.js";

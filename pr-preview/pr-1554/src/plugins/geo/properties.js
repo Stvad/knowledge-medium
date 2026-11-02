@@ -1,0 +1,1 @@
+export{vK as GEO_PROPERTY_SCHEMAS,yK as PLACE_PROPERTY_SCHEMAS,bK as locationProp,xK as placeAddressProp,SK as placeCategoriesProp,CK as placeGoogleMapsUrlProp,wK as placeGooglePlaceIdProp,TK as placeLatProp,EK as placeLngProp,DK as placePhoneProp,OK as placeWebsiteProp}from"../../../chunks/app-DqKZ4Spc.js";

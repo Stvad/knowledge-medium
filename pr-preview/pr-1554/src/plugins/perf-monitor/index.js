@@ -1,0 +1,1 @@
+export{gr as perfMonitorPlugin}from"../../../chunks/app-DqKZ4Spc.js";
