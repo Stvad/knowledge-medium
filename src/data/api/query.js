@@ -1,1 +1,1 @@
-export{yat as defineQuery}from"../../../chunks/app-eImBBUcU.js";
+export{Cat as defineQuery}from"../../../chunks/app-BhoY1Gbh.js";

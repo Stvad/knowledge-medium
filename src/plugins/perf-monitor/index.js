@@ -1,1 +1,1 @@
-export{sr as perfMonitorPlugin}from"../../../chunks/app-eImBBUcU.js";
+export{sr as perfMonitorPlugin}from"../../../chunks/app-BhoY1Gbh.js";
