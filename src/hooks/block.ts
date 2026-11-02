@@ -35,6 +35,7 @@ import {
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { getAliases } from '@/data/properties.js'
+import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
@@ -354,13 +355,10 @@ export function useProperty<T>(
   block: Block,
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] {
+  // Reads the cell under `schema.name`, where `block.get` reads the
+  // workspace's resolved winner for it: the two disagree for a shadowed or renamed definition.
   const value = useHandle(block, {
-    selector: doc => {
-      if (!doc) return schema.defaultValue
-      const stored = doc.properties[schema.name]
-      if (stored === undefined) return schema.defaultValue
-      return schema.codec.decode(stored)
-    },
+    selector: doc => doc ? decodeRowProperty(doc, schema) : schema.defaultValue,
   }) as T
 
   const setValue = useCallback(

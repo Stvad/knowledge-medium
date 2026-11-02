@@ -3,6 +3,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { getBlockTypes } from '@/data/properties.js'
+import { decodeRowProperty } from '@/data/rowProperty'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -19,11 +20,6 @@ export const TODO_CYCLE_ACTION_ID = 'todo.cycle'
 export const EDIT_MODE_TODO_CYCLE_ACTION_ID = 'edit.cm.todo.cycle'
 const TODO_TOGGLE_KEYS = ['$mod+Enter']
 
-const readStatus = (properties: Record<string, unknown>) => {
-  const stored = properties[statusProp.name]
-  if (stored === undefined) return statusProp.defaultValue
-  return statusProp.codec.decode(stored)
-}
 
 const clearStatusInTx = async (block: Block): Promise<void> => {
   await block.repo.tx(async tx => {
@@ -49,7 +45,7 @@ export const cycleTodoState = async (block: Block): Promise<void> => {
     return
   }
 
-  if (readStatus(row.properties) !== 'done') {
+  if (decodeRowProperty(row, statusProp) !== 'done') {
     await block.set(statusProp, 'done')
     return
   }

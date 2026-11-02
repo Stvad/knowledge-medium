@@ -13,7 +13,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
-import { safeDecodeRowProperty } from './rowProperty'
+import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
@@ -522,10 +522,8 @@ export const aliasesProp = seedProperty({
 
 // ──── Helpers ────
 
-export const getBlockTypes = (data: Pick<BlockData, 'properties'>): readonly string[] => {
-  const raw = data.properties[typesProp.name]
-  return raw === undefined ? typesProp.defaultValue : typesProp.codec.decode(raw)
-}
+export const getBlockTypes = (data: Pick<BlockData, 'properties'>): readonly string[] =>
+  decodeRowProperty(data, typesProp)
 
 export const hasBlockType = (
   data: Pick<BlockData, 'properties'>,
