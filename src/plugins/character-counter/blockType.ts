@@ -16,7 +16,7 @@ export const CHAR_COUNTER_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
     revision: 1,
     id: CHAR_COUNTER_TYPE,
     label: 'Character counter',
-    description: 'Shows a live character count below the block. Set an optional limit to see `count / limit` and an over-limit warning.',
+    description: 'Shows a live count below the block: characters or words (`char:profile`), for the block, each direct child, or the whole subtree (`char:scope`). Set an optional limit to see `count / limit` and an over-limit warning.',
     properties: [charLimitProp, charScopeProp, charProfileProp],
   }),
 ]

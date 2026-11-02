@@ -3,11 +3,11 @@
  *  serves every enum property without per-name wiring. Resolved by the
  *  `enum` ValuePreset keyed on `codec.type`. */
 
-import { isEnumCodec, type PropertyEditorProps } from '@/data/api'
+import { isEnumCodec, type EnumOption, type PropertyEditorProps } from '@/data/api'
 import { Block } from '@/data/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
-const EMPTY_OPTIONS: readonly { value: string; label: string }[] = []
+const EMPTY_OPTIONS: readonly EnumOption[] = []
 
 export function SelectPropertyEditor({
   value,
@@ -15,13 +15,34 @@ export function SelectPropertyEditor({
   block,
   schema,
 }: PropertyEditorProps<string>) {
+  return (
+    <OptionSelect
+      value={value}
+      onChange={onChange}
+      block={block}
+      name={schema?.name}
+      options={schema && isEnumCodec(schema.codec) ? schema.codec.options : EMPTY_OPTIONS}
+    />
+  )
+}
+
+interface OptionSelectProps {
+  value: string | undefined
+  onChange: (next: string) => void
+  block: unknown
+  name: string | undefined
+  options: readonly EnumOption[]
+}
+
+/** The select itself, for an editor whose options come from somewhere other
+ *  than an enum codec (a runtime registry, say). */
+export function OptionSelect({value, onChange, block, name, options}: OptionSelectProps) {
   const readOnly = block instanceof Block && block.repo.isReadOnly
   // A `<select>` is an editable target too (`hasEditableTarget`), so without
   // this it's the one property shape where Escape still does nothing. No
   // dismiss-first branch: the native popup is the browser's to close, and the
   // exit binding leaves `preventDefault` alone so that still works.
   const propertyEditingFocus = usePropertyEditingActivation(block)
-  const options = schema && isEnumCodec(schema.codec) ? schema.codec.options : EMPTY_OPTIONS
   const current = typeof value === 'string' ? value : ''
   // The controlled value must always match a rendered <option>, or the
   // browser silently shows option 0 while the real value stays put.
@@ -36,7 +57,7 @@ export function SelectPropertyEditor({
         className="h-7 min-w-0 max-w-full rounded-md border bg-background px-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
         value={current}
         disabled={readOnly}
-        aria-label={schema?.name ? `Select ${schema.name}` : 'Select value'}
+        aria-label={name ? `Select ${name}` : 'Select value'}
         onFocus={propertyEditingFocus.onFocus}
         onBlur={propertyEditingFocus.onBlur}
         onChange={event => {
