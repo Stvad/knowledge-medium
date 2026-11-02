@@ -1,1 +1,0 @@
-export{tr as ExtensionsSettings}from"../../../chunks/app-BxFg9ez0.js";

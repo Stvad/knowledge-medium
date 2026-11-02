@@ -1,1 +1,0 @@
-export{r_ as inlineBacklinksApplies}from"../../../../chunks/app-BxFg9ez0.js";

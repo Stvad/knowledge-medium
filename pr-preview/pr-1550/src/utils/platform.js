@@ -1,1 +1,0 @@
-export{SV as isIOS,CV as isMacPlatform}from"../../chunks/app-BxFg9ez0.js";

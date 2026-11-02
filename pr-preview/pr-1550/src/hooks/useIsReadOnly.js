@@ -1,1 +1,0 @@
-export{Av as useIsReadOnly}from"../../chunks/app-BxFg9ez0.js";

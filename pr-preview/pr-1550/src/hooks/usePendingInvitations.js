@@ -1,1 +1,0 @@
-export{TT as usePendingInvitations}from"../../chunks/app-BxFg9ez0.js";

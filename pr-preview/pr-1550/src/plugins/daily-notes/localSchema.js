@@ -1,1 +1,0 @@
-export{MK as dailyNotesLocalSchema}from"../../../chunks/app-BxFg9ez0.js";
