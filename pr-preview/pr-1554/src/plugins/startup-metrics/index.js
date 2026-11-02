@@ -1,1 +1,1 @@
-export{Ri as startupMetricsPlugin}from"../../../chunks/app-DqKZ4Spc.js";
+export{Vi as startupMetricsPlugin}from"../../../chunks/app-BSEc70eh.js";

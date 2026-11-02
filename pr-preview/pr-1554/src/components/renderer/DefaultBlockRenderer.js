@@ -1,1 +1,1 @@
-export{UP as BulletDot,WP as DefaultBlockLayout,GP as DefaultBlockRenderer}from"../../../chunks/app-DqKZ4Spc.js";
+export{KP as BulletDot,qP as DefaultBlockLayout,JP as DefaultBlockRenderer}from"../../../chunks/app-BSEc70eh.js";

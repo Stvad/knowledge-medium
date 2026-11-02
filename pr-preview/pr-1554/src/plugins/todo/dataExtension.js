@@ -1,1 +1,1 @@
-export{YU as todoDataExtension}from"../../../chunks/app-DqKZ4Spc.js";
+export{QU as todoDataExtension}from"../../../chunks/app-BSEc70eh.js";

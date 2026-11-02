@@ -1,1 +1,1 @@
-export{Not as CHANGE_SCOPE_POLICIES,Pot as ChangeScope,Fot as isChangeScope,Iot as policyForScope,Lot as scopeAllowedInReadOnly,Rot as scopeIsUndoable,zot as scopePoliciesEquivalent,Bot as scopeUploadsToServer,Vot as sourceForScope}from"../../../chunks/app-DqKZ4Spc.js";
+export{Rot as CHANGE_SCOPE_POLICIES,zot as ChangeScope,Bot as isChangeScope,Vot as policyForScope,Hot as scopeAllowedInReadOnly,Uot as scopeIsUndoable,Wot as scopePoliciesEquivalent,Got as scopeUploadsToServer,Kot as sourceForScope}from"../../../chunks/app-BSEc70eh.js";
