@@ -16,6 +16,7 @@
  *  so React keeps a stable component identity and never unmounts the inner
  *  subtree on a parent re-render (same invariant as geoContentDecorator). */
 
+import { useCallback } from 'react'
 import type { Block } from '@/data/block.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -86,9 +87,15 @@ const SubtreeCountBadge = ({
   limit,
   countText,
 }: BadgeProps & {countText: (content: string) => number}) => {
-  const total = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
-    selector: rows => rows?.reduce((sum, row) => sum + countText(row.content), 0),
-  })
+  const sumRows = useCallback(
+    (rows: readonly {content: string}[] | undefined) =>
+      rows?.reduce((sum, row) => sum + countText(row.content), 0),
+    [countText],
+  )
+  const total = useHandle(
+    block.repo.query.subtree({id: block.id, hidePropertyChildren: true}),
+    {selector: sumRows},
+  )
   // Nothing until the subtree has loaded: an empty sum would read as a real 0.
   if (total === undefined) return null
   const {text, over} = charCountDisplay(total, limit)
@@ -100,9 +107,9 @@ const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {
   const profiles = runtime.read(characterCountProfilesFacet)
   const profile = profileFrom(profiles, config.profileId)
 
-  // Keyed by profile id: profiles' `useCount` hooks differ, so switching
-  // profiles must remount rather than change the hook sequence in place.
   if (!config.subtreeTotal) {
+    // Keyed by profile id: profiles' `useCount` hooks differ, so switching
+    // profiles must remount rather than change the hook sequence in place.
     return <BlockCountBadge key={profile.id} block={block} profile={profile} limit={config.limit}/>
   }
   if (!profile.countText) {
@@ -110,7 +117,6 @@ const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {
   }
   return (
     <SubtreeCountBadge
-      key={profile.id}
       block={block}
       profile={profile}
       limit={config.limit}

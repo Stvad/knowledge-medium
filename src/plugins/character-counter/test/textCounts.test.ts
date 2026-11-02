@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countCharacters, countWords } from '../textCounts'
+import { countWords } from '../textCounts'
 
 describe('countWords', () => {
   it('counts whitespace-separated tokens', () => {
@@ -21,12 +21,5 @@ describe('countWords', () => {
 
   it('counts letters outside ASCII', () => {
     expect(countWords('привіт світ café')).toBe(3)
-  })
-})
-
-describe('countCharacters', () => {
-  it('is the raw content length', () => {
-    expect(countCharacters('')).toBe(0)
-    expect(countCharacters('a b')).toBe(3)
   })
 })

@@ -1,6 +1,6 @@
 /** Character-counter block type. `CHAR_COUNTER_TYPE` is a generic,
  *  user-applicable tag — add it to any block (a tweet draft, an abstract,
- *  a summary field) to get a live character count below its content. The
+ *  a summary field, an essay's root) to get a live character or word count. The
  *  `char:*` fields are lifted onto the type so `addType` seeds defaults and
  *  the property panel surfaces them in the type section, mirroring the geo
  *  plugin's lift of `place:*` fields. */
