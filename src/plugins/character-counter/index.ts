@@ -7,9 +7,11 @@
  *  and the limit is visual-only; neither ever blocks editing. */
 
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
+import { counterActions } from './actions'
 import { characterCounterDataExtension } from './dataExtension'
 import { characterCountDecoratorContribution } from './CharacterCountDecorator'
 import { builtinCountProfiles } from './profiles'
@@ -40,4 +42,5 @@ export const characterCounterPlugin: AppExtension = systemToggle({
   builtinCountProfiles,
   propertyEditorOverridesFacet.of(charProfileEditorOverride, {source: 'character-counter'}),
   blockContentDecoratorsFacet.of(characterCountDecoratorContribution, {source: 'character-counter'}),
+  counterActions.map(action => actionsFacet.of(action, {source: 'character-counter'})),
 ])
