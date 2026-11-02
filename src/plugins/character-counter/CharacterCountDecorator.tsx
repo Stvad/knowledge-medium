@@ -87,8 +87,10 @@ const SubtreeCountBadge = ({
   countText,
 }: BadgeProps & {countText: (content: string) => number}) => {
   const total = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
-    selector: rows => (rows ?? []).reduce((sum, row) => sum + countText(row.content), 0),
+    selector: rows => rows?.reduce((sum, row) => sum + countText(row.content), 0),
   })
+  // Nothing until the subtree has loaded: an empty sum would read as a real 0.
+  if (total === undefined) return null
   const {text, over} = charCountDisplay(total, limit)
   return <BadgeText profile={profile} text={text} over={over}/>
 }
