@@ -34,6 +34,7 @@ import {
 import type { Repo } from './repo'
 import type { LoaderHandle } from './internals/handleStore'
 import { getBlockTypes } from './properties'
+import { getResolvedProperty, peekResolvedProperty } from './internals/propertySchemaResolution'
 
 const liveSnapshot = (snapshot: BlockData | undefined): BlockData | undefined | null => {
   if (snapshot === undefined) return undefined
@@ -204,13 +205,8 @@ export class Block implements Handle<BlockData | null> {
    *  fallback. Throws BlockNotLoadedError if the row isn't loaded. */
   get<T>(schema: PropertySchema<T>): T {
     const data = this.data  // throws if not loaded
-    const resolution = this.repo.propertySchemaResolverFor(data.workspaceId)
-      .resolveBoundary(schema)
-    if (resolution.status === 'identity-unavailable') return schema.defaultValue
-    const resolvedSchema = resolution.schema
-    const stored = data.properties[resolvedSchema.name]
-    if (stored === undefined) return resolvedSchema.defaultValue
-    return resolvedSchema.codec.decode(stored)
+    return getResolvedProperty(
+      this.repo.propertySchemaResolverFor(data.workspaceId), data.properties, schema)
   }
 
   /** Like `get` but doesn't substitute the default — returns undefined
@@ -218,13 +214,8 @@ export class Block implements Handle<BlockData | null> {
   peekProperty<T>(schema: PropertySchema<T>): T | undefined {
     const snap = this.peek()
     if (snap === undefined || snap === null) return undefined
-    const resolution = this.repo.propertySchemaResolverFor(snap.workspaceId)
-      .resolveBoundary(schema)
-    if (resolution.status === 'identity-unavailable') return undefined
-    const resolvedSchema = resolution.schema
-    const stored = snap.properties[resolvedSchema.name]
-    if (stored === undefined) return undefined
-    return resolvedSchema.codec.decode(stored)
+    return peekResolvedProperty(
+      this.repo.propertySchemaResolverFor(snap.workspaceId), snap.properties, schema)
   }
 
   get types(): readonly string[] {
