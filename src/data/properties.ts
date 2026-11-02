@@ -550,16 +550,18 @@ export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string
  *  `properties` field. `row.before` is null on insert; `row.after` is
  *  null on hard-delete — both are null-safe here, returning the
  *  appropriate one-sided diff. Order in the returned array matches
- *  `typesProp.codec.decode` order on whichever side is non-null. */
+ *  `typesProp.codec.decode` order on whichever side is non-null.
+ *  A malformed `types` cell reads as no types: these run on every property
+ *  write, and a throw would refuse an unrelated edit to that block. */
 export const addedTypes = (row: ChangedRow): readonly string[] => {
-  const before = row.before ? new Set(getBlockTypes(row.before)) : new Set<string>()
-  const after = row.after ? getBlockTypes(row.after) : []
+  const before = new Set(row.before ? safeDecodeRowProperty(row.before, typesProp) : [])
+  const after = row.after ? safeDecodeRowProperty(row.after, typesProp) : []
   return after.filter(t => !before.has(t))
 }
 
 export const removedTypes = (row: ChangedRow): readonly string[] => {
-  const before = row.before ? getBlockTypes(row.before) : []
-  const after = row.after ? new Set(getBlockTypes(row.after)) : new Set<string>()
+  const before = row.before ? safeDecodeRowProperty(row.before, typesProp) : []
+  const after = new Set(row.after ? safeDecodeRowProperty(row.after, typesProp) : [])
   return before.filter(t => !after.has(t))
 }
 
