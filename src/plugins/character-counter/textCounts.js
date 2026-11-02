@@ -1,0 +1,1 @@
+export{xn as countCharacters,Sn as countWords}from"../../../chunks/app-hvijwxKg.js";

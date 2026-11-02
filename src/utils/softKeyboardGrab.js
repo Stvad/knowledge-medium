@@ -1,1 +1,1 @@
-export{KC as grabSoftKeyboard}from"../../chunks/app-BhoY1Gbh.js";
+export{rw as grabSoftKeyboard}from"../../chunks/app-hvijwxKg.js";

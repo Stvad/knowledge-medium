@@ -1,1 +1,1 @@
-export{vE as BlockRef}from"../../../chunks/app-BhoY1Gbh.js";
+export{kE as BlockRef}from"../../../chunks/app-hvijwxKg.js";

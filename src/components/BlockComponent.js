@@ -1,1 +1,1 @@
-export{TN as BlockChildren,EN as BlockComponent}from"../../chunks/app-BhoY1Gbh.js";
+export{LN as BlockChildren,RN as BlockComponent}from"../../chunks/app-hvijwxKg.js";

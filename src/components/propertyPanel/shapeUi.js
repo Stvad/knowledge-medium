@@ -1,1 +1,1 @@
-export{LH as PropertyShapeButton,RH as PropertyShapeGlyph}from"../../../chunks/app-BhoY1Gbh.js";
+export{YH as PropertyShapeButton,XH as PropertyShapeGlyph}from"../../../chunks/app-hvijwxKg.js";

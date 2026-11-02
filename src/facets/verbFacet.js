@@ -1,1 +1,1 @@
-export{MX as defineVerbFacet}from"../../chunks/app-BhoY1Gbh.js";
+export{WX as defineVerbFacet}from"../../chunks/app-hvijwxKg.js";

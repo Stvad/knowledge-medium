@@ -1,1 +1,1 @@
-export{zC as BreadcrumbRenderer}from"../../../chunks/app-BhoY1Gbh.js";
+export{XC as BreadcrumbRenderer}from"../../../chunks/app-hvijwxKg.js";

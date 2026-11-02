@@ -1,1 +1,1 @@
-export{UQ as Button}from"../../../chunks/app-BhoY1Gbh.js";
+export{t$ as Button}from"../../../chunks/app-hvijwxKg.js";

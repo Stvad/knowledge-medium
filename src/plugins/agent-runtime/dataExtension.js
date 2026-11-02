@@ -1,1 +1,1 @@
-export{NX as agentRuntimeDataExtension}from"../../../chunks/app-BhoY1Gbh.js";
+export{GX as agentRuntimeDataExtension}from"../../../chunks/app-hvijwxKg.js";
