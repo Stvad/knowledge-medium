@@ -111,19 +111,12 @@ const planBasisOf = (row: BlockData): string =>
  *  abort the whole `apply`, freezing references for its own row and every
  *  other row in the same event.
  *
- *  DEFENCE IN DEPTH, not a load-bearing guard: that scenario is currently
- *  unreachable through a local write, because the kernel's SAME-TX
- *  `core.blockTypeTypeify` calls `addedTypes` → `getBlockTypes` on every
- *  changed row first and throws there instead — which rolls the write
- *  back rather than corrupting derived state (verified by writing both
- *  malformed shapes through `repo.tx`; the tx rejects). So this is
- *  unpinnable through the public path and is unit-tested directly
- *  instead. It stays because the total read costs nothing, and because a
- *  wrong-shaped value reading as "not an extension" is the right answer
- *  anyway — the block gets parsed like ordinary content, exactly as
- *  before this gate existed. Same shape as `MediaBlockRenderer.canRender`,
- *  which documents the identical `getBlockTypes` hazard on the render
- *  side. */
+ *  Load-bearing: a local write can store a malformed `types` cell (the
+ *  kernel's same-tx processors read it tolerantly and let it through). A
+ *  wrong-shaped value reading as "not an extension" is the right answer —
+ *  the block gets parsed like ordinary content. Same shape as
+ *  `MediaBlockRenderer.canRender`, which documents the identical
+ *  `getBlockTypes` hazard on the render side. */
 export const isExtensionSource = (source: Pick<BlockData, 'properties'>): boolean => {
   const types = source.properties[typesProp.name]
   return Array.isArray(types) && types.includes(EXTENSION_TYPE)
