@@ -1,0 +1,1 @@
+export{WX as defineVerbFacet}from"../../chunks/app-DVfgyEfh.js";

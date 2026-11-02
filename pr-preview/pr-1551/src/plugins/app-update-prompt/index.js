@@ -1,0 +1,1 @@
+export{yM as appUpdatePromptExtension}from"../../../chunks/app-DVfgyEfh.js";

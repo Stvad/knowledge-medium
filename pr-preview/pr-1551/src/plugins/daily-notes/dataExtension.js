@@ -1,0 +1,1 @@
+export{UK as dailyNotesDataExtension}from"../../../chunks/app-DVfgyEfh.js";

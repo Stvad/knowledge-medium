@@ -1,0 +1,1 @@
+export{RI as BlockEditor}from"../../chunks/app-DVfgyEfh.js";

@@ -1,0 +1,1 @@
+export{XU as staticDataExtensions}from"../../chunks/app-DVfgyEfh.js";

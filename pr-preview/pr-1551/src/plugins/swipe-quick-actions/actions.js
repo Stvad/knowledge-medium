@@ -1,0 +1,1 @@
+export{IA as DEFAULT_QUICK_ACTION_ITEMS,LA as SWIPE_RIGHT_BLOCK_ACTION_ID,RA as isQuickActionItem,zA as quickActionItemsFacet}from"../../../chunks/app-DVfgyEfh.js";

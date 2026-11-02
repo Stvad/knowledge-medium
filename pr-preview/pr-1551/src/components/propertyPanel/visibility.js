@@ -1,0 +1,1 @@
+export{XB as isPropertyPanelHiddenProperty,ZB as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-DVfgyEfh.js";

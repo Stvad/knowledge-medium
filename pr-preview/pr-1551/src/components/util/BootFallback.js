@@ -1,0 +1,1 @@
+export{DU as BootFallback}from"../../../chunks/app-DVfgyEfh.js";

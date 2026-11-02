@@ -1,0 +1,1 @@
+export{OU as SuspenseFallback}from"../../../chunks/app-DVfgyEfh.js";

@@ -1,0 +1,1 @@
+export{gA as SwipeActionMenu}from"../../../chunks/app-DVfgyEfh.js";

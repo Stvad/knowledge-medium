@@ -1,0 +1,1 @@
+export{Oot as CHANGE_SCOPE_POLICIES,kot as ChangeScope,Aot as isChangeScope,jot as policyForScope,Mot as scopeAllowedInReadOnly,Not as scopeIsUndoable,Pot as scopePoliciesEquivalent,Fot as scopeUploadsToServer,Iot as sourceForScope}from"../../../chunks/app-DVfgyEfh.js";

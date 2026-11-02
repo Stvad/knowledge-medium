@@ -1,0 +1,1 @@
+export{kat as SYSTEM_AUTHOR_PREFIX,Aat as isSystemAuthor,jat as systemAuthor}from"../../../chunks/app-DVfgyEfh.js";
