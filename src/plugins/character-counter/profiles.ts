@@ -1,10 +1,8 @@
 import type { Block } from '@/data/block.js'
 import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useContent } from '@/hooks/block.js'
+import { RAW_CHARACTER_COUNT_PROFILE_ID, WORDS_COUNT_PROFILE_ID } from './properties'
 import { countCharacters, countWords } from './textCounts'
-
-export const RAW_CHARACTER_COUNT_PROFILE_ID = 'raw'
-export const WORDS_COUNT_PROFILE_ID = 'words'
 
 export interface CharacterCountProfile {
   id: string

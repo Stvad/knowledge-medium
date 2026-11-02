@@ -26,7 +26,7 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
-import { CHAR_COUNTER_TYPE } from './blockType'
+import { COUNTER_TYPES } from './blockType'
 import { charLimitProp, charProfileProp, charScopeProp } from './properties'
 import { charCountDisplay } from './charCount'
 import {
@@ -47,6 +47,9 @@ interface CharacterCountDecoratorProps {
   block: Block
   Inner: BlockRenderer
 }
+
+const isCounter = (types: readonly string[]): boolean =>
+  types.some(type => COUNTER_TYPES.includes(type))
 
 const blockInfoSelector = (data: ReturnType<Block['peek']>) => ({
   parentId: data?.parentId ?? null,
@@ -153,7 +156,7 @@ const InheritedCharacterCountDecorator = ({
   const [parentLimit] = useProperty(parent, charLimitProp)
   const [parentProfileId] = useProperty(parent, charProfileProp)
   const applies =
-    parentTypes.includes(CHAR_COUNTER_TYPE) &&
+    isCounter(parentTypes) &&
     parentScope === 'children'
 
   if (!applies) return <Inner block={block}/>
@@ -173,7 +176,7 @@ const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) =
   const [limit] = useProperty(block, charLimitProp)
   const [profileId] = useProperty(block, charProfileProp)
   const selfApplies =
-    info.types.includes(CHAR_COUNTER_TYPE) &&
+    isCounter(info.types) &&
     (scope === 'self' || scope === 'subtree')
 
   if (selfApplies) {

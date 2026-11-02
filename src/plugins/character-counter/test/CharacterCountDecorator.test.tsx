@@ -8,7 +8,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { BlockRendererProps } from '@/types'
-import { CHAR_COUNTER_TYPE } from '../blockType'
+import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from '../blockType'
 import { characterCounterDataExtension } from '../dataExtension'
 import { charLimitProp, charProfileProp, charScopeProp, type CharacterCounterScope } from '../properties'
 import { builtinCountProfiles, characterCountProfilesFacet } from '../profiles'
@@ -51,15 +51,20 @@ const CHILD = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'
 const GRANDCHILD = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'
 
 /** root "Essay draft" → child "one two three" → grandchild "four five". */
-const seedTree = async (counter: {scope: CharacterCounterScope; profile?: string; limit?: number}) => {
+const seedTree = async (counter: {
+  type?: string
+  scope?: CharacterCounterScope
+  profile?: string
+  limit?: number
+}) => {
   await repo.tx(async tx => {
     await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Essay draft'})
   }, {scope: ChangeScope.BlockDefault})
   await repo.mutate.createChild({parentId: ROOT, id: CHILD, content: 'one two three'})
   await repo.mutate.createChild({parentId: CHILD, id: GRANDCHILD, content: 'four five'})
-  await repo.addType(ROOT, CHAR_COUNTER_TYPE)
+  await repo.addType(ROOT, counter.type ?? CHAR_COUNTER_TYPE)
   const root = repo.block(ROOT)
-  await root.set(charScopeProp, counter.scope)
+  if (counter.scope !== undefined) await root.set(charScopeProp, counter.scope)
   if (counter.profile !== undefined) await root.set(charProfileProp, counter.profile)
   if (counter.limit !== undefined) await root.set(charLimitProp, counter.limit)
   return root
@@ -129,6 +134,20 @@ describe('CharacterCountDecorator', () => {
 
     renderBlock(ROOT)
     await waitFor(() => expect(badgeText()).toBe('7'), {timeout: TIMEOUT_MS})
+  })
+
+  it('a word counter starts out counting words over its whole subtree', async () => {
+    const root = await seedTree({type: WORD_COUNTER_TYPE})
+    expect(root.get(charScopeProp)).toBe('subtree')
+    expect(root.get(charProfileProp)).toBe('words')
+    renderBlock(ROOT)
+    await waitFor(() => expect(badgeText()).toBe('7'), {timeout: TIMEOUT_MS})
+  })
+
+  it('a word counter configured for its children decorates each child', async () => {
+    await seedTree({type: WORD_COUNTER_TYPE, scope: 'children'})
+    renderBlock(CHILD)
+    await waitFor(() => expect(badgeText()).toBe('3'), {timeout: TIMEOUT_MS})
   })
 
   it('says a hook-only profile cannot total a subtree instead of showing a wrong number', async () => {

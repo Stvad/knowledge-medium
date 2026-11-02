@@ -4,12 +4,8 @@
 import { definePropertyEditorOverride, type PropertyEditorProps } from '@/data/api'
 import { OptionSelect } from '@/components/propertyEditors/SelectPropertyEditor'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { charProfileProp } from './properties'
-import {
-  characterCountProfilesFacet,
-  profileLabel,
-  RAW_CHARACTER_COUNT_PROFILE_ID,
-} from './profiles'
+import { charProfileProp, RAW_CHARACTER_COUNT_PROFILE_ID } from './properties'
+import { characterCountProfilesFacet, profileLabel } from './profiles'
 
 export const ProfilePropertyEditor = ({
   value,
