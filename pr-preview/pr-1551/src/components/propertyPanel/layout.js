@@ -1,1 +1,0 @@
-export{QR as METADATA_ROW_GRID_STYLE,$R as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-DVfgyEfh.js";

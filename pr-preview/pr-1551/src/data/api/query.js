@@ -1,1 +1,0 @@
-export{Fat as defineQuery}from"../../../chunks/app-DVfgyEfh.js";

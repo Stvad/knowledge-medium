@@ -1,1 +1,0 @@
-export{Vv as useIsReadOnly}from"../../chunks/app-DVfgyEfh.js";

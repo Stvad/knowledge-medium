@@ -1,1 +1,0 @@
-export{Z0 as kernelDataExtension}from"../../chunks/app-DVfgyEfh.js";

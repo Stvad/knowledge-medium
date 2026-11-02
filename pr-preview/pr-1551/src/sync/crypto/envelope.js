@@ -1,1 +1,0 @@
-export{M8 as ENVELOPE_PREFIX,N8 as GCM_TAG_BYTES,P8 as NONCE_BYTES,F8 as SCHEMA_VERSION,I8 as decodeEnvelope,L8 as encodeEnvelope,R8 as hasEnvelopePrefix}from"../../../chunks/app-DVfgyEfh.js";

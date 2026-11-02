@@ -1,1 +1,0 @@
-export{QC as Breadcrumbs}from"../../../chunks/app-DVfgyEfh.js";

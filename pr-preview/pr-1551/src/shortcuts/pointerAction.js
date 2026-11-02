@@ -1,1 +1,0 @@
-export{UM as dispatchPointerAction,WM as setPointerActionDispatcher}from"../../chunks/app-DVfgyEfh.js";

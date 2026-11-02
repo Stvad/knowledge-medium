@@ -1,1 +1,0 @@
-export{Uat as definePostCommitProcessor}from"../../../chunks/app-DVfgyEfh.js";

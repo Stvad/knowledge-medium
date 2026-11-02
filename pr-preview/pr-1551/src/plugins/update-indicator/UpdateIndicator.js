@@ -1,1 +1,0 @@
-export{Jg as UpdateIndicator}from"../../../chunks/app-DVfgyEfh.js";

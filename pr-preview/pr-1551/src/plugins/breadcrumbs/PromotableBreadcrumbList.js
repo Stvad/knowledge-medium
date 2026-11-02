@@ -1,1 +1,0 @@
-export{YC as PromotableBreadcrumbList}from"../../../chunks/app-DVfgyEfh.js";

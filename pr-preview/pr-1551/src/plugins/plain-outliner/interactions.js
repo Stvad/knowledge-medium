@@ -1,1 +1,0 @@
-export{iw as blockEditingContentRenderer}from"../../../chunks/app-DVfgyEfh.js";

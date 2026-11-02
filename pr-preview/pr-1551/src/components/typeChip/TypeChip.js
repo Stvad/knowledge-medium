@@ -1,1 +1,0 @@
-export{sj as TypeChip}from"../../../chunks/app-DVfgyEfh.js";

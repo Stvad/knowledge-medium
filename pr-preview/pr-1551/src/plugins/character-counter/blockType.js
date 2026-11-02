@@ -1,1 +1,0 @@
-export{IJ as CHAR_COUNTER_TYPE,LJ as CHAR_COUNTER_TYPE_CONTRIBUTIONS}from"../../../chunks/app-DVfgyEfh.js";

@@ -1,1 +1,0 @@
-export{Pk as useCommandPaletteActions}from"../../../chunks/app-DVfgyEfh.js";

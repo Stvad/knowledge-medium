@@ -1,1 +1,0 @@
-export{nM as editorAutocompleteExtension}from"../../chunks/app-DVfgyEfh.js";

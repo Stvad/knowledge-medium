@@ -1,1 +1,0 @@
-export{FE as openRecentsPage}from"../../../chunks/app-DVfgyEfh.js";

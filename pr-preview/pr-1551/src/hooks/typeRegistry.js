@@ -1,1 +1,0 @@
-export{MB as useTypes}from"../../chunks/app-DVfgyEfh.js";
