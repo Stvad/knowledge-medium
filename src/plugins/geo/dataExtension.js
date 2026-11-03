@@ -1,1 +1,1 @@
-export{KG as geoDataExtension}from"../../../chunks/app-1i7xXIDC.js";
+export{KG as geoDataExtension}from"../../../chunks/app-BTj-F_fi.js";

@@ -1,1 +1,1 @@
-export{dy as aliasPageBullet,fy as aliasPageBulletContribution,py as aliasPageStyling,my as aliasPageStylingContribution}from"../../../chunks/app-1i7xXIDC.js";
+export{dy as aliasPageBullet,fy as aliasPageBulletContribution,py as aliasPageStyling,my as aliasPageStylingContribution}from"../../../chunks/app-BTj-F_fi.js";

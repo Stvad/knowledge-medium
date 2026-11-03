@@ -1,1 +1,1 @@
-export{PM as checkForAppUpdate,FM as registerServiceWorker}from"../chunks/app-1i7xXIDC.js";
+export{PM as checkForAppUpdate,FM as registerServiceWorker}from"../chunks/app-BTj-F_fi.js";
