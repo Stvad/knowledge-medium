@@ -1,1 +1,1 @@
-import{mk as e}from"../../../chunks/app-is2yVBCM.js";export{e as appUpdatePromptExtension};
+export{yM as appUpdatePromptExtension}from"../../../chunks/app-DEFsyFxb.js";

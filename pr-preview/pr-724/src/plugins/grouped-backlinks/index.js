@@ -1,1 +1,1 @@
-import{am as e}from"../../../chunks/app-is2yVBCM.js";export{e as groupedBacklinksPlugin};
+export{t_ as groupedBacklinksPlugin}from"../../../chunks/app-DEFsyFxb.js";

@@ -1,1 +1,1 @@
-import{_U as e}from"../../../chunks/app-is2yVBCM.js";export{e as dailyNotesDataExtension};
+export{UK as dailyNotesDataExtension}from"../../../chunks/app-DEFsyFxb.js";

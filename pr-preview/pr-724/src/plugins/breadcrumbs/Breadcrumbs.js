@@ -1,1 +1,1 @@
-import{Xb as e}from"../../../chunks/app-is2yVBCM.js";export{e as Breadcrumbs};
+export{QC as Breadcrumbs}from"../../../chunks/app-DEFsyFxb.js";

@@ -1,1 +1,1 @@
-import{sa as e}from"../../../chunks/app-is2yVBCM.js";export{e as MigrationGate};
+export{xa as MigrationGate}from"../../../chunks/app-DEFsyFxb.js";

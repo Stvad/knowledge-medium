@@ -1,1 +1,1 @@
-import{Yn as e}from"../../../chunks/app-is2yVBCM.js";export{e as extensionsDataExtension};
+export{or as extensionsDataExtension}from"../../../chunks/app-DEFsyFxb.js";

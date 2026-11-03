@@ -1,1 +1,1 @@
-import{ng as e}from"../../../chunks/app-is2yVBCM.js";export{e as CleanupAttachmentsDialog};
+export{wy as CleanupAttachmentsDialog}from"../../../chunks/app-DEFsyFxb.js";

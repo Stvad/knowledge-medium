@@ -1,1 +1,1 @@
-import{mn as e}from"../../../chunks/app-is2yVBCM.js";export{e as BirthdayCelebration};
+export{Tn as BirthdayCelebration}from"../../../chunks/app-DEFsyFxb.js";

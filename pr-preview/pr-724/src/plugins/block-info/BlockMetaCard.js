@@ -1,1 +1,1 @@
-import{Xp as e}from"../../../chunks/app-is2yVBCM.js";export{e as BlockMetaCard};
+export{Kg as BlockMetaCard}from"../../../chunks/app-DEFsyFxb.js";

@@ -1,1 +1,1 @@
-import{_v as e}from"../../../chunks/app-is2yVBCM.js";export{e as videoPlayerPlugin};
+export{vx as videoPlayerPlugin}from"../../../chunks/app-DEFsyFxb.js";

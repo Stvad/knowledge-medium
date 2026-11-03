@@ -1,1 +1,1 @@
-import{iW as e}from"../../../chunks/app-is2yVBCM.js";export{e as backlinksDataExtension};
+export{KJ as backlinksDataExtension}from"../../../chunks/app-DEFsyFxb.js";

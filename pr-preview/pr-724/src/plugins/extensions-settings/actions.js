@@ -1,1 +1,1 @@
-import{or as e}from"../../../chunks/app-is2yVBCM.js";export{e as openExtensionsSettingsAction};
+export{_r as openExtensionsSettingsAction}from"../../../chunks/app-DEFsyFxb.js";

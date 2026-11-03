@@ -1,1 +1,0 @@
-"use client";import{tC as e}from"../../../chunks/app-is2yVBCM.js";export{e as ThemeToggle};

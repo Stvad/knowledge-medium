@@ -1,1 +1,1 @@
-import{AO as e,jO as t}from"../../chunks/app-is2yVBCM.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+export{Pj as exampleExtensions,Fj as insertExampleExtensionsUnder}from"../../chunks/app-DEFsyFxb.js";

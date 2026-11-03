@@ -1,1 +1,1 @@
-import{Lz as e}from"../../../chunks/app-is2yVBCM.js";export{e as BootFallback};
+export{DU as BootFallback}from"../../../chunks/app-DEFsyFxb.js";

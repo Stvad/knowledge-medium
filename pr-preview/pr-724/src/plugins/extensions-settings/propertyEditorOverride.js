@@ -1,1 +1,1 @@
-import{Xn as e}from"../../../chunks/app-is2yVBCM.js";export{e as extensionsOverridesUi};
+export{sr as extensionsOverridesUi}from"../../../chunks/app-DEFsyFxb.js";

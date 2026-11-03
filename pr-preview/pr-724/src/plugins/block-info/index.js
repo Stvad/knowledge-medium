@@ -1,1 +1,1 @@
-import{Yp as e}from"../../../chunks/app-is2yVBCM.js";export{e as blockInfoPlugin};
+export{Gg as blockInfoPlugin}from"../../../chunks/app-DEFsyFxb.js";

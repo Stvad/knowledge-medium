@@ -1,1 +1,1 @@
-import{yet as e}from"../../../chunks/app-is2yVBCM.js";export{e as defineQuery};
+export{Yat as defineQuery}from"../../../chunks/app-DEFsyFxb.js";

@@ -1,1 +1,1 @@
-import{Ei as e}from"../../../chunks/app-is2yVBCM.js";export{e as startupMetricsPlugin};
+export{Bi as startupMetricsPlugin}from"../../../chunks/app-DEFsyFxb.js";

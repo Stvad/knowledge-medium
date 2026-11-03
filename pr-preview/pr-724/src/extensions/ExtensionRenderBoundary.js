@@ -1,1 +1,1 @@
-import{wM as e}from"../../chunks/app-is2yVBCM.js";export{e as ExtensionRenderBoundary};
+export{IF as ExtensionRenderBoundary}from"../../chunks/app-DEFsyFxb.js";

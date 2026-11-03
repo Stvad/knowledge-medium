@@ -1,0 +1,1 @@
+export{Vv as useIsReadOnly}from"../../chunks/app-DEFsyFxb.js";

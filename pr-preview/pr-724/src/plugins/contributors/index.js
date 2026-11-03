@@ -1,1 +1,1 @@
-import{ju as e}from"../../../chunks/app-is2yVBCM.js";export{e as contributorsPlugin};
+export{Qf as contributorsPlugin}from"../../../chunks/app-DEFsyFxb.js";

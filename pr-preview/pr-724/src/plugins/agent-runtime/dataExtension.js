@@ -1,1 +1,1 @@
-import{FG as e}from"../../../chunks/app-is2yVBCM.js";export{e as agentRuntimeDataExtension};
+export{XX as agentRuntimeDataExtension}from"../../../chunks/app-DEFsyFxb.js";

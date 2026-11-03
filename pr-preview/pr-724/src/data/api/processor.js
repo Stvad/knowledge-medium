@@ -1,1 +1,1 @@
-import{Det as e}from"../../../chunks/app-is2yVBCM.js";export{e as definePostCommitProcessor};
+export{rot as definePostCommitProcessor}from"../../../chunks/app-DEFsyFxb.js";

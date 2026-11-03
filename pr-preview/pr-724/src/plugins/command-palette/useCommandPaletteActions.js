@@ -1,1 +1,1 @@
-import{AE as e}from"../../../chunks/app-is2yVBCM.js";export{e as useCommandPaletteActions};
+export{Pk as useCommandPaletteActions}from"../../../chunks/app-DEFsyFxb.js";

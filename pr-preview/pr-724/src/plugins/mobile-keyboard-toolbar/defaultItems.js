@@ -1,1 +1,1 @@
-import{wb as e}from"../../../chunks/app-is2yVBCM.js";export{e as defaultToolbarItems};
+export{TC as defaultToolbarItems}from"../../../chunks/app-DEFsyFxb.js";

@@ -1,1 +1,1 @@
-import{rz as e}from"../../chunks/app-is2yVBCM.js";export{e as usePropertySchemas};
+export{qH as usePropertySchemas}from"../../chunks/app-DEFsyFxb.js";

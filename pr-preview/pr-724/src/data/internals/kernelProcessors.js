@@ -1,1 +1,1 @@
-import{jZ as e}from"../../../chunks/app-is2yVBCM.js";export{e as KERNEL_PROCESSORS};
+export{J2 as KERNEL_PROCESSORS}from"../../../chunks/app-DEFsyFxb.js";

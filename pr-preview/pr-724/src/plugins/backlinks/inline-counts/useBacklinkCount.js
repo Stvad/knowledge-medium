@@ -1,1 +1,1 @@
-import{_m as e}from"../../../../chunks/app-is2yVBCM.js";export{e as useBacklinkCount};
+export{p_ as useBacklinkCount}from"../../../../chunks/app-DEFsyFxb.js";
