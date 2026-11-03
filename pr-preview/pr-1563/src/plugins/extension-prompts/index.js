@@ -1,1 +1,0 @@
-export{dM as ExtensionPromptSurface,fM as extensionPromptsExtension}from"../../../chunks/app-CbcJ48p3.js";

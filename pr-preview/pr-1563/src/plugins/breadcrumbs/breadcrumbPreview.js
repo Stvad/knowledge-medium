@@ -1,1 +1,0 @@
-export{GC as getBreadcrumbContentPreview}from"../../../chunks/app-CbcJ48p3.js";

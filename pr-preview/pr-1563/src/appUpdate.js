@@ -1,1 +1,0 @@
-export{IM as appUpdate,LM as useAppUpdateAvailable}from"../chunks/app-CbcJ48p3.js";

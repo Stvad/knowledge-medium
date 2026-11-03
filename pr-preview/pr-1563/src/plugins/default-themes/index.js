@@ -1,1 +1,0 @@
-export{lE as DEFAULT_THEME_ID_DARK,uE as DEFAULT_THEME_ID_LIGHT,JT as defaultThemeContributions,qT as defaultThemesPlugin}from"../../../chunks/app-CbcJ48p3.js";

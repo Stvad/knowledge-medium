@@ -1,1 +1,0 @@
-export{Xg as BlockMetaCard}from"../../../chunks/app-CbcJ48p3.js";

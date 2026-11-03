@@ -1,1 +1,0 @@
-export{pj as TypeChip}from"../../../chunks/app-CbcJ48p3.js";

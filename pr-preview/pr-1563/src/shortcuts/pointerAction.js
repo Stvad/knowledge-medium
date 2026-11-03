@@ -1,1 +1,0 @@
-export{YM as dispatchPointerAction,XM as setPointerActionDispatcher}from"../../chunks/app-CbcJ48p3.js";

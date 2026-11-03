@@ -1,1 +1,0 @@
-export{IC as MobileBottomNavButton}from"../../../chunks/app-CbcJ48p3.js";

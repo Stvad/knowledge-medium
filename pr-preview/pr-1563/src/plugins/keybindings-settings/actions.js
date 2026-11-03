@@ -1,1 +1,0 @@
-export{Tk as openKeybindingsSettingsAction}from"../../../chunks/app-CbcJ48p3.js";

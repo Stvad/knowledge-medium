@@ -1,1 +1,0 @@
-export{wy as attachmentsPlugin}from"../../../chunks/app-CbcJ48p3.js";
