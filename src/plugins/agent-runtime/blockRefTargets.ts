@@ -47,6 +47,9 @@ const missingTargetFacts = async (repo: Repo, workspaceId: string, id: string): 
  *  parse: `destination` is read only when there is one, and answers null for
  *  a written block that does not exist, which the verb then reports itself.
  *
+ *  A mark inside code counts: the reference index reads raw content and
+ *  records it, though the renderer shows it as code.
+ *
  *  Checked before the write's tx, not inside it: the hint reads through
  *  `repo.db`, which a write tx would deadlock on, and a target deleted in the
  *  gap is the same dead link as one deleted right after the commit. */

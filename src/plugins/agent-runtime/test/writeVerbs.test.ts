@@ -644,6 +644,13 @@ describe('block refs in written content', () => {
     await run({type: 'edit-block', id: NOTE, old: 'milk', new: `oat ((${MISSING}))`})
     expect(await contentOf(NOTE)).toBe(`buy oat ((${MISSING})) ((${MISSING}))`)
   })
+
+  it('edit-block refuses a mark the edit assembles from the text around it', async () => {
+    await seed([{id: NOTE, content: `see ((${LONE}))`}, {id: LONE, content: 'target', orderKey: 'a1'}])
+    await expect(run({type: 'edit-block', id: NOTE, old: LONE, new: GUESSED}))
+      .rejects.toThrow(new RegExp(`edit-block: .*${GUESSED}`, 's'))
+    expect(await contentOf(NOTE)).toBe(`see ((${LONE}))`)
+  })
 })
 
 interface ChangesOut {

@@ -10,7 +10,7 @@ import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { AGENT_VIEW_DEFAULTS, charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
-import { blockDestination, newBlockDestination, refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { newBlockDestination, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { displayIds } from './agentViews/displayIds.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import { CUT_LEGEND, EMPTY_CONTENT, joinDisplayLines, plural } from './agentViews/shared.ts'
@@ -201,31 +201,43 @@ const editExcerpt = (content: string, at: number, length: number): string => {
     + `${end < content.length ? cutMarker(content.length - end) : ''}`
 }
 
+/** `content` with the one occurrence of `edit.old` replaced, and where. */
+const applyEdit = (verb: string, id: string, content: string, edit: EditBlockInput) => {
+  const at = content.indexOf(edit.old)
+  if (at < 0) {
+    throw new Error(
+      `${verb}: old text not found in block ${id}. Its current content is: ${contentEcho(content)}`,
+    )
+  }
+  const count = occurrences(content, edit.old)
+  if (count > 1) {
+    throw new Error(
+      `${verb}: old text matches ${count} times in block ${id} — include more surrounding text so it matches once.`,
+    )
+  }
+  // Spliced, not String.replace: a `$&` in the replacement stays literal.
+  return {content: content.slice(0, at) + edit.new + content.slice(at + edit.old.length), at}
+}
+
 export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<EditBlockResult> => {
   const verb = 'edit-block'
   if (input.old === '') {
     throw new Error(`${verb}: old must not be empty — use update-block to replace the whole content.`)
   }
   const id = await blockIdField(repo, input.id, verb, input.exactIds)
-  await refuseDanglingBlockRefs(repo, verb, [input.new], blockDestination(repo, id))
+  // The edited content, not `new` alone: a mark can take its parens or its id
+  // from the text around the replacement.
+  const current = await repo.load(id)
+  if (current) {
+    await refuseDanglingBlockRefs(repo, verb, [applyEdit(verb, id, current.content, input).content], async () => ({
+      workspaceId: current.workspaceId, before: current.content,
+    }))
+  }
   let excerpt = ''
   await repo.tx(async tx => {
     const block = await tx.get(id)
     if (!block || block.deleted) throw new Error(`${verb}: block ${id} not found.`)
-    const at = block.content.indexOf(input.old)
-    if (at < 0) {
-      throw new Error(
-        `${verb}: old text not found in block ${id}. Its current content is: ${contentEcho(block.content)}`,
-      )
-    }
-    const count = occurrences(block.content, input.old)
-    if (count > 1) {
-      throw new Error(
-        `${verb}: old text matches ${count} times in block ${id} — include more surrounding text so it matches once.`,
-      )
-    }
-    // Spliced, not String.replace: a `$&` in the replacement stays literal.
-    const content = block.content.slice(0, at) + input.new + block.content.slice(at + input.old.length)
+    const {content, at} = applyEdit(verb, id, block.content, input)
     await tx.update(id, {content})
     excerpt = editExcerpt(content, at, input.new.length)
   }, agentTxOptions(verb))
