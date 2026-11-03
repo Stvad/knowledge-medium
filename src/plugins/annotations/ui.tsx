@@ -205,22 +205,23 @@ export const commentPillContribution: BlockContentDecoratorContribution = ctx =>
 
 // ──── Inline expansion ────
 
-/** The quote as rendered markdown, so a reference in it is a link. `source`
- *  is a block the quote's references resolve against: the thread root, or the
- *  target before a root exists. */
+/** The quote as rendered markdown, so a reference in it is a link. Rendered
+ *  as a reference renders (`quotedRange.tsx`): inline, and never as a focal
+ *  title. `source` is a block the quote's references resolve against: the
+ *  thread root, or the target before a root exists. The line holding it
+ *  clamps its length, since a clamp makes its own element a block. */
 const QuoteText = ({anchor, source}: {anchor: ThreadAnchor; source: Block}) =>
   anchor.kind === 'block'
     ? <span className="italic">whole block</span>
     : (
-      <span className="line-clamp-3 break-words">
-        “<MarkdownContentRenderer
-          block={source}
-          contentTransform={() => anchor.quote}
-          containerElement="span"
-          containerClassName="[&>*]:m-0 [&>*]:inline"
-        />”
+      <span className="break-words">
+        “<NestedBlockContextProvider overrides={QUOTE_CONTEXT}>
+          <MarkdownContentRenderer block={source} contentTransform={() => anchor.quote}/>
+        </NestedBlockContextProvider>”
       </span>
     )
+
+const QUOTE_CONTEXT = {isNestedSurface: true, isReference: true}
 
 const COMPOSER_FIELD = 'min-h-[3.25em] rounded border bg-background px-2 py-1 text-sm focus-within:ring-2 focus-within:ring-ring'
 
@@ -256,7 +257,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
   }
   return (
     <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
-      <div className="text-xs text-muted-foreground">
+      <div className="line-clamp-3 text-xs text-muted-foreground">
         {suggesting ? 'Suggest a change to' : 'Comment on'}{' '}
         <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}} source={block}/>
       </div>
@@ -476,7 +477,7 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className="min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote block={block} root={root}/></span>
+      <span className="line-clamp-3 min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote block={block} root={root}/></span>
       {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
@@ -503,7 +504,7 @@ const ThreadElsewhere = ({block, root}: {block: Block; root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
   const {state} = useAnchorState(root)
   return (
-    <div className="text-sm text-muted-foreground">
+    <div className="line-clamp-3 text-sm text-muted-foreground">
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
