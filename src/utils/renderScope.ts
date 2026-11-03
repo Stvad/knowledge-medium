@@ -23,6 +23,11 @@ export const panelRenderScopeId = (panelId: string, topLevelBlockId: string): st
 export const isPanelRenderScopeId = (renderScopeId: string): boolean =>
   renderScopeId.startsWith('panel:')
 
+/** The panel a panel scope (`panelRenderScopeId`) belongs to; undefined for
+ *  any other scope. */
+export const panelIdOfRenderScopeId = (renderScopeId: string): string | undefined =>
+  isPanelRenderScopeId(renderScopeId) ? decodeURIComponent(renderScopeId.split(':')[1]) : undefined
+
 export const embedRenderScopeId = (
   parentRenderScopeId: string,
   sourceBlockId: string,

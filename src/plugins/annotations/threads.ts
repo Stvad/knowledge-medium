@@ -136,8 +136,10 @@ export interface CreateThreadArgs {
   /** null comments on the whole block. */
   anchor: RangeAnchor | null
   /** The first comment. Absent or empty makes a highlight: a thread with no
-   *  comments. */
+   *  comments, unless `emptyComment` asks for one to be written in. */
   comment?: string
+  /** Write an empty first comment for the user to fill in (`startComment`). */
+  emptyComment?: boolean
   /** Makes the thread an edit suggestion: "replace the quote with this". */
   replacement?: string
 }
@@ -160,7 +162,7 @@ export interface CreateThreadOptions {
  *  `AnchorChangedError` rather than anchoring to the wrong text. */
 export const createThread = async (
   repo: Repo,
-  {targetId, anchor, comment, replacement}: CreateThreadArgs,
+  {targetId, anchor, comment, emptyComment, replacement}: CreateThreadArgs,
   options: CreateThreadOptions = {},
 ): Promise<CreatedThread> => {
   if (anchor) assertQuotable(anchor)
@@ -191,8 +193,8 @@ export const createThread = async (
       ],
       references: [threadTargetEdge(targetId)],
     })
-    const commentId = comment
-      ? await tx.run(createChild, {parentId: threadId, content: comment})
+    const commentId = comment || emptyComment
+      ? await tx.run(createChild, {parentId: threadId, content: comment ?? ''})
       : null
     return {threadId, commentId}
   }, {

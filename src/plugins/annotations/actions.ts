@@ -26,6 +26,7 @@ import {annotationMarginOpenProp} from './marginSchema.ts'
 import {threadForRange} from './rangeRefs.ts'
 import {holdsSelection, locateReadSelection, mapReadSelection, type SelectionEnds} from './readSelection.ts'
 import {reanchorThread} from './reanchor.ts'
+import {NOT_ON_OUTLINE, startComment} from './newComment.ts'
 import {createThread, isThreadRefusal} from './threads.ts'
 import {
   closeComposer,
@@ -111,13 +112,11 @@ export const reportFailure = (error: unknown): void => {
   showError(error instanceof Error ? error.message : String(error))
 }
 
-/** Has the composer what its submit writes: a comment, or for a suggestion
- *  a replacement (its comment is optional). The replacement is taken as
- *  typed, whitespace included. */
-export const composerReady = (composer: ComposerState): boolean =>
-  composer.replacement !== undefined ? composer.replacement !== '' : composer.draft.trim() !== ''
+/** Has the composer a replacement to write (its comment is optional). It is
+ *  taken as typed, whitespace included. */
+export const composerReady = (composer: ComposerState): boolean => composer.replacement !== ''
 
-/** Write the composer's draft as a new thread. A target that changed under the
+/** Write the composer's suggestion as a new thread. A target that changed under the
  *  selection keeps the composer open with its draft and the reason, so the
  *  user can reselect and submit again. A submit while one is in flight is
  *  refused: both would capture the same draft. */
@@ -144,13 +143,12 @@ export const submitComposer = async (repo: Repo, key: string): Promise<boolean> 
   return true
 }
 
-/** The composer renders under outline blocks only, so the gestures run only
- *  there: in a backlinks entry, an embed or a comment card they would open a
- *  composer nothing shows. */
+/** A new thread's card and a suggestion's composer render under outline
+ *  blocks only, so the gestures run only there: in a backlinks entry, an embed
+ *  or a comment card they would open something nothing shows. */
 const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
   renderScopeId === undefined || isPanelRenderScopeId(renderScopeId)
 
-const NOT_ON_OUTLINE = 'Open the block in its page to comment on it.'
 
 /** The thread waiting for new text in this block (Reselect on its card), if
  *  any. It takes the selection wherever the block is edited, a comment's
@@ -170,8 +168,8 @@ export interface SelectionTarget {
   range: ContentRange
 }
 
-/** Open a composer on the target, or move the thread waiting for new text in
- *  its block there instead. True when a composer opened. */
+/** Start a comment on the target (`startComment`), or move the thread waiting
+ *  for new text in its block there instead. True when a comment started. */
 export const commentOnTarget = async (target: SelectionTarget): Promise<boolean> => {
   const {block, renderScopeId} = target
   const anchor = anchorOf(target.range)
@@ -184,8 +182,7 @@ export const commentOnTarget = async (target: SelectionTarget): Promise<boolean>
     showInfo(NOT_ON_OUTLINE)
     return false
   }
-  openComposer(viewKey(renderScopeId, block.id), block.id, anchor)
-  return true
+  return startComment(block.repo, {targetId: block.id, anchor, renderScopeId})
 }
 
 /** A composer on the target's text, its replacement prefilled with the
@@ -202,7 +199,7 @@ const suggestOnTarget = async (target: SelectionTarget): Promise<boolean> => {
     showInfo('Select the text to suggest a change to.')
     return false
   }
-  openComposer(viewKey(renderScopeId, block.id), block.id, anchor, {replacement: anchor.quote})
+  openComposer(viewKey(renderScopeId, block.id), block.id, anchor)
   return true
 }
 
@@ -227,8 +224,8 @@ export const highlightTarget = async (target: SelectionTarget): Promise<boolean>
 }
 
 /** Put `((T))` on the clipboard, T the thread that highlights the target's
- *  text, made here when there is none. It opens no composer, so unlike the
- *  steps above it runs wherever the block shows: an embed, a backlink entry,
+ *  text, made here when there is none. It opens no card or composer, so
+ *  unlike the steps above it runs wherever the block shows: an embed, a backlink entry,
  *  a comment in a card. True once the reference is copied. */
 export const copyReferenceToTarget = async ({block, range}: SelectionTarget): Promise<boolean> => {
   const anchor = anchorOf(range)
@@ -286,7 +283,8 @@ const commentOnSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =
   icon: MessageSquarePlus,
   defaultBinding: editModeBinding(COMMENT_KEYS),
   isVisible: deps => pendingReanchorIn(deps) !== null || gestureRunsHere(commentGesture, deps),
-  handler: openFromEditor(commentOnTarget),
+  // The new comment takes edit mode from the target itself.
+  handler: async deps => { await commentOnTarget(editorTarget(deps)) },
 }
 
 const highlightSelection: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
@@ -324,12 +322,12 @@ const commentOnBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   icon: MessageSquarePlus,
   defaultBinding: {keys: COMMENT_KEYS},
   isVisible: onOutline,
-  handler: deps => {
+  handler: async deps => {
     if (!onOutline(deps)) {
       showInfo(NOT_ON_OUTLINE)
       return
     }
-    openComposer(viewKey(deps.renderScopeId, deps.block.id), deps.block.id, null)
+    await startComment(deps.block.repo, {targetId: deps.block.id, anchor: null, renderScopeId: deps.renderScopeId})
   },
 }
 
@@ -351,13 +349,17 @@ export const readSelectionTarget = (repo: Repo, ends: SelectionEnds | null): Sel
 }
 
 /** Run `step` on a read-mode target, or show why it can't. The selection is
- *  cleared once the step lands, so it doesn't sit over the new highlight. */
+ *  cleared once the step lands, so it doesn't sit over the new highlight;
+ *  only while it is still there, since a comment's editor may have taken the
+ *  selection for its caret by then. */
 export const runOnReadTarget = async (
   target: SelectionTarget | string | null,
   step: (target: SelectionTarget) => Promise<boolean>,
 ): Promise<void> => {
   if (typeof target === 'string') showInfo(target)
-  else if (target && await step(target)) document.getSelection()?.removeAllRanges()
+  else if (target && await step(target) && locateReadSelection(document.getSelection())) {
+    document.getSelection()?.removeAllRanges()
+  }
 }
 
 /** The gestures a read-mode selection offers, as shortcuts and as its

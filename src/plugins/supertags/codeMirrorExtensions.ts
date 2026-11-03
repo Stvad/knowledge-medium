@@ -33,7 +33,7 @@
 import { EditorState } from '@codemirror/state'
 import type { CompletionSource } from '@codemirror/autocomplete'
 import type {
-  CodeMirrorExtensionContext,
+  BlockEditorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope, ProcessorRejection } from '@/data/api'
@@ -52,7 +52,7 @@ import {
 
 /** Exported for the integration test — production wiring goes through
  *  `supertagsCodeMirrorExtensions` below. */
-export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
+export const buildTypeTagSource = ({repo, block}: BlockEditorExtensionContext): CompletionSource => {
   const getCandidates = (query: string): TypeTagCandidate[] => {
     // The block is being edited, so its row is in cache; peek instead
     // of get so a just-deleted block degrades to "no current types"
@@ -163,7 +163,9 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
   return typeTagCompletionSource({getCandidates, pickType, restoreTrigger})
 }
 
-export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
-  const source = buildTypeTagSource(ctx)
+/** A `#tag` tags the edited block, so a draft has none to offer. */
+export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
+  const source = buildTypeTagSource({repo, block})
   return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }
