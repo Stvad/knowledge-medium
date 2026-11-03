@@ -84,6 +84,16 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(1)
   })
 
+  it('takes a dead ((ref)) the target already holds, in a suggestion that keeps it or a comment flagging it', async () => {
+    const dead = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `Meet on Thursday, see ((${dead})) for context`}), opts)
+    await asAgent({
+      type: 'add-comment', target: BLOCK, quote: `Thursday, see ((${dead}))`, replacement: `Friday, see ((${dead}))`,
+    })
+    await asAgent({type: 'add-comment', target: BLOCK, content: `The link ((${dead})) here is broken`})
+    expect((await comments({block: BLOCK})).total).toBe(2)
+  })
+
   it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
     const {threadId} = await asAgent({
       type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',

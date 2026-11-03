@@ -74,8 +74,8 @@ const activeWorkspace = (repo: Repo, verb: string): string => {
   return workspaceId
 }
 
-/** A block id for an id-typed field (`id`, `siblingId`): an id or a unique id
- *  prefix, never a name or a date — one typo from the wrong block. A ref that
+/** A block id for an id-typed field (`id`, `siblingId`): a whole id, never a
+ *  name or a date — one typo from the wrong block. A ref that
  *  matches nothing comes back as the id it names, so the verb reports its own
  *  not-found. */
 export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Promise<string> => {

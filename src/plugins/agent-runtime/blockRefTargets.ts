@@ -25,10 +25,12 @@ const TARGET_ROWS_SQL = `
  *  a written block that does not exist, which the verb then reports itself.
  *
  *  A mark inside code counts: the reference index reads raw content and
- *  records it, though the renderer shows it as code.
+ *  records it, though the renderer shows it as code. Only the inline UUID
+ *  grammar is read: no view prints an id fragment, and the broad whole-block
+ *  class would refuse prose like `((x))`.
  *
- *  Checked before the write's tx: a target deleted between the check and the
- *  commit is the same dead link as one deleted right after it. */
+ *  Checked before the write's tx, so a target deleted between the check and
+ *  the commit is written as a dead link: a window of one read, accepted. */
 export const refuseDanglingBlockRefs = async (
   repo: Repo,
   verb: string,
