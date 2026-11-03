@@ -1,1 +1,0 @@
-export{Gnt as isChildBackedPropertiesWorkspace}from"../chunks/app-Mxn_IgfC.js";

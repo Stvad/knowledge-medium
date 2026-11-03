@@ -1,1 +1,0 @@
-export{JR as addProperty,YR as deleteProperty,XR as writeProperty}from"../../../chunks/app-Mxn_IgfC.js";

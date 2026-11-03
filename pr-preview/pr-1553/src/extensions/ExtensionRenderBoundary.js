@@ -1,1 +1,0 @@
-export{RF as ExtensionRenderBoundary}from"../../chunks/app-Mxn_IgfC.js";

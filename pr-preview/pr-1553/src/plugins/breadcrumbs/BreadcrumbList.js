@@ -1,1 +1,0 @@
-export{UC as BreadcrumbList}from"../../../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{$0 as kernelDataExtension}from"../../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{gJ as annotationMarginOpenProp}from"../../../chunks/app-Mxn_IgfC.js";

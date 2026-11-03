@@ -1,1 +1,0 @@
-export{xn as countCharacters,Sn as countWords}from"../../../chunks/app-Mxn_IgfC.js";

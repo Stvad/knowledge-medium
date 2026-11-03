@@ -1,1 +1,0 @@
-export{AM as checkForAppUpdate,jM as registerServiceWorker}from"../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{GK as dailyNotesDataExtension}from"../../../chunks/app-Mxn_IgfC.js";

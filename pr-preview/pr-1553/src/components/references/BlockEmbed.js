@@ -1,1 +1,0 @@
-export{ej as BlockEmbed}from"../../../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{VN as LazyBlockComponent}from"../../chunks/app-Mxn_IgfC.js";

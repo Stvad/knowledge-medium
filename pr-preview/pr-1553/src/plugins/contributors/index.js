@@ -1,1 +1,0 @@
-export{Qf as contributorsPlugin}from"../../../chunks/app-Mxn_IgfC.js";

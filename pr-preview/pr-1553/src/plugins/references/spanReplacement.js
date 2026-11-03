@@ -1,1 +1,0 @@
-export{YW as preferredSpanReplacement}from"../../../chunks/app-Mxn_IgfC.js";

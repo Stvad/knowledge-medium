@@ -1,1 +1,0 @@
-export{gk as EXTENSIONS_PAGE_TITLE,_k as TUTORIAL_DEFAULT_TITLE,vk as TUTORIAL_VIM_TITLE,Jx as onboardingPlugin,hk as seedTutorial}from"../../../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{AU as SuspenseFallback}from"../../../chunks/app-Mxn_IgfC.js";

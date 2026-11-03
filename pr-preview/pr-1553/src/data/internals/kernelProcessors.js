@@ -1,1 +1,0 @@
-export{G2 as KERNEL_PROCESSORS}from"../../../chunks/app-Mxn_IgfC.js";

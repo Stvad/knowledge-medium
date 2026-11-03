@@ -1,1 +1,0 @@
-export{Gat as definePostCommitProcessor}from"../../../chunks/app-Mxn_IgfC.js";

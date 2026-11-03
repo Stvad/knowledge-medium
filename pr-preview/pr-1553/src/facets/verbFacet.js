@@ -1,1 +1,0 @@
-export{KX as defineVerbFacet}from"../../chunks/app-Mxn_IgfC.js";

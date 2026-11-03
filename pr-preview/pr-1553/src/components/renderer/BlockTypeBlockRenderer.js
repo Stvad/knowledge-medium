@@ -1,1 +1,0 @@
-export{RP as BlockTypeBlockRenderer,zP as BlockTypeContentRenderer,BP as writeBlockTypeLabel}from"../../../chunks/app-Mxn_IgfC.js";

@@ -1,1 +1,0 @@
-export{gM as approveExtensionHere}from"../../chunks/app-Mxn_IgfC.js";

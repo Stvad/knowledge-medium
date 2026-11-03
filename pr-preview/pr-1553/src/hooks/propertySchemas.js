@@ -1,1 +1,0 @@
-export{YH as usePropertySchemas}from"../../chunks/app-Mxn_IgfC.js";

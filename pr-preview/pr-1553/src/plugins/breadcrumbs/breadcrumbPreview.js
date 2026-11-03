@@ -1,1 +1,0 @@
-export{VC as getBreadcrumbContentPreview}from"../../../chunks/app-Mxn_IgfC.js";

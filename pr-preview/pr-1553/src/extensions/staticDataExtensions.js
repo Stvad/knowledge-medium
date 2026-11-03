@@ -1,1 +1,0 @@
-export{QU as staticDataExtensions}from"../../chunks/app-Mxn_IgfC.js";

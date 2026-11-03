@@ -1,1 +1,0 @@
-export{Aot as CHANGE_SCOPE_POLICIES,jot as ChangeScope,Mot as isChangeScope,Not as policyForScope,Pot as scopeAllowedInReadOnly,Fot as scopeIsUndoable,Iot as scopePoliciesEquivalent,Lot as scopeUploadsToServer,Rot as sourceForScope}from"../../../chunks/app-Mxn_IgfC.js";

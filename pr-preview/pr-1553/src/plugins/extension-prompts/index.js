@@ -1,1 +1,0 @@
-export{sM as ExtensionPromptSurface,cM as extensionPromptsExtension}from"../../../chunks/app-Mxn_IgfC.js";

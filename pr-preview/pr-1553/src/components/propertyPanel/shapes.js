@@ -1,1 +1,0 @@
-export{$H as propertyShapeLabel}from"../../../chunks/app-Mxn_IgfC.js";
