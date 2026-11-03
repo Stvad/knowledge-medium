@@ -1948,6 +1948,30 @@ describe('revival re-materializes property children (#778)', () => {
     expect(comment).toEqual({deleted: 1, parent_id: value!.id})
   })
 
+  it.each([
+    ['a bag update', (tx: Tx) => tx.update('p', {properties: {status: 'changed'}})],
+    ['setProperty', (tx: Tx) => tx.setProperty('p', statusSchema, 'changed')],
+    ['setProperties', (tx: Tx) =>
+      tx.setProperties('p', {set: [propertyValue(statusSchema, 'changed')]})],
+  ])('keeps %s made between a restore and a re-delete in one tx', async (_, write) => {
+    // The owner ends the tx deleted, so no revival runs for it at commit; the
+    // write has to have reached the children by then, or the next restore brings
+    // the tombstoned old value back over it.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await write(tx)
+      await tx.delete('p')
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue('p')).toBe('changed')
+    expect(await liveValueContents('p')).toEqual(['changed'])
+  })
+
   it('stays dormant in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()

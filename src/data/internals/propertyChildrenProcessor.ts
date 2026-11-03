@@ -381,6 +381,8 @@ export type UndecodableCellPolicy = 'reject' | 'skip'
  *  restores is a revived row in its own right, and splitting its names by who
  *  wrote them needs the bag this tx found it with. */
 export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf' | 'parentLivenessWhenTombstoned'>
+/** Revival's whole view of the tx: which rows died, plus {@link RevivalContext}. */
+export type RevivalHistory = RevivalContext & Pick<SameTxCtx, 'tombstonedDuringTx'>
 
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
@@ -692,7 +694,7 @@ const materializeChangedRows = async (
   tx: Tx,
   changedRows: readonly ChangedRow[],
   lookups: PropertyChildrenLookups,
-  history: RevivalContext & Pick<SameTxCtx, 'tombstonedDuringTx'>,
+  history: RevivalHistory,
 ): Promise<void> => {
   const revived = new Set<string>()
   for (const row of changedRows) {
