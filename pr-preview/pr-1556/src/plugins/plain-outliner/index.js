@@ -1,0 +1,1 @@
+export{tw as plainOutlinerPlugin}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{KN as defaultRegistry,qN as defaultRendererContributions,JN as defaultRenderersExtension}from"../../chunks/app-vSPp9IeF.js";

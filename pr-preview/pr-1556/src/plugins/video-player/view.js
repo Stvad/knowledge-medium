@@ -1,0 +1,1 @@
+export{Vx as DEFAULT_VIDEO_NOTES_PANE_RATIO,Hx as VIDEO_NOTES_VIEW_MODE,Ux as videoNotesPaneRatioProp}from"../../../chunks/app-vSPp9IeF.js";

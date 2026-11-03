@@ -1,0 +1,1 @@
+export{YC as usePromotableBreadcrumb}from"../../../chunks/app-vSPp9IeF.js";

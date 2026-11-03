@@ -1,0 +1,1 @@
+export{Gat as definePostCommitProcessor}from"../../../chunks/app-vSPp9IeF.js";

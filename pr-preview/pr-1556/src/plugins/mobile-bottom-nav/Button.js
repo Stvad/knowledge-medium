@@ -1,0 +1,1 @@
+export{UC as MobileBottomNavButton}from"../../../chunks/app-vSPp9IeF.js";

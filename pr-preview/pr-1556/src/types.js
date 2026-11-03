@@ -1,0 +1,1 @@
+export{Gnt as isChildBackedPropertiesWorkspace}from"../chunks/app-vSPp9IeF.js";

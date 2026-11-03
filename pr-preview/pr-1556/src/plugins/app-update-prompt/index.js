@@ -1,0 +1,1 @@
+export{bM as appUpdatePromptExtension}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{IE as openRecentsPage}from"../../../chunks/app-vSPp9IeF.js";

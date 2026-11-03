@@ -1,0 +1,1 @@
+export{lv as Wikilink}from"../../../../../chunks/app-vSPp9IeF.js";

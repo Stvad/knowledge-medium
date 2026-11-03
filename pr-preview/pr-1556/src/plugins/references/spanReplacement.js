@@ -1,0 +1,1 @@
+export{YW as preferredSpanReplacement}from"../../../chunks/app-vSPp9IeF.js";

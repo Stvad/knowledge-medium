@@ -1,0 +1,1 @@
+export{qg as BlockMetaCard}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{YH as usePropertySchemas}from"../../chunks/app-vSPp9IeF.js";

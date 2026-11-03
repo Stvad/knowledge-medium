@@ -1,0 +1,1 @@
+export{WM as dispatchPointerAction,GM as setPointerActionDispatcher}from"../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{jm as authorIdOf}from"../../../chunks/app-vSPp9IeF.js";

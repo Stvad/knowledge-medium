@@ -1,0 +1,1 @@
+export{$f as contributorsPlugin}from"../../../chunks/app-vSPp9IeF.js";

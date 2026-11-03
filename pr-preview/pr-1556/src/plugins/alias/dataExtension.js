@@ -1,0 +1,1 @@
+export{fX as aliasDataExtension}from"../../../chunks/app-vSPp9IeF.js";

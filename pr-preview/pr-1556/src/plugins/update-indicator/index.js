@@ -1,0 +1,1 @@
+export{Jg as updateIndicatorPlugin}from"../../../chunks/app-vSPp9IeF.js";

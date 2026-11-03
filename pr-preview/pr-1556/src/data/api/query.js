@@ -1,0 +1,1 @@
+export{Lat as defineQuery}from"../../../chunks/app-vSPp9IeF.js";

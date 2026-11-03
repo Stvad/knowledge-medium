@@ -1,0 +1,1 @@
+export{c_ as backlinksPlugin}from"../../../chunks/app-vSPp9IeF.js";

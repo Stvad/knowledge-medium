@@ -1,0 +1,1 @@
+export{X_ as usePlaceSearch}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{UJ as backlinksDataExtension}from"../../../chunks/app-vSPp9IeF.js";

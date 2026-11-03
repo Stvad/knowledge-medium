@@ -1,0 +1,1 @@
+export{cS as EXTENSIONS_PAGE_TITLE,lS as TUTORIAL_DEFAULT_TITLE,uS as TUTORIAL_VIM_TITLE,Yx as onboardingPlugin,sS as seedTutorial}from"../../../chunks/app-vSPp9IeF.js";

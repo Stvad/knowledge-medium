@@ -1,0 +1,1 @@
+export{$A as BlockEmbed}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{GP as ConfirmBulkDeleteDialog}from"../../chunks/app-vSPp9IeF.js";

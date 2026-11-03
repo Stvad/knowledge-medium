@@ -1,0 +1,1 @@
+export{AL as BLOCK_TITLE_TEXT_CLASS,jL as useBlockTitleTextClass}from"../../../chunks/app-vSPp9IeF.js";

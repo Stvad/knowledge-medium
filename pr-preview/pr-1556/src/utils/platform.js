@@ -1,0 +1,1 @@
+export{IV as isIOS,LV as isMacPlatform}from"../../chunks/app-vSPp9IeF.js";

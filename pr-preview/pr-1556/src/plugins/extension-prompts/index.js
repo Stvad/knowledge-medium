@@ -1,0 +1,1 @@
+export{oM as ExtensionPromptSurface,sM as extensionPromptsExtension}from"../../../chunks/app-vSPp9IeF.js";

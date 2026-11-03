@@ -1,0 +1,1 @@
+export{BN as LazyBlockComponent}from"../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{$0 as kernelDataExtension}from"../../chunks/app-vSPp9IeF.js";

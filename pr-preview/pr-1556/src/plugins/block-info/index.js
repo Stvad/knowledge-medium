@@ -1,0 +1,1 @@
+export{Kg as blockInfoPlugin}from"../../../chunks/app-vSPp9IeF.js";

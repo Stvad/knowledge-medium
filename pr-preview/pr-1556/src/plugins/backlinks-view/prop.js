@@ -1,0 +1,1 @@
+export{v_ as DEFAULT_BACKLINKS_VIEW_ID,y_ as FLAT_BACKLINKS_VIEW_ID,b_ as GROUPED_BACKLINKS_VIEW_ID,x_ as backlinksViewProp,S_ as defaultBacklinksViewIdForBlock}from"../../../chunks/app-vSPp9IeF.js";

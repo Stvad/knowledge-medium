@@ -1,0 +1,1 @@
+export{kJ as CONTRIBUTOR_TYPE,AJ as attributionCreatorsProp,jJ as attributionEditorsProp,MJ as contributorForProp,NJ as contributorKindOf,PJ as contributorKindProp,FJ as contributorProfileType,IJ as contributorRoleProp}from"../../../chunks/app-vSPp9IeF.js";

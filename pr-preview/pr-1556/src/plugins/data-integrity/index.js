@@ -1,0 +1,1 @@
+export{wo as dataIntegrityPlugin}from"../../../chunks/app-vSPp9IeF.js";

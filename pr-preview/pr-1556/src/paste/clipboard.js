@@ -1,0 +1,1 @@
+export{CI as readClipboardContent}from"../../chunks/app-vSPp9IeF.js";

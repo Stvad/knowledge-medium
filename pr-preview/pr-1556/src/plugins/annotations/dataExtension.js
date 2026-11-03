@@ -1,0 +1,1 @@
+export{dq as annotationsDataExtension}from"../../../chunks/app-vSPp9IeF.js";

@@ -1,0 +1,1 @@
+export{kM as checkForAppUpdate,AM as registerServiceWorker}from"../chunks/app-vSPp9IeF.js";

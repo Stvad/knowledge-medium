@@ -1,0 +1,1 @@
+export{rM as editorAutocompleteExtension}from"../../chunks/app-vSPp9IeF.js";
