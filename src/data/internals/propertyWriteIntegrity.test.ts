@@ -162,6 +162,18 @@ describe('property write integrity in the active workspace', () => {
     expect(await row('survivor')).not.toBeNull()
   })
 
+  it('refuses a typed write to an owner that stays deleted', async () => {
+    // Written without children, the value would lose to the tombstoned child
+    // that a later restore's revival brings back.
+    const repo = await setup()
+    await repo.tx(tx => tx.create(blockData('target')), opts)
+    await expect(repo.tx(async tx => {
+      await tx.delete('target')
+      await tx.setProperty('target', status, 'value')
+    }, opts)).rejects.toMatchObject({name: 'ParentDeletedError'})
+    expect(JSON.parse((await row('target'))!.properties_json)).toEqual({})
+  })
+
   it('rejects an invalid bag before inserting even when the caller handles the error', async () => {
     const repo = await setup()
     await repo.tx(async tx => {
@@ -171,6 +183,76 @@ describe('property write integrity in the active workspace', () => {
     }, opts)
     expect(await row('invalid')).toBeNull()
     expect(await row('survivor')).not.toBeNull()
+  })
+
+  describe('a property named after an Object.prototype key', () => {
+    const TO_STRING_FIELD = 'field-write-integrity-to-string'
+    const toStringProp = defineProperty('toString', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const registerToString = (repo: Awaited<ReturnType<typeof setup>>) =>
+      repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-to-string', [{
+        metadata: {
+          fieldId: TO_STRING_FIELD, workspaceId: WS, createdAt: 1, name: toStringProp.name,
+          changeScope: toStringProp.changeScope, hidden: false, origin: 'user',
+        },
+        schema: toStringProp,
+      }], {workspaceId: WS})
+    const toStringValues = () => db.db.getAll<{content: string}>(
+      `SELECT v.content FROM blocks f JOIN blocks v ON v.parent_id = f.id
+       WHERE f.parent_id = 'target' AND f.reference_target_id = ?
+         AND f.is_field_form = 1 AND f.deleted = 0 AND v.deleted = 0`,
+      [TO_STRING_FIELD],
+    )
+    const updatedAt = async () => (await db.db.get<{updated_at: number}>(
+      'SELECT updated_at FROM blocks WHERE id = ?', ['target'],
+    )).updated_at
+
+    it('removes an orphan named constructor through a raw bag update', async () => {
+      const repo = await setup()
+      await repo.tx(tx => tx.create(blockData('target')), opts)
+      await db.db.writeTransaction(tx => tx.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({constructor: 'orphan'}), 'target'],
+      ))
+      await repo.tx(tx => tx.update('target', {properties: {}}), opts)
+      expect(JSON.parse((await row('target'))!.properties_json)).toEqual({})
+    })
+
+    it('clears a registered one, children included, through a raw bag update', async () => {
+      const repo = await setup()
+      registerToString(repo)
+      await repo.tx(async tx => {
+        await tx.create(blockData('target'))
+        await tx.setProperty('target', toStringProp, 'set')
+      }, opts)
+      expect(await toStringValues()).toEqual([{content: 'set'}])
+      await repo.tx(tx => tx.update('target', {properties: {}}), opts)
+      expect(JSON.parse((await row('target'))!.properties_json)).toEqual({})
+      expect(await toStringValues()).toEqual([])
+    })
+
+    it('reads an unset one as absent', async () => {
+      const repo = await setup()
+      registerToString(repo)
+      await repo.tx(tx => tx.create(blockData('target')), opts)
+      await expect(repo.tx(tx => tx.getProperty('target', toStringProp), opts)).resolves.toBe('')
+      const block = repo.block('target')
+      await block.load()
+      expect(block.peekProperty(toStringProp)).toBeUndefined()
+      await repo.tx(
+        tx => tx.setProperty('target', toStringProp, current => current ?? 'from-absent'), opts)
+      expect(await toStringValues()).toEqual([{content: 'from-absent'}])
+    })
+
+    it('unsets an unset one without writing the row', async () => {
+      const repo = await setup()
+      registerToString(repo)
+      await repo.tx(tx => tx.create(blockData('target')), opts)
+      const before = await updatedAt()
+      await repo.tx(tx => tx.unsetProperty('target', toStringProp), opts)
+      expect(await updatedAt()).toBe(before)
+    })
   })
 
   it('retains cell-mode writes without a materialized definition', async () => {

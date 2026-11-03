@@ -122,13 +122,11 @@ describe('buildPropertyPanelModel', () => {
       name: row.name,
       labelText: row.labelText,
       canDelete: row.canDelete,
-      canChangeShape: row.canChangeShape,
       isHidden: row.isHidden,
     }))).toEqual([{
       name: internalProp.name,
       labelText: 'Internal',
       canDelete: false,
-      canChangeShape: false,
       isHidden: true,
     }])
   })
@@ -325,7 +323,6 @@ describe('buildPropertyPanelModel', () => {
       readOnly: true,
       statusText: 'Provided by srs-rescheduling — not installed/disabled',
       canDelete: false,
-      canChangeShape: false,
       isHidden: false,
     })
     expect(row?.Editor).toBeUndefined()
@@ -416,7 +413,6 @@ describe('buildPropertyPanelModel', () => {
     expect(presetRow).toMatchObject({
       readOnly: true,
       canDelete: false,
-      canChangeShape: false,
     })
     expect(presetRow?.Editor).toBeUndefined()
     // Even the pinned type-membership row is locked on a seed definition.
