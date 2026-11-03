@@ -18,7 +18,7 @@ import type { BlockData } from '@/data/api'
 import { hasBlockType } from '@/data/properties'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import type { Repo } from '@/data/repo'
-import { addComment } from '@/plugins/annotations/addComment.js'
+import { addComment, suggestedContent } from '@/plugins/annotations/addComment.js'
 import { resolveAnchor } from '@/plugins/annotations/anchor.js'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
 import {
@@ -29,7 +29,7 @@ import { authorIdOf } from '@/plugins/contributors/author.js'
 import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
-import { blockContent, refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { clampInt, loadRoot } from './agentViews/shared.ts'
 import { clip, clipLine, oneLine } from './agentViews/text.ts'
 
@@ -259,9 +259,16 @@ export const runAddComment = async (
   repo: Repo,
   {targetId, quote, occurrence, content, replacement}: AddCommentParams,
 ): Promise<AddedComment> => {
-  // Both are new text, read against the target's content: a suggestion that
-  // keeps a link the target holds, or a comment flagging it, adds no link.
-  await refuseDanglingBlockRefs(repo, 'add-comment', [content, replacement], blockContent(repo, targetId))
+  // Read against the target's content: a comment flagging a link the target
+  // holds adds none. A suggestion is read as the content accepting it would
+  // leave, since its quote widens to whole links and its replacement with it.
+  const annotated = await repo.load(targetId)
+  if (annotated) {
+    const suggested = quote === undefined || replacement === undefined
+      ? replacement
+      : suggestedContent(annotated.content, quote, replacement, occurrence)
+    await refuseDanglingBlockRefs(repo, 'add-comment', [content, suggested], async () => annotated.content)
+  }
   const created = await addComment(repo, {targetId, quote, occurrence, comment: content, replacement}, {
     description: agentTxOptions('add-comment').description,
   })

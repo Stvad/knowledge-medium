@@ -94,6 +94,15 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(2)
   })
 
+  it('reads a suggestion as stored, its quote widened to the whole link the replacement goes into', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `see ((${PAGE})) for context`}), opts)
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: missing}))
+      .rejects.toThrow(`((${missing})) — no block has this id`)
+    const created = await asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: BLOCK})
+    expect(created).toMatchObject({replacement: `((${BLOCK}))`})
+  })
+
   it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
     const {threadId} = await asAgent({
       type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',

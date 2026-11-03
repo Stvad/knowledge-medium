@@ -57,7 +57,3 @@ export const refuseDanglingBlockRefs = async (
     + 'A ((ref)) takes a block\'s id as the views print it after ^.',
   )
 }
-
-/** The content of the block `id`, for a write that replaces it. */
-export const blockContent = (repo: Repo, id: string) => async (): Promise<string | null> =>
-  (await repo.load(id))?.content ?? null

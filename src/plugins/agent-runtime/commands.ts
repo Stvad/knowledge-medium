@@ -28,7 +28,7 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
-import { blockContent, refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -1173,7 +1173,8 @@ const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
 ): Promise<BlockData | null> => {
-  await refuseDanglingBlockRefs(repo, 'update-block', [input.content], blockContent(repo, input.id))
+  await refuseDanglingBlockRefs(repo, 'update-block', [input.content], async () =>
+    (await repo.load(input.id))?.content ?? null)
   // Read INSIDE the tx so a merge-update is an ATOMIC read-modify-write.
   // repo.tx runs its whole body in one db.writeTransaction, which SQLite
   // serializes against every other writer — so no concurrent update to the
