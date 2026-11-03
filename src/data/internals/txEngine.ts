@@ -106,12 +106,14 @@ import {
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 import {
+  changedPropertyNames,
   materializePropertyChildrenForExistingRow,
   reconcileFieldValueChildren,
   undecodableCellValueError,
   upsertFieldRow,
 } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { storedPropertyValue } from '@/data/rowProperty'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -479,22 +481,20 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    const previous = before?.properties ?? {}
-    const names = [...new Set([...Object.keys(previous), ...Object.keys(after.properties)])]
-      .filter(name => !jsonValuesEqual(previous[name], after.properties[name]))
+    const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
     if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
     const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
     for (const name of names) {
       const resolution = resolver.resolve(name)
+      const encoded = storedPropertyValue(after.properties, name)
       if (resolution.status !== 'resolved') {
         // Orphan cleanup cannot leave children owned by an existing definition.
-        if (resolution.reason === 'definition-unavailable' && after.properties[name] === undefined) continue
+        if (resolution.reason === 'definition-unavailable' && encoded === undefined) continue
         throw new PropertySchemaIdentityError(name, resolution.reason)
       }
       const schema = resolution.schema
-      const encoded = after.properties[name]
       if (encoded !== undefined) {
         const rejection = propertyCellValueRejection(schema, encoded)
         if (rejection) throw undecodableCellValueError(name, after.id, schema, rejection)
@@ -1093,7 +1093,7 @@ export class TxImpl implements Tx {
     const target = await this.propertyWriteTarget(before, schema)
     const resolvedSchema = target.schema
     this.assertPropertyWriteScope(resolvedSchema)
-    const stored = before.properties[resolvedSchema.name]
+    const stored = storedPropertyValue(before.properties, resolvedSchema.name)
     const value = typeof valueOrUpdater === 'function'
       ? (valueOrUpdater as (current: T | undefined) => T)(
         stored === undefined ? undefined : resolvedSchema.codec.decode(stored),
@@ -1172,7 +1172,7 @@ export class TxImpl implements Tx {
     const target = await this.propertyWriteTarget(before, schema)
     const resolvedSchema = target.schema
     this.assertPropertyWriteScope(resolvedSchema)
-    if (before.properties[resolvedSchema.name] === undefined) {
+    if (storedPropertyValue(before.properties, resolvedSchema.name) === undefined) {
       this.recordPropertyUnsets(id, [resolvedSchema.name])
       return
     }

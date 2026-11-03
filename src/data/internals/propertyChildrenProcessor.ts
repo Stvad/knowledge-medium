@@ -70,6 +70,7 @@ import {
   unionValuesAcrossFieldRows,
 } from '@/data/propertyChildren'
 import { jsonValuesEqual } from './jsonCanonical'
+import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -347,16 +348,16 @@ export const reprojectOwnersForRowStates = async (
 
 // ─── cell → children (materialize) ───────────────────────────────────────
 
-const changedPropertyNames = (
-  before: Record<string, unknown>,
-  after: Record<string, unknown>,
+export const changedPropertyNames = (
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
 ): string[] => {
   const names = new Set([...Object.keys(before), ...Object.keys(after)])
   const changed: string[] = []
   for (const name of names) {
-    const beforeValue = Object.hasOwn(before, name) ? before[name] : undefined
-    const afterValue = Object.hasOwn(after, name) ? after[name] : undefined
-    if (!jsonValuesEqual(beforeValue, afterValue)) changed.push(name)
+    if (!jsonValuesEqual(storedPropertyValue(before, name), storedPropertyValue(after, name))) {
+      changed.push(name)
+    }
   }
   return changed
 }
@@ -581,7 +582,7 @@ export const materializePropertyChildrenForExistingRow = async (
       continue
     }
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
-    const encoded = Object.hasOwn(row.properties, name) ? row.properties[name] : undefined
+    const encoded = storedPropertyValue(row.properties, name)
 
     if (encoded === undefined) {
       // Key removed from the cell by a LOCAL write: the delete is the
