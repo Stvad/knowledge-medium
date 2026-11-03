@@ -1,1 +1,1 @@
-export{zI as BlockEditor}from"../../chunks/app-vSPp9IeF.js";
+export{zI as BlockEditor}from"../../chunks/app-CB_VHneN.js";

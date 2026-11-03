@@ -1,1 +1,1 @@
-export{ov as referencesMarkdownExtension}from"../../../../chunks/app-vSPp9IeF.js";
+export{ov as referencesMarkdownExtension}from"../../../../chunks/app-CB_VHneN.js";
