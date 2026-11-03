@@ -485,6 +485,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // settled writes share the generation they were made under.
   const rowWriteLog = new Map<string, Array<{gen: number, seq: number, after: BlockData | null}>>()
   let writeSeq = 0
+  /** See `SameTxCtx.tombstonedDuringTx`; the engine asks it too. */
+  const tombstonedDuringTx = (id: string): boolean =>
+    snapshots.get(id)?.before?.deleted === true
+    || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false)
   const afterCommitJobs: AfterCommitJob[] = []
   const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -558,6 +562,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       propertySchemaResolverFor: resolverFor,
       writableWorkspace,
       propertyWritesAreSettled: () => settleWrites,
+      tombstonedDuringTx,
       sameTxEvents,
       now,
       newId,
@@ -661,8 +666,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
                   ? undefined
                   : rerunBefore(entry.before, entry.before, entry.after, settledFieldPaths.get(id))
               },
-              tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
-                || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
+              tombstonedDuringTx,
               parentLivenessWhenTombstoned: async id => {
                 let previous = snapshots.get(id)?.before ?? null
                 let death: {seq: number; parentId: string | null} | undefined

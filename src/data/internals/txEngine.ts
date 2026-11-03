@@ -264,6 +264,8 @@ export interface TxImplContext {
   writableWorkspace: {readonly workspaceId: string | null} | null
   /** Settled processors write projections, not new cell-side intent. */
   propertyWritesAreSettled: () => boolean
+  /** `SameTxCtx.tombstonedDuringTx`, the predicate the revival processor reads. */
+  tombstonedDuringTx: (id: string) => boolean
   /** Content → the `references` it already implies, snapshotted at tx start
    *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
    *  Absent means no contributor, so nothing is prefilled and every row is
@@ -504,11 +506,19 @@ export class TxImpl implements Tx {
     return schemas
   }
 
+  /** A row this tx brought back from a tombstone. Its children are the revival
+   *  processor's to write: it reuses the tombstoned field and value rows that an
+   *  eager write here would mint replacements for. A row still deleted keeps the
+   *  eager write, since no revival in this tx will reconcile it. */
+  private revivedInThisTx(row: BlockData): boolean {
+    return !row.deleted && this.ctx.tombstonedDuringTx(row.id)
+  }
+
   private async writePropertyBagChildren(
     row: BlockData,
     schemas: PropertyBagWrites,
   ): Promise<void> {
-    if (schemas === null || schemas.size === 0) return
+    if (schemas === null || schemas.size === 0 || this.revivedInThisTx(row)) return
     await materializePropertyChildrenForExistingRow(
       this.propertyChildTx, row, {resolveNameSchema: name => schemas.get(name)}, [...schemas.keys()],
     )
@@ -1775,6 +1785,7 @@ export class TxImpl implements Tx {
     schema: AnyPropertySchema & {readonly fieldId: string},
     encoded: unknown,
   ): Promise<void> {
+    if (this.revivedInThisTx(parent)) return
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
       SELECT_PROPERTY_FIELD_CHILD_SQL,
       [parent.workspaceId, parent.id, schema.fieldId],

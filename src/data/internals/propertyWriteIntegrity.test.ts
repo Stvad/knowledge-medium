@@ -162,6 +162,18 @@ describe('property write integrity in the active workspace', () => {
     expect(await row('survivor')).not.toBeNull()
   })
 
+  it('refuses a typed write to an owner that stays deleted', async () => {
+    // Written without children, the value would lose to the tombstoned child
+    // that a later restore's revival brings back.
+    const repo = await setup()
+    await repo.tx(tx => tx.create(blockData('target')), opts)
+    await expect(repo.tx(async tx => {
+      await tx.delete('target')
+      await tx.setProperty('target', status, 'value')
+    }, opts)).rejects.toMatchObject({name: 'ParentDeletedError'})
+    expect(JSON.parse((await row('target'))!.properties_json)).toEqual({})
+  })
+
   it('rejects an invalid bag before inserting even when the caller handles the error', async () => {
     const repo = await setup()
     await repo.tx(async tx => {
