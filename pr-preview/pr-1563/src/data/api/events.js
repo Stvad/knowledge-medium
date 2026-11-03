@@ -1,1 +1,1 @@
-export{cot as CORE_BLOCK_DELETED_EVENT,lot as CORE_BLOCK_MERGED_EVENT,uot as CORE_BLOCK_SPLIT_EVENT}from"../../../chunks/app-rXZPTVRb.js";
+export{uot as CORE_BLOCK_DELETED_EVENT,dot as CORE_BLOCK_MERGED_EVENT,fot as CORE_BLOCK_SPLIT_EVENT}from"../../../chunks/app-CbcJ48p3.js";

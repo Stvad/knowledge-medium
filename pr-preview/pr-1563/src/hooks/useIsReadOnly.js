@@ -1,1 +1,1 @@
-export{Gv as useIsReadOnly}from"../../chunks/app-rXZPTVRb.js";
+export{Gv as useIsReadOnly}from"../../chunks/app-CbcJ48p3.js";

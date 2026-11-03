@@ -1,1 +1,1 @@
-export{GM as gestureBindingDescriptor,KM as matchesGestureEvent}from"../../chunks/app-rXZPTVRb.js";
+export{qM as gestureBindingDescriptor,JM as matchesGestureEvent}from"../../chunks/app-CbcJ48p3.js";
