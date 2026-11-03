@@ -18,7 +18,7 @@ import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type {
-  BlockEditorExtensionContext,
+  CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
@@ -75,7 +75,7 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-const buildPlaceCompletionSource = ({repo, block}: BlockEditorExtensionContext): CompletionSource => {
+const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -321,8 +321,9 @@ const buildPlaceCompletionSource = ({repo, block}: BlockEditorExtensionContext):
   // clicking it blurs the block, the per-block editor unmounts, and the
   // captured view can't take the insert anymore. Apply the same
   // replacement to the block's content instead — read-modify-write
-  // inside a tx so a pending editor flush can't be clobbered.
-  const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
+  // inside a tx so a pending editor flush can't be clobbered. A draft
+  // editor has no block, and unmounts only when its draft is dropped.
+  const persistInsert = block && (async ({triggerText, insert}: {triggerText: string, insert: string}) => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
@@ -332,16 +333,13 @@ const buildPlaceCompletionSource = ({repo, block}: BlockEditorExtensionContext):
         + data.content.slice(idx + triggerText.length)
       await tx.update(block.id, {content: next})
     }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
-  }
+  })
 
   return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
 }
 
-/** A picked place is written to the edited block's row, so a draft has none
- *  to offer. */
-export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block}) => {
-  if (!block) return []
-  const placeSource = buildPlaceCompletionSource({repo, block})
+export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
+  const placeSource = buildPlaceCompletionSource(ctx)
   return [
     placeAutocompleteTheme,
     EditorState.languageData.of(() => [{autocomplete: placeSource}]),
