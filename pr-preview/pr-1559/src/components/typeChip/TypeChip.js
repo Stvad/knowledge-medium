@@ -1,1 +1,0 @@
-export{sj as TypeChip}from"../../../chunks/app-DhlN1srw.js";

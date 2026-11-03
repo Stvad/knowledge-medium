@@ -1,1 +1,0 @@
-export{gy as richPastePlugin}from"../../../chunks/app-CdFtLpjb.js";

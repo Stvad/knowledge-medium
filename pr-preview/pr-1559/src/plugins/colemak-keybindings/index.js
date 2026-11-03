@@ -1,1 +1,0 @@
-export{xS as COLEMAK_KEYBINDINGS_PLUGIN_ID,SS as colemakKeybindingsPlugin,CS as colemakMovementKeybindingOverrides}from"../../../chunks/app-DhlN1srw.js";

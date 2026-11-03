@@ -1,1 +1,0 @@
-export{yM as appUpdatePromptExtension}from"../../../chunks/app-DhlN1srw.js";

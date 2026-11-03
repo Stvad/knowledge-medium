@@ -1,1 +1,0 @@
-export{AM as appUpdate,jM as useAppUpdateAvailable}from"../chunks/app-DhlN1srw.js";

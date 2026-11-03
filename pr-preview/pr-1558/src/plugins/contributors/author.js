@@ -1,1 +1,0 @@
-export{Am as authorIdOf}from"../../../chunks/app-CdFtLpjb.js";

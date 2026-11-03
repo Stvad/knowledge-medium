@@ -1,1 +1,0 @@
-export{_A as SWIPE_QUICK_ACTIONS_GESTURE_ID,vA as SWIPE_TRIGGER_PX,yA as swipeRecognizer}from"../../../chunks/app-DhlN1srw.js";

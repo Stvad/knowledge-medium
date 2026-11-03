@@ -1,1 +1,0 @@
-export{xk as openKeybindingsSettingsAction}from"../../../chunks/app-CdFtLpjb.js";

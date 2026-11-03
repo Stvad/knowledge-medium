@@ -1,1 +1,0 @@
-export{Wp as extensionsOverridesProp,Gp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-DhlN1srw.js";

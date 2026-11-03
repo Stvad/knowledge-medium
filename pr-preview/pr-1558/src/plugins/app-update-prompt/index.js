@@ -1,1 +1,0 @@
-export{yM as appUpdatePromptExtension}from"../../../chunks/app-CdFtLpjb.js";

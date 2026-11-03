@@ -1,1 +1,0 @@
-export{by as attachmentsPlugin}from"../../../chunks/app-DhlN1srw.js";

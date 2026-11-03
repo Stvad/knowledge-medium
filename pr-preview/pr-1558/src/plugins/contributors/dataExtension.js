@@ -1,1 +1,0 @@
-export{yJ as contributorsDataExtension}from"../../../chunks/app-CdFtLpjb.js";
