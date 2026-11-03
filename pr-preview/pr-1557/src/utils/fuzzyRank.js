@@ -1,1 +1,1 @@
-export{F2 as buildFilterPrefixes,I2 as rankCandidates,L2 as scoreCandidate,R2 as tokenize}from"../../chunks/app-Dj0cfHdR.js";
+export{P2 as buildFilterPrefixes,F2 as rankCandidates,I2 as scoreCandidate,L2 as tokenize}from"../../chunks/app-IqMYl_dQ.js";

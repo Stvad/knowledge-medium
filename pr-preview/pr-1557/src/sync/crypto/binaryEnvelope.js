@@ -1,1 +1,1 @@
-export{aT as BINARY_ENVELOPE_MAGIC,oT as BINARY_ENVELOPE_MIN_BYTES,sT as BINARY_ENVELOPE_OVERHEAD_BYTES,cT as BINARY_MAGIC_BYTES,lT as decodeBinaryEnvelope,uT as encodeBinaryEnvelope,dT as hasBinaryEnvelopeMagic}from"../../../chunks/app-Dj0cfHdR.js";
+export{iT as BINARY_ENVELOPE_MAGIC,aT as BINARY_ENVELOPE_MIN_BYTES,oT as BINARY_ENVELOPE_OVERHEAD_BYTES,sT as BINARY_MAGIC_BYTES,cT as decodeBinaryEnvelope,lT as encodeBinaryEnvelope,uT as hasBinaryEnvelopeMagic}from"../../../chunks/app-IqMYl_dQ.js";

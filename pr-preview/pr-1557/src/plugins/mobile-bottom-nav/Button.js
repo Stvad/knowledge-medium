@@ -1,1 +1,1 @@
-export{LC as MobileBottomNavButton}from"../../../chunks/app-Dj0cfHdR.js";
+export{IC as MobileBottomNavButton}from"../../../chunks/app-IqMYl_dQ.js";

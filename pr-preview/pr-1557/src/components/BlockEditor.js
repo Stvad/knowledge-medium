@@ -1,1 +1,1 @@
-export{GI as BlockEditor}from"../../chunks/app-Dj0cfHdR.js";
+export{WI as BlockEditor}from"../../chunks/app-IqMYl_dQ.js";
