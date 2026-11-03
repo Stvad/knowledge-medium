@@ -1,0 +1,1 @@
+export{iN as dynamicExtensionsExtension}from"../../chunks/app-CdFtLpjb.js";

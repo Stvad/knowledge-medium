@@ -1,0 +1,1 @@
+export{Wat as defineQuery}from"../../../chunks/app-CdFtLpjb.js";

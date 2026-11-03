@@ -1,0 +1,1 @@
+export{ZH as propertyShapeLabel}from"../../../chunks/app-CdFtLpjb.js";

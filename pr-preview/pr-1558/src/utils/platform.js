@@ -1,0 +1,1 @@
+export{PV as isIOS,FV as isMacPlatform}from"../../chunks/app-CdFtLpjb.js";

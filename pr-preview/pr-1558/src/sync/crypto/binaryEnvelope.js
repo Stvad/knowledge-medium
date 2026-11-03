@@ -1,0 +1,1 @@
+export{uT as BINARY_ENVELOPE_MAGIC,dT as BINARY_ENVELOPE_MIN_BYTES,fT as BINARY_ENVELOPE_OVERHEAD_BYTES,pT as BINARY_MAGIC_BYTES,mT as decodeBinaryEnvelope,hT as encodeBinaryEnvelope,gT as hasBinaryEnvelopeMagic}from"../../../chunks/app-CdFtLpjb.js";

@@ -1,0 +1,1 @@
+export{nM as editorAutocompleteExtension}from"../../chunks/app-CdFtLpjb.js";

@@ -1,0 +1,1 @@
+export{QX as agentDispatchCompanionDataExtension}from"../../../chunks/app-CdFtLpjb.js";

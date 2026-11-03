@@ -1,0 +1,1 @@
+export{XC as BreadcrumbRenderer}from"../../../chunks/app-CdFtLpjb.js";

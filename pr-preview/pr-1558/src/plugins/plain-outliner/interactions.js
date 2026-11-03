@@ -1,0 +1,1 @@
+export{iw as blockEditingContentRenderer}from"../../../chunks/app-CdFtLpjb.js";

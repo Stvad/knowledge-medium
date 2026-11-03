@@ -1,0 +1,1 @@
+export{C$ as TypeTagger,w$ as applyTypeTagInTx}from"../../chunks/app-CdFtLpjb.js";
