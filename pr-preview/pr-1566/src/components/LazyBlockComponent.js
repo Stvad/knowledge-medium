@@ -1,1 +1,0 @@
-export{GN as LazyBlockComponent}from"../../chunks/app-BwXhhghd.js";

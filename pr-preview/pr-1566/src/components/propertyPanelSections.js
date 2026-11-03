@@ -1,1 +1,0 @@
-export{QR as buildPropertyPanelSections}from"../../chunks/app-BwXhhghd.js";

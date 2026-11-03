@@ -1,1 +1,0 @@
-export{JC as plainOutlinerPlugin}from"../../../chunks/app-BwXhhghd.js";

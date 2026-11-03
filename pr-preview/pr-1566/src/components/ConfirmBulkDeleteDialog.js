@@ -1,1 +1,0 @@
-export{XP as ConfirmBulkDeleteDialog}from"../../chunks/app-BwXhhghd.js";

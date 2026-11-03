@@ -1,1 +1,0 @@
-export{Qg as UpdateIndicator}from"../../../chunks/app-BwXhhghd.js";

@@ -1,1 +1,0 @@
-export{QI as useShortcutSurfaceActivations}from"../../chunks/app-BwXhhghd.js";

@@ -1,1 +1,0 @@
-export{fw as LeftSidebar,pw as LeftSidebarCoreSection,mw as LeftSidebarShortcutsSection}from"../../../chunks/app-BwXhhghd.js";

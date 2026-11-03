@@ -1,1 +1,0 @@
-export{Gp as extensionApiCatalog,Kp as extensionApiRuntimeExports}from"../../chunks/app-BwXhhghd.js";

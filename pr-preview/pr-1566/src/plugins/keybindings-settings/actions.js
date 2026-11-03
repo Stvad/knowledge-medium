@@ -1,1 +1,0 @@
-export{Tk as openKeybindingsSettingsAction}from"../../../chunks/app-BwXhhghd.js";
