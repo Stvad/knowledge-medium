@@ -4,20 +4,21 @@
 
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { hasBlockType } from '@/data/properties'
+import { typesProp } from '@/data/properties'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { defineBlocksAction } from '@/shortcuts/utils.js'
 import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from './blockType'
 
 const lacksType = (typeId: string) => (block: Block): boolean => {
   const data = block.peek()
-  return !data || !hasBlockType(data, typeId)
+  return !data || !safeDecodeRowProperty(data, typesProp).includes(typeId)
 }
 
 const addTypeToBlocks = (typeId: string) => async (blocks: readonly Block[]): Promise<void> => {
   const repo = blocks[0]?.repo
   if (!repo || repo.isReadOnly) return
   await repo.tx(async tx => {
-    for (const block of blocks) await repo.addTypeInTx(tx, block.id, typeId)
+    for (const block of blocks) await repo.addTypeInTxLenient(tx, block.id, typeId)
   }, {scope: ChangeScope.BlockDefault, description: `add ${typeId}`})
 }
 

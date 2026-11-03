@@ -150,6 +150,18 @@ describe('CharacterCountDecorator', () => {
     await waitFor(() => expect(badgeText()).toBe('3'), {timeout: TIMEOUT_MS})
   })
 
+  it('renders a block with a malformed types cell, and its child, undecorated instead of throwing', async () => {
+    await seedTree({scope: 'self'})
+    await repo.tx(async tx => { await tx.update(CHILD, {properties: {types: 'not-a-list'}}) }, {scope: ChangeScope.BlockDefault})
+    expect(repo.block(CHILD).peek()!.properties.types).toBe('not-a-list')
+    for (const id of [CHILD, GRANDCHILD]) {
+      renderBlock(id)
+      await waitFor(() => expect(screen.getByTestId(`inner-${id}`)).toBeTruthy(), {timeout: TIMEOUT_MS})
+      expect(screen.queryByLabelText(/count/i)).toBeNull()
+      cleanup()
+    }
+  })
+
   it('says a hook-only profile cannot total a subtree instead of showing a wrong number', async () => {
     await seedTree({scope: 'subtree', profile: 'hook-only'})
     renderBlock(ROOT)

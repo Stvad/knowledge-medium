@@ -117,6 +117,16 @@ describe('typeInitialValuesProcessor', () => {
     expect(stored()).not.toHaveProperty(targetProp.name)
   })
 
+  it('leave a value the same tx explicitly unset unset', async () => {
+    await createBlock()
+    await repo.tx(async tx => {
+      await repo.addTypeInTx(tx, BLOCK, essayType.id)
+      await tx.unsetProperty(BLOCK, targetProp)
+    }, {scope: ChangeScope.BlockDefault})
+    expect(stored()[stageProp.name]).toBe('draft')
+    expect(stored()).not.toHaveProperty(targetProp.name)
+  })
+
   it('leave a property edit to a block with a malformed types cell alone', async () => {
     await createBlock()
     await sharedDb.db.writeTransaction(async db => {

@@ -41,10 +41,14 @@ export const withAbsentPropertyValues = async (
  *      propertyValue(stageProp, 'draft'),
  *    ]), {source: 'my-plugin'})
  *
- *  Values written by the caller in the same tx (`addType`'s `initialValues`)
- *  land first and win. Writes the raw bag rather than `tx.setProperty`, whose
- *  scope check would refuse a tag added in a tx of a different change scope
- *  than these properties'; field rows are materialized later in the same pass. */
+ *  Whatever the same tx did to a value wins: one it wrote (`addType`'s
+ *  `initialValues`) is held, one it explicitly unset stays unset. A block
+ *  created already tagged counts as newly tagged, so re-creating a block from
+ *  its stored bag fills values that bag lacked. Writes the raw bag rather than
+ *  `tx.setProperty`, whose scope check would refuse a tag added in a tx of a
+ *  different change scope than these properties'; `tx.update` materializes
+ *  their field rows in a children-backed workspace, and stamps the write as a
+ *  user edit even when the tagging write skipped metadata. */
 export const typeInitialValuesProcessor = (
   typeId: string,
   values: readonly AnyPropertyAssignment[],
@@ -58,7 +62,8 @@ export const typeInitialValuesProcessor = (
       if (row.after?.deleted || !addedTypes(row).includes(typeId)) continue
       const current = await ctx.tx.get(row.id)
       if (!current) continue
-      const next = await withAbsentPropertyValues(ctx.tx, row.id, current.properties, values)
+      const next = await withAbsentPropertyValues(ctx.tx, row.id, current.properties,
+        values.filter(({schema}) => !ctx.wasPropertyUnset(row.id, schema.name)))
       if (next) await ctx.tx.update(row.id, {properties: next})
     }
   },

@@ -18,7 +18,8 @@
 
 import { useCallback } from 'react'
 import type { Block } from '@/data/block.js'
-import { getBlockTypes } from '@/data/properties.js'
+import { typesProp } from '@/data/properties.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useHandle, useProperty } from '@/hooks/block.js'
 import {
@@ -53,7 +54,7 @@ const isCounter = (types: readonly string[]): boolean =>
 
 const blockInfoSelector = (data: ReturnType<Block['peek']>) => ({
   parentId: data?.parentId ?? null,
-  types: data ? getBlockTypes(data) : [],
+  types: data ? safeDecodeRowProperty(data, typesProp) : [],
 })
 
 const BadgeText = ({
@@ -150,7 +151,7 @@ const InheritedCharacterCountDecorator = ({
 }: InheritedCharacterCountDecoratorProps) => {
   const parent = block.repo.block(parentId)
   const parentTypes = useHandle(parent, {
-    selector: data => data ? getBlockTypes(data) : [],
+    selector: data => data ? safeDecodeRowProperty(data, typesProp) : [],
   })
   const [parentScope] = useProperty(parent, charScopeProp)
   const [parentLimit] = useProperty(parent, charLimitProp)

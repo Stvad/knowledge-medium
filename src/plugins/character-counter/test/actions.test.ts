@@ -44,6 +44,18 @@ describe('add counter commands', () => {
     }
   })
 
+  it('still tag the rest of a selection when one block was deleted', async () => {
+    await repo.block(B).delete()
+    await addWordCounterAction.blocks.handler(selection(A, B), new CustomEvent('test'))
+    expect(repo.block(A).hasType(WORD_COUNTER_TYPE)).toBe(true)
+  })
+
+  it('treat a block with a malformed types cell as lacking the type instead of throwing', async () => {
+    await repo.tx(async tx => { await tx.update(A, {properties: {types: 'not-a-list'}}) }, {scope: ChangeScope.BlockDefault})
+    expect(repo.block(A).peek()!.properties.types).toBe('not-a-list')
+    expect(addWordCounterAction.blocks.isVisible!(selection(A))).toBe(true)
+  })
+
   it('are offered while some selected block lacks the type, and hidden once all have it', async () => {
     await repo.addType(A, WORD_COUNTER_TYPE)
     const isVisible = addWordCounterAction.blocks.isVisible!
