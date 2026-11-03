@@ -1,1 +1,1 @@
-export{MB as useTypes}from"../../chunks/app-hvijwxKg.js";
+export{MB as useTypes}from"../../chunks/app-BhM0vbgr.js";

@@ -1,1 +1,1 @@
-export{qX as agentDispatchCompanionDataExtension}from"../../../chunks/app-hvijwxKg.js";
+export{QX as agentDispatchCompanionDataExtension}from"../../../chunks/app-BhM0vbgr.js";

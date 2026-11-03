@@ -1,1 +1,1 @@
-export{Fat as defineQuery}from"../../../chunks/app-hvijwxKg.js";
+export{Wat as defineQuery}from"../../../chunks/app-BhM0vbgr.js";

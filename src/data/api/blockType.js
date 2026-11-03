@@ -1,1 +1,1 @@
-export{Lot as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-hvijwxKg.js";
+export{Kot as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-BhM0vbgr.js";
