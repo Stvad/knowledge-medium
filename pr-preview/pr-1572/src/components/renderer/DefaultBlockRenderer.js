@@ -1,1 +1,1 @@
-export{QP as BulletDot,$P as DefaultBlockLayout,eF as DefaultBlockRenderer}from"../../../chunks/app-R_CgGQda.js";
+export{QP as BulletDot,$P as DefaultBlockLayout,eF as DefaultBlockRenderer}from"../../../chunks/app-Dea0WjG6.js";

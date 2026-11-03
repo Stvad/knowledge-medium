@@ -1,1 +1,1 @@
-export{pv as Wikilink}from"../../../../../chunks/app-R_CgGQda.js";
+export{pv as Wikilink}from"../../../../../chunks/app-Dea0WjG6.js";
