@@ -2,7 +2,7 @@ import { BlockRendererProps } from '@/types.js'
 import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
@@ -172,21 +172,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       block={block}
       extensions={extensions}
       className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}
-      basicSetup={{
-        closeBrackets: true,
-        lineNumbers: false,
-        foldGutter: false,
-        dropCursor: false,
-        allowMultipleSelections: false,
-        indentOnInput: false,
-        highlightSelectionMatches: false,
-        searchKeymap: false,
-        defaultKeymap: false,
-        history: false,
-        historyKeymap: false,
-        highlightActiveLine: false,
-        completionKeymap: false,
-      }}
+      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
       indentWithTab={false}
       onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}

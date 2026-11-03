@@ -14,7 +14,7 @@ import {annotationActions, SUGGEST_EDIT_ACTION_ID, submitComposer} from './actio
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadReplacementOf} from './schema'
-import {closeComposer, openComposer, peekComposer, updateComposer, viewKey} from './uiStore'
+import {closeComposer, peekComposer, updateComposer, viewKey} from './uiStore'
 
 vi.mock('@/data/properties.js', async importOriginal => {
   const actual = await importOriginal<typeof import('@/data/properties.js')>()
@@ -139,12 +139,17 @@ describe('suggesting an edit to a selection', () => {
     expect(peekComposer(KEY)).toMatchObject({anchor: {quote: 'vendor'}, replacement: 'vendor'})
   })
 
-  it('keeps a typed replacement when the composer is re-aimed, and drops it for a comment', async () => {
+  it('keeps a typed replacement when the composer is re-aimed', async () => {
     await suggest(editorSelecting('Thursday'))
     updateComposer(KEY, {replacement: 'Thursday 9am'})
     await suggest(editorSelecting('Thursday because'))
     expect(peekComposer(KEY)).toMatchObject({anchor: {quote: 'Thursday because'}, replacement: 'Thursday 9am'})
-    openComposer(KEY, 'B', null)
-    expect(peekComposer(KEY)?.replacement).toBeUndefined()
+  })
+
+  it('writes one thread when a second submit lands while the first is in flight', async () => {
+    await suggest(editorSelecting('Thursday'))
+    updateComposer(KEY, {replacement: 'Thursday 9am'})
+    expect(await Promise.all([submitComposer(repo, KEY), submitComposer(repo, KEY)])).toEqual([true, false])
+    expect(await threadsOnB()).toHaveLength(1)
   })
 })

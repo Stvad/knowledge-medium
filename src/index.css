@@ -367,6 +367,14 @@
     text-decoration-color: hsl(var(--muted-foreground) / 0.78);
   }
 
+  /* Not a link: its target is missing, so it must not read as one. */
+  .blockref.blockref--missing,
+  .blockref.blockref--missing:hover {
+    text-decoration-style: wavy;
+    text-decoration-color: hsl(var(--destructive) / 0.6);
+    cursor: help;
+  }
+
   img {
     max-width: 100%;
     height: auto;
