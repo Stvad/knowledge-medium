@@ -106,6 +106,7 @@ export const threadHighlights = (handle: Handle<ThreadSummary[]>): Extension[] =
   [highlightField, threadsFeed(handle)]
 
 export const threadHighlightsContribution: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId
   if (!workspaceId) return []
   return threadHighlights(repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}))

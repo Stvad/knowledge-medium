@@ -19,7 +19,7 @@ import {decodeRowProperty} from '@/data/rowProperty'
 import {navigationVerb, type NavigationResult} from '@/utils/navigation'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
-import {cardRenderScopeId, peekMarginShowing, revealThread, viewKey} from './uiStore.ts'
+import {cardRenderScopeId, outerCardSurface, revealThread, viewKey} from './uiStore.ts'
 
 export interface ThreadLanding {
   /** Where the navigation lands: the outermost thread's target. */
@@ -112,7 +112,7 @@ const revealLanding = async (
     }, {scope: ChangeScope.BlockDefault, description: 'reveal comment'})
   }
   // Focus is the panel's, as `writePanelContent` sets it for the landing.
-  await focusBlock(repo.block(panelId), blockId, {renderScopeId: landingFocusScope(panelId, landing, peekMarginShowing(panelId))})
+  await focusBlock(repo.block(panelId), blockId, {renderScopeId: landingFocusScope(panelId, landing, outerCardSurface(panelId) === 'margin')})
 }
 
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {

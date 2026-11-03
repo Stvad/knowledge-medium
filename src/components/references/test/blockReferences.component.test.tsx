@@ -258,6 +258,19 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(screen.getByText(/missing-/)).toBeTruthy()
   })
 
+  it('marks a reference as missing only once its target is confirmed missing, not while it loads', async () => {
+    renderInSource(<BlockRef blockId="missing-block" sourceBlockId="source" occurrenceId="occ-1"/>)
+    await waitFor(() => expect(document.querySelector('.blockref--missing')).toBeTruthy())
+    cleanup()
+
+    // In the db but not the cache: the first render is still loading.
+    repo.cache.deleteSnapshot('target')
+    renderInSource(<BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
+    expect(document.querySelector('.blockref--unresolved')).toBeTruthy()
+    expect(document.querySelector('.blockref--missing')).toBeNull()
+    await screen.findByText('Hello world')
+  })
+
   it('does NOT become editable when the target block is in edit mode elsewhere', async () => {
     // Put the target into edit mode (focused + editing) as if its home
     // location were being edited on the same page.

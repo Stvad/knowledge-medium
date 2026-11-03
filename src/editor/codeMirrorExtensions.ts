@@ -5,8 +5,14 @@ import { defineFacet, isFunction } from '@/facets/facet.js'
 
 export interface CodeMirrorExtensionContext {
   repo: Repo
-  block: Block
+  /** The block the editor edits. Absent in a draft editor (`DraftEditor`),
+   *  whose text becomes a block only once it is submitted: a contribution that
+   *  reads or writes the block contributes nothing there. */
+  block?: Block
 }
+
+/** The context of an editor bound to a block. */
+export type BlockEditorExtensionContext = CodeMirrorExtensionContext & {block: Block}
 
 export type CodeMirrorExtensionContribution =
   (context: CodeMirrorExtensionContext) => readonly CodeMirrorExtension[]
