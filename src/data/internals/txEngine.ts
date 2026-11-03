@@ -1792,7 +1792,10 @@ export class TxImpl implements Tx {
       await materializePropertyChildrenForExistingRow(
         this.propertyChildTx,
         {...parent, properties: {...parent.properties, [schema.name]: encoded}},
-        {resolveNameSchema: () => schema}, [schema.name], {revive: this.ctx.revivalHistory},
+        // The written name only: other names in the rows this revives are
+        // untouched by the write, and the deferred revival owns those.
+        {resolveNameSchema: name => name === schema.name ? schema : undefined},
+        [schema.name], {revive: this.ctx.revivalHistory},
       )
       return
     }

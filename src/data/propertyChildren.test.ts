@@ -1972,6 +1972,38 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents('p')).toEqual(['changed'])
   })
 
+  it.each([
+    ['a bag update', (tx: Tx) => tx.update('p', {properties: {status: 'changed'}})],
+    ['setProperty', (tx: Tx) => tx.setProperty('p', statusSchema, 'changed')],
+  ])('revives a value row\'s own other properties under their own definitions after %s', async (_, write) => {
+    // The revival recurses into the rows it restores, so the write's lookups
+    // have to answer for names beyond the one being written.
+    const LABEL_FIELD_ID = 'field-label-children'
+    const labelSchema = defineProperty('label', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-label-definition', LABEL_FIELD_ID, labelSchema)
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, labelSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await write(tx)
+      await tx.delete('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await bagOf(value!.id)).toEqual({label: 'nested'})
+    expect(await liveFieldRows(value!.id)).toEqual([])
+    const [labelField] = await liveFieldRowsFor(LABEL_FIELD_ID)(value!.id)
+    expect((await childrenRows(labelField!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['nested'])
+  })
+
   it('stays dormant in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()
