@@ -1,1 +1,0 @@
-export{Jp as extensionsOverridesProp,Yp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-wRc3n4_8.js";

@@ -1,1 +1,0 @@
-export{HP as BlockTypeBlockRenderer,UP as BlockTypeContentRenderer,WP as writeBlockTypeLabel}from"../../../chunks/app-wRc3n4_8.js";

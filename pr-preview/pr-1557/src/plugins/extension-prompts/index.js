@@ -1,1 +1,0 @@
-export{dM as ExtensionPromptSurface,fM as extensionPromptsExtension}from"../../../chunks/app-wRc3n4_8.js";
