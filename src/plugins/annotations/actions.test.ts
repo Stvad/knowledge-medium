@@ -7,6 +7,7 @@ import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {editorContentFlushFacet} from '@/editor/contentFlush.js'
+import {ActionContextTypes} from '@/shortcuts/types.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {focusedBlockLocationProp, isEditingBlock, isEditingProp} from '@/data/properties.js'
@@ -25,7 +26,7 @@ import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
 import {createThread} from './threads'
-import {cardRenderScopeId, peekPendingReanchor, releasePendingReanchor, startReanchor} from './uiStore'
+import {cardRenderScopeId, peekPendingReanchor, releasePendingReanchor, setMarginShowing, startReanchor} from './uiStore'
 
 const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
 const toasts = vi.hoisted(() => ({info: vi.fn(), error: vi.fn()}))
@@ -96,6 +97,33 @@ const select = (editor: EditorView, quote: string) => {
 }
 
 const threadsOnB = () => repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'}).load()
+
+describe.each([ActionContextTypes.NORMAL_MODE, ActionContextTypes.EDIT_MODE_CM])('block comment toggle availability in %s', context => {
+  const action = () => annotationActions.find(action => action.id === 'annotations.toggleBlockComments' && action.context === context)!
+  const deps = (renderScopeId: string) => ({block: repo.block('B'), uiStateBlock: repo.block('p'), renderScopeId})
+
+  afterEach(() => setMarginShowing('p', false))
+
+  it('offers and dispatches the toggle on the outline', () => {
+    expect(action().isVisible!(deps(PANEL))).toBe(true)
+    expect(action().canDispatch!(deps(PANEL))).toBe(true)
+  })
+
+  it('does not offer or dispatch the toggle on a nested surface with no inline comments', () => {
+    const nested = deps(backlinkRenderScopeId(PANEL, 'x'))
+    expect(action().isVisible!(nested)).toBe(false)
+    expect(action().canDispatch!(nested)).toBe(false)
+  })
+
+  it('does not offer or dispatch an inline toggle while that panel draws its comments in the margin', () => {
+    setMarginShowing('p', true)
+    expect(action().isVisible!(deps(PANEL))).toBe(false)
+    expect(action().canDispatch!(deps(PANEL))).toBe(false)
+    const otherPanel = deps(panelRenderScopeId('other-panel', 'page'))
+    expect(action().isVisible!(otherPanel)).toBe(true)
+    expect(action().canDispatch!(otherPanel)).toBe(true)
+  })
+})
 
 describe('commenting on an editor selection', () => {
   it.each([['Comment', commentOnTarget], ['Highlight', highlightTarget]] as const)(

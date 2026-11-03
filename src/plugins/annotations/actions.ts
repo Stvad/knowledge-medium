@@ -1,5 +1,5 @@
 import type {EditorView} from '@codemirror/view'
-import {MessageSquarePlus, Highlighter, PanelRight, PencilLine, TextQuote, type LucideIcon} from 'lucide-react'
+import {MessageSquare, MessageSquarePlus, Highlighter, PanelRight, PencilLine, TextQuote, type LucideIcon} from 'lucide-react'
 import {Block} from '@/data/block'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BLOCK_SHELL_ATTRIBUTE} from '@/extensions/blockInteraction.js'
@@ -14,12 +14,13 @@ import {
   type ActionContextConfig,
   type BaseShortcutDependencies,
   type BlockPointerDependencies,
+  type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
   type ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {writeTextToClipboard} from '@/utils/copy.js'
 import {resolveActivePanelRow} from '@/utils/navigation.js'
-import {isPanelRenderScopeId} from '@/utils/renderScope.js'
+import {isPanelRenderScopeId, panelIdOfRenderScopeId} from '@/utils/renderScope.js'
 import {showError, showInfo} from '@/utils/toast.js'
 import {captureAnchor, type RangeAnchor} from './anchor.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
@@ -32,8 +33,10 @@ import {
   closeComposer,
   openComposer,
   peekComposer,
+  peekMarginShowing,
   peekPendingReanchor,
   startReanchor,
+  toggleThreadsExpanded,
   updateComposer,
   viewKey,
   type ComposerState,
@@ -49,6 +52,7 @@ export const HIGHLIGHT_READ_SELECTION_ACTION_ID = 'annotations.highlightReadSele
 export const SUGGEST_EDIT_READ_SELECTION_ACTION_ID = 'annotations.suggestEditReadSelection'
 export const COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID = 'annotations.copyReferenceToReadSelection'
 export const TOGGLE_MARGIN_ACTION_ID = 'annotations.toggleMargin'
+export const TOGGLE_BLOCK_COMMENTS_ACTION_ID = 'annotations.toggleBlockComments'
 
 /** One chord per gesture, the same in every mode it runs in. Control+Shift
  *  rather than the platform modifier: macOS and the browsers reserve much of
@@ -148,6 +152,22 @@ export const submitComposer = async (repo: Repo, key: string): Promise<boolean> 
  *  or a comment card they would open something nothing shows. */
 const onOutline = ({renderScopeId}: {renderScopeId?: string}): boolean =>
   renderScopeId === undefined || isPanelRenderScopeId(renderScopeId)
+
+const canToggleBlockComments = (deps: BlockShortcutDependencies): boolean => {
+  const panelId = panelIdOfRenderScopeId(deps.renderScopeId ?? '')
+  return onOutline(deps) && (panelId === undefined || !peekMarginShowing(panelId))
+}
+
+const toggleBlockCommentsActions = [ActionContextTypes.NORMAL_MODE, ActionContextTypes.EDIT_MODE_CM].map(context => ({
+  id: TOGGLE_BLOCK_COMMENTS_ACTION_ID,
+  description: 'Toggle block comments',
+  context,
+  icon: MessageSquare,
+  defaultBinding: editModeBinding('Control+Shift+m'),
+  isVisible: canToggleBlockComments,
+  canDispatch: canToggleBlockComments,
+  handler: ({block, renderScopeId}) => toggleThreadsExpanded(viewKey(renderScopeId, block.id)),
+} satisfies ActionConfig<typeof context>))
 
 
 /** The thread waiting for new text in this block (Reselect on its card), if
@@ -450,5 +470,6 @@ const toggleMargin: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 }
 
 export const annotationActions: readonly ActionConfig[] = [
-  commentOnSelection, highlightSelection, suggestEdit, copyReferenceToSelection, commentOnBlock, ...readSelectionActions, toggleMargin,
+  commentOnSelection, highlightSelection, suggestEdit, copyReferenceToSelection, commentOnBlock,
+  ...readSelectionActions, ...toggleBlockCommentsActions, toggleMargin,
 ]
