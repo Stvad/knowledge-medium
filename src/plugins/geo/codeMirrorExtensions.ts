@@ -18,7 +18,7 @@ import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type {
-  CodeMirrorExtensionContext,
+  BlockEditorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
@@ -75,7 +75,7 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
+const buildPlaceCompletionSource = ({repo, block}: BlockEditorExtensionContext): CompletionSource => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -337,8 +337,11 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
   return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
 }
 
-export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
-  const placeSource = buildPlaceCompletionSource(ctx)
+/** A picked place is written to the edited block's row, so a draft has none
+ *  to offer. */
+export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
+  const placeSource = buildPlaceCompletionSource({repo, block})
   return [
     placeAutocompleteTheme,
     EditorState.languageData.of(() => [{autocomplete: placeSource}]),

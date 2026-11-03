@@ -448,7 +448,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       fireEvent.contextMenu(at('old').node.parentElement!)
       fireEvent.click(await screen.findByRole('menuitem', {name: 'Suggest edit'}))
       const quote = 'old** text, see [[Launch plan]] and'
-      expect(await screen.findByLabelText('Replacement')).toHaveProperty('value', quote)
+      expect(await screen.findByLabelText('Replacement')).toHaveProperty('textContent', quote)
       expect(peekComposer(viewKey(PANEL, 'rich'))?.anchor).toMatchObject({quote, quoteStart: RICH.indexOf(quote)})
     })
 

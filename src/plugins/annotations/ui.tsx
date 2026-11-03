@@ -14,7 +14,8 @@
  *   Delete (`CommentActions`).
  */
 
-import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent, type ReactNode} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
+import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
 import {MessageSquare} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
@@ -22,6 +23,7 @@ import type {Repo} from '@/data/repo'
 import {useInEditMode, useUIStateBlock} from '@/data/globalState.js'
 import {exitEditModeForBlock} from '@/data/properties.js'
 import {BlockComponent} from '@/components/BlockComponent.js'
+import {DraftEditor} from '@/components/DraftEditor.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
@@ -39,7 +41,7 @@ import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadge
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
-import {isImeKeyEvent} from '@/shortcuts/utils.js'
+import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
@@ -203,26 +205,39 @@ export const commentPillContribution: BlockContentDecoratorContribution = ctx =>
 
 // ──── Inline expansion ────
 
-const QuoteText = ({anchor}: {anchor: ThreadAnchor}) =>
+/** The quote as rendered markdown, so a reference in it is a link. `source`
+ *  is a block the quote's references resolve against: the thread root, or the
+ *  target before a root exists. */
+const QuoteText = ({anchor, source}: {anchor: ThreadAnchor; source: Block}) =>
   anchor.kind === 'block'
     ? <span className="italic">whole block</span>
-    : <span className="break-words">“{truncate(anchor.quote, 160)}”</span>
+    : (
+      <span className="line-clamp-3 break-words">
+        “<MarkdownContentRenderer
+          block={source}
+          contentTransform={() => anchor.quote}
+          containerElement="span"
+          containerClassName="[&>*]:m-0 [&>*]:inline"
+        />”
+      </span>
+    )
 
-const COMPOSER_FIELD = 'w-full resize-y rounded border bg-background px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+const COMPOSER_FIELD = 'min-h-[3.25em] rounded border bg-background px-2 py-1 text-sm focus-within:ring-2 focus-within:ring-ring'
 
 /** A comment's composer, or an edit suggestion's: the replacement, prefilled
- *  with the quote, and an optional comment. */
+ *  with the quote, and an optional comment. Each field is a `DraftEditor`: the
+ *  draft lives in the UI store and is written only on submit. */
 const Composer = ({block, composerKey, composer}: {block: Block; composerKey: string; composer: ComposerState}) => {
-  const input = useRef<HTMLTextAreaElement>(null)
+  const input = useRef<ReactCodeMirrorRef>(null)
   const suggesting = composer.replacement !== undefined
   // A frame late, on open and on re-aim: a menu that opened the composer
   // returns focus to its trigger as it closes. At the end of the text, where
   // a prefilled replacement is usually extended.
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      const field = input.current
-      field?.focus()
-      field?.setSelectionRange(field.value.length, field.value.length)
+      const view = input.current?.view
+      view?.dispatch({selection: {anchor: view.state.doc.length}})
+      view?.focus()
     })
     return () => cancelAnimationFrame(frame)
   }, [composer.anchor])
@@ -233,41 +248,34 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
       reportFailure(error)
     }
   }
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    event.stopPropagation()
-    // Escape and Enter belong to an IME composition while one is open.
-    if (isImeKeyEvent(event.nativeEvent)) return
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      void submit()
-    } else if (event.key === 'Escape') {
-      event.preventDefault()
-      closeComposer(composerKey)
-    }
+  const fieldProps = {
+    readOnly: composer.submitting,
+    onSubmit: () => void submit(),
+    onCancel: () => closeComposer(composerKey),
+    className: COMPOSER_FIELD,
   }
-  const fieldProps = {rows: 2, readOnly: composer.submitting, onKeyDown, className: COMPOSER_FIELD}
   return (
     <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
       <div className="text-xs text-muted-foreground">
         {suggesting ? 'Suggest a change to' : 'Comment on'}{' '}
-        <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}}/>
+        <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}} source={block}/>
       </div>
       {suggesting && (
-        <textarea
+        <DraftEditor
           {...fieldProps}
           ref={input}
-          aria-label="Replacement"
-          value={composer.replacement}
-          onChange={event => updateComposer(composerKey, {replacement: event.target.value, error: null})}
+          label="Replacement"
+          value={composer.replacement ?? ''}
+          onChange={replacement => updateComposer(composerKey, {replacement, error: null})}
         />
       )}
-      <textarea
+      <DraftEditor
         {...fieldProps}
         ref={suggesting ? undefined : input}
-        aria-label={suggesting ? 'Comment (optional)' : 'New comment'}
+        label={suggesting ? 'Comment (optional)' : 'New comment'}
         placeholder={suggesting ? 'Why (optional)' : undefined}
         value={composer.draft}
-        onChange={event => updateComposer(composerKey, {draft: event.target.value, error: null})}
+        onChange={draft => updateComposer(composerKey, {draft, error: null})}
       />
       {composer.error && <p role="alert" className="text-xs text-destructive">{composer.error}</p>}
       <div className="flex gap-2 text-xs">
@@ -400,8 +408,8 @@ const ThreadRootContent: BlockRenderer = ({block}) => {
   }, [editing, uiStateBlock, block.id, blockContext.renderScopeId])
   if (!root) return null
   return inCard(blockContext)
-    ? <ThreadHeader root={root} onReply={async () => focusNewComment(await replyTo(block.repo, block.id))}/>
-    : <ThreadElsewhere root={root}/>
+    ? <ThreadHeader block={block} root={root} onReply={async () => focusNewComment(await replyTo(block.repo, block.id))}/>
+    : <ThreadElsewhere block={block} root={root}/>
 }
 
 type RootFields = Pick<BlockData, 'id' | 'workspaceId' | 'content' | 'properties'>
@@ -453,12 +461,12 @@ const ReanchorControls = ({root, state, targetContent}: {
 }
 
 /** What a thread's line shows: a suggestion's change, or the quote. */
-const ThreadQuote = ({root}: {root: RootFields}) => {
+const ThreadQuote = ({block, root}: {block: Block; root: RootFields}) => {
   const suggestion = threadSuggestionOf(root)
-  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)}/>
+  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)} source={block}/>
 }
 
-const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise<void>}) => {
+const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; onReply: () => Promise<void>}) => {
   const repo = useRepo()
   const readOnly = useReadOnly(repo)
   const {state, targetContent} = useAnchorState(root)
@@ -468,7 +476,7 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className="min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote root={root}/></span>
+      <span className="min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote block={block} root={root}/></span>
       {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
@@ -491,7 +499,7 @@ const ThreadHeader = ({root, onReply}: {root: RootFields; onReply: () => Promise
 
 /** On the container page, in search results and anywhere else a root shows
  *  outside a card: which block it is on, and what it quotes. */
-const ThreadElsewhere = ({root}: {root: RootFields}) => {
+const ThreadElsewhere = ({block, root}: {block: Block; root: RootFields}) => {
   const targetId = threadTargetIdOf(root)
   const {state} = useAnchorState(root)
   return (
@@ -499,7 +507,7 @@ const ThreadElsewhere = ({root}: {root: RootFields}) => {
       <span>on </span>
       {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
       <span> · </span>
-      <ThreadQuote root={root}/>
+      <ThreadQuote block={block} root={root}/>
       {showsAnchorState(root) && state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
     </div>
   )
