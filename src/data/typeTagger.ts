@@ -18,7 +18,6 @@
 
 import type {
   AnyPropertySchema,
-  PropertySchema,
   RepoTxOptions,
   Tx,
   TxWriteOpts,
@@ -27,6 +26,8 @@ import type {
 } from '@/data/api'
 import { BlockNotFoundForTypeError, ChangeScope } from '@/data/api'
 import { typesProp } from './properties'
+import { decodeRowProperty } from './rowProperty'
+import { withAbsentPropertyValues } from './typeInitialValues'
 
 /** The slice of `Repo` the tagger needs: a tx primitive, the live type +
  *  schema registries, and a snapshot accessor for the own-tx entry
@@ -50,20 +51,10 @@ const requireTypeContribution = (
   )
 }
 
-const hasStoredProperty = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
-const readResolvedProperty = <T>(
-  properties: Record<string, unknown>,
-  schema: PropertySchema<T>,
-): T => hasStoredProperty(properties, schema.name)
-  ? schema.codec.decode(properties[schema.name])
-  : schema.defaultValue
-
 // Each type operation makes one net bag change per key. Initial values resolve
-// through the same identity boundary as setProperty; MATERIALIZE projects the
-// cells into field children in children-backed workspaces. Raw writes preserve
-// the only-if-absent contract under both caller and canonical property names.
+// through the same identity boundary as setProperty and fill only what the bag
+// lacks (`withAbsentPropertyValues`); MATERIALIZE projects the cells into field
+// children in children-backed workspaces.
 /** Apply a type using captured registries inside an existing transaction. */
 export const applyTypeTagInTx = async (
   tx: Tx,
@@ -99,26 +90,17 @@ export const applyTypeTagInTx = async (
   // codec, and this write path must reject through the identity boundary
   // rather than attempting to interpret the winner's cell as membership.
   const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
-  const current = readResolvedProperty(block.properties, resolvedTypes)
+  const current = decodeRowProperty(block, resolvedTypes)
   const wasNew = !current.includes(typeId)
-  const next: Record<string, unknown> = {...block.properties}
-  let propsChanged = false
-
-  if (wasNew) {
-    next[resolvedTypes.name] = resolvedTypes.codec.encode([...current, typeId])
-    propsChanged = true
-  }
+  const next = wasNew
+    ? {...block.properties, [resolvedTypes.name]: resolvedTypes.codec.encode([...current, typeId])}
+    : block.properties
 
   const entries = Object.entries(initialValues)
   const declaredSchemas = entries.length === 0
     ? null
     : new Map((contribution.properties ?? []).map(schema => [schema.name, schema] as const))
-  for (const [name, value] of entries) {
-    // Preserve the legacy only-if-empty contract for the caller's raw key.
-    // After resolution, repeat it for the canonical key; `hasOwnProperty`
-    // treats an explicitly stored null as present even when an optional codec
-    // would decode that value to undefined.
-    if (hasStoredProperty(block.properties, name)) continue
+  const assignments = entries.map(([name, value]) => {
     const schema = declaredSchemas?.get(name) ?? propertySchemas.get(name)
     if (schema === undefined) {
       throw new Error(
@@ -126,14 +108,12 @@ export const applyTypeTagInTx = async (
         'in the merged registry.',
       )
     }
-    const resolved = await tx.resolvePropertySchema(blockId, schema)
-    if (hasStoredProperty(next, resolved.name)) continue
-    next[resolved.name] = resolved.codec.encode(value)
-    propsChanged = true
-  }
+    return {schema, value}
+  })
+  const filled = await withAbsentPropertyValues(tx, blockId, next, assignments)
 
-  if (propsChanged) {
-    await tx.update(blockId, {properties: next}, writeOpts)
+  if (wasNew || filled) {
+    await tx.update(blockId, {properties: filled ?? next}, writeOpts)
   }
 }
 
@@ -144,7 +124,7 @@ export class TypeTagger {
     const block = await tx.get(blockId)
     if (!block) return
     const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
-    const current = readResolvedProperty(block.properties, resolvedTypes)
+    const current = decodeRowProperty(block, resolvedTypes)
     if (!current.includes(typeId)) return
     const next = {
       ...block.properties,
@@ -229,7 +209,7 @@ export class TypeTagger {
       // truth for the missing-block branch.
       if (!block || block.deleted) return
       const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
-      if (readResolvedProperty(block.properties, resolvedTypes).includes(typeId)) {
+      if (decodeRowProperty(block, resolvedTypes).includes(typeId)) {
         await this._removeTypeInTx(tx, blockId, typeId)
       } else {
         await applyTypeTagInTx(tx, snapshot, {blockId, typeId, strict: false})
@@ -248,7 +228,7 @@ export class TypeTagger {
       if (!block || block.deleted) return
 
       const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
-      const current = readResolvedProperty(block.properties, resolvedTypes)
+      const current = decodeRowProperty(block, resolvedTypes)
       const currentSet = new Set(current)
       for (const typeId of desiredOrder) {
         if (currentSet.has(typeId)) continue

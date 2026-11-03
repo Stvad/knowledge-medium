@@ -13,7 +13,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
-import { safeDecodeRowProperty } from './rowProperty'
+import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
@@ -522,10 +522,8 @@ export const aliasesProp = seedProperty({
 
 // ──── Helpers ────
 
-export const getBlockTypes = (data: Pick<BlockData, 'properties'>): readonly string[] => {
-  const raw = data.properties[typesProp.name]
-  return raw === undefined ? typesProp.defaultValue : typesProp.codec.decode(raw)
-}
+export const getBlockTypes = (data: Pick<BlockData, 'properties'>): readonly string[] =>
+  decodeRowProperty(data, typesProp)
 
 export const hasBlockType = (
   data: Pick<BlockData, 'properties'>,
@@ -536,30 +534,26 @@ export const hasBlockType = (
  *  (treated as none). Shared by every reader that only needs "which
  *  aliases does this row claim" — the alias-sync processor, the
  *  block-type typeify processor, the type-editor seed. */
-export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string[] => {
-  const raw = data.properties[aliasesProp.name]
-  if (raw === undefined) return []
-  try {
-    return aliasesProp.codec.decode(raw)
-  } catch {
-    return []
-  }
-}
+export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string[] =>
+  safeDecodeRowProperty(data, aliasesProp)
 
 /** Type-membership delta helpers for same-tx processors that watch the
  *  `properties` field. `row.before` is null on insert; `row.after` is
  *  null on hard-delete — both are null-safe here, returning the
  *  appropriate one-sided diff. Order in the returned array matches
- *  `typesProp.codec.decode` order on whichever side is non-null. */
+ *  `typesProp.codec.decode` order on whichever side is non-null.
+ *  A malformed `types` cell reads as no types: processors watching
+ *  `properties` call these on every property write, and a throw would refuse
+ *  an unrelated edit to that block. */
 export const addedTypes = (row: ChangedRow): readonly string[] => {
-  const before = row.before ? new Set(getBlockTypes(row.before)) : new Set<string>()
-  const after = row.after ? getBlockTypes(row.after) : []
+  const before = new Set(row.before ? safeDecodeRowProperty(row.before, typesProp) : [])
+  const after = row.after ? safeDecodeRowProperty(row.after, typesProp) : []
   return after.filter(t => !before.has(t))
 }
 
 export const removedTypes = (row: ChangedRow): readonly string[] => {
-  const before = row.before ? getBlockTypes(row.before) : []
-  const after = row.after ? new Set(getBlockTypes(row.after)) : new Set<string>()
+  const before = row.before ? safeDecodeRowProperty(row.before, typesProp) : []
+  const after = new Set(row.after ? safeDecodeRowProperty(row.after, typesProp) : [])
   return before.filter(t => !after.has(t))
 }
 
@@ -630,6 +624,16 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
+/** Whether `blockId` (in `renderScopeId`, when given) is the block being
+ *  text-edited — focused, with edit mode on. */
+export const isEditingBlock = (
+  uiStateBlock: Block,
+  blockId: string,
+  renderScopeId?: string,
+): boolean =>
+  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
+  Boolean(uiStateBlock.peekProperty(isEditingProp))
+
 export const sameFocusedBlockLocation = (
   a: FocusedBlockLocation | undefined,
   b: FocusedBlockLocation | undefined,
@@ -638,12 +642,7 @@ export const sameFocusedBlockLocation = (
 
 const isEditingFromProperties = (
   properties: Record<string, unknown> | undefined,
-): boolean => {
-  const encoded = properties?.[isEditingProp.name]
-  return encoded === undefined
-    ? isEditingProp.defaultValue
-    : isEditingProp.codec.decode(encoded)
-}
+): boolean => decodeRowProperty({properties: properties ?? {}}, isEditingProp)
 
 /** Default render scope for a location on `uiStateBlock`'s surface when the
  *  caller didn't thread the rendered scope through. Panel rows are the only

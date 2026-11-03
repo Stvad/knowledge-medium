@@ -23,6 +23,24 @@ const maxConcurrentCommands = 4
 // exactly the park boundary.
 const saturatedParkMs = 45_000
 
+export class BridgeNotPairedError extends Error {}
+
+class BridgeHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+// Read no fields of foreign errors: the reason carries no error message or
+// stack, header or body contents.
+const classifyBridgeError = (error: unknown): string => {
+  if (error instanceof BridgeNotPairedError) return 'not paired'
+  if (error instanceof BridgeHttpError) return `HTTP ${error.status}`
+  if (error instanceof TypeError) return 'TypeError'
+  if (error instanceof SyntaxError) return 'SyntaxError'
+  return 'other error'
+}
+
 /** A command's result as it goes back over the wire. */
 export const commandResult = async (run: () => Promise<unknown>): Promise<{ok: true, value: unknown} | {ok: false, error: ReturnType<typeof serializeError>}> => {
   try {
@@ -37,8 +55,8 @@ export interface BridgeLoopOptions {
   /** Read at every use, so a pairing approved while the loop runs is picked
    *  up at its next turn. */
   baseUrl: () => string
-  /** The bridge-secret header; throws while there is no secret, which the
-   *  loop treats as an unreachable bridge. */
+  /** The bridge-secret header; throws BridgeNotPairedError while there is
+   *  no secret, which the loop treats as an unreachable bridge. */
   headers: () => Record<string, string>
   /** The registration body, built at each registration's own turn. */
   registration: () => unknown
@@ -63,7 +81,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   let retryMs = retryBaseMs
   let attempts = 0
   let wakeResolve: (() => void) | null = null
-  let bridgeUnavailableLogged = false
+  let loggedUnavailableReason: string | null = null
 
   const waitForWakeOrTimeout = (ms: number) => new Promise<void>(resolve => {
     let settled = false
@@ -102,7 +120,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     })
 
     if (!response.ok) {
-      throw new Error(`Agent runtime bridge request failed: ${response.status}`)
+      throw new BridgeHttpError(`Agent runtime bridge request failed: ${response.status}`, response.status)
     }
 
     return response
@@ -144,14 +162,11 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   const poll = async () => {
     while (!abortController.signal.aborted) {
       const baseUrl = options.baseUrl()
+      let request = 'registration'
       try {
         await register(baseUrl)
 
-        if (bridgeUnavailableLogged) {
-          console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
-          bridgeUnavailableLogged = false
-        }
-
+        request = 'poll'
         const nextUrl = new URL(`${baseUrl}/runtime/commands/next`)
         nextUrl.searchParams.set('clientId', clientId)
         nextUrl.searchParams.set('timeoutMs', String(longPollMs))
@@ -161,32 +176,35 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
           signal: abortController.signal,
         })
         if (!response.ok) {
-          throw new Error(`Agent runtime bridge poll failed: ${response.status}`)
+          throw new BridgeHttpError(`Agent runtime bridge poll failed: ${response.status}`, response.status)
         }
 
         const rawCommand = await response.json() as unknown
-        retryMs = retryBaseMs
-        attempts = 0
-
-        if (!rawCommand) continue
-
         // Validated at the bridge boundary, so an unknown command type gets a
         // clean, structured error before the kernel switch ever runs, and the
         // executor gets a strict discriminated union.
-        const parsed = knownAgentCommandSchema.safeParse(rawCommand)
+        const parsed = rawCommand ? knownAgentCommandSchema.safeParse(rawCommand) : null
         const commandIdForResult = (rawCommand as {commandId?: string})?.commandId
 
-        if (!parsed.success) {
-          if (commandIdForResult) {
-            await reportResult(commandIdForResult, {
-              ok: false,
-              error: serializeError(
-                new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
-              ),
-            }, baseUrl)
-          }
-          continue
+        if (parsed && !parsed.success && commandIdForResult) {
+          request = 'result'
+          await reportResult(commandIdForResult, {
+            ok: false,
+            error: serializeError(
+              new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
+            ),
+          }, baseUrl)
         }
+
+        if (abortController.signal.aborted) return
+        retryMs = retryBaseMs
+        attempts = 0
+        if (loggedUnavailableReason !== null) {
+          console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
+          loggedUnavailableReason = null
+        }
+
+        if (!parsed?.success) continue
 
         // Detached, so a slow command (a hung eval, a long SQL) does not stall
         // delivery of everything queued behind it.
@@ -202,23 +220,25 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
           // Re-register FIRST: the long-poll that delivered this command may
           // have been held up to 25s server-side, and lastSeen + 25s + the
           // park would breach the server's 60s client TTL.
+          request = 'registration'
           await register(baseUrl)
           await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
           if (inFlightCommands.size >= maxConcurrentCommands) {
             console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)
           }
         }
-      } catch {
+      } catch (error) {
         if (abortController.signal.aborted) return
 
         attempts += 1
         if (attempts >= maxFastAttemptsBeforeQuiet) {
-          if (!bridgeUnavailableLogged) {
+          const reason = `${request}: ${classifyBridgeError(error)}`
+          if (reason !== loggedUnavailableReason) {
             console.info(
-              `Agent runtime bridge unavailable at ${baseUrl}; ` +
+              `Agent runtime bridge unavailable at ${baseUrl} (${reason}); ` +
               `retrying quietly every ${quietRetryMs / 1000} seconds.`,
             )
-            bridgeUnavailableLogged = true
+            loggedUnavailableReason = reason
           }
           await waitForWakeOrTimeout(quietRetryMs)
           if (abortController.signal.aborted) return

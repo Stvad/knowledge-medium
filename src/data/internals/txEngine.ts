@@ -88,6 +88,7 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
 import {
+  getResolvedProperty,
   isResolvableFieldDefinition,
   requirePropertyWriteTarget,
   type PropertyWriteTarget,
@@ -1266,13 +1267,8 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     const data = parseBlockRow(row)
-    const resolution = this.propertySchemaResolverFor(data.workspaceId)
-      .resolveBoundary(schema)
-    if (resolution.status === 'identity-unavailable') return schema.defaultValue
-    const resolvedSchema = resolution.schema
-    const stored = data.properties[resolvedSchema.name]
-    if (stored === undefined) return resolvedSchema.defaultValue
-    return resolvedSchema.codec.decode(stored)
+    return getResolvedProperty(
+      this.propertySchemaResolverFor(data.workspaceId), data.properties, schema)
   }
 
   // ──── Composition ────

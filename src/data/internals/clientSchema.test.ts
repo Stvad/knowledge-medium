@@ -659,23 +659,6 @@ describe('upload-routing triggers', () => {
   })
 })
 
-describe('upload queue download hold', () => {
-  const localHold = () =>
-    h.db.prepare("SELECT last_op, CAST(target_op AS TEXT) AS target_op FROM ps_buckets WHERE name = '$local'").get()
-  const columns = BLOCK_STORAGE_COLUMNS.map(c => c.name)
-
-  // Released: the last upload's write checkpoint has arrived.
-  beforeEach(() => { h.db.exec("INSERT INTO ps_buckets(name, last_op, target_op) VALUES ('$local', 5, 5)") })
-
-  it.each(['OR IGNORE', 'OR ABORT'])('raises it under a write carrying %s', clause => {
-    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
-    h.db.prepare(`INSERT ${clause} INTO blocks (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
-      .run(...blockValues(defaultBlock))
-    h.clearTxContext()
-    expect(localHold()).toEqual({last_op: 0, target_op: '9223372036854775807'})
-  })
-})
-
 describe('workspace-invariant triggers', () => {
   it('rejects local INSERT with dangling parent_id', () => {
     h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})

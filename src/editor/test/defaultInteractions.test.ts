@@ -247,6 +247,16 @@ describe('blockContentPointerGestures (content-surface pointer gestures)', () =>
     expect(mockDispatchPointerAction.mock.calls[0]![0]).toBe(end)
   })
 
+  it('takes no tap from a touch that had a second finger down', () => {
+    // Held finger A, then finger B lands; A lifting soon after is not a tap.
+    const surface = props()
+    surface.onTouchStart?.(touchAt(5, 5))
+    const second = {...touchAt(40, 5), touches: [{clientX: 5, clientY: 5}, {clientX: 40, clientY: 5}]}
+    surface.onTouchStart?.(second as unknown as TouchEvent<HTMLDivElement>)
+    surface.onTouchEnd?.(touchAt(5, 5))
+    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+  })
+
   it('ignores a touch that moves beyond the tap threshold (a drag, not a tap)', () => {
     const surface = props()
     surface.onTouchStart?.(touchAt(5, 5))

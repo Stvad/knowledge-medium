@@ -187,53 +187,51 @@ export const BlockEditor = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockEditData, editorView, block.id])
 
-  useEffect(() => {
+  // Focus in place, in the task of the commit that swaps editors: that commit
+  // unmounts the editor edit mode is leaving, so until this runs nothing
+  // editable has focus and typed keys are dropped. A rAF here drops exactly
+  // the keys typed right after Enter or a navigation, since the browser
+  // dispatches input queued during the swap before the next frame.
+  // `editorView` arrives via commit-phase state updates, which React flushes
+  // within that task. A layout rather than passive effect is defence in
+  // depth: the swap renders on the sync lane, whose passive effects flush in
+  // that task too, but a layout effect does not depend on the lane.
+  useLayoutEffect(() => {
     if (!isEditing || !inEditMode || !editorView) return
 
-    let cancelled = false
-    const frameId = requestAnimationFrame(() => {
-      if (!editorView || cancelled) return
+    editorView.focus()
 
-      editorView.focus()
-
-      const selection = uiStateBlock.peekProperty(editorSelection)
-      if (!cancelled && selection?.blockId === block.id) {
-        if (selection.x !== undefined && selection.y !== undefined) {
-          placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
-        } else if (selection.x !== undefined) {
-          placeCursorAtX(editorView, selection.x, selection.line === 'last')
-        } else if (selection.start !== undefined) {
-          // The stored selection is debounce-persisted and can outlive
-          // a doc-shrinking dispatch (e.g. the supertags `#`
-          // autocomplete deleting its trigger text) — clamp it (see
-          // clampSelectionToLength, shared with the adoption path
-          // above).
-          editorView.dispatch({selection: clampSelectionToLength(
-            EditorSelection.single(selection.start, selection.end ?? selection.start),
-            editorView.state.doc.length,
-          )})
-        }
+    const selection = uiStateBlock.peekProperty(editorSelection)
+    if (selection?.blockId === block.id) {
+      if (selection.x !== undefined && selection.y !== undefined) {
+        placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
+      } else if (selection.x !== undefined) {
+        placeCursorAtX(editorView, selection.x, selection.line === 'last')
+      } else if (selection.start !== undefined) {
+        // The stored selection is debounce-persisted and can outlive
+        // a doc-shrinking dispatch (e.g. the supertags `#`
+        // autocomplete deleting its trigger text) — clamp it (see
+        // clampSelectionToLength, shared with the adoption path
+        // above).
+        editorView.dispatch({selection: clampSelectionToLength(
+          EditorSelection.single(selection.start, selection.end ?? selection.start),
+          editorView.state.doc.length,
+        )})
       }
-
-      if (cancelled) return
-      // Pull the caret into view on edit-entry. `view.focus()` uses
-      // preventScroll (CodeMirror's default), so nothing else scrolls
-      // here — and when the on-screen keyboard is already up (tapping a
-      // second block while editing) no visualViewport resize fires for
-      // keyboardAwareScroll's plugin to catch, making this the only
-      // chance to lift the caret above the keyboard. The scrollMargins
-      // contributed by keyboardAwareScroll keep that landing keyboard-
-      // aware; on desktop the margin is 0 and this is a cheap no-op for
-      // an already-visible caret.
-      editorView.dispatch({
-        effects: EditorView.scrollIntoView(editorView.state.selection.main.head),
-      })
-    })
-
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(frameId)
     }
+
+    // Pull the caret into view on edit-entry. `view.focus()` uses
+    // preventScroll (CodeMirror's default), so nothing else scrolls
+    // here — and when the on-screen keyboard is already up (tapping a
+    // second block while editing) no visualViewport resize fires for
+    // keyboardAwareScroll's plugin to catch, making this the only
+    // chance to lift the caret above the keyboard. The scrollMargins
+    // contributed by keyboardAwareScroll keep that landing keyboard-
+    // aware; on desktop the margin is 0 and this is a cheap no-op for
+    // an already-visible caret.
+    editorView.dispatch({
+      effects: EditorView.scrollIntoView(editorView.state.selection.main.head),
+    })
   }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that

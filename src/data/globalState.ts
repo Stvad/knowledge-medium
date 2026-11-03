@@ -12,6 +12,7 @@
  * drives undo bucketing and schema validation, not the upload routing.
  */
 
+import { decodeRowProperty } from '@/data/rowProperty'
 import { use, useCallback } from 'react'
 import { useBlockContext } from '@/context/block.js'
 import { useUser } from '@/components/Login.js'
@@ -238,12 +239,8 @@ export const useInFocus = (blockId: string, explicitRenderScopeId?: string): boo
 
 export const useIsSelected = (blockId: string): boolean =>
   useHandle(useUIStateBlock(), {
-    selector: doc => {
-      const stored = doc?.properties[selectionStateProp.name]
-      if (stored === undefined) return false
-      const sel = selectionStateProp.codec.decode(stored)
-      return sel.selectedBlockIds.includes(blockId)
-    },
+    selector: doc =>
+      !!doc && decodeRowProperty(doc, selectionStateProp).selectedBlockIds.includes(blockId),
   })
 
 export const useInEditMode = (blockId: string, explicitRenderScopeId?: string): boolean => {

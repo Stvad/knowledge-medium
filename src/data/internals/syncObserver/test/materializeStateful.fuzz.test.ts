@@ -245,12 +245,8 @@ afterAll(() => { warnSpy.mockRestore() })
 /** Interrupt-barrier — see `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6).
  *  `seed: null` below: nothing in this target consults `Math.random` (no
  *  order-key jitter — materializeStagingRows never places blocks), but the
- *  barrier still matters because the DB is shared across fc cases. Registered
- *  AFTER `setupObserverTestDb()` so it runs BEFORE that harness's `afterAll`
- *  cleanup — vitest runs same-level `afterAll` hooks in reverse registration
- *  order, so the later-registered `guard.barrier` fires first. */
+ *  barrier still matters because the DB is shared across fc cases. */
 const guard = statefulFuzzGuard()
-afterAll(guard.barrier)
 
 const runCase = async ({ ops, readChunkSize }: {
   ops: readonly FuzzOp[]; readChunkSize: 2 | 500

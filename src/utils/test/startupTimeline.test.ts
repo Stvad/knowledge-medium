@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { observation, stubPerformanceObserver, type FakeObservation } from '@/test/fakePerformanceObserver'
 import {
   getLastLongTaskEndMs,
   getStartupTimeline,
@@ -43,20 +44,13 @@ describe('startupTimeline', () => {
 // which debounces a quiet window off these events. Drive it with a fake
 // PerformanceObserver (node's real one doesn't support the 'longtask' type).
 describe('startupTimeline long-task tracking', () => {
-  type LongTaskEntry = { startTime: number; duration: number }
-  let observerCb: ((list: { getEntries: () => LongTaskEntry[] }) => void) | undefined
-  const deliver = (entries: LongTaskEntry[]) => observerCb?.({ getEntries: () => entries })
+  let deliver: FakeObservation['deliver']
 
   beforeEach(() => {
     resetStartupTimeline()
-    observerCb = undefined
-    class FakePerformanceObserver {
-      constructor(cb: typeof observerCb) { observerCb = cb }
-      observe() {}
-      disconnect() {}
-    }
-    vi.stubGlobal('PerformanceObserver', FakePerformanceObserver)
+    const live = stubPerformanceObserver(['longtask'])
     startStartupObservers()
+    deliver = observation(live, 'longtask').deliver
   })
   afterEach(() => {
     resetStartupTimeline()

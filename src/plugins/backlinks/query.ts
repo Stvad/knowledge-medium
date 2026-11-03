@@ -11,9 +11,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
-import { propertyMachinerySourceIds, workspaceHasPropertyMachinery } from './machinery.ts'
 import { backlinkSourceIds } from './sourceBatch.ts'
+import { filteredBacklinkSourceIds } from './sources.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -83,9 +82,8 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
 /** Backlinks: blocks whose references point at `id`, self-reference excluded.
  *  Unfiltered, it is answered by the inline badge's batched statement
  *  (`sourceBatch.ts`), so the list on expand and the count on the badge are two
- *  projections of one query. Filtered (or `rawSources`), it is a wrapper around
- *  `core.typedBlockIds`, which drives from the indexed `block_references`
- *  lookup when `referencedBy` is set. */
+ *  projections of one query. Filtered (or `rawSources`), it goes through
+ *  `sources.ts`, the same owner grouped backlinks uses. */
 // Explicit const type so `typeof backlinksForBlockQuery` (it augments
 // QueryRegistry below) is knowable without inferring this initializer —
 // otherwise the `ctx.run` call here resolves QueryRegistry, which loops
@@ -102,7 +100,8 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
-    // Default (false): exclude property-machinery sources — a `[[Foo]]`
+    // Default (false): exclude property-machinery sources, and the edges
+    // another surface owns (`edgeExclusions.ts`). Machinery: a `[[Foo]]`
     // property VALUE mints its backlink through the owning block's cell
     // reprojection, so surfacing the hidden value row too would double it and
     // attribute one copy to invisible machinery. `true` returns EVERY source
@@ -123,36 +122,10 @@ export const backlinksForBlockQuery: Query<
       key: typedBlocksStructureKey(workspaceId, id),
     })
     const normalized = normalizeBacklinksFilter(filter)
-    // The machinery exclusion on both routes below is NOT flip-gated. The
-    // gate's premise — an un-flipped workspace has no property value children
-    // — is what the cell→children backfill breaks: it mints them while the
-    // workspace still reads cells, and a ref-typed value row's `[[X]]` then
-    // duplicates the owner's projected property edge on a surface that had
-    // stopped filtering.
-    //
-    // KNOWN, pre-existing: the exclusion walks each SOURCE's ancestry, but the
-    // only structural dep declared above is the TARGET's. Moving a source out
-    // from under a field row — or editing an ancestor between `((D))` and
-    // `::((D))` — changes membership with nothing to invalidate on, so the
-    // list stays stale until the next reference change or a reload. Un-gating
-    // makes it reachable in every workspace rather than only flipped ones.
-    // Not fixed here: the honest fix is a dep per candidate source and walked
-    // ancestor, and the unfiltered view is what the inline badge on every
-    // visible block counts. km-nc46.
     if (!rawSources && normalized.include.length === 0 && normalized.exclude.length === 0) {
       return backlinkSourceIds(ctx, workspaceId, id)
     }
-    const ids = (await ctx.run('core.typedBlockIds', {
-      workspaceId,
-      referencedBy: {id},
-      match: normalized.include,
-      exclude: normalized.exclude,
-      order: 'created-desc',
-    })).filter(sourceId => sourceId !== id)
-    if (rawSources || ids.length === 0) return ids
-    if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
-    return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
+    return filteredBacklinkSourceIds(ctx, workspaceId, id, normalized, {raw: rawSources})
   },
 })
 

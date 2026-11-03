@@ -65,7 +65,6 @@ const caseArb = fc.record({
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 afterEach(() => { consumePendingPropertyCreateRequest('parent') })

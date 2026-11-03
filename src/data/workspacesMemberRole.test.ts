@@ -5,7 +5,6 @@ import {awaitLocalMemberRole} from '@/data/workspaces'
 
 interface ChangeHandler {
   onChange: () => void | Promise<void>
-  onError?: (error: unknown) => void
 }
 
 class MemberRoleDbFake {
@@ -91,17 +90,6 @@ describe('awaitLocalMemberRole', () => {
     await expect(awaitLocalMemberRole(subscriptionDb.repo(), 'ws', 'user'))
       .rejects.toThrow('subscription failed')
     expect(subscriptionDb.dispose).not.toHaveBeenCalled()
-  })
-
-  it('rejects DB subscription errors and disposes', async () => {
-    const db = new MemberRoleDbFake()
-    const waiting = awaitLocalMemberRole(db.repo(), 'ws', 'user')
-    await Promise.resolve()
-    await Promise.resolve()
-    db.handler!.onError?.(new Error('stream failed'))
-
-    await expect(waiting).rejects.toThrow('stream failed')
-    expect(db.dispose).toHaveBeenCalledTimes(1)
   })
 
   it('rejects instead of hanging when successful cleanup throws', async () => {
@@ -271,9 +259,10 @@ describe('awaitLocalMemberRole', () => {
       const waiting = awaitLocalMemberRole(db.repo(), 'ws', 'user', {onPark: park.onPark})
       await parked(park)
 
-      db.handler!.onError?.(new Error('stream failed'))
+      db.queryError = new Error('query failed')
+      await db.handler!.onChange()
       expect(park.depth()).toBe(0)
-      await expect(waiting).rejects.toThrow('stream failed')
+      await expect(waiting).rejects.toThrow('query failed')
     })
   })
 })

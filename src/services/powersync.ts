@@ -1,5 +1,5 @@
 import {
-  AbstractPowerSyncDatabase,
+  CommonPowerSyncDatabase,
   CrudEntry,
   PowerSyncBackendConnector,
   UpdateType,
@@ -73,11 +73,11 @@ export type CompactedBlockOperation =
  *  in `defaultUploadDeps` below. */
 export interface UploadDeps {
   applyOperations: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     operations: readonly CompactedBlockOperation[],
   ) => Promise<void>
   recordRejection: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     transaction: CrudTransaction,
     error: unknown,
   ) => Promise<void>
@@ -99,8 +99,8 @@ export type GetWorkspaceMode = (workspaceId: string) => UploadMode | Promise<Upl
  *  says e2ee and this device can't seal yet. It takes the same path as a missing
  *  key — out of the upload pass, so the tx stays first in `ps_crud` and PowerSync
  *  retries it — because a held write must be neither sent nor quarantined. While
- *  it waits, the core publishes no checkpoint (`ps_crud_hold_downloads`); that
- *  stall is accepted. */
+ *  it waits in `ps_crud`, the core publishes no checkpoint; that stall is
+ *  accepted. */
 export class UploadHeldError extends Error {
   constructor(readonly workspaceId: string) {
     super(`upload held for ${workspaceId}: the server says e2ee and this device's pin is not upgraded`)
@@ -476,7 +476,7 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 }
 
 const applyCompactedBlockOperations = async (
-  _database: AbstractPowerSyncDatabase,
+  _database: CommonPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
   sink: BlockUploadSink = defaultBlockUploadSink,
 ) => {
@@ -519,7 +519,7 @@ const defaultBlockUploadSink: BlockUploadSink = {
 
 
 const collectUploadBatch = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
 ): Promise<CrudTransaction[]> => {
   const transactions: CrudTransaction[] = []
   const iterator = database.getCrudTransactions()[Symbol.asyncIterator]()
@@ -544,7 +544,7 @@ const collectUploadBatch = async (
  *  code + message, wall-clock time) for a later UI surface or for
  *  manual inspection via `kmagent sql`. */
 const recordRejectionToTable = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transaction: CrudTransaction,
   error: unknown,
 ): Promise<void> => {
@@ -700,7 +700,7 @@ const forgetAmbiguousAttempts = (
  *  missing key is treated as transient (retry), never a rejection (which would
  *  discard the edit). */
 const uploadTransactionsWithFallback = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number> = new Map(),
@@ -783,7 +783,7 @@ const uploadTransactionsWithFallback = async (
 }
 
 const runUploadLoop = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number>,
 ): Promise<void> => {

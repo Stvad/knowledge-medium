@@ -8,7 +8,7 @@ import { agentTokenStore, agentTokensChangedEvent, isAgentTokensStorageKey } fro
 // reaches the node bundle.
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
-import { startBridgeLoop } from './bridgeLoop.ts'
+import { BridgeNotPairedError, startBridgeLoop } from './bridgeLoop.ts'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { blockEditResumed, blockEditSettled } from '@/editor/editSettleSignal.js'
@@ -213,7 +213,7 @@ export const bridgeUrl = () =>
 const bridgeHeaders = () => {
   const secret = getStoredBridgeSecret()
   if (!secret) {
-    throw new Error('Agent runtime bridge is not paired. Start the bridge server and open its pairing URL.')
+    throw new BridgeNotPairedError('Agent runtime bridge is not paired. Start the bridge server and open its pairing URL.')
   }
   return {'x-agent-runtime-secret': secret}
 }

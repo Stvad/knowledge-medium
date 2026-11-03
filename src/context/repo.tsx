@@ -3,7 +3,7 @@ import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import { getClientId } from '@/utils/clientId'
 import { PowerSyncContext } from '@powersync/react'
-import type { AbstractPowerSyncDatabase } from '@powersync/common'
+import type { CommonPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
 import type { ClientContextReader } from '../data/clientContext'
 import { BlockCache } from '@/data/blockCache'
@@ -140,7 +140,7 @@ export function RepoProvider({children, boot = bareBoot}: { children: ReactNode;
 
   return (
     <RepoContext value={repoInstance}>
-      <PowerSyncContext value={repoInstance.db as unknown as AbstractPowerSyncDatabase}>
+      <PowerSyncContext value={repoInstance.db as unknown as CommonPowerSyncDatabase}>
         {children}
       </PowerSyncContext>
     </RepoContext>

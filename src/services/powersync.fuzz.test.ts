@@ -85,7 +85,8 @@
  *  - Non-`blocks` table entries throw the documented `Error` immediately
  *    (powersync.ts:215-217), never a different failure mode.
  */
-import { CrudEntry, UpdateType } from '@powersync/common'
+import { type CrudEntry, UpdateType } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
@@ -121,11 +122,11 @@ const columnValueArb = fc.oneof(
 const opDataArb = fc.dictionary(fc.constantFrom(...columnKeys), columnValueArb, {maxKeys: columnKeys.length})
 
 const put = (id: string, data: Record<string, unknown>, txId: number, clientId = 0) =>
-  new CrudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
+  crudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
 const patch = (id: string, data: Record<string, unknown>, txId: number, clientId = 0) =>
-  new CrudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
+  crudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
 const del = (id: string, txId: number, clientId = 0) =>
-  new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
+  crudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 // ──────────────────────────────────────────────────────────────────────
 // orderedBlockUpserts
@@ -323,7 +324,7 @@ const freeStubsArb = fc.array(freeEntryArb, {minLength: 0, maxLength: 15})
 
 const toCrudEntries = (
   stubs: readonly {op: UpdateType; id: string; transactionId: number; opData: Record<string, unknown>}[],
-): CrudEntry[] => stubs.map((s, i) => new CrudEntry(i, s.op, 'blocks', s.id, s.transactionId, s.opData))
+): CrudEntry[] => stubs.map((s, i) => crudEntry(i, s.op, 'blocks', s.id, s.transactionId, s.opData))
 
 describe('compactBlockCrudEntries', () => {
   it('differential replay: compacted ops and raw entries reach the same per-id final state (contiguous-tx batches)', () => {
@@ -458,7 +459,7 @@ describe('compactBlockCrudEntries', () => {
 
     fc.assert(
       fc.property(stubsWithBadTableArb, stubs => {
-        const entries = stubs.map((s, i) => new CrudEntry(i, s.op, s.table, s.id, s.transactionId, s.opData))
+        const entries = stubs.map((s, i) => crudEntry(i, s.op, s.table, s.id, s.transactionId, s.opData))
         let thrown: unknown
         try {
           __compactBlockCrudEntriesForTest(entries)

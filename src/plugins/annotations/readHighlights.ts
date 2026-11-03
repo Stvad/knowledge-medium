@@ -1,0 +1,416 @@
+/**
+ * Read-mode highlights: each open thread's quote, marked in the rendered
+ * markdown by a remark transform that runs after every other remark plugin.
+ *
+ * Last, because marking first would change what those plugins see: a split
+ * through a timestamp or a reference turns it into a different token.
+ * Running last, every token is already a node, and the rule is
+ * one: plain text may be cut, anything else is marked whole or not at all.
+ *
+ * A quote is raw-content offsets; the tree knows only source spans. The
+ * mapping is exact or the quote is not drawn:
+ *
+ * - a text node whose value IS its source slice is split at the range's
+ *   boundaries;
+ * - any other node (inline code, an image, a reference, a timestamp, text
+ *   whose value differs from its source because of an escape or an entity)
+ *   is opaque: marked whole when the range covers it, and a range that cuts
+ *   one is not drawn;
+ * - only phrasing content is wrapped; a covered paragraph or list item is
+ *   marked inside.
+ *
+ * The plugins before this one leave the nodes they create with no position.
+ * Their spans are recovered by aligning each positionless run against its
+ * positioned neighbours, from the source each node stands for, and kept only
+ * where the source spells it exactly; what can't be aligned is opaque.
+ * Recovered spans stay in this transform: a node it does not split keeps the
+ * position it had, absent or not.
+ */
+
+import type {List, ListItem, Parent, Root, RootContent} from 'mdast'
+import type {Plugin} from 'unified'
+import type {MarkdownExtension} from '@/markdown/extensions.js'
+import {fnv1a32Hex} from '@/utils/fnv1a.js'
+import {coveringStyle, highlightClasses, highlightRanges, type HighlightRange} from './highlights.ts'
+import type {HighlightThread} from './summaries.ts'
+
+const ANNOTATION_MARK_NODE = 'annotationMark'
+
+type Position = NonNullable<RootContent['position']>
+type Point = Position['start']
+
+
+interface Span {
+  from: number
+  to: number
+}
+
+/** One stretch of source covered by the same highlight style, as the mark's
+ *  classes. */
+interface Segment extends Span {
+  className: string
+}
+
+/** The covered stretches, disjoint and in order, each styled as
+ *  `coveringStyle` decides where ranges overlap. */
+const segmentsOf = (ranges: readonly HighlightRange[]): Segment[] => {
+  const cuts = [...new Set(ranges.flatMap(r => [r.from, r.to]))].sort((a, b) => a - b)
+  const segments: Segment[] = []
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const from = cuts[i]
+    const to = cuts[i + 1]
+    const covering = ranges.filter(r => r.from <= from && r.to >= to)
+    if (covering.length === 0) continue
+    const className = highlightClasses(coveringStyle(covering))
+    const last = segments[segments.length - 1]
+    if (last && last.to === from && last.className === className) last.to = to
+    else segments.push({from, to, className})
+  }
+  return segments
+}
+
+type Coverage = {kind: 'none'} | {kind: 'whole'; className: string} | {kind: 'partial'}
+
+const coverageOf = (segments: readonly Segment[], {from, to}: Span): Coverage => {
+  const touching = segments.filter(s => s.from < to && s.to > from)
+  if (touching.length === 0) return {kind: 'none'}
+  const [only] = touching
+  return touching.length === 1 && only.from <= from && only.to >= to
+    ? {kind: 'whole', className: only.className}
+    : {kind: 'partial'}
+}
+
+/** Markdown's own containers whose children are phrasing content, the only
+ *  place a mark can sit. */
+const PHRASING_PARENTS = new Set(['paragraph', 'heading', 'tableCell', 'emphasis', 'strong', 'delete', 'link', 'linkReference'])
+
+/** Markdown's own containers, which this descends into. Every other node with
+ *  children was made by a plugin (a wikilink, a block ref) and is one token. */
+const MARKDOWN_CONTAINERS = new Set([
+  'root', 'blockquote', 'list', 'listItem', 'table', 'tableRow', 'footnoteDefinition', ...PHRASING_PARENTS,
+])
+
+type Container = Root | (RootContent & Parent)
+
+const isContainer = (node: RootContent | Root): node is Container => MARKDOWN_CONTAINERS.has(node.type)
+
+const parsedSpan = (node: RootContent | Root): Span | null => {
+  const from = node.position?.start.offset
+  const to = node.position?.end.offset
+  return from === undefined || to === undefined ? null : {from, to}
+}
+
+/** Text markdown may have decoded from longer source: a backslash (an
+ *  escape, or what one left), an entity, a line whose prefix was stripped.
+ *  Decoding only shortens, so the decoded text can also be spelled, one or
+ *  more characters early, by the source it came from (`&amp;amp;` reads
+ *  `&amp;`), and aligning it there would mark the wrong text. */
+const MAYBE_DECODED = /\\|&[#a-z]|\n[>\s]/i
+
+/** The source text a positionless node stands for, where it is knowable:
+ *  text is itself, an autolink literal is its one text child, and a plugin's
+ *  token keeps its raw source as its `value`. Never text that may have been
+ *  decoded. */
+const literalSource = (node: RootContent): string | null => {
+  const text = node.type === 'link' ? autolinkText(node) : (node as {value?: unknown}).value
+  return typeof text === 'string' && !MAYBE_DECODED.test(text) ? text : null
+}
+
+const autolinkText = (node: RootContent & {type: 'link'}): string | null => {
+  const [child] = node.children
+  if (node.children.length !== 1 || child.type !== 'text') return null
+  const url = node.url ?? ''
+  return [child.value, `mailto:${child.value}`, `http://${child.value}`, `https://${child.value}`].includes(url)
+    ? child.value
+    : null
+}
+
+/** Every node's span: the parser's, or one recovered for a run of positionless
+ *  siblings. The run is aligned forward from the positioned sibling before it
+ *  (or the parent's start) and back from the one after it (or the parent's
+ *  end), node by node, each kept only where the source spells exactly the text
+ *  that node stands for. A node in the middle that neither end reaches (one
+ *  whose source isn't knowable) gets the whole stretch left between them,
+ *  which makes that stretch opaque. */
+const spansOf = (tree: Root, source: string): WeakMap<object, Span> => {
+  const spans = new WeakMap<object, Span>()
+  const visit = (parent: Container) => {
+    const parentSpan = spans.get(parent)
+    const children = parent.children as RootContent[]
+    for (const child of children) {
+      const span = parsedSpan(child)
+      if (span) spans.set(child, span)
+    }
+    for (let start = 0; start < children.length; start++) {
+      if (spans.has(children[start])) continue
+      let end = start
+      while (end < children.length && !spans.has(children[end])) end++
+      let from = start > 0 ? spans.get(children[start - 1])!.to : parentSpan?.from
+      let to = end < children.length ? spans.get(children[end])!.from : parentSpan?.to
+      let i = start
+      for (; i < end && from !== undefined; i++) {
+        const text = literalSource(children[i])
+        if (text === null || source.slice(from, from + text.length) !== text) break
+        spans.set(children[i], {from, to: from + text.length})
+        from += text.length
+      }
+      let j = end - 1
+      for (; j >= i && to !== undefined; j--) {
+        const text = literalSource(children[j])
+        if (text === null || source.slice(to - text.length, to) !== text) break
+        spans.set(children[j], {from: to - text.length, to})
+        to -= text.length
+      }
+      if (from !== undefined && to !== undefined && from <= to) {
+        for (let k = i; k <= j; k++) spans.set(children[k], {from, to})
+      }
+      start = end
+    }
+    for (const child of children) if (isContainer(child)) visit(child)
+  }
+  const rootSpan = parsedSpan(tree)
+  if (rootSpan) spans.set(tree, rootSpan)
+  visit(tree)
+  return spans
+}
+
+/** A text node whose value is exactly its source, so a source offset inside it
+ *  is also an offset into its value. */
+const isAddressableText = (node: RootContent, span: Span, source: string): boolean =>
+  node.type === 'text' && node.value === source.slice(span.from, span.to)
+
+/** Every node a range must not cut: anything whose inside can't be
+ *  addressed. */
+const opaqueSpans = (tree: Root, spans: WeakMap<object, Span>, source: string): Span[] => {
+  const found: Span[] = []
+  const walk = (node: RootContent) => {
+    if (isContainer(node)) {
+      for (const child of node.children) walk(child)
+      return
+    }
+    const span = spans.get(node)
+    if (span && !isAddressableText(node, span, source)) found.push(span)
+  }
+  for (const child of tree.children) walk(child)
+  return found
+}
+
+const drawable = (opaque: readonly Span[]) => ({from, to}: HighlightRange): boolean =>
+  opaque.every(node => node.to <= from || node.from >= to || (node.from >= from && node.to <= to))
+
+const pointsOf = (source: string) => {
+  const lineStarts = [0]
+  for (let i = 0; i < source.length; i++) if (source[i] === '\n') lineStarts.push(i + 1)
+  return (offset: number): Point => {
+    let line = lineStarts.length - 1
+    while (lineStarts[line] > offset) line--
+    return {line: line + 1, column: offset - lineStarts[line] + 1, offset}
+  }
+}
+
+/** ACCEPTED: a mark wrapping an embed moves it under a new parent, and a mark
+ *  added before a marked embed shifts its key, so an editor open in an embed
+ *  inside a quote remounts when that paragraph's marks change. */
+const markNode = (className: string, children: RootContent[]): RootContent => ({
+  type: ANNOTATION_MARK_NODE,
+  children,
+  data: {
+    hName: 'mark',
+    hProperties: {className: className.split(' ')},
+  },
+} as unknown as RootContent)
+
+/** `className` is the piece's mark, or null when it is not marked. */
+type Piece = {node: RootContent; className: string | null}
+
+export interface AnnotationMarksOptions {
+  /** The content the ranges were resolved against. A renderer that transforms
+   *  the content first gets no marks, since the ranges would not line up. */
+  content: string
+  ranges: readonly HighlightRange[]
+  /** The render's {@link renderedSourceKey}, when a read-mode selection in
+   *  it should map back to its text: see {@link SOURCE_SPANS_ATTRIBUTE}. */
+  sourceKey?: string
+}
+
+export const remarkAnnotationMarks: Plugin<[AnnotationMarksOptions], Root> = ({content, ranges, sourceKey}) => (tree, file) => {
+  const source = String(file.value ?? '')
+  // The parser skips a leading byte-order mark without counting it, so every
+  // position it reports would sit one before the text it names.
+  if (source !== content || source.charCodeAt(0) === 0xfeff) return
+  const spans = spansOf(tree, source)
+  const segments = ranges.length === 0 ? [] : segmentsOf(ranges.filter(drawable(opaqueSpans(tree, spans, source))))
+  if (segments.length > 0) drawMarks(tree, spans, segments, source)
+  if (sourceKey !== undefined) recordSourceSpans(tree, spans, source, sourceKey)
+}
+
+/** Wrap every covered stretch in a mark, splitting addressable text at the
+ *  segment boundaries. Each split piece's span joins `spans`. */
+const drawMarks = (tree: Root, spans: WeakMap<object, Span>, segments: readonly Segment[], source: string) => {
+  const pointAt = pointsOf(source)
+  const position = (from: number, to: number): Position => ({start: pointAt(from), end: pointAt(to)})
+
+  /** Split at every segment boundary inside `span`. A piece keeps an exact
+   *  position only if the node had one from the parser. */
+  const splitText = (node: RootContent & {value: string}, span: Span): Piece[] => {
+    const cuts = [span.from, ...segments.flatMap(s => [s.from, s.to]).filter(c => c > span.from && c < span.to), span.to]
+    const pieces: Piece[] = []
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const piece = {from: cuts[i], to: cuts[i + 1]}
+      const text = {
+        type: 'text',
+        value: node.value.slice(piece.from - span.from, piece.to - span.from),
+        ...(node.position ? {position: position(piece.from, piece.to)} : {}),
+      } as RootContent
+      spans.set(text, piece)
+      const coverage = coverageOf(segments, piece)
+      pieces.push({node: text, className: coverage.kind === 'whole' ? coverage.className : null})
+    }
+    return pieces
+  }
+
+  const piecesOf = (node: RootContent, phrasing: boolean): Piece[] => {
+    const span = spans.get(node)
+    if (!span) return [{node, className: null}]
+    const coverage = coverageOf(segments, span)
+    if (coverage.kind === 'none') return [{node, className: null}]
+    if (coverage.kind === 'whole' && phrasing) return [{node, className: coverage.className}]
+    if (isContainer(node)) {
+      transform(node)
+      return [{node, className: null}]
+    }
+    // Partly covered, so addressable text: `drawable` refused ranges that cut
+    // anything else.
+    return node.type === 'text' ? splitText(node, span) : [{node, className: null}]
+  }
+
+  /** Rebuild `parent.children`, wrapping each run of adjacent marked pieces
+   *  of one style in one mark, so a quote reads as one mark rather than one
+   *  per node. */
+  const transform = (parent: Container) => {
+    const phrasing = PHRASING_PARENTS.has(parent.type)
+    const out: RootContent[] = []
+    let run = null as {className: string; nodes: RootContent[]} | null
+    for (const {node, className} of (parent.children as RootContent[]).flatMap(child => piecesOf(child, phrasing))) {
+      if (className === null) {
+        run = null
+        out.push(node)
+      } else if (run?.className === className) {
+        run.nodes.push(node)
+      } else {
+        run = {className, nodes: [node]}
+        out.push(markNode(className, run.nodes))
+      }
+    }
+    parent.children = out as Parent['children']
+  }
+
+  transform(tree)
+}
+
+/**
+ * Where each text node of the render came from, for mapping a DOM selection
+ * back to raw offsets (`readSelection.ts`). Written on the element that holds
+ * the text: the render's {@link renderedSourceKey}, then one entry per DOM text
+ * node that element will hold, in order — `from-to` where the text is exactly
+ * that slice of the source, `-` where it is not.
+ *
+ * The entries count what React renders, not what mdast holds: an empty text
+ * renders no node, and a line break renders a newline text after its `<br>`.
+ * Where that count can't be known here the element records nothing, and a
+ * reader that finds a different count refuses rather than guess.
+ */
+export const SOURCE_SPANS_ATTRIBUTE = 'data-annotation-source'
+
+/** Which render recorded the spans: the block, the render scope, and the exact
+ *  source rendered. A reader recomputes it from the row it found and the
+ *  content it is about to anchor in, so another block's or another scope's
+ *  render (a block shown inside itself) refuses, and so does a render the
+ *  content has moved past, even where each end's own text still matches. The
+ *  length tells most edits apart outright; the hash, those that keep it. */
+export const renderedSourceKey = (blockId: string, renderScopeId: string | undefined, source: string): string =>
+  `${source.length}.${fnv1a32Hex(`${blockId}\n${renderScopeId}\n${source}`)}`
+
+/** mdast-util-to-hast's rule: a list is loose when it, or any item in it, is
+ *  spread; an item with no `spread` is spread when it has several children. */
+const isTightList = (list: List): boolean =>
+  !list.spread && list.children.every(item => !(item.spread ?? item.children.length > 1))
+
+/** In a tight list, mdast-util-to-hast unwraps an item's paragraph into the
+ *  `<li>`, so the item holds that paragraph's text. Only the plain shape is
+ *  knowable: with more children it adds newlines the block-separator pass may
+ *  trim, and a task item adds a checkbox and a space. */
+const unwrappedParagraph = (item: ListItem) => {
+  const [only] = item.children
+  return item.children.length === 1 && only.type === 'paragraph' && typeof item.checked !== 'boolean' ? only : null
+}
+
+const recordSourceSpans = (tree: Root, spans: WeakMap<object, Span>, source: string, key: string) => {
+  const entriesOf = (children: readonly RootContent[]): string[] | null => {
+    const entries: string[] = []
+    for (const child of children) {
+      if (child.type === 'text') {
+        // DEFENCE IN DEPTH: no plugin here leaves an empty text today. React
+        // renders none, so counting one would make the element refuse.
+        if (child.value === '') continue
+        const span = spans.get(child)
+        entries.push(span && isAddressableText(child, span, source) ? `${span.from}-${span.to}` : '-')
+      } else if (child.type === 'break') {
+        entries.push('-')
+      } else if (child.type === 'html' || child.type === 'linkReference' || child.type === 'imageReference') {
+        // Raw HTML may render as text or as elements, and an unresolved
+        // reference reverts to bracketed text around its children.
+        return null
+      }
+    }
+    return entries
+  }
+  const record = (holder: RootContent, children: readonly RootContent[]) => {
+    const entries = entriesOf(children)
+    if (!entries) return
+    const data = (holder.data ?? {}) as {hProperties?: Record<string, unknown>}
+    holder.data = {...data, hProperties: {...data.hProperties, [SOURCE_SPANS_ATTRIBUTE]: [key, ...entries].join(' ')}}
+  }
+  const visit = (node: Root | RootContent) => {
+    // A mark is this transform's own node, outside mdast's type union.
+    const marked = (node.type as string) === ANNOTATION_MARK_NODE
+    if (!marked && !isContainer(node)) return
+    const {children} = node as Container
+    if (marked || PHRASING_PARENTS.has(node.type)) record(node as RootContent, children)
+    if (node.type === 'list' && isTightList(node)) {
+      for (const item of node.children) {
+        const paragraph = unwrappedParagraph(item)
+        if (paragraph) record(item, paragraph.children)
+      }
+    }
+    for (const child of children) visit(child)
+  }
+  visit(tree)
+}
+
+/** The input the block's feed is provided under, around its content, by
+ *  whatever already reads its thread summaries: the comment pill on outline
+ *  blocks, and a card for its comments. It applies only where it was provided,
+ *  that block in that render scope: an embed or a block ref inside the content
+ *  inherits it, and sets a scope of its own, `((B))` inside B included. */
+export const THREAD_HIGHLIGHTS_INPUT = 'annotations.threadHighlights'
+
+export interface ThreadHighlightsFeed {
+  blockId: string
+  renderScopeId: string | undefined
+  threads: readonly HighlightThread[]
+}
+
+/** Ranges resolve against the snapshot being rendered, so they cannot lag
+ *  it. Source spans are recorded wherever the block renders live; a static
+ *  render (an export) has no render scope, and no selection to map. */
+export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, input, data}) => {
+  const feed = input[THREAD_HIGHLIGHTS_INPUT] as ThreadHighlightsFeed | undefined
+  const fed = feed !== undefined && feed.blockId === block.id && feed.renderScopeId === blockContext.renderScopeId
+  const ranges = fed ? highlightRanges(data.content, feed.threads) : []
+  const sourceKey = blockContext.renderScopeId === undefined
+    ? undefined
+    : renderedSourceKey(block.id, blockContext.renderScopeId, data.content)
+  if (ranges.length === 0 && sourceKey === undefined) return null
+  return {remarkPlugins: [[remarkAnnotationMarks, {content: data.content, ranges, sourceKey}]]}
+}

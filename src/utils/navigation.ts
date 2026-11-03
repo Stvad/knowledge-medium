@@ -49,6 +49,7 @@ import { navigateInPanel } from './panelHistory'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
+import { blockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
@@ -365,46 +366,6 @@ export const useNavigate = () => {
 // ---------------------------------------------------------------------------
 // Intent layer: gesture → NavigateInput (the navigation POLICY).
 // ---------------------------------------------------------------------------
-
-export interface BlockLinkClickModifierState {
-  shiftKey: boolean
-  altKey: boolean
-  metaKey: boolean
-  ctrlKey: boolean
-  button: number
-}
-
-/** The raw modifier→target matrix. Shared by the default navigation policy and
- *  by surfaces (e.g. quick-find) that map the same gesture onto their own
- *  target vocabulary.
- *    - shift+alt+primary  → new side panel
- *    - shift+primary      → Roam-style vertical sidebar stack
- *    - alt+primary        → main panel
- *    - plain primary      → role decides (see `defaultNavigationIntent`)
- *    - cmd / ctrl / non-primary → `'native'`: let the browser handle the href
- *      (new tab, middle-click) */
-export type BlockLinkClickIntent =
-  | 'new-panel'
-  | 'sidebar-stack'
-  | 'main'
-  | 'default'
-  | 'native'
-
-export const blockLinkClickIntent = (
-  event: BlockLinkClickModifierState,
-): BlockLinkClickIntent => {
-  if (event.shiftKey && event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'new-panel'
-  }
-  if (event.shiftKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'sidebar-stack'
-  }
-  if (event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'main'
-  }
-  if (event.metaKey || event.ctrlKey || event.button !== 0) return 'native'
-  return 'default'
-}
 
 /** What a plain (no-modifier) primary click should do — also the surface's
  *  navigation *role*, used as the default `origin` of the resulting navigation.

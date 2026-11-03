@@ -12,6 +12,7 @@ import type { PluggableList } from 'unified'
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,
   blockContext: {},
+  input: {},
   data: {content: '', references: [], workspaceId: ''},
 })
 

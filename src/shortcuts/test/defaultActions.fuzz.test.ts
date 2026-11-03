@@ -278,7 +278,6 @@ beforeAll(async () => {
   stopAutoConfirm = autoConfirmDialogs()
 })
 afterAll(async () => {
-  await guard.barrier()
   stopAutoConfirm?.()
   await sharedDb.cleanup()
 })
@@ -462,7 +461,6 @@ describe('default-action dispatch sequences', () => {
   // deep-fuzz run that grew the tree this far would burn its hour-long timeout
   // with no failure to report.
   it('answers the bulk-delete confirmation instead of hanging on it', async () => {
-    await guard.barrier()
     const env = await buildEnv(
       Array.from({length: BULK_DELETE_CONFIRM_THRESHOLD + 1}, () => ({parent: 0, content: 'x'})),
     )
@@ -491,7 +489,6 @@ describe('default-action dispatch sequences', () => {
   // observable effects for the main handler families under exactly the
   // deps this harness synthesizes.
   it('dispatched actions observably reach the handlers', async () => {
-    await guard.barrier()
     const env = await buildEnv([
       {parent: 0, content: 'alpha'},
       {parent: 0, content: 'beta'},

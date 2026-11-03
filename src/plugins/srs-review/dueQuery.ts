@@ -149,5 +149,21 @@ const lacksSrsType = (data: BlockData): boolean => {
  *  property the scheduler writes. A de-typed card falls through both tests
  *  and stays invisible to the deck, exactly as before this feature existed;
  *  re-adding its type restores it as the mature card it still is. */
-export const selectNewCards = (candidates: readonly BlockData[]): BlockData[] =>
-  candidates.filter(data => lacksSrsType(data) && !hasStoredSrsState(data))
+export const selectNewCards = (
+  candidates: readonly BlockData[],
+  contentCopyTypes: readonly string[] = [],
+): BlockData[] =>
+  candidates.filter(data => lacksSrsType(data) && !hasStoredSrsState(data) && !isContentCopy(data, contentCopyTypes))
+
+/** A block whose content is a copy of other text, such as a comment thread
+ *  quoting a card, carries that text's `[[Tag]]` without being tagged itself.
+ *  The types come from backlinks' `contentCopyTypes`. Unreadable types count
+ *  as a copy, the same conservative direction as `lacksSrsType`. */
+const isContentCopy = (data: BlockData, contentCopyTypes: readonly string[]): boolean => {
+  if (contentCopyTypes.length === 0) return false
+  try {
+    return getBlockTypes(data).some(type => contentCopyTypes.includes(type))
+  } catch {
+    return true
+  }
+}

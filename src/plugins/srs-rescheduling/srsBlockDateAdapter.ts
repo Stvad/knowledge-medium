@@ -7,21 +7,14 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { getAliases, getBlockTypes } from '@/data/properties.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { dailyNoteIso, getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes/dailyNotes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.js'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
-const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null => {
-  const stored = properties[srsNextReviewDateProp.name]
-  if (stored === undefined) return null
-  try {
-    const value = srsNextReviewDateProp.codec.decode(stored)
-    return value || null
-  } catch {
-    return null
-  }
-}
+const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null =>
+  safeDecodeRowProperty({properties}, srsNextReviewDateProp) || null
 
 const dailyNoteIsoFromBlockId = async (
   block: Block,

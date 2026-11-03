@@ -9,6 +9,7 @@ import {
   blockIdsInOrderedSelectionRange,
   findBestSelectionAnchorIndex,
   getLastVisibleDescendant,
+  insertInDocumentOrder,
 } from '@/utils/selection.js'
 
 const WS = 'ws-1'
@@ -138,6 +139,18 @@ describe('blockAfterSubtreeRemoval', () => {
     expect(result?.id).toBe('a')
   })
 
+  it('passes over the siblings leaving with it', async () => {
+    // top > [a, b, c]; remove b and c together → not c, not b: a
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+      {id: 'c', parentId: 'top', orderKey: 'd'},
+    ])
+    const result = await blockAfterSubtreeRemoval(env.repo.block('c'), 'top', new Set(['b', 'c']))
+    expect(result?.id).toBe('a')
+  })
+
   it('returns the parent when the block is the sole child', async () => {
     // top > [parent > [only]]; remove only → parent
     await seedOutline(env.repo, [
@@ -242,5 +255,37 @@ describe('getLastVisibleDescendant', () => {
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
     const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
     expect(result.id).toBe('b')
+  })
+})
+
+describe('insertInDocumentOrder', () => {
+  beforeEach(async () => {
+    await seedOutline(env.repo, [
+      {id: 'root', parentId: null, orderKey: 'a0'},
+      {id: 'p', parentId: 'root', orderKey: 'a0'},
+      {id: 'p1', parentId: 'p', orderKey: 'a0'},
+      {id: 'q', parentId: 'root', orderKey: 'b0'},
+      // Two siblings sharing an order key, which every children query breaks by id.
+      {id: 'tb', parentId: 'root', orderKey: 'c0'},
+      {id: 'ta', parentId: 'root', orderKey: 'c0'},
+      {id: 'other', parentId: null, orderKey: 'b0'},
+      {id: 'o1', parentId: 'other', orderKey: 'a0'},
+    ])
+  })
+
+  it('puts an ancestor before its descendant', async () => {
+    expect(await insertInDocumentOrder(['p1'], 'p', env.repo)).toEqual(['p', 'p1'])
+  })
+
+  it('breaks an order-key tie by id, as the children queries do', async () => {
+    expect(await insertInDocumentOrder(['tb'], 'ta', env.repo)).toEqual(['ta', 'tb'])
+  })
+
+  it('appends a block from another tree, which has no order against this one', async () => {
+    expect(await insertInDocumentOrder(['q'], 'o1', env.repo)).toEqual(['q', 'o1'])
+  })
+
+  it('steps over a selected id that no longer resolves', async () => {
+    expect(await insertInDocumentOrder(['gone', 'q'], 'p', env.repo)).toEqual(['gone', 'p', 'q'])
   })
 })

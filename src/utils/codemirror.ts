@@ -283,6 +283,12 @@ export const createMinimalMarkdownConfig = (
         caretColor: 'currentColor',
       },
       '.cm-line': {padding: '0'},
+      '.cm-selectionBackground': {
+        backgroundColor: 'hsl(var(--foreground) / 0.15)',
+      },
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: 'hsl(var(--primary) / 0.3)',
+      },
       /* Caret fix: zero the half-pixel shift, and recolor the drawn
          cursor (default is black) so it's visible against any palette. */
       ".cm-cursor, .cm-dropCursor": {

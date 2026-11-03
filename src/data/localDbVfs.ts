@@ -20,6 +20,7 @@
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
+import { powerSyncLogger } from '@/data/powerSyncLogger.js'
 import { corruptErrorUserId, isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
 
 export type LocalDbVfs = WASQLiteVFS.OPFSCoopSyncVFS | WASQLiteVFS.OPFSWriteAheadVFS
@@ -389,9 +390,8 @@ const HANDOFF_CLOSE_TIMEOUT_MS = 3_000
 
 const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (dbFilename, fn) => {
   const db = new WASQLiteOpenFactory({
-    dbFilename,
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-    flags: {enableMultiTabs: true},
+    open: {dbFilename, vfs: WASQLiteVFS.OPFSCoopSyncVFS, enableMultiTabs: true},
+    logger: powerSyncLogger,
   }).openDB()
 
   let bodyError: unknown = null

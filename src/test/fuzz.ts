@@ -1,4 +1,5 @@
 import fc from 'fast-check'
+import { afterEach } from 'vitest'
 
 /**
  * Shared run configuration for the fuzz suites (`*.fuzz.test.ts`).
@@ -133,9 +134,15 @@ export const withPinnedRandom = async <T>(seed: number, fn: () => Promise<T>): P
  *    within a single suite whenever more than one property or a
  *    non-property test can touch the shared state (multiple `fc.assert`
  *    properties in one file; a canary `it` after the fuzzed one).
- *  - last-case leak: a suite's `afterAll` must call `guard.barrier()` so
- *    an interrupted FINAL case can't leave `Math.random` patched (or
- *    still writing to a shared DB) after the file's tests finish.
+ *  - last-case leak: every test waits out its in-flight case in an
+ *    `afterEach` the guard registers itself, so an interrupted case can't
+ *    outlive the test that started it. A file's `afterEach` runs before
+ *    the setup file's, which releases the test's Repos
+ *    (`testRepoScope.ts`); a case still running past that release writes
+ *    through a Repo with no open workspace, and a fire-and-forget write
+ *    there surfaces as an unhandled rejection blamed on the next test.
+ *    Build the guard at collection time (module or `describe` scope) for
+ *    the hook to attach to the suite.
  *
  * `seed: null` skips the pin (for cases with no nondeterminism to pin —
  * e.g. a suite with no DB/order-key jitter in its op set); the barrier
@@ -163,5 +170,8 @@ export const statefulFuzzGuard = (): {
     inFlightCase = casePromise
     return casePromise
   }
+  // The abandoned case may be a whole deep-tier case, so it gets a test's
+  // budget rather than vitest's default hook timeout.
+  afterEach(barrier, fuzzTestTimeout())
   return {barrier, run}
 }

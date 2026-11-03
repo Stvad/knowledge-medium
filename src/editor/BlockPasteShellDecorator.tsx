@@ -8,7 +8,7 @@ import {
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
 import { readClipboardContent } from '@/paste/clipboard.js'
-import { pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
 
 /**
@@ -42,6 +42,14 @@ export function BlockPasteShellDecorator({
       e.preventDefault()
       const content = readClipboardContent(e.clipboardData)
       if (!content) return
+
+      const cutPaste = await pasteArmedCut(content.text, block, repo, { scopeRootId })
+      if (cutPaste) {
+        if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
+          void focusBlock(uiStateBlock, cutPaste.blocks[0].id, { renderScopeId })
+        }
+        return
+      }
 
       // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
       // the chord intent is always 'split'. Resolve the decision, capturing any

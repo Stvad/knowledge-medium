@@ -31,7 +31,7 @@ export const useCloseOnServerE2ee = (
       }
     }
     const unsubscribe = db.onChange(
-      {onChange: check, onError: err => console.warn('[gate] workspace mode watch failed', err)},
+      {onChange: check},
       {tables: ['workspaces']},
     )
     void check()

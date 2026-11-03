@@ -520,6 +520,10 @@ export const getPluginUIStateChild = memoizeAsync(
 export const getSelectionStateSnapshot = (uiStateBlock: Block): BlockSelectionState =>
   uiStateBlock.peekProperty(selectionStateProp) ?? selectionStateProp.defaultValue
 
+/** Whether any block is selected, i.e. multi-select mode is on (sync). */
+export const hasBlockSelection = (uiStateBlock: Block): boolean =>
+  getSelectionStateSnapshot(uiStateBlock).selectedBlockIds.length > 0
+
 export const resetBlockSelection = async (uiStateBlock: Block): Promise<void> => {
   const current = uiStateBlock.peekProperty(selectionStateProp)
   if (!current?.selectedBlockIds.length && !current?.anchorBlockId) return

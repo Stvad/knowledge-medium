@@ -20,4 +20,6 @@ export interface StaleDist {
 }
 export declare const staleDist: (root: string) => StaleDist[]
 
-export declare const ensureDeps: (options: { root: string; env?: NodeJS.ProcessEnv }) => string
+export declare const sessionRoot: (hookInput: string) => string
+
+export declare const ensureDeps:(options: { root: string; env?: NodeJS.ProcessEnv }) => string

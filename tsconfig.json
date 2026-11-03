@@ -9,7 +9,6 @@
     { "path": "./packages/agent-dispatch" }
   ],
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@knowledge-medium/agent-cli/protocol": ["./packages/agent-cli/src/protocol.ts"]
