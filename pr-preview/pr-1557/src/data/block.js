@@ -1,0 +1,1 @@
+export{o2 as Block,s2 as requireLoadedBlock}from"../../chunks/app-Cwo35rQO.js";

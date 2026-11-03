@@ -1,0 +1,1 @@
+export{UD as Label}from"../../../chunks/app-Cwo35rQO.js";

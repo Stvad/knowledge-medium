@@ -1,0 +1,1 @@
+export{MU as BootFallback}from"../../../chunks/app-Cwo35rQO.js";

@@ -1,0 +1,1 @@
+export{iw as BreadcrumbList}from"../../../chunks/app-Cwo35rQO.js";

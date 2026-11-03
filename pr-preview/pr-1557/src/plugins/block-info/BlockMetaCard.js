@@ -1,0 +1,1 @@
+export{Zg as BlockMetaCard}from"../../../chunks/app-Cwo35rQO.js";

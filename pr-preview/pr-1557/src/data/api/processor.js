@@ -1,0 +1,1 @@
+export{rot as definePostCommitProcessor}from"../../../chunks/app-Cwo35rQO.js";

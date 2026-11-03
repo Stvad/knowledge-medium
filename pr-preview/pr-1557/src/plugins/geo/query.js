@@ -1,0 +1,1 @@
+export{GG as PLACES_UNDER_BLOCK_QUERY,KG as placesUnderBlockQuery}from"../../../chunks/app-Cwo35rQO.js";

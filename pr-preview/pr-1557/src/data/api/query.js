@@ -1,0 +1,1 @@
+export{Yat as defineQuery}from"../../../chunks/app-Cwo35rQO.js";

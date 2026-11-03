@@ -1,0 +1,1 @@
+export{Aj as ensureMetricsConsoleHook}from"../../chunks/app-Cwo35rQO.js";

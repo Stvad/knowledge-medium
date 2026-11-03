@@ -1,0 +1,1 @@
+export{lN as dynamicExtensionsExtension}from"../../chunks/app-Cwo35rQO.js";

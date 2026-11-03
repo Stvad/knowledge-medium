@@ -1,0 +1,1 @@
+export{Am as authorIdOf}from"../../../chunks/app-Cwo35rQO.js";

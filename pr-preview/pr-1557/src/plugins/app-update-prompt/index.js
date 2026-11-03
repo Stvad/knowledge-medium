@@ -1,0 +1,1 @@
+export{wM as appUpdatePromptExtension}from"../../../chunks/app-Cwo35rQO.js";

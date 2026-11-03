@@ -1,0 +1,1 @@
+export{WN as LazyBlockComponent}from"../../chunks/app-Cwo35rQO.js";

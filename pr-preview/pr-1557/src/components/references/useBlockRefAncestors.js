@@ -1,0 +1,1 @@
+export{ij as useBlockRefAncestors}from"../../../chunks/app-Cwo35rQO.js";

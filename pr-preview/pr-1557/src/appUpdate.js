@@ -1,0 +1,1 @@
+export{FM as appUpdate,IM as useAppUpdateAvailable}from"../chunks/app-Cwo35rQO.js";

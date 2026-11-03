@@ -1,0 +1,1 @@
+export{DI as readClipboardContent}from"../../chunks/app-Cwo35rQO.js";

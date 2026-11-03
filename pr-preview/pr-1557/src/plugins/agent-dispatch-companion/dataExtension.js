@@ -1,0 +1,1 @@
+export{rZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-Cwo35rQO.js";

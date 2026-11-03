@@ -1,0 +1,1 @@
+export{JC as mobileBottomNavItemsFacet}from"../../../chunks/app-Cwo35rQO.js";

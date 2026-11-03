@@ -1,0 +1,1 @@
+export{QH as usePropertySchemas}from"../../chunks/app-Cwo35rQO.js";

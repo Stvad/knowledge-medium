@@ -1,0 +1,1 @@
+export{$g as UpdateIndicator}from"../../../chunks/app-Cwo35rQO.js";

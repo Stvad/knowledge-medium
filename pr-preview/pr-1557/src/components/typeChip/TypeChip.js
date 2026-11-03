@@ -1,0 +1,1 @@
+export{fj as TypeChip}from"../../../chunks/app-Cwo35rQO.js";

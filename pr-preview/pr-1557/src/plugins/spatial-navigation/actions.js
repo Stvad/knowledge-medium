@@ -1,0 +1,1 @@
+export{qS as extendSelectionToSpatialTarget,JS as getSpatialNavigationActionTransforms,YS as getSpatialNavigationActions,XS as getSpatialNavigationDispatchDecorators,ZS as spatialNavigationActionDecoratorsExtension,QS as spatialNavigationActionsExtension,$S as spatialSelectionClickDecorator}from"../../../chunks/app-Cwo35rQO.js";

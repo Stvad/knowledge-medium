@@ -1,0 +1,1 @@
+export{VF as ExtensionRenderBoundary}from"../../chunks/app-Cwo35rQO.js";

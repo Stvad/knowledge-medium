@@ -1,0 +1,1 @@
+export{IE as BlockLink}from"../../../chunks/app-Cwo35rQO.js";
