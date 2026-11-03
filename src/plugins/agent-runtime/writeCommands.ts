@@ -10,6 +10,7 @@ import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { AGENT_VIEW_DEFAULTS, charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
+import { blockDestination, newBlockDestination, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { displayIds } from './agentViews/displayIds.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import { CUT_LEGEND, EMPTY_CONTENT, joinDisplayLines, plural } from './agentViews/shared.ts'
@@ -95,6 +96,7 @@ export const appendMarkdown = async (
   const verb = 'append-markdown'
   // Before resolving the target: resolution can CREATE a page.
   if (input.markdown.trim() === '') throw new Error(`${verb}: markdown is empty — nothing to append.`)
+  await refuseDanglingBlockRefs(outerRepo, verb, [input.markdown], newBlockDestination(outerRepo))
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
@@ -205,6 +207,7 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Edit
     throw new Error(`${verb}: old must not be empty — use update-block to replace the whole content.`)
   }
   const id = await blockIdField(repo, input.id, verb, input.exactIds)
+  await refuseDanglingBlockRefs(repo, verb, [input.new], blockDestination(repo, id))
   let excerpt = ''
   await repo.tx(async tx => {
     const block = await tx.get(id)

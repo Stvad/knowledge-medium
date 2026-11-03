@@ -32,7 +32,7 @@ export interface ResolveBlockRefOptions {
 }
 
 export const MIN_ID_PREFIX = 6
-const SHORT_ID_LENGTHS = [8, 12, 16] as const
+export const SHORT_ID_LENGTHS = [8, 12, 16] as const
 const MAX_PREFIX_CANDIDATES = 10
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -52,7 +52,7 @@ export class BlockRefError extends Error {
  *  U+10FFFF encodes above every byte an id can contain, so under SQLite's
  *  BINARY collation `id >= prefix AND id < prefix || char(1114111)` is
  *  exactly "starts with prefix" — and, unlike LIKE, uses the primary key. */
-const PREFIX_RANGE_SQL = 'id >= ? AND id < ? || char(1114111)'
+export const PREFIX_RANGE_SQL = 'id >= ? AND id < ? || char(1114111)'
 
 const PREFIX_MATCHES_SQL = `
   SELECT id, deleted FROM blocks

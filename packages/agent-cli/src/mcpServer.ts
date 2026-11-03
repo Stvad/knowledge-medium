@@ -51,7 +51,7 @@ The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_que
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten.
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))) with the block's full id, which get_block prints in parentheses after its ^shortid; a write that links an id no live block of the workspace has is refused.
 
 Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 

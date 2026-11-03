@@ -30,6 +30,7 @@ import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from
 import { agentTxOptions } from './agentWrites.ts'
 import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { clampInt, loadRoot } from './agentViews/shared.ts'
 import { clip, clipLine, oneLine } from './agentViews/text.ts'
 
@@ -263,6 +264,12 @@ export const runAddComment = async (
   repo: Repo,
   {targetId, quote, occurrence, content, replacement}: AddCommentParams,
 ): Promise<AddedComment> => {
+  // Both are new text in the target's workspace: a comment is a new block, and
+  // a suggestion's marks reach the target only once it is accepted.
+  await refuseDanglingBlockRefs(repo, 'add-comment', [content, replacement], async () => {
+    const target = await repo.load(targetId)
+    return target && {workspaceId: target.workspaceId}
+  })
   const created = await addComment(repo, {targetId, quote, occurrence, comment: content, replacement}, {
     description: agentTxOptions('add-comment').description,
   })

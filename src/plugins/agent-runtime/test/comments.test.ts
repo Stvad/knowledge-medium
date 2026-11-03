@@ -72,6 +72,18 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(0)
   })
 
+  it('refuses a ((ref)) to an id no block has, in the comment or the replacement', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await expect(asAgent({type: 'add-comment', target: BLOCK, content: `see [this](((${missing})))`}))
+      .rejects.toThrow(new RegExp(`add-comment: .*${missing}`, 's'))
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: `((${missing}))`}))
+      .rejects.toThrow(missing)
+    expect((await comments({block: BLOCK})).total).toBe(0)
+
+    await asAgent({type: 'add-comment', target: BLOCK, content: `see ((${PAGE}))`})
+    expect((await comments({block: BLOCK})).total).toBe(1)
+  })
+
   it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
     const {threadId} = await asAgent({
       type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',

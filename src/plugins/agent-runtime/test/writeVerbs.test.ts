@@ -23,6 +23,7 @@ import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId, resolvePageTarget } from '../targets'
 import { agentTxOptions } from '../agentWrites'
+import { refuseDanglingBlockRefs } from '../blockRefTargets'
 import { BLOCK_HISTORY_CONTENT_CHARS, LISTED_PROPERTY_NAMES, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
@@ -551,6 +552,97 @@ describe('agent write attribution', () => {
   it('create-block takes a null parentId as a top-level block, as move-block does', async () => {
     const created = await run({type: 'create-block', parentId: null, content: 'loose'}) as {parentId: string | null, workspaceId: string}
     expect(created).toMatchObject({parentId: null, workspaceId: WS})
+  })
+})
+
+describe('block refs in written content', () => {
+  // Shares LONE's first 8 characters and nothing after: the shape of an id
+  // completed from a printed ^shortid.
+  const GUESSED = '7d41e0aa-1234-4abc-8def-0123456789ab'
+  const MISSING = '0badc0de-0000-4000-8000-00000000dead'
+  const blockCount = async () => (await sharedDb.db.get<{n: number}>('SELECT count(*) AS n FROM blocks')).n
+
+  it('create-block refuses a ((ref)) to an id no block has, naming it, and writes nothing', async () => {
+    await seed([{id: NOTE, content: 'parent'}])
+    const before = await blockCount()
+    await expect(run({type: 'create-block', parentId: NOTE, content: `see ((${MISSING}))`}))
+      .rejects.toThrow(new RegExp(`create-block: .*\\(\\(${MISSING}\\)\\) — no block has this id`, 's'))
+    expect(await blockCount()).toBe(before)
+  })
+
+  it('writes refs to live blocks in every form, unchanged', async () => {
+    await seed([{id: NOTE, content: 'parent'}, {id: LONE, content: 'target', orderKey: 'a1'}])
+    const content = `((${LONE})) !((${LONE})) [label](((${LONE})))`
+    const created = await run({type: 'create-block', parentId: NOTE, content}) as {id: string}
+    expect(await contentOf(created.id)).toBe(content)
+  })
+
+  it('create-block checks a top-level block too', async () => {
+    await expect(run({type: 'create-block', parentId: null, content: `((${MISSING}))`}))
+      .rejects.toThrow(MISSING)
+    expect(await blockCount()).toBe(0)
+  })
+
+  it('refuses the aliased form, and names the live block whose id starts the same way', async () => {
+    await seed([{id: NOTE, content: 'parent'}, {id: LONE, content: 'the real one', orderKey: 'a1'}])
+    const refused = run({type: 'create-block', parentId: NOTE, content: `[it](((${GUESSED})))`})
+    await expect(refused).rejects.toThrow(GUESSED)
+    await expect(refused).rejects.toThrow(new RegExp(`starts with 7d41e0aa:\\n\\s+${LONE}  the real one`))
+  })
+
+  it('names as alternatives only live blocks of the written workspace', async () => {
+    await seed([{id: NOTE, content: 'parent'}, {id: LONE, content: 'gone', orderKey: 'a1'}])
+    await seed([{id: '7d41e0aa-0000-4000-8000-000000000009', content: 'elsewhere', workspaceId: OTHER_WS}])
+    await repo.mutate.delete({id: LONE})
+    await expect(run({type: 'create-block', parentId: NOTE, content: `((${GUESSED}))`}))
+      .rejects.toThrow(`((${GUESSED})) — no block has this id\n`)
+  })
+
+  it('names a deleted target and one in another workspace as such', async () => {
+    await seed([{id: NOTE, content: 'parent'}, {id: LONE, content: 'gone', orderKey: 'a1'}])
+    await seed([{id: NOTE_TWIN, content: 'elsewhere', workspaceId: OTHER_WS}])
+    await repo.mutate.delete({id: LONE})
+    const refused = run({type: 'create-block', parentId: NOTE, content: `((${LONE})) ((${NOTE_TWIN}))`})
+    await expect(refused).rejects.toThrow(`((${LONE})) — deleted`)
+    await expect(refused).rejects.toThrow(`((${NOTE_TWIN})) — a block of another workspace`)
+  })
+
+  it('append-markdown and create-block refuse before resolving their target, so they create no page', async () => {
+    await expect(run({type: 'append-markdown', target: '[[Fresh]]', markdown: `- a\n  - ((${MISSING}))`}))
+      .rejects.toThrow(new RegExp(`append-markdown: .*${MISSING}`, 's'))
+    await expect(run({type: 'create-block', parentId: '[[Fresh]]', content: `((${MISSING}))`}))
+      .rejects.toThrow(new RegExp(`create-block: .*${MISSING}`, 's'))
+    expect(await blockCount()).toBe(0)
+  })
+
+  it('reads nothing for text without a block ref', async () => {
+    const destination = vi.fn(async () => ({workspaceId: WS}))
+    await refuseDanglingBlockRefs(repo, 'probe', ['((not an id)) [[Page]] ^7d41e0aa', undefined], destination)
+    expect(destination).not.toHaveBeenCalled()
+  })
+
+  it('leaves a write to a block that does not exist to report it not found', async () => {
+    await expect(run({type: 'update-block', id: MISSING, content: `((${LONE}))`})).rejects.toThrow(/not found/)
+  })
+
+  it('update-block refuses a ref it adds, and keeps a dangling one the block already had', async () => {
+    await seed([{id: NOTE, content: `old ((${MISSING}))`}])
+    await expect(run({type: 'update-block', id: NOTE, content: `old ((${MISSING})) ((${GUESSED}))`}))
+      .rejects.toThrow(new RegExp(`update-block: .*${GUESSED}`, 's'))
+    expect(await contentOf(NOTE)).toBe(`old ((${MISSING}))`)
+
+    await run({type: 'update-block', id: NOTE, content: `new ((${MISSING}))`})
+    expect(await contentOf(NOTE)).toBe(`new ((${MISSING}))`)
+  })
+
+  it('edit-block refuses a ref its replacement adds, and keeps one already in the block', async () => {
+    await seed([{id: NOTE, content: `buy milk ((${MISSING}))`}])
+    await expect(run({type: 'edit-block', id: NOTE, old: 'milk', new: `((${GUESSED}))`}))
+      .rejects.toThrow(new RegExp(`edit-block: .*${GUESSED}`, 's'))
+    expect(await contentOf(NOTE)).toBe(`buy milk ((${MISSING}))`)
+
+    await run({type: 'edit-block', id: NOTE, old: 'milk', new: `oat ((${MISSING}))`})
+    expect(await contentOf(NOTE)).toBe(`buy oat ((${MISSING})) ((${MISSING}))`)
   })
 })
 
