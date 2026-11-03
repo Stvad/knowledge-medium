@@ -1,0 +1,1 @@
+export{Bk as useCommandPaletteActions}from"../../../chunks/app-CdB8R-df.js";

@@ -1,0 +1,1 @@
+export{IR as PropertyRow}from"../../../chunks/app-CdB8R-df.js";

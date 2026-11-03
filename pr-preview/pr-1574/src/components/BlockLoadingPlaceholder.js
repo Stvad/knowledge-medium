@@ -1,0 +1,1 @@
+export{JN as BlockLoadingPlaceholder}from"../../chunks/app-CdB8R-df.js";

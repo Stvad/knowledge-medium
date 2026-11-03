@@ -1,0 +1,1 @@
+export{Fv as blockDragPlugin}from"../../../chunks/app-CdB8R-df.js";

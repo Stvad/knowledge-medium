@@ -1,0 +1,1 @@
+export{EI as canConvertEmptyChildBlockToProperty,DI as convertEmptyChildBlockToProperty}from"../../chunks/app-CdB8R-df.js";

@@ -1,0 +1,1 @@
+export{WC as BreadcrumbRenderer}from"../../../chunks/app-CdB8R-df.js";

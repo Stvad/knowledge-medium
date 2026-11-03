@@ -1,0 +1,1 @@
+export{kZ as omnilinerNamespace}from"../../chunks/app-CdB8R-df.js";

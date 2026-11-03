@@ -1,0 +1,1 @@
+export{HJ as characterCounterDataExtension}from"../../../chunks/app-CdB8R-df.js";

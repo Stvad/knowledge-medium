@@ -1,0 +1,1 @@
+export{hO as dailyDateWikilinkDecorator}from"../../../chunks/app-CdB8R-df.js";

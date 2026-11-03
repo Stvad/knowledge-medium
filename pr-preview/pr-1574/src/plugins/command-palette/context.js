@@ -1,0 +1,1 @@
+export{Kk as COMMAND_PALETTE_ACTION_ID,qk as COMMAND_PALETTE_CONTEXT,Jk as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,Yk as commandPaletteActionContext}from"../../../chunks/app-CdB8R-df.js";

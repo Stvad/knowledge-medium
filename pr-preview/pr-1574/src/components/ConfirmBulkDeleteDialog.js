@@ -1,0 +1,1 @@
+export{XP as ConfirmBulkDeleteDialog}from"../../chunks/app-CdB8R-df.js";

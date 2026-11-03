@@ -1,0 +1,1 @@
+export{HC as usePromotableBreadcrumb}from"../../../chunks/app-CdB8R-df.js";

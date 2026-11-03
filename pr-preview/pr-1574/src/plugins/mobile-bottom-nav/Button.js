@@ -1,0 +1,1 @@
+export{IC as MobileBottomNavButton}from"../../../chunks/app-CdB8R-df.js";

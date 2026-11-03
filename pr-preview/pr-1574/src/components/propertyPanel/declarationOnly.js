@@ -1,0 +1,1 @@
+export{nz as declarationOnlyDefinitionForName,rz as declarationOnlyStatusText}from"../../../chunks/app-CdB8R-df.js";

@@ -1,0 +1,1 @@
+export{Kf as HIGHLIGHT_CLASS,qf as MOVED_HIGHLIGHT_CLASS,Jf as SUGGESTION_HIGHLIGHT_CLASS,Yf as coveringStyle,Xf as highlightClasses,Zf as highlightField,Qf as highlightRange,$f as highlightRanges,ep as threadHighlights,tp as threadHighlightsContribution}from"../../../chunks/app-CdB8R-df.js";

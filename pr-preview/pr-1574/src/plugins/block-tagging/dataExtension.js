@@ -1,0 +1,1 @@
+export{wl as blockTaggingDataExtension}from"../../../chunks/app-CdB8R-df.js";

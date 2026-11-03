@@ -1,0 +1,1 @@
+export{GC as getBreadcrumbContentPreview}from"../../../chunks/app-CdB8R-df.js";

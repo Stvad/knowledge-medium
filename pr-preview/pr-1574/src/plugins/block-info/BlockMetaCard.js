@@ -1,0 +1,1 @@
+export{Xg as BlockMetaCard}from"../../../chunks/app-CdB8R-df.js";

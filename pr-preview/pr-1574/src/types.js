@@ -1,0 +1,1 @@
+export{ort as isChildBackedPropertiesWorkspace}from"../chunks/app-CdB8R-df.js";

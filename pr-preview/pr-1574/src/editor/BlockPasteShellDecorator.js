@@ -1,0 +1,1 @@
+export{Qj as BlockPasteShellDecorator,$j as blockPasteShellDecorator}from"../../chunks/app-CdB8R-df.js";

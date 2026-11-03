@@ -1,0 +1,1 @@
+export{JC as plainOutlinerPlugin}from"../../../chunks/app-CdB8R-df.js";

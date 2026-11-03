@@ -1,0 +1,1 @@
+export{Os as getSyncIndicatorView}from"../../../chunks/app-CdB8R-df.js";

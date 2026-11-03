@@ -1,0 +1,1 @@
+export{Gp as extensionApiCatalog,Kp as extensionApiRuntimeExports}from"../../chunks/app-CdB8R-df.js";

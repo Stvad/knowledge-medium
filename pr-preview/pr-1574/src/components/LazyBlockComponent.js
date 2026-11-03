@@ -1,0 +1,1 @@
+export{GN as LazyBlockComponent}from"../../chunks/app-CdB8R-df.js";

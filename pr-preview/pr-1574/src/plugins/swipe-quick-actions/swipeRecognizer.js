@@ -1,0 +1,1 @@
+export{CA as SWIPE_QUICK_ACTIONS_GESTURE_ID,wA as SWIPE_TRIGGER_PX,TA as swipeRecognizer}from"../../../chunks/app-CdB8R-df.js";

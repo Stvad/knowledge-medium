@@ -1,0 +1,1 @@
+export{xJ as annotationMarginOpenProp}from"../../../chunks/app-CdB8R-df.js";

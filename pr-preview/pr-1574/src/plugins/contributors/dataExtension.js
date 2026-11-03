@@ -1,0 +1,1 @@
+export{EJ as contributorsDataExtension}from"../../../chunks/app-CdB8R-df.js";

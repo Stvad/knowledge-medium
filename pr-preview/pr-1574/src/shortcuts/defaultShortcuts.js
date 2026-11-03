@@ -1,0 +1,1 @@
+export{yj as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,bj as OPEN_PREFERENCES_ACTION_ID,xj as RELOAD_IN_SAFE_MODE_ACTION_ID,Sj as defaultActionContextsExtension,Cj as defaultActionsExtension,wj as getDefaultActionGroups,Tj as getDefaultActions}from"../../chunks/app-CdB8R-df.js";

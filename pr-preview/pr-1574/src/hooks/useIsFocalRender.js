@@ -1,0 +1,1 @@
+export{_R as isFocalRender,vR as useIsFocalRender}from"../../chunks/app-CdB8R-df.js";

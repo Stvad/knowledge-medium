@@ -1,0 +1,1 @@
+export{PM as checkForAppUpdate,FM as registerServiceWorker}from"../chunks/app-CdB8R-df.js";

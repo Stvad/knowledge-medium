@@ -1,0 +1,1 @@
+export{tm as PROVE_DISTINCT_VALUE_LIMIT,nm as applyPropertyDefinitionSynthesis,rm as flipBlockedBySynthesis,im as keyCannotBeDefined,am as planPropertyDefinitionSynthesis,om as provePresetId,sm as resolveSynthesisNamespace,cm as synthesizedPropertyDefinitionBlockId}from"../../../chunks/app-CdB8R-df.js";

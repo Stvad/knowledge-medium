@@ -1,0 +1,1 @@
+export{Gv as useIsReadOnly}from"../../chunks/app-CdB8R-df.js";
