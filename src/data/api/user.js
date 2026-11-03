@@ -1,1 +1,1 @@
-export{Jat as SYSTEM_AUTHOR_PREFIX,Yat as isSystemAuthor,Xat as systemAuthor}from"../../../chunks/app-BTj-F_fi.js";
+export{Jat as SYSTEM_AUTHOR_PREFIX,Yat as isSystemAuthor,Xat as systemAuthor}from"../../../chunks/app-4Q3qNul_.js";

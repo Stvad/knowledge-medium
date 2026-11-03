@@ -1,1 +1,1 @@
-export{HP as BlockTypeBlockRenderer,UP as BlockTypeContentRenderer,WP as writeBlockTypeLabel}from"../../../chunks/app-BTj-F_fi.js";
+export{HP as BlockTypeBlockRenderer,UP as BlockTypeContentRenderer,WP as writeBlockTypeLabel}from"../../../chunks/app-4Q3qNul_.js";

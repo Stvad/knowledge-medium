@@ -1,1 +1,1 @@
-export{Jp as extensionsOverridesProp,Yp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-BTj-F_fi.js";
+export{Jp as extensionsOverridesProp,Yp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-4Q3qNul_.js";

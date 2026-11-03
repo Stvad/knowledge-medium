@@ -1,1 +1,1 @@
-export{BB as copyBlockIdsToClipboard,VB as copyBlockToClipboard,HB as copySelectedBlocksToClipboard,UB as cutBlockIdsToClipboard,WB as serializeBlock,GB as serializeSelectedBlocks,KB as writeTextToClipboard}from"../../chunks/app-BTj-F_fi.js";
+export{BB as copyBlockIdsToClipboard,VB as copyBlockToClipboard,HB as copySelectedBlocksToClipboard,UB as cutBlockIdsToClipboard,WB as serializeBlock,GB as serializeSelectedBlocks,KB as writeTextToClipboard}from"../../chunks/app-4Q3qNul_.js";

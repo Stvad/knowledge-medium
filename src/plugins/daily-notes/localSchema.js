@@ -1,1 +1,1 @@
-export{ZK as dailyNotesLocalSchema}from"../../../chunks/app-BTj-F_fi.js";
+export{ZK as dailyNotesLocalSchema}from"../../../chunks/app-4Q3qNul_.js";
