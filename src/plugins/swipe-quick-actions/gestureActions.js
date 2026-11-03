@@ -1,1 +1,1 @@
-export{vA as swipeGestureActions,yA as swipeLeftOpenAction,bA as swipeLeftRevealAction,xA as swipeRightCloseAction}from"../../../chunks/app-4Q3qNul_.js";
+export{yA as swipeGestureActions,bA as swipeLeftOpenAction,xA as swipeLeftRevealAction,SA as swipeRightCloseAction}from"../../../chunks/app-D-jUA4nf.js";

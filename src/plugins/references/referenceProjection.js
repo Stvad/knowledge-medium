@@ -1,1 +1,1 @@
-export{hG as isRetainableAbsentRef,gG as projectPropertyReferences,_G as projectedIdOf}from"../../../chunks/app-4Q3qNul_.js";
+export{gG as isRetainableAbsentRef,_G as projectPropertyReferences,vG as projectedIdOf}from"../../../chunks/app-D-jUA4nf.js";
