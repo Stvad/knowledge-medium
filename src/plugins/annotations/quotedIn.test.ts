@@ -163,6 +163,29 @@ describe('deleting a quoted thread’s last comment from its card', () => {
     expect(dialogs.opened).toHaveLength(1)
   })
 
+  it('asks again about the thread the comment moved to meanwhile', async () => {
+    await quote()
+    const from = B_TEXT.indexOf('vendor')
+    const other = (await createThread(repo, {targetId: 'B', anchor: captureAnchor(B_TEXT, from, from + 'vendor'.length)})).threadId
+    await repo.tx(tx => tx.create({
+      id: 'Y', workspaceId: WS, parentId: 'page', orderKey: 'b-Y', content: `The ((${other})) is late.`,
+    }), opts)
+    await repo.awaitProcessors()
+    const comment = await lastComment()
+    dialogs.answer = true
+    dialogs.meanwhile = async () => {
+      await repo.tx(tx => tx.move(comment.id, {parentId: other, orderKey: 'a0'}), opts)
+      // The user declines deleting the thread it is in now.
+      dialogs.meanwhile = async () => { dialogs.answer = undefined }
+    }
+
+    expect(await deleteCommentFromCard(comment)).toBe('refused')
+
+    expect(dialogs.opened).toHaveLength(2)
+    expect((await repo.load(other))?.deleted).toBe(false)
+    expect((await repo.load('Y'))?.content).toBe(`The ((${other})) is late.`)
+  })
+
   it('does not ask about a thread nothing quotes', async () => {
     const comment = await lastComment()
 
