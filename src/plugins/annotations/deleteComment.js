@@ -1,1 +1,1 @@
-export{Td as DELETED_COMMENT_CONTENT,Ed as deleteCommentFromCard}from"../../../chunks/app-VPQ119A0.js";
+export{Td as DELETED_COMMENT_CONTENT,Ed as deleteCommentFromCard}from"../../../chunks/app-1i7xXIDC.js";

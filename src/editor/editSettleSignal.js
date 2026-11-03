@@ -1,1 +1,1 @@
-export{GI as blockEditResumed,KI as blockEditSettled,qI as notifyBlockEditResumed,JI as notifyBlockEditSettled}from"../../chunks/app-VPQ119A0.js";
+export{GI as blockEditResumed,KI as blockEditSettled,qI as notifyBlockEditResumed,JI as notifyBlockEditSettled}from"../../chunks/app-1i7xXIDC.js";
