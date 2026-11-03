@@ -1,1 +1,1 @@
-export{wx as videoPlayerMarkdownExtension}from"../../../chunks/app-a_6d1nIK.js";
+export{wx as videoPlayerMarkdownExtension}from"../../../chunks/app-Dj0cfHdR.js";
