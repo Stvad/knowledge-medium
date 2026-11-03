@@ -444,11 +444,12 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
 ] as const satisfies readonly BlockSnapshotJsonField[]
 
+/** The JSON snapshot of a `blocks` row that `row_events` stores. */
 export const buildBlockSnapshotJsonSql = (rowRef: string) => `
   json_object(
 ${formatSqlList(BLOCK_SNAPSHOT_JSON_FIELDS.map(field => `'${field.key}', ${field.sqlExpression(rowRef)}`), 4)}
   )
-`
+`.trim()
 
 const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback
@@ -460,9 +461,6 @@ const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
     return fallback
   }
 }
-
-export const parseBlockSnapshotJson = (value: string | null | undefined) =>
-  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
 
 export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,

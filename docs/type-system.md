@@ -1,5 +1,7 @@
 # Tana-style type system
 
+> **Status:** unverified — a dated snapshot of design intent (last edited 2026-05-20). Last verified against code: not since this banner (2026-10-23). CODE + tests are authoritative.
+
 ## Goal
 
 Unify the ad-hoc `type` strings already in use (`extension`, `page`, `panel`, `journal`, `daily-note`) with the future need for user-modelable types (todo, task, project, person, note-with-fields...) under one principled abstraction. Types are facet contributions; a block can carry multiple types; named relationships ride on the existing references pipeline.
@@ -178,7 +180,7 @@ The lift mechanism itself stays internal to the runtime build — `propertySchem
 
 ### 2. Multi-type: `typesProp` replaces `typeProp` as the primary discriminator
 
-Add a new schema and migrate single-string usage to it. Per [feedback_no_backcompat_in_alpha](../.claude/projects/-Users-vlad-coding-knowledge-knowledge-medium-knowledge-medium/memory/feedback_no_backcompat_in_alpha.md), no shim — one-shot data migration, drop `typeProp` after.
+Add a new schema and migrate single-string usage to it. Per `bd recall feedback_no_backcompat_in_alpha`, no shim — one-shot data migration, drop `typeProp` after.
 
 ```ts
 // src/data/properties.ts
@@ -231,7 +233,7 @@ This sidesteps Tana-style per-supertag schema scoping (which makes "set status o
 What still belongs on the type contribution rather than on the schema:
 
 - **Per-type `properties[]` membership** → which schemas appear in this type's section of the property panel; a flat `statusProp` listed by both `todo` and `task` shows up under both.
-- **Type-add behaviors** (child-block templates, computed initial values, cross-block wiring on first tag) → ride on top of `sameTxProcessorsFacet` contributions that watch the `properties` field and key off `addedTypes(row).includes(typeId)`. The type registry itself stays data-only; behaviors compose through the existing processor pipeline. See `docs/user-defined-types/design.html` Phase 2.
+- **Type-add behaviors** (child-block templates, computed initial values, cross-block wiring on first tag) → ride on top of `sameTxProcessorsFacet` contributions that watch the `properties` field and key off `addedTypes(row).includes(typeId)`. The type registry itself stays data-only; behaviors compose through the existing processor pipeline. See `docs/user-defined-types/design.html` Phase 2. Fixed initial values have a ready-made processor: `typeInitialValuesProcessor(typeId, [propertyValue(prop, value)])` in `src/data/typeInitialValues.ts`, which fills only properties the block does not already hold.
 
 Defaults belong on the schema (one global per field), not on per-type overrides — the §3 hybrid rule covers value-space differences by namespacing into a different field rather than by overriding a shared field's default. Ref-target constraints — "this `tasks` field accepts only Task-typed blocks" — live on the codec itself, also not on per-type overrides; see §5.
 

@@ -14,7 +14,7 @@
  * repo-scoped watcher), which is a deliberate opt-in.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
+import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
@@ -54,6 +54,7 @@ export interface CommonRunOptions {
 export interface AgentRunOptions extends CommonRunOptions {
   claudeBin: string
   allowedTools: string[]
+  effort?: ClaudeEffort
   mcpConfigPath?: string
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
@@ -118,6 +119,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
   if (options.model) args.push('--model', options.model)
+  if (options.effort) args.push('--effort', options.effort)
   if (options.mcpConfigPath) {
     // strict: spawned runs get OUR mcp config only, not the user's
     // globally-registered servers.

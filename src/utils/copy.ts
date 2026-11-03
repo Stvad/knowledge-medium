@@ -2,6 +2,8 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
+import { ChangeScope } from '@/data/api'
+import { armCut, disarmCut } from '@/paste/armedCut.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '
@@ -52,10 +54,28 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
   })
 
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
+  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
   navigator.clipboard.write([createClipboardItem(data)])
 
+/** Copy: the clipboard no longer holds a cut, so a paste must not move one.
+ *  Disarmed only once the write RESOLVED; a refused write leaves the cut on
+ *  the clipboard. */
+const copyToClipboard = async (data: ClipboardData): Promise<void> => {
+  await writeToClipboard(data)
+  disarmCut()
+}
+
+/** Write `text` to the clipboard: the app's one plain-text clipboard writer,
+ *  enforced by lint. Whatever it writes replaces a cut on the clipboard, so it
+ *  disarms that cut once the write resolved (see {@link copyToClipboard}). */
+export const writeTextToClipboard = async (text: string): Promise<void> => {
+  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+  await navigator.clipboard.writeText(text)
+  disarmCut()
+}
+
 export const copyBlockToClipboard = async (block: Block): Promise<void> =>
-  writeToClipboard(await serializeBlock(block))
+  copyToClipboard(await serializeBlock(block))
 
 const getSelectionState = (uiStateBlock: Block) =>
   uiStateBlock.peekProperty(selectionStateProp)
@@ -104,11 +124,8 @@ export const copySelectedBlocksToClipboard = async (
   await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo)
 }
 
-/** Copy an explicit set of blocks. `cut` needs this: it deletes the blocks its
- *  DEPS name, and re-deriving the copy set from the ui-state selection means
- *  the two can disagree — an action dispatched with supplied deps (a group
- *  header button, the agent bridge) has no ui-state selection at all, so the
- *  copy silently no-ops while the delete still runs. Cut what you delete. */
+/** Copy an explicit set of blocks, for callers whose deps name them rather
+ *  than the ui-state selection (a group-header button, the agent bridge). */
 export const copyBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
@@ -117,5 +134,35 @@ export const copyBlockIdsToClipboard = async (
     console.log('No blocks selected to copy')
     return
   }
-  await writeToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+  await copyToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+}
+
+/** Cut `blockIds` (roots, in document order): put them on the clipboard and
+ *  arm them to MOVE on the next paste in the app (`@/paste/armedCut.js`).
+ *  Deletes nothing: the blocks stay where they are until that paste.
+ *
+ *  Armed only after the write resolved. A refused write throws, and the
+ *  clipboard still holds whatever it held before, which the cut must not
+ *  claim.
+ *
+ *  `'empty'`: the blocks serialize to no text (one blank, childless block),
+ *  and a paste of no text never reaches the paste handlers, so nothing could
+ *  complete the cut. Nothing is written or armed. */
+export const cutBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+): Promise<'cut' | 'empty'> => {
+  if (!blockIds.length) return 'empty'
+  const first = repo.block(blockIds[0])
+  const workspaceId = (first.peek() ?? await first.load())?.workspaceId
+  if (!workspaceId) throw new Error(`Cannot cut: block ${blockIds[0]} not found`)
+  const data = await serializeSelectedBlocks([...blockIds], repo)
+  if (data.markdown === '') return 'empty'
+  await writeToClipboard(data)
+  await armCut(data.markdown, {
+    workspaceId,
+    rootIds: blockIds,
+    undoTop: repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault),
+  })
+  return 'cut'
 }

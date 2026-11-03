@@ -126,7 +126,6 @@ const undecodableArbFor = (kind: Kind): fc.Arbitrary<unknown> => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 const guard = statefulFuzzGuard()
@@ -227,7 +226,6 @@ describe('materializePropertyChildrenForExistingRow: undecodable raw cell write 
   // processes `names` in iteration order (:341) and would have happily
   // materialized the valid key had it come first.
   it('a sibling key with a genuinely NEW valid value in the same bag is also rolled back, not materialized', async () => {
-    await guard.barrier()
     await resetTestDb(sharedDb.db)
     await seedWorkspace()
     const repo = setup()

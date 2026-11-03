@@ -22,13 +22,13 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
-  DAILY_NOTE_TYPE,
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   ensureDailyNoteTarget,
   isDateAlias,
   isValidDateAlias,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 
 const WS = 'ws-1'
 

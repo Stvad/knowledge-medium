@@ -1334,7 +1334,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await repo.tx(async tx => {
       await tx.create({id, workspaceId: 'some-other-ws', parentId: null,
                        orderKey: 'a0', content: 'squatter'})
-    }, {scope: ChangeScope.BlockDefault, description: 'squat'})
+    }, {scope: ChangeScope.BlockDefault, description: 'squat', allowUnloadedWorkspace: true})
 
     const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
     expect(result.skipped[0]!.reason).toMatch(/another workspace/)

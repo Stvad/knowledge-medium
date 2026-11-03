@@ -3,7 +3,7 @@ import {parseConfig} from '../src/config'
 import {reportBillingPosture, relevantBillingEnvVars} from '../src/billing'
 
 const config = (over: Record<string, unknown> = {}) =>
-  parseConfig({watchers: [{kind: 'backlinks', name: 'm', target: 'claude'}], ...over})
+  parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'm', target: 'claude'}], ...over})
 
 describe('reportBillingPosture', () => {
   it('subscription mode names present credentials it will scrub (never their values)', () => {

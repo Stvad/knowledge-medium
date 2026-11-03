@@ -504,8 +504,12 @@ export const describeRuntimeSummary = async (
     },
     more: [
       {
-        need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
-        command: 'pnpm agent data-model',
+        need: 'Read a workspace other than activeWorkspaceId. The token reaches every workspace of its user; writes act on activeWorkspaceId only, because they resolve through the open workspace\'s registries.',
+        command: 'pnpm agent search <query> --workspace <id>  # get-block, subtree, backlinks, grouped-backlinks, search, page, daily-note; the first five need an app tab with it open, page / daily-note / --raw do not; sql sees every workspace in the local database',
+      },
+      {
+        need: "Understand the data model (blocks, pages, daily notes, references, backlinks, types and properties) before reading or writing a user's data",
+        command: 'pnpm agent data-model  # an index of topics; --topic <id> reads one, --topic all everything',
       },
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',

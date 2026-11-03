@@ -14,6 +14,7 @@ import { jsonPathForProperty } from '@/data/internals/typedBlockQuery'
 import type { User } from '@/data/api'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import type { FacetRuntime } from '@/facets/facet'
+import { observation, stubPerformanceObserver } from '@/test/fakePerformanceObserver'
 import {
   buildStartupRecord,
   collectStartupMetricsEffect,
@@ -436,19 +437,13 @@ describe('collectStartupMetricsEffect', () => {
 
   it('debounces interactive off long-task events when the Long Tasks API is present', () => {
     vi.useFakeTimers()
-    let observerCb: ((list: { getEntries: () => Array<{ startTime: number; duration: number }> }) => void) | undefined
-    class FakePerformanceObserver {
-      constructor(cb: typeof observerCb) { observerCb = cb }
-      observe() {}
-      disconnect() {}
-    }
-    vi.stubGlobal('PerformanceObserver', FakePerformanceObserver)
+    const live = stubPerformanceObserver(['longtask'])
     startStartupObservers() // longTasksSupported() now true → debounce path, not the idle fallback
     try {
       markStartupAt('firstContentPaint', 100)
       startEffect(WS)
       // A long task ending at 500 resets the quiet window.
-      observerCb?.({ getEntries: () => [{ startTime: 200, duration: 300 }] })
+      observation(live, 'longtask').deliver([{ startTime: 200, duration: 300 }])
       vi.advanceTimersByTime(1999)
       expect(getStartupTimeline().marks.interactive).toBeUndefined() // window not yet elapsed
       vi.advanceTimersByTime(1) // 2s of quiet since the last long task

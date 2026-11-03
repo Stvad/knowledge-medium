@@ -88,6 +88,11 @@ export type {
 } from '@/extensions/blockInteraction.js'
 
 export type {
+  MarkdownSource,
+} from '@/markdown/context.js'
+
+export type {
+  OutlineNode,
   PasteDecision,
   PasteRequest,
   PasteSurface,
@@ -140,6 +145,8 @@ export type {
   TypeContribution,
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
+
+export type { SystemPage } from '@/data/facets.js'
 
 export type {
   DerivedChildOutcome,

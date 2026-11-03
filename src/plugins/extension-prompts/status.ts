@@ -24,7 +24,7 @@
  * of which core may not name. The prompt STORE it reads moved here with it,
  * since nothing outside this feature used it.
  */
-import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
+import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/extensions/openExtensionsSettings.js'
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,

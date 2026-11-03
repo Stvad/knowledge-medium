@@ -17,9 +17,14 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
-import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
+import {
+  agentRuntimeConfigDir,
+  bridgeUrl as resolveBridgeUrl,
+  isLocalBridgeUrl,
+  loadContributorSelection,
+} from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
-import { createGraph } from './graph.js'
+import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
@@ -48,15 +53,19 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets
- *  blocked from write-back by the dispatch-owned MCP write guard. */
-const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
-  const serverDef = buildMcpServerDef(config)
+ *  blocked from write-back by the dispatch-owned MCP write guard.
+ *  `alwaysLoad` puts its tools in the first prompt instead of behind
+ *  claude's tool search: every run uses them, so deferring them only
+ *  costs each run a lookup turn. */
+const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null): Promise<string> => {
+  const serverDef = buildMcpServerDef(config, contributorId)
   const mcpConfig = {
     mcpServers: {
       [serverDef.name]: {
         command: serverDef.command,
         args: serverDef.args,
         env: serverDef.env,
+        alwaysLoad: true,
       },
     },
   }
@@ -72,10 +81,21 @@ const main = async () => {
 
   // Config problems exit CLEAN (0) — see exit discipline above.
   let config: DaemonConfig
+  let contributorId: string | null | undefined
   try {
     config = await loadConfig(args.config)
     if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
+    }
+    if (config.watchers.length > 0) {
+      const selection = await loadContributorSelection(config.profile, config.workspaceId)
+      if (selection === undefined) {
+        throw new Error(
+          `No contributor selection saved for profile "${config.profile}" and workspace "${config.workspaceId}". `
+          + `Choose one with: kmagent --profile ${config.profile} contributor use <id|none> --workspace ${config.workspaceId}`,
+        )
+      }
+      contributorId = selection
     }
   } catch (error) {
     process.stderr.write(`config error: ${errorMessage(error)}\nFix the config, then launchctl kickstart (or rerun) the daemon.\n`)
@@ -127,7 +147,12 @@ const main = async () => {
   const nap = (ms: number) => sleep(ms)
   const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
-  const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
+  const client = createBridgeClient({
+    profile: config.profile,
+    timeoutMs: 60_000,
+    workspaceId: config.workspaceId,
+    contributorId,
+  })
 
   if (config.watchers.length === 0) {
     log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
@@ -140,6 +165,10 @@ const main = async () => {
     await releasePidfile({file: pidfilePath()})
     return
   }
+  // Defence in depth: active watcher attribution was checked before startup.
+  if (contributorId === undefined) {
+    throw new Error('Active dispatch watchers require an explicit contributor selection.')
+  }
 
   // Preflight: make the bridge exist, then wait for a paired tab. Never
   // exits — a reboot or closed tab is a wait, not a crash.
@@ -147,7 +176,7 @@ const main = async () => {
   while (!stopping) {
     try {
       const whoami = await client.whoami()
-      log(`paired as user=${whoami.audience?.userId ?? '?'} workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
+      log(`paired as user=${whoami.audience?.userId ?? '?'} acting-on-workspace=${config.workspaceId} focused-tab-workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
       if (!whoami.connected) log('WARNING: no app tab connected — watchers idle until one appears')
       break
     } catch (error) {
@@ -173,9 +202,9 @@ const main = async () => {
     }
   }
 
-  const mcpConfigPath = await writeMcpConfig(config)
+  const mcpConfigPath = await writeMcpConfig(config, contributorId)
   log(`mcp config: ${mcpConfigPath}`)
-  const mcpServerDef = buildMcpServerDef(config)
+  const mcpServerDef = buildMcpServerDef(config, contributorId)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
@@ -186,6 +215,7 @@ const main = async () => {
   const engine = createEngine({
     config,
     graph,
+    replies: createReplyWriter(client),
     state: createStateStore(config.statePath ?? defaultStatePath()),
     runTask: options => options.executor === 'codex'
       ? runCodex({

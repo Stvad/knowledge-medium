@@ -205,16 +205,27 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     }
   })
 
-  it('seeds a hello-renderer demo block carrying the user:hello gating property', async () => {
+  it.each(['cell', 'children'] as const)('seeds extension demos before their definitions are enabled in %s mode', async mode => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', ?)`,
+      [WS, mode],
+    )
+    env.repo.setActiveWorkspaceId(WS)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve('user:hello').status)
+      .toBe('identity-unavailable')
     const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, { descendants: true })
 
     const allIds = await listAllBlockIds(env.h)
     for (const id of allIds) await env.repo.load(id)
-    const helloDemo = allIds
-      .map(id => env.repo.block(id))
-      .find(b => b.peek()?.properties['user:hello'] === true)
-    expect(helloDemo).toBeDefined()
+    const blocks = allIds.map(id => env.repo.block(id))
+    for (const [extension, property] of [['hello-renderer', 'user:hello'], ['split-layout', 'user:layout']]) {
+      const demo = blocks.find(b => b.peek()?.content.startsWith(`Try it: enable \`${extension}\``))
+      expect(demo?.peek()?.content).toContain(property)
+      expect(demo?.peek()?.content).toContain('then add')
+      expect(blocks.every(b => b.peek()?.properties[property] === undefined)).toBe(true)
+    }
   })
 
   it('all inserts share a single tx — exactly one command_events row', async () => {

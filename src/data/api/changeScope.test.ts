@@ -16,9 +16,9 @@ describe('change scope policies', () => {
   it('routes every writable scope through source="user"', () => {
     // Every repo.tx invocation queues to ps_crud now; UI-state used to
     // route to a 'local-ephemeral' sink that never uploaded. The
-    // rejection quarantine ([[feedback_powersync_sync_config_with_schema]])
-    // is what catches RLS / FK failures, so there's no need for a
-    // separate non-uploading source.
+    // rejection quarantine (`ps_crud_rejected`, `clientSchema.ts`) is what
+    // catches RLS / FK failures, so there's no need for a separate
+    // non-uploading source.
     expect(sourceForScope(ChangeScope.BlockDefault)).toBe('user')
     expect(sourceForScope(ChangeScope.References)).toBe('user')
     expect(sourceForScope(ChangeScope.UserPrefs)).toBe('user')

@@ -1,11 +1,13 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
+import {createElement} from 'react'
 import {
   ChangeScope,
   codecs,
   defineProperty,
   definePropertyEditorOverride,
+  joinValuePreset,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
@@ -15,6 +17,7 @@ import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
 import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {seedProperty} from '@/data/propertySeeds'
+import {stringValuePresetCore} from '@/data/kernelValuePresetCores'
 import { buildPropertyPanelModel } from './model'
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
@@ -24,6 +27,25 @@ const uisMap = (uis: readonly AnyPropertyEditorOverride[]) =>
   new Map(uis.map(ui => [ui.seedKey, ui]))
 
 describe('buildPropertyPanelModel', () => {
+  it('requires a definition before offering a value editor while keeping orphan cleanup available', () => {
+    const Editor = () => createElement('span')
+    const known = defineProperty('known', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1', workspaceId: 'ws-1', updatedAt: 1, updatedBy: 'user-1',
+      properties: {known: 'editable', orphan: 'preserved'},
+      schemas: schemasMap([known, typesProp]), propertyDefinitions: null, typeDefinitions: null,
+      uis: new Map(), typesRegistry: new Map(),
+      presets: new Map([['string', joinValuePreset(stringValuePresetCore, {id: 'string', label: 'Text', Editor})]]),
+    })
+    const rows = model.sections.flatMap(section => section.rows)
+    expect(rows.find(row => row.name === 'known')?.Editor).toBe(Editor)
+    const orphan = rows.find(row => row.name === 'orphan')
+    expect(orphan).toMatchObject({value: 'preserved', schemaUnknown: true, canDelete: true})
+    expect(orphan?.Editor).toBeUndefined()
+  })
+
   it('pins type membership outside loose property sections', () => {
     const visibleProp = defineProperty<string>('visible', {
       codec: codecs.string,
@@ -99,14 +121,12 @@ describe('buildPropertyPanelModel', () => {
     expect(model.hiddenSection.rows.map(row => ({
       name: row.name,
       labelText: row.labelText,
-      canRename: row.canRename,
       canDelete: row.canDelete,
       canChangeShape: row.canChangeShape,
       isHidden: row.isHidden,
     }))).toEqual([{
       name: internalProp.name,
       labelText: 'Internal',
-      canRename: false,
       canDelete: false,
       canChangeShape: false,
       isHidden: true,
@@ -304,7 +324,6 @@ describe('buildPropertyPanelModel', () => {
       schemaUnknown: false,
       readOnly: true,
       statusText: 'Provided by srs-rescheduling — not installed/disabled',
-      canRename: false,
       canDelete: false,
       canChangeShape: false,
       isHidden: false,
@@ -396,7 +415,6 @@ describe('buildPropertyPanelModel', () => {
     const presetRow = rows.find(row => row.name === 'property-schema:preset')
     expect(presetRow).toMatchObject({
       readOnly: true,
-      canRename: false,
       canDelete: false,
       canChangeShape: false,
     })
@@ -489,7 +507,7 @@ describe('buildPropertyPanelModel', () => {
       ...model.hiddenSection.rows,
     ]
     const labelRow = rows.find(row => row.name === 'block-type:label')
-    expect(labelRow).toMatchObject({readOnly: true, canRename: false, canDelete: false})
+    expect(labelRow).toMatchObject({readOnly: true, canDelete: false})
     // Even the normally-editable pinned type-membership row is locked.
     expect(model.pinnedRows.find(row => row.name === typesProp.name)?.readOnly).toBe(true)
   })

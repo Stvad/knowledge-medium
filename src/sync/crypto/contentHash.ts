@@ -65,3 +65,14 @@ export const digestFromContentHash = (contentHash: string): Uint8Array<ArrayBuff
   }
   return digest
 }
+
+/** Whether `value` is a canonical content hash, one {@link digestFromContentHash}
+ *  reads: anything else names no object. */
+export const isContentHash = (value: string): boolean => {
+  try {
+    digestFromContentHash(value)
+    return true
+  } catch {
+    return false
+  }
+}

@@ -34,6 +34,9 @@ export interface UpdateBlockInput {
   content?: string
   properties?: BlockProperties
   replaceProperties?: boolean
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this, checked inside the writing transaction. */
+  expectedContent?: string
 }
 
 export type MoveBlockPosition =

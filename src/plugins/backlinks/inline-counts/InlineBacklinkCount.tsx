@@ -24,6 +24,7 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import { GutterPill } from '@/components/GutterPill.js'
 import { BacklinksViewSection } from '@/plugins/backlinks-view/BacklinksViewSection.js'
 import { inlineBacklinksApplies } from './applies.ts'
 import { useBacklinkCount } from './useBacklinkCount.ts'
@@ -52,20 +53,12 @@ const InlineBacklinkCountBadge = ({
         <Inner block={block} />
       </div>
       {count > 0 && (
-        <button
-          type="button"
+        <GutterPill
+          count={count}
+          expanded={expanded}
           onClick={() => toggleBacklinkExpansion(block.id)}
-          aria-expanded={expanded}
-          aria-label={`${count} linked reference${count === 1 ? '' : 's'}`}
-          title={`${count} linked reference${count === 1 ? '' : 's'}`}
-          className={`mt-0.5 inline-flex h-4 min-w-4 shrink-0 select-none items-center justify-center rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
-            expanded
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          }`}
-        >
-          {count}
-        </button>
+          label={`${count} linked reference${count === 1 ? '' : 's'}`}
+        />
       )}
     </div>
   )

@@ -9,6 +9,8 @@ import { type AppExtension } from '@/facets/facet.js'
 import { invalidationRulesFacet, queriesFacet } from '@/data/facets.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
+  KERNEL_FIELD_RECOGNITION_CHANNEL,
+  KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksReferenceKey,
@@ -281,5 +283,93 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     await createIn({ id: 'Q', references: [{ id: 'Target', alias: 'T' }] })
 
     await expectCount('Target', 1, FLIP_WS)
+  })
+})
+
+describe('backlinks.countForBlock — one read per wave of badges', () => {
+  // Every visible block resolves its badge in the same tick. Issued one by one
+  // they queue behind each other on a pool of one or two connections, and the
+  // page's own child reads queue behind them.
+  const reads = () => {
+    const { db } = env.repo.metrics()
+    return db.getAll.calls + db.getOptional.calls + db.get.calls
+  }
+
+  const seedWorkspace = async (wsId: string, machinery: boolean) => {
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'wave ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [wsId],
+    )
+    // Block ids are global, so each workspace's fixture is prefixed with its id.
+    const at = (id: string) => `${wsId}:${id}`
+    const ref = (id: string): BlockReference => ({ id: at(id), alias: id })
+    const mk = (args: {
+      id: string; parentId?: string; content?: string
+      referenceTargetId?: string; references?: BlockReference[]
+    }) => env.repo.tx(tx => tx.create({
+      id: at(args.id), workspaceId: wsId, parentId: args.parentId ? at(args.parentId) : null,
+      orderKey: `k-${args.id}`, content: args.content ?? '',
+      referenceTargetId: args.referenceTargetId && at(args.referenceTargetId),
+      references: args.references ?? [],
+    }), { scope: ChangeScope.BlockDefault })
+    for (const t of ['A', 'B', 'C', 'Warm']) await mk({ id: t })
+    await mk({ id: 'a1', references: [ref('A')] })
+    await mk({ id: 'a2', references: [ref('A')] })
+    await mk({ id: 'b1', references: [ref('B'), ref('A')] })
+    if (machinery) {
+      await mk({ id: 'D', content: 'status' })
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+        [at('D'), wsId],
+      )
+      await mk({ id: 'O' })
+      await mk({ id: 'F', parentId: 'O', content: `::((${at('D')}))`, referenceTargetId: 'D' })
+      // Hidden value row: dropped from A's count, inside the same statement.
+      await mk({ id: 'V', parentId: 'F', references: [ref('A')] })
+    }
+  }
+
+  const wave = (wsId: string) => Promise.all(['A', 'B', 'C'].map(id => count(`${wsId}:${id}`, wsId)))
+
+  it('answers a wave with one read once the Repo has seen machinery in the workspace', async () => {
+    await seedWorkspace('ws-wave', true)
+    await count('ws-wave:Warm', 'ws-wave')
+    env.repo.resetMetrics()
+    expect(await wave('ws-wave')).toEqual([3, 1, 0])
+    expect(reads()).toBe(1)
+  })
+
+  it('adds one probe to the first wave, and to every wave of a workspace with no machinery', async () => {
+    await seedWorkspace('ws-wave-cold', true)
+    env.repo.resetMetrics()
+    expect(await wave('ws-wave-cold')).toEqual([3, 1, 0])
+    expect(reads()).toBe(2)
+
+    await seedWorkspace('ws-wave-plain', false)
+    env.repo.resetMetrics()
+    expect(await wave('ws-wave-plain')).toEqual([3, 1, 0])
+    expect(reads()).toBe(2)
+  })
+
+  it('depends on field recognition exactly when the exclusion runs', async () => {
+    const recognition = `${KERNEL_FIELD_RECOGNITION_CHANNEL}:${KERNEL_FIELD_RECOGNITION_KEY}`
+    const depsOf = async (wsId: string) => {
+      const handle = env.repo.query[BACKLINKS_COUNT_FOR_BLOCK_QUERY]({ workspaceId: wsId, id: `${wsId}:A` })
+      await handle.load()
+      return depIds(handle.__depsForTest(), 'plugin')
+    }
+    await seedWorkspace('ws-wave-dep', true)
+    await seedWorkspace('ws-wave-dep-plain', false)
+    expect(await depsOf('ws-wave-dep')).toContain(recognition)
+    expect(await depsOf('ws-wave-dep-plain')).not.toContain(recognition)
+  })
+
+  it('agrees with the list for every badge in the wave', async () => {
+    await seedWorkspace('ws-wave-parity', true)
+    const counts = await wave('ws-wave-parity')
+    const lists = await Promise.all(['A', 'B', 'C'].map(id => forBlockLen(`ws-wave-parity:${id}`, 'ws-wave-parity')))
+    expect(counts).toEqual(lists)
   })
 })

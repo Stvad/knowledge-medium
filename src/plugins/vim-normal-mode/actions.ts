@@ -16,6 +16,7 @@ import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
+import { undoOrTakeBackCut } from '@/paste/armedCut.js'
 import {
   bindBlockActionContext,
   createSharedBlockActions,
@@ -318,7 +319,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'undo',
       description: 'Undo',
-      handler: async () => { await repo.undo() },
+      handler: async () => { await undoOrTakeBackCut(repo) },
       defaultBinding: {
         keys: 'u',
       },

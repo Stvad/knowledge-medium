@@ -58,7 +58,6 @@ export interface PropertyPanelModelRow {
    *  the matching `ValuePreset.Glyph`. Undefined falls back to the
    *  codec-type-keyed icon table inside `PropertyShapeGlyph`. */
   readonly Glyph?: ComponentType<{className?: string}>
-  readonly canRename: boolean
   readonly canDelete: boolean
   readonly canChangeShape: boolean
   readonly isHidden: boolean
@@ -184,9 +183,9 @@ const resolveModelRow = (
     schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: rowReadOnly ? undefined : display.Editor,
+    // Inferred shapes describe orphan values; only definitions authorize editing.
+    Editor: rowReadOnly || !display.isKnown ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown && !rowReadOnly,
     canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
     canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,

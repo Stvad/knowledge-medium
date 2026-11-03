@@ -25,6 +25,7 @@ import {
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
   manyAncestorsSql,
+  NO_REGISTRY_RECOGNITION_PARAMS,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_SQL,
   VISIBLE_SUBTREE_SQL,
@@ -366,7 +367,7 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // A MARKED child targeting the definition IS machinery and filters.
     await insertBlock({id: 'F', parent_id: 'P', reference_target_id: DEF, is_field_form: 1, order_key: 'a2'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', '[]', ''])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', ...NO_REGISTRY_RECOGNITION_PARAMS])
     expect(rows.map(r => r.id)).toEqual(['C', 'L'])
   })
 
@@ -402,7 +403,7 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     await insert('CU', 'PU', null, null, 'a0')
     await insert('FU', 'PU', DEF_U, 1, 'a1')
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['PU', '[]', ''])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['PU', ...NO_REGISTRY_RECOGNITION_PARAMS])
     expect(rows.map(r => r.id)).toEqual(['CU'])
   })
 
@@ -425,7 +426,7 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // The registry-derived seed-id set is bound into the predicate, so the
     // row classifies without any DB state for the definition.
     const rows = await h.db.getAll<{id: string}>(
-      VISIBLE_CHILDREN_SQL, ['P3', JSON.stringify([UNMATERIALIZED_SEED]), WS],
+      VISIBLE_CHILDREN_SQL, ['P3', '[]', JSON.stringify([UNMATERIALIZED_SEED]), WS],
     )
     expect(rows.map(r => r.id)).toEqual(['C3'])
   })
@@ -446,9 +447,26 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
 
     const rows = await h.db.getAll<{id: string}>(
       // The seed set is bound for a workspace these rows do not belong to.
-      VISIBLE_CHILDREN_SQL, ['P4', JSON.stringify([FOREIGN_SEED]), 'some-other-ws'],
+      VISIBLE_CHILDREN_SQL, ['P4', '[]', JSON.stringify([FOREIGN_SEED]), 'some-other-ws'],
     )
     expect(rows.map(r => r.id)).toEqual(['C4', 'F4'])
+  })
+
+  it('leaves a marked row visible when the registry cannot parse its tagged target (#1202)', async () => {
+    // `block_types` tags DEF, but the registry reports the block unparseable:
+    // no definition, so the row is an honest unknown-field row (§9).
+    await insertBlock({id: 'P5', parent_id: null, order_key: 'd0'})
+    await insertBlock({id: 'C5', parent_id: 'P5', order_key: 'a0'})
+    await insertBlock({id: 'F5', parent_id: 'P5', reference_target_id: DEF, is_field_form: 1, order_key: 'a1'})
+    await insertBlock({id: 'V5', parent_id: 'F5', order_key: 'a0'})
+    const ids = async (sql: string, params: readonly unknown[]) =>
+      (await h.db.getAll<{id: string}>(sql, [...params])).map(r => r.id)
+    const vetoed = [JSON.stringify([DEF]), '[]', WS]
+
+    expect(await ids(VISIBLE_CHILDREN_SQL, ['P5', ...vetoed])).toEqual(['C5', 'F5'])
+    expect(await ids(VISIBLE_SUBTREE_SQL, ['P5', ...vetoed])).toEqual(['P5', 'C5', 'F5', 'V5'])
+    // Precondition: the tag alone recognizes the row.
+    expect(await ids(VISIBLE_CHILDREN_SQL, ['P5', ...NO_REGISTRY_RECOGNITION_PARAMS])).toEqual(['C5'])
   })
 
   it('VISIBLE_SUBTREE_SQL prunes AT each marked row, keeps unmarked stamped rows, and never prunes the root', async () => {
@@ -461,12 +479,12 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
     // Unmarked stamped row (the old look-alike) descends normally.
     await insertBlock({id: 'L2', parent_id: 'P2', reference_target_id: DEF, order_key: 'a0'})
 
-    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', '[]', ''])
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', ...NO_REGISTRY_RECOGNITION_PARAMS])
     expect(rows.map(r => r.id)).toEqual(['P2', 'L2'])
 
     // The ROOT itself is never pruned — opening a field row shows its
     // subtree (its value child), minus nothing here (V2 is unmarked).
-    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2', '[]', ''])
+    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2', ...NO_REGISTRY_RECOGNITION_PARAMS])
     expect(fromField.map(r => r.id)).toEqual(['F2', 'V2'])
   })
 })

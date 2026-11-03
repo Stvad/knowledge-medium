@@ -27,7 +27,7 @@ import { getAssetResolverForUser } from './assetResolver.js'
 import { getByteStore } from './byteStore.js'
 import { reconcileDownLane } from './downLane.js'
 import { runSingleOwner } from './laneLock.js'
-import { MEDIA_TYPE, mediaHashProp } from './mediaBlock.js'
+import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
 import type { AssetResolveRequest } from './resolver.js'
 
 /** Slow periodic re-walk (§9): catches a block whose origin uploaded its bytes LATE
@@ -57,19 +57,9 @@ export const collectReplicationRequests = async (
   const seen = new Set<string>()
   const out: AssetResolveRequest[] = []
   for (const row of rows) {
-    const encoded = row.properties[mediaHashProp.name]
-    if (encoded === undefined) continue
-    // Decode TOTAL: the cache boundary validates JSON syntax, not shape, so a legacy /
-    // imported / hand-edited row could carry a non-string `media:hash` (the string codec
-    // THROWS on it). Skip that one block rather than let it abort the whole workspace's
-    // walk — same throw-free stance as the renderer's canRender (MediaBlockRenderer). The
-    // block just won't background-replicate; it's still demand-fetchable (fail-closed) on view.
-    let contentHash: string
-    try {
-      contentHash = mediaHashProp.codec.decode(encoded)
-    } catch {
-      continue
-    }
+    // A row whose hash doesn't decode won't background-replicate; it's still
+    // demand-fetchable (fail-closed) on view.
+    const contentHash = mediaHashOf(row.properties)
     if (!contentHash || seen.has(contentHash)) continue
     seen.add(contentHash)
     out.push({ workspaceId, contentHash })

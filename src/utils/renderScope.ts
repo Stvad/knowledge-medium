@@ -18,6 +18,16 @@ export const outlineRenderScopeId = (topLevelBlockId: string): string =>
 export const panelRenderScopeId = (panelId: string, topLevelBlockId: string): string =>
   joinScope('panel', [panelId, topLevelBlockId])
 
+/** Is `renderScopeId` a panel's own outline (not an embed, backlink or other
+ *  nested surface inside it)? */
+export const isPanelRenderScopeId = (renderScopeId: string): boolean =>
+  renderScopeId.startsWith('panel:')
+
+/** The panel a panel scope (`panelRenderScopeId`) belongs to; undefined for
+ *  any other scope. */
+export const panelIdOfRenderScopeId = (renderScopeId: string): string | undefined =>
+  isPanelRenderScopeId(renderScopeId) ? decodeURIComponent(renderScopeId.split(':')[1]) : undefined
+
 export const embedRenderScopeId = (
   parentRenderScopeId: string,
   sourceBlockId: string,
@@ -40,3 +50,12 @@ export const breadcrumbRenderScopeId = (
   blockId: string,
   occurrenceId: string,
 ): string => joinScope('breadcrumb', [blockId, occurrenceId, parentRenderScopeId])
+
+/** Scope of a block a plugin renders as its own nested surface, such as a
+ *  comment card under its target. `surface` names the plugin's surface and
+ *  must be unique to it, so two surfaces never share a scope. */
+export const surfaceRenderScopeId = (
+  surface: string,
+  parentRenderScopeId: string,
+  occurrenceId: string,
+): string => joinScope(`surface.${surface}`, [occurrenceId, parentRenderScopeId])

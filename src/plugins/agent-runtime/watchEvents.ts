@@ -398,10 +398,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     watchers.forEach((spec, index) => {
       const runtime = entry.runtimes[index]!
       runtime.disposeOnChange = db.onChange(
-        {
-          onChange: () => requestCompute(db, consumer, runtime),
-          onError: error => console.warn(`watch-events: ${consumer}/${runtime.name} subscription error`, error),
-        },
+        {onChange: () => requestCompute(db, consumer, runtime)},
         {tables: watchTablesFor(spec), throttleMs: CHANGE_THROTTLE_MS},
       )
     })

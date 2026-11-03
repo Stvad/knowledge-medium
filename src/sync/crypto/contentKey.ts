@@ -23,9 +23,10 @@
  * key, exactly as aad.ts domain-separates the canary from content columns.
  */
 
-import { digestFromContentHash } from './contentHash.js'
-import { bytesToHex } from './hex.js'
+import { verifyObjectBytes } from '../byteTransform.js'
 import type { SyncMode } from '../transform.js'
+import { computeContentHash, digestFromContentHash } from './contentHash.js'
+import { bytesToHex } from './hex.js'
 
 /** HKDF `info` label binding K_id to this purpose + version (§10). NOT optional:
  *  it domain-separates the content-key subkey from any future WK-derived key
@@ -102,4 +103,84 @@ export const deriveContentKey = async (ref: ContentKeyRef): Promise<string> => {
   }
   const mac = await crypto.subtle.sign('HMAC', ref.contentKeyHmac, digest)
   return bytesToHex(new Uint8Array(mac))
+}
+
+/** One workspace key pair: the key that seals its objects and the `K_id`
+ *  that names them, both from one key record. */
+export interface WorkspaceObjectKeys {
+  readonly cek: CryptoKey
+  readonly contentKeyHmac: CryptoKey
+}
+
+/** The keyed names of a set of content hashes, each mapped back to its hash,
+ *  with the key that opens the objects under them. */
+export interface KeyedNames {
+  readonly cek: CryptoKey
+  readonly hashByName: ReadonlyMap<string, string>
+}
+
+/** Index the keyed name of each content hash under `keys`. A malformed hash
+ *  names no object, so it is skipped; a key that can't sign throws. */
+export const indexKeyedNames = async (
+  contentHashes: Iterable<string>,
+  keys: WorkspaceObjectKeys,
+): Promise<KeyedNames> => {
+  const hashByName = new Map<string, string>()
+  for (const contentHash of contentHashes) {
+    let digest: Uint8Array<ArrayBuffer>
+    try {
+      digest = digestFromContentHash(contentHash)
+    } catch {
+      continue
+    }
+    const mac = await crypto.subtle.sign('HMAC', keys.contentKeyHmac, digest)
+    hashByName.set(bytesToHex(new Uint8Array(mac)), contentHash)
+  }
+  return {cek: keys.cek, hashByName}
+}
+
+export type StoredObjectClass =
+  /** The plaintext bytes of `contentHash`, at their pre-conversion name. */
+  | {readonly kind: 'raw'; readonly contentHash: string}
+  /** `contentHash`'s plaintext, sealed, at its keyed name. */
+  | {readonly kind: 'keyed'; readonly contentHash: string}
+  | {readonly kind: 'neither'}
+
+/**
+ * What the object at `<workspaceId>/<name>` holds, decided by its bytes
+ * (docs/workspace-e2ee-conversion.md §6.3 step 8). `name` is the object's path
+ * under the workspace's folder, so a nested object is never raw or keyed. For
+ * bytes b under name n:
+ *   - raw iff n == hex(sha256(b));
+ *   - keyed iff b opens under the workspace key to p, and n == hex(HMAC(K_id, sha256(p)));
+ *   - otherwise neither.
+ * Never by a header or the name's shape: both names are 64 hex characters, and
+ * a plaintext file may begin with `encb:v1:`.
+ *
+ * The asset AAD binds the content hash, so b can only be opened with p's hash
+ * in hand: an object is keyed only under a name `keyed` maps, and any other is
+ * neither. `keyed` is null when nothing can be keyed: a plaintext workspace, or
+ * a caller without the key.
+ */
+export const classifyStoredObject = async ({
+  workspaceId,
+  name,
+  bytes,
+  keyed,
+}: {
+  readonly workspaceId: string
+  readonly name: string
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly keyed: KeyedNames | null
+}): Promise<StoredObjectClass> => {
+  const contentHash = await computeContentHash(bytes)
+  if (name === (await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null}))) {
+    return {kind: 'raw', contentHash}
+  }
+  const keyedHash = keyed?.hashByName.get(name)
+  if (keyed && keyedHash !== undefined) {
+    const verified = await verifyObjectBytes(bytes, 'e2ee', async () => keyed.cek, {contentHash: keyedHash, workspaceId})
+    if (verified.ok) return {kind: 'keyed', contentHash: keyedHash}
+  }
+  return {kind: 'neither'}
 }

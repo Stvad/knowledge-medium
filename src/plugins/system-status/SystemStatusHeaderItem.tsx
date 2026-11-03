@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { appVersion } from '@/appVersion.js'
-import { useIsLocalOnly } from '@/components/Login.js'
+import { useIsLocalOnly, useUser } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
   DropdownMenu,
@@ -22,9 +22,11 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog.js'
+import { dbFilenameForUser } from '@/data/localDbStorage.js'
+import { isSyncStreamLockHeld } from '@/data/syncStreamLock.js'
 import {
   formatPendingChanges,
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -89,6 +91,32 @@ function useIsDeviceOnline(): boolean {
     }
   }, [])
   return online
+}
+
+// Web Locks has no change event, so the hold is re-read on this interval.
+const syncStreamLockPollMs = 5_000
+
+// Whether another client holds this database's sync stream lock, re-read while
+// `active`. Never true while inactive: the last reading is kept, not cleared.
+function useSyncingInOtherTab(dbFilename: string, active: boolean): boolean {
+  const [held, setHeld] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const check = () => {
+      isSyncStreamLockHeld(dbFilename).then(
+        (next) => { if (!cancelled) setHeld(next) },
+        () => {},
+      )
+    }
+    check()
+    const timer = setInterval(check, syncStreamLockPollMs)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [dbFilename, active])
+  return active && held
 }
 
 type SyncStatus = ReturnType<typeof useStatus>
@@ -215,18 +243,7 @@ function RemoteSyncStatusHeaderContent({
   const pendingChangesApproximate = previewCount > uploadQueueCountCap
   const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
 
-  // Staged rows the Layout B observer hasn't applied to `blocks` yet. The change
-  // queue mutates every drain window, so watch it throttled like the upload
-  // preview; it counts down to 0 as the backlog materializes.
-  const materializeQueue = useQuery<UploadQueueCountRow>(
-    materializeQueueCountSql,
-    [],
-    {
-      reportFetching: false,
-      throttleMs: uploadQueuePreviewThrottleMs,
-    },
-  )
-  const materializingChanges = Number(materializeQueue.data[0]?.count ?? 0)
+  const materializingChanges = useMaterializeBacklog()
 
   return (
     <SyncStatusHeaderContent
@@ -263,7 +280,13 @@ function SyncStatusHeaderContent({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const deviceOnline = useIsDeviceOnline()
-  const dataFlow = status.dataFlowStatus
+  const user = useUser()
+  // Only the state the chip would otherwise call Offline: a device that is
+  // really offline stays Offline.
+  const syncingInOtherTab = useSyncingInOtherTab(
+    dbFilenameForUser(user.id),
+    !localOnly && deviceOnline && !status.connected && !status.connecting,
+  )
   // Decide whether a sync error is worth showing. When the *device* is
   // offline, any upload/download error is just connectivity noise — show the
   // calm "Offline" chip, not a raw websocket/fetch error. But when the
@@ -274,7 +297,7 @@ function SyncStatusHeaderContent({
   // and hides the very reason sync isn't working. The grace window below
   // still debounces transient blips in both cases.
   const networkError = deviceOnline
-    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    ? (status.uploadError?.message ?? status.downloadError?.message ?? null)
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
@@ -299,12 +322,13 @@ function SyncStatusHeaderContent({
     connected: status.connected,
     connecting: status.connecting,
     hasSynced: status.hasSynced,
-    uploading: Boolean(dataFlow.uploading),
-    downloading: Boolean(dataFlow.downloading),
+    uploading: status.uploading,
+    downloading: status.downloading,
     pendingChanges,
     pendingChangesApproximate,
     rejectedChanges: rejectedCount,
     materializingChanges,
+    syncingInOtherTab,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,

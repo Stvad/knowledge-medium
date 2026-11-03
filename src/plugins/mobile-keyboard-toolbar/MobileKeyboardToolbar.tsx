@@ -11,7 +11,7 @@ import {
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport.js'
-import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
+import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet, type MobileKeyboardToolbarItem } from './facet.ts'
 
 /** Track a value derived from viewport geometry, recomputed on every relevant
  *  change via the shared keyboard-viewport subscription (the same listener set
@@ -119,7 +119,7 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
-  const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
+  const handleClick = ({actionId, movesFocus}: MobileKeyboardToolbarItem) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -142,9 +142,10 @@ export function MobileKeyboardToolbar() {
       }
     }
 
-    // The Done button is the *one* path that genuinely wants edit mode off —
-    // run it with no keepalive so its blur tears edit mode down.
-    if (actionId === EXIT_EDIT_ACTION_ID) {
+    // The Done button genuinely wants edit mode off, and an action that moves
+    // focus elsewhere wants focus to stay where it put it — run both with no
+    // keepalive, so the blur is not undone.
+    if (actionId === EXIT_EDIT_ACTION_ID || movesFocus) {
       await run()
       return
     }
@@ -188,7 +189,7 @@ export function MobileKeyboardToolbar() {
             aria-label={action.description}
             title={action.description}
             onMouseDown={handleMouseDown}
-            onClick={handleClick(item.actionId)}
+            onClick={handleClick(item)}
             className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
           >
             <Icon className="h-5 w-5"/>

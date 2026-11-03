@@ -107,7 +107,13 @@ export interface PlaceAutocompleteOptions {
    *  (details fetch, collision toast), by when the editor the pick came
    *  from may have unmounted, or another mounted; the implementation
    *  decides where the block's text lives at that moment. */
-  deliverInsert: (args: {span: {from: number; to: number}; triggerText: string; insert: string}) => Promise<void>
+  deliverInsert: (args: {
+    /** The editor the pick came from. */
+    view: EditorView
+    span: {from: number; to: number}
+    triggerText: string
+    insert: string
+  }) => Promise<void>
 }
 
 /** `@` trigger detection — the shared matcher (see
@@ -135,7 +141,7 @@ const candidateToOption = (
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      await options.deliverInsert({span: {from: applyFrom, to: applyTo}, triggerText, insert})
+      await options.deliverInsert({view, span: {from: applyFrom, to: applyTo}, triggerText, insert})
     })()
   },
 })

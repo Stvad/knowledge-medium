@@ -16,6 +16,7 @@ import {
 } from '../src/push'
 
 const config = parseConfig({
+    workspaceId: 'ws-test',
   watchers: [
     {kind: 'backlinks', name: 'claude-mentions', target: 'claude', quietMs: 5_000},
     {kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', tables: ['blocks', 'block_references']},

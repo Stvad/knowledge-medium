@@ -178,6 +178,12 @@ export interface SameTxTypeOwnership {
 }
 
 export interface SameTxCtx {
+  /** Whether the user callback wrote the row without skipping intent metadata.
+   * Internal property materialization and processor writes do not count. */
+  hasUserWrite(id: string): boolean
+  /** Whether the typed API explicitly unset a canonical property key,
+   * rather than omitting it from a replacement bag. */
+  wasPropertyUnset(id: string, name: string): boolean
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the
    *  whole user tx via SQLite's `writeTransaction` abort. */
@@ -187,6 +193,8 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Merged type registry captured alongside the property schemas. */
+  types: ReadonlyMap<string, TypeContribution>
   /** Registered value presets, snapshotted at tx start alongside
    *  `propertySchemas`. What `propertySchemas` CANNOT give you: a codec for a
    *  definition as the tx is about to leave it. That registry is frozen at tx
@@ -217,9 +225,10 @@ export interface SameTxCtx {
   /** Resolve a durable fieldId (definition block id) against the same
    *  snapshot — the recognition primitive for field rows
    *  (`reference_target_id` → schema). Shadowed definitions resolve as
-   *  `identity-unavailable` with reason 'shadowed' (their field rows keep
-   *  classifying at read sites, but they are excluded from the name map
-   *  and cell projection — unification §7). */
+   *  `identity-unavailable` with reason 'shadowed', and a winner this device
+   *  cannot build a codec for with 'behavior-unavailable' (both keep their
+   *  field rows classifying at read sites, but never project into a cell —
+   *  unification §7). */
   resolvePropertySchemaField(
     workspaceId: string,
     fieldId: string,
@@ -244,6 +253,25 @@ export interface SameTxCtx {
     workspaceId: string,
     name: string,
   ): readonly string[] | null
+  /** The baseline a "what did this tx write" diff runs against: a row's state
+   *  at TX START, with every path a `settledWrites` processor wrote LAST read
+   *  as its current value — `null` for a row the tx created, `undefined` for
+   *  one it has not written. Unlike an event's `before`, which on the
+   *  `rerunOnDirtyRows` pass is a merged baseline over just the rows dirtied
+   *  since the processor's first run, this answers for ANY row, which a
+   *  processor that reaches rows outside its event needs. Raw tx start is the
+   *  wrong baseline: PROJECT's lossy unset would read as the tx removing the
+   *  key. */
+  txBaselineOf(id: string): BlockData | null | undefined
+  /** Whether row `id` was tombstoned at tx start or by any write of this tx —
+   *  including a row a later write restored, whose net `deleted` is unchanged
+   *  and so shows in no field diff. */
+  tombstonedDuringTx(id: string): boolean
+  /** Row `id`'s parent's liveness at the last write of this tx that
+   *  tombstoned `id`: `'live'` for a delete of the row itself, `'tombstoned'`
+   *  for a subtree delete's cascade, which tombstones the parent first.
+   *  `undefined` for a row this tx did not tombstone, or a root. */
+  parentLivenessWhenTombstoned(id: string): Promise<'live' | 'tombstoned' | undefined>
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

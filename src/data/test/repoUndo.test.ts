@@ -12,6 +12,7 @@
  *   - Round-trip: move → undo reverts parent/order → redo re-moves
  *   - Multi-row tx (kernel mutator): one entry covers all rows
  *   - Stack discipline: a new tx after undo clears the redo branch
+ *   - A tx committing mid-gesture: the stacks follow commit order (#227)
  *   - Read-only mode rejects undo (BlockDefault scope)
  *   - UiState/UserPrefs writes never enter the undo stack
  *   - References scope is recorded but isolated from BlockDefault
@@ -20,7 +21,7 @@
  *     by checking ps_crud row count grew after the undo replay
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -84,6 +85,9 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
+// A spy restored after an assertion leaks into every later test when that
+// assertion fails.
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('repo.undo / redo on tx.update (setContent)', () => {
   it('reverts content on undo and re-applies on redo', async () => {
@@ -96,6 +100,12 @@ describe('repo.undo / redo on tx.update (setContent)', () => {
 
     expect(await env.repo.undo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('original')
+    // Named after the entry it replayed, which it takes only under the lock —
+    // in the audit row and in the tx metrics alike.
+    const undoRow = await env.repo.db.get<{description: string}>(
+      'SELECT description FROM command_events ORDER BY rowid DESC LIMIT 1')
+    expect(undoRow.description).toBe('undo: edit a')
+    expect(env.repo.metrics().txLog.at(-1)?.description).toBe('undo: edit a')
 
     expect(await env.repo.redo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('edited')
@@ -449,12 +459,12 @@ describe('undo against a pass that drops the history', () => {
     return {settled, release: (): void => { release!() }}
   }
 
-  it('abandons a replay whose history was dropped while it was in flight', async () => {
-    // `undo()` takes the entry OFF its stack and then awaits the replay, so a
-    // pass clearing the history in that window cannot reach it — `clear()` only
-    // empties the manager. Left unchecked, the replay lands after the pass's
-    // commit and restores the pre-pass state of a row it has already recorded
-    // as done.
+  it('finds nothing to replay when the history is cleared while the gesture waits for the lock', async () => {
+    // The gesture takes its entry only once it holds the write lock, so a clear
+    // landing while it queues empties the very stack it would have taken from.
+    // Taken at press time instead, the entry would be out of the clear's reach,
+    // and the replay would land after the pass's commit and restore the
+    // pre-pass state of a row the pass has already recorded as done.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
     await repo.tx(async (tx) => {
@@ -462,13 +472,11 @@ describe('undo against a pass that drops the history', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
 
     // The write lock is HELD while the replay queues behind it, which is the
-    // ordering that matters: clearing before `_replay` is even called would
-    // also be caught by a check outside the transaction, and this is about the
-    // check being inside it.
+    // ordering that matters: clearing before `undo()` is even called is caught
+    // by the press-time check, and this is about the one under the lock.
     const lock = await holdWriteLock(repo)
 
-    // `undo` pops synchronously and only then awaits the replay, so by the next
-    // line the entry is already off the stack and its transaction is queued.
+    // Past the press-time check by the next line: the stack was not empty.
     const undoing = repo.undo(ChangeScope.BlockDefault)
     repo.undoManager.clear()
     lock.release()
@@ -485,8 +493,8 @@ describe('undo against a pass that drops the history', () => {
   it('refuses a replay a pass invalidated without dropping the stacks', async () => {
     // BEGINNING a drop is what a pass does while it still holds the write lock,
     // before it knows whether its chunk will commit. The stacks survive until
-    // the drop is finished — only a replay already in flight is refused — so
-    // this pins that the replay checks the epoch rather than the stack being
+    // the drop is finished, so this pins that the replay, once it holds the
+    // lock, asks whether a drop is under way rather than whether the stack is
     // empty.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
@@ -505,40 +513,31 @@ describe('undo against a pass that drops the history', () => {
     expect(await readContent(repo, 'a')).toBe('edited')
   })
 
-  it('does not put the entry back when a pass drops the history mid-gesture', async () => {
-    // The gesture pops, replays, and only then pushes onto the opposite stack.
-    // The database can hand the write lock to a pass's chunk while `_replay` is
-    // still resolving, so a clear can land in between — and pushing then
-    // REPOPULATES the history that clear had just emptied, with an entry
-    // describing a pre-pass row. The next cmd-Z samples the new epoch, passes,
-    // and replays it over the pass's committed writes.
-    //
-    // That window is a handful of microtasks inside one continuation, which the
-    // harness has no other way into, so the clear is injected exactly there
-    // rather than raced for. What is asserted is ordinary observable behaviour.
+  it('neither commits nor puts back a replay whose history is cleared mid-apply', async () => {
+    // A bare `clear()` holds no lock, so it can land while a replay is applying
+    // — after that replay took its entry off the stack, where the clear cannot
+    // reach it. The replay must roll back rather than commit a pre-clear
+    // snapshot, and must NOT push its entry back on the way out: that would
+    // REPOPULATE the history the clear just emptied, and the next cmd-Z would
+    // replay it. Unlike a pass's drop, nothing empties the stacks afterwards.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
     await repo.tx(async (tx) => {
       await tx.update('a', {content: 'edited'})
     }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
 
-    const internals = repo as unknown as {
-      _replay: (...args: unknown[]) => Promise<void>
-    }
-    const realReplay = internals._replay.bind(repo)
-    internals._replay = async (...args: unknown[]) => {
-      await realReplay(...args)
-      repo.undoManager.clear()
-    }
+    const applyRaw = TxImpl.prototype.applyRaw
+    const spy = vi.spyOn(TxImpl.prototype, 'applyRaw').mockImplementation(
+      async function (this: TxImpl, ...args: Parameters<typeof applyRaw>) {
+        const result = await applyRaw.apply(this, args)
+        repo.undoManager.clear()
+        return result
+      })
 
-    // The undo itself stands — the replay COMMITTED, so the gesture did what
-    // the user asked. All that is withheld is the inverse.
-    expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
-    expect(await readContent(repo, 'a')).toBe('original')
-
-    expect(repo.undoManager.depths(ChangeScope.BlockDefault).redo).toBe(0)
-    expect(await repo.redo(ChangeScope.BlockDefault)).toBe(false)
-    expect(await readContent(repo, 'a')).toBe('original')
+    await expect(repo.undo(ChangeScope.BlockDefault)).resolves.toBe(false)
+    spy.mockRestore()
+    expect(await readContent(repo, 'a')).toBe('edited')
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
   })
 
   it('keeps the entry of an edit that took the lock mid-drop, for an IN-LOCK pass', async () => {
@@ -689,20 +688,18 @@ describe('undo against a pass that drops the history', () => {
     expect(await repo.undo(ChangeScope.BlockDefault)).toBe(true)
   })
 
-  it('drops an entry whose transaction was recorded after a pass cleared', async () => {
-    // A user transaction can hold the write lock ahead of a pass's chunk,
-    // commit, release — and only reach its own recording continuation after
-    // that chunk has written and cleared. The clear cannot reach an entry that
-    // does not exist yet, and neither can the epoch move that opened the drop,
-    // so without the epoch check it lands on the stack holding the whole
-    // PRE-pass row and undoing it reverts the pass with its completion already
-    // recorded.
+  it('drops an entry whose transaction held the lock while the history was cleared', async () => {
+    // A lockless pass can drop the history while a user transaction holds the
+    // write lock. Its `before` rows were read before the pass's writes land, and
+    // the clear has already run, so it cannot reach an entry that does not exist
+    // yet: without the epoch check the entry lands on the stack holding the
+    // whole PRE-pass row, and undoing it reverts the pass with its completion
+    // already recorded.
     const {repo} = env
     await seedRoot(repo, 'a', 'original')
     expect(undoDepth(repo)).toBe(0)
 
-    // Stands in for the pass clearing between this transaction committing and
-    // its entry being recorded.
+    // Stands in for the pass clearing while this transaction holds the lock.
     await repo.tx(async (tx) => {
       await tx.update('a', {content: 'edited while a pass was running'})
       repo.undoManager.clear()
@@ -748,5 +745,172 @@ describe('undo against a pass that drops the history', () => {
     expect(undoDepth(repo)).toBe(1)
     expect(await repo.undo()).toBe(true)
     expect(await readContent(repo, 'a')).toBe('original')
+  })
+})
+
+/** An ordinary transaction committing while a gesture is in flight (#227).
+ *
+ *  The stacks have to describe the database in COMMIT order: an entry is safe
+ *  to replay only while every row it touches still holds the state on its far
+ *  side. These pin the orderings a gesture can lose to — a commit queued AHEAD
+ *  of the replay, a commit landing between the replay's commit and the
+ *  gesture's push, and a commit landing while a FAILED replay unwinds — through
+ *  the public API and the database's own lock, never a sleep. */
+describe('undo/redo against a transaction committing mid-gesture (#227)', () => {
+  const depths = (repo: Repo) => repo.undoManager.depths(ChangeScope.BlockDefault)
+
+  const edit = (repo: Repo, id: string, content: string) =>
+    repo.tx(async (tx) => { await tx.update(id, {content}) },
+      {scope: ChangeScope.BlockDefault, description: `set ${id}=${content}`})
+
+  /** Start an edit that is holding the write lock and has not written yet; it
+   *  writes once released. Anything started meanwhile queues behind it, so it
+   *  commits ahead of them by construction. */
+  const editHoldingLock = async (repo: Repo, id: string, content: string) => {
+    let release: (() => void) | null = null
+    const settled = repo.tx(async (tx) => {
+      await new Promise<void>(resolve => { release = resolve })
+      await tx.update(id, {content})
+    }, {scope: ChangeScope.BlockDefault, description: `set ${id}=${content}`})
+    await vi.waitFor(() => { expect(release).not.toBeNull() }, {timeout: 3000})
+    return {settled, release: (): void => { release!() }}
+  }
+
+  /** Run `between` once the NEXT write transaction has settled — committed or
+   *  rolled back, lock released — and before its caller's continuation runs.
+   *  That is the gap a gesture's own stack motion used to sit in. Patched on the
+   *  raw database, which the Repo's metrics proxy calls through on every
+   *  transaction, and removed after one use. */
+  const onNextWriteSettled = (between: () => Promise<void>): {fired: () => boolean} => {
+    const db = sharedDb.db as unknown as {writeTransaction: (...args: unknown[]) => Promise<unknown>}
+    const real = db.writeTransaction.bind(db)
+    let fired = false
+    db.writeTransaction = async (...args: unknown[]) => {
+      delete (db as Record<string, unknown>).writeTransaction
+      try {
+        return await real(...args)
+      } finally {
+        fired = true
+        await between()
+      }
+    }
+    return {fired: () => fired}
+  }
+
+  beforeEach(async () => {
+    await seedRoot(env.repo, 'a', 'v0')
+  })
+
+  it('does not resurrect redo when a commit lands between the undo replay and its push', async () => {
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    await repo.awaitProcessors()
+
+    const hook = onNextWriteSettled(() => edit(repo, 'a', 'v2').then(() => {}))
+    expect(await repo.undo()).toBe(true)
+    expect(hook.fired()).toBe(true)
+
+    // Undo ran, then v2 committed on top of it: v2 is a new action, so the redo
+    // branch it superseded is gone and the undo stack ends in v2.
+    expect(await readContent(repo, 'a')).toBe('v2')
+    expect(depths(repo)).toEqual({undo: 1, redo: 0})
+    expect(await repo.redo()).toBe(false)
+    expect(await readContent(repo, 'a')).toBe('v2')
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v0')
+  })
+
+  it('keeps commit order on the undo stack when a commit lands between a redo replay and its push', async () => {
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    expect(await repo.undo()).toBe(true)
+    await repo.awaitProcessors()
+
+    const hook = onNextWriteSettled(() => edit(repo, 'a', 'v2').then(() => {}))
+    expect(await repo.redo()).toBe(true)
+    expect(hook.fired()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v2')
+
+    // Redo of v1 committed BEFORE v2, so v2 is undone first.
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v1')
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v0')
+    expect(depths(repo).undo).toBe(0)
+  })
+
+  it('undoes an edit that committed but has not yet resumed its caller', async () => {
+    // The lock is released at COMMIT and the edit's caller resumes some time
+    // after; a gesture can take the lock in between. Its entry must already be
+    // on the stack by then, or the undo reverts the entry UNDER it and writes
+    // that one's stale `before` over the edit.
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    await repo.awaitProcessors()
+
+    let undone: boolean | null = null
+    const hook = onNextWriteSettled(async () => { undone = await repo.undo() })
+    await edit(repo, 'a', 'v2')
+    expect(hook.fired()).toBe(true)
+
+    expect(undone).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v1')
+    expect(depths(repo)).toEqual({undo: 1, redo: 1})
+  })
+
+  it('undoes the commit that was queued ahead of the undo, not the entry under it', async () => {
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+
+    const ahead = await editHoldingLock(repo, 'a', 'v2')
+    const undoing = repo.undo()
+    ahead.release()
+    await ahead.settled
+
+    // v2 committed first, so it is the newest action: the undo reverts it and
+    // leaves v1 alone — never writing v1's `before` over v2.
+    expect(await undoing).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v1')
+    expect(depths(repo)).toEqual({undo: 1, redo: 1})
+    expect(await repo.redo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v2')
+  })
+
+  it('refuses a redo whose branch a commit queued ahead of it superseded', async () => {
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    expect(await repo.undo()).toBe(true)
+
+    const ahead = await editHoldingLock(repo, 'a', 'v2')
+    const redoing = repo.redo()
+    ahead.release()
+    await ahead.settled
+
+    // v2 is a new action after the undo, which ends the redo branch; replaying
+    // v1's `after` over it would revert the user's newest edit.
+    expect(await redoing).toBe(false)
+    expect(await readContent(repo, 'a')).toBe('v2')
+    expect(depths(repo)).toEqual({undo: 1, redo: 0})
+  })
+
+  it('puts a failed replay back BELOW a commit that landed while it unwound', async () => {
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    await repo.awaitProcessors()
+
+    const failure = new Error('replay failed')
+    const spy = vi.spyOn(TxImpl.prototype, 'applyRaw').mockRejectedValueOnce(failure)
+    const hook = onNextWriteSettled(() => edit(repo, 'a', 'v2').then(() => {}))
+    await expect(repo.undo()).rejects.toBe(failure)
+    spy.mockRestore()
+    expect(hook.fired()).toBe(true)
+
+    // The failed undo changed nothing, so history reads v1 then v2 — the retry
+    // reverts v2 first, exactly as if the failed press had never happened.
+    expect(await readContent(repo, 'a')).toBe('v2')
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v1')
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v0')
   })
 })

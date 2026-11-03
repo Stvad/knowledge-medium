@@ -3,6 +3,7 @@ import {
   decidePending,
   diffQueryRows,
   findThreadSession,
+  isMention,
   MAX_ATTEMPTS,
   MAX_CURSOR_IDS,
   STALE_RUNNING_MS,
@@ -119,6 +120,19 @@ describe('decidePending', () => {
     })
     expect(decidePending({source: stale, nowMs: NOW, baselineMs: NOW}))
       .toEqual({pending: true, reason: 'stale-running'})
+  })
+})
+
+describe('isMention', () => {
+  it('excludes a backlink only when attribution is its sole reference', () => {
+    expect(isMention(['attribution:creators', 'attribution:editors'])).toBe(false)
+    expect(isMention(['', 'attribution:editors'])).toBe(true)
+    expect(isMention(['assignee'])).toBe(true)
+  })
+
+  it('counts a backlink with no reported fields as a mention', () => {
+    expect(isMention([])).toBe(true)
+    expect(isMention(undefined)).toBe(true)
   })
 })
 

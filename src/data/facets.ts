@@ -18,11 +18,18 @@ import type {
   BlockReference,
   Tx,
 } from '@/data/api'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  combineProjectedPropertyDefinitions,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
+import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
+import type { BlockSearchFilter } from './searchFilter.ts'
+
+export { isActiveSearchFilter, matchesTypeFilter, type BlockSearchFilter } from './searchFilter.ts'
 import {isPropertySeedDeclaration} from './propertySeeds.ts'
 import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
@@ -39,8 +46,8 @@ export interface LocalSchemaBackfill {
 /** One table a contribution owns that the ANALYZE paths have to reach.
  *
  *  Both pieces, because the two paths need different things and asking for them
- *  separately is what lets them drift apart. The one-shot exact-stats repair
- *  wants a NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  separately is what lets them drift apart. `runAnalyzeInstalledTables` wants a
+ *  NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
  *  be turned into one: measured on the shipped wa-sqlite build against
  *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
  *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
@@ -63,10 +70,9 @@ export interface LocalSchemaContribution {
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
   /** Tables this contribution owns that core's ANALYZE paths must reach, so
-   *  core never has to name a plugin's table. Consumed by
-   *  `resolveAnalyzeArmingProbes` (`src/data/localSchema.ts`), and by the
-   *  one-shot exact-stats repair's table list — deliberately the same set, so
-   *  it is declared once here rather than twice in core. */
+   *  core never has to name a plugin's table. Read through
+   *  `resolveAnalyzeTables` (`src/data/localSchema.ts`): the probes arm the
+   *  staleness check, the names are what `runAnalyzeInstalledTables` analyzes. */
   analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 
@@ -287,12 +293,17 @@ export const definitionSeedsFacet = defineFacet<
   validate: isPropertySeedDeclaration,
 })
 
-/** Block-built property definitions keyed by durable field id. Metadata is
- * always present; locally-buildable behavior is optional. */
-export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedPropertyDefinition>(
-  'data.projected-property-definitions',
-  definition => definition.metadata.fieldId,
-)
+/** Block-built property definitions keyed by durable field id: parsed
+ * metadata with optional locally-buildable behavior, or the marker for a
+ * `property-schema` block whose metadata does not parse. */
+export const projectedPropertyDefinitionsFacet = defineFacet<
+  ProjectedPropertyDefinition,
+  ReadonlyMap<string, ProjectedPropertyDefinition>
+>({
+  id: 'data.projected-property-definitions',
+  combine: combineProjectedPropertyDefinitions,
+  empty: () => new Map(),
+})
 
 /** Block-built type definitions keyed by durable block id — the type-side
  * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`
@@ -398,41 +409,27 @@ export const contentReferencePrefillFor = (
 }
 
 /**
- * A per-workspace singleton page that must exist EARLY — before the workspace's
- * landing/first-run seed runs. Owners (kernel + plugins) declare theirs; the
- * bootstrap materialises them all via `Repo.ensureSystemPages` before any
- * landing resolver runs.
+ * An owner-installed kernel page. The shared spec defines its deterministic
+ * identity, bootstrap creation and UI deletion refusal. Register lazy pages too:
+ * protection follows the owner even before the page's first use.
  *
- * Why eager: `[[Name]]` is auto-create (Roam-style) — the references processor
- * mints a page at an alias-"seat" id when no page with that alias exists yet.
- * Singleton pages (Journal/Properties/Types/Locations) are created elsewhere at
- * their OWN deterministic ids and claim a reserved alias, so a wiki-link that
- * resolves first auto-creates a rival claimant → two blocks, one alias →
- * `alias.collision`. Creating the canonical page first means `aliasLookup` hits
- * and no rival is minted.
+ * Eager pages are created by `Repo.ensureSystemPages` before landing/first-run
+ * seeds, so wiki-links to reserved aliases find the canonical page instead of
+ * auto-creating a rival. Lazy pages are created only at their point of use.
  *
- * `ensure` MUST be idempotent and write at a deterministic, workspace-derived
- * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
- * converging clients all land on the same row.
- *
- * It MAY be skipped: `ensureSystemPages` reports a failing `ensure` and carries
- * on, so one page cannot stop the workspace opening. Whether that skip is
- * momentary or lasts the session is YOUR consumers' doing — one that
- * get-or-creates the page at its point of use retries the moment the feature is
- * touched, while one that navigates straight to the derived id finds nothing
- * there until the next workspace open. Prefer the former.
+ * Bootstrap logs and skips a failed eager page so the workspace can still open.
+ * Consumers should get-or-create at point of use to retry a failed bootstrap.
  */
 export interface SystemPage {
-  /** Stable id, for facet dedup. */
-  readonly id: string
-  /** Returns `Promise<unknown>` so the existing get-or-create helpers
-   *  (which resolve to the created `Block`) assign directly; the result is
-   *  ignored by `ensureSystemPages`. */
-  ensure: (repo: Repo, workspaceId: string) => Promise<unknown>
+  readonly spec: KernelPageSpec
+  readonly eager: boolean
 }
 
 const isSystemPage = (value: unknown): value is SystemPage =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.ensure === 'function'
+  isRecord(value) && isRecord(value.spec) &&
+  typeof value.spec.namespace === 'string' && typeof value.spec.alias === 'string' &&
+  (value.spec.markerType === null || typeof value.spec.markerType === 'string') &&
+  typeof value.eager === 'boolean'
 
 export const systemPagesFacet = defineFacet<SystemPage, readonly SystemPage[]>({
   id: 'data.systemPages',
@@ -512,6 +509,9 @@ export interface SearchSourceArgs {
    *  participates in the cross-source sort at the merge point. */
   readonly limit: number
   readonly recentBlockIds?: ReadonlyArray<string>
+  /** Applied by the source itself when it declares `supportsFilter`;
+   *  otherwise see that flag. */
+  readonly filter?: BlockSearchFilter
 }
 
 /** A pluggable block-search backend. `search` is called alongside every
@@ -534,6 +534,13 @@ export interface SearchSourceArgs {
  *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
+  /** Applies `SearchSourceArgs.filter` in its own query, before its limit.
+   *  For a source without it the merge point drops candidates the filter's
+   *  type clauses exclude, and the source sits out a filter with `underId`.
+   *  Its share of a filtered result is therefore best effort (it limits
+   *  before the filter) — kept over sitting it out, so contributed sources
+   *  still take part in the agent's default, extension-excluding search. */
+  readonly supportsFilter?: boolean
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
 }
 

@@ -1,5 +1,5 @@
 import {
-  AbstractPowerSyncDatabase,
+  CommonPowerSyncDatabase,
   CrudEntry,
   PowerSyncBackendConnector,
   UpdateType,
@@ -8,7 +8,7 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
-import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
+import { encryptUploadColumns, snapshotCekPerCall, type GetCek, type UploadMode } from '@/sync/transform.js'
 
 // `§` references in this file cite docs/e2ee-design.html.
 
@@ -73,11 +73,11 @@ export type CompactedBlockOperation =
  *  in `defaultUploadDeps` below. */
 export interface UploadDeps {
   applyOperations: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     operations: readonly CompactedBlockOperation[],
   ) => Promise<void>
   recordRejection: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     transaction: CrudTransaction,
     error: unknown,
   ) => Promise<void>
@@ -88,12 +88,25 @@ export interface UploadDeps {
   ) => Promise<readonly CompactedBlockOperation[]>
 }
 
-/** Resolve a workspace's sync mode for the encrypt-on-upload decision. Answered
+/** Resolve a workspace's upload mode for the encrypt-on-upload decision. Answered
  *  for the ROW's own workspace, never the Repo's active one, so a write that
  *  lands while the active-workspace pin is moving is still sealed under the
  *  mode of the workspace it belongs to. The policy (mode pin, §6) is injected;
  *  production binds it to the §6 resolver in `repoProvider`. */
-export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
+export type GetWorkspaceMode = (workspaceId: string) => UploadMode | Promise<UploadMode>
+
+/** Thrown for a write to a workspace whose upload mode is `hold`: the server
+ *  says e2ee and this device can't seal yet. It takes the same path as a missing
+ *  key — out of the upload pass, so the tx stays first in `ps_crud` and PowerSync
+ *  retries it — because a held write must be neither sent nor quarantined. While
+ *  it waits in `ps_crud`, the core publishes no checkpoint; that stall is
+ *  accepted. */
+export class UploadHeldError extends Error {
+  constructor(readonly workspaceId: string) {
+    super(`upload held for ${workspaceId}: the server says e2ee and this device's pin is not upgraded`)
+    this.name = 'UploadHeldError'
+  }
+}
 
 /** Seal the content columns of each create/patch op whose workspace is e2ee,
  *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
@@ -112,8 +125,8 @@ const encryptUploadOps = async (
   // means thousands of main-thread reads + awaits for one value per
   // workspace. Memoize per workspaceId (mirrors `materializabilityByWs` in
   // syncObserver/materialize.ts).
-  const modeByWs = new Map<string, SyncMode>()
-  const resolveMode = async (workspaceId: string): Promise<SyncMode> => {
+  const modeByWs = new Map<string, UploadMode>()
+  const resolveMode = async (workspaceId: string): Promise<UploadMode> => {
     const cached = modeByWs.get(workspaceId)
     if (cached !== undefined) return cached
     const resolved = await getMode(workspaceId)
@@ -121,8 +134,13 @@ const encryptUploadOps = async (
     return resolved
   }
 
+  // One key read per workspace per call; the next call reads the store again.
+  const batchCek = snapshotCekPerCall(getCek)
+
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
+    // Never held, because never queued: blocks have no DELETE upload trigger (a
+    // soft delete is a PATCH, which carries workspace_id and is held like any).
     if (op.kind === 'delete') {
       out.push(op)
       continue
@@ -133,11 +151,12 @@ const encryptUploadOps = async (
       continue
     }
     const mode = await resolveMode(workspaceId)
+    if (mode === 'hold') throw new UploadHeldError(workspaceId)
     if (mode === 'none') {
       out.push(op)
       continue
     }
-    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, getCek)
+    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, batchCek)
     out.push(
       op.kind === 'create'
         ? { ...op, payload: payload as BlockUploadPayload }
@@ -457,7 +476,7 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 }
 
 const applyCompactedBlockOperations = async (
-  _database: AbstractPowerSyncDatabase,
+  _database: CommonPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
   sink: BlockUploadSink = defaultBlockUploadSink,
 ) => {
@@ -500,7 +519,7 @@ const defaultBlockUploadSink: BlockUploadSink = {
 
 
 const collectUploadBatch = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
 ): Promise<CrudTransaction[]> => {
   const transactions: CrudTransaction[] = []
   const iterator = database.getCrudTransactions()[Symbol.asyncIterator]()
@@ -525,7 +544,7 @@ const collectUploadBatch = async (
  *  code + message, wall-clock time) for a later UI surface or for
  *  manual inspection via `kmagent sql`. */
 const recordRejectionToTable = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transaction: CrudTransaction,
   error: unknown,
 ): Promise<void> => {
@@ -670,9 +689,10 @@ const forgetAmbiguousAttempts = (
  *  in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
- *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
- *  throw. The BATCH encryption is guarded so that failure DOESN'T abort the
- *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  workspace whose key is momentarily missing/unreadable, or for a workspace
+ *  whose upload is held ({@link UploadHeldError}), makes `encryptOps` throw.
+ *  The BATCH encryption is guarded so that failure DOESN'T abort the whole
+ *  preflight — it falls through to the per-tx loop, which drains every
  *  earlier (encryptable) tx and then stops at the un-encryptable one (its
  *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
  *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a
@@ -680,7 +700,7 @@ const forgetAmbiguousAttempts = (
  *  missing key is treated as transient (retry), never a rejection (which would
  *  discard the edit). */
 const uploadTransactionsWithFallback = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number> = new Map(),
@@ -694,7 +714,9 @@ const uploadTransactionsWithFallback = async (
   try {
     batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
   } catch (err) {
-    console.warn('[powersync] batch encryption failed — isolating per tx', err)
+    // A hold recurs on every retry until the pin is upgraded, so it is not news.
+    if (err instanceof UploadHeldError) console.debug('[powersync] batch holds a write —', err.message)
+    else console.warn('[powersync] batch encryption failed — isolating per tx', err)
   }
 
   if (batchOps) {
@@ -761,7 +783,7 @@ const uploadTransactionsWithFallback = async (
 }
 
 const runUploadLoop = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number>,
 ): Promise<void> => {

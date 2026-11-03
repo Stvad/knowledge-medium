@@ -20,6 +20,7 @@
 
 import { WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings.js'
+import { powerSyncLogger } from '@/data/powerSyncLogger.js'
 import { corruptErrorUserId, isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
 
 export type LocalDbVfs = WASQLiteVFS.OPFSCoopSyncVFS | WASQLiteVFS.OPFSWriteAheadVFS
@@ -272,6 +273,21 @@ const anyWriteAheadSidecar = async (
   return sizes.some(size => size !== null)
 }
 
+/** Bytes of the main file and of each write-ahead sidecar, keyed `main` and by
+ *  sidecar suffix, for the startup record. Observability only and on the boot
+ *  path, so an unreadable file reads as `null` like a missing one, never a throw. */
+export const readLocalDbFileSizes = async (
+  dbFilename: string,
+  fileSize: LocalDbVfsHandoffDeps['fileSize'] = opfsFileSize,
+): Promise<Record<string, number | null>> => {
+  const files: [string, string][] = [
+    ['main', dbFilename],
+    ...WRITE_AHEAD_SIDECAR_SUFFIXES.map((suffix): [string, string] => [suffix, `${dbFilename}${suffix}`]),
+  ]
+  return Object.fromEntries(await Promise.all(files.map(async ([key, name]) =>
+    [key, await fileSize(name).catch(() => null)] as const)))
+}
+
 export interface LocalDbVfsHandoffDeps {
   /** Size in bytes, or null when the file does not exist. */
   fileSize: (name: string) => Promise<number | null>
@@ -374,9 +390,8 @@ const HANDOFF_CLOSE_TIMEOUT_MS = 3_000
 
 const withTemporaryConnection: LocalDbVfsHandoffDeps['withConnection'] = async (dbFilename, fn) => {
   const db = new WASQLiteOpenFactory({
-    dbFilename,
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-    flags: {enableMultiTabs: true},
+    open: {dbFilename, vfs: WASQLiteVFS.OPFSCoopSyncVFS, enableMultiTabs: true},
+    logger: powerSyncLogger,
   }).openDB()
 
   let bodyError: unknown = null

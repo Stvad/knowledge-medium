@@ -29,6 +29,12 @@
  *     should not toggle recents / app settings.
  *   - `UiState` — never recorded (selection / focus state isn't
  *     undoable). The `record` call no-ops on this scope.
+ *
+ * Ordering: this class keeps no clock of its own, so its stacks are only as
+ * ordered as the calls into it. `Repo` records and replays under the database
+ * write lock, which makes the stacks change in the order transactions commit
+ * (#227) — feed it from a continuation after the lock's release and two
+ * commits can arrive here inverted.
  */
 
 import { ChangeScope, scopeIsUndoable } from '@/data/api'
@@ -192,17 +198,18 @@ export class UndoManager {
    *  A drop is an event with a DURATION, and both ends matter:
    *
    *  - It must begin AT THE LAST MOMENT BEFORE THE PASS'S WRITES BECOME
-   *    VISIBLE. `undo()` takes its entry off the stack before awaiting the
-   *    replay, so by the time the stacks are emptied, the entry that most needs
-   *    reaching is the one no longer on them. Moving the epoch is what reaches
-   *    it: that replay re-reads the epoch inside its own transaction and
-   *    abandons on it. A pass that writes in a transaction begins the drop
-   *    inside the lock, where a replay queued behind the chunk would otherwise
-   *    be granted the lock first and revert what that chunk committed. A pass
-   *    that holds NO lock — the props-as-blocks flip is a server round trip and
-   *    a raw `db.execute` — begins it before its first write: having no
-   *    transaction to queue behind does not make the window smaller, it removes
-   *    the only thing serialising it.
+   *    VISIBLE. From then until it ends, a replay that takes the write lock
+   *    refuses ({@link historyDropInProgress}), and one ALREADY holding it has
+   *    its entry off the stack, where emptying the stacks cannot reach it.
+   *    Moving the epoch is what reaches that one: it re-reads the epoch just
+   *    before committing and rolls back on it. A pass that writes in a
+   *    transaction begins the drop inside the lock, where a replay queued
+   *    behind the chunk would otherwise be granted the lock first and revert
+   *    what that chunk committed. A pass that holds NO lock — the
+   *    props-as-blocks flip is a server round trip and a raw `db.execute` —
+   *    begins it before its first write: having no transaction to queue behind
+   *    does not make the window smaller, it removes the only thing serialising
+   *    it.
    *
    *  - It must END by emptying the stacks once those writes are DURABLE, which
    *    is why `finish` is separate: an aborted transaction leaves nothing to be
@@ -268,7 +275,8 @@ export class UndoManager {
    *  before writes that are landing as it runs. For a lockless drop that window
    *  is a server round trip wide.
    *
-   *  Read by `replayGesture`, which refuses for the duration. Recording is NOT
+   *  Read by a replay once it holds the write lock (`Repo._replay`), which
+   *  refuses for the duration. Recording is NOT
    *  gated on it: a new edit during a pass is the user's own work on rows they
    *  can see, and the drop's end takes its entry anyway. */
   get historyDropInProgress(): boolean {
@@ -307,8 +315,9 @@ export class UndoManager {
    *  Notifies subscribers on every scope that previously had state.
    *
    *  Moves the epoch, which {@link beginHistoryDropInWriteLock}'s `finish` does
-   *  not, so it DOES reach a replay already in flight: `undo()` sampled the
-   *  epoch before popping, and the popped entry is refused when it re-checks.
+   *  not, so it DOES reach a replay already holding the write lock: the replay
+   *  sampled the epoch when it popped, and rolls back when it re-checks before
+   *  committing.
    *
    *  What it cannot do is cover a DURATION. A pass's writes land over a window
    *  — for the lockless flip, a server round trip — and a gesture STARTING

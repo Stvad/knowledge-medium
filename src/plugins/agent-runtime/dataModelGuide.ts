@@ -1,21 +1,27 @@
-/** Agent-facing orientation to Knowledge Medium's data model, surfaced
- *  through the bridge CLI so a fresh agent can learn the model without
- *  reverse-engineering it from source. Reachable three ways:
- *    - `pnpm agent data-model`            (prints this, rendered)
- *    - `pnpm agent describe-runtime --guide data-model`
- *    - pointed at from `pnpm agent runtime-summary`
- *
- *  Keep this in sync with the real schema/queries if they change — it is
- *  the canonical agent-facing description of the model. Plain markdown so
- *  the dedicated verb can print it verbatim. */
-export const DATA_MODEL_GUIDE = `# Knowledge Medium — data model (for agents)
+import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
+import { COMMENTS_PAGE_ALIAS } from '@/plugins/annotations/container.js'
+import { annotationReplacementProp, annotationStatusProp, annotationTargetProp, THREAD_TYPE } from '@/plugins/annotations/schema.js'
+import { COMMENTS_RECIPE_QUIET_MS, COMMENTS_RECIPE_SQL } from '@/plugins/annotations/scope.js'
+
+const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
 
 Mental model: this is broadly **Roam-like** — an outliner of blocks, where
 pages, daily notes, and "linked references" (backlinks) work about how you'd
 expect from Roam. That analogy is just a head start; the specifics below are
 what's actually true here.
+`
 
-## Everything is a block
+interface GuideSection {
+  topic: DataModelTopic
+  text: string
+}
+
+/** The guide's sections in reading order, each tagged with the topic id an
+ *  agent passes to read it alone. */
+const GUIDE_SECTIONS: GuideSection[] = [
+  {
+    topic: 'blocks',
+    text: `## Everything is a block
 
 There is one node type. \`blocks\` is the universal table:
 
@@ -50,19 +56,29 @@ re-order siblings with \`localeCompare\` (case-folds → inverts the order) or b
 numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
 \`children\`, and the children-ordered queries already return rows in correct
 \`(order_key, id)\` order — **preserve the order you're given; don't re-sort.**
-
-## Pages, aliases, and finding them by name
+`,
+  },
+  {
+    topic: 'pages',
+    text: `## Pages, aliases, and finding them by name
 
 - A **page** is a block with type \`page\` (usually \`parent_id IS NULL\`); its
   title is its \`content\`.
 - Pages can have **multiple names**: the \`alias\` property is a string array,
   and any alias resolves to the page. \`[[Some Name]]\` in text links to
   whichever block claims that alias.
+- Commands that take a block (\`get-block\`, \`subtree\`, \`backlinks\`,
+  \`grouped-backlinks\`, \`search --under\`) accept a **block ref**: a full id, a unique id prefix as
+  printed (\`^3f2a9c1d\`), a page name (or \`[[Page name]]\`), or a date for its
+  daily note — so \`subtree "Project Alpha"\` and \`subtree today\` need no lookup.
 - To find a page by name use \`pnpm agent page <name>\` (exact alias hit +
   substring candidates) — don't scan \`content\`. Pages + aliases are the most
   common things in the graph.
-
-## Daily notes & dates
+`,
+  },
+  {
+    topic: 'daily-notes',
+    text: `## Daily notes & dates
 
 A **daily note** is a page with types \`daily-note, page\`, nested under a
 \`Journal\` page. Its title/\`content\` is the human date ("June 17th, 2026") and
@@ -73,8 +89,11 @@ typed page. Daily-note block ids are deterministic from workspace + ISO date.)
 - \`pnpm agent daily-note <date>\` resolves \`today\` | \`yesterday\` | an ISO date |
   the literal title | natural language ("next monday") to the daily-note
   block (and tells you whether it exists yet).
-
-## References, \`source_field\`, and backlinks
+`,
+  },
+  {
+    topic: 'references',
+    text: `## References, \`source_field\`, and backlinks
 
 When block S references block T, you get a \`block_references\` row with
 \`source_id = S\`, \`target_id = T\`. The **\`source_field\`** says *how*:
@@ -89,18 +108,25 @@ When block S references block T, you get a \`block_references\` row with
 self-reference). Do **not** approximate backlinks by "blocks on T's page", and
 do **not** filter them by \`created_at\` — that gives the wrong set.
 
-- \`pnpm agent backlinks <blockId>\` → hydrated backlinks (id, content, types,
-  \`sourceFields\`, deep-link).
-
-## Grouped backlinks (the grouped-references view)
+- \`pnpm agent backlinks <ref>\` → a page of backlinks (\`--limit\`, \`--offset\`),
+  each with its breadcrumb, the property it links through when not body text,
+  and — for a block that is only a link — its parent's text and first child.
+  \`--raw\` returns every backlink hydrated (id, content, types, \`sourceFields\`,
+  deep-link).
+`,
+  },
+  {
+    topic: 'grouped-backlinks',
+    text: `## Grouped backlinks (the grouped-references view)
 
 The grouped view takes a **target**, finds its backlinks, then groups each
 backlink by the references of the backlink itself **and every ancestor up its
 chain** — plus the containing root page, \`groupWith\` expansion, and \`types\`
 enrichment. ("What context is each reference in?")
 
-- \`pnpm agent grouped-backlinks <blockId>\` → the same groups the panel shows
-  (label, optional page deep-link, hydrated members) plus an \`Other\` fallback.
+- \`pnpm agent grouped-backlinks <ref>\` → the same groups the panel shows
+  (label, size, first few members; \`--offset\` pages groups) plus an \`Other\`
+  fallback. \`--raw\` returns every group with every member hydrated.
 - "Which of page T's backlinks group under page P?" → run
   \`grouped-backlinks <T>\` and find the group whose label/id is P.
 
@@ -114,8 +140,11 @@ enrichment. ("What context is each reference in?")
 \`grouped-backlinks\` also takes \`--grouping user\` (default; the user's real
 config, matches the UI) | \`none\` (empty — generic groups dominate, can
 mislead) | \`'<json>'\`.
-
-## Other block kinds you'll meet
+`,
+  },
+  {
+    topic: 'block-kinds',
+    text: `## Other block kinds you'll meet
 
 The graph is more than pages. The common typed blocks (by frequency):
 
@@ -132,8 +161,11 @@ The graph is more than pages. The common typed blocks (by frequency):
   from those sources. **map**, **panel**/**panel-stack** (saved layouts).
 - **archived** is a property (\`archived: true\`), not a type — archived blocks
   still exist and are returned by queries unless you filter them out.
-
-## Types & properties
+`,
+  },
+  {
+    topic: 'properties',
+    text: `## Types & properties
 
 - **Types are multi-valued** (\`block_types\`, the \`types\` property). A block can
   be \`daily-note, page\` at once.
@@ -156,8 +188,11 @@ The graph is more than pages. The common typed blocks (by frequency):
   (\`data.types\` holds only kernel/plugin CODE types — user-created \`block-type\`
   blocks project into \`data.projected-type-definitions\`, so \`data.types\` alone
   will not show them).
-
-## Finding things — the named queries you can call
+`,
+  },
+  {
+    topic: 'queries',
+    text: `## Finding things — the named queries you can call
 
 These are reachable in \`pnpm agent eval\` via \`repo.query.<name>(args).load()\`.
 The convenience commands above wrap the starred ones (★) and add hydration.
@@ -176,25 +211,210 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - \`aliasesInWorkspace({workspaceId, filter?})\` → all alias strings.
 
 (Daily-note ids are derived, not queried: \`daily-note <date>\` resolves them.)
+`,
+  },
+  {
+    topic: 'writing',
+    text: `## Writing
 
-## Lower-level access
+Write the way you would edit files, and let the app do the outline:
 
-- \`pnpm agent get-block <id>\` — fetch one block.
-- \`pnpm agent subtree <rootId>\` — fetch a subtree (root included). Prints a
-  depth-indented \`- [id] content\` outline (one line per block, id first);
-  add \`--json\` for the raw flat array (each row also carries its \`depth\`
-  from the root — 0 at the root).
-  Either way it's a **pre-order** traversal with siblings in \`(order_key, id)\`
+- \`append-markdown <target> -- <markdown>\` (or markdown on stdin; MCP
+  \`append_markdown\`) — markdown is split into blocks exactly as the app's
+  "paste as markdown" splits it (bullets and headings nest; a fenced code block,
+  table or quote stays one block) and inserted in ONE transaction. Default
+  position: after the target's last child. \`create-page <name> | --date <expr>\`
+  creates a page or daily note without writing content.
+- ${WRITE_TARGET_HELP}
+- \`edit-block <id> <old> <new>\` — replace the one occurrence of \`old\`,
+  applied against the content current at write time. Prefer it to rewriting a
+  whole block.
+- \`update-block\` replaces the whole content (properties merge). Pass
+  \`expectedContent\` — the block's exact content, read whole with
+  \`get-block\`, not from an outline line — and the update is refused if the
+  content is no longer that.
+- ${TODO_WRITE_HELP}
+- The Contributors plugin attributes normal \`BlockDefault\` document edits. Undo/redo
+  restores recorded provenance; UI, preference, automation and reference scopes
+  stay quiet. Explicit context rebinding and direct database maintenance in
+  trusted \`eval\` remain available outside automatic attribution.
+- With Contributors enabled, \`run-action\` / \`action\` refuses dispatch:
+  UI action closures can retain repositories outside the command context.
+  Use graph write commands or \`eval\` with its supplied \`repo\` instead.
+- \`recent-changes\` lists the blocks agent writes changed (\`--all\`, MCP
+  \`includeUser\`, adds the user's own edits); \`block-history <id>\` shows one
+  block's changes with prior content (cut past 2,000 chars), to review them.
+  A bridge write is a transaction described \`agent runtime <verb>\` — except
+  \`eval\`, \`sql execute\` and \`run-action\`, and the follow-up transactions
+  the app runs after a write (such as a page a new [[link]] mints).
+`,
+  },
+  {
+    topic: 'comments',
+    text: `## Comments and annotations
+
+A **comment thread** is a block typed \`${THREAD_TYPE}\`, filed under the
+\`${COMMENTS_PAGE_ALIAS}\` page. Its \`${annotationTargetProp.name}\` ref points
+at the block it annotates. Its content is the quoted text of that block, or empty
+for a thread on the whole block, and \`${annotationStatusProp.name}\` is \`open\`,
+\`resolved\`, or for a suggestion \`accepted\` or \`rejected\`. Its children are the comments, and a reply is a child of the
+comment it answers, to any depth. A quote is a copy, not a mention: a
+\`[[Page]]\` inside it never counts as a backlink.
+
+A range thread whose root carries \`${annotationReplacementProp.name}\` is an
+**edit suggestion**: replace the quote with that text. A person accepts it in
+the app, which changes the block and sets the status \`accepted\`, or rejects
+it (\`rejected\`). Setting the status yourself changes no text. Propose with
+\`add-comment\` only; never set \`${annotationReplacementProp.name}\` by hand.
+
+- \`comments\` (MCP \`comments\`) reads threads as JSON. \`scope\` gives every
+  thread on a block under that page or block, plus the threads on their
+  comments, recursively. \`block\` gives one block's threads, and \`thread\`
+  gives one thread by its root id. Each thread comes with its anchor: \`block\`
+  for a whole-block thread, otherwise \`exact\`, \`moved\` or \`stale\` against
+  the target as it reads now. It also has the quote, the target's path and an
+  excerpt, and its comments nested as replied. Each comment names its author
+  and the author's kind (human, agent or automation). The author is the first
+  \`attribution:creators\` entry, else the page of the comment's \`created_by\`
+  user. A thread shows its first 50 comments in reading order
+  (\`omittedComments\` counts the rest; \`subtree\` on the root reads them), and a
+  page of threads ends early past the views' size budget, with \`nextOffset\`.
+- \`add-comment\` (MCP \`add_comment\`) starts a thread on quoted text, or on the
+  whole block, and returns its root id. Writing \`((rootId))\` elsewhere quotes
+  that range. The quote and \`occurrence\` count in the block's verbatim
+  content, as \`get-block\` returns it (outline views collapse whitespace); the
+  result's \`quoteStart\` and \`excerpt\` show which appearance it anchored.
+  With \`replacement\` it is an edit suggestion (for just the quoted part when
+  the quote is widened); the result's \`replacement\` confirms it, and null
+  means a plain comment was made. Use \`edit-block\` only to change text
+  yourself.
+- **Reply** with \`append-markdown\` whose target is the comment you are answering.
+  Target the thread root only to start a new top-level comment.
+- **Resolve or reopen** with \`update-block\` on the root, properties
+  \`{"${annotationStatusProp.name}": "resolved"}\` (or \`"open"\`).
+
+### Being woken by comments
+
+- A comment mentioning a dispatch watcher's target page (\`[[claude]]\`) is a
+  mention like any other. The mention watcher answers it under that comment,
+  with the thread from its root down to that comment as context.
+- To follow a page without being mentioned, give the dispatch daemon a
+  \`query\` watcher running the recipe below, as its \`sql\` (one JSON string).
+  It binds two params: the scope's id, and a JSON array of the dispatch target
+  page ids (resolve them with \`page\`). The recipe selects comments, at any
+  depth, of open threads in the scope that pass four tests:
+  - they are not empty;
+  - they have been quiet for ${COMMENTS_RECIPE_QUIET_MS / 1000} s, so a half-typed reply is never answered;
+  - they were not created by an agent or automation contributor, which is the loop guard;
+  - they mention no target page, so the mention watcher answers those, once.
+
+  Its rows carry \`id\`, \`thread_id\` and \`content\`. A comment is picked up by
+  the next poll after it goes quiet, or by any later write that re-runs the
+  query: time passing changes no table, so going quiet fires no push event of
+  its own. The watcher fires on ids it has not seen, so reopening a thread
+  resolved before its baseline, or moving a block with old threads into the
+  scope, brings their old comments in as new ones, one run of up to
+  \`maxRowsPerFire\`. The daemon needs a contributor. Under
+  \`contributor none\` its replies look human, and the recipe fires on them
+  again, bounded only by \`runsPerHour\`.
+
+\`\`\`json
+{"kind": "query", "name": "review-comments", "sql": "<the recipe>",
+ "params": ["<scope id>", "[\\"<claude page id>\\"]"],
+ "prompt": "New comments to answer:\\n{{newRows}}\\nFor each, read its thread with comments (thread: its thread_id), then reply with append_markdown under the comment (target: its id)."}
+\`\`\`
+
+\`\`\`sql
+${COMMENTS_RECIPE_SQL.trim()}
+\`\`\`
+`,
+  },
+  {
+    topic: 'sql',
+    text: `## Lower-level access
+
+- \`pnpm agent get-block <ref>\` — one block: content (cut past \`--max-chars\`,
+  continued with \`--content-offset\`), breadcrumb, types, decoded properties,
+  child and backlink counts. \`--raw\` for the stored row.
+- \`pnpm agent subtree <ref>\` — a bounded markdown outline, one line per block:
+  \`- content  key:: value  ^shortid\`. \`--depth\` / \`--limit\` bound it
+  (shallower levels fill first); \`(+N children)\` marks what was not expanded,
+  \`…[+N chars]\` what was cut, and a long child list ends with the
+  \`--offset\` to continue. \`--json\` for the same view structured; \`--raw\`
+  for the whole stored subtree as a flat array (each row carries its \`depth\`).
+  Every form is a **pre-order** traversal with siblings in \`(order_key, id)\`
   order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
   order").
 - \`pnpm agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
-- \`pnpm agent move-block <json>\` — structural move via \`repo.mutate.move\`;
+- \`pnpm agent move-block <json>\` — structural move via the \`core.move\` mutator;
   body is \`{id, parentId:string|null, position:{kind:"first"|"last"|"before"|"after", siblingId?}}\`.
 - \`pnpm agent delete-block <id>\` — soft-delete a block and its descendants
-  via \`repo.mutate.delete\`.
-- \`pnpm agent restore-block <id>\` — restore one tombstoned block via
-  \`repo.mutate.restore\`; descendants stay deleted unless restored separately.
+  via the \`core.delete\` mutator.
+- \`pnpm agent restore-block <id>\` — restore one tombstoned block via the
+  \`core.restore\` mutator; descendants stay deleted unless restored separately.
 - \`pnpm agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.
-`
+`,
+  },
+]
+
+/** Agent-facing orientation to Knowledge Medium's data model, surfaced
+ *  through the bridge CLI so a fresh agent can learn the model without
+ *  reverse-engineering it from source. Reachable three ways:
+ *    - `pnpm agent data-model`   (an index; `--topic <id>` reads a section,
+ *                                 `--topic all` prints this verbatim)
+ *    - `pnpm agent describe-runtime --guide data-model`  (this, verbatim)
+ *    - pointed at from `pnpm agent runtime-summary`
+ *
+ *  Keep this in sync with the real schema/queries if they change — it is
+ *  the canonical agent-facing description of the model. Plain markdown, so
+ *  it prints as it is. */
+export const DATA_MODEL_GUIDE = [GUIDE_INTRO, ...GUIDE_SECTIONS.map(section => section.text)].join('\n')
+
+const GUIDE_TOPIC_ALL = 'all'
+
+const headingOf = (section: GuideSection): string =>
+  section.text.slice(3, section.text.indexOf('\n')).replace(/`/g, '').trim()
+
+/** Lowercased words with a plural ending dropped, so `page` meets `pages`
+ *  and `query` meets `queries`. */
+const wordsOf = (text: string): string[] =>
+  text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(word => word.replace(/ies$/, 'y').replace(/s$/, ''))
+
+const fits = (haystack: string, guess: string[]): boolean => {
+  const words = new Set(wordsOf(haystack))
+  return guess.every(word => words.has(word))
+}
+
+const only = <T>(matches: T[]): T | undefined => matches.length === 1 ? matches[0] : undefined
+
+/** The one section a guessed topic means: its id, else the only section
+ *  whose id and heading hold every word of the guess, else the only one
+ *  whose text does. */
+const guessSection = (guess: string): GuideSection | undefined => {
+  const words = wordsOf(guess)
+  return only(GUIDE_SECTIONS.filter(section => fits(`${section.topic} ${headingOf(section)}`, words)))
+    ?? only(GUIDE_SECTIONS.filter(section => fits(section.text, words)))
+}
+
+const guideIndex = (): string => {
+  const index = GUIDE_SECTIONS.map(section => `- \`${section.topic}\` — ${headingOf(section)}`)
+  return `${GUIDE_INTRO.trim()}\n\nTopics (read one with topic: <id>, or "${GUIDE_TOPIC_ALL}" for the whole guide):\n${index.join('\n')}\n`
+}
+
+/** The guide as an agent reads it: with no topic, the opening and an index
+ *  of its sections, so the whole of it is never the first thing read; a
+ *  topic reads that section, and `all` the whole guide. A guess that is no
+ *  id reads the section it plainly means, or the index — never an error,
+ *  since the index is the answer to a topic that does not exist. */
+export const dataModelGuide = (topic?: string): string => {
+  const wanted = topic?.trim().toLowerCase()
+  if (!wanted) return guideIndex()
+  if (wanted === GUIDE_TOPIC_ALL) return DATA_MODEL_GUIDE
+  const exact = GUIDE_SECTIONS.find(section => section.topic === wanted)
+  if (exact) return exact.text
+  const guessed = guessSection(wanted)
+  if (guessed) return `(No topic "${topic}"; reading \`${guessed.topic}\`.)\n\n${guessed.text}`
+  return `No topic "${topic}".\n\n${guideIndex()}`
+}

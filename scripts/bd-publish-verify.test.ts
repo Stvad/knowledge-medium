@@ -24,11 +24,10 @@ describe('matchesApiPublish', () => {
     expect(matchesApiPublish('cat x | gh api graphql -f query=@-')).toBe(true)
   })
 
-  // A LONE explicit read publishes nothing — gh sends its fields as a query
+  // An explicit read publishes nothing — gh sends its fields as a query
   // string — so its response object was READ, and calling that "published"
-  // sends the agent to edit text it never wrote. A COMPOUND still matches:
-  // the effective method is resolved across the whole skeleton, so exempting
-  // one there would exempt the mutation beside it.
+  // sends the agent to edit text it never wrote. A mutation beside it is still
+  // one: each call's method is its own.
   it('exempts a lone explicit read, but not one compounded with a mutation', () => {
     expect(matchesApiPublish('gh api repos/Stvad/knowledge-medium/issues/652')).toBe(false)
     expect(matchesApiPublish('gh api --method GET repos/Stvad/knowledge-medium/issues -f state=open')).toBe(false)
@@ -92,6 +91,13 @@ describe('publishedTargets', () => {
   it('drops CLI targets whose kind the command cannot have produced', () => {
     const out = `${url('issues/500')}\n${url('pull/652')}`
     expect(publishedTargets(PR_CREATE, out)).toEqual([{ kind: 'pr', number: 652 }])
+  })
+
+  // pnpm pr:reply prints the reply's URL (after pnpm's own banner); the
+  // reply is the only kind it can produce.
+  it('reads a review-comment reply target from pr:reply output', () => {
+    const out = ['$ node scripts/pr-reply.mjs 652 41 b.md', url('pull/652#discussion_r42'), url('pull/652')].join('\n')
+    expect(publishedTargets('pnpm pr:reply 652 41 b.md', out)).toEqual([{ kind: 'review-comment', id: 42 }])
   })
 
   // The harm the exemption prevents: the fetched issue's own html_url used to
@@ -348,11 +354,11 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   it('ignores non-publish commands even when their output is an html_url object', () => {
     const { hook, shimCalls } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abcd' },
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
-    const r = hook('cat notes.json', JSON.stringify({ html_url: url('pull/652'), body: 'tracks km-abc' }))
+    const r = hook('cat notes.json', JSON.stringify({ html_url: url('pull/652'), body: 'tracks km-abcd' }))
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
     expect(shimCalls()).toBe('')
@@ -412,14 +418,14 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   it('reports a published bead id with the mapped number and that number real title', () => {
     const { hook, shimCalls } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abcd' },
         'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const r = hook(PR_CREATE, `some output\n${url('pull/652')}`)
     expect(r.status).toBe(0)
-    expect(context(r)).toContain('km-abc → #12')
+    expect(context(r)).toContain('km-abcd → #12')
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
     expect(shimCalls()).not.toContain('gh api -X')
   })
@@ -447,11 +453,11 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         'repos/Stvad/knowledge-medium/pulls/652': {
           html_url: url('pull/652'),
           title: 'T',
-          body: 'literal km-abc, relates to #12',
+          body: 'literal km-abcd, relates to #12',
         },
         'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const r = hook(`KM_ALLOW_BEAD_IDS=1 ${PR_CREATE}`, url('pull/652'))
     expect(r.status).toBe(0)
@@ -651,8 +657,7 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   // thing this report has.
   it('stays silent for an explicit GET carrying field flags', () => {
     const { hook } = makeRepo({ fixtures: {} })
-    // a text-ish field name, so the check above passes it and the GET test is
-    // the thing actually doing the work
+    // a text-ish field name: the explicit GET alone makes it no publish
     const r = hook('gh api --method GET repos/Stvad/knowledge-medium/actions/artifacts -f name=foo', '[]')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
@@ -680,10 +685,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   it('reports a bead mapping whose issue 404s as stale, not as unchecked', () => {
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abcd' },
         // no fixture for issues/12: the mapped issue 404s
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
@@ -698,10 +703,10 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
   it('reports a bead mapping it could not check as unconfirmed, not as stale', () => {
     const { hook } = makeRepo({
       fixtures: {
-        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abc' },
+        'repos/Stvad/knowledge-medium/pulls/652': { html_url: url('pull/652'), title: 'T', body: 'tracks km-abcd' },
         'repos/Stvad/knowledge-medium/issues/12#fail': { message: 'Server Error' },
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const r = hook(PR_CREATE, url('pull/652'))
     expect(r.status).toBe(0)
@@ -761,6 +766,22 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
     expect(context(r)).toContain('#77 → "Referenced" (issue, open)')
   })
 
+  it('verifies a pr:reply reply through the review-comments API', () => {
+    const { hook, shimCalls } = makeRepo({
+      fixtures: {
+        'repos/Stvad/knowledge-medium/pulls/comments/42': {
+          html_url: url('pull/652#discussion_r42'),
+          body: 'fixed, see #77',
+        },
+        'repos/Stvad/knowledge-medium/issues/77': { title: 'Referenced', state: 'open' },
+      },
+    })
+    const r = hook('pnpm pr:reply 652 41 body.md', `> node scripts/pr-reply.mjs 652 41 body.md\n${url('pull/652#discussion_r42')}`)
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/comments/42')
+    expect(context(r)).toContain('#77 → "Referenced" (issue, open)')
+  })
+
   // An api-published review's html_url carries the #pullrequestreview
   // fragment — the REVIEW is the object read back, not its parent PR.
   it('verifies a review target through the reviews API, never the parent PR', () => {
@@ -768,18 +789,18 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
       fixtures: {
         'repos/Stvad/knowledge-medium/pulls/652/reviews/77': {
           html_url: url('pull/652#pullrequestreview-77'),
-          body: 'tracks km-abc',
+          body: 'tracks km-abcd',
         },
         'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const cmd = 'gh api repos/Stvad/knowledge-medium/pulls/652/reviews -f body=x'
-    const out = JSON.stringify({ html_url: url('pull/652#pullrequestreview-77'), body: 'tracks km-abc' })
+    const out = JSON.stringify({ html_url: url('pull/652#pullrequestreview-77'), body: 'tracks km-abcd' })
     const r = hook(cmd, out)
     expect(r.status).toBe(0)
     expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/652/reviews/77')
-    expect(context(r)).toContain('km-abc → #12')
+    expect(context(r)).toContain('km-abcd → #12')
     expect(shimCalls()).not.toContain('gh api repos/Stvad/knowledge-medium/pulls/652 ')
   })
 
@@ -790,17 +811,17 @@ describe('bd-publish-verify process behavior', { timeout: 30_000 }, () => {
         'repos/Stvad/knowledge-medium/releases/tags/v1.2.0': {
           id: 9,
           html_url: url('releases/tag/v1.2.0'),
-          name: 'km-abc ships',
+          name: 'km-abcd ships',
           body: 'relates to #12',
         },
         'repos/Stvad/knowledge-medium/issues/12': A_TRACKED_ISSUE,
       },
-      shows: [[{ id: 'km-abc', external_ref: url('issues/12') }]],
+      shows: [[{ id: 'km-abcd', external_ref: url('issues/12') }]],
     })
     const r = hook('gh release edit v1.2.0 --notes-file /tmp/x.md', url('releases/tag/v1.2.0'))
     expect(r.status).toBe(0)
     // the name field is scanned too, not just the body
-    expect(context(r)).toContain('km-abc → #12')
+    expect(context(r)).toContain('km-abcd → #12')
     expect(context(r)).toContain('#12 → "Tracked issue" (issue, open)')
   })
 

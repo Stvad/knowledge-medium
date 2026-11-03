@@ -446,6 +446,128 @@ describe('spatial navigation shift-click selection', () => {
     })
   })
 
+  // A scrollbar drag mounts the rows it lands on and none it passed over, so the
+  // rows between the two ends can still be placeholders when the click lands.
+  it('includes rows still deferred between the anchor and the clicked block', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline'},
+        {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},
+        {blockId: 'C', renderScopeId: 'panel:outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'B', 'C'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  // A backlink entry reserves its slot without naming the scope it will mint,
+  // which keeps navigation off it; a range needs only the block.
+  it('includes a deferred row whose slot names no scope', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {deferredBlockId: 'X'},
+      {blockId: 'B', renderScopeId: 'panel:backlink:B'},
+    ] as NavInstance[])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('B'),
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A', 'X', 'B'])
+  })
+
+  it('leaves out deferred rows inside an excluded surface, as it does mounted ones', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline'},
+        {
+          blockId: 'X',
+          renderScopeId: 'panel:crumbs',
+          surface: 'breadcrumb',
+          nested: [{deferredBlockId: 'B1', deferredScopeId: 'panel:crumbs:B1'}],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A', 'C'])
+  })
+
+  it('extends from the range origin the gesture carries rather than the focused row', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+      rangeOrigin: {blockId: 'A', renderScopeId: 'panel:outline'},
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'B', 'C'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  it('lets an active selection anchor win over the range origin', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['B'], anchorBlockId: 'B'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+      rangeOrigin: {blockId: 'A', renderScopeId: 'panel:outline'},
+    })
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['B', 'C'],
+      anchorBlockId: 'B',
+    })
+  })
+
   it('declines to the structural base when the clicked block is in another panel', async () => {
     // The load-bearing decline: extendSelectionToSpatialTarget reports a panel
     // mismatch as "handled" for the keyboard contract, so the transform gates on

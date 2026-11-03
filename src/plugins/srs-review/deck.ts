@@ -1,7 +1,7 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { ChangeScope } from '@/data/api'
-import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage.js'
+import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from '@/data/kernelPage.js'
 import {
   SRS_REVIEW_DECK_TYPE,
   reviewDeckStartedProp,
@@ -14,6 +14,12 @@ import {
 const REVIEW_DECK_NS = 'c3f1a9d4-2b8e-4f57-bc6a-1e9d8a4f2c70'
 const REVIEW_DECK_ALIAS = 'SRS Review'
 
+export const reviewDeckSpec: KernelPageSpec = {
+  namespace: REVIEW_DECK_NS,
+  alias: REVIEW_DECK_ALIAS,
+  markerType: SRS_REVIEW_DECK_TYPE,
+}
+
 export const reviewDeckBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, REVIEW_DECK_NS)
 
@@ -23,11 +29,7 @@ export const reviewDeckBlockId = (workspaceId: string): string =>
  *  `srs-review-deck` marker is what `SrsReviewDeckRenderer.canRender`
  *  keys on. */
 export const getOrCreateReviewDeck = (repo: Repo, workspaceId: string): Promise<Block> =>
-  getOrCreateKernelPage(repo, workspaceId, {
-    namespace: REVIEW_DECK_NS,
-    alias: REVIEW_DECK_ALIAS,
-    markerType: SRS_REVIEW_DECK_TYPE,
-  })
+  getOrCreateKernelPage(repo, workspaceId, reviewDeckSpec)
 
 /** Point the deck at a tag (`''` = all due) and flip it into the review
  *  session. Shared by the deck picker and the daily-note hint, so both

@@ -1,8 +1,8 @@
 /** Local-only registry of bridge auth tokens. A token authorizes
- *  whoever holds it to drive the agent runtime bridge as if they were
- *  this user, in this workspace, on this device. Stored in
- *  localStorage (device-scoped, not synced) keyed by
- *  (userId, workspaceId).
+ *  whoever holds it to drive the agent runtime bridge as this user, on
+ *  this device, in any of the user's workspaces — which workspace a call
+ *  acts on is a per-call parameter, not a property of the token. Stored
+ *  in localStorage (device-scoped, not synced) keyed by userId.
  *
  *  Tokens are stored in the clear: the security boundary is the
  *  browser's same-origin model + the bridge listening on
@@ -10,6 +10,7 @@
  *  user's session and can do anything from the running app. */
 import { hex } from '@scure/base'
 import { ClientLocalSettings, clientLocalSettings } from '@/utils/ClientLocalSettings.js'
+import { UUID_RE_SOURCE } from '@/data/referenceBlock.js'
 
 export interface AgentToken {
   /** Random secret. Treat as a credential. */
@@ -19,18 +20,35 @@ export interface AgentToken {
   /** read-only tokens can inspect state but cannot enqueue mutations/eval. */
   scope?: AgentTokenScope
   createdAt: number
-  /** Last time we observed a registration with this token. Updated by
-   *  the bridge handshake reply, so users can see which tokens are
-   *  actively in use. */
+  /** Last time this token was seen in use, for the tokens dialog. Only
+   *  `touch` writes it, and nothing calls `touch` yet. */
   lastSeenAt?: number | null
 }
 
 export type AgentTokenScope = 'read-write' | 'read-only'
 
-const KEY_PREFIX = 'agent-runtime:tokens'
+const KEY_PREFIX = 'agent-runtime:user-tokens'
+/** Where tokens lived when they were stored per (user, workspace). A prefix
+ *  the per-user key cannot share, since local-only user ids are free text. */
+const LEGACY_KEY_PREFIX = 'agent-runtime:tokens'
 
-const storageKey = (userId: string, workspaceId: string) =>
-  `${KEY_PREFIX}:${userId}:${workspaceId}`
+const storageKey = (userId: string) => `${KEY_PREFIX}:${encodeURIComponent(userId)}`
+
+/** Whether a localStorage key holds agent tokens (any user, either shape). */
+export const isAgentTokensStorageKey = (key: string): boolean =>
+  key.startsWith(`${KEY_PREFIX}:`) || key.startsWith(`${LEGACY_KEY_PREFIX}:`)
+
+/** Exactly `<prefix>:<userId>:<workspace uuid>`, so user `vlad` never matches
+ *  the keys of user `vlad:work`. */
+const isLegacyKeyOf = (userId: string, key: string): boolean => {
+  const prefix = `${LEGACY_KEY_PREFIX}:${userId}:`
+  return key.startsWith(prefix) && new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(key.slice(prefix.length))
+}
+
+const readTokens = (settings: ClientLocalSettings, key: string): AgentToken[] => {
+  const tokens = settings.get<AgentToken[]>(key, [])
+  return Array.isArray(tokens) ? tokens : []
+}
 
 const generateSecret = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
@@ -51,23 +69,20 @@ const generateSecret = () => {
 export class AgentTokenStore {
   constructor(private readonly settings: ClientLocalSettings = clientLocalSettings) {}
 
-  list(userId: string, workspaceId: string): AgentToken[] {
-    if (!userId || !workspaceId) return []
-    const tokens = this.settings.get<AgentToken[]>(storageKey(userId, workspaceId), [])
-    return Array.isArray(tokens) ? tokens : []
+  list(userId: string): AgentToken[] {
+    if (!userId) return []
+    return this.adoptPerWorkspaceTokens(userId)
   }
 
   create(
     userId: string,
-    workspaceId: string,
     label: string,
     scope: AgentTokenScope = 'read-write',
   ): AgentToken {
     if (!userId) throw new Error('userId required')
-    if (!workspaceId) throw new Error('workspaceId required')
 
     const trimmedLabel = label.trim() || 'agent'
-    const tokens = this.list(userId, workspaceId)
+    const tokens = this.list(userId)
     const token: AgentToken = {
       token: generateSecret(),
       label: trimmedLabel,
@@ -75,30 +90,56 @@ export class AgentTokenStore {
       createdAt: Date.now(),
       lastSeenAt: null,
     }
-    this.settings.set(storageKey(userId, workspaceId), [...tokens, token])
+    this.settings.set(storageKey(userId), [...tokens, token])
     return token
   }
 
-  revoke(userId: string, workspaceId: string, token: string): void {
-    const tokens = this.list(userId, workspaceId)
+  revoke(userId: string, token: string): void {
+    const tokens = this.list(userId)
     const next = tokens.filter(t => t.token !== token)
     if (next.length === tokens.length) return
     if (next.length === 0) {
-      this.settings.remove(storageKey(userId, workspaceId))
+      this.settings.remove(storageKey(userId))
     } else {
-      this.settings.set(storageKey(userId, workspaceId), next)
+      this.settings.set(storageKey(userId), next)
     }
   }
 
-  touch(userId: string, workspaceId: string, token: string): void {
-    const tokens = this.list(userId, workspaceId)
+  touch(userId: string, token: string): void {
+    const tokens = this.list(userId)
     let changed = false
     const next = tokens.map(t => {
       if (t.token !== token) return t
       changed = true
       return {...t, lastSeenAt: Date.now()}
     })
-    if (changed) this.settings.set(storageKey(userId, workspaceId), next)
+    if (changed) this.settings.set(storageKey(userId), next)
+  }
+
+  /** The user's tokens, with any still stored under the old per-(user,
+   *  workspace) keys folded in. The old keys go only once the merged list
+   *  reads back whole: a write that failed (a full quota) keeps them, and
+   *  this read still returns every token. */
+  private adoptPerWorkspaceTokens(userId: string): AgentToken[] {
+    const current = readTokens(this.settings, storageKey(userId))
+    const legacyKeys = this.settings.keys().filter(key => isLegacyKeyOf(userId, key))
+    if (legacyKeys.length === 0) return current
+
+    const merged = [...current]
+    const known = new Set(merged.map(t => t.token))
+    for (const key of legacyKeys) {
+      for (const token of readTokens(this.settings, key)) {
+        if (known.has(token.token)) continue
+        known.add(token.token)
+        merged.push(token)
+      }
+    }
+    if (merged.length > 0) this.settings.set(storageKey(userId), merged)
+    const written = new Set(readTokens(this.settings, storageKey(userId)).map(t => t.token))
+    if (merged.every(t => written.has(t.token))) {
+      for (const key of legacyKeys) this.settings.remove(key)
+    }
+    return merged
   }
 }
 

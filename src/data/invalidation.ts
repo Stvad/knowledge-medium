@@ -119,6 +119,13 @@ export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
 export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
 export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
 export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
+/** Fired by the Repo, not by a rule, when the active property registry
+ *  changes which field ids it recognizes as definitions — the state a
+ *  visible-children query binds through `RecognitionParams`. It is the
+ *  registry's answer, which moves after the write that caused it, so no
+ *  snapshot rule can see it. One key: there is one active registry. */
+export const KERNEL_FIELD_RECOGNITION_CHANNEL = 'kernel.fieldRecognition'
+export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
 
 const SEP = '\u0000'
 

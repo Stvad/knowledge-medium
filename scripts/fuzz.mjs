@@ -33,21 +33,28 @@ import { existsSync, readFileSync } from 'node:fs'
 //  - "FAIL" rows in the "Failed Tests" section and for whole-file
 //    crashes (setup errors etc.) that never produce a tree row, e.g.
 //      FAIL  src/data/test/twoRepoConvergence.fuzz.test.ts > suite > test
-// Pull the file path out of either. CI output isn't a TTY so vitest
+//  - the attribution line under an unhandled error, which fails the run
+//    while every file's tree row stays ✓, e.g.
+//      This error originated in "src/shortcuts/test/defaultActions.fuzz.test.ts" test file.
+// Pull the file path out of any of them. CI output isn't a TTY so vitest
 // disables color, but strip ANSI defensively in case that ever changes.
+// A test file as vitest.config.ts includes it: `*.test.*` and `*.spec.*`.
+const TEST_FILE = String.raw`\S+\.(?:test|spec)\.\w+`
+const TREE_ROW = new RegExp(String.raw`^\s*([✓✗×❯↓])\s+(${TEST_FILE})\s+\(\d+\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)`)
+const FAIL_ROW = new RegExp(String.raw`^\s*FAIL\s+(${TEST_FILE})`)
+const UNHANDLED_ORIGIN = new RegExp(String.raw`This error originated in "(${TEST_FILE})" test file`)
+
 export function extractFailingFiles(log) {
   const clean = log.replace(/\x1B\[[0-9;]*m/g, '')
   const files = new Set()
   for (const line of clean.split('\n')) {
-    const treeRow = line.match(
-      /^\s*([✓✗×❯↓])\s+(\S+\.test\.\w+)\s+\(\d+\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)/,
-    )
+    const treeRow = line.match(TREE_ROW)
     if (treeRow) {
       const [, marker, file, failedCount] = treeRow
       if (marker !== '✓' || Number(failedCount ?? 0) > 0) files.add(file)
       continue
     }
-    const failRow = line.match(/^\s*FAIL\s+(\S+\.test\.\w+)/)
+    const failRow = line.match(FAIL_ROW) ?? line.match(UNHANDLED_ORIGIN)
     if (failRow) files.add(failRow[1])
   }
   return [...files]

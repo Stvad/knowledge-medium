@@ -171,37 +171,9 @@ describe('displayableTypes', () => {
 
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
-    expect(labelForBlockData({
-      id: 'with-alias',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Content',
-      properties: {[aliasesProp.name]: ['Page']},
-      references: [],
-      createdAt: 1,
-      updatedAt: 1,
-      userUpdatedAt: 1,
-      createdBy: 'u',
-      updatedBy: 'u',
-      deleted: false,
-    }, 'fallback')).toBe('Page')
+    expect(labelForBlockData({content: 'Content', properties: {[aliasesProp.name]: ['Page']}}, 'fallback')).toBe('Page')
 
-    expect(labelForBlockData({
-      id: 'with-content',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Content',
-      properties: {},
-      references: [],
-      createdAt: 1,
-      updatedAt: 1,
-      userUpdatedAt: 1,
-      createdBy: 'u',
-      updatedBy: 'u',
-      deleted: false,
-    }, 'fallback')).toBe('Content')
+    expect(labelForBlockData({content: 'Content', properties: {}}, 'fallback')).toBe('Content')
   })
 
   it('searches aliases and content while de-duping content hits covered by aliases', async () => {
@@ -879,6 +851,33 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     // ...but its payload is the fresher, real DB copy — not the stale
     // toy-source content that won on score.
     expect(results[0].content).toBe('sync notes')
+  })
+
+  it('core applies a filter before its limit; other sources are type-filtered, and sit out an ancestry filter', async () => {
+    await create({id: 'plain', content: 'sync plain'})
+    await create({id: 'tagged', content: 'sync tagged', types: ['todo']})
+    const unfiltering = vi.fn(async () => [
+      {block: blockData('semantic-untyped', 'unrelated'), score: 999},
+      {block: {...blockData('semantic-todo', 'unrelated'), properties: {types: ['todo']}}, score: 998},
+    ])
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:toy-source', [{id: 'test.toy', search: unfiltering}])
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+
+    // A type filter: the other source runs, and only its matching candidate survives.
+    const typed = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 2, filter: {types: ['todo']}})
+    expect(typed.map(block => block.id)).toEqual(['semantic-todo', 'tagged'])
+    expect(reports).toHaveLength(1)
+
+    // An ancestry filter cannot be checked on a candidate: that source sits
+    // out, and the partial run files no health report (an absent source
+    // would read as one that left).
+    unfiltering.mockClear()
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 1, filter: {underId: 'nowhere'}})
+    expect(unfiltering).not.toHaveBeenCalled()
+    expect(reports).toHaveLength(1)
   })
 
   it('drops a source that throws without failing the others', async () => {

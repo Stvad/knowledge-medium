@@ -10,11 +10,11 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import {
-  dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { dailyNotesDeletionGuard } from '../deletionGuard.ts'
 
 const WS = 'ws-1'
@@ -39,9 +39,9 @@ describe('dailyNotesDeletionGuard', () => {
     expect(await dailyNotesDeletionGuard(note)).toMatch(/Daily notes/)
   })
 
-  it('refuses the Journal', async () => {
+  it('leaves the Journal to the core kernel-page rule', async () => {
     const journal = await getOrCreateJournalBlock(repo, WS)
-    expect(await dailyNotesDeletionGuard(journal)).toMatch(/Journal/)
+    expect(await dailyNotesDeletionGuard(journal)).toBeNull()
   })
 
   it('allows an ordinary page, including a child of a daily note', async () => {

@@ -91,10 +91,9 @@ describe('runMoveFlow selection handling', () => {
     expect(after.anchorBlockId).toBeNull()
   })
 
-  it('drops the relocated prefix from the selection when the batch fails part-way', async () => {
-    // 'x' lands in 'd'; 'p' then can't (d is inside p), so the flow
-    // throws PartialMoveError. The prefix still moved, so it must leave
-    // the selection — otherwise Delete reaches it at its new home.
+  it('leaves the selection untouched when the batch fails', async () => {
+    // 'a' could move into 'd' on its own; 'p' can't (d is inside p), so
+    // the whole batch rolls back and nothing leaves the selection.
     await seed('p', null)
     await seed('d', 'p')
     const uiStateBlock = repo.block('ui')
@@ -103,14 +102,11 @@ describe('runMoveFlow selection handling', () => {
       anchorBlockId: 'a',
     })
 
-    // Destination is 'd' for this one, so re-point the stubbed picker.
     pickDestination('d')
     await runMoveFlow([repo.block('a'), repo.block('p')], {uiStateBlock})
 
-    // 'a' moved into 'd' and is gone from the selection; 'p' never moved
-    // and stays selected.
-    expect(await parentOf('a')).toBe('d')
-    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['p'])
+    expect(await parentOf('a')).toBeNull()
+    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['a', 'p'])
   })
 
   it('also unselects a selected descendant that rode along inside a moved subtree', async () => {
@@ -129,32 +125,6 @@ describe('runMoveFlow selection handling', () => {
     expect(await parentOf('a')).toBe('dest')
     expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
     expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual([])
-  })
-
-  it('on a partial failure, also unselects a descendant that rode along with the prefix that DID move — but not the untouched remainder', async () => {
-    // Mirrors the success-path descendant test above, but through the
-    // PartialMoveError catch: 'a' (with 'kid' riding along under it)
-    // commits first, then 'p' fails (same cycle setup as the "drops the
-    // relocated prefix" test — 'd' is inside 'p'). Subtracting only
-    // `error.movedIds` (['a']) would leave 'kid' selected at its new
-    // home; subtracting everything requested (the success-path shortcut)
-    // would ALSO drop 'p', which never moved and must stay selected.
-    await seed('p', null)
-    await seed('d', 'p')
-    await seed('kid', 'a')
-    const uiStateBlock = repo.block('ui')
-    await uiStateBlock.set(selectionStateProp, {
-      selectedBlockIds: ['a', 'kid', 'p'],
-      anchorBlockId: 'a',
-    })
-
-    pickDestination('d')
-    await runMoveFlow([repo.block('a'), repo.block('kid'), repo.block('p')], {uiStateBlock})
-
-    expect(await parentOf('a')).toBe('d')
-    expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
-    expect(await parentOf('p')).toBeNull() // never moved
-    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['p'])
   })
 
   it('leaves an unrelated selection alone on a single-block move', async () => {
@@ -192,28 +162,6 @@ describe('runMoveFlow selection handling', () => {
     expect(await parentOf('a')).toBe('dest')
     expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
     expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual([])
-  })
-
-  it('on a partial failure, unselects a selected descendant of the moved prefix even when only the ancestor was requested', async () => {
-    // Same gap as above, through the PartialMoveError catch: only 'a' and
-    // 'p' are requested (context-menu-style), 'kid' is independently
-    // selected under 'a'.
-    await seed('p', null)
-    await seed('d', 'p')
-    await seed('kid', 'a')
-    const uiStateBlock = repo.block('ui')
-    await uiStateBlock.set(selectionStateProp, {
-      selectedBlockIds: ['a', 'kid', 'p'],
-      anchorBlockId: 'a',
-    })
-
-    pickDestination('d')
-    await runMoveFlow([repo.block('a'), repo.block('p')], {uiStateBlock})
-
-    expect(await parentOf('a')).toBe('d')
-    expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
-    expect(await parentOf('p')).toBeNull() // never moved
-    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['p'])
   })
 
   it('removes just the moved block when a context-menu move targets one of several selected blocks', async () => {

@@ -8,39 +8,40 @@
  * - Soundness on adversarial input (never throws, forest is acyclic with
  *   every `parentId` pointing at an earlier-emitted block, sibling
  *   `orderKey`s strictly ascending). This follows from the *structure* of
- *   the two-pass algorithm, not from understanding its indent/header/list
- *   nesting rules:
- *     - Pass 1 (markdownParser.ts:60-164) walks `lines` index-based and
- *       always advances `idx`, so it terminates.
- *     - Pass 2 (markdownParser.ts:180-205) assigns `parentId` only from
- *       `parentStack[level - 1]`, which — if set — was written by a
- *       strictly earlier iteration of the very same loop (it can only be
- *       overwritten going forward). So `parentId`, when defined, always
- *       names a block already pushed to `blocks`. That gives acyclicity
- *       for free — no need to model the context-stack nesting rules to
+ *   the lex → nest → flatten pipeline, not from understanding its
+ *   indent/header/list nesting rules:
+ *     - `lexMarkdownLines` walks `lines` index-based and always advances
+ *       `idx`, so it terminates.
+ *     - `outlineFromTokens` builds a tree, and `parsedBlocksFromOutline`
+ *       walks it pre-order, minting a block's id before queueing its
+ *       children with that id as their `parentId`. So `parentId`, when
+ *       defined, always names a block already pushed to `blocks`. That
+ *       gives acyclicity for free — no need to model the nesting rules to
  *       assert it.
  *     - Sibling `orderKey`s come from repeated `keyAtEnd(lastOrderKey)`
- *       calls (per parent, or the `rootLastKey` cursor for root-level
- *       siblings) in document order — asserted, not just assumed, since it
- *       depends on `fractional-indexing-jittered` actually being monotone.
+ *       calls per parent (root-level siblings included) in document order
+ *       — asserted, not just assumed, since it depends on
+ *       `fractional-indexing-jittered` actually being monotone.
  *
  * - Structured round-trip on a *known-good* class (well-formed bullet
  *   outlines with single-line, structure-free content): the (depth,
  *   content) sequence recovered by walking `parentId` links must equal the
  *   input outline exactly. This is a stronger, semantic oracle, but only
  *   sound on inputs where indentation is the *only* nesting signal and all
- *   lines are the same type (`ul-item`) — see the code-cited proof in the
- *   docblock above the generator below.
+ *   lines are the same kind (`list-item`) — see the proof in the docblock
+ *   above the generator below.
  *
- * - Fenced-code isolation: the fence is documented (markdownParser.ts:76-84)
- *   to always become exactly one block, with inner lines never reinterpreted
- *   as structure — checked directly.
+ * - Fenced-code isolation: a fence always becomes exactly one block, with
+ *   inner lines never reinterpreted as structure — checked directly.
+ *
+ * - Outline flattening: `parsedBlocksFromOutline` preserves an arbitrary
+ *   tree exactly — the shape every pre-built paste (clipboard HTML) relies on.
  */
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { lineFragmentArb } from '@/test/arbitraries/markdownSoup'
-import { parseMarkdownToBlocks, type ParsedBlock } from '../markdownParser'
+import { parseMarkdownToBlocks, parsedBlocksFromOutline, type OutlineNode, type ParsedBlock } from '../markdownParser'
 
 // ──── Property 1: never throws + valid forest on adversarial soup ────
 //
@@ -65,15 +66,13 @@ describe('parseMarkdownToBlocks: adversarial soup', () => {
 
         for (const b of blocks) {
           // parentId, if set, must name a block emitted strictly earlier
-          // (markdownParser.ts:190-194: parentStack[level-1] can only
-          // hold an id written by a prior loop iteration).
+          // (a pre-order walk emits a parent before its children).
           if (b.parentId !== undefined) {
             expect(emittedBefore.has(b.parentId)).toBe(true)
           }
 
-          // Sibling orderKeys strictly ascend in emission order
-          // (markdownParser.ts:193/196: each sibling's key is
-          // keyAtEnd(previous sibling's key)).
+          // Sibling orderKeys strictly ascend in emission order (each
+          // sibling's key is keyAtEnd(previous sibling's key)).
           const prevKey = lastSiblingKey.get(b.parentId)
           if (prevKey !== undefined) {
             expect(b.orderKey > prevKey).toBe(true)
@@ -91,8 +90,8 @@ describe('parseMarkdownToBlocks: adversarial soup', () => {
 // ──── Property 2: structured round-trip on well-formed bullet outlines ────
 //
 // Proof sketch that the round-trip holds for this generator (all lines are
-// `- content`, i.e. type 'ul-item', so only Case A / B3 / Case C of the
-// context-stack popping logic apply — markdownParser.ts:125,136-139,143):
+// `- content`, i.e. kind 'list-item', so `nestsAtSameIndent` is always false
+// and only indentation decides — `outlineFromTokens`):
 //
 // Write I(d) for the indent `getIndentationLevel` measures on a line the
 // generator renders at outline depth d, i.e. on `unit.repeat(d)`. I is
@@ -101,32 +100,29 @@ describe('parseMarkdownToBlocks: adversarial soup', () => {
 // argument needs — never I(d) === d — which is what lets the property run
 // over tab units as well as space ones.
 //
-// By induction, after processing outline entry i-1, the context stack
-// holds root plus exactly one node per level 0..depth[i-1], the node at
-// level d carrying rawIndent = I(d). For entry i:
+// By induction, after processing outline entry i-1, the open stack holds
+// exactly one node per level 0..depth[i-1], the node at level d carrying
+// indent I(d). For entry i:
 //   - depth[i] = depth[i-1] + 1: current indent > stack-top indent →
-//     Case A, break immediately → level = depth[i-1] + 1 = depth[i].
-//   - depth[i] <= depth[i-1]: same/less indent pops (B3 for ties, Case C
-//     for outdents) until the stack top has rawIndent = I(depth[i] - 1) —
-//     the deepest node still shallower than I(depth[i]), since I is
-//     strictly increasing — or just root, for depth[i] = 0 → level = depth[i].
-// So the first-pass `level` sequence equals the input `depth` sequence
-// exactly. The second pass (markdownParser.ts:180-205) walks that same
-// kind of depth-like sequence with an analogous parentStack, so the
-// parent-child shape it builds mirrors it 1:1.
+//     nests immediately → depth[i-1] + 1 = depth[i].
+//   - depth[i] <= depth[i-1]: same/less indent pops (ties are siblings)
+//     until the stack top has indent I(depth[i] - 1) — the deepest node
+//     still shallower than I(depth[i]), since I is strictly increasing — or
+//     the stack is empty, for depth[i] = 0.
+// So the tree's depths equal the input `depth` sequence exactly, and the
+// pre-order flattening (Property 4) preserves them.
 //
 // Content: rendering `unit.repeat(depth) + '- ' + content` means
-// `trimmedLine === '-' + ' ' + content` exactly (indentation is pure
-// leading whitespace, content has no leading/trailing whitespace or `\n`
-// per the generator below), so the ul-item regex captures `content` back
-// verbatim.
+// `trimmed === '-' + ' ' + content` exactly (indentation is pure leading
+// whitespace, content has no leading/trailing whitespace or `\n` per the
+// generator below), so the bullet regex captures `content` back verbatim.
 
 const outlineContentArb = fc
   .string({minLength: 1, maxLength: 12})
   .map(s => s.trim())
   // Non-empty after trim (an empty capture group collapses the marker —
-  // `'- '.trim()` is `'-'`, which doesn't match the ul-item regex at all
-  // and falls through to type 'text' with content '-', breaking the
+  // `'- '.trim()` is `'-'`, which doesn't match the bullet regex at all
+  // and falls through to a paragraph with content '-', breaking the
   // 1-rendered-line-per-outline-entry assumption); no `\n` (would add
   // physical lines the outline doesn't account for); no leading
   // structure-like char (defensive — see docblock; not strictly required
@@ -193,9 +189,9 @@ describe('parseMarkdownToBlocks: bullet-outline round-trip', () => {
 
 // ──── Property 3: fenced code is never split / reinterpreted ────
 //
-// markdownParser.ts:76-84: a fence is consumed as ONE block from its
-// opening line through the closing fence (or EOF); inner lines are never
-// reinterpreted as list markers / headers.
+// `fencedCodeEnd`: a fence is consumed as ONE block from its opening line
+// through the closing fence (or EOF); inner lines are never reinterpreted as
+// list markers / headers.
 
 describe('parseMarkdownToBlocks: fenced-code isolation', () => {
   it('a fence with adversarial inner lines is always exactly one block, verbatim', () => {
@@ -206,15 +202,14 @@ describe('parseMarkdownToBlocks: fenced-code isolation', () => {
     // unconstrained (may embed \n, list markers, headers, tabs, ...).
     const innerLineArb = fc.string({maxLength: 10}).map(s => s.replace(/[`~]/g, '.'))
     // Single physical, non-empty, fence-char-free prose line, restricted
-    // to the parser's plain 'text' line-type (no leading `#` header
-    // marker, no `- `/`* `/`+ ` or `N. ` list marker). This matters: a
-    // header nests any FOLLOWING same-indent non-header line as its CHILD
-    // (markdownParser.ts:128-129, B1 — also see the
-    // 'places content underneath a header as its child' unit test), so a
-    // '#' prelude would make the fence block (and postlude) its children
-    // rather than root siblings. Excluding header/list-marker prefixes
-    // keeps prelude/fence/postlude at the same 'text' type, which pops as
-    // ROOT siblings (B4) — the structure this property assumes.
+    // to the parser's 'paragraph' kind (no leading `#` header marker, no
+    // `- `/`* `/`+ ` or `N. ` list marker). This matters: a header nests
+    // any FOLLOWING same-indent non-header line as its CHILD
+    // (`nestsAtSameIndent` — also see the 'places content underneath a
+    // header as its child' unit test), so a '#' prelude would make the
+    // fence block (and postlude) its children rather than root siblings.
+    // Excluding those prefixes keeps prelude, fence and postlude ROOT
+    // siblings — the structure this property assumes.
     const proseLineArb = fc
       .string({minLength: 1, maxLength: 8})
       .map(s => s.replace(/[`~\n]/g, '.').trim())
@@ -241,6 +236,41 @@ describe('parseMarkdownToBlocks: fenced-code isolation', () => {
         },
       ),
       fuzzParams(80),
+    )
+  })
+})
+
+// ──── Property 4: flattening preserves an arbitrary outline ────
+//
+// `parsedBlocksFromOutline` is the one path every paste takes to blocks —
+// the markdown parse and a pre-built (clipboard HTML) tree alike — so any
+// tree must come back with the same shape and content, in pre-order.
+
+describe('parsedBlocksFromOutline: preserves the tree', () => {
+  const {tree: treeArb} = fc.letrec<{tree: OutlineNode[]}>(tie => ({
+    tree: fc.array(
+      fc.record({
+        // Unconstrained: content is never re-parsed on this path.
+        content: fc.string({maxLength: 6}),
+        children: fc.oneof({depthSize: 'small'}, fc.constant([]), tie('tree')),
+      }),
+      {maxLength: 4},
+    ),
+  }))
+
+  const rebuild = (blocks: ParsedBlock[], parentId: string | undefined): OutlineNode[] =>
+    blocks
+      .filter(block => block.parentId === parentId)
+      .sort((a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
+      .map(block => ({content: block.content, children: rebuild(blocks, block.id)}))
+
+  it('rebuilding from parentId + orderKey yields the input tree', () => {
+    fc.assert(
+      fc.property(treeArb, tree => {
+        const blocks = parsedBlocksFromOutline(tree)
+        expect(rebuild(blocks, undefined)).toEqual(tree)
+      }),
+      fuzzParams(120),
     )
   })
 })

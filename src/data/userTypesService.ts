@@ -35,7 +35,10 @@ import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { parseTypeDefinitionMetadata } from '@/data/typeDefinitionMetadata'
 import { projectedTypeDefinitionsFacet } from '@/data/facets'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  isParsedPropertyDefinition,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type {PropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
@@ -78,7 +81,7 @@ const tryBuildType = (
   const properties: AnyPropertySchema[] = []
   for (const refId of refIds) {
     const definition = schemas?.contributionForBlockId(refId)
-    if (!definition) continue
+    if (!definition || !isParsedPropertyDefinition(definition)) continue
     const schema = resolveSelectedPropertyDefinition(definition.metadata, resolver)
     if (schema) properties.push(schema)
   }

@@ -196,6 +196,68 @@ describe('UserSchemasService.addSchema', () => {
     expect(tx).toHaveBeenCalled()
   })
 
+  it('persists schemas through its bound Repo host', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.userSchemas.addSchema({name: 'bound-schema', presetId: 'string'})
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const regularOptions = tx.mock.calls[0]?.[1]
+    expect(regularOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+  })
+
+  it('keeps schema writes context-bound inside undoGroup facades', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.undoGroup(grouped =>
+      grouped.userSchemas.addSchema({name: 'grouped-bound-schema', presetId: 'string'}),
+    )
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const groupedOptions = tx.mock.calls[0]?.[1]
+    expect(groupedOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    expect(groupedOptions?.groupId).toEqual(expect.any(String))
+  })
+
+  it('shares same-name reservations between the Repo service and bound views', async () => {
+    env = await setup()
+    let release!: () => void
+    const primed = new Promise<void>(resolve => { release = resolve })
+    const handle = env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!
+    vi.spyOn(handle, 'whenPrimed').mockReturnValueOnce(primed)
+
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    const first = bound.userSchemas.addSchema({name: 'shared-reservation', presetId: 'string'})
+    try {
+      await expect(env.service.addSchema({name: 'shared-reservation', presetId: 'string'}))
+        .rejects.toThrow('already being created')
+    } finally {
+      release()
+    }
+    await expect(first).resolves.toMatchObject({name: 'shared-reservation'})
+    expect(env.repo.propertyDefinitions?.definitionsByName.get('shared-reservation'))
+      .toHaveLength(1)
+  })
+
   it('rejects concurrent same-name creation before either call can persist', async () => {
     env = await setup()
     let release!: () => void

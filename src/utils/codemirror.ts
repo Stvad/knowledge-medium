@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { insertNewline } from '@codemirror/commands'
 import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
+import type { BasicSetupOptions } from '@uiw/react-codemirror'
 import { isIOS } from '@/utils/platform.js'
 
 /** Clamp every range of a selection into `[0, docLength]`. For
@@ -217,6 +218,24 @@ export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptComplet
  *  Enter before it can reach a window shortcut). */
 export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
 
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
+ *  for bracket closing. Keys, history and completion come from the app. */
+export const BLOCK_EDITOR_BASIC_SETUP = {
+  closeBrackets: true,
+  lineNumbers: false,
+  foldGutter: false,
+  dropCursor: false,
+  allowMultipleSelections: false,
+  indentOnInput: false,
+  highlightSelectionMatches: false,
+  searchKeymap: false,
+  defaultKeymap: false,
+  history: false,
+  historyKeymap: false,
+  highlightActiveLine: false,
+  completionKeymap: false,
+} as const satisfies BasicSetupOptions
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
@@ -283,6 +302,12 @@ export const createMinimalMarkdownConfig = (
         caretColor: 'currentColor',
       },
       '.cm-line': {padding: '0'},
+      '.cm-selectionBackground': {
+        backgroundColor: 'hsl(var(--foreground) / 0.15)',
+      },
+      '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+        backgroundColor: 'hsl(var(--primary) / 0.3)',
+      },
       /* Caret fix: zero the half-pixel shift, and recolor the drawn
          cursor (default is black) so it's visible against any palette. */
       ".cm-cursor, .cm-dropCursor": {

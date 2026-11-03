@@ -75,7 +75,6 @@ const valueArbFor = (kind: Kind): fc.Arbitrary<string> =>
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 const guard = statefulFuzzGuard()

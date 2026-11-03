@@ -215,6 +215,7 @@ describe('core.setProperty', () => {
 
 describe('core.createChild', () => {
   it('appends to parent at position=last by default; uses parent workspace', async () => {
+    env.repo.setActiveWorkspaceId('ws-X')
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-X', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
@@ -319,7 +320,7 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
       // Block before r1 in lex order, but in a DIFFERENT workspace.
       await tx.create({id: 'ws2-root-a', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ws2-root-b', workspaceId: 'ws-2', parentId: null, orderKey: 'a9'})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     // createSiblingAbove({siblingId:'r1'}) should ONLY see ws-1's
     // siblings — meaning it positions the new row at start of ws-1's
     // root-sibling list (only r1 is there). It must not consider
@@ -1035,6 +1036,24 @@ describe('core.split', () => {
     expect(await env.childIds('orig')).toEqual(['child'])
     expect(env.read(newId)!.content).toBe('left ')
     expect(env.read('orig')!.content).toBe('right')
+  })
+
+  it('firstChild placement keeps before-text on the original and moves after-text into a revealed first child', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'orig', id: 'child', content: 'child'})
+    await env.repo.mutate.setProperty({id: 'orig', schema: isCollapsedProp, value: true})
+
+    const newId = await env.repo.mutate.split({id: 'orig', before: 'left ', after: 'right', placement: 'firstChild'})
+
+    expect(await env.childIds('p')).toEqual(['orig'])
+    expect(await env.childIds('orig')).toEqual([newId, 'child'])
+    expect(env.read('orig')!.content).toBe('left ')
+    expect(env.read(newId)!.content).toBe('right')
+    expect(env.read('orig')!.properties[isCollapsedProp.name]).toBe(false)
   })
 })
 

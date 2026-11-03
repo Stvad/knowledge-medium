@@ -4,12 +4,10 @@ import {
   previewIdFromBasePath,
 } from '@/sw/previewDatabases.js'
 
-// wa-sqlite's VFS caps pathnames at 64 chars (mxPathname in
-// node_modules/@journeyapps/wa-sqlite/src/VFS.js). SQLite derives
-// WAL/journal/shm paths from the dbFilename with suffixes up to ~10
-// chars, so the base has to stay well under 64 or sqlite3_open_v2
-// fails with "Filename too long" and no useful error. 7 (prefix) +
-// 40 (user) + 3 (suffix) = 50 — safe headroom.
+// Bounds the DB filename, which the web SDK caps at 112 chars and SQLite
+// extends with sidecar suffixes (`-journal`, `-wa0`): 7 (prefix) + 40 (user)
+// + 3 (suffix) = 50. Longer user ids are truncated to it, so changing it
+// points those users at a new, empty file.
 const MAX_USER_SEGMENT = 40
 
 // v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
@@ -42,8 +40,8 @@ export const dbFilenameForUser = (
   const previewNamespace = previewId ? `~${previewId}~` : ''
   // The preview namespace comes OUT of the user budget, so the base name stays
   // within the same envelope as production (`kmp-v6-` + <=MAX_USER_SEGMENT +
-  // `.db` = 50) regardless of the namespace — preserving the headroom the 64-char
-  // wa-sqlite pathname cap needs for the -journal/-wal/-shm derivatives.
+  // `.db` = 50) regardless of the namespace — preserving the headroom the
+  // filename cap needs for the sidecar derivatives.
   const sanitized = userId
     .replace(/[^a-zA-Z0-9_-]/g, '_')
     .slice(0, Math.max(0, MAX_USER_SEGMENT - previewNamespace.length))

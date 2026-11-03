@@ -1,10 +1,11 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, seedType } from '@/data/api'
+import { ChangeScope, seedType, type BlockData } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typeSeedsFacet } from '@/data/facets'
 import {
   getOrCreateKernelPage,
@@ -46,7 +47,7 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { env.repo.stopSyncObserver(); vi.restoreAllMocks() })
 
 /** A live page carrying PAGE_TYPE and its alias but NO marker type — built
  *  damaged rather than created-then-damaged, so no repair path launders it on
@@ -151,6 +152,69 @@ describe('getOrCreateKernelPage', () => {
 
       expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
     })
+
+    it('drops a sync-co-owned canonical alias while repairing marker and preserving its custom alias', async () => {
+      env.repo.startSyncObserver()
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const syncedRow = (
+        blockId: string,
+        createdAt: number,
+        aliases: string[],
+        types: string[],
+      ): BlockData => ({
+        id: blockId,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: blockId === id ? 'Foo' : 'Remote claimant',
+        properties: {[aliasesProp.name]: aliases, [typesProp.name]: types},
+        references: [],
+        createdAt,
+        updatedAt: createdAt,
+        userUpdatedAt: createdAt,
+        createdBy: 'remote',
+        updatedBy: 'remote',
+        deleted: false,
+      })
+
+      // Sync apply allows duplicate claims; the kernel page sorts first by
+      // created_at, so a LIMIT 1 lookup incorrectly sees only itself.
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(
+        syncedRow(id, 10, ['Foo', 'My Foo'], [PAGE_TYPE]),
+      ))
+      await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(
+        syncedRow('remote-foo-claimant', 20, ['Foo'], []),
+      ))
+      await env.repo.flushSyncObserver()
+
+      const claimants = await sharedDb.db.get<{count: number}>(
+        'SELECT COUNT(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, 'Foo'],
+      )
+      expect(claimants.count).toBe(2)
+      const observedClaims = await env.repo.tx(async tx => ({
+        oldest: await tx.aliasLookup('Foo', WS),
+        all: await tx.aliasClaimants('Foo', WS),
+      }), {scope: ChangeScope.BlockDefault})
+      expect(observedClaims.oldest?.id).toBe(id)
+      expect(observedClaims.all.map(claimant => claimant.id)).toEqual([id, 'remote-foo-claimant'])
+      expect(await env.repo.load(id)).toMatchObject({
+        properties: {[aliasesProp.name]: ['Foo', 'My Foo']},
+      })
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(aliasesProp)).toEqual(['My Foo'])
+      expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+      expect(env.repo.block('remote-foo-claimant').peekProperty(aliasesProp)).toEqual(['Foo'])
+      const remainingFooClaimants = await sharedDb.db.get<{count: number}>(
+        'SELECT COUNT(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, 'Foo'],
+      )
+      expect(remainingFooClaimants.count).toBe(1)
+    })
   })
 
 
@@ -216,7 +280,7 @@ describe('getOrCreateKernelPage', () => {
           id, workspaceId: 'other-workspace', parentId: null, orderKey: 'a0',
           content: 'someone else\'s page',
         }, {systemMint: true})
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
       const repo = readOnlyRepo()
       await expect(getOrCreateKernelPage(repo, WS, {
@@ -262,7 +326,7 @@ describe('getOrCreateKernelPage', () => {
           content: 'someone else\'s page',
         })
         if (deleted) await tx.delete(id)
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
       return id
     }
 
@@ -305,7 +369,7 @@ describe('getOrCreateKernelPage', () => {
         await tx.setProperty(id, aliasesProp, ['Foo'])
         await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
         await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
       // A fully-shaped row makes `needsRepair` false, so the repair
       // transaction — and the recheck inside it — is never reached. The

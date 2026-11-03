@@ -14,16 +14,18 @@
  *   - re-unlocking a workspace already pinned `e2ee` whose WK is absent on this
  *     device (re-pinning the same value is a no-op).
  *
+ * A workspace the server calls e2ee while this device's pin doesn't goes through
+ * `upgradeWorkspacePin` instead, which checks the conversion phase first; this
+ * flow pins first, and a plaintext pin refuses that (reported as `storage`).
+ *
  * Pure of UI and DB: the canary comes in as a string and the key store is
  * injected. The caller (Phase E UI) supplies `workspaces.wk_canary` and, on
  * success, re-materializes the workspace via the observer's `drainWorkspace`.
  */
 
-import { validateCanary } from '../../crypto/canary.js'
-import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
-import { importWorkspaceKey, parseWorkspaceKey } from '../../crypto/workspaceKey.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
 import { setModePin } from '../modePin.js'
+import { openCanaryWithPastedKey } from './pastedKey.js'
 
 export interface UnlockWorkspaceArgs {
   readonly userId: string
@@ -48,27 +50,9 @@ export const unlockWorkspaceWithKey = async (
 ): Promise<UnlockWorkspaceResult> => {
   const { userId, workspaceId, canary, pastedKey, keyStore } = args
 
-  let key: CryptoKey
-  let contentKeyHmac: CryptoKey
-  try {
-    const wkBytes = parseWorkspaceKey(pastedKey)
-    try {
-      key = await importWorkspaceKey(wkBytes)
-      // Derive K_id (§10) from the raw bytes in their ONLY in-scope window — the
-      // stored WK handle is non-extractable, so this is the one chance.
-      contentKeyHmac = await deriveContentKeyHmac(wkBytes)
-    } finally {
-      // Zero on EVERY exit (success or a throw mid-import/derive) — unlock
-      // previously let the parsed bytes drop to GC un-zeroed; this closes that leak.
-      wkBytes.fill(0)
-    }
-  } catch {
-    return { ok: false, reason: 'format' }
-  }
-
-  if (!(await validateCanary(key, canary, workspaceId))) {
-    return { ok: false, reason: 'invalid-key' }
-  }
+  const opened = await openCanaryWithPastedKey(pastedKey, canary, workspaceId)
+  if (typeof opened === 'string') return { ok: false, reason: opened }
+  const { wk: key, contentKeyHmac } = opened
 
   // Canary validated → this workspace is genuinely e2ee. Pin it FIRST (in the
   // quarantine case the pin is what defeats a server downgrade lie), then

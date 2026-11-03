@@ -12,7 +12,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
 import {
-  resolveAnalyzeArmingProbes,
+  resolveAnalyzeTables,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
@@ -87,9 +87,11 @@ describe('app boot composition', () => {
     const contributed = (referencesLocalSchema.analyzeTables ?? []).map(t => t.probe)
     expect(contributed).not.toHaveLength(0)
 
-    expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
+    const probesOf = (contributions: Parameters<typeof resolveAnalyzeTables>[0]) =>
+      resolveAnalyzeTables(contributions).map(table => table.probe)
+    expect(probesOf(runtime.read(localSchemaFacet)))
       .not.toEqual(expect.arrayContaining(contributed))
-    expect(resolveAnalyzeArmingProbes(resolveLocalSchemaContributions(staticDataExtensions)))
+    expect(probesOf(resolveLocalSchemaContributions(staticDataExtensions)))
       .toEqual(expect.arrayContaining(contributed))
   })
 

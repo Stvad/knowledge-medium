@@ -207,7 +207,7 @@ describe('encrypted durable gap through the migration gesture', () => {
       .toContainEqual({content: 'Fixture property'})
   })
 
-  it('reapplies an identical legacy encrypted stamp-zero row and clears its unverified flag before consent', async () => {
+  it('verifies an identical legacy encrypted stamp-zero row by decoding it, and clears its unverified flag before consent', async () => {
     materializability = 'decrypt'
     await strandEncrypted(key, true)
     const staged = await shared.db.getOptional<{content: string; updated_at: number; needs_apply: number}>(
@@ -225,7 +225,8 @@ describe('encrypted durable gap through the migration gesture', () => {
 
     expect(recovery).toHaveBeenCalledExactlyOnceWith(WS, {scope: 'unapplied'})
     expect(await recovery.mock.results[0]!.value).toMatchObject({
-      scanned: 1, applied: 1, resolved: 1, deferred: 0, quarantined: 0,
+      // Decoded, it IS the local row, so the drain writes nothing.
+      scanned: 1, applied: 0, skippedStale: 1, resolved: 1, deferred: 0, quarantined: 0,
       unappliedBefore: 1, unappliedAfter: 0, remainingGap: null,
     })
     expect(await shared.db.getOptional('SELECT needs_apply FROM blocks_synced WHERE id = ?', ['encrypted-block']))

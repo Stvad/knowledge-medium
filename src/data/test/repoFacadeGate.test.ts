@@ -20,10 +20,9 @@
  *      sync-observer pair, `undo`/`redo` via metrics bookkeeping).
  *   3. construction-captured collaborators — the member routes writes
  *      through an object that captured the REAL repo at construction
- *      and therefore opens UNGROUPED txs mid-group (the TypeTagger
- *      convenience writes; the stateful userSchemas/userTypes/
- *      projectors services are the documented exception — they can't
- *      be facade-twinned without clobbering shared buckets).
+ *      and therefore opens UNGROUPED txs mid-group (the TypeTagger and
+ *      UserSchemasService convenience writes; both are hosted by the
+ *      facade, with schema reservations shared across service views).
  *
  * Until now that contract lived in a comment ("adding a Repo member in
  * one of these classes means adding a facade override"). This test
@@ -41,8 +40,8 @@
  *     the call (identity maps, handle stores, job queues, listener
  *     sets holding bound methods)? → override.
  *   - Does it write through a collaborator constructed with the real
- *     repo? → override with a facade-hosted twin (stateless
- *     collaborators only) or document it as group-escaping.
+ *     repo? → override with a facade-hosted view that preserves any
+ *     shared coordination state, or document it as group-escaping.
  *   - Otherwise (pure read; mutation of a shared object reached
  *     through the chain; writes into a caller-provided tx) → allowlist
  *     with a short reason.
@@ -84,6 +83,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   metricsSpan: 'read-only span identity (same fields as metrics(), no snapshot cost)',
   exists: 'read',
   countBlocksUsingProperty: 'read',
+  countPropertyDefinitionConsumers: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
@@ -97,6 +97,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
   workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',
   backfillViewGap: 'read — polls workspaceViewGap with call-local timers; assigns no Repo fields',
+  syncDivergence: 'read — two queries and the injected materializability policy; assigns no Repo fields',
+  materializationPolicy: 'getter read (the injected observer deps, or a call-local plaintext stub)',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
@@ -144,7 +146,12 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   buildAliasCollisionRejection: 'private',
   dispatchMutator: 'private (overridden run/mutate pass groupId explicitly)',
   dispatchQuery: 'private',
-  groupedFacade: 'private (the facade factory itself)',
+  groupedFacade: 'private (the undo-group facade factory)',
+  transactionFacade: 'private (the shared transaction-host binding factory)',
+  contextFacade: 'private (the context-bound host and local Block identity factory)',
+  processorFacade: 'private (the processor runtime host factory)',
+  transact: 'private (reached through the tx override with real-repo this)',
+  captureTransactionRuntime: 'private (readiness plus immutable runtime capture; reached on the real repo)',
   hydrateChildren: 'private read',
   hydrateRows: 'private read + shared-cache mutation',
   makeQueryCtx: 'private (reached via delegated runQuery / real-repo query proxy)',
@@ -220,7 +227,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   now: 'pure clock function (no this)',
   processorRunner: 'collaborator constructor-bound to the real repo',
   processors: 'data field',
-  projectors: 'stateful service constructor-bound to the real repo — documented group-escaping',
+  projectors: 'shared projector lifecycle and contribution state; do not clone per facade',
   queries: 'data field',
   query: 'dispatch proxy whose closures captured the real repo at construction',
   queryEpoch: 'data field',
@@ -248,8 +255,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   userErrorListeners: 'shared CallbackSet',
   readOnlyListeners: 'shared CallbackSet',
   metricsResetListeners: 'shared CallbackSet',
-  userSchemas: 'stateful service constructor-bound to the real repo — documented group-escaping',
-  userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
+  userTypes: 'read-only service constructor-bound to the real repo; currently only resolves type definition ids',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   backfillSyncGate: 'injected function, captures no repo (default closes over this.db only)',
   backfillCompletionClaim: 'injected object or undefined; captures no repo',

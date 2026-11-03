@@ -6,11 +6,10 @@ import {
   isEditingProp,
   isCollapsedProp,
   peekFocusedBlockLocation,
-  sameFocusedBlockLocation,
   selectionStateProp,
   uiStateRenderScopeId,
 } from '@/data/properties'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -116,12 +115,17 @@ export const previousVisibleBlock = async (
  *  meaningful target, the surface is about to be empty), or when the
  *  block is detached from the tree.
  *
+ *  `leaving`: the rest of a multi-selection going with `current` (a delete or
+ *  a cut of several blocks). Siblings in it are passed over, so the last two
+ *  siblings of a list fall back to an earlier one rather than to each other.
+ *
  *  Mirrors `walker.findRecoveryAnchor`'s sibling-then-ancestor order
  *  on the data side so the post-delete jump matches the proactive
  *  recovery's choice for the disappear-from-DOM case. */
 export const blockAfterSubtreeRemoval = async (
   current: Block,
   scopeRootId: string,
+  leaving: ReadonlySet<string> = new Set(),
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
@@ -135,8 +139,10 @@ export const blockAfterSubtreeRemoval = async (
   const idx = siblingIds.indexOf(current.id)
   if (idx === -1) return parent
 
-  if (idx + 1 < siblingIds.length) return repo.block(siblingIds[idx + 1])
-  if (idx - 1 >= 0) return repo.block(siblingIds[idx - 1])
+  const next = siblingIds.slice(idx + 1).find(id => !leaving.has(id))
+  if (next !== undefined) return repo.block(next)
+  const previous = siblingIds.slice(0, idx).reverse().find(id => !leaving.has(id))
+  if (previous !== undefined) return repo.block(previous)
   return parent
 }
 
@@ -210,6 +216,56 @@ const isDescendantOf = (descendant: Block, ancestor: Block): boolean => {
   return false
 }
 
+/** `id`'s chain from its root down to itself, read from the cache (load its
+ *  ancestors first), or null when part of it isn't loaded or it cycles. */
+const pathFromRoot = (repo: Repo, id: string): BlockData[] | null => {
+  const path: BlockData[] = []
+  const seen = new Set<string>()
+  let current = repo.cache.getSnapshot(id)
+  while (current) {
+    // Defence in depth: a parent cycle (corrupt rows) would loop forever.
+    if (seen.has(current.id)) return null
+    seen.add(current.id)
+    path.unshift(current)
+    if (!current.parentId) return path
+    current = repo.cache.getSnapshot(current.parentId)
+  }
+  return null
+}
+
+/** Whether `a` renders before `b` in their tree: an ancestor before its
+ *  descendants, siblings as every children query sorts them (order key,
+ *  then id). Blocks in different trees have no order. */
+const precedesInTree = (a: readonly BlockData[], b: readonly BlockData[]): boolean => {
+  if (a[0].id !== b[0].id) return false
+  for (let depth = 1; depth < Math.min(a.length, b.length); depth++) {
+    const [x, y] = [a[depth], b[depth]]
+    if (x.id === y.id) continue
+    return x.orderKey < y.orderKey || (x.orderKey === y.orderKey && x.id < y.id)
+  }
+  return a.length < b.length
+}
+
+/** `ids` with `id` inserted before the first of them it renders before,
+ *  else appended — so a selection kept in document order stays in it. The
+ *  multi-select actions apply in selection order and rely on that. Loads
+ *  the ancestors the comparison reads. */
+export async function insertInDocumentOrder(
+  ids: readonly string[],
+  id: string,
+  repo: Repo,
+): Promise<string[]> {
+  await Promise.all([id, ...ids].map(each => repo.load(each, {ancestors: true})))
+  const path = pathFromRoot(repo, id)
+  const index = path
+    ? ids.findIndex(other => {
+      const otherPath = pathFromRoot(repo, other)
+      return otherPath !== null && precedesInTree(path, otherPath)
+    })
+    : -1
+  return index === -1 ? [...ids, id] : [...ids.slice(0, index), id, ...ids.slice(index)]
+}
+
 /** Validates a set of block ids against hierarchical selection
  *  rules:
  *   - When a block is selected, none of its descendants may be selected
@@ -247,8 +303,17 @@ export async function validateSelectionHierarchy(
 const uniqueBlockIds = (ids: readonly string[]): string[] =>
   Array.from(new Set(ids))
 
+/** One row of a range, in document order. A range is a set of blocks, so a row
+ *  whose scope isn't known (a deferred row whose surface doesn't name it) still
+ *  belongs; only the anchor search reads the scope, to tell copies of one
+ *  block apart. */
+export interface SelectionRangeRow {
+  blockId: string
+  renderScopeId?: string
+}
+
 export const blockIdsInOrderedSelectionRange = (
-  orderedLocations: readonly FocusedBlockLocation[],
+  orderedLocations: readonly SelectionRangeRow[],
   anchorIndex: number,
   targetIndex: number,
 ): string[] => {
@@ -267,7 +332,7 @@ export const blockIdsInOrderedSelectionRange = (
 }
 
 export const findBestSelectionAnchorIndex = (
-  orderedLocations: readonly FocusedBlockLocation[],
+  orderedLocations: readonly SelectionRangeRow[],
   options: {
     anchorBlockId: string
     targetIndex: number
@@ -289,9 +354,9 @@ export const findBestSelectionAnchorIndex = (
   if (candidates.length === 0) return -1
   if (candidates.length === 1) return candidates[0].index
 
-  const focusedCandidate = candidates.find(({location}) =>
-    sameFocusedBlockLocation(location, currentLocation),
-  )
+  const focusedCandidate = currentLocation?.blockId === anchorBlockId
+    ? candidates.find(({location}) => location.renderScopeId === currentLocation.renderScopeId)
+    : undefined
   if (focusedCandidate) return focusedCandidate.index
 
   const selected = new Set(selectedBlockIds)
@@ -414,21 +479,29 @@ export async function getBlocksInRange(
  *  anchor and target block. Reads selection state + focus from the
  *  UI-state block (sync), computes the range against the visible
  *  document order within the surface's scope root, then writes the
- *  new selection state. */
+ *  new selection state. With no active selection the range starts at
+ *  `originBlockId` when given, else at the focused block. */
 export async function extendSelection(
   targetBlockId: string,
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
-  clearEditing = false,
+  {
+    scopeRootForcesOpen = true,
+    clearEditing = false,
+    originBlockId,
+  }: {
+    scopeRootForcesOpen?: boolean
+    clearEditing?: boolean
+    originBlockId?: string
+  } = {},
 ): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
 
   if (!scopeRootId) return false
 
-  const currentAnchor = currentState?.anchorBlockId || focusedId
+  const currentAnchor = currentState?.anchorBlockId || originBlockId || focusedId
   if (!currentAnchor) return false
 
   const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)

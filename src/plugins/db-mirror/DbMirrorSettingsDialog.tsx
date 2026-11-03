@@ -40,6 +40,7 @@ import {
   MIN_KEEP_COUNT,
 } from './store.js'
 import {dbMirrorSchedule, describeError} from './schedule.js'
+import {isPickerDismissal} from '@/utils/fileSystemAccess.js'
 import {chooseMirrorDirectory, requestDirectoryPermission} from './fileSystemAccess.js'
 
 const INTERVAL_OPTIONS = (
@@ -57,8 +58,6 @@ const formatMiB = (bytes: number): string => `${(bytes / MIB).toFixed(1)} MiB`
 
 const formatTime = (at: number): string => new Date(at).toLocaleString()
 
-/** A dismissed `showDirectoryPicker()` — not a failure worth reporting. */
-const isAbort = (err: unknown): boolean => err instanceof DOMException && err.name === 'AbortError'
 
 export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   const repo = useRepo()
@@ -79,7 +78,7 @@ export function DbMirrorSettingsDialog({cancel}: DialogContextProps<void>) {
   }, [userId])
 
   const reportChooseFailure = (err: unknown): void => {
-    if (isAbort(err)) return
+    if (isPickerDismissal(err)) return
     showError(`Could not choose a folder: ${describeError(err)}`)
   }
 

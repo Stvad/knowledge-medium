@@ -262,7 +262,7 @@ describe('getOrCreateTypedChild', () => {
     await repo.tx(async tx => {
       await tx.create({id: 'parent-2', workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere'})
       await tx.create({id, workspaceId: 'ws-2', parentId: 'parent-2', orderKey: 'a1', content: 'Theirs'})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     expect((await record('shared-key')).status).toBe('taken')
     expect(cache.getSnapshot(id)!.content).toBe('Theirs')

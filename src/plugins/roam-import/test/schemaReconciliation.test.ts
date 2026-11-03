@@ -169,22 +169,22 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:notes', presetId: 'string'}])
   })
 
-  it('classifies pure plain-string arrays as the list preset', () => {
+  it('classifies pure plain-string arrays as the text-list preset', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:highlights': ['first', 'second']}),
       block('b', {'roam:highlights': ['third']}),
     ]
     const plan = collectSchemaReconciliationPlan(blocks, env.repo)
-    expect(plan.toRegister).toEqual([{name: 'roam:highlights', presetId: 'list'}])
+    expect(plan.toRegister).toEqual([{name: 'roam:highlights', presetId: 'string-list'}])
   })
 
-  it('classifies mixed scalar strings and plain-string arrays as the list preset', () => {
+  it('classifies mixed scalar strings and plain-string arrays as the text-list preset', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:email': 'gliderok@gmail.com'}),
       block('b', {'roam:email': ['gliderok@gmail.com', 'aix123@yandex.ru']}),
     ]
     const plan = collectSchemaReconciliationPlan(blocks, env.repo)
-    expect(plan.toRegister).toEqual([{name: 'roam:email', presetId: 'list'}])
+    expect(plan.toRegister).toEqual([{name: 'roam:email', presetId: 'string-list'}])
   })
 
   it('mixed page-token and plain-string arrays fall back to string', () => {
@@ -427,7 +427,7 @@ describe('ensurePromotedPropertySchemas', () => {
     expect(env.repo.propertySchemas.get('matrix:when')?.codec.type).toBe('string')
   })
 
-  it('downgrades refList to list, so page tokens stay decodable without an aliasIdMap', async () => {
+  it('downgrades refList to a TEXT list, so page tokens stay decodable without an aliasIdMap', async () => {
     const blocks = [
       block('a', {'matrix:topic': ['[[Alpha]]', '[[Beta]]']}),
       block('b', {'matrix:topic': ['[[Gamma]]']}),
@@ -438,6 +438,9 @@ describe('ensurePromotedPropertySchemas', () => {
     const codec = env.repo.propertySchemas.get('matrix:topic')!.codec
     expect(codec.type).not.toBe('refList')
     expect(() => codec.decode(blocks[0]!.properties['matrix:topic'])).not.toThrow()
+    // Both list presets answer `list` here, so the one this lands on is
+    // visible only at MEMBER grain: the text list refuses a non-string.
+    expect(() => codec.decode(['[[Alpha]]', 7])).toThrow()
   })
 
   it('normalizes a mixed batch to match the preset it just registered', async () => {

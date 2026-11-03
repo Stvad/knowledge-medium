@@ -14,7 +14,8 @@
  * a legacy service_role JWT — the local stack still issues the latter); it bypasses
  * RLS to set up the test users/workspaces. Exercises the post-§10.1-reversal
  * contract: direct writer-gated INSERT (flat, non-empty path), member SELECT, NO
- * UPDATE (immutability / first-write-wins), writer DELETE. NOT part of
+ * UPDATE (immutability / first-write-wins), writer DELETE, and the bucket's row,
+ * for its upload limit, readable by any signed-in user. NOT part of
  * `pnpm run check` — it needs a live stack.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -189,6 +190,11 @@ async function run() {
   check('owner (member) reads', await canRead(owner.client, path))
   check('viewer (member) reads', await canRead(viewer.client, path))
   check('stranger (non-member) read DENIED', !(await canRead(stranger.client, path)))
+
+  console.log("\n— BUCKET: its upload limit readable by any signed-in user —")
+  const bucketLimit = async (client: SupabaseClient) => (await client.storage.getBucket(BUCKET)).data?.file_size_limit
+  check("stranger (signed in, non-member) reads the bucket's upload limit", typeof (await bucketLimit(stranger.client)) === 'number')
+  check('anon bucket read DENIED', (await bucketLimit(createClient(url!, anon!, noPersist))) === undefined)
 
   console.log('\n— UPDATE: none → immutability / first-write-wins —')
   const dup = await tryUpload(owner.client, path, false)

@@ -26,6 +26,7 @@ describe('convertEmptyChildBlockToProperty', () => {
       newId: () => crypto.randomUUID(),
       startSyncObserver: false,
     }).repo
+    repo.setActiveWorkspaceId('ws-1')
 
     await repo.tx(async tx => {
       await tx.create({

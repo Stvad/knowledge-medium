@@ -8,9 +8,8 @@
 //
 // All checks are READ-ONLY over the client SQLite (it runs on the decrypted
 // client, so unlike the server probe it covers the e2ee workspace). The lean
-// checks are pure counts plus a BOUNDED e2ee decrypt spot-check (so the cadence
-// cost stays fixed regardless of graph size). `full` mode adds the heavier
-// inspections — precise property-ref projection, schema-aware at-rest,
+// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check. `full` mode
+// adds the heavier inspections — precise property-ref projection, schema-aware at-rest,
 // content-link recompute, dangling refs, and an EXHAUSTIVE keyset-paginated
 // decrypt-compare — which need the app's own projection/parser + the active
 // workspace schemas (passed in via `opts.full`). Each check is isolated: a
@@ -30,6 +29,7 @@ import {
 // `full`-mode checks reuse the app's own projection + reference parser so they
 // see exactly what the references processor sees.
 import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
+import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
 
@@ -366,7 +366,7 @@ const runDanglingRefsCheck = async (
 }
 
 type StoredRef = { id?: string; alias?: string; sourceField?: string }
-const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''} ${r.id ?? ''}`
+const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''}\u0000${r.id ?? ''}`
 
 /** R4(1) — precise property-ref projection diff (active workspace, loaded ref
  *  schemas): recompute expected refs via the app's projection and diff stored.
@@ -426,12 +426,12 @@ const runPropertyRefProjectionCheck = async (
     if (missing.length) {
       blocksMissing += 1
       refsMissing += missing.length
-      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split(' ')) })
+      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split('\u0000')) })
     }
     if (extra.length) {
       blocksExtra += 1
       refsExtra += extra.length
-      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split(' ')) })
+      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split('\u0000')) })
     }
   }
   const anomalous = blocksMissing + blocksExtra > 0
@@ -844,9 +844,7 @@ export const runConsistencyAudit = async (
   // frequently a TRANSIENT mid-sync state, so a dirty first pass is re-measured
   // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
   await run('local_server_divergence', async () => {
-    const pendingClause = `NOT EXISTS (
-      SELECT 1 FROM ps_crud p
-      WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
+    const pendingClause = `b.id NOT IN (${PENDING_UPLOAD_IDS_SQL})`
     const strandedWhere = `b.workspace_id=? AND b.deleted=0
       AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
       AND ${pendingClause}`

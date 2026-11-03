@@ -8,10 +8,10 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
-  propertyMachinerySourceIds,
-  workspaceHasPropertyMachinery,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import { backlinkSourceIds } from '@/plugins/backlinks/sourceBatch.js'
+import { filteredBacklinkSourceIds } from '@/plugins/backlinks/sources.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -23,7 +23,6 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -120,33 +119,6 @@ const dependOnGroupLabel = (
   })
 }
 
-const resolveBacklinkSourceIds = async (
-  ctx: QueryCtx,
-  workspaceId: string,
-  id: string,
-  filter?: Required<BacklinksFilter>,
-): Promise<string[]> => {
-  const ids = (await ctx.run('core.typedBlockIds', {
-    workspaceId,
-    referencedBy: {id},
-    match: filter?.include,
-    exclude: filter?.exclude,
-    order: 'created-desc',
-  })).filter(sourceId => sourceId !== id)
-  // Same property-machinery exclusion `backlinks.forBlock` applies: grouped
-  // backlinks resolve their own sources rather than routing through that
-  // query, so without this a hidden value row's `[[Target]]`
-  // disappears from Linked References and the inline count but still shows up
-  // here — duplicating the owner's projected property backlink on the one
-  // surface that didn't filter. Un-gated for the reason given there: the
-  // backfill mints value rows before the flip. It carries that filter's
-  // undeclared-ancestry-dependency residual too (km-nc46).
-  if (ids.length === 0) return ids
-  if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
-  return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
-}
-
 const resolveSourceParents = async (
   ctx: QueryCtx,
   workspaceId: string,
@@ -181,7 +153,7 @@ const SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`
 
 /** Hydrate the member (source/backlink) rows by id. Grouping consumes the
  *  members' *references* (via `block_references`) and their parent edges, but
- *  never the members' own rows — `resolveBacklinkSourceIds` returns ids only.
+ *  never the members' own rows — `filteredBacklinkSourceIds` returns ids only.
  *  Group-header actions (e.g. daily-notes "spread") gate visibility on each
  *  member's content through the action's `isVisible` (`block.peek()`), so this
  *  primes those rows into the cache. One JSON-array bind (same trick as
@@ -204,8 +176,8 @@ export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
 export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
     ${SOURCE_IDS_CTE},
-    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path, ws) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/', b.workspace_id
       FROM source_ids s
       JOIN blocks b ON b.id = s.id
       WHERE b.deleted = 0
@@ -215,10 +187,14 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         parent.id,
         parent.parent_id,
         ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
+        ancestor_chain.path || '!' || hex(parent.id) || '/',
+        ancestor_chain.ws
       FROM ancestor_chain
       JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
       WHERE parent.deleted = 0
+        -- A sync-applied parent edge can leave the source's workspace; the
+        -- context walk stops there, so nothing past it becomes a group.
+        AND parent.workspace_id = ancestor_chain.ws
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
@@ -255,6 +231,11 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   FROM group_context_refs cr
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
+    -- A sync-applied edge (a parent or a reference) can reach another
+    -- workspace's block; it is not a group of this one. The requested
+    -- workspace is bound, not read off the source: sync rewrites a row's
+    -- workspace_id in place, so the source may have moved since it was listed.
+    AND group_block.workspace_id = ?
   ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -291,6 +272,10 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
+    -- The main statement's workspace rule, here as defence in depth: no
+    -- test reaches a groupWith target that its source's direct context
+    -- does not already outrank.
+    AND group_block.workspace_id = refs.workspace_id
   ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -379,9 +364,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const unfilteredSourceIds = await resolveBacklinkSourceIds(ctx, workspaceId, id)
+    const unfilteredSourceIds = await backlinkSourceIds(ctx, workspaceId, id)
     const sourceIds = hasBacklinksFilter(normalizedFilter)
-      ? await resolveBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
+      ? await filteredBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
       : unfilteredSourceIds
     if (sourceIds.length === 0) {
       return {groups: [], total: 0, unfilteredSourceIds, sourceParents: []}
@@ -405,7 +390,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
-      [sourceIdsJson, workspaceId, id],
+      [sourceIdsJson, workspaceId, id, workspaceId],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
       SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,

@@ -1,62 +1,28 @@
 /**
- * The File System Access API surface this plugin needs, typed here because
- * `lib.dom` carries only the standardised half — `getFileHandle`, `removeEntry`
- * and `createWritable` are declared, while the directory picker and the
- * per-handle permission methods are not. Same approach as the manual export's
- * `showSaveFilePicker` declaration in `@/utils/exportSqliteDb`.
+ * The mirror's use of the File System Access API (`@/utils/fileSystemAccess`):
+ * always read-write, since a read grant hands back a handle that looks fine and
+ * fails on every write, and its own picker id so the picker reopens where the
+ * mirror folder was chosen.
  */
 
-export type FileSystemPermissionMode = 'read' | 'readwrite'
-
-interface HandlePermissions {
-  queryPermission?: (descriptor?: {mode?: FileSystemPermissionMode}) => Promise<PermissionState>
-  requestPermission?: (descriptor?: {mode?: FileSystemPermissionMode}) => Promise<PermissionState>
-}
-
-type WindowWithDirectoryPicker = typeof globalThis & {
-  showDirectoryPicker?: (options?: {
-    id?: string
-    mode?: FileSystemPermissionMode
-    startIn?: string
-  }) => Promise<FileSystemDirectoryHandle>
-}
+import {
+  pickDirectory,
+  queryDirectoryPermission as queryPermission,
+  requestDirectoryPermission as requestPermission,
+  supportsDirectoryPicker,
+} from '@/utils/fileSystemAccess.js'
 
 /** Whether this browser can offer the feature at all. Firefox and Safari have
  *  no directory picker, so the setting is never shown there. */
-export const supportsDirectoryMirroring = (): boolean =>
-  typeof (globalThis as WindowWithDirectoryPicker).showDirectoryPicker === 'function'
+export const supportsDirectoryMirroring = supportsDirectoryPicker
 
-/** Ask the user for a folder. MUST be called from a user gesture. Resolves to
- *  undefined when the browser has no picker; rejects with an `AbortError` when
- *  the user dismisses it. */
-export const chooseMirrorDirectory = async (): Promise<FileSystemDirectoryHandle | undefined> => {
-  const picker = (globalThis as WindowWithDirectoryPicker).showDirectoryPicker
-  if (!picker) return undefined
-  return picker({id: 'km-db-mirror', mode: 'readwrite'})
-}
+/** MUST be called from a user gesture; see {@link pickDirectory}. */
+export const chooseMirrorDirectory = (): Promise<FileSystemDirectoryHandle | undefined> =>
+  pickDirectory({id: 'km-db-mirror', mode: 'readwrite'})
 
-/** The standing grant on a stored handle. Never prompts.
- *
- *  The `typeof` fallback is DEFENCE IN DEPTH and unpinned, and it fails OPEN on
- *  purpose: a handle from a browser without the permission methods can only
- *  have come from a picker in this same session, so "granted" is the honest
- *  answer, and a real write failure surfaces on its own. Failing closed would
- *  turn a browser that merely lacks the query into one that can never mirror. */
-export const queryDirectoryPermission = async (
-  directory: FileSystemDirectoryHandle,
-): Promise<PermissionState> => {
-  const query = (directory as unknown as HandlePermissions).queryPermission
-  if (typeof query !== 'function') return 'granted'
-  return query.call(directory, {mode: 'readwrite'})
-}
+export const queryDirectoryPermission = (directory: FileSystemDirectoryHandle): Promise<PermissionState> =>
+  queryPermission(directory, 'readwrite')
 
-/** Re-ask for a grant that lapsed. MUST be called from a user gesture — the
- *  browser silently denies it otherwise, which is why no scheduled run calls
- *  this. */
-export const requestDirectoryPermission = async (
-  directory: FileSystemDirectoryHandle,
-): Promise<PermissionState> => {
-  const request = (directory as unknown as HandlePermissions).requestPermission
-  if (typeof request !== 'function') return 'granted'
-  return request.call(directory, {mode: 'readwrite'})
-}
+/** MUST be called from a user gesture. */
+export const requestDirectoryPermission = (directory: FileSystemDirectoryHandle): Promise<PermissionState> =>
+  requestPermission(directory, 'readwrite')

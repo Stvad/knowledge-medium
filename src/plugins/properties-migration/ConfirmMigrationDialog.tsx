@@ -59,8 +59,9 @@ export interface ConfirmMigrationDialogProps {
    *  missed. */
   repairableKeys: NamedPropertyKeys
   /** Keys whose DEFINITION is fine and whose stored VALUES disagree with it —
-   *  the class `audit-properties` cannot see, because the key resolves and only
-   *  its cells do not. On an un-flipped workspace the gesture refuses before
+   *  the class the key scan cannot see, because the key resolves and only its
+   *  cells do not (`audit-properties` reports the ones still without property
+   *  blocks, past the flip, under `coverage.refused`). On an un-flipped workspace the gesture refuses before
    *  reaching the dialog, so a number here means the workspace is already
    *  flipped. Carries the CELL count as well: the repair is per key, and the
    *  scale that decides whether it is worth doing now is per value. */

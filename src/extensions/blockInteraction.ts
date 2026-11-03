@@ -28,7 +28,6 @@ import {
   type VariantResolver,
 } from '@/facets/variantFacet.js'
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
-import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
 
 export interface BlockContentRendererSlot {
@@ -240,6 +239,26 @@ export type BlockBulletHoverResolver =
  *  a layout that styles its own wrapper still declares the boundary, and any
  *  handler resolving ownership can ask one question of both halves. */
 export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
+
+/** Every row one render scope draws, in document order: the shells of mounted
+ *  rows, and the placeholders `LazyViewportMount` labels with the scope for
+ *  rows not mounted yet. A wrapper that mints its own scope (a backlink entry,
+ *  an embed) labels its rows with that scope, so they never match another. */
+export const scopeRowSelector = (renderScopeId: string): string => {
+  const scope = CSS.escape(renderScopeId)
+  return `[${BLOCK_SHELL_ATTRIBUTE}][data-block-id][data-render-scope-id="${scope}"], ` +
+    `[data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`
+}
+
+/** The block a {@link scopeRowSelector} row stands for, mounted or not. */
+export const scopeRowBlockId = (row: HTMLElement): string | undefined =>
+  row.dataset.blockId ?? row.dataset.lazyBlockId
+
+/** Marks a block's bullet — the handle plugins attach row-level pointer
+ *  gestures to (block drag-and-drop) by delegating from the document, so the
+ *  bullet needs no per-gesture handler props. Its block is the enclosing
+ *  {@link BLOCK_SHELL_ATTRIBUTE} element's. */
+export const BLOCK_BULLET_ATTRIBUTE = 'data-block-bullet'
 
 /** Marks a content slot that holds a VIEW — a review backlog, a review deck, a
  *  recents list — rather than the block's own text. Written by the slot, which
@@ -707,13 +726,21 @@ const interactiveContentSelector = [
   '[data-block-interaction="ignore"]',
 ].join(',')
 
-export const isInteractiveContentEvent = (event: { target: EventTarget | null }) => {
-  const target = event.target
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE
-    ? target as Element
-    : target.parentElement
-  return Boolean(element?.closest(interactiveContentSelector))
+export const elementOf = (target: EventTarget | null): Element | null => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return null
+  return target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
+}
+
+export const isInteractiveContentEvent = (event: { target: EventTarget | null }) =>
+  Boolean(elementOf(event.target)?.closest(interactiveContentSelector))
+
+/** Whether a content-surface gesture (a swipe, a scrub, a hold) may start on
+ *  `target`: anywhere but an interactive descendant, except links and video.
+ *  Those fill much of readable content and keep their taps, since only a
+ *  gesture that completes takes the event from them. */
+export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
+  const element = elementOf(target)
+  return !element?.closest(interactiveContentSelector) || Boolean(element.closest('a[href],video'))
 }
 
 /**
@@ -730,7 +757,7 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
  * layout's class: a layout is free to style its own wrapper, and one that does
  * must still be recognisable as a block.
  */
-const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
+export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
 
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?
@@ -776,14 +803,15 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
-
+  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
+  // it, so a selection written after edit mode moves misses that placement.
   if (selection) {
-    void uiStateBlock.set(editorSelection, {
+    await uiStateBlock.set(editorSelection, {
       blockId: block.id,
       ...selection,
     })
   }
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
 
   requestEditorFocus(uiStateBlock)
 }
@@ -818,17 +846,18 @@ export const isSelectionClick = (event: MouseEvent) =>
 
 /**
  * Build the deps a pointer-dispatched block gesture needs from a block's
- * resolve context plus the live event — the clicked/tapped block, the surface
- * boundary, and the DOM node the event targeted. `currentTarget` is read
- * synchronously here (the caller is still inside the React handler) because
- * React nulls it once the handler returns, and pointer actions (the spatial
- * selection walker) need the bound element to locate the gesture among visible
- * blocks. Shared by the block shell's click path and the content surface's
- * double-click/tap path so the supplied-deps shape stays in one place.
+ * resolve context plus the element the gesture is bound to — the clicked,
+ * tapped or held block, the surface boundary, and that element. A React
+ * caller passes `event.currentTarget`, read synchronously inside its handler
+ * because React nulls it once the handler returns; pointer actions (the
+ * spatial selection walker) need the bound element to locate the gesture
+ * among visible blocks. Shared by the block shell's click path, the content
+ * surface's double-click/tap path and the gesture recognizers, so the
+ * supplied-deps shape stays in one place.
  */
 export const blockPointerDepsFrom = (
   context: BlockResolveContext,
-  event: PointerGestureEvent,
+  targetElement: HTMLElement,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -838,7 +867,7 @@ export const blockPointerDepsFrom = (
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
+    targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
   }
 }

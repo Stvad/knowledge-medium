@@ -44,7 +44,7 @@ export const noKey: GetCek = async () => null
 /** Constant materializability resolver ('copy' plaintext / 'decrypt' e2ee / 'defer'). */
 export const constMat = (m: Materializability): GetMaterializability => () => m
 
-const INSERT_BLOCK_SQL =
+export const INSERT_BLOCK_SQL =
   `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
   `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 

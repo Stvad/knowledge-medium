@@ -75,6 +75,21 @@ export class ClientLocalSettings {
     }
   }
 
+  /** Every key currently stored. */
+  keys(): string[] {
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < this.storage.length; i += 1) {
+        const key = this.storage.key(i);
+        if (key !== null) keys.push(key);
+      }
+      return keys;
+    } catch (error) {
+      console.error('Error listing localStorage keys:', error);
+      return [];
+    }
+  }
+
   /**
    * Check if a key exists in localStorage
    * @param key The key to check

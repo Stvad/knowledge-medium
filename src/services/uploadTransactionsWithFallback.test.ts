@@ -37,7 +37,8 @@
  * frozen per #459, and extracting a shared fixtures module would mean
  * editing that file).
  */
-import { CrudEntry, UpdateType, type AbstractPowerSyncDatabase, type CrudTransaction } from '@powersync/common'
+import { type CrudEntry, UpdateType, type CommonPowerSyncDatabase, type CrudTransaction } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/services/supabase.js', () => ({
@@ -53,7 +54,7 @@ import { __uploadTransactionsWithFallbackForTest, type UploadDeps } from './powe
 // ──────────────────────────────────────────────────────────────────────
 
 const put = (clientId: number, id: string, data: Record<string, unknown>, txId = 1) =>
-  new CrudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
+  crudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
 
 interface FakeTx {
   transactionId: number
@@ -80,7 +81,7 @@ const flakyOnComplete = (tx: FakeTx, err: unknown): void => {
   }
 }
 
-const fakeDb = {} as AbstractPowerSyncDatabase
+const fakeDb = {} as CommonPowerSyncDatabase
 
 const fkError = (): Error =>
   Object.assign(new Error('violates foreign key constraint'), {code: '23503'})

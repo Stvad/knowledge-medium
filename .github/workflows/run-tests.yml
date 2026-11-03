@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.1.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -38,8 +38,8 @@ jobs:
       - name: Install Social Publisher extension dependencies
         run: pnpm -C agent-extensions/social-media-publisher install --frozen-lockfile
 
-      # Persist the incremental build caches across runs: tsgo -b (the check
-      # gate's compiler; plain tsc for compile:tsc/compile:packages) writes
+      # Persist the incremental build caches across runs: tsc -b (TypeScript 7's
+      # native compiler for compile and compile:packages; TS 6 for compile:ts6) writes
       # node_modules/.tmp/*.tsbuildinfo, eslint --cache writes
       # node_modules/.cache/eslint. Both live under node_modules and are wiped
       # on a cold runner. The key hashes the tsconfig/eslint config + rules +
@@ -50,7 +50,7 @@ jobs:
       # for incremental reuse. tsc's content-hash invalidation keeps the
       # tsbuildinfo reuse sound.
       - name: Cache tsc + eslint build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             node_modules/.tmp

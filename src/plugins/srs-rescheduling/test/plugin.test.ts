@@ -335,12 +335,8 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('binds the reschedule toast to the block\'s workspace, not the active one (#186)', async () => {
-    // The reschedule writes to `block` (ws-1), pinning its undo entry to
-    // ws-1's manager — regardless of which workspace is active. The toast
-    // must capture the reschedule's OWN workspace + entry, NOT the active
-    // workspace: pre-fix it read `activeWorkspaceId` / the active manager
-    // after the `rescheduleBlock` await, so a workspace switch in that
-    // window bound the toast (and its Undo) to an unrelated workspace.
+    // The workspace switch lands after the reschedule commits, before its
+    // toast reads the undo entry.
     showCustomMock.mockClear()
     const { repo } = createTestRepo({
       db: sharedDb.db,
@@ -355,8 +351,13 @@ describe('srsReschedulingPlugin', () => {
     const block = repo.block('card')
     await block.load()
 
-    // User is viewing a DIFFERENT workspace than the block's when cmd-Z'd.
-    repo.setActiveWorkspaceId('ws-2')
+    repo.setActiveWorkspaceId('ws-1')
+    const undoGroup = repo.undoGroup.bind(repo)
+    vi.spyOn(repo, 'undoGroup').mockImplementationOnce(async fn => {
+      const result = await undoGroup(fn)
+      repo.setActiveWorkspaceId('ws-2')
+      return result
+    })
 
     const reschedule = getEffectiveActions(runtime).find(it => it.id === 'srs.reschedule.good')!
     // handler takes (deps, trigger, dispatch?); the reschedule handler ignores

@@ -812,20 +812,14 @@ const textRoute = (
  * and swaps the value, and swaps the CELL with it.
  *
  * The {@link textRoute} answers wherever the {@link valueRoute} declines.
- *
- * `from` is null when the definition's previous preset does not build, which
- * is why this takes a nullable schema at all: nothing can read the row under
- * the codec that wrote it, so the text route is the only answer.
  */
 export const convertValueChildContent = (
-  from: AnyPropertySchema | null,
+  from: AnyPropertySchema,
   to: AnyPropertySchema,
   content: string,
 ): ValueChildConversion => {
-  if (from !== null) {
-    const carried = valueRoute(from, to, content)
-    if (carried.outcome === 'converted') return carried
-  }
+  const carried = valueRoute(from, to, content)
+  if (carried.outcome === 'converted') return carried
   return textRoute(to, content)
 }
 

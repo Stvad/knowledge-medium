@@ -11,10 +11,11 @@ import {
 import { GroupedLinkedReferences } from '../GroupedLinkedReferences.tsx'
 
 const state = vi.hoisted(() => {
-  const makeGrouped = (groups: GroupedBacklinksResult['groups']): GroupedBacklinksResult => {
+  type TestGroup = Omit<GroupedBacklinksResult['groups'][number], 'blockId'>
+  const makeGrouped = (groups: TestGroup[]): GroupedBacklinksResult => {
     const sourceIds = Array.from(new Set(groups.flatMap(group => group.sourceIds)))
     return {
-      groups,
+      groups: groups.map(group => ({...group, blockId: group.fallback ? null : group.groupId})),
       total: sourceIds.length,
       unfilteredSourceIds: sourceIds,
       sourceParents: sourceIds.map(sourceId => ({sourceId, parentIds: []})),

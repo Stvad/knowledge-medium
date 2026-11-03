@@ -9,7 +9,7 @@
  * the property panel is visible on arrival. Without this, the user
  * lands on a settings block whose content is empty (everything lives
  * in properties) and would have to toggle the panel manually.
- * Scoped UiState so the choice is per-device and doesn't sync.
+ * Scoped UiState so the choice is separate from document undo history.
  */
 
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
@@ -17,11 +17,8 @@ import {showPropertiesProp} from '@/data/properties.js'
 import {navigate} from '@/utils/navigation.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {extensionsPrefsType} from './config.ts'
+import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/extensions/openExtensionsSettings.js'
 
-/** Stable id for the "Manage extensions" action. Exported so other surfaces
- *  (the global extension-prompt indicator) can route to settings via
- *  `runActionById` without hardcoding the string. */
-export const OPEN_EXTENSIONS_SETTINGS_ACTION_ID = 'open_extensions_settings'
 
 export const openExtensionsSettingsAction: ActionConfig<
   typeof ActionContextTypes.GLOBAL

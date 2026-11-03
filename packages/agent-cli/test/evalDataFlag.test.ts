@@ -49,6 +49,18 @@ const startStubBridge = async (): Promise<StubBridge> => {
         return
       }
 
+      if (req.method === 'GET' && req.url === '/runtime/whoami') {
+        res.writeHead(200, {'content-type': 'application/json'})
+        res.end(JSON.stringify({
+          clientId: 'client-1',
+          audience: {userId: 'user-1', workspaceId: 'ws-stub-1', label: 'stub'},
+          scope: 'read-write',
+          connected: true,
+          clientLastSeen: Date.now(),
+        }))
+        return
+      }
+
       if (req.method === 'POST' && req.url === '/runtime/commands') {
         const parsed = body ? JSON.parse(body) : null
         resolveBody(parsed)
@@ -135,6 +147,7 @@ describe('kmagent eval --data / --data-json', {timeout: 30_000}, () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.code).toBe('return data.plans.length')
     expect(body.data).toEqual(payload)
   })
@@ -144,6 +157,7 @@ describe('kmagent eval --data / --data-json', {timeout: 30_000}, () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.data).toEqual({x: 1, y: [true, null]})
   })
 
@@ -152,6 +166,7 @@ describe('kmagent eval --data / --data-json', {timeout: 30_000}, () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.code).toBe('return 42')
     expect('data' in body).toBe(false)
   })

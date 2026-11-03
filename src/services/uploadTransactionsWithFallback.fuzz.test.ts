@@ -143,11 +143,11 @@
  * this issue asks for.
  */
 import {
-  AbstractPowerSyncDatabase,
-  CrudEntry,
+  CommonPowerSyncDatabase,
   CrudTransaction,
   UpdateType,
 } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
@@ -170,7 +170,7 @@ import {
   type CompactedBlockOperation,
 } from './powersync'
 
-const fakeDatabase = {} as unknown as AbstractPowerSyncDatabase
+const fakeDatabase = {} as unknown as CommonPowerSyncDatabase
 
 // ──────────────────────────────────────────────────────────────────────
 // Real error shapes — mirrors uploadErrorClassifier.ts's own buckets and
@@ -770,11 +770,11 @@ const isExpectedLog = (args: readonly unknown[]): boolean =>
 // rather than inventing a second one: `guard.run` serializes every
 // simulation (barrier-before-body, so a
 // new case's buffer swap can never happen until the PREVIOUS case, abandoned
-// or not, has fully finished appending to its OWN buffer), and `afterAll`
-// awaits `guard.barrier()` before restoring the spies, so a truly abandoned
-// last case still has a real console to log into while it finishes. `seed:
-// null` — nothing here pins `Math.random`, only the barrier ordering is
-// needed.
+// or not, has fully finished appending to its OWN buffer), and the guard's
+// own `afterEach` waits out an abandoned case before its test ends, so the
+// last one finishes logging into the still-mocked console before `afterAll`
+// restores it. `seed: null` — nothing here pins `Math.random`, only the
+// barrier ordering is needed.
 const guard = statefulFuzzGuard()
 
 let currentUnexpectedLogs: unknown[][] = []
@@ -947,7 +947,7 @@ const runSimulationUnspied = async (
     const thrownErrorByBlockId = new Map<string, unknown>()
 
     const crudTxs = passPending.map((tx, idxInPass) => {
-      const entry = new CrudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
+      const entry = crudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
       const complete = async (): Promise<void> => {
         // Site (a): the BATCH's own complete() (powersync.ts:647) — only
         // the LAST tx's closure is ever invoked for this, and only once
@@ -1008,7 +1008,7 @@ const runSimulationUnspied = async (
     })
 
     const applyOperations = async (
-      _database: AbstractPowerSyncDatabase,
+      _database: CommonPowerSyncDatabase,
       operations: readonly CompactedBlockOperation[],
     ): Promise<void> => {
       const touchedIds = operations.map(op => op.id)
@@ -1055,7 +1055,7 @@ const runSimulationUnspied = async (
     // passing silently.
     const recordRejectionErrorByBlockId = new Map<string, unknown>()
     const recordRejection = async (
-      _database: AbstractPowerSyncDatabase,
+      _database: CommonPowerSyncDatabase,
       transaction: CrudTransaction,
       error: unknown,
     ): Promise<void> => {
@@ -1166,11 +1166,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(recordIfUnexpected)
     errorSpy = vi.spyOn(console, 'error').mockImplementation(recordIfUnexpected)
   })
-  afterAll(async () => {
-    // Barrier BEFORE restore: let a genuinely abandoned last case (see
-    // `guard` above) finish logging into a real, still-mocked console
-    // before we tear the spies down.
-    await guard.barrier()
+  afterAll(() => {
     warnSpy.mockRestore()
     errorSpy.mockRestore()
   })

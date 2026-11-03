@@ -120,8 +120,8 @@ describe('placeCompletionSource', () => {
 })
 
 describe('placeCompletionSource — resolved insert delivery', () => {
-  it('hands the wikilink, the trigger text and its span to deliverInsert', async () => {
-    const delivered: Array<{span: {from: number; to: number}; triggerText: string; insert: string}> = []
+  it('hands the wikilink, the trigger text, its span and the view to deliverInsert', async () => {
+    const delivered: Array<{view: EditorView; span: {from: number; to: number}; triggerText: string; insert: string}> = []
     const source = placeCompletionSource({
       getCandidates: async () => [
         {id: 'g', source: 'google', label: 'Blue Bottle', insertText: 'Blue Bottle'},
@@ -137,7 +137,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     try {
       option.apply(view, option, 7, 12)
       await vi.waitFor(() => {
-        expect(delivered).toEqual([{span: {from: 7, to: 12}, triggerText: '@blue', insert: '[[Blue Bottle]]'}])
+        expect(delivered).toEqual([{view, span: {from: 7, to: 12}, triggerText: '@blue', insert: '[[Blue Bottle]]'}])
       })
     } finally {
       view.destroy()

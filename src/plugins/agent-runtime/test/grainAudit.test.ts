@@ -15,6 +15,8 @@ import type { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { typesProp } from '@/data/properties'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { auditExtensionData, writeWarnings } from '../grainAudit'
@@ -155,6 +157,19 @@ describe('update-block', () => {
       context,
     ) as {agentWarnings?: unknown}
     expect(result.agentWarnings).toBeUndefined()
+  })
+})
+
+describe('audit-extension', () => {
+  it('reads whether the extension is enabled without creating the user\'s prefs blocks', async () => {
+    const extension = 'ext-audit-1'
+    await create({id: extension, content: 'export default []', properties: {[typesProp.name]: [EXTENSION_TYPE]}})
+    const blockCount = async () => (await sharedDb.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
+    const before = await blockCount()
+
+    const result = await executeCommand({commandId: 'a', type: 'audit-extension', id: extension} as never, context) as {enabled: boolean}
+    expect(result.enabled).toBe(false)
+    expect(await blockCount()).toBe(before)
   })
 })
 

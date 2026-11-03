@@ -20,7 +20,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
 

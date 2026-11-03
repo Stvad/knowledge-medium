@@ -36,6 +36,13 @@ import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils
  *  ancestors are cut at the end instead. */
 export const CRUMB_MAX_CHARS = 24
 
+/** What a crumb is made from: the fields read here, so a caller may pass a
+ *  bounded projection of each ancestor instead of its whole row. */
+export type CrumbAncestor = Pick<
+  BlockData,
+  'workspaceId' | 'parentId' | 'isFieldForm' | 'referenceTargetId' | 'content' | 'properties'
+>
+
 /** Most crumbs shown before the middle collapses to `…`.
  *
  *  The collapse keeps both ends, but only the ROOT is actually
@@ -55,14 +62,14 @@ export const CRUMB_MAX_CHARS = 24
  *  cheap end win is the right trade. */
 export const CRUMB_MAX_SEGMENTS = 4
 
-const CRUMB_ELLIPSIS = '…'
+export const CRUMB_ELLIPSIS = '…'
 
 /** Whether this block has a real alias, i.e. whether `labelForBlockData`
  *  below will return a NAME rather than a line of body text. Mirrors that
  *  function's own filter (a raw properties-bag write can leave a
  *  non-array, or an array with blanks and non-strings in it) rather than
  *  going through `getAliases`, which throws on exactly those shapes. */
-const hasAlias = (data: BlockData): boolean => {
+const hasAlias = (data: CrumbAncestor): boolean => {
   const aliases = data.properties[aliasesProp.name]
   return Array.isArray(aliases) &&
     aliases.some(alias => typeof alias === 'string' && alias.trim() !== '')
@@ -80,7 +87,7 @@ const hasAlias = (data: BlockData): boolean => {
  *  such tail; its last few characters are wherever the sentence happened
  *  to be, so splicing them on reads as damage ("Fold a block…llet below.")
  *  and cutting the end is both honest and easier to read. */
-const crumbLabel = (data: BlockData): string => {
+const crumbLabel = (data: CrumbAncestor): string => {
   const label = collapseWhitespace(firstLine(labelForBlockData(data, '')))
   if (!label) return ''
   return hasAlias(data)
@@ -101,7 +108,7 @@ const crumbLabel = (data: BlockData): string => {
  *  Ellipsised from the middle, like an aliased block: a property name is a
  *  NAME, and names are told apart by their tails. */
 const propertyCrumbLabel = (
-  data: BlockData,
+  data: CrumbAncestor,
   propertyName: PropertyNameResolver | undefined,
 ): string => {
   const name = propertyName && recognizePropertyField(data, propertyName)?.name
@@ -138,7 +145,7 @@ const propertyCrumbLabel = (
  *  re-validation — so this display-time consumer declines to render
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
-  ancestors: readonly BlockData[],
+  ancestors: readonly CrumbAncestor[],
   {workspaceId, stoppedAtParentId, propertyName}: {
     workspaceId: string
     stoppedAtParentId: string | null
@@ -148,7 +155,7 @@ export const crumbsFromAncestors = (
     propertyName?: PropertyNameResolver
   },
 ): string[] => {
-  const chain: BlockData[] = []
+  const chain: CrumbAncestor[] = []
   for (const ancestor of ancestors) {
     if (ancestor.workspaceId !== workspaceId) break
     chain.push(ancestor)

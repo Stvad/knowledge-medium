@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as Babel from '@babel/standalone'
+import { EXTENSION_BABEL_PRESETS } from '@/extensions/compileExtensionModule'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import { describeAuthoringCatalog } from '@/plugins/agent-runtime/authoringCatalog'
 import { ChangeScope } from '@/data/api'
@@ -102,12 +103,12 @@ describe('exampleExtensions — templated sources', () => {
     expect(leaked).toEqual([])
   })
 
-  it('all templated sources transpile via Babel (react + typescript) without error', () => {
+  it('all templated sources transpile via the loader\'s Babel presets without error', () => {
     for (const {id, source} of exampleExtensions) {
       expect(() =>
         Babel.transform(source, {
           filename: `${id}.tsx`,
-          presets: ['react', 'typescript'],
+          presets: EXTENSION_BABEL_PRESETS,
         }),
         `${id} should transpile`,
       ).not.toThrow()

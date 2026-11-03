@@ -5,7 +5,7 @@
  *
  * Targets and their contracts:
  *
- * - `planSingleBlockPaste` (operations.ts:96-107): normalizes CRLF/CR to LF
+ * - `planSingleBlockPaste`: normalizes CRLF/CR to LF
  *   and otherwise passes `{from, to}` straight through — no `Math.max`/`min`
  *   clamping anywhere in the function, unlike its sibling below. Its one
  *   production call site (`CodeMirrorContentRenderer.tsx`) passes
@@ -16,35 +16,34 @@
  *   (`0 <= from <= to <= docLength`); it does not probe clamping behavior
  *   the function was never meant to have.
  *
- * - `planEditModeMultilinePaste` (operations.ts:251-284) is the converse: it
- *   DOES clamp (`:260-261`, `Math.max(0, Math.min(...))`), so its selection
+ * - `planEditModeMultilinePaste` is the converse: it
+ *   DOES clamp (`Math.max(0, Math.min(...))`), so its selection
  *   arbitrary deliberately includes out-of-range and unordered `{from, to}`
  *   (negative, past `currentContent.length`, `from > to`). Oracles, each
  *   cited at its assertion below:
  *     - never throws, and returns `null` exactly when the parsed paste has
- *       no root to absorb (`:256-258` — blank/whitespace-only paste).
+ *       no root to absorb (a blank/whitespace-only paste).
  *     - `parsed` is the parser's full output, unfiltered, returned verbatim
- *       (`:256,276`) — content sequence conservation, checked against a
+ *       — content sequence conservation, checked against a
  *       fresh `parseMarkdownToBlocks` call. (ids/orderKeys are `uuidv4`/
  *       jittered-key random per call — see markdownParser.fuzz.test.ts's
  *       note on `fractional-indexing-jittered` — so only `content` is
  *       compared, never `id`/`orderKey`.)
  *     - effective from/to are clamped into `[0, currentContent.length]`.
  *     - `targetContent` always starts with `currentContent.slice(0,
- *       clampedFrom)` (`:262,273`: `prefix + mergedFirstContent` is always a
- *       leading segment of `targetContent`, in both branches of `:278-280`).
+ *       clampedFrom)` (`prefix + mergedFirstContent` is always a
+ *       leading segment of `targetContent`, in both branches).
  *     - `suffix`/`targetContent`'s trailing segment reconstruct
  *       `currentContent.slice(clampedTo)` exactly, branching on
- *       `createsAdditionalBlocks` (`:264,278-283`) — which is equivalent to
+ *       `createsAdditionalBlocks` — which is equivalent to
  *       `parsed.length > 1` (every id is unique, so "some block other than
  *       the absorbed root" reduces to "more than one block total").
- *     - `focusOffsetInTarget` (`:273,281`) is always
+ *     - `focusOffsetInTarget` is always
  *       `contentBeforeStructuralBreak.length`; derived exactly per branch
  *       below, which also implies the weaker `[0, targetContent.length]`
  *       range the task asked for.
- *     - fenced-code root (`:265-272`): a multi-line absorbed root (only
- *       possible for a fence — the only parse that yields one block
- *       spanning newlines) is kept whole (`mergedFirstContent =
+ *     - fenced-code root: a multi-line absorbed root (an atomic token — the
+ *       only parses that yield one block spanning newlines) is kept whole (`mergedFirstContent =
  *       absorbedRoot.content`), so `targetContent` contains the full fence
  *       body verbatim — checked directly with a fence-only generator.
  *
@@ -61,7 +60,7 @@
  *   `mergedFirstContent` turns out to be, and full conservation of `parsed`
  *   (so nothing from the parse is silently dropped from the returned plan).
  *
- * - `pasteChordIntent` (operations.ts:76-83): totality only — classifies an
+ * - `pasteChordIntent`: totality only — classifies an
  *   arbitrary key-event-shaped record into `'split' | 'single-block' |
  *   null` and never throws.
  */
@@ -120,15 +119,15 @@ describe('planSingleBlockPaste', () => {
       fc.property(pastedTextArb, selectionArb, (pastedText, selection) => {
         const plan = planSingleBlockPaste(pastedText, selection)
 
-        // operations.ts:100 — `\r\n?` replaced with `\n`, so no bare \r or
-        // \r\n can survive into `insert`.
+        // `\r\n?` replaced with `\n`, so no bare \r or \r\n can survive
+        // into `insert`.
         expect(plan.insert).not.toMatch(/\r/)
 
-        // operations.ts:103-104 — pass-through, unchanged.
+        // Pass-through, unchanged.
         expect(plan.from).toBe(selection.from)
         expect(plan.to).toBe(selection.to)
 
-        // operations.ts:105.
+        // The caret lands after the insert.
         expect(plan.cursor).toBe(selection.from + plan.insert.length)
       }),
       fuzzParams(150),
@@ -150,7 +149,7 @@ describe('planEditModeMultilinePaste', () => {
   })
 
   it(
-    'never throws; clamps from/to; reconstructs prefix/suffix exactly; conserves `parsed` content (operations.ts:251-284)',
+    'never throws; clamps from/to; reconstructs prefix/suffix exactly; conserves `parsed` content',
     () => {
       fc.assert(
         fc.property(pastedTextArb, currentContentArb, rawSelectionArb, (pastedText, currentContent, selection) => {
@@ -158,15 +157,15 @@ describe('planEditModeMultilinePaste', () => {
           const freshParsed = parseMarkdownToBlocks(pastedText)
 
           if (freshParsed.length === 0) {
-            // No root block to absorb (operations.ts:256-258).
+            // No root block to absorb.
             expect(plan).toBeNull()
             return
           }
           expect(plan).not.toBeNull()
           if (!plan) return
 
-          // Conservation: `parsed` is the parser's full, unfiltered output
-          // (operations.ts:256,276). ids/orderKeys are randomized per call
+          // Conservation: `parsed` is the parser's full, unfiltered output.
+          // ids/orderKeys are randomized per call
           // (uuidv4 / jittered keys), so compare content only.
           expect(plan.parsed.map(b => b.content)).toEqual(freshParsed.map(b => b.content))
 
@@ -177,17 +176,17 @@ describe('planEditModeMultilinePaste', () => {
           expect(clampedTo).toBeGreaterThanOrEqual(clampedFrom)
           expect(clampedTo).toBeLessThanOrEqual(currentContent.length)
 
-          // targetContent always starts with the clamped prefix (operations.ts:262,273).
+          // targetContent always starts with the clamped prefix.
           const prefix = currentContent.slice(0, clampedFrom)
           expect(plan.targetContent.startsWith(prefix)).toBe(true)
 
-          // `createsAdditionalBlocks` (operations.ts:264) reduces to
+          // `createsAdditionalBlocks` reduces to
           // `parsed.length > 1`: every parsed id is unique, so "some block
           // other than the absorbed root" is exactly "more than one block".
           const createsAdditionalBlocks = freshParsed.length > 1
           const trueSuffix = currentContent.slice(clampedTo)
 
-          // Suffix reconstruction, branch-exact (operations.ts:278-283).
+          // Suffix reconstruction, branch-exact.
           if (createsAdditionalBlocks) {
             expect(plan.suffix).toBe(trueSuffix)
           } else {
@@ -195,8 +194,8 @@ describe('planEditModeMultilinePaste', () => {
             expect(plan.targetContent.endsWith(trueSuffix)).toBe(true)
           }
 
-          // focusOffsetInTarget = contentBeforeStructuralBreak.length always
-          // (operations.ts:273,281); branch-exact value, which implies the
+          // focusOffsetInTarget = contentBeforeStructuralBreak.length always;
+          // branch-exact value, which implies the
           // [0, targetContent.length] range.
           expect(plan.focusOffsetInTarget).toBeGreaterThanOrEqual(0)
           expect(plan.focusOffsetInTarget).toBeLessThanOrEqual(plan.targetContent.length)
@@ -211,7 +210,7 @@ describe('planEditModeMultilinePaste', () => {
     },
   )
 
-  describe('fenced-code absorbed root keeps the full body (operations.ts:265-272)', () => {
+  describe('fenced-code absorbed root keeps the full body', () => {
     // Single fenced block, no prelude/postlude, so the parse yields exactly
     // one (multi-line) root — adapted from the fence generator in
     // markdownParser.fuzz.test.ts.
@@ -247,7 +246,7 @@ describe('planEditModeMultilinePaste', () => {
 
 // ──── pasteChordIntent ────
 
-describe('pasteChordIntent: classifier totality (operations.ts:76-83)', () => {
+describe('pasteChordIntent: classifier totality', () => {
   const keyEventArb = fc.record({
     metaKey: fc.boolean(),
     ctrlKey: fc.boolean(),

@@ -9,6 +9,7 @@
  *  right before writing — never across an await, where an editor can open
  *  or the workspace's role can change. */
 
+import type { EditorView } from '@codemirror/view'
 import { ChangeScope, type BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { flushEditorContent } from '@/editor/contentFlush'
@@ -45,6 +46,20 @@ export const readBlock = async (
   return {data, text: liveEditorFor(blockId)?.state.doc.toString() ?? data.content}
 }
 
+/** False when the target is gone from the view's text. */
+export const replaceInView = (view: EditorView, locate: Locate, replacement: string): boolean => {
+  const at = locate(view.state.doc.toString())
+  if (at === null) return false
+  // No explicit selection: the caret maps through the change, so it stays
+  // where the user is — or lands after the replacement if it sat right
+  // after the target, as on an accepted completion.
+  view.dispatch({changes: {from: at.from, to: at.to, insert: replacement}})
+  // Commit now rather than on the editor's debounce, so follow-up work
+  // reads it from the stored row.
+  flushEditorContent(view)
+  return true
+}
+
 /** `null` when no editor owns the block's text right now. */
 const replaceInLiveEditor = (
   repo: Repo,
@@ -56,16 +71,7 @@ const replaceInLiveEditor = (
   if (!view) return null
   // The editor writes no tx until its flush, which a read-only repo rejects.
   if (repo.isReadOnly) return false
-  const at = locate(view.state.doc.toString())
-  if (at === null) return false
-  // No explicit selection: the caret maps through the change, so it stays
-  // where the user is — or lands after the replacement if it sat right
-  // after the target, as on an accepted completion.
-  view.dispatch({changes: {from: at.from, to: at.to, insert: replacement}})
-  // Commit now rather than on the editor's debounce, so follow-up work
-  // reads it from the stored row.
-  flushEditorContent(view)
-  return true
+  return replaceInView(view, locate, replacement)
 }
 
 /** Read-modify-write inside a tx, so a concurrent editor flush can't be

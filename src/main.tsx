@@ -1,10 +1,10 @@
 // main is a BOOT SHIM — do not grow it. It mounts the provider/boundary stack
-// and the pre-React instrumentation, nothing else. New app-root behavior goes
+// and the pre-React instrumentation, nothing else — plus the conversion flow's
+// host, which must outlive App's swap between a workspace and its gate. New app-root behavior goes
 // into an overridable seam — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
 // See docs/perspective-keep-alive-design.html.
-import React, { StrictMode, Suspense } from 'react'
-import ReactDOM from 'react-dom'
+import { StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
 import './index.css'
@@ -20,6 +20,7 @@ import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
 import { installIdleCallbackPolyfill } from '@/utils/idleCallbackPolyfill.js'
 import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
+import { ConversionFlowHost } from '@/components/workspace/conversion/ConversionFlowHost.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
@@ -36,10 +37,6 @@ installDbForensicsLifecycle()
 // L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).
 setDevAssertionsEnabled(import.meta.env.DEV)
-
-// Todo remember why I need this something about version mismatch/having implied react in custom blocks
-window.React = React
-window.ReactDOM = ReactDOM
 
 registerServiceWorker()
 
@@ -74,6 +71,10 @@ createRoot(document.getElementById('root')!).render(
             <Suspense fallback={<SuspenseFallback/>}>
               <App/>
             </Suspense>
+            {/* Outside App's boundary: a conversion run spans the flip, which
+                closes the workspace into its gate, and the pin upgrade, which
+                re-resolves it, and neither may suspend or remount the run. */}
+            <ConversionFlowHost/>
           </RepoProvider>
         </ErrorBoundary>
       </Login>

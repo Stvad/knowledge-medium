@@ -50,7 +50,7 @@ import { inlineBlockRefs } from './referenceParser.ts'
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
   'references.inlineDeletedBlockReferences'
 
-const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
+export const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
   SELECT DISTINCT br.source_id AS id
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id

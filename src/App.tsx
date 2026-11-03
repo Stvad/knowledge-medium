@@ -18,16 +18,20 @@ import { layoutWorkspaceChanged } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
-import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
+import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
+import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.js'
+import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
+import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { getCurrentHash, getInitialLayout, preparedInitialHash } from '@/bootstrap/initialLayout.js'
 
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
-// without its key, or never-pinned (quarantine) — and App renders the
-// WorkspaceKeyGate. `waiting`: access can't be decided until the workspaces row
-// replicates (opened by URL before sync delivered encryption_mode/wk_canary);
-// App shows a neutral loader and re-resolves when the row lands.
+// without its key, never-pinned (quarantine), or e2ee on the server while this
+// device's pin isn't — and App renders the WorkspaceKeyGate. `waiting`: access
+// can't be decided until the workspaces row replicates (opened by URL before
+// sync delivered encryption_mode/wk_canary); App shows a neutral loader and
+// re-resolves when the row lands.
 interface HashSnapshot {
   hash: string
   version: number
@@ -130,6 +134,18 @@ const App = () => {
   const reResolve = useCallback(() => {
     setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
   }, [])
+  // Re-resolve as if no workspace were named — the remembered one, else the
+  // personal one. For leaving a gated workspace just deleted.
+  const resolveDefaultWorkspace = useCallback(() => {
+    setHashSnapshot(current => ({hash: '', version: current.version + 1}))
+  }, [])
+
+  // A workspace the server converts to e2ee while it's open here closes into
+  // the gate: until this device's pin is upgraded it can't sync the workspace.
+  useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', reResolve)
+  // So does one whose key this device stops holding: the browser evicted it.
+  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, reResolve)
+  const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
 
   if (initial.kind === 'waiting') {
     return <WorkspaceSyncWaiting workspaceId={initial.workspaceId} onReady={reResolve}/>
@@ -138,18 +154,22 @@ const App = () => {
   if (initial.kind === 'locked') {
     return (
       <WorkspaceKeyGate
+        // One instance per workspace: a hash change between two locked
+        // workspaces must not carry one gate's state into the other's.
+        key={initial.workspaceId}
         userId={repo.user.id}
         workspaceId={initial.workspaceId}
         workspaceName={initial.workspaceName ?? undefined}
         reason={initial.reason}
         canary={initial.canary}
-        onResolved={async () => {
-          // Re-materialize the now-decryptable staged rows BEFORE re-resolving,
-          // so the bootstrap getOrCreate*s no-op against the synced content
-          // rather than racing it.
-          await repo.drainSyncWorkspace(initial.workspaceId)
-          reResolve()
-        }}
+        // The gate drains the now-decryptable staged rows BEFORE this re-resolve,
+        // so the bootstrap getOrCreate*s no-op against the synced content rather
+        // than racing it. Re-entry mid-drain (footer, Back) races it instead,
+        // deliberately: those mints are stamp-0 and yield to the server's rows,
+        // as on any fresh device — resolution does not wait for the pass.
+        deps={gateDeps}
+        onResolved={reResolve}
+        footer={<WorkspaceSwitcher gate={{workspaceId: initial.workspaceId, onLeave: resolveDefaultWorkspace}}/>}
       />
     )
   }

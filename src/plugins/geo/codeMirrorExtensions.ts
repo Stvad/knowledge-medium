@@ -26,6 +26,7 @@ import { PLACE_TYPE } from './blockTypes'
 import {
   placeCompletionSource,
   type PlaceAutocompleteCandidate,
+  type PlaceAutocompleteOptions,
   type PlaceResolveContext,
   type PlaceResolveResult,
 } from './placeAutocomplete'
@@ -41,7 +42,7 @@ import {
 import type { PlaceCandidate } from './createOrFindPlace'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
-import { locateText, replaceBlockText } from './blockTextReplace'
+import { locateText, replaceBlockText, replaceInView } from './blockTextReplace'
 
 const GOOGLE_MIN_QUERY_LEN = 2
 const LOCAL_RESULT_CAP = 8
@@ -317,13 +318,18 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     return null
   }
 
-  const deliverInsert = async (
-    {span, triggerText, insert}: {span: {from: number, to: number}, triggerText: string, insert: string},
-  ) => {
+  const deliverInsert: PlaceAutocompleteOptions['deliverInsert'] = async ({view, span, triggerText, insert}) => {
+    const locate = (doc: string) => locateText(doc, triggerText, span)
+    // A draft has no block to find an editor by or to store into: the text
+    // lives only in its own view, and is gone once that view is.
+    if (!block) {
+      replaceInView(view, locate, insert)
+      return
+    }
     await replaceBlockText({
       repo,
       blockId: block.id,
-      locate: doc => locateText(doc, triggerText, span),
+      locate,
       replacement: insert,
       description: 'insert place link',
     })

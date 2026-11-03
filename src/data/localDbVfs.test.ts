@@ -7,6 +7,7 @@ import {
   markDbOpenFailure,
   LocalDbVfsHandoffError,
   prepareLocalDbForVfs,
+  readLocalDbFileSizes,
   readLocalDbVfsOverride,
   resolveLocalDbVfs,
   tagHandoffErrorUserId,
@@ -158,6 +159,16 @@ describe('prepareLocalDbForVfs', () => {
     const error = await prepareLocalDbForVfs(DB, WASQLiteVFS.OPFSWriteAheadVFS, h.deps).catch(e => e)
     expect(error).not.toBeInstanceOf(LocalDbVfsHandoffError)
     expect((error as Error).message).toContain('malformed')
+  })
+})
+
+describe('readLocalDbFileSizes', () => {
+  it('reports every file, and a file it cannot read as absent rather than failing boot', async () => {
+    const sizes = await readLocalDbFileSizes(DB, async name => {
+      if (name === `${DB}-wa1`) throw new DOMException('held elsewhere', 'NoModificationAllowedError')
+      return name === DB ? 4096 : name === `${DB}-wa0` ? 512 : null
+    })
+    expect(sizes).toEqual({main: 4096, '-wa0': 512, '-wa1': null})
   })
 })
 
