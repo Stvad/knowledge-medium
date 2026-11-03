@@ -1037,6 +1037,24 @@ describe('core.split', () => {
     expect(env.read(newId)!.content).toBe('left ')
     expect(env.read('orig')!.content).toBe('right')
   })
+
+  it('firstChild placement keeps before-text on the original and moves after-text into a revealed first child', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'orig', id: 'child', content: 'child'})
+    await env.repo.mutate.setProperty({id: 'orig', schema: isCollapsedProp, value: true})
+
+    const newId = await env.repo.mutate.split({id: 'orig', before: 'left ', after: 'right', placement: 'firstChild'})
+
+    expect(await env.childIds('p')).toEqual(['orig'])
+    expect(await env.childIds('orig')).toEqual([newId, 'child'])
+    expect(env.read('orig')!.content).toBe('left ')
+    expect(env.read(newId)!.content).toBe('right')
+    expect(env.read('orig')!.properties[isCollapsedProp.name]).toBe(false)
+  })
 })
 
 // ──── merge ────

@@ -93,9 +93,8 @@ describe('collectRestAssets', () => {
 describe('bootWorkerAssets', () => {
   it('selects the DB worker graph and its selectable VFS + wasm variants, never the cipher builds', () => {
     const files = [
-      'assets/WASQLiteDB.worker-1pScv-ee.js',
+      'assets/worker-1pScv-ee.js',
       'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
-      'assets/SharedSyncImplementation.worker-DLI2cC4_.js',
       'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
       'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
       'assets/FacadeVFS-BssyCf6W.js',
@@ -114,7 +113,7 @@ describe('bootWorkerAssets', () => {
       'assets/FacadeVFS-BssyCf6W.js',
       'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
       'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
-      'assets/WASQLiteDB.worker-1pScv-ee.js',
+      'assets/worker-1pScv-ee.js',
       'assets/wa-sqlite-Di4Pf_yS.js',
       'assets/wa-sqlite-XZW__iJk.wasm',
       'assets/wa-sqlite-async-B563xfYH.js',
@@ -128,6 +127,6 @@ describe('bootWorkerAssets', () => {
       'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
       'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
       'assets/wa-sqlite-XZW__iJk.wasm',
-    ])).toThrow(/WASQLiteDB/)
+    ])).toThrow(/assets\\\/worker-/)
   })
 })

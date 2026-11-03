@@ -7,7 +7,8 @@
      attribute is set.
   2. The cycle registry in `theme.ts` is rebuilt to mirror the
      contribution order so toggleTheme() cycles through whatever's
-     currently registered.
+     currently registered, and the live theme's `data-theme-mode` is
+     re-stamped from it.
   3. One "Theme: <label>" `actionsFacet` entry per contribution is
      pushed at runtime so the command palette surfaces an explicit
      picker — selecting an entry applies that theme directly,
@@ -27,6 +28,7 @@ import {
   applyTheme,
   FALLBACK_THEME,
   setThemeRegistry,
+  syncLiveThemeMode,
   themesFacet,
   type ThemeContribution,
   type ThemeDefinition,
@@ -86,6 +88,7 @@ export const themeStyleSyncEffect: AppEffect = {
         ? [FALLBACK_THEME]
         : contributions.map(toDefinition)
       setThemeRegistry(definitions)
+      syncLiveThemeMode()
       runtime.setRuntimeContributions(
         actionsFacet,
         APPLY_ACTIONS_SOURCE,

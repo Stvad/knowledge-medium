@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog.js'
 import { Button } from '@/components/ui/button.js'
 import { useRepo } from '@/context/repo.js'
+import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
 import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
@@ -53,6 +54,22 @@ const perWrite = (r: InteractionRecordData): string => {
   return rate === null ? '—' : round2(rate).toFixed(2)
 }
 
+/** Long-frame blocking per minute OBSERVED — the stored total only grows with
+ *  how long the tab stayed open. Display only (`InteractionRecordData.responsiveness`). */
+const blockingPerMinute = (r: InteractionRecordData): string => {
+  const main = r.responsiveness
+  // A rate over no observed time is not a number.
+  if (main?.longFrames === undefined || !(main.observedMs > 0)) return '—'
+  return `${ms(main.longFrames.blockingMs / (main.observedMs / 60_000))}/min`
+}
+
+/** How many inputs were slow, and the p95 among those — '—' where unmeasured. */
+const slowInputs = (r: InteractionRecordData): string => {
+  const inputs = r.responsiveness?.slowInputs
+  if (inputs === undefined) return '—'
+  return inputs.duration === undefined ? String(inputs.count) : `${inputs.count} (${ms(inputs.duration.p95Ms)})`
+}
+
 const Th = ({ children }: { children: React.ReactNode }) => (
   <th className="text-left font-medium text-muted-foreground pr-3 pb-1 whitespace-nowrap">{children}</th>
 )
@@ -71,14 +88,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
   const analysis = useSyncExternalStore(subscribeVerdict, () =>
     getPerfAnalysisFor(repo, workspaceId ?? repo.activeWorkspaceId),
   )
-  // The dialog reads the recording blocker LIVE, and a role change moves it
-  // with nothing else moving — no analysis is published, so the store's
-  // subscription never fires. Same seam the status chip uses; without it this
-  // dialog shows the pre-change status until the next cadence.
-  const readOnly = useSyncExternalStore(
-    useCallback((onChange: () => void) => repo.onReadOnlyChange(onChange), [repo]),
-    () => repo.isReadOnly,
-  )
+  // A role change publishes no analysis, so the recording blocker reads it live.
+  const readOnly = useIsReadOnly(repo)
   /** The context a refresh is running for, or null. A refresh superseded by a
    *  sign-out, a workspace change or a monitor toggle would otherwise hold the
    *  replacement's button disabled until it settled — or forever, if it hung. */
@@ -351,6 +362,9 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                     {/* Re-resolves per write is the ratio that catches an
                         over-broad invalidation dep, which no latency column can. */}
                     <Th>Re-resolves / write</Th><Th>Slowest query p95 (uncontended)</Th>
+                    {/* Whether the main thread was free to show those results:
+                        the query timings above cannot tell. */}
+                    <Th>Blocking / min</Th><Th>Slow inputs (p95)</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -364,6 +378,8 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                         <Td>{r.writes}</Td>
                         <Td>{perWrite(r)}</Td>
                         <Td>{worst ? `${worst.name} ${ms(worst.p95Ms)}` : '—'}</Td>
+                        <Td>{blockingPerMinute(r)}</Td>
+                        <Td>{slowInputs(r)}</Td>
                       </tr>
                     )
                   })}

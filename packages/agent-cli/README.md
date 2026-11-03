@@ -35,6 +35,20 @@ kmagent ping
 
 After step 2, the token is saved at `~/.config/knowledge-medium/agent-token.json` and reused for every subsequent invocation.
 
+## When the app cannot reach the bridge
+
+The app tab's console prints an unavailable reason after six failed attempts,
+when the loop starts retrying quietly every 60 seconds. The reason names the
+request (`registration`, `poll`, or `result`) and error kind; unchanged reasons
+are logged once until reconnection.
+
+From that tab's DevTools console, run `fetch('<bridge url>/health')` with the
+bridge URL the CLI uses (`AGENT_RUNTIME_URL`, default `http://127.0.0.1:8787`).
+If `kmagent status` can reach the same bridge but this fetch rejects from the
+hosted HTTPS origin,
+check Chrome's site permissions for
+[local network access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access).
+
 ## What you can do
 
 The CLI exposes both *local* commands (pairing, profile management) and *bridge* commands (forwarded to the running app):
@@ -57,6 +71,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
 | `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
 | `kmagent data-model [<topic id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with a topic id (`data-model pages`, or `--topic pages`), all of it with `all`. |
+| `kmagent comments (--scope <ref> \| --block <ref> \| --thread <id>) [--include-closed]` | Comment threads as JSON: each thread's status, anchor, quote, target and its comments nested as replied, with their authors. Open threads only unless `--include-closed`. See `data-model comments`. |
 | `kmagent create-block <json>` | Create one block: `{parentId, content, properties?, position?}`. `parentId` is a write target (see Writing); absent or `null` makes a top-level block, which is not a page — use `create-page`. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
@@ -64,6 +79,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
 | `kmagent append-markdown <target> -- '<markdown>'` (or markdown on stdin) | Split markdown into blocks the way "paste as markdown" does and insert them under a target in one transaction (`--first`, `--after <id>`, `--before <id>`, `--one-block`). See [Writing](#writing). |
 | `kmagent edit-block <id> <old> <new>` | Replace the one occurrence of `<old>` in a block, against its content at write time. |
+| `kmagent add-comment '<json>'` | Start a comment thread from `{target, quote?, occurrence?, content?}`: on quoted text of the block, or on the whole block; no `content` makes a highlight. Prints the thread root's id. Reply with `append-markdown` under the comment being answered. |
 | `kmagent create-page <name> \| --date <expr>` | Get-or-create a page (as `[[name]]` would) or a daily note. |
 | `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |
 | `kmagent block-history <id>` | One block's recorded changes with prior content (cut past 2,000 chars) — local and synced. |
@@ -98,7 +114,7 @@ Writes are markdown-native and conflict-safe, so an agent can treat the graph li
 
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`, `append_markdown`, `edit_block` and `create_page`, plus `recent_changes` (defaults to what changed since that MCP session started) and `block_history` to review them; their id fields take a full id or a printed `^shortid`, and a write target also a `[[Page name]]` or a date (see [Writing](#writing)). It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`), `comments` (comment threads of a scope, a block or one thread, as JSON) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`, `append_markdown`, `edit_block`, `add_comment` (starts a comment thread; a reply is `append_markdown` under the comment it answers, and resolving is `update_block` on the thread root) and `create_page`, plus `recent_changes` (defaults to what changed since that MCP session started) and `block_history` to review them; their id fields take a full id or a printed `^shortid`, and a write target also a `[[Page name]]` or a date (see [Writing](#writing)). It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {
@@ -233,7 +249,7 @@ Single-module output is not bundled with its transitive dependencies; use the di
 
 `react` and `react-dom` are **host-provided peer dependencies**: an extension renders into the app's React tree, so it must run on the app's copy of React. A second copy fails with "Invalid hook call" and a context the host's components never see.
 
-- **Imports.** Write `import {useState} from 'react'` and `import {createRoot} from 'react-dom/client'`. The page import map resolves `react`, `react/…`, `react-dom` and `react-dom/…` to the host's modules, so the extension gets the same module instances the app uses; `react`, `react/jsx-runtime`, `react-dom` and `react-dom/client` are integrity-pinned.
+- **Imports.** Write `import {useState} from 'react'` and `import {createRoot} from 'react-dom/client'`. The page import map resolves `react`, `react-dom` and every subpath they export for a browser (`react/jsx-runtime`, `react-dom/client`, `react-dom/server`, `react-dom/static`, …) to same-origin modules that re-export the app's own copy, so the extension gets the same instances the app uses. Not mapped: the `.node` and `.bun` server builds, which need Node built-ins, and `react-dom/profiling`.
 - **JSX.** The app's in-browser compiler uses the automatic JSX runtime: JSX becomes an import from `react/jsx-runtime`, which the import map resolves to the host's. No `import React` is needed, and the app sets no `React` / `ReactDOM` global, so import whatever you use. JSX no longer calls a local `React` binding, and a `/** @jsx */` or `/** @jsxFrag */` pragma fails to compile unless the file also says `/** @jsxRuntime classic */`.
 - **Bundled extensions** (`kmagent new-extension`) keep `react`, `react/*`, `react-dom`, `react-dom/*` and every `@/…` module external, and compile JSX with the automatic runtime (`@vitejs/plugin-react` does by default) so the bundle imports `react/jsx-runtime` instead of carrying a factory of its own. The `react` / `react-dom` entries in the scaffold's `devDependencies` supply types and the test environment only; they are never bundled.
 
@@ -264,7 +280,11 @@ The bridge is a background process that keeps running after the CLI that started
 kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
-Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.8.0 km-mcp`).
+Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.9.0 km-mcp`).
+
+### Upgrade to 0.9.0
+
+0.9.0 adds comment threads: the `comments` read tool and verb, and the `add_comment` write tool with its `kmagent add-comment` verb. Upgrade `agent-cli`, restart the bridge using the steps above, and restart every MCP client that launches `km-mcp`. Restart the bridge even if you only read: it classifies verbs by its own copy of the command list, so a bridge older than 0.9.0 treats `comments` as a write and refuses it to a read-only token (read-write tokens are unaffected). Both tools need an app build that has the `comments` and `add-comment` verbs; an older app tab fails them with `Invalid command body`.
 
 ### Upgrade to 0.8.0
 

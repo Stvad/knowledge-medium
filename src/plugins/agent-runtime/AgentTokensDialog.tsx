@@ -1,3 +1,4 @@
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { useState } from 'react'
 import {
   Dialog,
@@ -97,7 +98,7 @@ function AgentTokensDialogBody({
 
   const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      await writeTextToClipboard(text)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)
     } catch (error) {

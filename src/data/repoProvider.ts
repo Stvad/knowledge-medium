@@ -20,8 +20,19 @@
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  */
 
-import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-import { instrumentOpenFactory } from './internals/poolInstrumentation.js'
+import {
+  LogLevels,
+  PowerSyncDatabase,
+  Schema,
+  SyncStreamConnectionMethod,
+  WASQLiteOpenFactory,
+  WASQLiteVFS,
+  type DBAdapter,
+  type WebPowerSyncDatabaseOptions,
+  type WebSQLOpenOptions,
+} from '@powersync/web'
+import { instrumentAdapter } from './internals/poolInstrumentation.js'
+import { powerSyncLogger } from './powerSyncLogger.js'
 import { DbContention, registerContention } from './internals/timingMetrics.js'
 import {
   asLostWriteAheadSupport,
@@ -253,11 +264,16 @@ const buildPowerSyncDb = (userId: string) => {
     throw new Error('getPowerSyncDb called before ensurePowerSyncReady resolved the local DB VFS')
   }
   const connections = vfs === WASQLiteVFS.OPFSWriteAheadVFS ? 1 + ADDITIONAL_READERS : 1
+  const open: WebSQLOpenOptions = {
+    dbFilename,
+    vfs,
+    additionalReaders: ADDITIONAL_READERS,
+    cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
+    enableMultiTabs: true,
+  }
   // Counts connection acquisitions, so that "was this query queued behind
   // something?" is answered at the boundary every user of the pool crosses
-  // rather than at one of the several doors into it. Wrapping the FACTORY
-  // rather than the opened adapter because PowerSync opens it itself; the
-  // adapter is otherwise never in our hands.
+  // rather than at one of the several doors into it.
   //
   // Counting STARTS HERE, not when a Repo attaches: PowerSync begins its own
   // init from the constructor, and `ensurePowerSyncReady` runs the schema DDL
@@ -265,21 +281,27 @@ const buildPowerSyncDb = (userId: string) => {
   // lands in the first snapshot — read `busyMs` and `maxDepth` as spanning the
   // database's life, the same way the per-method timings are page totals.
   const contention = new DbContention()
-  const db = new PowerSyncDatabase({
-    schema: appSchema,
-    database: instrumentOpenFactory(new WASQLiteOpenFactory({
-      dbFilename,
-      vfs,
-      additionalReaders: ADDITIONAL_READERS,
-      cacheSizeKb: Math.floor(TOTAL_PAGE_CACHE_KB / connections),
-    }), contention),
-    flags: {
-      enableMultiTabs: true,
-    },
-  })
+  const opened = instrumentAdapter(new WASQLiteOpenFactory({open, logger: powerSyncLogger}).openDB(), contention)
+  const db = new PowerSyncDatabase(webDatabaseOptions(open, opened))
   registerContention(db, contention)
   return db
 }
+
+/** Options for a database whose adapter we open ourselves. `database` repeats
+ *  the adapter's open options because the web database reads its own
+ *  `enableMultiTabs` (shared or per-tab sync, and whether `close()`
+ *  disconnects) only from there; `opened` takes precedence over it when the
+ *  adapter is picked. */
+export const webDatabaseOptions = (
+  open: WebSQLOpenOptions,
+  opened: DBAdapter,
+): WebPowerSyncDatabaseOptions => ({
+  schema: appSchema,
+  logger: powerSyncLogger,
+  database: open,
+  opened,
+  sync: {logLevel: LogLevels.warn},
+})
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
@@ -436,7 +458,11 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
           getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,
         },
-      }))
+      }), {
+        // Kept from 1.x, whose default it was; 2.x defaults to HTTP
+        // streaming, a switch that needs testing against the real service.
+        connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET,
+      })
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)

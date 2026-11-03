@@ -25,7 +25,7 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, getAliases, typesProp } from '@/data/properties'
 import { keyAtEnd } from '@/data/orderKey'
 import { PLACE_TYPE } from './blockTypes'
 import {
@@ -107,16 +107,6 @@ const isPlaceData = (block: BlockData): boolean => {
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-/** Tx-level `BlockData` carries encoded property values. */
-const txAliases = (block: BlockData): string[] => {
-  const encoded = block.properties[aliasesProp.name]
-  if (encoded === undefined) return []
-  try {
-    return [...aliasesProp.codec.decode(encoded)]
-  } catch {
-    return []
-  }
-}
 
 const collisionResult = (
   name: string,
@@ -243,7 +233,7 @@ export const addPlaceToExistingBlock = async (
     if (!block || block.deleted) {
       throw new Error(`addPlaceToExistingBlock: block ${blockId} not found`)
     }
-    const aliases = txAliases(block)
+    const aliases = getAliases(block)
     if (!aliases.includes(machineAlias)) {
       await tx.setProperty(blockId, aliasesProp, [...aliases, machineAlias])
     }

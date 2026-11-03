@@ -1,4 +1,4 @@
-import { blockLinkClickIntent } from '@/utils/navigation.js'
+import { blockLinkClickIntent } from '@/utils/linkClickGestures.js'
 import type {
   LinkTargetAliasMatch,
   LinkTargetBlockMatch,

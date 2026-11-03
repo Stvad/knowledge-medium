@@ -25,6 +25,8 @@ export const KM_MCP_TOOL_NAMES = [
   'create_contributor',
   'recent_changes',
   'block_history',
+  'comments',
+  'add_comment',
 ] as const
 
 export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]

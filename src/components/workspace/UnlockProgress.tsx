@@ -31,7 +31,7 @@ export function UnlockProgress({progress}: {progress: DrainProgress}) {
         <Loader2 className="h-4 w-4 shrink-0 animate-spin"/>
         A large workspace can take a few minutes.
       </p>
-      {status.dataFlowStatus.downloading && (
+      {status.downloading && (
         <ProgressRow
           label="Downloading from the server"
           detail={downloadFraction === null ? null : percent(downloadFraction)}

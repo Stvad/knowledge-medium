@@ -21,7 +21,7 @@ import { derivedBlockId } from '@/data/derivedIds'
 import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
-import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
+import { aliasesProp, addBlockTypeToProperties, getAliases, typesProp } from './properties'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { PAGE_TYPE } from './blockTypes'
 
@@ -216,15 +216,6 @@ export interface AliasSeatRow {
  *  (read-phase of post-commit processors, hits committed state). */
 export type AliasSeatReader = (id: string) => Promise<AliasSeatRow | null>
 
-const decodeAliasList = (encoded: unknown): readonly string[] => {
-  if (encoded === undefined) return []
-  try {
-    return aliasesProp.codec.decode(encoded)
-  } catch {
-    return []
-  }
-}
-
 /** Tx-scoped reader: `tx.get` returns the row including tombstones, with
  *  codec-encoded properties (passed through as-is). `tx.childrenOf`
  *  filters `deleted = 0`, which is what we want — only live children
@@ -417,7 +408,7 @@ export const resolveAliasSeatId = async (
       if (isRestorableTransientTombstone(row, alias)) return id
       continue
     }
-    if (decodeAliasList(row.properties[aliasesProp.name]).includes(alias)) return id
+    if (getAliases(row).includes(alias)) return id
     // Live row claims a different alias — typical post-rename. Probe next.
   }
   throw new Error(

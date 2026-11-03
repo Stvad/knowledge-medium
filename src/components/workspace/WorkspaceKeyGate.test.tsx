@@ -23,7 +23,7 @@ const sync = vi.hoisted(() => ({
 
 vi.mock('@powersync/react', () => ({
   useStatus: () => ({
-    dataFlowStatus: {downloading: sync.downloading},
+    downloading: sync.downloading,
     downloadProgress: sync.downloadedFraction === null ? null : {downloadedFraction: sync.downloadedFraction},
   }),
   useQuery: (sql: string) => ({data: sql === MATERIALIZE_QUEUE_COUNT_SQL ? [{count: sync.backlog}] : []}),

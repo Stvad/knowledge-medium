@@ -74,10 +74,11 @@ export interface KernelPageSpec {
  *  come with it; it stays where it is with all of its children, and this mints
  *  an empty one beside it. Either leave the existing page on the id it already
  *  has, or migrate deliberately — and in that order: clear the old page's
- *  alias BEFORE calling `getOrCreateKernelPage`, because this claims the same
- *  alias and aliases are unique per workspace, so the create aborts the whole
- *  transaction while the old page still holds the name. Then re-parent its
- *  children and delete it. Nothing here detects the situation for you. */
+ *  alias BEFORE calling `getOrCreateKernelPage`, because this claims only an
+ *  alias no other live block holds: while the old page still has the name,
+ *  the new page is created without it and the name keeps resolving to the old
+ *  page. Then re-parent its children and delete it. Nothing here detects the
+ *  situation for you. */
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
@@ -90,10 +91,19 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  an action handler into an empty page.
  *
  *  UNDOABLE by default (issue #306), so a create inside a caller's
- *  `repo.undoGroup` merges into the operation that needed it. Pass `skipUndo`
- *  only when there is no user operation to merge into: an unattended create
- *  lands alone on the stack, and `UndoManager.record` clears the redo branch
- *  on every push, so it silently discards a redo the user still wanted. */
+ *  `repo.undoGroup` merges into the operation that needed it.
+ *
+ *  A CONTAINER always passes `skipUndo`: a page that records are filed under
+ *  (comment threads, assets), whatever gesture first needs it. Other devices
+ *  file records under the same derived id, so undoing the create that happened
+ *  to come first would tombstone the page while their records still sit under
+ *  it. Left in place, an empty container costs nothing; the record the gesture
+ *  wrote stays undoable on its own.
+ *
+ *  Otherwise pass `skipUndo` only when there is no user operation to merge
+ *  into: an unattended create lands alone on the stack, and
+ *  `UndoManager.record` clears the redo branch on every push, so it silently
+ *  discards a redo the user still wanted. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,

@@ -32,8 +32,8 @@ export const appUpdate = {
     available = true
     for (const listener of listeners) listener()
   },
-  /** Reload onto the new build. The new SW already controls the page (it was
-   *  activated in the background), so a plain reload is served fresh. */
+  /** Reload onto the new build. The new SW is active, so the next navigation
+   *  is served fresh. */
   reload(): void {
     if (typeof window !== 'undefined') window.location.reload()
   },

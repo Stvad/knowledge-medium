@@ -10,11 +10,7 @@
  * `deleteSubtreeInTx`, so a guarded block sitting under a deleted ancestor goes
  * with it, unasked. That's deliberate — this is a UI affordance stopping a
  * keystroke from doing something pointless, not an immortality bit — but don't
- * read the guards as a subtree-wide protection when adding one. The
- * previous shape — each handler calling `block.delete()` and remembering to ask
- * first — lasted one commit before diverging: `delete_block` checked,
- * `delete_empty_block_cm` and `cut_selected_blocks` did not, so `Delete` on a
- * daily note was refused while `d` on the same selection destroyed it.
+ * read the guards as a subtree-wide protection when adding one.
  *
  * The CONFIRMATION is scoped the other way round, to everything that will be
  * tombstoned — see {@link confirmBulkDeleteThroughUi}.
@@ -57,19 +53,18 @@ export interface DeleteThroughUiOptions {
    *  callback renders under the frozen page snapshot, where it cannot be
    *  clicked, and the gesture waits on a promise nobody can resolve. */
   animate?: boolean
-  /** Work that must happen while the blocks still exist — a cut's clipboard
-   *  write, a focus target read out of the subtree about to vanish. Runs after
+  /** Work that must happen while the blocks still exist — a focus target
+   *  read out of the subtree about to vanish. Runs after
    *  the guards and the confirmation, so a refused or cancelled gesture never
    *  reaches it, and before the write, which is the only window in which it is
-   *  correct. Callers used to sequence this themselves and each had to
-   *  remember the same order. */
+   *  correct. */
   beforeWrite?: () => Promise<void> | void
 }
 
 /**
  * Ask the guards, confirm if the delete is big, then delete. Returns whether
  * the delete happened, so callers can skip follow-up work (focus moves,
- * clipboard writes, selection resets) when it didn't.
+ * selection resets) when it didn't.
  *
  * Loads the block first: guards inspect types and workspace id, and an unloaded
  * block would answer "no types" and be waved through.
@@ -82,7 +77,7 @@ export const deleteBlockThroughUi = async (
 
 /** Batch form: refuses the WHOLE call if any block is protected, rather than
  *  half-deleting the set. One toast, and the user's selection is intact so they
- *  can narrow it and retry — a partial cut is not something they can undo by
+ *  can narrow it and retry — a partial delete is not something they can undo by
  *  re-selecting.
  *
  *  All-or-nothing describes the GUARDS, not the writes. The deletes are N
@@ -91,11 +86,7 @@ export const deleteBlockThroughUi = async (
  *  1..K-1 tombstoned. Making that atomic is the same open item as
  *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
  *
- *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
- *  selection here directly; `multi_select.delete_block` fans out per block
- *  through `applyToAllBlocksInSelection`, so it runs the same check once over
- *  the selection as that helper's `preflight` before any block is touched.
- *  `Delete` and `d` on the same selection must not disagree. */
+ *  The multi-select `Delete` passes its whole selection here directly. */
 export const deleteBlocksThroughUi = async (
   blocks: readonly Block[],
   {animate = false, beforeWrite}: DeleteThroughUiOptions = {},
@@ -110,10 +101,9 @@ export const deleteBlocksThroughUi = async (
   if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
     await beforeWrite()
-    // Caller work of unbounded duration — the cut path serializes every
-    // selected subtree and awaits the clipboard API — so the guards are
-    // resolved again rather than writing on a decision taken before it. Gated
-    // on there being such work: without it this is the pass above.
+    // Caller work awaits (it walks the tree), so the guards are resolved
+    // again rather than writing on a decision taken before it. Gated on there
+    // being such work: without it this is the pass above.
     if (!await ensureDeletableThroughUi(targets)) return false
   }
   const write = async (): Promise<void> => {
@@ -129,9 +119,8 @@ export const deleteBlocksThroughUi = async (
 
 /**
  * The guard check on its own, toast included. Use this when the gesture has
- * work to do BETWEEN deciding and deleting — `cut_selected_blocks` has to write
- * the clipboard while the blocks still exist, and must not write it at all for
- * a cut the guards will refuse.
+ * work to do BETWEEN deciding and deleting that must not happen for a delete
+ * the guards will refuse (a merge's picker, a merge into the previous block).
  */
 export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   await Promise.all(blocks.map(block => block.load()))

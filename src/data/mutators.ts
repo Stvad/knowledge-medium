@@ -9,6 +9,7 @@ import { z } from 'zod'
 import {
   ChangeScope,
   CORE_BLOCK_DELETED_EVENT,
+  CORE_BLOCK_SPLIT_EVENT,
   defineMutator,
   type AnyMutator,
   type BlockData,
@@ -482,6 +483,50 @@ export const move = defineMutator<MoveArgs, void>({
   },
 })
 
+/** Where a batch of moved blocks lands: a parent (`null` = workspace root)
+ *  plus the placement of the FIRST block within that parent's child list.
+ *  Later blocks chain after it — see {@link moveBlocksInTx}. */
+export interface MoveTarget {
+  parentId: string | null
+  position: InsertPosition
+}
+
+/**
+ * Move `ids` to `target` inside `tx`, keeping their order. `ids` must be
+ * roots: none may be a descendant of another, or it is pulled out of its
+ * ancestor. Every user-facing move (the move command, drag-and-drop, a cut
+ * completed by paste) lands through here, inside the caller's one tx.
+ *
+ * ## The ordering rule
+ *
+ * Only the FIRST block goes to the requested position; every later block
+ * is placed `{kind: 'after'}` its predecessor. Reusing the requested
+ * position for all N is the obvious loop and it is WRONG for two of the
+ * four position kinds — it silently reverses the batch:
+ *
+ * | position          | naive loop (A,B,C) | chained (A,B,C) |
+ * |-------------------|--------------------|-----------------|
+ * | `last`            | A,B,C ✓            | A,B,C ✓         |
+ * | `before X`        | A,B,C,X ✓          | A,B,C,X ✓       |
+ * | `first`           | **C,B,A** ✗        | A,B,C ✓         |
+ * | `after X`         | X,**C,B,A** ✗      | X,A,B,C ✓       |
+ *
+ * `first` and `after X` re-target the same slot every iteration and stack
+ * up backwards; chaining is uniform, so no caller has to know which kind
+ * is order-safe.
+ */
+export const moveBlocksInTx = async (
+  tx: Tx,
+  ids: readonly string[],
+  target: MoveTarget,
+): Promise<void> => {
+  let position = target.position
+  for (const id of ids) {
+    await tx.run(move, {id, parentId: target.parentId, position})
+    position = {kind: 'after', siblingId: id}
+  }
+}
+
 // ──── setOrderKey (direct) ────
 
 export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
@@ -711,12 +756,55 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
 
 // ──── split ────
 
+/** Where the new block goes, and so which half of the text it takes:
+ *  - `siblingBefore`: just before the original, holding `before`; the
+ *    original keeps `after`, and its children.
+ *  - `firstChild`: the original's first child, holding `after`; the original
+ *    keeps `before`. For a scope root, whose preceding sibling is outside the
+ *    surface the user is looking at. */
+export const SPLIT_PLACEMENTS = ['siblingBefore', 'firstChild'] as const
+export type SplitPlacement = typeof SPLIT_PLACEMENTS[number]
+
 interface SplitArgs {
   id: string
-  /** Content for the new sibling-before (the prefix). */
+  /** The text before the cut. */
   before: string
-  /** New content for the original block (the suffix). */
+  /** The text after the cut. */
   after: string
+  /** Defaults to `siblingBefore`. */
+  placement?: SplitPlacement
+}
+
+const splitIntoSiblingBefore = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
+  await tx.update(self.id, {content: after})
+  // Compute order_key for the new prefix sibling — between self and
+  // its previous sibling. Pass self.workspaceId for the null-parent
+  // case so the root-sibling lookup is workspace-scoped (the
+  // pinned-meta would also work here since tx.update above already
+  // pinned, but the explicit pass is clearer and less brittle).
+  const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
+  const ix = siblings.findIndex(s => s.id === self.id)
+
+  // The prefix sibling must sort IMMEDIATELY before `self` at its current
+  // position. When `self` ties with its predecessor there's no key strictly
+  // between them, so `keyImmediatelyBefore` breaks the tie (re-keying `self`
+  // and its tied successors just past the run) to open the slot — keeping a
+  // mid-run split in place instead of overshooting its successors, and never
+  // throwing/rolling back the typed edit. (`ix < 0` only on a stale read.)
+  const orderKey = ix < 0
+    ? keyBetween(null, self.orderKey)
+    : await keyImmediatelyBefore(tx, self.parentId, siblings, ix)
+  return tx.create({
+    workspaceId: self.workspaceId,
+    parentId: self.parentId,
+    orderKey,
+    content: before,
+  })
+}
+
+const splitIntoFirstChild = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
+  await tx.update(self.id, {content: before})
+  return tx.run(createChild, {parentId: self.id, content: after, position: {kind: 'first'}, revealParent: true})
 }
 
 export const split = defineMutator<SplitArgs, string>({
@@ -725,6 +813,7 @@ export const split = defineMutator<SplitArgs, string>({
     id: z.string(),
     before: z.string(),
     after: z.string(),
+    placement: z.enum(SPLIT_PLACEMENTS).optional(),
   }),
   resultSchema: z.string(),
   scope: ChangeScope.BlockDefault,
@@ -732,34 +821,23 @@ export const split = defineMutator<SplitArgs, string>({
   // Callers pass the live `before`/`after` strings (e.g. from CodeMirror's
   // current doc, sliced at the cursor). The mutator does NOT slice
   // self.content — debounced editors can leave SQL stale, and slicing
-  // there would split the wrong text and lose the live edits. See
-  // §13.3 / phase-1 review feedback.
-  apply: async (tx, {id, before, after}) => {
+  // there would split the wrong text and lose the live edits.
+  apply: async (tx, {id, before, after, placement = 'siblingBefore'}) => {
     const self = await requireBlock(tx, id)
-    await tx.update(id, {content: after})
-    // Compute order_key for the new prefix sibling — between self and
-    // its previous sibling. Pass self.workspaceId for the null-parent
-    // case so the root-sibling lookup is workspace-scoped (the
-    // pinned-meta would also work here since tx.update above already
-    // pinned, but the explicit pass is clearer and less brittle).
-    const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
-    const ix = siblings.findIndex(s => s.id === id)
-
-    // The prefix sibling must sort IMMEDIATELY before `self` at its current
-    // position. When `self` ties with its predecessor there's no key strictly
-    // between them, so `keyImmediatelyBefore` breaks the tie (re-keying `self`
-    // and its tied successors just past the run) to open the slot — keeping a
-    // mid-run split in place instead of overshooting its successors, and never
-    // throwing/rolling back the typed edit. (`ix < 0` only on a stale read.)
-    const orderKey = ix < 0
-      ? keyBetween(null, self.orderKey)
-      : await keyImmediatelyBefore(tx, self.parentId, siblings, ix)
-    return tx.create({
+    const newId = placement === 'firstChild'
+      ? await splitIntoFirstChild(tx, self, before, after)
+      : await splitIntoSiblingBefore(tx, self, before, after)
+    const [beforeId, afterId] = placement === 'firstChild' ? [id, newId] : [newId, id]
+    tx.emitEvent(CORE_BLOCK_SPLIT_EVENT, {
       workspaceId: self.workspaceId,
-      parentId: self.parentId,
-      orderKey,
-      content: before,
+      blockId: id,
+      content: before + after,
+      pieces: [
+        {blockId: beforeId, start: 0, end: before.length},
+        {blockId: afterId, start: before.length, end: before.length + after.length},
+      ],
     })
+    return newId
   },
 })
 

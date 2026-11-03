@@ -26,21 +26,21 @@ it('batches reference stamps and alias reads within the bind limit, preserving S
   const {repo, cache} = createTestRepo({db: h.env.db, startSyncObserver: true})
   const statements: {sql: string; binds: number}[] = []
   const rawWrite = h.env.db.writeTransaction.bind(h.env.db)
-  const spy = vi.spyOn(h.env.db, 'writeTransaction').mockImplementation(fn => rawWrite(tx => fn({
-    ...tx,
-    execute: async (sql, params) => {
+  // A Transaction is a class instance: a spread would drop its methods.
+  const spy = vi.spyOn(h.env.db, 'writeTransaction').mockImplementation(fn => rawWrite(tx => fn(Object.assign(Object.create(tx), {
+    execute: async (sql: string, params?: unknown[]) => {
       statements.push({sql, binds: params?.length ?? 0})
       return tx.execute(sql, params)
     },
-    getAll: async (sql, params) => {
+    getAll: async (sql: string, params?: unknown[]) => {
       statements.push({sql, binds: params?.length ?? 0})
       return tx.getAll(sql, params)
     },
-    getOptional: async (sql, params) => {
+    getOptional: async (sql: string, params?: unknown[]) => {
       statements.push({sql, binds: params?.length ?? 0})
       return tx.getOptional(sql, params)
     },
-  })))
+  }))))
   try {
     await repo.flushSyncObserver()
     const stamps = statements.filter(s => /UPDATE blocks SET reference_target_id/.test(s.sql))

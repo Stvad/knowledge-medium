@@ -28,7 +28,10 @@ is the nightly tier's job; on failure it uploads both passes' vitest
 logs as an artifact and files (or appends to) an issue labeled
 `fuzz-failure`. The failing seed is always in the uploaded artifact;
 the issue body itself carries a best-effort excerpt of the failure
-(only from the pass(es) that actually failed), not a guarantee.
+(only from the pass(es) that actually failed), not a guarantee. The
+workflow then fires the fuzz-triage cloud routine over its API trigger
+(repo secrets `FUZZ_TRIAGE_FIRE_URL` / `FUZZ_TRIAGE_FIRE_TOKEN`), which
+reproduces the failure and opens a fix PR against the issue.
 
 ## Reproducing a failure
 
@@ -837,7 +840,10 @@ pinned test:
   emoji beside that emphasis lost half its surrogate pair to the
   reference. Fixed upstream in 2.1.3; the dependency is now on 2.2.0.
   The arbitrary now draws a non-ASCII and an astral letter as well, and
-  finds it on 2.1.2 within a second.
+  finds it on 2.1.2 within a second. The nightly later found the same
+  loss beside strikethrough (`\A<del>!</del>`, issue #1454): the
+  serializer encodes beside every attention marker, GFM's `~` included,
+  and the escape listed only `*` and `_`.
 
 The oracle reads each block's markdown back rather than matching the raw
 string, because the serializer spells a letter beside such emphasis as a
@@ -877,13 +883,16 @@ needs the same.
    `interruptAfterTimeLimit` resolves `fc.assert` WITHOUT awaiting the
    case that's currently executing, so the abandoned case keeps running
    — and writing — after the property "finishes". Use
-   `statefulFuzzGuard` from `@/test/fuzz`: wrap each case body in
-   `guard.run(seedOrNull, body)` (it owns the barrier-before-pin
-   ordering for `Math.random` pins), call `await guard.barrier()` at
-   the top of any canary/example test touching the shared state, and
-   add `afterAll(guard.barrier)`. Symptom if you skip this:
+   `statefulFuzzGuard` from `@/test/fuzz`, built at module or
+   `describe` scope, and wrap each case body in
+   `guard.run(seedOrNull, body)`: it owns the barrier-before-pin
+   ordering for `Math.random` pins, and registers an `afterEach` that
+   waits out the abandoned case before the test ends, so the case
+   finishes before the test's Repos are released and before the next
+   test touches the shared state. Symptom if you skip this:
    deep-tier-only, order-dependent flakes in whatever runs after the
-   property (phantom rows, duplicate-id errors).
+   property (phantom rows, duplicate-id errors, an unhandled
+   `WorkspaceRegistryUnavailableError` from a released Repo).
 7. Choose the string `unit` deliberately — the default and the usual
    correction are both narrower than "any string". `fc.string()` is
    `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the

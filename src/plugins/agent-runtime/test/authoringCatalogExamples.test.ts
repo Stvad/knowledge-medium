@@ -31,8 +31,8 @@ import {
 //
 // The rest cover what tsc doesn't:
 //   1. Babel-transpiles each example with the presets the *dynamic extension
-//      loader* uses (`EXTENSION_BABEL_PRESETS`) — the app is compiled by tsgo,
-//      so a construct tsgo accepts and Babel rejects would still break an agent
+//      loader* uses (`EXTENSION_BABEL_PRESETS`) — the app is compiled by tsc,
+//      so a construct tsc accepts and Babel rejects would still break an agent
 //      that pastes the example into an extension.
 //   2. Parses every `import { ... } from '@/…'` and, for each specifier that
 //      is a curated-API module (`apiCatalog.ts`), confirms every imported name
@@ -171,10 +171,10 @@ describe('authoring catalog example drift guard', () => {
       'getOrCreateKernelPage', 'getOrCreateTypedChild', 'getPluginPrefsBlock',
       'navigate', 'openDialog', 'pluginBlockId', 'propertyEditorOverridesFacet',
       'seedProperty', 'seedType', 'showError', 'showProgress', 'showSuccess',
-      'statusProp', 'typeSeedsFacet', 'useRepo',
+      'statusProp', 'systemPagesFacet', 'typeSeedsFacet', 'useRepo',
       // A type, not a runtime export — the guides name it when describing the
       // editor contract, and a rename would drift the prose the same way.
-      'PropertyEditorProps',
+      'KernelPageSpec', 'PropertyEditorProps',
     ]
 
     const catalog = describeAuthoringCatalog()
@@ -246,7 +246,7 @@ describe('authoring catalog example drift guard', () => {
         const transpiled = Babel.transform(example.code, {
           filename: `${path}.tsx`,
           presets: EXTENSION_BABEL_PRESETS,
-        }).code
+        })?.code
         if (!transpiled) {
           failures.push(`${path}: Babel returned empty output`)
         }

@@ -3,7 +3,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
-import { ChangeScope, type User } from '@/data/api'
+import {
+  ChangeScope,
+  CORE_BLOCK_MERGED_EVENT,
+  CORE_BLOCK_SPLIT_EVENT,
+  defineSameTxProcessor,
+  ProcessorRejection,
+  type User,
+} from '@/data/api'
+import { sameTxProcessorsFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -49,6 +57,7 @@ import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi'
 import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
 import * as viewTransition from '@/utils/viewTransition'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
@@ -919,10 +928,9 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
   })
 
-  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
-    // `cut_selected_blocks` is bound to `d` in multi-select. It called
-    // `block.delete()` directly, so `Delete` on a daily note was refused while
-    // `d` on the identical selection destroyed it.
+  it('cut deletes nothing: it writes the clipboard and arms the blocks to move, guarded ones too', async () => {
+    // `cut_selected_blocks` (`$mod+x`, `d`) deletes nothing, so the deletion
+    // guards and the bulk-delete confirmation don't apply to it.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -948,6 +956,7 @@ describe('default CodeMirror shortcuts', () => {
     const write = vi.fn(async () => {})
     vi.stubGlobal('ClipboardItem', class { })
     vi.stubGlobal('navigator', {clipboard: {write}})
+    disarmCut()
 
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
     await action.handler({
@@ -956,62 +965,117 @@ describe('default CodeMirror shortcuts', () => {
       anchorBlock: null,
     } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    // All-or-nothing: the unguarded sibling survives too, rather than the
-    // selection being half-cut.
-    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
-    // And the guard runs BEFORE the copy: a refused cut must not leave the
-    // user believing the content is on their clipboard. Asserting only that
-    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
-    // the guards itself, so the deletion assertions pass even with the
-    // pre-copy check removed.
-    expect(write).not.toHaveBeenCalled()
-    // The selection survives too, so the user can narrow it and retry.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
-      .toEqual(['ordinary', 'protected'])
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(getArmedCut()?.rootIds).toEqual(['ordinary', 'protected'])
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
+    disarmCut()
     vi.unstubAllGlobals()
   })
 
-  it('cut asks for confirmation BEFORE writing the clipboard', async () => {
-    // Same ordering rule as the guards, for the same reason plus one: a cut the
-    // user calls off must not have replaced whatever their clipboard held.
+  it('cut moves focus past the cut blocks, so a paste there is not inside the cut', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
     }, {scope: ChangeScope.BlockDefault})
-    const ids: string[] = []
-    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
-      const id = `bulk-${i}`
-      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
-      ids.push(id)
-    }
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'cut-me', id: 'cut-child', content: 'child'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+    disarmCut()
 
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-me')],
+      anchorBlock: null,
+      scopeRootId: 'root',
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() =>
+      expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('next'))
+    disarmCut()
+    vi.unstubAllGlobals()
+  })
+
+  it('cutting the last siblings focuses an earlier one, not another cut block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of ['keep', 'cut-1', 'cut-2']) {
+      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
+    }
+    const uiStateBlock = env.repo.block('ui')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+    disarmCut()
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-1'), env.repo.block('cut-2')],
+      anchorBlock: null,
+      scopeRootId: 'root',
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() =>
+      expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('keep'))
+    disarmCut()
+    vi.unstubAllGlobals()
+  })
+
+  it('a cut whose clipboard write is refused arms nothing and keeps the selection', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(selectionStateProp, {
       ...selectionStateProp.defaultValue,
-      selectedBlockIds: ids,
+      selectedBlockIds: ['ordinary'],
     })
-    const write = vi.fn(async () => {})
     vi.stubGlobal('ClipboardItem', class { })
-    vi.stubGlobal('navigator', {clipboard: {write}})
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    disarmCut()
 
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
-    const cutting = action.handler({
+    await action.handler({
       uiStateBlock,
-      selectedBlocks: ids.map(id => env.repo.block(id)),
+      selectedBlocks: [env.repo.block('ordinary')],
       anchorBlock: null,
     } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
-    expect(write).not.toHaveBeenCalled()
-    // Cancel. `null` is the dialog queue's cancel value.
-    getDialogQueue()[0].finalize(null)
-    await cutting
+    expect(getArmedCut()).toBeNull()
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['ordinary'])
+    vi.unstubAllGlobals()
+  })
 
-    expect(write).not.toHaveBeenCalled()
-    for (const id of ids) expect(await isBlockDeleted(env.repo, id)).toBe(false)
-    // And the selection survives, so the user can narrow it and retry.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(ids)
+  it('normal-mode cut that the clipboard refuses leaves the focused block and data intact', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'cut-me')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    disarmCut()
+
+    const action = findNormalModeAction(env.repo, 'cut_block')
+    await action.handler({uiStateBlock, block: env.repo.block('cut-me'), scopeRootId: 'root'} satisfies BlockShortcutDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(getArmedCut()).toBeNull()
+    expect(await isBlockDeleted(env.repo, 'cut-me')).toBe(false)
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('cut-me')
     vi.unstubAllGlobals()
   })
 
@@ -1120,6 +1184,38 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.content).toBe('current')
     // No half-applied merge parked in the editor waiting to be flushed.
     expect(editorView.state.doc.toString()).toBe('current')
+  })
+
+  it('puts the editor text back when a Delete merge is refused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-merge', [defineSameTxProcessor({
+      name: 'test.refuseMerge',
+      watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    // Left merged, the editor's next flush would copy `next` into this block.
+    expect(editorView.state.doc.toString()).toBe('current')
+    expect(editorView.state.selection.main.head).toBe('current'.length)
   })
 
   it('a guarded block is not merged away by Backspace at offset 0', async () => {
@@ -1610,6 +1706,42 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.doc.toString()).toBe('left ')
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(suffixId)
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({blockId: suffixId, start: 0})
+  })
+
+  // Each split re-arms the editor with the half its block keeps before the
+  // split's transaction runs, so a refused split must put the rest back, or
+  // the editor's next flush would save only that half.
+  it.each([
+    ['a mid-text split', 'root'],
+    ['a scope-root split', 'current'],
+  ])('puts the whole text back in the editor when %s is refused', async (_shape, scopeRootId) => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'left right'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-split', [defineSameTxProcessor({
+      name: 'test.refuseSplit',
+      watches: {kind: 'event', events: [CORE_BLOCK_SPLIT_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'current')
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(editorView.state.doc.toString()).toBe('left right')
+    expect(editorView.state.selection.main.head).toBe('left '.length)
+    expect(env.repo.block('current').peek()?.content).toBe('left right')
+    expect(await childIds('root')).toEqual(['current'])
   })
 
   it('makes Tab a no-op on a scope-root block', async () => {

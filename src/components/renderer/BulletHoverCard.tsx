@@ -151,6 +151,10 @@ export function useBulletHover(enabled: boolean): BulletHoverController {
   return {open: enabled && open, anchorEl, anchorHoverProps, cardHoverProps, close}
 }
 
+/** Marks the bullet hover card, so a gesture that runs over bullets (block
+ *  drag-and-drop) can keep it out of the way. */
+export const BULLET_HOVER_CARD_ATTRIBUTE = 'data-bullet-hover-card'
+
 export interface BulletHoverCardProps {
   open: boolean
   anchorEl: HTMLElement | null
@@ -181,6 +185,7 @@ export function BulletHoverCard({open, anchorEl, hoverProps, children}: BulletHo
       // role="tooltip": the card holds interactive links, which that role
       // forbids; the mouse handlers keep the hover-intent alive.
       data-block-interaction="ignore"
+      {...{[BULLET_HOVER_CARD_ATTRIBUTE]: 'true'}}
       style={floatingStyle}
       onMouseEnter={hoverProps.onMouseEnter}
       onMouseLeave={hoverProps.onMouseLeave}

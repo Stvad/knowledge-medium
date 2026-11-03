@@ -38,7 +38,7 @@
  * in this stack — so it's pinned per case via `statefulFuzzGuard`
  * (`@/test/fuzz`), making fast-check's shrink/seed-replay sound.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, statefulFuzzGuard } from '@/test/fuzz'
 import type { BlockData, Tx } from '@/data/api'
@@ -203,10 +203,8 @@ const checkOracles = (
  *  The shared state here is global `Math.random` (no DB), but the
  *  barrier-before-pin ordering matters just the same: an abandoned
  *  case's `finally` would otherwise restore it over the next property's
- *  pin, breaking seeded replay. `afterAll` covers the LAST property's
- *  final case, which has no subsequent pre-case barrier of its own. */
+ *  pin, breaking seeded replay. */
 const guard = statefulFuzzGuard()
-afterAll(async () => { await guard.barrier() })
 
 describe('orderKeyPlacement fuzz', () => {
   it('keysImmediatelyBefore: never throws; new keys ascending with no ties; ids preserved; land immediately before the anchor', async () => {

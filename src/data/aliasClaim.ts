@@ -19,6 +19,7 @@
 
 import { ProcessorRejection, type AnyPropertySchema, type BlockData, type Tx } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import { decodeRowProperty } from '@/data/rowProperty'
 import {
   childContentsToEncodedPropertyValue,
   fieldValueChildren,
@@ -152,8 +153,7 @@ export const appendDerivedAliasClaims = async (
   if (row === null || row.deleted) return
   let existing: readonly string[]
   try {
-    const encoded = row.properties[aliasesProp.name]
-    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+    existing = decodeRowProperty(row, aliasesProp)
   } catch {
     return
   }

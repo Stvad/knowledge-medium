@@ -1,4 +1,4 @@
-import { KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -12,11 +12,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import {
-  merge as mergeMutator,
-  setContent as setContentMutator,
-  createChild as createChildMutator,
-} from '@/data/mutators'
+import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -53,13 +49,14 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
+import { disarmCut, getArmedCut, undoOrTakeBackCut } from '@/paste/armedCut.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -77,7 +74,8 @@ import {
   togglePanelMaximized,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
-import { showProgress } from '@/utils/toast.js'
+import { showError, showInfo, showProgress } from '@/utils/toast.js'
+import { pluralize } from '@/utils/pluralize.js'
 import {
   chooseRawSqliteExportFile,
   downloadBlob,
@@ -94,76 +92,59 @@ import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
 
-const splitCodeMirrorBlockAtCursor = async (
-  block: Block,
+/**
+ * Run `write` with the editor showing `text` (caret at `cursor`), the text its
+ * block holds once `write` lands. The editor is re-armed BEFORE `write` runs,
+ * so its debounced pushChange can't later flush the old text over what
+ * `write` stored. A `write` that fails puts the old text and caret back, or
+ * that flush would save the re-armed text over a block `write` never changed.
+ */
+const writeWithEditorRearmed = async <T>(
   editorView: EditorView,
-): Promise<Block> => {
-  const doc = editorView.state.doc
-  const cursorPos = editorView.state.selection.main.head
-
-  const beforeCursor = doc.sliceString(0, cursorPos)
-  const afterCursor = doc.sliceString(cursorPos)
-  const repo = block.repo
-
-  // Push the suffix into the editor synchronously so its debounced
-  // pushChange re-arms with the post-split text. Without this the
-  // pending debounce would later flush the pre-split full content
-  // and clobber the suffix that core.split wrote to SQL.
-  editorView.dispatch({
-    changes: {from: 0, to: doc.length, insert: afterCursor},
-    selection: EditorSelection.cursor(0),
+  text: string,
+  cursor: number,
+  write: () => Promise<T>,
+): Promise<T> => {
+  const rearm = (next: string, caret: number) => editorView.dispatch({
+    changes: {from: 0, to: editorView.state.doc.length, insert: next},
+    selection: EditorSelection.cursor(caret),
   })
-
-  // core.split creates a new sibling BEFORE self with before-text, and
-  // leaves self as the after-text block. Pass the live before/after
-  // strings — the mutator does NOT slice persisted content, since a
-  // debounced editor can leave SQL stale.
-  await repo.mutate.split({
-    id: block.id,
-    before: beforeCursor,
-    after: afterCursor,
-  })
-  return block
+  const previous = editorView.state.doc.toString()
+  const previousCursor = editorView.state.selection.main.head
+  rearm(text, cursor)
+  try {
+    return await write()
+  } catch (error) {
+    rearm(previous, previousCursor)
+    throw error
+  }
 }
 
 /**
- * Mid-text split when the edited block is the *scope root* (a backlink
- * entry, embed, or zoomed panel root). `core.split` would push the
- * before-cursor text into a preceding sibling — which lives outside the
- * visible surface, silently burying the first half (the same class as
- * the "invisible block" bug for `o`/`O`). Instead the root keeps the
- * before-text and the continuation becomes its first child, mirroring
- * the reading order (root = first half, child = the rest).
+ * Split the edited block at the cursor, passing the live text (a debounced
+ * editor can be ahead of SQL); returns the id of the block that now holds the
+ * text after the cursor, which takes focus.
  *
- * Returns the new child's id.
+ * At the scope root (a backlink entry, embed, or zoomed panel root) the
+ * default split would push the before-cursor text into a preceding sibling —
+ * which lives outside the visible surface, silently burying the first half
+ * (the same class as the "invisible block" bug for `o`/`O`). There the root
+ * keeps the before-text and the continuation becomes its first child,
+ * mirroring the reading order (root = first half, child = the rest).
  */
-const splitScopeRootIntoFirstChild = async (
+const splitAtCursor = async (
   block: Block,
   editorView: EditorView,
+  placement: SplitPlacement,
 ): Promise<string> => {
-  const doc = editorView.state.doc
   const cursorPos = editorView.state.selection.main.head
-  const beforeCursor = doc.sliceString(0, cursorPos)
-  const afterCursor = doc.sliceString(cursorPos)
-  const repo = block.repo
-
-  // Re-arm the editor (and its debounced pushChange) with the prefix that
-  // stays in the root, so a later flush can't clobber the SQL we write
-  // below — same precaution as splitCodeMirrorBlockAtCursor.
-  editorView.dispatch({
-    changes: {from: 0, to: doc.length, insert: beforeCursor},
-    selection: EditorSelection.cursor(beforeCursor.length),
-  })
-
-  return repo.tx(async tx => {
-    await tx.run(setContentMutator, {id: block.id, content: beforeCursor})
-    return tx.run(createChildMutator, {
-      parentId: block.id,
-      content: afterCursor,
-      position: {kind: 'first'},
-      revealParent: true,
-    })
-  }, {scope: ChangeScope.BlockDefault, description: 'split scope root into first child'})
+  const before = editorView.state.doc.sliceString(0, cursorPos)
+  const after = editorView.state.doc.sliceString(cursorPos)
+  const keepsBefore = placement === 'firstChild'
+  const newId = await writeWithEditorRearmed(
+    editorView, keepsBefore ? before : after, keepsBefore ? before.length : 0,
+    () => block.repo.mutate.split({id: block.id, before, after, placement}))
+  return keepsBefore ? newId : block.id
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -354,6 +335,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
+    {
+      id: 'cut_block',
+      description: 'Cut focused block to move it',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: ({uiStateBlock, block, scopeRootId, renderScopeId}: BlockShortcutDependencies) =>
+        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId, renderScopeId}),
+      defaultBinding: {
+        keys: '$mod+x',
+        eventOptions: {preventDefault: true},
+      },
+    },
     // Promoted out of the vim plugin, like the copy actions above it: an action
     // has to be IN THE REGISTRY to be dispatchable at all, and the block/swipe
     // menu and command palette dispatch by id with supplied deps rather than
@@ -390,7 +382,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Undo',
       context: ActionContextTypes.GLOBAL,
       icon: Undo2,
-      handler: async () => { await repo.undo() },
+      handler: async () => { await undoOrTakeBackCut(repo) },
       defaultBinding: {
         keys: '$mod+z',
         eventOptions: {preventDefault: true},
@@ -747,21 +739,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
-          // At the scope root a normal split would bury the before-text in
-          // an invisible preceding sibling — keep it in the root and push
-          // the continuation into a new first child instead.
-          if (policy.isScopeRoot) {
-            const childId = await splitScopeRootIntoFirstChild(block, editorView)
-            await uiStateBlock.set(editorSelection, {blockId: childId, start: 0})
-            await focusBlock(uiStateBlock, childId, {edit: true, renderScopeId: deps.renderScopeId})
-          } else {
-            const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView)
-            await uiStateBlock.set(editorSelection, {
-              blockId: blockInFocus.id,
-              start: 0,
-            })
-            await focusBlock(uiStateBlock, blockInFocus.id, {edit: true, renderScopeId: deps.renderScopeId})
-          }
+          const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
+          await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
+          await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})
         }
         // Case 2: Cursor at end and the new block belongs as a first
         // child — either the block shows children, or it's the scope
@@ -1124,24 +1104,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const fromContent = nextVisible.peek()?.content ?? ''
         const fromId = nextVisible.id
 
-        // Re-arm the editor synchronously with the merged text (caret parked
-        // at the join) so its debounced pushChange carries the post-merge
-        // content. Unlike Backspace — which hands focus to the previous
+        // The editor shows the merged text (caret parked at the join) while
+        // the merge runs. Unlike Backspace — which hands focus to the previous
         // block's editor — Delete keeps the caret in *this* editor, so a
         // pending flush of the pre-merge text would otherwise clobber the
-        // fold core.merge wrote to SQL. Same precaution as
-        // splitCodeMirrorBlockAtCursor.
-        editorView.dispatch({
-          changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
-          selection: EditorSelection.cursor(joinOffset),
-        })
-
+        // fold core.merge wrote to SQL.
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.
-        await repo.tx(async tx => {
-          await tx.update(block.id, {content: liveContent})
-          await tx.run(mergeMutator, {intoId: block.id, fromId})
-        }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'})
+        await writeWithEditorRearmed(editorView, liveContent + fromContent, joinOffset, () =>
+          repo.tx(async tx => {
+            await tx.update(block.id, {content: liveContent})
+            await tx.run(mergeMutator, {intoId: block.id, fromId})
+          }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
 
         await uiStateBlock.set(editorSelection, {
           blockId: block.id,
@@ -1224,26 +1198,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
 
   /**
-   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
-   * only in whether the selection reaches the clipboard on its way out, so they
-   * share everything else rather than each re-deriving it — the divergence is
-   * what let `d` destroy a daily note that `Delete` refused, and later let
-   * `Delete` leave the pane in multi-select over tombstones that `d` exited
-   * cleanly.
+   * `Delete` on a selection.
    *
-   * Order is load-bearing:
-   *  - guards and the bulk-delete confirmation BEFORE the clipboard write, so
-   *    neither a refused nor a cancelled cut leaves the user believing the
-   *    content was copied — or with their clipboard silently replaced by a cut
-   *    they called off;
-   *  - the copy while the blocks still exist, in SELECTION order (the delete
-   *    runs leaf-first so each removal can't disturb the next, which is not the
-   *    order the markdown should come out in);
-   *  - the selection reset only after a delete actually HAPPENED, so a refusal
-   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
-   *    the guards immediately before writing, and a guard is not contracted to
-   *    answer the same way twice — an answer that flips during the clipboard
-   *    write would otherwise clear the selection having deleted nothing.
+   * The selection reset happens only after a delete actually HAPPENED, so a
+   * refusal leaves it intact to narrow and retry. `deleteBlocksThroughUi`
+   * re-asks the guards immediately before writing, and a guard is not
+   * contracted to answer the same way twice.
    *
    * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
    * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
@@ -1253,10 +1213,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * if that lands back inside the selection there is no sensible target and we
    * leave focus alone.
    */
-  const deleteSelectedBlocks = async (
-    deps: MultiSelectModeDependencies,
-    {copyFirst}: {copyFirst: boolean},
-  ): Promise<void> => {
+  const deleteSelectedBlocks = async (deps: MultiSelectModeDependencies): Promise<void> => {
     const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
@@ -1264,20 +1221,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const deleted = await deleteBlocksThroughUi(selectedBlocks, {
       animate: true,
       beforeWrite: async () => {
-        // Copy exactly the set we're about to delete rather than re-reading the
-        // ui-state selection: with supplied deps the two can differ, and the copy
-        // would quietly no-op while the delete went ahead.
-        //
-        // Stays BEFORE the write, unlike the focus move in the Backspace path,
-        // even though a late guard refusal can then leave the clipboard holding
-        // blocks that survived. Deferring it until after would mean a failed
-        // clipboard write costs the blocks as well: a cut degrading to a copy
-        // is benign, a cut degrading to a delete is not.
-        if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-
         const selectedIds = new Set(selectedBlocks.map(block => block.id))
         const after = scopeRootId
-          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+          ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
           : null
         focus.target = after && !selectedIds.has(after.id) ? after : null
       },
@@ -1289,6 +1235,47 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     }
   }
 
+  /**
+   * Cut the supplied blocks. Deletes nothing: the blocks go on the
+   * clipboard and are armed to MOVE on the next paste in the app, staying
+   * where they are, dimmed, until then. So it consults no deletion guard,
+   * like the move command and drag-and-drop. Taken back by the toast's
+   * Cancel, or by undo before anything else is edited (`undoOrTakeBackCut`).
+   *
+   * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
+   * selection: with supplied deps the two can differ.
+   */
+  const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'renderScopeId'> & {selectedBlocks: Block[]}): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId, renderScopeId} = deps
+    if (!selectedBlocks.length) return
+    let outcome: 'cut' | 'empty'
+    try {
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    } catch (error) {
+      // A refused clipboard write armed nothing; keep the selection to retry.
+      console.error('[cut] clipboard write failed', error)
+      showError("Couldn't write to the clipboard, so nothing was cut")
+      return
+    }
+    if (outcome === 'empty') {
+      showInfo('Nothing to cut: the block is empty. Drag it or use Move to… instead')
+      return
+    }
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    // Focus past the cut, as a delete does: a paste right here (vim `d` then
+    // `p` is a move down) would otherwise land inside the cut and be refused.
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId, selectedIds)
+      : null
+    if (after && !selectedIds.has(after.id)) void focusBlock(uiStateBlock, after.id, {renderScopeId})
+
+    const cutId = getArmedCut()?.cutId
+    showInfo(`Cut ${pluralize(selectedBlocks.length, 'block')}: paste to move`, {
+      action: {label: 'Cancel', onClick: () => { if (cutId) disarmCut(cutId) }},
+    })
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -1296,18 +1283,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
-    // clipboard, so both run the same batch below rather than converging on it
-    // by having two code paths remember the same rules.
+    // Not a per-block fan-out: one guarded, confirmed batch delete.
     {
       ...makeMultiSelect(deleteBlockAction),
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+      handler: deleteSelectedBlocks,
     },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {
       id: 'clear_selection',
       description: 'Clear selection',
+      icon: Check,
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async (deps: MultiSelectModeDependencies) =>
         deps.uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue),
@@ -1331,7 +1317,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
+      handler: cutBlocks,
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {
