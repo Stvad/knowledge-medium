@@ -1,0 +1,1 @@
+export{QK as dailyNotesLocalSchema}from"../../../chunks/app-R_CgGQda.js";

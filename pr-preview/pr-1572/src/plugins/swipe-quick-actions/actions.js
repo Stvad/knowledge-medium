@@ -1,0 +1,1 @@
+export{UA as DEFAULT_QUICK_ACTION_ITEMS,WA as SWIPE_RIGHT_BLOCK_ACTION_ID,GA as isQuickActionItem,KA as quickActionItemsFacet}from"../../../chunks/app-R_CgGQda.js";

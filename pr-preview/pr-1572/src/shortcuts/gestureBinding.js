@@ -1,0 +1,1 @@
+export{JM as gestureBindingDescriptor,YM as matchesGestureEvent}from"../../chunks/app-R_CgGQda.js";

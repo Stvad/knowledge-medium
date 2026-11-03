@@ -1,0 +1,1 @@
+export{OE as useMinuteClock}from"../../chunks/app-R_CgGQda.js";

@@ -1,0 +1,1 @@
+export{UF as ExtensionRenderBoundary}from"../../chunks/app-R_CgGQda.js";

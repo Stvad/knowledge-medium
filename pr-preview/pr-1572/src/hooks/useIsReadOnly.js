@@ -1,0 +1,1 @@
+export{Kv as useIsReadOnly}from"../../chunks/app-R_CgGQda.js";

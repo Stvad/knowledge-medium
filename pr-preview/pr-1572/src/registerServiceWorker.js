@@ -1,0 +1,1 @@
+export{FM as checkForAppUpdate,IM as registerServiceWorker}from"../chunks/app-R_CgGQda.js";

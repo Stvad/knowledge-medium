@@ -1,0 +1,1 @@
+export{GC as BreadcrumbRenderer}from"../../../chunks/app-R_CgGQda.js";

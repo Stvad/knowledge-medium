@@ -1,0 +1,1 @@
+export{qat as SYSTEM_AUTHOR_PREFIX,Jat as isSystemAuthor,Yat as systemAuthor}from"../../../chunks/app-R_CgGQda.js";

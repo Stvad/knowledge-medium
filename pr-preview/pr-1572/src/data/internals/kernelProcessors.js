@@ -1,0 +1,1 @@
+export{i4 as KERNEL_PROCESSORS}from"../../../chunks/app-R_CgGQda.js";

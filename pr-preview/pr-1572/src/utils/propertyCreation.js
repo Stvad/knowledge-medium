@@ -1,0 +1,1 @@
+export{DI as canConvertEmptyChildBlockToProperty,OI as convertEmptyChildBlockToProperty}from"../../chunks/app-R_CgGQda.js";

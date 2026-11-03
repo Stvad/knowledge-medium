@@ -1,0 +1,1 @@
+export{GM as HotkeyReconciler}from"../../chunks/app-R_CgGQda.js";

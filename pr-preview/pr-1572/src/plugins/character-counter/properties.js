@@ -1,0 +1,1 @@
+export{YJ as RAW_CHARACTER_COUNT_PROFILE_ID,XJ as WORDS_COUNT_PROFILE_ID,ZJ as charLimitProp,QJ as charProfileProp,$J as charScopeProp}from"../../../chunks/app-R_CgGQda.js";

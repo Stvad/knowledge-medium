@@ -1,0 +1,1 @@
+export{UJ as characterCounterDataExtension}from"../../../chunks/app-R_CgGQda.js";

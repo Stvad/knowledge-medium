@@ -1,0 +1,1 @@
+export{EM as appUpdatePromptExtension}from"../../../chunks/app-R_CgGQda.js";

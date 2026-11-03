@@ -1,0 +1,1 @@
+export{tU as usePropertySchemas}from"../../chunks/app-R_CgGQda.js";

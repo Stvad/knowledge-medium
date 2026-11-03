@@ -1,0 +1,1 @@
+export{JG as PLACES_UNDER_BLOCK_QUERY,YG as placesUnderBlockQuery}from"../../../chunks/app-R_CgGQda.js";

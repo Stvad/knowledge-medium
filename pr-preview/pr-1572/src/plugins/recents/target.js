@@ -1,0 +1,1 @@
+export{AE as openRecentsPage}from"../../../chunks/app-R_CgGQda.js";

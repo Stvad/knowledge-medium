@@ -1,0 +1,1 @@
+export{or as extensionsDataExtension}from"../../../chunks/app-R_CgGQda.js";

@@ -1,0 +1,1 @@
+export{Yt as staticAppExtensions}from"../../chunks/app-R_CgGQda.js";

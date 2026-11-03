@@ -1,0 +1,1 @@
+export{_q as annotationsDataExtension}from"../../../chunks/app-R_CgGQda.js";

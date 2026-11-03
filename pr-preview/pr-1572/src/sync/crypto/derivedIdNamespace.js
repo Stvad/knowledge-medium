@@ -1,0 +1,1 @@
+export{Pnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-R_CgGQda.js";

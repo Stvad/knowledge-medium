@@ -1,0 +1,1 @@
+export{Ty as attachmentsPlugin}from"../../../chunks/app-R_CgGQda.js";

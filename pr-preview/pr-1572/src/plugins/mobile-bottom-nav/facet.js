@@ -1,0 +1,1 @@
+export{RC as mobileBottomNavItemsFacet}from"../../../chunks/app-R_CgGQda.js";

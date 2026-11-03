@@ -1,0 +1,1 @@
+export{mj as TypeChip}from"../../../chunks/app-R_CgGQda.js";

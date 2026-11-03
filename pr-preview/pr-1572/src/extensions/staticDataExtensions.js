@@ -1,0 +1,1 @@
+export{iW as staticDataExtensions}from"../../chunks/app-R_CgGQda.js";

@@ -1,0 +1,1 @@
+export{LC as MobileBottomNavButton}from"../../../chunks/app-R_CgGQda.js";

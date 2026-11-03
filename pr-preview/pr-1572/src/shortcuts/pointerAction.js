@@ -1,0 +1,1 @@
+export{XM as dispatchPointerAction,ZM as setPointerActionDispatcher}from"../../chunks/app-R_CgGQda.js";

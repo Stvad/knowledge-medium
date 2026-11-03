@@ -1,0 +1,1 @@
+export{IU as SuspenseFallback}from"../../../chunks/app-R_CgGQda.js";

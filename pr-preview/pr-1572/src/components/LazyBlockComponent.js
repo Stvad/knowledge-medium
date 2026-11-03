@@ -1,0 +1,1 @@
+export{KN as LazyBlockComponent}from"../../chunks/app-R_CgGQda.js";

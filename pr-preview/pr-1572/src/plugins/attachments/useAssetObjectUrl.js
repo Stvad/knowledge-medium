@@ -1,0 +1,1 @@
+export{Wb as useAssetObjectUrl}from"../../../chunks/app-R_CgGQda.js";

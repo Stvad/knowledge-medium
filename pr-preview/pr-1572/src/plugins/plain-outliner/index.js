@@ -1,0 +1,1 @@
+export{YC as plainOutlinerPlugin}from"../../../chunks/app-R_CgGQda.js";

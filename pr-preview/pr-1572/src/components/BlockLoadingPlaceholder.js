@@ -1,0 +1,1 @@
+export{YN as BlockLoadingPlaceholder}from"../../chunks/app-R_CgGQda.js";

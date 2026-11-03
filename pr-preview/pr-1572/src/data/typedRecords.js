@@ -1,0 +1,1 @@
+export{$m as adoptTypedBlock,eh as createTypedChild,crt as derivedBlockId,th as getOrCreateTypedChild}from"../../chunks/app-R_CgGQda.js";

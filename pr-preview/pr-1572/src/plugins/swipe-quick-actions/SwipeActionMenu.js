@@ -1,0 +1,1 @@
+export{CA as SwipeActionMenu}from"../../../chunks/app-R_CgGQda.js";

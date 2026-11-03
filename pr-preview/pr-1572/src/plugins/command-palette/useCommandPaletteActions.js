@@ -1,0 +1,1 @@
+export{Vk as useCommandPaletteActions}from"../../../chunks/app-R_CgGQda.js";

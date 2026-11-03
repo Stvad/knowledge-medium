@@ -1,0 +1,1 @@
+export{f2 as kernelDataExtension}from"../../chunks/app-R_CgGQda.js";

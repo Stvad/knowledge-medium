@@ -1,0 +1,1 @@
+export{aU as propertyShapeLabel}from"../../../chunks/app-R_CgGQda.js";

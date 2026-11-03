@@ -1,0 +1,1 @@
+export{KC as getBreadcrumbContentPreview}from"../../../chunks/app-R_CgGQda.js";

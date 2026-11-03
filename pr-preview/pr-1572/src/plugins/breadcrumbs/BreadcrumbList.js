@@ -1,0 +1,1 @@
+export{JC as BreadcrumbList}from"../../../chunks/app-R_CgGQda.js";

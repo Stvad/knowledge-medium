@@ -1,0 +1,1 @@
+export{Kot as CHANGE_SCOPE_POLICIES,qot as ChangeScope,Jot as isChangeScope,Yot as policyForScope,Xot as scopeAllowedInReadOnly,Zot as scopeIsUndoable,Qot as scopePoliciesEquivalent,$ot as scopeUploadsToServer,est as sourceForScope}from"../../../chunks/app-R_CgGQda.js";
