@@ -115,6 +115,17 @@ describe('findGoogleMapsLinks', () => {
     ])
   })
 
+  it('decodes the &amp; an HTML-escaped destination carries, keeping the place id', () => {
+    const text = '[map](https://www.google.com/maps/search/?api=1&amp;query=Cafe&amp;query_place_id=ChIJabc)'
+    const [link] = findGoogleMapsLinks(text)
+    expect(link).toEqual({
+      from: 0,
+      to: text.length,
+      url: 'https://www.google.com/maps/search/?api=1&query=Cafe&query_place_id=ChIJabc',
+    })
+    expect(parseGoogleMapsUrl(link.url)).toEqual({kind: 'full', query: 'Cafe', placeId: 'ChIJabc'})
+  })
+
   it("reads a markdown link's destination, never a URL in its label", () => {
     expect(findGoogleMapsLinks('[https://maps.app.goo.gl/label](https://example.com)')).toEqual([])
     const both = '[https://maps.app.goo.gl/label](https://maps.app.goo.gl/target)'

@@ -163,10 +163,12 @@ const isLinkDestination = (text: string, url: SyntaxNode): boolean => {
 }
 
 /** A `[label](…)` destination's value — the node text keeps the `<…>`
- *  wrapper and backslash escapes markdown allows there. */
+ *  wrapper, backslash escapes and character references markdown allows
+ *  there. Of the references only `&amp;` is decoded: it's the one a URL
+ *  carries, and the full named-entity table isn't worth a dependency. */
 const destinationValue = (raw: string): string =>
   (raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw)
-    .replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    .replace(/\\([!-/:-@[-`{-~])|&amp;/g, (_, escaped?: string) => escaped ?? '&')
 
 /** Found by the editor's markdown parser rather than a regex, so links
  *  in code stay literal and URL boundaries follow GFM (trailing
