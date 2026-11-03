@@ -9,6 +9,7 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
+import { decodeRowProperty } from '@/data/rowProperty'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
@@ -408,8 +409,7 @@ const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<voi
   if (seat === null || seat.deleted) return
   let existing: readonly string[]
   try {
-    const encoded = seat.properties[aliasesProp.name]
-    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+    existing = decodeRowProperty(seat, aliasesProp)
   } catch {
     return
   }

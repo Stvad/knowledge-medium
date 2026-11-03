@@ -6,31 +6,14 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, getBlockTypes } from '@/data/properties.js'
+import { getAliases, getBlockTypes } from '@/data/properties.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes/dailyNotes'
 import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.js'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
-const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null => {
-  const stored = properties[srsNextReviewDateProp.name]
-  if (stored === undefined) return null
-  try {
-    const value = srsNextReviewDateProp.codec.decode(stored)
-    return value || null
-  } catch {
-    return null
-  }
-}
-
-const decodeAliases = (properties: Record<string, unknown>): readonly string[] => {
-  const stored = properties[aliasesProp.name]
-  if (stored === undefined) return []
-  try {
-    return aliasesProp.codec.decode(stored)
-  } catch {
-    return []
-  }
-}
+const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null =>
+  safeDecodeRowProperty({properties}, srsNextReviewDateProp) || null
 
 const dailyNoteIsoFromBlockId = async (
   block: Block,
@@ -42,7 +25,7 @@ const dailyNoteIsoFromBlockId = async (
   // only date-shaped alias is e.g. `2026-13-01` would, under shape-only
   // matching, feed bogus input to `addDaysIso` and roll over silently.
   // Treat such rows as "no date" so scheduling refuses to act on them.
-  const aliasIso = decodeAliases(data.properties).find(isValidDateAlias)
+  const aliasIso = getAliases(data).find(isValidDateAlias)
   if (aliasIso) return aliasIso
   const content = data.content.trim()
   return isValidDateAlias(content) ? content : null

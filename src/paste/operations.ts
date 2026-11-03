@@ -2,6 +2,7 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
+import { decodeRowProperty } from '@/data/rowProperty'
 import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
@@ -116,10 +117,8 @@ export const planSingleBlockPaste = (
 
 const isBlankContent = (content: string): boolean => content.trim().length === 0
 
-const isCollapsed = (properties: Record<string, unknown>): boolean => {
-  const raw = properties[isCollapsedProp.name]
-  return raw === undefined ? isCollapsedProp.defaultValue : isCollapsedProp.codec.decode(raw)
-}
+const isCollapsed = (properties: Record<string, unknown>): boolean =>
+  decodeRowProperty({properties}, isCollapsedProp)
 
 const editorContentForFirstPastedLine = (
   pastedText: string,

@@ -18,6 +18,10 @@ import { ChangeScope, seedProperty } from '@/data/api'
 
 export type CharacterCounterScope = 'self' | 'children' | 'subtree'
 
+/** The built-in `char:profile` values. */
+export const RAW_CHARACTER_COUNT_PROFILE_ID = 'raw'
+export const WORDS_COUNT_PROFILE_ID = 'words'
+
 export const charLimitProp = seedProperty({
   seedKey: 'system:character-counter/property/limit',
   revision: 1,

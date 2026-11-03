@@ -11,6 +11,7 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {propertySchemaOriginForSeedKey} from '@/data/propertyDefinitionMetadata'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {decodeRowProperty, peekRowProperty} from '@/data/rowProperty'
 
 export type PropertyBoundaryResolution<T> =
   | {readonly status: 'available'; readonly schema: PropertySchema<T>}
@@ -448,6 +449,32 @@ export const requireWritablePropertySchema = <T>(
     resolution.schema as PropertySchema<unknown>,
   )
   return (strict as PropertySchema<T> | undefined) ?? resolution.schema
+}
+
+/** A property's value in `properties` as `resolver`'s winner for its name reads
+ *  it, or `undefined` when that identity is unavailable or the cell is absent.
+ *  The one resolved read behind `Block.peekProperty`, `Block.get` and
+ *  `Tx.getProperty`; raw rows with no resolver use `peekRowProperty`. */
+export const peekResolvedProperty = <T>(
+  resolver: PropertySchemaResolver,
+  properties: Readonly<Record<string, unknown>>,
+  schema: PropertySchema<T>,
+): T | undefined => {
+  const resolution = resolver.resolveBoundary(schema)
+  if (resolution.status === 'identity-unavailable') return undefined
+  return peekRowProperty({properties}, resolution.schema)
+}
+
+/** `peekResolvedProperty` with defaults: the winner's default when the cell is
+ *  absent, `schema`'s own when the identity is unavailable. */
+export const getResolvedProperty = <T>(
+  resolver: PropertySchemaResolver,
+  properties: Readonly<Record<string, unknown>>,
+  schema: PropertySchema<T>,
+): T => {
+  const resolution = resolver.resolveBoundary(schema)
+  if (resolution.status === 'identity-unavailable') return schema.defaultValue
+  return decodeRowProperty({properties}, resolution.schema)
 }
 
 export type PropertyWriteTarget<T> =

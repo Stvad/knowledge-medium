@@ -12,6 +12,7 @@
  * cosmetic. (Capture — Phase 5 — populates them; this phase only defines + renders.)
  */
 
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { TypeSeedDeclaration } from '@/data/api'
 import type { KernelPageSpec } from '@/data/kernelPage'
@@ -34,15 +35,8 @@ export const mediaHashProp = seedProperty({
 /** A media block's content hash from its stored properties, or null when it
  *  has none yet. Total: a legacy or hand-edited row can hold a value the codec
  *  throws on, and one such row must not abort a walk over the workspace. */
-export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null => {
-  const encoded = properties[mediaHashProp.name]
-  if (encoded === undefined) return null
-  try {
-    return mediaHashProp.codec.decode(encoded) || null
-  } catch {
-    return null
-  }
-}
+export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null =>
+  safeDecodeRowProperty({properties}, mediaHashProp) || null
 
 /** The content hash of a stored `properties_json` that is a media block's, or
  *  null for any other row. Total: an unparsable or non-object value is no media

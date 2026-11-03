@@ -19,6 +19,7 @@ import {
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { decodeRowProperty } from '@/data/rowProperty'
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
@@ -137,21 +138,15 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   const userSchemas = block.repo.userSchemas
 
   const label = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeLabelProp.name]
-    return raw === undefined ? blockTypeLabelProp.defaultValue : blockTypeLabelProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeLabelProp) : ''
   }, [data])
 
   const description = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeDescriptionProp.name]
-    return raw === undefined ? blockTypeDescriptionProp.defaultValue : blockTypeDescriptionProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeDescriptionProp) : ''
   }, [data])
 
   const propertyRefs = useMemo<readonly string[]>(() => {
-    if (!data) return []
-    const raw = data.properties[blockTypePropertiesProp.name]
-    return raw === undefined ? blockTypePropertiesProp.defaultValue : blockTypePropertiesProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypePropertiesProp) : []
   }, [data])
 
   // Resolve each block-id ref to its published schema. Unresolved refs

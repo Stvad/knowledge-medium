@@ -18,7 +18,8 @@
 
 import { useCallback } from 'react'
 import type { Block } from '@/data/block.js'
-import { getBlockTypes } from '@/data/properties.js'
+import { typesProp } from '@/data/properties.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useHandle, useProperty } from '@/hooks/block.js'
 import {
@@ -26,7 +27,7 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
-import { CHAR_COUNTER_TYPE } from './blockType'
+import { COUNTER_TYPES } from './blockType'
 import { charLimitProp, charProfileProp, charScopeProp } from './properties'
 import { charCountDisplay } from './charCount'
 import {
@@ -48,9 +49,12 @@ interface CharacterCountDecoratorProps {
   Inner: BlockRenderer
 }
 
+const isCounter = (types: readonly string[]): boolean =>
+  types.some(type => COUNTER_TYPES.includes(type))
+
 const blockInfoSelector = (data: ReturnType<Block['peek']>) => ({
   parentId: data?.parentId ?? null,
-  types: data ? getBlockTypes(data) : [],
+  types: data ? safeDecodeRowProperty(data, typesProp) : [],
 })
 
 const BadgeText = ({
@@ -147,13 +151,13 @@ const InheritedCharacterCountDecorator = ({
 }: InheritedCharacterCountDecoratorProps) => {
   const parent = block.repo.block(parentId)
   const parentTypes = useHandle(parent, {
-    selector: data => data ? getBlockTypes(data) : [],
+    selector: data => data ? safeDecodeRowProperty(data, typesProp) : [],
   })
   const [parentScope] = useProperty(parent, charScopeProp)
   const [parentLimit] = useProperty(parent, charLimitProp)
   const [parentProfileId] = useProperty(parent, charProfileProp)
   const applies =
-    parentTypes.includes(CHAR_COUNTER_TYPE) &&
+    isCounter(parentTypes) &&
     parentScope === 'children'
 
   if (!applies) return <Inner block={block}/>
@@ -173,7 +177,7 @@ const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) =
   const [limit] = useProperty(block, charLimitProp)
   const [profileId] = useProperty(block, charProfileProp)
   const selfApplies =
-    info.types.includes(CHAR_COUNTER_TYPE) &&
+    isCounter(info.types) &&
     (scope === 'self' || scope === 'subtree')
 
   if (selfApplies) {

@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
-import type {BlockData} from '@/data/api'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import {useHandle} from '@/hooks/block.js'
 import {useMinuteClock} from '@/hooks/useMinuteClock.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
@@ -26,15 +26,10 @@ import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from './queries.js'
 type Attribution = {creators: readonly string[]; editors: readonly string[]; workspaceId: string}
 type Profile = {id: string; name: string; kind: ContributorKind; role?: string}
 
-const readProperty = <T,>(data: BlockData, schema: {name: string; codec: {decode: (value: unknown) => T}; defaultValue: T}): T => {
-  const value = data.properties[schema.name]
-  return value === undefined ? schema.defaultValue : schema.codec.decode(value)
-}
-
 const useAttribution = (block: Block): Attribution | undefined => useHandle(block, {
   selector: data => data ? {
-    creators: readProperty(data, attributionCreatorsProp),
-    editors: readProperty(data, attributionEditorsProp),
+    creators: decodeRowProperty(data, attributionCreatorsProp),
+    editors: decodeRowProperty(data, attributionEditorsProp),
     workspaceId: data.workspaceId,
   } : undefined,
 })
@@ -67,9 +62,8 @@ const useContributorProfiles = (block: Block): {attribution: Attribution | undef
     profileRows.forEach(row => {
       const id = row.id
       let kind: ContributorKind = 'agent'
-      let role: string | undefined
       try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
-      try { role = readProperty(row, contributorRoleProp) } catch { /* A role is optional display metadata. */ }
+      const role = safeDecodeRowProperty(row, contributorRoleProp)
       byId.set(id, {
         id,
         name: row.content.trim().split('\n')[0] || `${kind} contributor`,

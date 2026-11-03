@@ -66,6 +66,7 @@ import {
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import {
   addBlockTypeToProperties,
+  addedTypes,
   aliasesProp,
   blockTypeLabelProp,
   getAliases,
@@ -384,12 +385,7 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const seedKey = seededDefinitionKey(after)
       if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 
-      // Tolerant on BOTH sides, for the reason the gate above is: `addedTypes`
-      // decodes `before` strictly, and a tx writing a well-formed cell over a
-      // malformed one would throw there instead of completing the type.
-      const hadBlockType = row.before !== null
-        && safeDecodeRowProperty(row.before, typesProp).includes(BLOCK_TYPE_TYPE)
-      if (!hadBlockType) {
+      if (addedTypes(row).includes(BLOCK_TYPE_TYPE)) {
         await completeNewType(row, after, ctx)
         continue
       }

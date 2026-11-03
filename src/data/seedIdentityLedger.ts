@@ -212,6 +212,7 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
   ['system:backlinks/type/backlinks-prefs', 'backlinks-prefs'],
   ['system:block-tagging/type/block-tagging-prefs', 'block-tagging-prefs'],
   ['system:character-counter/type/char-counter', 'char-counter'],
+  ['system:character-counter/type/word-counter', 'word-counter'],
   ['system:contributors/type/profile', 'contributor:profile'],
   ['system:daily-notes/type/daily-note', 'daily-note'],
   ['system:extensions-settings/type/extensions-prefs', 'extensions-prefs'],
