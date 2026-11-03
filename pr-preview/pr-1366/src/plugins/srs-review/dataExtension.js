@@ -1,1 +1,1 @@
-import{sc as e}from"../../../chunks/app-DcuRJwGP.js";export{e as srsReviewDataExtension};
+export{bc as srsReviewDataExtension}from"../../../chunks/app-Dmdjq0Ge.js";

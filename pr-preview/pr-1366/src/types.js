@@ -1,1 +1,1 @@
-import{J8 as e}from"../chunks/app-DcuRJwGP.js";export{e as isChildBackedPropertiesWorkspace};
+export{xnt as isChildBackedPropertiesWorkspace}from"../chunks/app-Dmdjq0Ge.js";

@@ -1,1 +1,1 @@
-import{EH as e,TH as t}from"../../../chunks/app-DcuRJwGP.js";export{t as getOrCreateLocationsPage,e as locationsPageBlockId};
+export{XG as getOrCreateLocationsPage,ZG as locationsPageBlockId,QG as locationsPageSpec}from"../../../chunks/app-Dmdjq0Ge.js";

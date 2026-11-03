@@ -1,1 +1,1 @@
-import{VX as e}from"../../chunks/app-DcuRJwGP.js";export{e as kernelDataExtension};
+export{i2 as kernelDataExtension}from"../../chunks/app-Dmdjq0Ge.js";
