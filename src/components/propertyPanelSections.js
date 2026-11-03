@@ -1,1 +1,1 @@
-export{XR as buildPropertyPanelSections}from"../../chunks/app-hyg0Of51.js";
+export{QR as buildPropertyPanelSections}from"../../chunks/app-BicTmzqe.js";

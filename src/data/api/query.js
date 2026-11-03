@@ -1,1 +1,1 @@
-export{Xat as defineQuery}from"../../../chunks/app-hyg0Of51.js";
+export{Qat as defineQuery}from"../../../chunks/app-BicTmzqe.js";
