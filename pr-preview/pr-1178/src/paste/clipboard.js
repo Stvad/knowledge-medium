@@ -1,0 +1,1 @@
+export{RI as readClipboardContent}from"../../chunks/app-D30bWpOQ.js";

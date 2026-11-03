@@ -1,0 +1,1 @@
+export{WU as BootFallback}from"../../../chunks/app-D30bWpOQ.js";

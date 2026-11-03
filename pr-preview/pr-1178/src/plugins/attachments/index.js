@@ -1,1 +1,1 @@
-import{Nf as e}from"../../../chunks/app-Cwpk03jk.js";export{e as attachmentsPlugin};
+export{Py as attachmentsPlugin}from"../../../chunks/app-D30bWpOQ.js";

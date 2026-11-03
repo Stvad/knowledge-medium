@@ -1,1 +1,1 @@
-import{CP as e}from"../../chunks/app-Cwpk03jk.js";export{e as usePropertySchemas};
+export{uU as usePropertySchemas}from"../../chunks/app-D30bWpOQ.js";

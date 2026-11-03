@@ -1,0 +1,1 @@
+export{FE as BlockLink}from"../../../chunks/app-D30bWpOQ.js";

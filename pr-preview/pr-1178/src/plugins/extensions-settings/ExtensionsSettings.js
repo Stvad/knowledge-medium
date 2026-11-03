@@ -1,1 +1,1 @@
-import{Ct as e}from"../../../chunks/app-Cwpk03jk.js";export{e as ExtensionsSettings};
+export{fr as ExtensionsSettings}from"../../../chunks/app-D30bWpOQ.js";

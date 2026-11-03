@@ -1,1 +1,1 @@
-import{As as e,Cs as t,Ds as n,Es as r,Os as i,Ts as a,ks as o,ws as s}from"../../../chunks/app-Cwpk03jk.js";export{t as blockTaggingPrefsType,s as blockTagsConfigCodec,a as blockTagsConfigPresetCore,r as blockTagsConfigProp,n as isValidTagName,i as normalizeBlockTagsConfig,o as selectableTagNames,e as tagNameIssue};
+export{Tl as blockTaggingPrefsType,El as blockTagsConfigCodec,Dl as blockTagsConfigPresetCore,Ol as blockTagsConfigProp,kl as isValidTagName,Al as normalizeBlockTagsConfig,jl as selectableTagNames,Ml as tagNameIssue}from"../../../chunks/app-D30bWpOQ.js";

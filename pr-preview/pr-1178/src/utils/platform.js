@@ -1,1 +1,1 @@
-import{lN as e,uN as t}from"../../chunks/app-Cwpk03jk.js";export{e as isIOS,t as isMacPlatform};
+export{ZV as isIOS,QV as isMacPlatform}from"../../chunks/app-D30bWpOQ.js";

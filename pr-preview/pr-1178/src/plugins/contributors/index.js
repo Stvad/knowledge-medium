@@ -1,0 +1,1 @@
+export{rp as contributorsPlugin}from"../../../chunks/app-D30bWpOQ.js";

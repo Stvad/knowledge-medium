@@ -1,1 +1,1 @@
-import{y as e}from"../../../chunks/app-Cwpk03jk.js";export{e as typeChipsDecoratorContribution};
+export{Zt as typeChipsDecoratorContribution}from"../../../chunks/app-D30bWpOQ.js";

@@ -1,1 +1,1 @@
-import{nw as e,tw as t}from"../../chunks/app-Cwpk03jk.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+export{Xj as exampleExtensions,Zj as insertExampleExtensionsUnder}from"../../chunks/app-D30bWpOQ.js";

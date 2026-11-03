@@ -1,0 +1,1 @@
+export{IJ as annotationMarginOpenProp}from"../../../chunks/app-D30bWpOQ.js";

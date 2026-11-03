@@ -1,0 +1,1 @@
+export{xm as BLOCK_HISTORY_CONTENT_CHARS,Sm as LISTED_PROPERTY_NAMES,Cm as MAX_LISTED_CHANGES,wm as blockHistory,Tm as recentChanges}from"../../../chunks/app-D30bWpOQ.js";
