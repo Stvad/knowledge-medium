@@ -11,8 +11,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { AGENT_VIEW_DEFAULTS, charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
 import { newBlockDestination, refuseDanglingBlockRefs } from './blockRefTargets.ts'
-import { displayIds } from './agentViews/displayIds.ts'
-import { shortIds } from './agentViews/resolveRef.ts'
+import { idMark } from './agentViews/displayIds.ts'
 import { CUT_LEGEND, EMPTY_CONTENT, joinDisplayLines, plural } from './agentViews/shared.ts'
 import { clipLine } from './agentViews/text.ts'
 import {
@@ -43,10 +42,9 @@ interface AppendMarkdownInput {
   exactIds?: boolean
 }
 
-/** A block as an append reports it: one display line, cut at the read views'
- *  line budget, and its id as they print it. */
+/** A block's content as an append reports it: one display line, cut at the
+ *  read views' line budget. */
 interface AppendedLine {
-  shortId: string
   content: string
   /** Characters cut from `content` (0 when it fit). */
   cut: number
@@ -69,23 +67,23 @@ interface AppendMarkdownView {
   blocks: AppendedBlock[]
 }
 
-const appendedLine = (content: string, shortId: string): AppendedLine => {
+const appendedLine = (content: string): AppendedLine => {
   const clipped = clipLine(content, AGENT_VIEW_DEFAULTS.lineChars)
-  return {shortId, content: clipped.text === '' ? EMPTY_CONTENT : clipped.text, cut: clipped.cut}
+  return {content: clipped.text === '' ? EMPTY_CONTENT : clipped.text, cut: clipped.cut}
 }
 
-/** `Appended N blocks under <target>  ^short (kind[, created]):`, then the new
+/** `Appended N blocks under <target>  ^id (kind[, created]):`, then the new
  *  blocks as an outline in the read views' line form. */
 export const renderAppendView = (view: AppendMarkdownView): string => {
   const {target, appended, blocks} = view
   const facts = target.created ? `${target.kind}, created` : target.kind
   const lines = [
-    `Appended ${plural(appended, 'block')} under ${target.content}  ^${target.shortId} (${facts}):`,
-    ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ^${block.shortId}`),
+    `Appended ${plural(appended, 'block')} under ${target.content}  ${idMark(target.id)} (${facts}):`,
+    ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ${idMark(block.id)}`),
   ]
   if ([target, ...blocks].some(line => line.cut > 0)) lines.push(CUT_LEGEND)
   const rest = appended - blocks.length
-  if (rest > 0) lines.push(`… ${plural(rest, 'more block')} not shown — read them with subtree ^${target.shortId}`)
+  if (rest > 0) lines.push(`… ${plural(rest, 'more block')} not shown — read them with subtree ${idMark(target.id)}`)
   return joinDisplayLines(lines)
 }
 
@@ -147,11 +145,10 @@ export const appendMarkdown = async (
     }, agentTxOptions(verb))
 
     const listed = blocks.slice(0, AGENT_VIEW_DEFAULTS.outlineLimit)
-    const ids = await displayIds(repo, [target.id, ...listed.map(block => block.id)])
     return {
-      target: {...target, ...appendedLine(targetContent, ids.get(target.id)!)},
+      target: {...target, ...appendedLine(targetContent)},
       appended: blocks.length,
-      blocks: listed.map(({content, ...block}) => ({...block, ...appendedLine(content, ids.get(block.id)!)})),
+      blocks: listed.map(({content, ...block}) => ({...block, ...appendedLine(content)})),
     }
   })
 }
@@ -186,7 +183,6 @@ export const contentEcho = (content: string): string => {
 
 interface EditBlockResult {
   id: string
-  shortId: string
   /** The replacement with up to {@link EDIT_CONTEXT_CHARS} of context on each
    *  side, cuts marked: the confirmation, without echoing a long block whole. */
   excerpt: string
@@ -241,7 +237,7 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Edit
     await tx.update(id, {content})
     excerpt = editExcerpt(content, at, input.new.length)
   }, agentTxOptions(verb))
-  return {id, shortId: (await shortIds(repo, [id])).get(id)!, excerpt}
+  return {id, excerpt}
 }
 
 interface CreatePageInput {
@@ -272,6 +268,5 @@ export const createPage = async (
     resolved = await resolveDailyNoteTarget(repo, date.iso, verb)
   }
   const content = (await repo.load(resolved.id))?.content ?? ''
-  const ids = await displayIds(repo, [resolved.id])
-  return {...resolved, ...appendedLine(content, ids.get(resolved.id)!)}
+  return {...resolved, ...appendedLine(content)}
 }

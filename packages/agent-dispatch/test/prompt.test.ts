@@ -29,9 +29,11 @@ describe('renderMentionPrompt', () => {
     }
   })
 
-  it('teaches both default templates the block-link form that resolves, not a ^shortid', () => {
+  it('teaches both default templates the block-link form, with the id the tools print after ^', () => {
     for (const template of [undefined, DEFAULT_MENTION_CHANNEL_PROMPT]) {
-      expect(renderMentionPrompt(template, context)).toContain('[a few words](((full block id)))')
+      const prompt = renderMentionPrompt(template, context)
+      expect(prompt).toContain('[a few words](((block id)))')
+      expect(prompt).toContain('the id the km tools print after its ^')
     }
   })
 

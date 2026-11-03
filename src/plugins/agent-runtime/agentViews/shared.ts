@@ -8,7 +8,6 @@ import { clipLine, formatCount, oneLine } from './text.ts'
 /** One block as a view row: everything a line needs, already bounded. */
 export interface ViewRow {
   id: string
-  shortId: string
   /** One line, cut to the view's per-row budget (`cut` says by how much). */
   content: string
   cut: number
@@ -20,8 +19,7 @@ export interface ViewRow {
 
 export const toViewRow = (
   block: BlockData,
-  {shortIds, renderer, maxChars}: {
-    shortIds: ReadonlyMap<string, string>
+  {renderer, maxChars}: {
     renderer: PropertyRenderer
     maxChars: number
   },
@@ -30,7 +28,6 @@ export const toViewRow = (
   const properties = renderer.view(block)
   return {
     id: block.id,
-    shortId: shortIds.get(block.id) ?? block.id,
     content: clipped.text === '' ? EMPTY_CONTENT : clipped.text,
     cut: clipped.cut,
     types: renderer.typeLabels(block),

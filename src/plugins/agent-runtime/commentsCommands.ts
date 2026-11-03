@@ -29,7 +29,6 @@ import { authorIdOf } from '@/plugins/contributors/author.js'
 import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
-import { shortIds } from './agentViews/resolveRef.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { clampInt, loadRoot } from './agentViews/shared.ts'
 import { clip, clipLine, oneLine } from './agentViews/text.ts'
@@ -168,11 +167,10 @@ export const buildCommentsView = async (
   const commentRows = new Map(await Promise.all(page.map(async root => [root.id, await commentRowsOf(repo, root.id)] as const)))
   const allComments = [...commentRows.values()].flatMap(rows => rows.slice(0, MAX_COMMENTS_PER_THREAD))
   const targetIds = page.flatMap(root => threadTargetIdOf(root) ?? [])
-  const [targets, authors, crumbs, short] = await Promise.all([
+  const [targets, authors, crumbs] = await Promise.all([
     loadTargets(repo, targetIds),
     authorsOf(repo, allComments),
     loadCrumbs(repo, targetIds, workspaceId),
-    shortIds(repo, [...page.map(root => root.id), ...targetIds, ...allComments.map(row => row.id)]),
   ])
 
   const threadView = (root: BlockData): CommentThreadView => {
@@ -191,7 +189,6 @@ export const buildCommentsView = async (
       const {text: content, cut} = clip(row.content, AGENT_VIEW_DEFAULTS.blockMaxChars)
       const node: CommentNode = {
         id: row.id,
-        shortId: short.get(row.id) ?? row.id,
         content,
         cut,
         author: authors.get(row.id)!,
@@ -206,14 +203,12 @@ export const buildCommentsView = async (
 
     return {
       id: root.id,
-      shortId: short.get(root.id) ?? root.id,
       status: statusOf(root),
       anchor: anchor.kind === 'block' ? 'block' : resolution?.state ?? 'stale',
       quote: anchor.kind === 'block' ? null : clip(anchor.quote, QUOTE_MAX_CHARS).text,
       replacement: suggestion ? clip(suggestion.replacement, QUOTE_MAX_CHARS).text : null,
       target: targetId ? {
         id: targetId,
-        shortId: short.get(targetId) ?? targetId,
         deleted: target?.deleted === 1,
         path: crumbs.get(targetId) ?? [],
         excerpt: target ? excerptOf(target.content, range) : '',

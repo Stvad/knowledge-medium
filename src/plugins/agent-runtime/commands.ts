@@ -2048,7 +2048,7 @@ const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string
 }
 
 /** A raw command's block id, accepting every form an agent view prints or
- *  takes (unique id prefix, page name, date). An unmatched ref passes through
+ *  takes (an id, a page name, a date). An unmatched ref passes through
  *  unchanged, so the command's own not-found answer is unchanged too. */
 const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
   const resolution = await resolveBlockRef(repo, ref, {

@@ -1,6 +1,6 @@
 /**
  * Write targets for agent-bridge verbs: `resolveBlockRef` (the read views'
- * resolver — ids, `^short` prefixes, page names, dates) plus what only a write
+ * resolver — ids, page names, dates) plus what only a write
  * needs, CREATING a missing page or daily note:
  *   - `[[Name]]` — found by alias exactly as a wikilink is; on a miss created
  *     the way a wikilink creates it (a date-literal name is that day's daily
@@ -25,7 +25,7 @@ import { assertActiveWorkspace } from './workspaceGuard.ts'
 type ParsedAgentTarget =
   | {kind: 'page'; name: string}
   | {kind: 'block'; ref: string}
-  /** An id, an id prefix, a page name or a date expression. */
+  /** An id, a page name or a date expression. */
   | {kind: 'bare'; text: string}
 
 const wrapped = (raw: string, open: string, close: string): string | null =>
@@ -249,7 +249,7 @@ export const resolveAgentTarget = async (
     const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
     throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
   }
-  if (found.via === 'id' || found.via === 'prefix') return liveBlockTarget(repo, found.id, verb, pinned.workspaceId)
+  if (found.via === 'id') return liveBlockTarget(repo, found.id, verb, pinned.workspaceId)
   if (found.via === 'date') {
     // `resolveBlockRef` names the day's deterministic id; the note itself may
     // not exist yet.

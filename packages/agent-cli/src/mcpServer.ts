@@ -45,13 +45,13 @@ const agentCliPackageVersion = (() => {
  *  `serverOptions.instructions` is appended after it. */
 export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
 
-Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take a full id or a printed ^shortid, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
+Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as its id, a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take an id, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
 
-The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))) with the block's full id, which get_block prints in parentheses after its ^shortid; a write that links an id no live block of the workspace has is refused.
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; a write that links an id no live block of the workspace has is refused.
 
 Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 
@@ -59,8 +59,8 @@ type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
 /** What a write tool is about to do, as the write guard sees it. Block-id
  *  fields (`id`, move_block's `parentId` and `position.siblingId`) carry the
- *  FULL id the write will act on — a `^short` / `((id))` / prefix the caller
- *  typed is resolved first — so a guard looking rows up by id checks the same
+ *  FULL id the write will act on — a `^id` / `((id))` the caller typed is
+ *  resolved first — so a guard looking rows up by id checks the same
  *  block. Targets (`parentId` of create_block, `target`) stay as typed. */
 export type GraphMcpWriteOperation =
   | {type: 'create_block', parentId: string, content: string, properties?: Record<string, unknown>}
@@ -245,7 +245,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   server.registerTool('append_markdown' satisfies KmMcpToolName, {
     description: 'Insert markdown under a target in ONE transaction, split into blocks as the app\'s paste does '
     + '(bullets and headings nest; a code block or table stays one block; shape "block" keeps it all one block). '
-    + 'Returns the new blocks as a ^short-id outline. Default position: after the target\'s last child; a '
+    + 'Returns the new blocks as an outline with their ids. Default position: after the target\'s last child; a '
     + `before/after siblingId must be a child of the target, which is then never created. ${WRITE_TARGET_HELP}`,
     inputSchema: {
       target: z.string(),

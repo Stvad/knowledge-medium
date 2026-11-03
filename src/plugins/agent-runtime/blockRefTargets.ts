@@ -1,13 +1,11 @@
 /**
  * The `((id))` marks an agent write adds must name live blocks of the
- * workspace it writes to. The read views print ids as `^shortid`, and an id
- * completed from one parses as a reference to nothing: refused, the agent
- * retries; written, it is a dead link the user finds later.
+ * workspace it writes to. A mistyped or invented id parses as a reference to
+ * nothing: refused, the agent retries; written, it is a dead link the user
+ * finds later.
  */
 import type { Repo } from '@/data/repo'
 import { extractBlockRefIds } from '@/plugins/references/referenceParser.js'
-import { PREFIX_RANGE_SQL, SHORT_ID_LENGTHS } from './agentViews/resolveRef.ts'
-import { clipLine, textHeadSql } from './agentViews/text.ts'
 
 interface RefDestination {
   workspaceId: string
@@ -21,27 +19,6 @@ const TARGET_ROWS_SQL = `
     FROM json_each(?) j JOIN blocks b ON b.id = j.value
 `
 
-const PREFIX_CANDIDATES = 3
-
-const PREFIX_CANDIDATES_SQL = `
-  SELECT id, ${textHeadSql('content', 200)} AS content FROM blocks
-   WHERE ${PREFIX_RANGE_SQL} AND workspace_id = ? AND deleted = 0
-   ORDER BY id
-   LIMIT ${PREFIX_CANDIDATES}
-`
-
-/** What there is instead of `id`: the live blocks sharing its first
- *  shortid-length characters, the part of an id the read views print. */
-const missingTargetFacts = async (repo: Repo, workspaceId: string, id: string): Promise<string> => {
-  const prefix = id.slice(0, SHORT_ID_LENGTHS[0])
-  const rows = await repo.db.getAll<{id: string, content: string | null}>(
-    PREFIX_CANDIDATES_SQL, [prefix, prefix, workspaceId],
-  )
-  if (rows.length === 0) return 'no block has this id'
-  return `no block has this id; live blocks whose id starts with ${prefix}:`
-    + rows.map(row => `\n      ${row.id}  ${clipLine(row.content ?? '', 60).text}`).join('')
-}
-
 /** Refuses the write when `texts` add a block-ref mark whose target is
  *  missing, deleted or in another workspace. Text without a mark costs one
  *  parse: `destination` is read only when there is one, and answers null for
@@ -50,9 +27,8 @@ const missingTargetFacts = async (repo: Repo, workspaceId: string, id: string): 
  *  A mark inside code counts: the reference index reads raw content and
  *  records it, though the renderer shows it as code.
  *
- *  Checked before the write's tx, not inside it: the hint reads through
- *  `repo.db`, which a write tx would deadlock on, and a target deleted in the
- *  gap is the same dead link as one deleted right after the commit. */
+ *  Checked before the write's tx: a target deleted between the check and the
+ *  commit is the same dead link as one deleted right after it. */
 export const refuseDanglingBlockRefs = async (
   repo: Repo,
   verb: string,
@@ -73,16 +49,14 @@ export const refuseDanglingBlockRefs = async (
   for (const id of added) {
     const row = byId.get(id)
     if (row && row.deleted === 0 && row.workspaceId === where.workspaceId) continue
-    const facts = !row ? await missingTargetFacts(repo, where.workspaceId, id)
-      : row.deleted ? 'deleted'
-        : 'a block of another workspace'
+    const facts = !row ? 'no block has this id' : row.deleted ? 'deleted' : 'a block of another workspace'
     dangling.push(`  ((${id})) — ${facts}`)
   }
   if (dangling.length === 0) return
   throw new Error(
     `${verb}: the content links blocks that are not live in this workspace — nothing was written:\n`
     + `${dangling.join('\n')}\n`
-    + 'A ((ref)) takes a block\'s full id, which get_block prints in parentheses after its ^shortid.',
+    + 'A ((ref)) takes a block\'s id as the views print it after ^.',
   )
 }
 

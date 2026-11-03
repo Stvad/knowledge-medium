@@ -129,11 +129,11 @@ describe('createGraphMcpServer', () => {
           return {id: command.id, content: 'restored'}
         case 'append-markdown':
           return {
-            target: {id: 'p', shortId: 'p', kind: 'block', created: false, content: 'Parent'},
-            blocks: [{id: 'n', shortId: 'n', parentId: 'p', depth: 0, content: 'note'}],
+            target: {id: 'p', kind: 'block', created: false, content: 'Parent'},
+            blocks: [{id: 'n', parentId: 'p', depth: 0, content: 'note'}],
           }
         case 'edit-block':
-          return {id: command.id, shortId: 'b', excerpt: 'edited'}
+          return {id: command.id, excerpt: 'edited'}
         case 'add-comment':
           return {threadId: 't', commentId: 'c', quote: 'a'}
         case 'create-page':

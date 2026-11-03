@@ -61,7 +61,6 @@ export interface MoveBlockInput extends ExactIds {
 
 export interface EditBlockResult {
   id: string
-  shortId: string
   /** The replacement with bounded context on each side, cuts marked. */
   excerpt: string
 }

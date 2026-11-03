@@ -108,8 +108,8 @@ describe('add-comment', () => {
       .toMatchObject({replacement: null})
   })
 
-  it('takes a printed short id as its target', async () => {
-    const created = await asAgent({type: 'add-comment', target: `^${BLOCK.slice(0, 8)}`, content: 'On the whole block'}) as {threadId: string}
+  it('takes an id as the views print it as its target', async () => {
+    const created = await asAgent({type: 'add-comment', target: `^${BLOCK}`, content: 'On the whole block'}) as {threadId: string}
     expect((await comments({thread: created.threadId})).threads[0]?.target?.id).toBe(BLOCK)
   })
 

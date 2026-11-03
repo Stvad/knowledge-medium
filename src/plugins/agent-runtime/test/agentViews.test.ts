@@ -20,7 +20,7 @@ import { hasLoneSurrogate } from '@/utils/string'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
-import { resolveBlockRef, shortIds } from '../agentViews/resolveRef'
+import { resolveBlockRef } from '../agentViews/resolveRef'
 import type { OutlineView } from '../agentViews/outline'
 import type { BlockView } from '../agentViews/block'
 import { renderBacklinksView, type BacklinksView, type GroupedBacklinksView } from '../agentViews/backlinks'
@@ -123,12 +123,11 @@ describe('resolveBlockRef', () => {
     await create({id: PAGE, content: 'Project Alpha', properties: {alias: ['Project Alpha']}})
   })
 
-  it('accepts a full id, a unique prefix (bare, ^ or (( )) ), and a page name', async () => {
+  it('accepts a full id (bare, ^ or (( )) ) and a page name', async () => {
     const opts = {workspaceId: WS}
     expect(await resolveBlockRef(repo, PAGE, opts)).toEqual({id: PAGE, via: 'id'})
-    expect(await resolveBlockRef(repo, 'a1b2c3', opts)).toEqual({id: PAGE, via: 'prefix'})
-    expect(await resolveBlockRef(repo, '^A1B2C3D4', opts)).toEqual({id: PAGE, via: 'prefix'})
-    expect(await resolveBlockRef(repo, '((a1b2c3d4-00))', opts)).toEqual({id: PAGE, via: 'prefix'})
+    expect(await resolveBlockRef(repo, `^${PAGE}`, opts)).toEqual({id: PAGE, via: 'id'})
+    expect(await resolveBlockRef(repo, `((${PAGE}))`, opts)).toEqual({id: PAGE, via: 'id'})
     expect(await resolveBlockRef(repo, 'Project Alpha', opts)).toEqual({id: PAGE, via: 'alias'})
     expect(await resolveBlockRef(repo, '[[Project Alpha]]', opts)).toEqual({id: PAGE, via: 'alias'})
   })
@@ -138,43 +137,20 @@ describe('resolveBlockRef', () => {
       .toEqual({id: dailyNoteBlockId(WS, '2026-06-18'), via: 'date', iso: '2026-06-18'})
   })
 
-  it('refuses an ambiguous prefix and lists the candidates', async () => {
-    const twin = uuid('a1b2c3d4', 2)
-    await create({id: twin, content: 'Twin'})
-    await expect(resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}))
-      .rejects.toThrow(new RegExp(`ambiguous[\\s\\S]*${PAGE}[\\s\\S]*${twin}`))
-  })
-
-  it('prefers a live block over a deleted one sharing the prefix', async () => {
-    const deleted = uuid('a1b2c3d4', 3)
-    await create({id: deleted, content: 'Gone'})
-    await executeCommand({commandId: 'd', type: 'delete-block', id: deleted}, context)
-    expect(await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS})).toEqual({id: PAGE, via: 'prefix'})
-  })
-
-  it('a too-short prefix is not treated as one', async () => {
-    await expect(resolveBlockRef(repo, 'a1b2', {workspaceId: WS})).rejects.toThrow(/No block matches/)
+  it('does not resolve the start of an id', async () => {
+    for (const prefix of [PAGE.slice(0, 8), `^${PAGE.slice(0, 8)}`, `((${PAGE.slice(0, 13)}))`]) {
+      await expect(resolveBlockRef(repo, prefix, {workspaceId: WS}))
+        .rejects.toThrow(/No block matches .*\(tried: id, page name, date\)/)
+    }
   })
 
   it('keeps user text in its errors on one line, without bidi controls', async () => {
-    await create({id: uuid('a1b2c3d4', 4), content: 'Twin\n\u202Eforged'})
-    const ambiguous = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
-    expect(ambiguous).toContain('Twin ⏎ forged')
-    expect(ambiguous).not.toMatch(/\p{Bidi_Control}/u)
-    // A synced id is not guaranteed canonical either.
-    await create({id: 'a1b2c3d4-x\nfake line \u202E', content: 'odd id'})
-    const oddId = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
-    expect(oddId).toContain('a1b2c3d4-x ⏎ fake line')
-    expect(oddId).not.toMatch(/fake line \u202E|\nfake/u)
+    const unmatched = await resolveBlockRef(repo, 'no\nsuch ‮block', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(unmatched).toContain('No block matches "no ⏎ such')
+    expect(unmatched).not.toMatch(/\p{Bidi_Control}/u)
     await create({id: uuid('a1b2c3d5', 5), content: 'x', properties: {alias: ['Project\nAlpha two']}})
     const missing = await resolveBlockRef(repo, 'Project', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
     expect(missing).toContain('  Project ⏎ Alpha two')
-  })
-
-  it('describes an ambiguous candidate by its content head, past leading whitespace', async () => {
-    await create({id: uuid('a1b2c3d4', 7), content: `${' '.repeat(300)}Real head ${'x'.repeat(5000)}`})
-    const message = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
-    expect(message).toContain('Real head xxx')
   })
 
   it('clips a long alias in its suggestions', async () => {
@@ -189,69 +165,27 @@ describe('resolveBlockRef', () => {
       .rejects.toThrow(/Pages with similar names:\n {2}Project Alpha/)
   })
 
-  it("gives a deleted block a prefix only when that prefix resolves back to it", async () => {
-    const live = 'cafe0001-1111-4000-8000-000000000001'
-    const deletedTwin = 'cafe0001-2222-4000-8000-000000000002'
-    const deletedA = 'cafe0002-1111-4000-8000-000000000003'
-    const deletedB = 'cafe0002-2222-4000-8000-000000000004'
-    for (const id of [live, deletedTwin, deletedA, deletedB]) await create({id})
-    for (const id of [deletedTwin, deletedA, deletedB]) {
-      await executeCommand({commandId: 'd', type: 'delete-block', id}, context)
-    }
-    const short = await shortIds(repo, [live, deletedTwin, deletedA, deletedB])
-    // `cafe0001` resolves to the live block, so its deleted twin needs more characters.
-    expect(short.get(live)).toBe('cafe0001')
-    expect(short.get(deletedTwin)).toBe('cafe0001-222')
-    // Two deleted blocks sharing a prefix tell each other apart the same way.
-    expect(short.get(deletedA)).toBe('cafe0002-111')
-    for (const id of [live, deletedTwin, deletedA, deletedB]) {
-      expect((await resolveBlockRef(repo, short.get(id)!, {workspaceId: WS})).id).toBe(id)
-    }
-  })
-
   it('keeps a wrapped ref meaning its target when a stored id spells the ref itself', async () => {
-    const planted = ['[[Project Alpha]]', '^a1b2c3d4', `((${PAGE}))`]
+    const planted = ['[[Project Alpha]]', `^${PAGE}`, `((${PAGE}))`]
     for (const id of planted) await create({id, content: 'planted'})
     expect(await resolveBlockRef(repo, '[[Project Alpha]]', {workspaceId: WS})).toEqual({id: PAGE, via: 'alias'})
-    expect(await resolveBlockRef(repo, '^a1b2c3d4', {workspaceId: WS})).toEqual({id: PAGE, via: 'prefix'})
+    expect(await resolveBlockRef(repo, `^${PAGE}`, {workspaceId: WS})).toEqual({id: PAGE, via: 'id'})
     expect(await resolveBlockRef(repo, `((${PAGE}))`, {workspaceId: WS})).toEqual({id: PAGE, via: 'id'})
     for (const id of planted) {
       expect(await resolveBlockRef(repo, `((${id}))`, {workspaceId: WS})).toEqual({id, via: 'id'})
     }
   })
 
-  it('keeps a non-canonical UUID exactly as given, and never shortens one', async () => {
+  it('keeps a non-canonical UUID exactly as given', async () => {
     const mixedCase = 'ABCDEF12-0000-4000-8000-000000000001'
     expect(await resolveBlockRef(repo, mixedCase, {workspaceId: WS})).toEqual({id: mixedCase, via: 'id'})
-    expect((await shortIds(repo, [mixedCase])).get(mixedCase)).toBe(mixedCase)
   })
 
   it("accept:'id' refuses names, and onMissing:'verbatim' hands the ref back", async () => {
     await expect(resolveBlockRef(repo, 'Project Alpha', {workspaceId: WS, accept: 'id'}))
-      .rejects.toThrow(/takes an id/)
+      .rejects.toThrow('No block has id "Project Alpha". This operation takes a block id, not a name.')
     expect(await resolveBlockRef(repo, 'nothing-here', {workspaceId: WS, onMissing: 'verbatim'}))
       .toEqual({id: 'nothing-here', via: 'verbatim'})
-  })
-})
-
-describe('shortIds', () => {
-  it('uses 8 characters, more where 8 would be ambiguous (up to the whole id), and leaves non-hex ids whole', async () => {
-    const a = 'feedbeef-1111-4000-8000-000000000001'
-    const b = 'feedbeef-2222-4000-8000-000000000002'
-    const c = uuid('0badcafe', 3)
-    const d = 'feedbeef-2222-4000-8000-000000000004'
-    for (const id of [a, b, c, d]) await create({id})
-    await create({id: 'plain-id'})
-
-    const short = await shortIds(repo, [a, b, c, d, 'plain-id'])
-    expect(short.get(c)).toBe('0badcafe')
-    expect(short.get(a)).toBe('feedbeef-111')
-    expect(short.get(b)).toBe(b)
-    expect(short.get('plain-id')).toBe('plain-id')
-    // Every short id resolves back to its block.
-    for (const id of [a, b, c, d]) {
-      expect((await resolveBlockRef(repo, short.get(id)!, {workspaceId: WS})).id).toBe(id)
-    }
   })
 })
 
@@ -260,10 +194,11 @@ describe('view-outline', () => {
 
   it('renders markdown lines, hides UI-hidden properties, summarizes structured values', async () => {
     const other = uuid('00000002', 2)
+    const first = uuid('00000003', 3)
     await create({id: other, content: 'Other page', properties: {alias: ['Other page']}})
     await create({id: ROOT, content: 'Root page', properties: {alias: ['Root page']}})
     await create({
-      id: uuid('00000003', 3),
+      id: first,
       parentId: ROOT,
       content: 'First child\nsecond line',
       properties: {
@@ -275,33 +210,35 @@ describe('view-outline', () => {
 
     const text = await view<string>({type: 'view-outline', ref: 'Root page'})
     const lines = text.split('\n')
-    expect(lines[0]).toBe('Root page  ^00000001  · 1 child')
-    expect(lines[1]).toBe('- First child ⏎ second line  groupWith:: [[Other page]] ^00000002  snapshot-history:: [2 items]  ^00000003')
+    expect(lines[0]).toBe(`Root page  ^${ROOT}  · 1 child`)
+    expect(lines[1]).toBe(`- First child ⏎ second line  groupWith:: [[Other page]] ^${other}  snapshot-history:: [2 items]  ^${first}`)
     expect(text).not.toContain('system:collapsed')
   })
 
   it('stops at depth, marking unexpanded and collapsed children', async () => {
     await create({id: ROOT, content: 'Root'})
     const a = uuid('0000000a', 1)
+    const a1 = uuid('000000a1', 3)
     const collapsed = uuid('0000000c', 2)
+    const underFold = uuid('000000c1', 5)
     await create({id: a, parentId: ROOT, content: 'A'})
-    await create({id: uuid('000000a1', 3), parentId: a, content: 'A1'})
-    await create({id: uuid('000000a2', 4), parentId: uuid('000000a1', 3), content: 'A1x'})
+    await create({id: a1, parentId: a, content: 'A1'})
+    await create({id: uuid('000000a2', 4), parentId: a1, content: 'A1x'})
     await create({id: collapsed, parentId: ROOT, content: 'Folded', properties: {'system:collapsed': true}})
-    await create({id: uuid('000000c1', 5), parentId: collapsed, content: 'Hidden under fold'})
+    await create({id: underFold, parentId: collapsed, content: 'Hidden under fold'})
 
     const text = await view<string>({type: 'view-outline', ref: ROOT, depth: 2})
-    expect(text).toContain('  - A1  ^000000a1  (+1 child)')
-    expect(text).toContain('- Folded  ^0000000c  (+1 child, collapsed)')
+    expect(text).toContain(`  - A1  ^${a1}  (+1 child)`)
+    expect(text).toContain(`- Folded  ^${collapsed}  (+1 child, collapsed)`)
     expect(text).not.toContain('Hidden under fold')
     expect(text).toContain('(+N children) = not expanded')
 
     const expanded = await view<string>({type: 'view-outline', ref: ROOT, depth: 2, expandCollapsed: true})
-    expect(expanded).toContain('  - Hidden under fold  ^000000c1')
+    expect(expanded).toContain(`  - Hidden under fold  ^${underFold}`)
 
     // A collapsed root still shows its children, as the app does when zoomed into it.
     const asRoot = await view<string>({type: 'view-outline', ref: collapsed})
-    expect(asRoot).toContain('- Hidden under fold  ^000000c1')
+    expect(asRoot).toContain(`- Hidden under fold  ^${underFold}`)
   })
 
   it('counts the root children after reading the page, so a child added meanwhile leaves a continuation', async () => {
@@ -400,9 +337,10 @@ describe('view-outline', () => {
 
   it('cuts long content with a char count and a pointer to the full read', async () => {
     await create({id: ROOT, content: 'Root'})
-    await create({id: uuid('00000004', 4), parentId: ROOT, content: 'x'.repeat(450)})
+    const long = uuid('00000004', 4)
+    await create({id: long, parentId: ROOT, content: 'x'.repeat(450)})
     const text = await view<string>({type: 'view-outline', ref: ROOT})
-    expect(text).toContain(`- ${'x'.repeat(200)}…[+250 chars]  ^00000004`)
+    expect(text).toContain(`- ${'x'.repeat(200)}…[+250 chars]  ^${long}`)
     expect(text).toContain('get_block on that id reads the rest')
   })
 
@@ -431,7 +369,7 @@ describe('view-outline', () => {
   })
 
   describe('the output budget', () => {
-    /** Ids whose first 8 hex chars differ, so each prints as an 8-char short id. */
+    /** A distinct id per series and index. */
     const seriesId = (series: string, i: number): string => uuid(`${series}${i.toString(16).padStart(6, '0')}`, i)
     /** A property bag that prints about 15k characters with properties: full. */
     const bigProperties = (): BlockProperties =>
@@ -465,7 +403,7 @@ describe('view-outline', () => {
       const text = await view<string>(command)
       expect(text.split('\n')[1]).toMatch(/^in: .* ⏎ /)
       const rowLines = text.split('\n').slice(2, 2 + kept)
-      expect(rowLines.map(line => /\^(\w+) {2}\(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.shortId))
+      expect(rowLines.map(line => /\^([\w-]+) {2}\(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.id))
       // Counted as printed: the root's lines, breadcrumb included, each row's
       // with its hidden-children note, and every line break; one more row
       // would not have fit.
@@ -474,7 +412,7 @@ describe('view-outline', () => {
       expect(counted + longestLine(rowLines)).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
       expect(text).toContain(`continue with offset=${kept}`)
       expect(text).toMatch(new RegExp(`\\n… ${400 - kept} more selected blocks not shown, past the [\\d,]+-character output budget `
-        + '— narrow with properties=none, a lower limit or depth, or search with under=\\^00000001\\n'))
+        + `— narrow with properties=none, a lower limit or depth, or search with under=\\^${ROOT}\\n`))
 
       const next = await view<OutlineView>({...command, offset: kept, format: 'json'})
       expect(next.rows[0].content).toBe(`entry ${kept}`)
@@ -668,7 +606,7 @@ describe('structural edge cases', () => {
     }
     const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
     const group = out.groups.find(candidate => candidate.label === 'Topic B')!
-    expect(group).toMatchObject({groupId: 'topic-page', shortId: 'topic-page'})
+    expect(group).toMatchObject({groupId: 'topic-page'})
   })
 
   it('search never fetches past its window cap, whatever the offset', async () => {
@@ -810,22 +748,25 @@ describe('structural edge cases', () => {
     getAll.mockRestore()
     expect(JSON.parse(titleQuery![1]![0] as string)).toHaveLength(20)
     const value = out.properties.find(property => property.name === 'groupWith')!.value
-    const [, shown, rest] = value.match(/^((?:\[\[r\d+\]\] \^7e7e7e\d\d, )+)…\+(\d+) more$/)!
+    const [, shown, rest] = value.match(/^((?:\[\[r\d+\]\] \^[0-9a-f-]{36}, )+)…\+(\d+) more$/)!
     expect(shown.split(', ').length - 1 + Number(rest)).toBe(25)
   })
 
-  it('shows a ref whole or counts it, never cutting its id, when prefixes collide', async () => {
+  it('shows a ref whole or counts it, never cutting its id', async () => {
     const first = uuid('7a7b7c7d', 1)
     const second = uuid('7a7b7c7d', 2)
-    for (const id of [first, second]) await create({id, content: `Twin ${id.slice(-1)}`})
+    for (const id of [first, second]) await create({id, content: `Target ${id.slice(-1)}`})
     const root = uuid('7a7b7c7e', 1)
     await create({id: root, content: 'root'})
     await create({id: uuid('7a7b7c7f', 1), parentId: root, content: 'one', properties: {groupWith: [first]}})
     await create({id: uuid('7a7b7c7f', 2), parentId: root, content: 'two', properties: {groupWith: [first, second]}})
-    // Every shorter prefix of these ids is shared, so each prints whole (36 characters).
+    // Longer than any canonical id; only sync can deliver one.
+    const long = 'f'.repeat(60)
+    await create({id: uuid('7a7b7c7f', 3), parentId: root, content: 'three', properties: {groupWith: [long, first]}})
     const text = await view<string>({type: 'view-outline', ref: root})
-    expect(text).toContain(`- one  groupWith:: ^${first}  `)
-    expect(text).toContain('- two  groupWith:: [2 refs]  ')
+    expect(text).toContain(`- one  groupWith:: "Target 1" ^${first}  `)
+    expect(text).toContain(`- two  groupWith:: "Target 1" ^${first}, …+1 more  `)
+    expect(text).toContain('- three  groupWith:: [2 refs]  ')
   })
 
   it('counts only the refs that decode, not malformed list entries', async () => {
@@ -840,7 +781,7 @@ describe('structural edge cases', () => {
     )
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
     const line = out.properties.find(property => property.name === 'groupWith')!
-    expect(line.value).toBe('[[Target]] ^7f9f0001')
+    expect(line.value).toBe(`[[Target]] ^${target}`)
     expect(line.refIds).toEqual([target])
   })
 
@@ -853,7 +794,7 @@ describe('structural edge cases', () => {
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
     const line = out.properties.find(property => property.name === 'groupWith')!
     expect(line.refIds).toEqual([target, dangling])
-    expect(line.value).toMatch(/^\[\[Target\]\] \^7f8f0001, \(\(dangling-z+…\)\)$/)
+    expect(line.value).toMatch(new RegExp(`^\\[\\[Target\\]\\] \\^${target}, \\(\\(dangling-z+…\\)\\)$`))
   })
 
   it('gives an aliased ref its id: an alias two pages claim resolves to the older one', async () => {
@@ -871,11 +812,11 @@ describe('structural edge cases', () => {
     expect((await resolveBlockRef(repo, '[[Plans]]', {workspaceId: WS})).id).toBe(older)
 
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
-    expect(out.properties.find(property => property.name === 'groupWith')!.value).toBe('[[Plans]] ^7e8e0002')
-    expect((await resolveBlockRef(repo, '^7e8e0002', {workspaceId: WS})).id).toBe(younger)
+    expect(out.properties.find(property => property.name === 'groupWith')!.value).toBe(`[[Plans]] ^${younger}`)
+    expect((await resolveBlockRef(repo, `^${younger}`, {workspaceId: WS})).id).toBe(younger)
   })
 
-  it('names a ref to a block with no alias by its content and a short id that resolves back', async () => {
+  it('names a ref to a block with no alias by its content and its id', async () => {
     const task = uuid('7a7a7a7a', 1)
     const content = `Write the quarterly report${' and more'.repeat(20)}`
     await create({id: task, content})
@@ -888,11 +829,11 @@ describe('structural edge cases', () => {
 
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
     expect(out.properties.find(property => property.name === 'groupWith')!.value)
-      .toBe(`"${content}" ^7a7a7a7a, [[Plans]] ^7b7b7b7b`)
-    expect((await resolveBlockRef(repo, '^7a7a7a7a', {workspaceId: WS})).id).toBe(task)
-    // A brief line is 40 characters: the label gives way, never the id.
+      .toBe(`"${content}" ^${task}, [[Plans]] ^${page}`)
+    expect((await resolveBlockRef(repo, `^${task}`, {workspaceId: WS})).id).toBe(task)
+    // A brief line gives way in the label, never the id.
     const outline = await view<string>({type: 'view-outline', ref: root})
-    expect(outline).toMatch(/groupWith:: "Write the[^"]*…" \^7a7a7a7a, …\+1 more/)
+    expect(outline).toContain(`groupWith:: "Write the quart…" ^${task}, …+1 more`)
   })
 
   it('formats a huge list value only as far as its line, counting the rest', async () => {
@@ -1044,7 +985,9 @@ describe('structural edge cases', () => {
     }})
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
     const value = (name: string) => out.properties.find(property => property.name === name)!.value
-    expect(value('groupWith')).toMatch(/^\[\[t0\]\] \^8b8b8b80, \[\[t1\]\] \^8b8b8b81, \[\[t2\]\] \^8b8b8b82, .*, …\+\d+ more$/)
+    expect(value('groupWith')).toMatch(new RegExp(
+      `^${targets.map((target, i) => `\\[\\[t${i}\\]\\] \\^${target}, `).join('')}.*, …\\+\\d+ more$`,
+    ))
     expect(value('numbers')).toMatch(/…\+\d+ more$/)
     expect(value('history')).toBe('[200001 items]')
   })
@@ -1106,7 +1049,7 @@ describe('structural edge cases', () => {
     await create({id: 'field:reviewer', content: 'planted'})
     await create({id: uuid('a5a5a5a5', 1), content: 'src', references: [{id: target, alias: 'Target', sourceField: 'reviewer'}]})
     const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
-    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({groupId: null, shortId: null})
+    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({groupId: null})
   })
 
   it('reads only a head of a huge types list, counting the rest', async () => {
@@ -1128,11 +1071,11 @@ describe('structural edge cases', () => {
 
   it('numbers backlinks by the positions consumed, a deleted one included', () => {
     const row = (id: string, position: number) => ({
-      id, shortId: id, content: `row ${id}`, cut: 0, types: [], properties: [], omittedProperties: 0,
+      id, content: `row ${id}`, cut: 0, types: [], properties: [], omittedProperties: 0,
       position, parentId: null, breadcrumb: [], childCount: 0, viaProperties: [],
     })
     const text = renderBacklinksView({
-      target: {id: 't', shortId: 't', title: 'Target'},
+      target: {id: 't', title: 'Target'},
       total: 5, offset: 0, nextOffset: 3, filter: null,
       rows: [row('a', 1), row('c', 3)],
     })
@@ -1142,7 +1085,7 @@ describe('structural edge cases', () => {
 
   it("a backlinks page whose sources were all deleted still points to the next one", async () => {
     const lines = renderBacklinksView({
-      target: {id: 't', shortId: 't', title: 'Target'},
+      target: {id: 't', title: 'Target'},
       total: 5,
       offset: 0,
       nextOffset: 2,
@@ -1193,14 +1136,6 @@ describe('structural edge cases', () => {
     await create({id, content: 'Page Title', properties: {alias: ['Page Title'], a: 1, b: 2, c: 3, d: 4}})
     const line = (await view<string>({type: 'view-outline', ref: id})).split('\n')[0]
     expect(line).toContain('a:: 1  b:: 2  c:: 3  +1 props')
-  })
-
-  it('clips a long id listed in an ambiguous-prefix error', async () => {
-    await create({id: `e1e1e1e1-${'f'.repeat(300)}`, content: 'long'})
-    await create({id: uuid('e1e1e1e1', 2), content: 'short'})
-    const message = await resolveBlockRef(repo, 'e1e1e1e1', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
-    expect(message).toMatch(/ambiguous/)
-    expect(message).not.toContain('f'.repeat(100))
   })
 
   it('sql summarizes a binary cell by its size', async () => {
@@ -1490,7 +1425,7 @@ describe('view-backlinks', () => {
     expect(all.rows.find(candidate => candidate.id !== linkOnly)?.parentContent).toBeUndefined()
 
     const text = await view<string>({type: 'view-backlinks', ref: TARGET, limit: 2})
-    expect(text.split('\n')[0]).toBe('Backlinks of "Target" ^7a7a7a7a — 1–2 of 4 (next: offset=2)')
+    expect(text.split('\n')[0]).toBe(`Backlinks of "Target" ^${TARGET} — 1–2 of 4 (next: offset=2)`)
     expect(text).toMatch(/^2\. \^/m)
     const second = await view<string>({type: 'view-backlinks', ref: TARGET, limit: 2, offset: 2})
     expect(second).toMatch(/^3\. \^/m)
@@ -1513,7 +1448,7 @@ describe('view-backlinks', () => {
     expect(out.groups[0].members).toHaveLength(2)
 
     const text = await view<string>({type: 'view-grouped-backlinks', ref: TARGET, membersPerGroup: 2})
-    expect(text).toContain('## Topic A  ^70b1c000  (4)')
+    expect(text).toContain(`## Topic A  ^${topic}  (4)`)
     expect(text).toContain('+2 more — memberOffset=2 offset=0 limit=1 continues this group')
     const rest = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, membersPerGroup: 2, memberOffset: 2, limit: 1, format: 'json'})
     expect(rest.groups[0].members).toHaveLength(2)
@@ -1535,7 +1470,7 @@ describe('view-search', () => {
     const [hit] = out.hits
     expect([hit.breadcrumb.at(-1), hit.duplicates[0].place].sort()).toEqual(['Copperline', 'Kestrel'])
     const text = await view<string>({type: 'view-search', query: 'renewal due'})
-    expect(text).toContain(`identical: ^${hit.duplicates[0].shortId} in ${hit.duplicates[0].place})`)
+    expect(text).toContain(`identical: ^${hit.duplicates[0].id} in ${hit.duplicates[0].place})`)
   })
 
   it('takes no label from another workspace, so a line under one folds and shows no siblings', async () => {
@@ -1775,19 +1710,22 @@ describe('view-search', () => {
     expect(await ids({})).toEqual([uuid('dddd0001', 2), uuid('dddd0002', 3)])
     expect(await ids({includeExtensions: true})).toHaveLength(3)
     expect(await ids({types: ['todo']})).toEqual([uuid('dddd0001', 2)])
-    expect(await ids({under: 'dddd0000'})).toEqual([uuid('dddd0001', 2)])
+    expect(await ids({under: project})).toEqual([uuid('dddd0001', 2)])
     // A selective filter must not shrink a page: it applies before the limit.
     expect(await ids({types: ['todo'], limit: 1})).toEqual([uuid('dddd0001', 2)])
   })
 })
 
 describe('raw commands accept the same refs', () => {
-  it('get-block takes a prefix; a missing id still answers null', async () => {
+  it('get-block takes an id as printed; a missing id, or the start of one, still answers null', async () => {
     const id = uuid('e0e0e0e0', 1)
     await create({id, content: 'Raw'})
-    const block = await executeCommand({commandId: 'r', type: 'get-block', id: 'e0e0e0e0'}, context) as {id: string}
-    expect(block.id).toBe(id)
+    for (const ref of [id, `^${id}`]) {
+      const block = await executeCommand({commandId: 'r', type: 'get-block', id: ref}, context) as {id: string}
+      expect(block.id).toBe(id)
+    }
     expect(await executeCommand({commandId: 'r2', type: 'get-block', id: 'not-a-block'}, context)).toBeNull()
+    expect(await executeCommand({commandId: 'r3', type: 'get-block', id: 'e0e0e0e0'}, context)).toBeNull()
   })
 
   it('refuses a raw read of a block outside the workspace the call names', async () => {

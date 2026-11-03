@@ -171,7 +171,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
 describe('mention inside a comment thread', () => {
   const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
   const comment = (id: string, by: ReturnType<typeof author>, content: string, replies: CommentThreadView['comments'] = []) => ({
-    id, shortId: id, content, cut: 0, author: by, createdAt: 1, replies,
+    id, content, cut: 0, author: by, createdAt: 1, replies,
   })
   const alex = author('Alex', 'human')
   const claude = author('Claude', 'agent')
@@ -187,8 +187,8 @@ describe('mention inside a comment thread', () => {
     },
     threads: {
       root: {
-        id: 'root', shortId: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
-        target: {id: 'target', shortId: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
+        id: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
+        target: {id: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
         comments: [
           comment('c1', alex, 'Is Thursday confirmed?', [
             comment('c2', claude, 'Yes, 9am.', [comment('c3', alex, '[[claude]] can you check the venue too?')]),

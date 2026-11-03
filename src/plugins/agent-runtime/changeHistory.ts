@@ -15,7 +15,6 @@ import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
 import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
-import { shortIds } from './agentViews/resolveRef.ts'
 import { clampInt, viewWorkspace } from './agentViews/shared.ts'
 import { cutMarker } from './agentViews/text.ts'
 
@@ -130,8 +129,6 @@ type ChangeKind = 'create' | 'update' | 'move' | 'soft-delete' | 'restore' | 'de
 
 interface BlockChange {
   blockId: string
-  /** Unique id prefix, as the read views print it (`^short`). */
-  shortId: string
   kind: ChangeKind
   /** What this write changed, compared field by field. */
   changed: ChangedField[]
@@ -152,7 +149,7 @@ const propertyNameFields = (row: ChangeRow): Pick<BlockChange, 'properties' | 'p
       : {}),
   }
 
-const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange, 'shortId'> => {
+const describeChange = (row: ChangeRow, contentLimit: number): BlockChange => {
   const before = snapshotOf(row.before_meta)
   const after = snapshotOf(row.after_meta)
   const content = {
@@ -219,7 +216,7 @@ const propertyStorageOwners = async (repo: Repo, rows: readonly ChangeRow[]): Pr
 /** Storage rows a same-tx processor wrote for a property change the owner's
  *  own line already names. One whose owner shows no property change in that
  *  tx is kept: nothing else would report it. */
-type DescribedChange = {row: ChangeRow; change: Omit<BlockChange, 'shortId'>}
+type DescribedChange = {row: ChangeRow; change: BlockChange}
 
 const withoutCoveredPropertyStorage = async (
   repo: Repo,
@@ -361,11 +358,10 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
     repo,
     rows.map(row => ({row, change: describeChange(row, RECENT_CONTENT_LIMIT)})),
   )
-  const short = await shortIds(repo, visible.map(({row}) => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()
   for (const {row, change} of visible) {
     const list = changesByTx.get(row.tx_id!) ?? []
-    list.push({...change, shortId: short.get(row.block_id)!})
+    list.push(change)
     changesByTx.set(row.tx_id!, list)
   }
   return {
@@ -398,7 +394,6 @@ interface BlockHistoryEvent extends BlockChange {
 
 interface BlockHistoryResult {
   blockId: string
-  shortId: string
   /** Newest first; content cut at {@link BLOCK_HISTORY_CONTENT_CHARS}. */
   events: BlockHistoryEvent[]
   truncated: boolean
@@ -419,10 +414,8 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
     [BLOCK_HISTORY_CONTENT_CHARS, BLOCK_HISTORY_CONTENT_CHARS, input.id, limit + 1],
   )
   if (rows.length === 0) throw new Error(`block-history: no recorded changes for block ${input.id}.`)
-  const shortId = (await shortIds(repo, [input.id])).get(input.id)!
   return {
     blockId: input.id,
-    shortId,
     truncated: rows.length > limit,
     events: rows.slice(0, limit).map(row => ({
       at: isoAt(row.created_at),
@@ -430,7 +423,6 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
       txId: row.tx_id,
       description: row.description,
       ...describeChange(row, BLOCK_HISTORY_CONTENT_CHARS),
-      shortId,
     })),
   }
 }
