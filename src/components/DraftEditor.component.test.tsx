@@ -5,6 +5,7 @@
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, render, screen, waitFor} from '@testing-library/react'
 import {currentCompletions, startCompletion} from '@codemirror/autocomplete'
+import {isolateHistory} from '@codemirror/commands'
 import {EditorView} from '@codemirror/view'
 import {useState} from 'react'
 import {ChangeScope} from '@/data/api'
@@ -112,6 +113,19 @@ describe('DraftEditor', () => {
     // jsdom reports no platform, so CodeMirror's Mod is Ctrl.
     press(view, {key: 'Enter', ctrlKey: true})
     expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it('undoes and redoes its own edits, which no block’s undo covers yet', async () => {
+    const view = await mount()
+    type(view, 'kept')
+    // Its own undo step, as a later gesture would be: history joins adjacent
+    // edits made within half a second.
+    act(() => { view.dispatch({changes: {from: 0, to: view.state.doc.length}, userEvent: 'delete', annotations: isolateHistory.of('before')}) })
+    press(view, {key: 'z', ctrlKey: true})
+    expect(view.state.doc.toString()).toBe('kept')
+    expect(values.at(-1)).toBe('kept')
+    press(view, {key: 'z', ctrlKey: true, shiftKey: true})
+    expect(view.state.doc.toString()).toBe('')
   })
 
   it('closes an open completion on Escape before cancelling', async () => {

@@ -2,7 +2,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { useLayoutEffect, useMemo, useRef, type KeyboardEvent, type Ref } from 'react'
 import { closeCompletion } from '@codemirror/autocomplete'
 import { EditorView, keymap } from '@codemirror/view'
-import { insertNewline } from '@codemirror/commands'
+import { history, historyKeymap, insertNewline } from '@codemirror/commands'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -44,6 +44,10 @@ export const DraftEditor = ({
 
   const extensions = useMemo(() => [
     keyboardAwareScroll(),
+    // A block's edits are undone by the repo's undo; a draft is no block yet,
+    // so it keeps CodeMirror's.
+    history(),
+    keymap.of(historyKeymap),
     ...createMinimalMarkdownConfig([
       ...runtime.read(codeMirrorExtensionsFacet)({repo}),
       // After the plugins', so an open completion takes Enter first. In a
