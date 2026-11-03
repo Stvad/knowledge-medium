@@ -36,7 +36,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  piece of user text in it (the ref, candidate aliases) is
  *  neutralized like any other display text. */
 export class BlockRefError extends Error {
-  constructor(message: string, readonly candidates: readonly string[] = []) {
+  constructor(message: string) {
     super(message)
     this.name = 'BlockRefError'
   }
@@ -92,10 +92,7 @@ const notFound = async (
   const hint = candidates.length > 0
     ? `\nPages with similar names:\n${candidates.map(row => `  ${clipLine(row.alias, 80).text}`).join('\n')}`
     : ''
-  return new BlockRefError(
-    `No block matches "${oneLine(ref)}" (tried: id, page name, date).${hint}`,
-    candidates.map(row => row.blockId),
-  )
+  return new BlockRefError(`No block matches "${oneLine(ref)}" (tried: id, page name, date).${hint}`)
 }
 
 /** Resolve an agent-supplied block reference to a block id. See

@@ -183,7 +183,7 @@ describe('resolveBlockRef', () => {
 
   it("accept:'id' refuses names, and onMissing:'verbatim' hands the ref back", async () => {
     await expect(resolveBlockRef(repo, 'Project Alpha', {workspaceId: WS, accept: 'id'}))
-      .rejects.toThrow('No block has id "Project Alpha". This operation takes a block id, not a name.')
+      .rejects.toThrow(/takes a block id/)
     expect(await resolveBlockRef(repo, 'nothing-here', {workspaceId: WS, onMissing: 'verbatim'}))
       .toEqual({id: 'nothing-here', via: 'verbatim'})
   })

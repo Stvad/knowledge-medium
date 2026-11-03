@@ -28,7 +28,7 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
-import { blockDestination, newBlockDestination, refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { blockContent, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -935,7 +935,7 @@ const createRuntimeBlock = async (
   if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
     throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
   }
-  await refuseDanglingBlockRefs(repo, 'create-block', [content], newBlockDestination(repo))
+  await refuseDanglingBlockRefs(repo, 'create-block', [content])
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId !== undefined) {
@@ -1173,6 +1173,7 @@ const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
 ): Promise<BlockData | null> => {
+  await refuseDanglingBlockRefs(repo, 'update-block', [input.content], blockContent(repo, input.id))
   // Read INSIDE the tx so a merge-update is an ATOMIC read-modify-write.
   // repo.tx runs its whole body in one db.writeTransaction, which SQLite
   // serializes against every other writer — so no concurrent update to the
@@ -1181,7 +1182,6 @@ const updateRuntimeBlock = async (
   // from a stale snapshot clobbered any property another writer set in the
   // gap (e.g. an agent-dispatch orphan-clear reverting a channel task's
   // concurrently-written agent:status back to `running`).
-  await refuseDanglingBlockRefs(repo, 'update-block', [input.content], blockDestination(repo, input.id))
   let found = false
   await repo.tx(async tx => {
     const before = await tx.get(input.id)

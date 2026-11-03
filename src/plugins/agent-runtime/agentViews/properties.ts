@@ -267,7 +267,7 @@ export const createPropertyRenderer = async (
   }
 
   // A ref reads as its page's [[alias]] or its block's quoted content, then
-  // the id that addresses it. The id is what addresses the target —
+  // its id. The id is what addresses the target —
   // content names nothing, and an alias two pages claim names the older one —
   // so the label gives way to it, never the reverse. References resolve within
   // a workspace, so another workspace's block stays a dangling ((id)) here, as

@@ -29,7 +29,7 @@ import { authorIdOf } from '@/plugins/contributors/author.js'
 import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
-import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { blockContent, refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { clampInt, loadRoot } from './agentViews/shared.ts'
 import { clip, clipLine, oneLine } from './agentViews/text.ts'
 
@@ -259,13 +259,9 @@ export const runAddComment = async (
   repo: Repo,
   {targetId, quote, occurrence, content, replacement}: AddCommentParams,
 ): Promise<AddedComment> => {
-  // Both are new text in the target's workspace, read against the target's
-  // content: a suggestion that keeps a link the target holds, or a comment
-  // flagging it, adds no link.
-  await refuseDanglingBlockRefs(repo, 'add-comment', [content, replacement], async () => {
-    const target = await repo.load(targetId)
-    return target && {workspaceId: target.workspaceId, before: target.content}
-  })
+  // Both are new text, read against the target's content: a suggestion that
+  // keeps a link the target holds, or a comment flagging it, adds no link.
+  await refuseDanglingBlockRefs(repo, 'add-comment', [content, replacement], blockContent(repo, targetId))
   const created = await addComment(repo, {targetId, quote, occurrence, comment: content, replacement}, {
     description: agentTxOptions('add-comment').description,
   })

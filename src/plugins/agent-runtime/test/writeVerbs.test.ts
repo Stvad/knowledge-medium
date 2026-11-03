@@ -566,6 +566,17 @@ describe('block refs in written content', () => {
     expect(await contentOf(created.id)).toBe(content)
   })
 
+  it('leaves a write with no active workspace to report that, not its refs', async () => {
+    await seed([{id: NOTE, content: 'parent'}])
+    repo.setActiveWorkspaceId(null)
+    try {
+      await expect(run({type: 'create-block', parentId: NOTE, content: `((${NOTE}))`}))
+        .rejects.toThrow(/no active workspace/)
+    } finally {
+      repo.setActiveWorkspaceId(WS)
+    }
+  })
+
   it('create-block checks a top-level block too', async () => {
     await expect(run({type: 'create-block', parentId: null, content: `((${MISSING}))`}))
       .rejects.toThrow(MISSING)
@@ -596,9 +607,9 @@ describe('block refs in written content', () => {
   })
 
   it('reads nothing for text without a block ref', async () => {
-    const destination = vi.fn(async () => ({workspaceId: WS}))
-    await refuseDanglingBlockRefs(repo, 'probe', [`((not an id)) [[Page]] ^${LONE}`, undefined], destination)
-    expect(destination).not.toHaveBeenCalled()
+    const replaced = vi.fn(async () => '')
+    await refuseDanglingBlockRefs(repo, 'probe', [`((not an id)) [[Page]] ^${LONE}`, undefined], replaced)
+    expect(replaced).not.toHaveBeenCalled()
   })
 
   it('leaves a write to a block that does not exist to report it not found', async () => {
