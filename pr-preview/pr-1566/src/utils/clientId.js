@@ -1,0 +1,1 @@
+export{xet as deviceSurface,Set as getClientId,Cet as getDeviceLabel,wet as isClientIdPersistent,Tet as resetClientIdCache}from"../../chunks/app-BwXhhghd.js";

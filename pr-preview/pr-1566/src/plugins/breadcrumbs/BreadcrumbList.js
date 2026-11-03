@@ -1,0 +1,1 @@
+export{qC as BreadcrumbList}from"../../../chunks/app-BwXhhghd.js";

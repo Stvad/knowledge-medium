@@ -1,0 +1,1 @@
+export{HF as ExtensionRenderBoundary}from"../../chunks/app-BwXhhghd.js";

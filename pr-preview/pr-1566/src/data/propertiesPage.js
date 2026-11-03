@@ -1,0 +1,1 @@
+export{Qtt as getOrCreatePropertiesPage,$tt as propertiesPageBlockId,ent as propertiesPageSpec}from"../../chunks/app-BwXhhghd.js";

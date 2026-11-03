@@ -1,0 +1,1 @@
+export{Ub as useAssetObjectUrl}from"../../../chunks/app-BwXhhghd.js";

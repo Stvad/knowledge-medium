@@ -1,0 +1,1 @@
+export{Zg as updateIndicatorPlugin}from"../../../chunks/app-BwXhhghd.js";
