@@ -1,1 +1,1 @@
-export{uK as liveEditorFor,dK as liveEditorRegistration}from"../../chunks/app-D30bWpOQ.js";
+export{uK as liveEditorFor,dK as liveEditorRegistration}from"../../chunks/app-7pB9FUSC.js";
