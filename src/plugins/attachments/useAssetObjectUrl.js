@@ -1,1 +1,1 @@
-export{Wb as useAssetObjectUrl}from"../../../chunks/app-D-jUA4nf.js";
+export{Wb as useAssetObjectUrl}from"../../../chunks/app-CTr5bbXd.js";

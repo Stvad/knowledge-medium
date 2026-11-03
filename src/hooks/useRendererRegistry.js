@@ -1,1 +1,1 @@
-export{QN as defaultRegistry,XN as refreshRendererRegistry,ZN as useRenderer}from"../../chunks/app-D-jUA4nf.js";
+export{QN as defaultRegistry,XN as refreshRendererRegistry,ZN as useRenderer}from"../../chunks/app-CTr5bbXd.js";

@@ -1,1 +1,1 @@
-export{UP as BlockTypeBlockRenderer,WP as BlockTypeContentRenderer,GP as writeBlockTypeLabel}from"../../../chunks/app-D-jUA4nf.js";
+export{UP as BlockTypeBlockRenderer,WP as BlockTypeContentRenderer,GP as writeBlockTypeLabel}from"../../../chunks/app-CTr5bbXd.js";

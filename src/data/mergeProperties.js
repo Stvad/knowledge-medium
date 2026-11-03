@@ -1,1 +1,1 @@
-export{k3 as mergeProperties}from"../../chunks/app-D-jUA4nf.js";
+export{k3 as mergeProperties}from"../../chunks/app-CTr5bbXd.js";

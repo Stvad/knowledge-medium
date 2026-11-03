@@ -1,1 +1,1 @@
-export{IL as BLOCK_TITLE_TEXT_CLASS,LL as useBlockTitleTextClass}from"../../../chunks/app-D-jUA4nf.js";
+export{IL as BLOCK_TITLE_TEXT_CLASS,LL as useBlockTitleTextClass}from"../../../chunks/app-CTr5bbXd.js";

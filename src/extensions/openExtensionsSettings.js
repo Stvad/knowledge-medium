@@ -1,1 +1,1 @@
-export{gP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,_P as openExtensionsSettings}from"../../chunks/app-D-jUA4nf.js";
+export{gP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,_P as openExtensionsSettings}from"../../chunks/app-CTr5bbXd.js";

@@ -1,1 +1,1 @@
-export{gM as extensionPromptStore,_M as pendingExtensionPrompts}from"../../../chunks/app-D-jUA4nf.js";
+export{gM as extensionPromptStore,_M as pendingExtensionPrompts}from"../../../chunks/app-CTr5bbXd.js";

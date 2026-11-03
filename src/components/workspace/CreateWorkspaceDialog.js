@@ -1,1 +1,1 @@
-export{Vw as CreateWorkspaceDialog}from"../../../chunks/app-D-jUA4nf.js";
+export{Vw as CreateWorkspaceDialog}from"../../../chunks/app-CTr5bbXd.js";

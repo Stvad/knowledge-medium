@@ -1,1 +1,1 @@
-export{DJ as contributorsDataExtension}from"../../../chunks/app-D-jUA4nf.js";
+export{DJ as contributorsDataExtension}from"../../../chunks/app-CTr5bbXd.js";

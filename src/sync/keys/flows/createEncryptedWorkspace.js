@@ -1,1 +1,1 @@
-export{Hw as createEncryptedWorkspace}from"../../../../chunks/app-D-jUA4nf.js";
+export{Hw as createEncryptedWorkspace}from"../../../../chunks/app-CTr5bbXd.js";
