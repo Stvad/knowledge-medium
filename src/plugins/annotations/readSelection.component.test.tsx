@@ -23,7 +23,6 @@ import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {LazyBlockEntry} from '@/plugins/backlinks/BlockEntry'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
 import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
@@ -105,7 +104,6 @@ describe('a read-mode selection, mapped to raw offsets', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
-        backlinksDataExtension,
         annotationsPlugin,
       ],
     }).repo
