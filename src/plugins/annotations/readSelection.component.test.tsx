@@ -26,7 +26,7 @@ import {LazyBlockEntry} from '@/plugins/backlinks/BlockEntry'
 import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
-import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
+import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
 import {ThreadCard} from './ui'
@@ -407,6 +407,28 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   it('refuses text the parser changed, a space dropped before a line break', async () => {
     await renderBlocks('trimmed', 'rich')
     expect(mapReadSelection(ends('second', 'line'), contentOf)).toEqual({kind: 'inexact'})
+  })
+
+  it('clears the read selection once a step lands, but not a caret the step put elsewhere', async () => {
+    await renderBlocks('rich', 'other')
+    const select = () => {
+      const {node, offset} = at('bold')
+      document.getSelection()!.setBaseAndExtent(node, offset, node, offset + 'bold'.length)
+    }
+    const target = () => readSelectionTarget(repo, document.getSelection()) as SelectionTarget
+
+    select()
+    await runOnReadTarget(target(), async () => true)
+    expect(document.getSelection()!.rangeCount).toBe(0)
+
+    // A new comment's editor takes focus, and the selection with it, as a caret.
+    select()
+    const caret = at('Another').node
+    await runOnReadTarget(target(), async () => {
+      document.getSelection()!.collapse(caret, 2)
+      return true
+    })
+    expect(document.getSelection()!.focusNode).toBe(caret)
   })
 
   it('copies a reference to the selected text, through the read-mode gesture', async () => {

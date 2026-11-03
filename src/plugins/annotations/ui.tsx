@@ -6,8 +6,8 @@
  *   non-nested surface, the focal block included (nothing else shows a focal
  *   block's comments). It also hands the block's threads to the read-mode
  *   highlights (`readHighlights.ts`);
- * - its inline expansion under the block, holding the composer and a card per
- *   thread;
+ * - its inline expansion under the block, holding an edit suggestion's
+ *   composer and a card per thread;
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
@@ -48,6 +48,7 @@ import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
@@ -66,7 +67,6 @@ import {
   activateThread,
   cardRenderScopeId,
   closeComposer,
-  openComposer,
   releasePendingReanchor,
   showClosedThreads,
   startReanchor,
@@ -225,12 +225,11 @@ const QUOTE_CONTEXT = {isNestedSurface: true, isReference: true}
 
 const COMPOSER_FIELD = 'min-h-[3.25em] rounded border bg-background px-2 py-1 text-sm focus-within:ring-2 focus-within:ring-ring'
 
-/** A comment's composer, or an edit suggestion's: the replacement, prefilled
- *  with the quote, and an optional comment. Each field is a `DraftEditor`: the
- *  draft lives in the UI store and is written only on submit. */
+/** An edit suggestion's composer: the replacement, prefilled with the quote,
+ *  and an optional comment. Each field is a `DraftEditor`: the draft lives in
+ *  the UI store and is written only on submit. */
 const Composer = ({block, composerKey, composer}: {block: Block; composerKey: string; composer: ComposerState}) => {
   const input = useRef<ReactCodeMirrorRef>(null)
-  const suggesting = composer.replacement !== undefined
   // A frame late, on open and on re-aim: a menu that opened the composer
   // returns focus to its trigger as it closes. At the end of the text, where
   // a prefilled replacement is usually extended.
@@ -258,23 +257,19 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
   return (
     <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
       <div className="line-clamp-3 text-xs text-muted-foreground">
-        {suggesting ? 'Suggest a change to' : 'Comment on'}{' '}
-        <QuoteText anchor={composer.anchor ? {kind: 'range', ...composer.anchor} : {kind: 'block'}} source={block}/>
+        Suggest a change to <QuoteText anchor={{kind: 'range', ...composer.anchor}} source={block}/>
       </div>
-      {suggesting && (
-        <DraftEditor
-          {...fieldProps}
-          ref={input}
-          label="Replacement"
-          value={composer.replacement ?? ''}
-          onChange={replacement => updateComposer(composerKey, {replacement, error: null})}
-        />
-      )}
       <DraftEditor
         {...fieldProps}
-        ref={suggesting ? undefined : input}
-        label={suggesting ? 'Comment (optional)' : 'New comment'}
-        placeholder={suggesting ? 'Why (optional)' : undefined}
+        ref={input}
+        label="Replacement"
+        value={composer.replacement}
+        onChange={replacement => updateComposer(composerKey, {replacement, error: null})}
+      />
+      <DraftEditor
+        {...fieldProps}
+        label="Comment (optional)"
+        placeholder="Why (optional)"
         value={composer.draft}
         onChange={draft => updateComposer(composerKey, {draft, error: null})}
       />
@@ -286,7 +281,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
           onClick={() => void submit()}
           className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50"
         >
-          {suggesting ? 'Suggest' : 'Comment'}
+          Suggest
         </button>
         <button type="button" onClick={() => closeComposer(composerKey)} className="px-1 text-muted-foreground hover:text-foreground">
           Cancel
@@ -565,12 +560,15 @@ export const commentActionsContribution: BlockContentDecoratorContribution = ctx
 
 // ──── Bullet menu ────
 
-/** Only where the composer can render: the inline threads live on outline
+/** Only where a thread's card can render: the inline threads live on outline
  *  blocks, not on nested surfaces. */
 export const commentContextMenuItem: BlockContextMenuItemsContribution = ctx =>
   appliesToOutlineBlock(ctx)
     ? {
       id: 'annotations.comment', label: 'Comment', icon: MessageSquare,
-      onSelect: () => openComposer(viewKey(ctx.blockContext?.renderScopeId, ctx.block.id), ctx.block.id, null),
+      onSelect: () => {
+        startComment(ctx.repo, {targetId: ctx.block.id, anchor: null, renderScopeId: ctx.blockContext?.renderScopeId})
+          .catch(reportFailure)
+      },
     }
     : null

@@ -1,7 +1,7 @@
 /**
  * Per-tab view state for comments. Module state like the toggle sets
- * (`createKeyedToggleSet`), never block data: a draft is written only on
- * submit, so an abandoned comment leaves nothing behind.
+ * (`createKeyedToggleSet`), never block data: an edit suggestion's draft is
+ * written only on submit, so an abandoned one leaves nothing behind.
  *
  * - Inline threads, resolved threads shown and open composers are keyed by
  *   `viewKey`, one block as shown in one render scope, so expanding or
@@ -28,13 +28,15 @@ export type CardSurface = 'comments' | 'margin'
 export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
   surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
 
+/** An edit suggestion being composed. A comment needs no composer: it is
+ *  written at once (`startComment`). */
 export interface ComposerState {
   targetId: string
-  /** null comments on the whole block. */
-  anchor: RangeAnchor | null
+  anchor: RangeAnchor
+  /** The text to replace the quote with. */
+  replacement: string
+  /** The optional comment saying why. */
   draft: string
-  /** Present for an edit suggestion: the text to replace the quote with. */
-  replacement?: string
   error: string | null
   /** A submit is in flight; another one would write the same draft twice. */
   submitting: boolean
@@ -56,25 +58,19 @@ export const useShowResolved = showingResolved.useHas
 /** A replacement the user changed from its prefill (the quote), worth keeping
  *  across a re-aim; an untouched prefill follows the new quote. */
 const editedReplacement = (current: ComposerState | undefined): string | undefined =>
-  current?.replacement !== current?.anchor?.quote ? current?.replacement : undefined
+  current && current.replacement !== current.anchor.quote ? current.replacement : undefined
 
-/** Open (or re-aim) a composer, keeping a draft already typed there: a submit
- *  refused because the text changed keeps the draft, and the user's next
- *  selection re-aims it. A suggestion's replacement is kept the same way once
- *  edited, and otherwise starts as `replacement`. Expands the block's
- *  threads. */
-export const openComposer = (
-  key: string,
-  targetId: string,
-  anchor: RangeAnchor | null,
-  {replacement}: {replacement?: string} = {},
-): void => {
+/** Open (or re-aim) a composer, keeping what was typed there: a submit
+ *  refused because the text changed keeps it, and the user's next selection
+ *  re-aims it. An untouched replacement starts as the quote. Expands the
+ *  block's threads. */
+export const openComposer = (key: string, targetId: string, anchor: RangeAnchor): void => {
   const current = composers.get(key)
   composers.set(key, {
     targetId,
     anchor,
     draft: current?.draft ?? '',
-    replacement: replacement === undefined ? undefined : editedReplacement(current) ?? replacement,
+    replacement: editedReplacement(current) ?? anchor.quote,
     error: null,
     submitting: false,
   })
@@ -137,6 +133,10 @@ export const showClosedThreads = showingClosed.add
 export const useShowClosed = showingClosed.useHas
 
 export const peekMarginShowing = (panelId: string): boolean => marginShowing.has(panelId)
+
+/** Where a thread's card shows in `panelId`: the margin's where it is drawn,
+ *  else inline under its block. */
+export const outerCardSurface = (panelId: string): CardSurface => marginShowing.has(panelId) ? 'margin' : 'comments'
 
 /** Show `threadId`'s card for the block that `key` names in `panelId`: pinned
  *  in the margin, and expanded inline for when the margin isn't drawn, with

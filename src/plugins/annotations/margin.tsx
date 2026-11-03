@@ -180,6 +180,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       for (const [i, [, entry]] of placed.entries()) {
         entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
         entry.el.style.visibility = 'visible'
+        entry.el.style.opacity = ''
       }
       for (const [, entry] of cards.current) {
         if (!rowIndex.has(entry.blockId)) entry.el.style.visibility = 'hidden'
@@ -340,8 +341,10 @@ const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId
       data-margin-card={slotKey}
       onClick={() => activateThread(registry.panelId, slotKey)}
       onFocus={event => { if (isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
-      // Placed by the layout pass; hidden until it has.
-      style={{visibility: 'hidden'}}
+      // Placed by the layout pass; transparent until it has, not hidden: an
+      // editor mounting in a new card (a comment just started) takes focus
+      // as it mounts, which a hidden element refuses.
+      style={{opacity: 0}}
       className={`pointer-events-auto absolute inset-x-0 top-0 rounded-md transition-shadow ${
         active ? 'shadow-md ring-1 ring-ring' : 'shadow-sm'
       }`}
