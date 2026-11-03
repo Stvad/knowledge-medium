@@ -1,1 +1,1 @@
-export{WP as ConfirmBulkDeleteDialog}from"../../chunks/app-BhM0vbgr.js";
+export{JP as ConfirmBulkDeleteDialog}from"../../chunks/app-hyg0Of51.js";

@@ -1,1 +1,1 @@
-export{sk as shortcutHelpToggle}from"../../../chunks/app-BhM0vbgr.js";
+export{dk as shortcutHelpToggle}from"../../../chunks/app-hyg0Of51.js";
