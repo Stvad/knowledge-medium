@@ -290,7 +290,7 @@ const formatField = {
 }
 
 /** Parse markdown with the app paste parser and insert it under a target, in
- *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
+ *  one transaction. `target` is a block id, a `[[Page]]` or a date
  *  expression (a missing page or daily note is created). `position` places the
  *  inserted run among the target's children (default last). */
 export const appendMarkdownCommandSchema = z.looseObject({
@@ -324,7 +324,7 @@ export const editBlockCommandSchema = z.looseObject({
  *  in the app. */
 export const addCommentCommandSchema = z.looseObject({
   type: z.literal('add-comment'),
-  target: z.string().describe('The block to comment on: a full id or a printed ^shortid'),
+  target: z.string().describe('The block to comment on: its id'),
   quote: z.string().optional().describe(
     'Text of the block to anchor to, verbatim as get_block returns its content (outline views collapse '
     + 'whitespace); omit to comment on the whole block. A quote that cuts a [[link]] or ((ref)) is widened '
@@ -367,8 +367,8 @@ export const recentChangesCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
- *  prefix) — what a write verb would act on. A ref matching nothing comes back
+/** The id an id-typed field resolves to (`^id`, `((id))`, a bare id) — what
+ *  a write verb would act on. A ref matching nothing comes back
  *  as the id its syntax names (`^x` / `((x))` → `x`), else as given. Lets a
  *  caller check the same block the write will touch. */
 export const resolveBlockIdCommandSchema = z.looseObject({
@@ -381,7 +381,7 @@ export const resolveBlockIdCommandSchema = z.looseObject({
 /** One block's recorded changes, newest first — local and sync-applied. */
 export const blockHistoryCommandSchema = z.looseObject({
   type: z.literal('block-history'),
-  id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
+  id: z.string().describe('The block: its id'),
   limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
   ...contributorField,
   ...commandIdField,
@@ -639,7 +639,7 @@ export const AGENT_VIEW_DEFAULTS = {
 } as const
 
 const viewRefField = z.string().describe(
-  'The block: a full id, a unique id prefix as printed (^3f2a9c1d), a page name '
+  'The block: its id, a page name '
   + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
 )
 
@@ -773,7 +773,6 @@ export interface CommentAuthor {
 
 export interface CommentNode {
   id: string
-  shortId: string
   content: string
   /** Characters cut from `content`; get_block reads the rest. */
   cut: number
@@ -784,7 +783,6 @@ export interface CommentNode {
 
 export interface CommentThreadView {
   id: string
-  shortId: string
   /** `open` or `resolved`, `accepted` or `rejected` for an edit suggestion,
    *  or the stored value when this build can't read it. */
   status: string
@@ -795,7 +793,6 @@ export interface CommentThreadView {
   replacement: string | null
   target: {
     id: string
-    shortId: string
     deleted: boolean
     /** Root→parent labels, as a breadcrumb reads. */
     path: string[]
@@ -1070,9 +1067,9 @@ export interface KnownCommandMeta {
 /** How the write verbs name where to write: quoted by the CLI verbs and the
  *  km MCP tools alike, so both surfaces say the same thing. */
 export const WRITE_TARGET_HELP =
-  'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
+  'A target is a block id; a [[Page name]], created if missing as typing '
   + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
-  + 'daily note, created if missing. Bare text is tried as an id prefix, an existing page, then a date — so '
+  + 'daily note, created if missing. Bare text is tried as an id, an existing page, then a date — so '
   + 'name a page as [[name]].'
 
 /** A todo composes the built-in `todo` type. */
@@ -1149,8 +1146,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent update-block <json>',
     description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
       + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
-      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line). id may be a '
-      + 'unique id prefix.',
+      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line).',
     readOnly: false,
   },
   'move-block': {
@@ -1179,7 +1175,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
     description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
       + 'content at write time; prints the change in context. Refused when <old> is empty or found more than once '
-      + '(add surrounding text), and when it is not found, showing the current content. <id> may be a unique id prefix.',
+      + '(add surrounding text), and when it is not found, showing the current content.',
     readOnly: false,
   },
   'create-page': {
@@ -1202,8 +1198,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'resolve-block-id': {
-    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
-    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
+    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"((3f2a9c1b-0000-4000-8000-000000000001))"}\'',
+    description: 'The block id an id-typed write field resolves to (^id, ((id)), a bare id) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
     readOnly: true,
   },
   'install-extension': {
@@ -1301,7 +1297,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'view-outline': {
     usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
-    description: `A block and its descendants as a markdown outline: \`- content  key:: value  ^shortid\`, one line per block. Bounded: expands \`depth\` levels and at most \`limit\` blocks below the root, shallower levels first, and stops early, saying how to narrow, at ${AGENT_VIEW_DEFAULTS.outlineChars} characters; unexpanded children show as \`(+N children)\`, long content as \`…[+N chars]\`, and a cut-off list of the root's children ends with the offset to continue from.`,
+    description: `A block and its descendants as a markdown outline: \`- content  key:: value  ^id\`, one line per block. Bounded: expands \`depth\` levels and at most \`limit\` blocks below the root, shallower levels first, and stops early, saying how to narrow, at ${AGENT_VIEW_DEFAULTS.outlineChars} characters; unexpanded children show as \`(+N children)\`, long content as \`…[+N chars]\`, and a cut-off list of the root's children ends with the offset to continue from.`,
     readOnly: true,
   },
   'view-backlinks': {

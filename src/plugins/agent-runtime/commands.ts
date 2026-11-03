@@ -28,6 +28,7 @@ import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -934,6 +935,7 @@ const createRuntimeBlock = async (
   if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
     throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
   }
+  await refuseDanglingBlockRefs(repo, 'create-block', [content])
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId !== undefined) {
@@ -1171,6 +1173,8 @@ const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
 ): Promise<BlockData | null> => {
+  await refuseDanglingBlockRefs(repo, 'update-block', [input.content], async () =>
+    (await repo.load(input.id))?.content ?? null)
   // Read INSIDE the tx so a merge-update is an ATOMIC read-modify-write.
   // repo.tx runs its whole body in one db.writeTransaction, which SQLite
   // serializes against every other writer — so no concurrent update to the
@@ -2045,7 +2049,7 @@ const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string
 }
 
 /** A raw command's block id, accepting every form an agent view prints or
- *  takes (unique id prefix, page name, date). An unmatched ref passes through
+ *  takes (an id, a page name, a date). An unmatched ref passes through
  *  unchanged, so the command's own not-found answer is unchanged too. */
 const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
   const resolution = await resolveBlockRef(repo, ref, {

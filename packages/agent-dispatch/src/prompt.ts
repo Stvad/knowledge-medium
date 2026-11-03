@@ -41,9 +41,9 @@ export interface MentionPromptContext {
   splitReply?: boolean
 }
 
-/** Only a full UUID in one of these forms parses as a block reference; the
- *  ^shortids the km tools print are display text. */
-const BLOCK_LINK_RULE = 'write [a few words](((full block id))) to link a block, with the id in full as get_block prints it in parentheses (a ^shortid is how the tools print an id, not a link)'
+/** Only an id in one of these forms parses as a block reference; the `^id`
+ *  the km tools print marks it in a view, it is not a link. */
+const BLOCK_LINK_RULE = 'write [a few words](((block id))) to link a block, with the id the km tools print after its ^'
 
 export const DEFAULT_MENTION_PROMPT = `You were mentioned as [[{{target}}]] in the user's Knowledge Medium notes, an outliner where blocks nest under blocks. Read the mention as a request addressed to you.
 

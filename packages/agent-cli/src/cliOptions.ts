@@ -91,7 +91,7 @@ export const scopeAssertion = (scope: unknown): {scope?: string} => {
 
 /** cac numberifies every digits-only option value before this code sees it,
  *  so `00123` arrives as 123 and its text is gone: turning it back into a
- *  string would name something else (another id prefix, another type). */
+ *  string would name something else (another id, another type). */
 export const refuseNumberified = (flag: string, value: unknown): void => {
   if (typeof value !== 'number') return
   throw new Error(

@@ -72,6 +72,37 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(0)
   })
 
+  it('refuses a ((ref)) to an id no block has, in the comment or the replacement', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await expect(asAgent({type: 'add-comment', target: BLOCK, content: `see [this](((${missing})))`}))
+      .rejects.toThrow(new RegExp(`add-comment: .*${missing}`, 's'))
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: `((${missing}))`}))
+      .rejects.toThrow(missing)
+    expect((await comments({block: BLOCK})).total).toBe(0)
+
+    await asAgent({type: 'add-comment', target: BLOCK, content: `see ((${PAGE}))`})
+    expect((await comments({block: BLOCK})).total).toBe(1)
+  })
+
+  it('takes a dead ((ref)) the target already holds, in a suggestion that keeps it or a comment flagging it', async () => {
+    const dead = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `Meet on Thursday, see ((${dead})) for context`}), opts)
+    await asAgent({
+      type: 'add-comment', target: BLOCK, quote: `Thursday, see ((${dead}))`, replacement: `Friday, see ((${dead}))`,
+    })
+    await asAgent({type: 'add-comment', target: BLOCK, content: `The link ((${dead})) here is broken`})
+    expect((await comments({block: BLOCK})).total).toBe(2)
+  })
+
+  it('reads a suggestion as stored, its quote widened to the whole link the replacement goes into', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `see ((${PAGE})) for context`}), opts)
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: missing}))
+      .rejects.toThrow(`((${missing})) — no block has this id`)
+    const created = await asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: BLOCK})
+    expect(created).toMatchObject({replacement: `((${BLOCK}))`})
+  })
+
   it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
     const {threadId} = await asAgent({
       type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',
@@ -96,8 +127,8 @@ describe('add-comment', () => {
       .toMatchObject({replacement: null})
   })
 
-  it('takes a printed short id as its target', async () => {
-    const created = await asAgent({type: 'add-comment', target: `^${BLOCK.slice(0, 8)}`, content: 'On the whole block'}) as {threadId: string}
+  it('takes an id as the views print it as its target', async () => {
+    const created = await asAgent({type: 'add-comment', target: `^${BLOCK}`, content: 'On the whole block'}) as {threadId: string}
     expect((await comments({thread: created.threadId})).threads[0]?.target?.id).toBe(BLOCK)
   })
 
