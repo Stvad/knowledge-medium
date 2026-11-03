@@ -1,1 +1,0 @@
-export{KN as BlockLoadingPlaceholder}from"../../chunks/app-C0ZvaVWh.js";

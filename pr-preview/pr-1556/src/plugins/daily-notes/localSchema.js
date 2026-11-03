@@ -1,1 +1,0 @@
-export{YK as dailyNotesLocalSchema}from"../../../chunks/app-C0ZvaVWh.js";

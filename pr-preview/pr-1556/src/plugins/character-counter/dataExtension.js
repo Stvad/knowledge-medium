@@ -1,1 +1,0 @@
-export{BJ as characterCounterDataExtension}from"../../../chunks/app-C0ZvaVWh.js";

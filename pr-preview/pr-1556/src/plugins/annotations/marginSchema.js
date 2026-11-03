@@ -1,1 +1,0 @@
-export{yJ as annotationMarginOpenProp}from"../../../chunks/app-C0ZvaVWh.js";

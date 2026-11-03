@@ -1,1 +1,0 @@
-export{Wat as SYSTEM_AUTHOR_PREFIX,Gat as isSystemAuthor,Kat as systemAuthor}from"../../../chunks/app-C0ZvaVWh.js";

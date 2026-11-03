@@ -1,1 +1,0 @@
-export{l2 as kernelDataExtension}from"../../chunks/app-C0ZvaVWh.js";

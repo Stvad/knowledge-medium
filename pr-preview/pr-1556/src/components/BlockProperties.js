@@ -1,1 +1,0 @@
-export{OR as BlockProperties}from"../../chunks/app-C0ZvaVWh.js";

@@ -1,1 +1,0 @@
-export{vM as approveExtensionHere}from"../../chunks/app-C0ZvaVWh.js";

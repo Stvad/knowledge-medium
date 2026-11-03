@@ -1,1 +1,0 @@
-export{vK as matchCharTrigger}from"../../chunks/app-C0ZvaVWh.js";

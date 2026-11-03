@@ -1,1 +1,0 @@
-export{qM as dispatchPointerAction,JM as setPointerActionDispatcher}from"../../chunks/app-C0ZvaVWh.js";

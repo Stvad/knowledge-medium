@@ -1,1 +1,0 @@
-export{XR as buildPropertyPanelSections}from"../../chunks/app-C0ZvaVWh.js";

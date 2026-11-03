@@ -1,1 +1,0 @@
-export{Xat as defineQuery}from"../../../chunks/app-C0ZvaVWh.js";
