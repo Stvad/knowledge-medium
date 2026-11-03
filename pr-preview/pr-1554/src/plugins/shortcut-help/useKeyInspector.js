@@ -1,1 +1,1 @@
-export{sk as useKeyInspector}from"../../../chunks/app-BSEc70eh.js";
+export{ok as useKeyInspector}from"../../../chunks/app-CNQnE9nl.js";

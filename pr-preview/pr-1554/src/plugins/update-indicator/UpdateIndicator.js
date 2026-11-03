@@ -1,1 +1,1 @@
-export{Yg as UpdateIndicator}from"../../../chunks/app-BSEc70eh.js";
+export{Jg as UpdateIndicator}from"../../../chunks/app-CNQnE9nl.js";

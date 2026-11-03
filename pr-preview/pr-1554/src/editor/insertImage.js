@@ -1,1 +1,1 @@
-export{eb as INSERT_IMAGE_ACTION_ID,tb as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,nb as insertReferences,rb as pickAndInsertImages,ib as pickImagesIntoBlock}from"../../chunks/app-BSEc70eh.js";
+export{$y as INSERT_IMAGE_ACTION_ID,eb as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,tb as insertReferences,nb as pickAndInsertImages,rb as pickImagesIntoBlock}from"../../chunks/app-CNQnE9nl.js";

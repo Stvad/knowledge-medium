@@ -1,1 +1,1 @@
-export{QR as AddPropertyForm}from"../../../chunks/app-BSEc70eh.js";
+export{ZR as AddPropertyForm}from"../../../chunks/app-CNQnE9nl.js";
