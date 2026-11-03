@@ -236,11 +236,12 @@ export const copyReferenceToTarget = async ({block, range}: SelectionTarget): Pr
     showInfo('Select the text to quote.')
     return false
   }
-  const threadId = await threadForRange(block.repo, block.id, anchor, range.content).catch(showRefusal)
+  const thread = threadForRange(block.repo, block.id, anchor, range.content)
+  // Started before the thread exists, while this is still the user's gesture.
+  const copied = writeTextToClipboard(thread.then(id => `((${id}))`)).then(() => true, () => false)
+  const threadId = await thread.catch(showRefusal)
   if (threadId === false) return false
-  try {
-    await writeTextToClipboard(`((${threadId}))`)
-  } catch {
+  if (!await copied) {
     // The highlight stays, and the next copy of this range reuses it.
     showError('The browser refused to write to the clipboard. Try again.')
     return false
