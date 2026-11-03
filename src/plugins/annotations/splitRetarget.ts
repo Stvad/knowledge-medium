@@ -42,6 +42,9 @@ export const anchorAfterSplit = (
   // The piece the quote starts in, since `pieces` are in text order.
   const piece = split.pieces.find(p => resolved.from < p.end)
   if (!piece || resolved.to > piece.end) return null
+  // ACCEPTED: an anchor names no occurrence, so a cut that drops a moved
+  // quote's context can make a repeat of it the better match in the piece, as
+  // deleting that context would; recapturing instead would confirm it unasked.
   if (resolved.state === 'moved') return {blockId: piece.blockId, anchor: null}
   // Null where a reference span the piece parses on its own would widen the
   // quote, which would then be text nobody selected.
