@@ -37,7 +37,6 @@ describe('PropertyRow', () => {
       Editor: undefined,
       Glyph: undefined,
       canDelete: true,
-      canChangeShape: false,
       isHidden: false,
       readOnly: false,
     }
@@ -78,7 +77,6 @@ describe('PropertyRow', () => {
       Editor: undefined, // no preset/override for codec type 'object'
       Glyph: undefined,
       canDelete: true,
-      canChangeShape: false,
       isHidden: false,
       readOnly: false,
     }
@@ -123,7 +121,6 @@ describe('PropertyRow', () => {
       // true here so the component test proves it suppresses every affordance
       // independently of the model's declaration-only capability policy.
       canDelete: true,
-      canChangeShape: true,
       isHidden: false,
       readOnly: true,
       statusText: 'Provided by srs-rescheduling — not installed/disabled',
@@ -172,7 +169,6 @@ describe('PropertyRow', () => {
       Editor: CustomEditor,
       Glyph: undefined,
       canDelete: false,
-      canChangeShape: false,
       isHidden: false,
       readOnly: false,
     }
