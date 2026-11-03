@@ -1,1 +1,0 @@
-export{Pnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CdB8R-df.js";

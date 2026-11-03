@@ -1,1 +1,0 @@
-export{jR as MetadataRow,MR as PropertySectionLabel}from"../../../chunks/app-CdB8R-df.js";

@@ -1,1 +1,0 @@
-export{SJ as annotationMarginOpenProp}from"../../../chunks/app-Dea0WjG6.js";

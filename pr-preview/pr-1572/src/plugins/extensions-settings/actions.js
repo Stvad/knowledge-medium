@@ -1,1 +1,0 @@
-export{_r as openExtensionsSettingsAction}from"../../../chunks/app-Dea0WjG6.js";

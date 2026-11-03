@@ -1,1 +1,0 @@
-export{iU as propertyShapeLabel}from"../../../chunks/app-CdB8R-df.js";

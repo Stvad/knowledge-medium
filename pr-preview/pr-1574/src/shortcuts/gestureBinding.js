@@ -1,1 +1,0 @@
-export{qM as gestureBindingDescriptor,JM as matchesGestureEvent}from"../../chunks/app-CdB8R-df.js";

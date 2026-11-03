@@ -1,1 +1,0 @@
-export{Jat as SYSTEM_AUTHOR_PREFIX,Yat as isSystemAuthor,Xat as systemAuthor}from"../../../chunks/app-CdB8R-df.js";

@@ -1,1 +1,0 @@
-export{TM as appUpdatePromptExtension}from"../../../chunks/app-CdB8R-df.js";

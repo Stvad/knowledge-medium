@@ -1,1 +1,0 @@
-export{Kp as extensionApiCatalog,qp as extensionApiRuntimeExports}from"../../chunks/app-Dea0WjG6.js";

@@ -1,1 +1,0 @@
-export{UC as PromotableBreadcrumbList}from"../../../chunks/app-CdB8R-df.js";

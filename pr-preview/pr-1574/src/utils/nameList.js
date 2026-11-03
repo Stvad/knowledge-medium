@@ -1,1 +1,0 @@
-export{F4 as NAMES_IN_A_SENTENCE,I4 as describeNames,L4 as firstFew}from"../../chunks/app-CdB8R-df.js";

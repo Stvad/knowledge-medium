@@ -1,1 +1,0 @@
-export{rW as staticDataExtensions}from"../../chunks/app-CdB8R-df.js";

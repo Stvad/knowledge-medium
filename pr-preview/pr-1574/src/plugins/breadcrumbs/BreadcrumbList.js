@@ -1,1 +1,0 @@
-export{qC as BreadcrumbList}from"../../../chunks/app-CdB8R-df.js";

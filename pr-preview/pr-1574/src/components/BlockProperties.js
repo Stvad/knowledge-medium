@@ -1,1 +1,0 @@
-export{AR as BlockProperties}from"../../chunks/app-CdB8R-df.js";

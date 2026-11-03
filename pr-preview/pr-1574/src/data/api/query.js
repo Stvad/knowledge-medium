@@ -1,1 +1,0 @@
-export{eot as defineQuery}from"../../../chunks/app-CdB8R-df.js";

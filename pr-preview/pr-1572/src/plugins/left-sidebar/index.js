@@ -1,1 +1,0 @@
-export{pw as LeftSidebar,fw as LeftSidebarHeaderItem,lw as OPEN_LEFT_SIDEBAR_ACTION_ID,uw as leftSidebarActions,iw as leftSidebarCoreSection,aw as leftSidebarHeaderItem,ow as leftSidebarMount,sw as leftSidebarPlugin,bw as leftSidebarSectionsFacet,cw as leftSidebarShortcutsSection,dw as openLeftSidebarAction}from"../../../chunks/app-Dea0WjG6.js";

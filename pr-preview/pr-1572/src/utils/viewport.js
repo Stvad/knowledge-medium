@@ -1,1 +1,0 @@
-export{eB as MOBILE_BREAKPOINT_QUERY,tB as POINTER_COARSE_QUERY,nB as isMobileViewport,rB as isPointerCoarse}from"../../chunks/app-Dea0WjG6.js";

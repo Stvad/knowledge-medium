@@ -1,1 +1,0 @@
-export{kb as DEFAULT_MAX_CAPTURE_BYTES,Ab as captureMedia,jb as mediaBlockId}from"../../../chunks/app-Dea0WjG6.js";

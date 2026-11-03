@@ -1,1 +1,0 @@
-export{PF as useIsMobile,FF as usePointerCoarse}from"../../chunks/app-CdB8R-df.js";

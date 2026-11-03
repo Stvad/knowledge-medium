@@ -1,1 +1,0 @@
-export{jR as BlockProperties}from"../../chunks/app-Dea0WjG6.js";

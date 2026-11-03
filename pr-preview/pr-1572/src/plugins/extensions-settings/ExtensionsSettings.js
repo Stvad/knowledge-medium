@@ -1,1 +1,0 @@
-export{fr as ExtensionsSettings}from"../../../chunks/app-Dea0WjG6.js";

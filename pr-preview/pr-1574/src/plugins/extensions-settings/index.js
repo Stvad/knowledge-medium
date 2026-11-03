@@ -1,1 +1,0 @@
-export{Jp as extensionsOverridesProp,Yp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-CdB8R-df.js";

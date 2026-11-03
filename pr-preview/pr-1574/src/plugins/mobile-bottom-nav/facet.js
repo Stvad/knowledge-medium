@@ -1,1 +1,0 @@
-export{LC as mobileBottomNavItemsFacet}from"../../../chunks/app-CdB8R-df.js";
