@@ -80,6 +80,6 @@ export const shortcutHelpPlugin: AppExtension = systemToggle({
   actionsFacet.of(shortcutHelpAction, {source: 'shortcut-help'}),
   headerItemsFacet.of(shortcutHelpHeaderItem, {
     source: 'shortcut-help',
-    precedence: 60,
+    precedence: 35,
   }),
 ])

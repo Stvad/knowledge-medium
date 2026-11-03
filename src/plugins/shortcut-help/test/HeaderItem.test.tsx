@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { headerItemsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { accountHeaderPlugin } from '@/plugins/account-header'
+import { systemStatusPlugin } from '@/plugins/system-status'
+import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { ShortcutHelpHeaderItem, shortcutHelpHeaderItem, shortcutHelpPlugin } from '../index.ts'
 import { shortcutHelpToggle } from '../toggleStore.ts'
 
@@ -26,5 +29,21 @@ describe('shortcut help header item', () => {
     expect(shortcutHelpToggle.isOpen()).toBe(false)
     fireEvent.click(button)
     expect(shortcutHelpToggle.isOpen()).toBe(true)
+  })
+
+  it('places Help between workspace controls and system status/account controls', () => {
+    const runtime = resolveFacetRuntimeSync([
+      workspaceHeaderPlugin,
+      shortcutHelpPlugin,
+      systemStatusPlugin,
+      accountHeaderPlugin,
+    ])
+
+    expect(runtime.read(headerItemsFacet).map(({id}) => id)).toEqual([
+      'workspace-header.pending-invitations',
+      'shortcut-help.header',
+      'system-status.header',
+      'account-header.user-menu',
+    ])
   })
 })
