@@ -1,0 +1,1 @@
+export{BJ as characterCounterDataExtension}from"../../../chunks/app-CCtbBPkp.js";

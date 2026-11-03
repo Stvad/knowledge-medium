@@ -1,0 +1,1 @@
+export{oot as definePostCommitProcessor}from"../../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{mq as annotationsDataExtension}from"../../../chunks/app-CCtbBPkp.js";

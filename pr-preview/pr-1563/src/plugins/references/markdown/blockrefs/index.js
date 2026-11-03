@@ -1,0 +1,1 @@
+export{mv as blockrefMarkdownExtension}from"../../../../../chunks/app-CCtbBPkp.js";

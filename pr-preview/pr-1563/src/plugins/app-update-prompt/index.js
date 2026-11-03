@@ -1,0 +1,1 @@
+export{CM as appUpdatePromptExtension}from"../../../chunks/app-CCtbBPkp.js";

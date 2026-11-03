@@ -1,0 +1,1 @@
+export{l2 as kernelDataExtension}from"../../chunks/app-CCtbBPkp.js";

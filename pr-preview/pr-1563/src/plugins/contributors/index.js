@@ -1,0 +1,1 @@
+export{np as contributorsPlugin}from"../../../chunks/app-CCtbBPkp.js";

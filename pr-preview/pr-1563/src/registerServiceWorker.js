@@ -1,0 +1,1 @@
+export{MM as checkForAppUpdate,NM as registerServiceWorker}from"../chunks/app-CCtbBPkp.js";

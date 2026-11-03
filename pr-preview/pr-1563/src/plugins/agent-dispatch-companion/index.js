@@ -1,0 +1,1 @@
+export{ap as agentDispatchCompanionPlugin}from"../../../chunks/app-CCtbBPkp.js";

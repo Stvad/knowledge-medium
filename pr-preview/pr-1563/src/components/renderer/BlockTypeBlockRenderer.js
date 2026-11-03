@@ -1,0 +1,1 @@
+export{BP as BlockTypeBlockRenderer,VP as BlockTypeContentRenderer,HP as writeBlockTypeLabel}from"../../../chunks/app-CCtbBPkp.js";

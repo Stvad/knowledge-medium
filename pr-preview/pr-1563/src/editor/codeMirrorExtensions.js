@@ -1,0 +1,1 @@
+export{IK as codeMirrorExtensionsFacet}from"../../chunks/app-CCtbBPkp.js";

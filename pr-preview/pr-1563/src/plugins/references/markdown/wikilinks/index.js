@@ -1,0 +1,1 @@
+export{dv as wikilinkMarkdownExtension}from"../../../../../chunks/app-CCtbBPkp.js";

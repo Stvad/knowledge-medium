@@ -1,0 +1,1 @@
+export{oM as editorAutocompleteExtension}from"../../chunks/app-CCtbBPkp.js";

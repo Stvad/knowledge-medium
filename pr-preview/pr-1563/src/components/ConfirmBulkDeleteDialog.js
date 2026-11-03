@@ -1,0 +1,1 @@
+export{JP as ConfirmBulkDeleteDialog}from"../../chunks/app-CCtbBPkp.js";

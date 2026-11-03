@@ -1,0 +1,1 @@
+export{zE as openRecentsPage}from"../../../chunks/app-CCtbBPkp.js";

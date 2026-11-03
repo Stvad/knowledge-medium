@@ -1,0 +1,1 @@
+export{PR as PropertyRow}from"../../../chunks/app-CCtbBPkp.js";

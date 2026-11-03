@@ -1,0 +1,1 @@
+export{YK as dailyNotesLocalSchema}from"../../../chunks/app-CCtbBPkp.js";

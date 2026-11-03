@@ -1,0 +1,1 @@
+export{PM as appUpdate,FM as useAppUpdateAvailable}from"../chunks/app-CCtbBPkp.js";

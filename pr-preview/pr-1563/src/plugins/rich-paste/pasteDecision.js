@@ -1,0 +1,1 @@
+export{xy as richPasteDecisionContribution}from"../../../chunks/app-CCtbBPkp.js";

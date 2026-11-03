@@ -1,0 +1,1 @@
+export{FE as BlockLink}from"../../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{bX as aliasDataExtension}from"../../../chunks/app-CCtbBPkp.js";

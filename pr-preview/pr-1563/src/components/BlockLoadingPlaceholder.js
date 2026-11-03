@@ -1,0 +1,1 @@
+export{KN as BlockLoadingPlaceholder}from"../../chunks/app-CCtbBPkp.js";

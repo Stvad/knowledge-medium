@@ -1,0 +1,1 @@
+export{iN as ClientLocalSettings,aN as clientLocalSettings}from"../../chunks/app-CCtbBPkp.js";

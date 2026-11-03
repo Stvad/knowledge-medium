@@ -1,0 +1,1 @@
+export{fv as Wikilink}from"../../../../../chunks/app-CCtbBPkp.js";

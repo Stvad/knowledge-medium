@@ -1,0 +1,1 @@
+export{Rk as useCommandPaletteActions}from"../../../chunks/app-CCtbBPkp.js";

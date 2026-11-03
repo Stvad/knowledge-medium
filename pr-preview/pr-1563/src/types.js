@@ -1,0 +1,1 @@
+export{irt as isChildBackedPropertiesWorkspace}from"../chunks/app-CCtbBPkp.js";

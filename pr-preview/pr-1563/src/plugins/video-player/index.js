@@ -1,0 +1,1 @@
+export{Sx as videoPlayerPlugin}from"../../../chunks/app-CCtbBPkp.js";

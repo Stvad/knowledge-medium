@@ -1,0 +1,1 @@
+export{BS as spatialNavigationShellDecorator}from"../../../chunks/app-CCtbBPkp.js";

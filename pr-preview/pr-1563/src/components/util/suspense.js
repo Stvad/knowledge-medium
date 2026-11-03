@@ -1,0 +1,1 @@
+export{NU as SuspenseFallback}from"../../../chunks/app-CCtbBPkp.js";

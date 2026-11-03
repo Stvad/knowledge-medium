@@ -1,0 +1,1 @@
+export{Mnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CCtbBPkp.js";

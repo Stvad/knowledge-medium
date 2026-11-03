@@ -1,0 +1,1 @@
+export{qM as dispatchPointerAction,JM as setPointerActionDispatcher}from"../../chunks/app-CCtbBPkp.js";

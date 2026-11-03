@@ -1,0 +1,1 @@
+export{XI as useShortcutSurfaceActivations}from"../../chunks/app-CCtbBPkp.js";

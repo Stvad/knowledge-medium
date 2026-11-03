@@ -1,0 +1,1 @@
+export{Yg as blockInfoPlugin}from"../../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{lh as assertActiveWorkspace}from"../../../chunks/app-CCtbBPkp.js";

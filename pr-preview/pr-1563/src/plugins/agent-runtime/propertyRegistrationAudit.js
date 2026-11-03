@@ -1,0 +1,1 @@
+export{Zp as PROVENANCE_BLOCKS_PER_KEY,Qp as PROVENANCE_KEY_LIMIT,$p as auditPropertyRegistration,em as describeUnregisteredProperty}from"../../../chunks/app-CCtbBPkp.js";

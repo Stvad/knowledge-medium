@@ -1,0 +1,1 @@
+export{by as richPastePlugin}from"../../../chunks/app-CCtbBPkp.js";

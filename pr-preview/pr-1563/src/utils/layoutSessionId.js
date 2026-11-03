@@ -1,0 +1,1 @@
+export{Tet as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Eet as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Det as __resetLayoutSessionIdForTesting,Oet as getLayoutSessionId,ket as isInstalledAppDisplayMode,Aet as readOrCreateLayoutSessionId}from"../../chunks/app-CCtbBPkp.js";

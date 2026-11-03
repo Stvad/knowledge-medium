@@ -1,0 +1,1 @@
+export{cN as dynamicExtensionsExtension}from"../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{Bj as resolveStructuralEditPolicy,Vj as structuralEditPolicyForBlock}from"../../chunks/app-CCtbBPkp.js";

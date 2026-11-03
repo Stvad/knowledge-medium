@@ -1,0 +1,1 @@
+export{wi as interactionMetricsPlugin}from"../../../chunks/app-CCtbBPkp.js";

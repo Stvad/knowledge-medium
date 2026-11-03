@@ -1,0 +1,1 @@
+export{dj as TypeChip}from"../../../chunks/app-CCtbBPkp.js";

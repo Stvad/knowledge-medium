@@ -1,0 +1,1 @@
+export{fj as chipStyle}from"../../../chunks/app-CCtbBPkp.js";

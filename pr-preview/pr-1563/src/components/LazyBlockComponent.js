@@ -1,0 +1,1 @@
+export{UN as LazyBlockComponent}from"../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{Tk as openKeybindingsSettingsAction}from"../../../chunks/app-CCtbBPkp.js";

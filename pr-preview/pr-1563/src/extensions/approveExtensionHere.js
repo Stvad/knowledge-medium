@@ -1,0 +1,1 @@
+export{vM as approveExtensionHere}from"../../chunks/app-CCtbBPkp.js";

@@ -1,0 +1,1 @@
+export{QP as GESTURE_ACTIVE,$P as GESTURE_CANCEL,eF as GESTURE_IDLE,tF as TOUCH_HOLD_MS,nF as TOUCH_SLOP_PX,rF as continuousGestureRecognizersFacet,iF as createBlockGestureController,aF as enabledTouchAction,oF as suppressNextClick,sF as unionTouchAction,cF as useContinuousGestures}from"../../chunks/app-CCtbBPkp.js";

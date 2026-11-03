@@ -1,0 +1,1 @@
+export{kj as ensureMetricsConsoleHook}from"../../chunks/app-CCtbBPkp.js";

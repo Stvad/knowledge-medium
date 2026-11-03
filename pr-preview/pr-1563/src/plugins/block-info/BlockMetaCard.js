@@ -1,0 +1,1 @@
+export{Xg as BlockMetaCard}from"../../../chunks/app-CCtbBPkp.js";

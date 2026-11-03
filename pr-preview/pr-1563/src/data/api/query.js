@@ -1,0 +1,1 @@
+export{Qat as defineQuery}from"../../../chunks/app-CCtbBPkp.js";

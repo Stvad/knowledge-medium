@@ -1,0 +1,1 @@
+export{GM as gestureBindingDescriptor,KM as matchesGestureEvent}from"../../chunks/app-CCtbBPkp.js";
