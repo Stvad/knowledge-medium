@@ -1,1 +1,1 @@
-export{Gp as extensionsOverridesProp,Kp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-CB_VHneN.js";
+export{Gp as extensionsOverridesProp,Kp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-BbK77i2F.js";

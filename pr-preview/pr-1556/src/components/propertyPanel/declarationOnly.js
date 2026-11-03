@@ -1,1 +1,1 @@
-export{ZR as declarationOnlyDefinitionForName,QR as declarationOnlyStatusText}from"../../../chunks/app-CB_VHneN.js";
+export{ZR as declarationOnlyDefinitionForName,QR as declarationOnlyStatusText}from"../../../chunks/app-BbK77i2F.js";

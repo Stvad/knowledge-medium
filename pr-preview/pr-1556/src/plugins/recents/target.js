@@ -1,1 +1,1 @@
-export{IE as openRecentsPage}from"../../../chunks/app-CB_VHneN.js";
+export{IE as openRecentsPage}from"../../../chunks/app-BbK77i2F.js";

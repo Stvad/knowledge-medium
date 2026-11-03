@@ -1,1 +1,1 @@
-export{Kat as defineMutator}from"../../../chunks/app-CB_VHneN.js";
+export{tot as defineMutator}from"../../../chunks/app-BbK77i2F.js";

@@ -1,1 +1,1 @@
-export{QU as staticDataExtensions}from"../../chunks/app-CB_VHneN.js";
+export{QU as staticDataExtensions}from"../../chunks/app-BbK77i2F.js";
