@@ -12,9 +12,6 @@ import {
 } from '@/data/api'
 import { addedTypes } from './properties'
 
-const hasStoredProperty = (properties: Readonly<Record<string, unknown>>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 /** `properties` plus each assignment's encoded value, for every assignment the
  *  bag holds under neither its own name nor the canonical name `tx` resolves it
  *  to (they differ for a handle to a renamed definition). A stored `null`
@@ -27,9 +24,9 @@ export const withAbsentPropertyValues = async (
 ): Promise<Record<string, unknown> | null> => {
   let next: Record<string, unknown> | null = null
   for (const {schema, value} of assignments) {
-    if (hasStoredProperty(properties, schema.name)) continue
+    if (Object.hasOwn(properties, schema.name)) continue
     const resolved = await tx.resolvePropertySchema(blockId, schema)
-    if (hasStoredProperty(next ?? properties, resolved.name)) continue
+    if (Object.hasOwn(next ?? properties, resolved.name)) continue
     next ??= {...properties}
     next[resolved.name] = resolved.codec.encode(value)
   }

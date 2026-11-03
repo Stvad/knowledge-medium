@@ -44,6 +44,7 @@
  * afterCommit schedule all commit together).
  */
 
+import { decodeRowProperty } from '@/data/rowProperty'
 import { z } from 'zod'
 import {
   ChangeScope,
@@ -402,8 +403,7 @@ const claimLiteralDateAliases = async (
   if (target === null || target.deleted) return
   let existing: readonly string[]
   try {
-    const encoded = target.properties[aliasesProp.name]
-    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+    existing = decodeRowProperty(target, aliasesProp)
   } catch {
     // Malformed alias property (e.g. legacy `["2026-01-05", 1]`): the
     // append below would REPLACE the whole list, dropping entries the

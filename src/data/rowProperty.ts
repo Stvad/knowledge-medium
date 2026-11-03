@@ -12,12 +12,9 @@ interface DefaultingProperty<T> extends DecodableProperty<T> {
 }
 
 /** Decode a property's stored value straight off a raw row, or `undefined` when
- *  the property is absent. Reads the cell under the schema's own name; unlike
- *  `Block.peekProperty` it does not resolve the workspace's winner for that
- *  name, and skips the cache-backed facade — a projector subscription already hands us the
- *  authoritative `BlockData`, so reading it directly avoids the hydration race
- *  where `repo.block(id)` could transiently read an un-hydrated facade
- *  (`peekProperty` → undefined) and drop a freshly-created row from the rebuild.
+ *  the property is absent. Reads the cell under the schema's own name: no
+ *  winner resolution (that is `peekResolvedProperty`) and no cache-backed
+ *  facade, so a caller holding authoritative `BlockData` reads exactly it.
  *  A decode error PROPAGATES: the caller decides whether a malformed value is
  *  fatal. */
 export const peekRowProperty = <T>(

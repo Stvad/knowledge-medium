@@ -355,8 +355,10 @@ export function useProperty<T>(
   block: Block,
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] {
-  // Reads the cell under `schema.name`, where `block.get` reads the
-  // workspace's resolved winner for it: the two disagree for a shadowed or renamed definition.
+  // Reads the cell under `schema.name`, while `block.get` and this hook's own
+  // setter resolve the workspace's winner first, so for a shadowed or renamed
+  // user definition the hook can show a different cell than it writes. Not
+  // resolved here: the selector would also have to re-run on registry changes (#1555).
   const value = useHandle(block, {
     selector: doc => doc ? decodeRowProperty(doc, schema) : schema.defaultValue,
   }) as T

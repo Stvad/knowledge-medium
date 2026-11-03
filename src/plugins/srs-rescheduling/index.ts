@@ -6,7 +6,7 @@ import { systemToggle } from '@/facets/togglable.js'
 import type { Block } from '@/data/block'
 import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
-import { ChangeScope, type PropertySchema } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import {
   DATE_SCRUB_CONTEXT,
   blockDateAdapterFacet,
@@ -17,6 +17,7 @@ import {
   type DateScrubDraft,
 } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { formatIsoDate } from '@/utils/dailyPage'
 import { createElement } from 'react'
 import { showCustom } from '@/utils/toast.js'
@@ -29,8 +30,6 @@ import {
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import {
-  DEFAULT_FACTOR,
-  DEFAULT_INTERVAL,
   scheduleSrsProperties,
   SrsSignal,
   srsSignals,
@@ -112,19 +111,6 @@ interface RescheduleActionOptions<T extends SrsActionContext> {
   descriptionSuffix?: string
 }
 
-const readProperty = <T,>(
-  properties: Record<string, unknown>,
-  schema: PropertySchema<T>,
-  fallback: T,
-): T => {
-  const stored = properties[schema.name]
-  if (stored === undefined) return fallback
-  try {
-    return schema.codec.decode(stored)
-  } catch {
-    return fallback
-  }
-}
 
 export interface RescheduleResult {
   signal: SrsSignal
@@ -220,10 +206,10 @@ const basisFromBlock = async (
   const now = new Date()
   return {
     workspaceId: data.workspaceId,
-    interval: readProperty(sourceProperties, srsIntervalProp, DEFAULT_INTERVAL),
-    factor: readProperty(sourceProperties, srsFactorProp, DEFAULT_FACTOR),
-    reviewCount: readProperty(sourceProperties, srsReviewCountProp, 0),
-    history: readProperty(sourceProperties, srsSnapshotHistoryProp, []),
+    interval: safeDecodeRowProperty({properties: sourceProperties}, srsIntervalProp),
+    factor: safeDecodeRowProperty({properties: sourceProperties}, srsFactorProp),
+    reviewCount: safeDecodeRowProperty({properties: sourceProperties}, srsReviewCountProp),
+    history: safeDecodeRowProperty({properties: sourceProperties}, srsSnapshotHistoryProp),
     scheduleFrom: scheduleFromIso ? dateFromIso(scheduleFromIso) ?? now : now,
     reviewedIso: formatIsoDate(now),
   }
@@ -596,10 +582,10 @@ const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) =
   const data = block.peek()
   if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return null
   const indicatorState = {
-    interval: readProperty(data.properties, srsIntervalProp, DEFAULT_INTERVAL),
-    factor: readProperty(data.properties, srsFactorProp, DEFAULT_FACTOR),
-    reviewCount: readProperty(data.properties, srsReviewCountProp, 0),
-    archived: readProperty(data.properties, srsArchivedProp, false),
+    interval: safeDecodeRowProperty(data, srsIntervalProp),
+    factor: safeDecodeRowProperty(data, srsFactorProp),
+    reviewCount: safeDecodeRowProperty(data, srsReviewCountProp),
+    archived: safeDecodeRowProperty(data, srsArchivedProp),
   }
   return {
     className: srsBarClass(indicatorState),

@@ -4,13 +4,13 @@
 
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { getBlockTypes } from '@/data/properties'
+import { hasBlockType } from '@/data/properties'
 import { defineBlocksAction } from '@/shortcuts/utils.js'
 import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from './blockType'
 
 const lacksType = (typeId: string) => (block: Block): boolean => {
   const data = block.peek()
-  return !data || !getBlockTypes(data).includes(typeId)
+  return !data || !hasBlockType(data, typeId)
 }
 
 const addTypeToBlocks = (typeId: string) => async (blocks: readonly Block[]): Promise<void> => {
@@ -29,7 +29,7 @@ const addCounterAction = (typeId: string, id: string, name: string) => defineBlo
   flow: addTypeToBlocks(typeId),
 })
 
-export const addCharacterCounterAction =
+const addCharacterCounterAction =
   addCounterAction(CHAR_COUNTER_TYPE, 'character-counter.add-char-counter', 'character counter')
 export const addWordCounterAction =
   addCounterAction(WORD_COUNTER_TYPE, 'character-counter.add-word-counter', 'word counter')

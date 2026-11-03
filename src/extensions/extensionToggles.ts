@@ -21,6 +21,7 @@
  * and described in the settings tree.
  */
 
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import type {BlockData} from '@/data/api'
 import {
   extensionDescriptionProp,
@@ -34,14 +35,7 @@ function blockStringProperty(
   block: BlockData,
   schema: typeof extensionNameProp | typeof extensionDescriptionProp,
 ): string | undefined {
-  const encoded = block.properties[schema.name]
-  if (encoded === undefined) return undefined
-  try {
-    const value = schema.codec.decode(encoded).trim()
-    return value.length > 0 ? value : undefined
-  } catch {
-    return undefined
-  }
+  return safeDecodeRowProperty(block, schema).trim() || undefined
 }
 
 /** Resolve a display name from block-level data only — no module

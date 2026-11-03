@@ -534,23 +534,17 @@ export const hasBlockType = (
  *  (treated as none). Shared by every reader that only needs "which
  *  aliases does this row claim" — the alias-sync processor, the
  *  block-type typeify processor, the type-editor seed. */
-export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string[] => {
-  const raw = data.properties[aliasesProp.name]
-  if (raw === undefined) return []
-  try {
-    return aliasesProp.codec.decode(raw)
-  } catch {
-    return []
-  }
-}
+export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string[] =>
+  safeDecodeRowProperty(data, aliasesProp)
 
 /** Type-membership delta helpers for same-tx processors that watch the
  *  `properties` field. `row.before` is null on insert; `row.after` is
  *  null on hard-delete — both are null-safe here, returning the
  *  appropriate one-sided diff. Order in the returned array matches
  *  `typesProp.codec.decode` order on whichever side is non-null.
- *  A malformed `types` cell reads as no types: these run on every property
- *  write, and a throw would refuse an unrelated edit to that block. */
+ *  A malformed `types` cell reads as no types: processors watching
+ *  `properties` call these on every property write, and a throw would refuse
+ *  an unrelated edit to that block. */
 export const addedTypes = (row: ChangedRow): readonly string[] => {
   const before = new Set(row.before ? safeDecodeRowProperty(row.before, typesProp) : [])
   const after = row.after ? safeDecodeRowProperty(row.after, typesProp) : []
@@ -648,12 +642,7 @@ export const sameFocusedBlockLocation = (
 
 const isEditingFromProperties = (
   properties: Record<string, unknown> | undefined,
-): boolean => {
-  const encoded = properties?.[isEditingProp.name]
-  return encoded === undefined
-    ? isEditingProp.defaultValue
-    : isEditingProp.codec.decode(encoded)
-}
+): boolean => decodeRowProperty({properties: properties ?? {}}, isEditingProp)
 
 /** Default render scope for a location on `uiStateBlock`'s surface when the
  *  caller didn't thread the rendered scope through. Panel rows are the only

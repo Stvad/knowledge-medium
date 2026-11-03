@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
-import {decodeRowProperty} from '@/data/rowProperty'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import {useHandle} from '@/hooks/block.js'
 import {useMinuteClock} from '@/hooks/useMinuteClock.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
@@ -62,9 +62,8 @@ const useContributorProfiles = (block: Block): {attribution: Attribution | undef
     profileRows.forEach(row => {
       const id = row.id
       let kind: ContributorKind = 'agent'
-      let role: string | undefined
       try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
-      try { role = decodeRowProperty(row, contributorRoleProp) } catch { /* A role is optional display metadata. */ }
+      const role = safeDecodeRowProperty(row, contributorRoleProp)
       byId.set(id, {
         id,
         name: row.content.trim().split('\n')[0] || `${kind} contributor`,

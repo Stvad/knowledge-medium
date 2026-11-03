@@ -20,7 +20,6 @@ export const TODO_CYCLE_ACTION_ID = 'todo.cycle'
 export const EDIT_MODE_TODO_CYCLE_ACTION_ID = 'edit.cm.todo.cycle'
 const TODO_TOGGLE_KEYS = ['$mod+Enter']
 
-
 const clearStatusInTx = async (block: Block): Promise<void> => {
   await block.repo.tx(async tx => {
     const row = await tx.get(block.id)
@@ -39,7 +38,7 @@ export const cycleTodoState = async (block: Block): Promise<void> => {
   const types = getBlockTypes(row)
   if (!types.includes(TODO_TYPE)) {
     await block.repo.tx(async tx => {
-      await block.repo.addTypeInTx(tx, block.id, TODO_TYPE, {[statusProp.name]: 'open'})
+      await block.repo.addTypeInTx(tx, block.id, TODO_TYPE)
       await tx.setProperty(block.id, statusProp, 'open')
     }, {scope: ChangeScope.BlockDefault, description: 'cycle todo state'})
     return
