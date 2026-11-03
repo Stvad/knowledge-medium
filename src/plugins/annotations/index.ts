@@ -16,6 +16,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
+import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
 import {
@@ -50,6 +51,9 @@ export const annotationsPlugin: AppExtension = systemToggle({
 }).of([
   annotationsDataExtension,
   dialogAppMountExtension, // asking before deleting a quoted thread
+  // A thread's quoters are its backlinks ("Quoted in", that deletion
+  // question), whether or not the Backlinks plugin is on.
+  backlinksDataExtension,
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   threadNavigationContribution,

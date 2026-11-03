@@ -20,7 +20,6 @@ import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
 import {threadAnchorOf} from './schema'
@@ -82,7 +81,6 @@ describe('a thread card’s quote', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
-        backlinksDataExtension,
         annotationsPlugin,
       ],
     }).repo

@@ -25,7 +25,6 @@ import {ActionContextTypes} from '@/shortcuts/types'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
-import {backlinksPlugin} from '@/plugins/backlinks'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
 
@@ -86,7 +85,6 @@ describe('the block comments toggle action', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
-        backlinksPlugin,
         ...defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
         annotationsPlugin,
       ],

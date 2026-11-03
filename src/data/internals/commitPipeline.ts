@@ -56,6 +56,7 @@ import {
   type MutatorCallRecord,
   type TxDb,
 } from './txEngine'
+import type { RevivalHistory } from './propertyChildrenProcessor'
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
@@ -545,6 +546,43 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     )
 
     // Step 2: construct Tx + snapshots map + run user fn.
+    /** The tx's write history as revival reads it (`SameTxCtx`'s three fields of
+     *  that name). The engine's eager property writes read it too, so a row
+     *  revived mid-tx gets its tombstoned children back from either writer. */
+    const revivalHistory: RevivalHistory = {
+      tombstonedDuringTx: (id: string): boolean =>
+        snapshots.get(id)?.before?.deleted === true
+        || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
+      txBaselineOf: (id: string) => {
+        const entry = snapshots.get(id)
+        // `rerunBefore` with the watermark AT tx start: the tx-start
+        // row with only the settled-last paths overlaid.
+        return entry === undefined
+          ? undefined
+          : rerunBefore(entry.before, entry.before, entry.after, settledFieldPaths.get(id))
+      },
+      parentLivenessWhenTombstoned: async (id: string) => {
+        let previous = snapshots.get(id)?.before ?? null
+        let death: {seq: number; parentId: string | null} | undefined
+        for (const record of rowWriteLog.get(id) ?? []) {
+          if (record.after?.deleted === true && previous?.deleted === false) {
+            death = {seq: record.seq, parentId: record.after.parentId}
+          }
+          previous = record.after
+        }
+        if (death === undefined || death.parentId === null) return undefined
+        const parentEntry = snapshots.get(death.parentId)
+        // A parent this tx never wrote was as it is now throughout.
+        let parent = parentEntry === undefined
+          ? await tx.get(death.parentId)
+          : parentEntry.before
+        for (const record of rowWriteLog.get(death.parentId) ?? []) {
+          if (record.seq > death.seq) break
+          parent = record.after
+        }
+        return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
+      },
+    }
     const tx = new TxImpl({
       txDb,
       snapshots,
@@ -558,6 +596,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       propertySchemaResolverFor: resolverFor,
       writableWorkspace,
       propertyWritesAreSettled: () => settleWrites,
+      revivalHistory,
       sameTxEvents,
       now,
       newId,
@@ -653,37 +692,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
               propertyDefinitionsClaimingName,
-              txBaselineOf: id => {
-                const entry = snapshots.get(id)
-                // `rerunBefore` with the watermark AT tx start: the tx-start
-                // row with only the settled-last paths overlaid.
-                return entry === undefined
-                  ? undefined
-                  : rerunBefore(entry.before, entry.before, entry.after, settledFieldPaths.get(id))
-              },
-              tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
-                || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
-              parentLivenessWhenTombstoned: async id => {
-                let previous = snapshots.get(id)?.before ?? null
-                let death: {seq: number; parentId: string | null} | undefined
-                for (const record of rowWriteLog.get(id) ?? []) {
-                  if (record.after?.deleted === true && previous?.deleted === false) {
-                    death = {seq: record.seq, parentId: record.after.parentId}
-                  }
-                  previous = record.after
-                }
-                if (death === undefined || death.parentId === null) return undefined
-                const parentEntry = snapshots.get(death.parentId)
-                // A parent this tx never wrote was as it is now throughout.
-                let parent = parentEntry === undefined
-                  ? await tx.get(death.parentId)
-                  : parentEntry.before
-                for (const record of rowWriteLog.get(death.parentId) ?? []) {
-                  if (record.seq > death.seq) break
-                  parent = record.after
-                }
-                return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
-              },
+              ...revivalHistory,
             },
           )
         } finally {

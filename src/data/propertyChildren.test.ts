@@ -1910,7 +1910,23 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents('p')).toEqual(['done'])
   })
 
-  it('a patched restore updates the original property rows and reconnects nested content', async () => {
+  it.each([
+    ['a patched restore', async (tx: Tx) => {
+      await tx.restore('p', {properties: {status: 'changed'}})
+    }],
+    ['a restore then a bag update in the same tx', async (tx: Tx) => {
+      await tx.restore('p')
+      await tx.update('p', {properties: {status: 'changed'}})
+    }],
+    ['a restore then setProperty in the same tx', async (tx: Tx) => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'changed')
+    }],
+    ['a restore then setProperties in the same tx', async (tx: Tx) => {
+      await tx.restore('p')
+      await tx.setProperties('p', {set: [propertyValue(statusSchema, 'changed')]})
+    }],
+  ])('%s updates the original property rows and reconnects nested content', async (_, revive) => {
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [field] = await liveFieldRows('p')
@@ -1921,8 +1937,7 @@ describe('revival re-materializes property children (#778)', () => {
     await repo.mutate.delete({id: 'p'})
     expect(await liveFieldRows('p')).toEqual([])
 
-    await repo.tx(tx => tx.restore('p', {properties: {status: 'changed'}}),
-      {scope: ChangeScope.BlockDefault})
+    await repo.tx(revive, {scope: ChangeScope.BlockDefault})
 
     expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
     const restoredValues = (await childrenRows(field!.id)).filter(row => row.deleted === 0)
@@ -1931,6 +1946,62 @@ describe('revival re-materializes property children (#778)', () => {
     const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
       'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
     expect(comment).toEqual({deleted: 1, parent_id: value!.id})
+  })
+
+  it.each([
+    ['a bag update', (tx: Tx) => tx.update('p', {properties: {status: 'changed'}})],
+    ['setProperty', (tx: Tx) => tx.setProperty('p', statusSchema, 'changed')],
+    ['setProperties', (tx: Tx) =>
+      tx.setProperties('p', {set: [propertyValue(statusSchema, 'changed')]})],
+  ])('keeps %s made between a restore and a re-delete in one tx', async (_, write) => {
+    // The owner ends the tx deleted, so no revival runs for it at commit; the
+    // write has to have reached the children by then, or the next restore brings
+    // the tombstoned old value back over it.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await write(tx)
+      await tx.delete('p')
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue('p')).toBe('changed')
+    expect(await liveValueContents('p')).toEqual(['changed'])
+  })
+
+  it.each([
+    ['a bag update', (tx: Tx) => tx.update('p', {properties: {status: 'changed'}})],
+    ['setProperty', (tx: Tx) => tx.setProperty('p', statusSchema, 'changed')],
+  ])('revives a value row\'s own other properties under their own definitions after %s', async (_, write) => {
+    // The revival recurses into the rows it restores, so the write's lookups
+    // have to answer for names beyond the one being written.
+    const LABEL_FIELD_ID = 'field-label-children'
+    const labelSchema = defineProperty('label', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-label-definition', LABEL_FIELD_ID, labelSchema)
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, labelSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await write(tx)
+      await tx.delete('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await bagOf(value!.id)).toEqual({label: 'nested'})
+    expect(await liveFieldRows(value!.id)).toEqual([])
+    const [labelField] = await liveFieldRowsFor(LABEL_FIELD_ID)(value!.id)
+    expect((await childrenRows(labelField!.id))
+      .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['nested'])
   })
 
   it('stays dormant in an un-flipped workspace', async () => {
@@ -2241,10 +2312,8 @@ describe('revival re-materializes property children (#778)', () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'p')
-    await repo.mutate.delete({id: 'p'})
 
     await expect(repo.tx(async tx => {
-      await tx.restore('p')
       await tx.setProperty('p', statusSchema, 'fresh')
       const [field] = (await tx.childrenOf('p', undefined)).filter(c => c.isFieldForm === true)
       const [value] = await tx.childrenOf(field!.id, undefined)
@@ -2451,12 +2520,13 @@ describe('revival re-materializes property children (#778)', () => {
       .filter(v => v.deleted === 0)[0]!.content).toBe('done')
   })
 
-  it('leaves the tombstone alone when the same tx already minted a live field row', async () => {
-    // The `createOrRestoreTargetBlock` shape: restore, then `setProperty` in the
-    // same tx. setProperty's dual-write mints a live field row before
-    // materialize runs, so identity is already decided — reviving the tombstone
-    // on top would only add a duplicate, and folding a duplicate RELOCATES its
-    // children, dragging the old value's comment thread onto the new value.
+  it('leaves the tombstone alone when the same tx already wrote a live field row', async () => {
+    // A field row the tx wrote by hand under the restored owner, then a bag
+    // write naming its value. Identity is already decided — reviving the
+    // tombstone on top would only add a duplicate, and folding a duplicate
+    // RELOCATES its children, dragging the old value's comment thread onto the
+    // new value. (The engine's own dual-write does not land here: on a row
+    // revived in this tx it defers to the revival.)
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [oldField] = await liveFieldRows('p')
@@ -2468,13 +2538,19 @@ describe('revival re-materializes property children (#778)', () => {
 
     await repo.tx(async tx => {
       await tx.restore('p')
-      await tx.setProperty('p', statusSchema, 'new')
+      await tx.create({
+        id: 'hand-field', workspaceId: WS, parentId: 'p', orderKey: 'a0',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+        referenceTargetId: STATUS_FIELD_ID, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'hand-value', workspaceId: WS, parentId: 'hand-field', orderKey: 'a0', content: 'new',
+      })
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
     }, {scope: ChangeScope.BlockDefault})
 
-    const fields = await liveFieldRows('p')
-    expect(fields).toHaveLength(1)
-    expect(fields[0]!.id).not.toBe(oldField!.id)
-    expect((await childrenRows(fields[0]!.id))
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual(['hand-field'])
+    expect((await childrenRows('hand-field'))
       .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['new'])
     // The old value's comment stayed put — not relocated onto the new value.
     const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
