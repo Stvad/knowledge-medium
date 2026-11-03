@@ -1,1 +1,0 @@
-export{Qf as contributorsPlugin}from"../../../chunks/app-CNQnE9nl.js";

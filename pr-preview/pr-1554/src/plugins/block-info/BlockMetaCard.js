@@ -1,1 +1,0 @@
-export{Kg as BlockMetaCard}from"../../../chunks/app-CNQnE9nl.js";

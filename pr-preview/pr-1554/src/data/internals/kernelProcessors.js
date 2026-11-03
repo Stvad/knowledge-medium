@@ -1,1 +1,0 @@
-export{X2 as KERNEL_PROCESSORS}from"../../../chunks/app-CNQnE9nl.js";

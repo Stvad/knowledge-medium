@@ -1,1 +1,0 @@
-export{XC as BreadcrumbRenderer}from"../../../chunks/app-CNQnE9nl.js";

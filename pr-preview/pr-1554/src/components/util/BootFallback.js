@@ -1,1 +1,0 @@
-export{DU as BootFallback}from"../../../chunks/app-CNQnE9nl.js";

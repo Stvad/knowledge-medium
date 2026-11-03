@@ -1,1 +1,0 @@
-export{vx as videoPlayerPlugin}from"../../../chunks/app-CNQnE9nl.js";

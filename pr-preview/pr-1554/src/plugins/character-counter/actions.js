@@ -1,1 +1,0 @@
-export{Sn as addWordCounterAction,Cn as counterActions}from"../../../chunks/app-CNQnE9nl.js";

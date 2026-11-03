@@ -1,1 +1,0 @@
-export{NE as useMinuteClock}from"../../chunks/app-CNQnE9nl.js";

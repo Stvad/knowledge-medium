@@ -1,1 +1,0 @@
-export{CR as BlockProperties}from"../../chunks/app-CNQnE9nl.js";
