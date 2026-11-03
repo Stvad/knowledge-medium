@@ -23,6 +23,7 @@ import {referencesPlugin} from '@/plugins/references'
 import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
+import {threadAnchorOf} from './schema'
 import {ThreadCard} from './ui'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
@@ -107,11 +108,12 @@ describe('a thread card’s quote', () => {
 
   it('renders the references it quotes as links', async () => {
     const {threadId} = await addComment(repo, {targetId: 'target', quote: QUOTE, comment: 'A note'})
+    const anchor = threadAnchorOf((await repo.load(threadId))!)
     render(
       <AppRuntimeContextProvider value={repo.facetRuntime!}>
         <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'page', renderScopeId: panelRenderScopeId('panel', 'page')}}>
           <ActiveContextsProvider>
-            <ThreadCard thread={{id: threadId, open: true, anchor: {kind: 'range', quote: QUOTE}, suggestion: false, commentCount: 1, quoterCount: 0, createdAt: 0}}/>
+            <ThreadCard thread={{id: threadId, open: true, anchor, suggestion: false, commentCount: 1, quoterCount: 0, createdAt: 0}}/>
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
