@@ -1,1 +1,1 @@
-export{Ztt as getOrCreatePropertiesPage,Qtt as propertiesPageBlockId,$tt as propertiesPageSpec}from"../../chunks/app-CCtbBPkp.js";
+export{Ztt as getOrCreatePropertiesPage,Qtt as propertiesPageBlockId,$tt as propertiesPageSpec}from"../../chunks/app-rXZPTVRb.js";

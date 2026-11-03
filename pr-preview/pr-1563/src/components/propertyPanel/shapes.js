@@ -1,1 +1,1 @@
-export{nU as propertyShapeLabel}from"../../../chunks/app-CCtbBPkp.js";
+export{nU as propertyShapeLabel}from"../../../chunks/app-rXZPTVRb.js";

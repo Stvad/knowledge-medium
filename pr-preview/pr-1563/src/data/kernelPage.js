@@ -1,1 +1,1 @@
-export{Get as getOrCreateKernelPage,Ket as kernelPageBlockId}from"../../chunks/app-CCtbBPkp.js";
+export{Get as getOrCreateKernelPage,Ket as kernelPageBlockId}from"../../chunks/app-rXZPTVRb.js";
