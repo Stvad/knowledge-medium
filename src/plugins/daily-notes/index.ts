@@ -241,7 +241,7 @@ export {
   ensureDailyNoteTarget,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
-  dailyNoteIsoFromAliases,
+  dailyNoteIso,
   isDateAlias,
   isValidDateAlias,
   journalBlockId,
