@@ -122,6 +122,25 @@ describe('a split of the target', () => {
       .toEqual({state: 'moved', from, to: from + 'Monday'.length})
   })
 
+  it('carries a moved thread onto its own text, never onto an identical repeat at its old offset', async () => {
+    const phrase = 'and on Monday we ship the release, and'
+    const repeated = [phrase, phrase, phrase].join(' ')
+    await repo.tx(tx => tx.update('B', {content: repeated}), opts)
+    const thread = (await createThread(repo, {targetId: 'B', anchor: anchorAt(repeated, 'ship', 1), comment: 'x'})).threadId
+    const edited = `Note: ${repeated}`
+    await repo.tx(tx => tx.update('B', {content: edited}), opts)
+    const quoted = edited.indexOf('ship', edited.indexOf('ship') + 1)
+    const cut = edited.indexOf(phrase) + phrase.length + 1
+
+    const child = await split('firstChild', edited.slice(0, cut), edited.slice(cut))
+
+    const root = (await repo.load(thread))!
+    const from = quoted - cut
+    expect(threadTargetIdOf(root)).toBe(child)
+    expect(resolveAnchor((await repo.load(child))!.content, threadAnchorOf(root) as RangeAnchor))
+      .toMatchObject({from, to: from + 'ship'.length})
+  })
+
   it('places a thread by the text the split cut, which can be ahead of the stored row', async () => {
     const thread = await threadOn('Draft the plan')
     // The editor's live text, not yet flushed: it moved the quote.

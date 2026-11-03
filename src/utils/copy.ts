@@ -67,10 +67,21 @@ const copyToClipboard = async (data: ClipboardData): Promise<void> => {
 
 /** Write `text` to the clipboard: the app's one plain-text clipboard writer,
  *  enforced by lint. Whatever it writes replaces a cut on the clipboard, so it
- *  disarms that cut once the write resolved (see {@link copyToClipboard}). */
-export const writeTextToClipboard = async (text: string): Promise<void> => {
-  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
-  await navigator.clipboard.writeText(text)
+ *  disarms that cut once the write resolved (see {@link copyToClipboard}).
+ *
+ *  Text that needs async work first comes as a promise, and the write starts
+ *  at the call: Safari refuses one that starts after the gesture's handler has
+ *  awaited. A rejected `text` rejects the write and leaves the clipboard as it
+ *  was. */
+export const writeTextToClipboard = async (text: string | Promise<string>): Promise<void> => {
+  if (typeof text === 'string') {
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.writeText(text)
+  } else {
+    const blob = text.then(value => new Blob([value], {type: 'text/plain'}))
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.write([new ClipboardItem({'text/plain': blob})])
+  }
   disarmCut()
 }
 
