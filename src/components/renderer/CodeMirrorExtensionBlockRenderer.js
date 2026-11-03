@@ -1,1 +1,1 @@
-export{IP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BicTmzqe.js";
+export{IP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-B1HdhodE.js";

@@ -1,1 +1,1 @@
-export{OI as readClipboardContent}from"../../chunks/app-BicTmzqe.js";
+export{OI as readClipboardContent}from"../../chunks/app-B1HdhodE.js";
