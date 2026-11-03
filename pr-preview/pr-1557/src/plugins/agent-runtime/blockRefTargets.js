@@ -1,1 +1,1 @@
-export{uh as blockContent,dh as refuseDanglingBlockRefs}from"../../../chunks/app-IqMYl_dQ.js";
+export{dh as refuseDanglingBlockRefs}from"../../../chunks/app-wRc3n4_8.js";
