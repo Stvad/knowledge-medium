@@ -1,0 +1,1 @@
+export{UC as mobileBottomNavItemsFacet}from"../../../chunks/app-DhlN1srw.js";

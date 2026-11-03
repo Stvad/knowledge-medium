@@ -1,0 +1,1 @@
+export{WP as ConfirmBulkDeleteDialog}from"../../chunks/app-DhlN1srw.js";

@@ -1,0 +1,1 @@
+export{DU as BootFallback}from"../../../chunks/app-DhlN1srw.js";

@@ -1,0 +1,1 @@
+export{i2 as kernelDataExtension}from"../../chunks/app-DhlN1srw.js";

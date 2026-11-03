@@ -1,0 +1,1 @@
+export{gy as richPastePlugin}from"../../../chunks/app-DhlN1srw.js";

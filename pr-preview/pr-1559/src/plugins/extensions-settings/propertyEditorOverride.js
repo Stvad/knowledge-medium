@@ -1,0 +1,1 @@
+export{sr as extensionsOverridesUi}from"../../../chunks/app-DhlN1srw.js";

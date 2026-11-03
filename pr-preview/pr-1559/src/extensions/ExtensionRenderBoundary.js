@@ -1,0 +1,1 @@
+export{IF as ExtensionRenderBoundary}from"../../chunks/app-DhlN1srw.js";

@@ -1,0 +1,1 @@
+export{lq as annotationsDataExtension}from"../../../chunks/app-DhlN1srw.js";

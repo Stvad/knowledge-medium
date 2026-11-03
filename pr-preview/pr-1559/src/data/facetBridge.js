@@ -1,0 +1,1 @@
+export{g$ as FacetBridge}from"../../chunks/app-DhlN1srw.js";

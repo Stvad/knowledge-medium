@@ -1,0 +1,1 @@
+export{lP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,uP as openExtensionsSettings}from"../../chunks/app-DhlN1srw.js";

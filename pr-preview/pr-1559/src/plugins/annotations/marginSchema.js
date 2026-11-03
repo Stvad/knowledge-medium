@@ -1,0 +1,1 @@
+export{mJ as annotationMarginOpenProp}from"../../../chunks/app-DhlN1srw.js";

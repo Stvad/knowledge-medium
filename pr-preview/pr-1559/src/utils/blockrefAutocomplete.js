@@ -1,0 +1,1 @@
+export{gv as blockrefCompletionSource}from"../../chunks/app-DhlN1srw.js";

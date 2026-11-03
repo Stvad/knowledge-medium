@@ -1,0 +1,1 @@
+export{OF as useIsMobile,kF as usePointerCoarse}from"../../chunks/app-DhlN1srw.js";

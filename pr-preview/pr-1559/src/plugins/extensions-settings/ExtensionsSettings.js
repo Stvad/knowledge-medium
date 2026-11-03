@@ -1,0 +1,1 @@
+export{fr as ExtensionsSettings}from"../../../chunks/app-DhlN1srw.js";

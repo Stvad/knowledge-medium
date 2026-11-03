@@ -1,0 +1,1 @@
+export{NE as useMinuteClock}from"../../chunks/app-DhlN1srw.js";

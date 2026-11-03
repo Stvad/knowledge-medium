@@ -1,0 +1,1 @@
+export{CR as BlockProperties}from"../../chunks/app-DhlN1srw.js";

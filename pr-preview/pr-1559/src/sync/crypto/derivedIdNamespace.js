@@ -1,0 +1,1 @@
+export{Ent as deriveWorkspaceIdNamespace}from"../../../chunks/app-DhlN1srw.js";

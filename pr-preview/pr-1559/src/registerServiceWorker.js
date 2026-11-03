@@ -1,0 +1,1 @@
+export{OM as checkForAppUpdate,kM as registerServiceWorker}from"../chunks/app-DhlN1srw.js";

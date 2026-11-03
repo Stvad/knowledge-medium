@@ -1,0 +1,1 @@
+export{Lot as CHANGE_SCOPE_POLICIES,Rot as ChangeScope,zot as isChangeScope,Bot as policyForScope,Vot as scopeAllowedInReadOnly,Hot as scopeIsUndoable,Uot as scopePoliciesEquivalent,Wot as scopeUploadsToServer,Got as sourceForScope}from"../../../chunks/app-DhlN1srw.js";

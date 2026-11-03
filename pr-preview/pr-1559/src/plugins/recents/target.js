@@ -1,0 +1,1 @@
+export{FE as openRecentsPage}from"../../../chunks/app-DhlN1srw.js";

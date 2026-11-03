@@ -1,0 +1,1 @@
+export{G_ as backlinksViewFacet}from"../../../chunks/app-DhlN1srw.js";

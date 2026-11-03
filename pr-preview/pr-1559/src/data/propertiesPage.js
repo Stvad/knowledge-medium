@@ -1,0 +1,1 @@
+export{Gtt as getOrCreatePropertiesPage,Ktt as propertiesPageBlockId,qtt as propertiesPageSpec}from"../../chunks/app-DhlN1srw.js";

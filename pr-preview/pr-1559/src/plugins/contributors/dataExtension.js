@@ -1,0 +1,1 @@
+export{yJ as contributorsDataExtension}from"../../../chunks/app-DhlN1srw.js";

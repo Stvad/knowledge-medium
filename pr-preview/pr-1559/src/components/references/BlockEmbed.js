@@ -1,0 +1,1 @@
+export{QA as BlockEmbed}from"../../../chunks/app-DhlN1srw.js";

@@ -1,0 +1,1 @@
+export{MB as useTypes}from"../../chunks/app-DhlN1srw.js";

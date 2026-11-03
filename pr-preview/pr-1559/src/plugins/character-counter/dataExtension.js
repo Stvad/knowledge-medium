@@ -1,0 +1,1 @@
+export{FJ as characterCounterDataExtension}from"../../../chunks/app-DhlN1srw.js";

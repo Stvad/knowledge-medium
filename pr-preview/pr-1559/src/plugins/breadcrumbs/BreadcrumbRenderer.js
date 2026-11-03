@@ -1,0 +1,1 @@
+export{XC as BreadcrumbRenderer}from"../../../chunks/app-DhlN1srw.js";

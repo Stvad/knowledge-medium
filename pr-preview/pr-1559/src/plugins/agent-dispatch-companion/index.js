@@ -1,0 +1,1 @@
+export{tp as agentDispatchCompanionPlugin}from"../../../chunks/app-DhlN1srw.js";

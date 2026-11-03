@@ -1,0 +1,1 @@
+export{Tj as ensureMetricsConsoleHook}from"../../chunks/app-DhlN1srw.js";

@@ -1,0 +1,1 @@
+export{UM as dispatchPointerAction,WM as setPointerActionDispatcher}from"../../chunks/app-DhlN1srw.js";

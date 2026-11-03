@@ -1,0 +1,1 @@
+export{LS as SpatialNavigationShellDecorator}from"../../../chunks/app-DhlN1srw.js";

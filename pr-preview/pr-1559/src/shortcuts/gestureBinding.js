@@ -1,0 +1,1 @@
+export{VM as gestureBindingDescriptor,HM as matchesGestureEvent}from"../../chunks/app-DhlN1srw.js";

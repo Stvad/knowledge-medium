@@ -1,0 +1,1 @@
+export{Rat as SYSTEM_AUTHOR_PREFIX,zat as isSystemAuthor,Bat as systemAuthor}from"../../../chunks/app-DhlN1srw.js";
