@@ -6,10 +6,10 @@
  * uses the width a wide panel leaves empty beside the text instead of
  * squeezing it, moving the text left, unchanged in width, when the right side
  * alone is short of the widest column (`fitColumn`, `PANEL_RIGHT_CLEARANCE`).
- * The cost is that it lives outside the scrollport: it finds the
- * panel's rows in the DOM (mounted rows and lazy placeholders alike, of the
- * panel's own render scope), reads their positions and moves the cards within
- * one animation frame of a scroll, a resize or a re-render.
+ * The cost is that it lives outside the scrollport: it finds the panel's rows
+ * in the DOM (mounted rows and lazy placeholders alike, of the panel's own
+ * render scope), reads their positions and moves the cards within one animation
+ * frame of a scroll, a resize or a re-render.
  *
  * Where there is no room for the column, it draws nothing and says so
  * (`setMarginShowing`), and the comment pill falls back to expanding threads
@@ -44,9 +44,10 @@ import {
   useShowClosed,
 } from './uiStore.ts'
 
-/** The column's width bounds, and the space kept between it and the text. A
- *  panel with less room than the minimum shows no margin. The maximum keeps
- *  deeply nested replies readable without the column outweighing the text. */
+/** The column's width bounds, and the space kept on each side of it and left
+ *  of the moved text. A panel with less room than the minimum shows no margin.
+ *  The maximum keeps deeply nested replies readable without the column
+ *  outweighing the text. */
 const COLUMN_BOUNDS = {min: 240, max: 520}
 const EDGE_PX = 16
 const CARD_GAP_PX = 8
@@ -143,8 +144,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       else panelEl.style.removeProperty(PANEL_RIGHT_CLEARANCE)
     }
 
-    const measure = (top: Element | null, portRect: DOMRect): ColumnFrame | null => {
-      if (!top) return null
+    const measure = (top: Element, portRect: DOMRect): ColumnFrame | null => {
       const panelRect = panelEl.getBoundingClientRect()
       // From the widths alone, so the answer doesn't depend on the current shift.
       const side = (portRect.width - top.getBoundingClientRect().width) / 2
@@ -167,7 +167,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         observedTopRow = topRow
       }
       const portRect = scrollport.getBoundingClientRect()
-      const nextFrame = measure(topRow, portRect)
+      const nextFrame = topRow && measure(topRow, portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
       setTextShift(nextFrame?.textShift ?? 0)
       const rowEls = new Map<string, Element>()
@@ -178,7 +178,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const order = [...rowEls.keys()]
       setRows(current => current.length === order.length && current.every((id, i) => id === order[i]) ? current : order)
       const column = columnRef.current
-      if (!column || !nextFrame) {
+      if (!column || !topRow || !nextFrame) {
         setExtraBottom(0)
         return
       }
@@ -206,9 +206,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       // From the outline itself, not `scrollHeight`: on a page shorter than
       // the viewport that is the viewport's height, so the padding would
       // converge on its size a frame at a time.
-      const contentEnd = topRow
-        ? topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
-        : scrollport.scrollHeight - extraBottom
+      const contentEnd = topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
       setExtraBottom(Math.max(0, Math.ceil(cardsEnd - contentEnd)))
     }
     const schedule = () => {
