@@ -1,0 +1,1 @@
+export{Iu as resolveDailyPage}from"../../../chunks/app-BiuS647l.js";

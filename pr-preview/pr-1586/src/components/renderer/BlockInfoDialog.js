@@ -1,0 +1,1 @@
+export{KF as BlockInfoDialog}from"../../../chunks/app-BiuS647l.js";

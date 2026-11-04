@@ -1,0 +1,1 @@
+export{Gk as useCommandPaletteActions}from"../../../chunks/app-BiuS647l.js";

@@ -1,0 +1,1 @@
+export{tr as KeyCaptureInput}from"../../../chunks/app-BiuS647l.js";

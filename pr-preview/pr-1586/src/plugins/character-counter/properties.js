@@ -1,0 +1,1 @@
+export{eY as RAW_CHARACTER_COUNT_PROFILE_ID,tY as WORDS_COUNT_PROFILE_ID,nY as charLimitProp,rY as charProfileProp,iY as charScopeProp}from"../../../chunks/app-BiuS647l.js";

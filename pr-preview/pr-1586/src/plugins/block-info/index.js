@@ -1,0 +1,1 @@
+export{Qg as blockInfoPlugin}from"../../../chunks/app-BiuS647l.js";

@@ -1,0 +1,1 @@
+export{oG as preferredSpanReplacement}from"../../../chunks/app-BiuS647l.js";

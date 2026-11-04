@@ -1,0 +1,1 @@
+export{XN as LazyBlockComponent}from"../../chunks/app-BiuS647l.js";

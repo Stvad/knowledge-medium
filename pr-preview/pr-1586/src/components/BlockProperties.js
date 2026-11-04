@@ -1,0 +1,1 @@
+export{IR as BlockProperties}from"../../chunks/app-BiuS647l.js";

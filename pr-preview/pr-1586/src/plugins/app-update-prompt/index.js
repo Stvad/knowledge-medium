@@ -1,0 +1,1 @@
+export{AM as appUpdatePromptExtension}from"../../../chunks/app-BiuS647l.js";

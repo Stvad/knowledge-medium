@@ -1,0 +1,1 @@
+export{nP as defaultRegistry,rP as defaultRendererContributions,iP as defaultRenderersExtension}from"../../chunks/app-BiuS647l.js";

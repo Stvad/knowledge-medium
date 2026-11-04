@@ -1,0 +1,1 @@
+export{qC as usePromotableBreadcrumb}from"../../../chunks/app-BiuS647l.js";

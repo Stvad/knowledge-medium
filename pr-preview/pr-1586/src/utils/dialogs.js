@@ -1,0 +1,1 @@
+export{VF as __resetDialogsForTests,HF as getDialogQueue,UF as isDialogOpenForWorkspace,WF as openDialog,GF as subscribeDialogs}from"../../chunks/app-BiuS647l.js";

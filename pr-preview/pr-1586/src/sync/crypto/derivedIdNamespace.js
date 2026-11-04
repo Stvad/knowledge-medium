@@ -1,0 +1,1 @@
+export{Bnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BiuS647l.js";

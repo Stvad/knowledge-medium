@@ -1,0 +1,1 @@
+export{wi as interactionMetricsPlugin}from"../../../chunks/app-BiuS647l.js";

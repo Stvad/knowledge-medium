@@ -1,0 +1,1 @@
+export{yl as appendTagToBlocks,bl as appendTagToContent}from"../../../chunks/app-BiuS647l.js";

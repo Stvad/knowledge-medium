@@ -1,0 +1,1 @@
+export{g2 as ProcessorRunner}from"../../../chunks/app-BiuS647l.js";

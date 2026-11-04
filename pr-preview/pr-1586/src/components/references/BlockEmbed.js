@@ -1,0 +1,1 @@
+export{lj as BlockEmbed}from"../../../chunks/app-BiuS647l.js";

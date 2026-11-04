@@ -1,0 +1,1 @@
+export{m2 as Block,h2 as requireLoadedBlock}from"../../chunks/app-BiuS647l.js";

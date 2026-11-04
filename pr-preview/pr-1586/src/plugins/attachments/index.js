@@ -1,0 +1,1 @@
+export{Oy as attachmentsPlugin}from"../../../chunks/app-BiuS647l.js";

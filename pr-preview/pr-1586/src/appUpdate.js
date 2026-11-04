@@ -1,0 +1,1 @@
+export{VM as appUpdate,HM as useAppUpdateAvailable}from"../chunks/app-BiuS647l.js";

@@ -1,0 +1,1 @@
+export{frt as isChildBackedPropertiesWorkspace}from"../chunks/app-BiuS647l.js";

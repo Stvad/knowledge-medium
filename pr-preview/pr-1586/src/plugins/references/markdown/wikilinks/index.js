@@ -1,0 +1,1 @@
+export{mv as wikilinkMarkdownExtension}from"../../../../../chunks/app-BiuS647l.js";

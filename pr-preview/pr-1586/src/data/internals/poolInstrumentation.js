@@ -1,0 +1,1 @@
+export{MQ as instrumentAdapter}from"../../../chunks/app-BiuS647l.js";

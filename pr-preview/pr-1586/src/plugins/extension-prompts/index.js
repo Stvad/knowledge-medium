@@ -1,0 +1,1 @@
+export{gM as ExtensionPromptSurface,_M as extensionPromptsExtension}from"../../../chunks/app-BiuS647l.js";

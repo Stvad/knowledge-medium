@@ -1,0 +1,1 @@
+export{BU as BootFallback}from"../../../chunks/app-BiuS647l.js";

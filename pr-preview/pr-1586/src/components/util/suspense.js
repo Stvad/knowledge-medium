@@ -1,0 +1,1 @@
+export{VU as SuspenseFallback}from"../../../chunks/app-BiuS647l.js";
