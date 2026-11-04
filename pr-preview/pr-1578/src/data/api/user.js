@@ -1,1 +1,1 @@
-export{Xat as SYSTEM_AUTHOR_PREFIX,Zat as isSystemAuthor,Qat as systemAuthor}from"../../../chunks/app-DcI2k--Z.js";
+export{Xat as SYSTEM_AUTHOR_PREFIX,Zat as isSystemAuthor,Qat as systemAuthor}from"../../../chunks/app-Vg48jl6t.js";

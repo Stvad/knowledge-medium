@@ -1,1 +1,1 @@
-export{x$ as BlockCache,S$ as BlockCacheMetrics}from"../../chunks/app-DcI2k--Z.js";
+export{x$ as BlockCache,S$ as BlockCacheMetrics}from"../../chunks/app-Vg48jl6t.js";

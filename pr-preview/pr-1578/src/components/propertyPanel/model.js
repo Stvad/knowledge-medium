@@ -1,1 +1,1 @@
-export{zR as HIDDEN_SECTION,BR as buildPropertyPanelModel}from"../../../chunks/app-DcI2k--Z.js";
+export{zR as HIDDEN_SECTION,BR as buildPropertyPanelModel}from"../../../chunks/app-Vg48jl6t.js";

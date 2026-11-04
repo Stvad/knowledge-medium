@@ -1,1 +1,1 @@
-export{Yp as extensionsOverridesProp,Xp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-DcI2k--Z.js";
+export{Yp as extensionsOverridesProp,Xp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-Vg48jl6t.js";

@@ -1,1 +1,1 @@
-export{Qg as updateIndicatorPlugin}from"../../../chunks/app-DcI2k--Z.js";
+export{Qg as updateIndicatorPlugin}from"../../../chunks/app-Vg48jl6t.js";

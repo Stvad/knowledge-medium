@@ -1,1 +1,1 @@
-export{BK as codeMirrorExtensionsFacet}from"../../chunks/app-DcI2k--Z.js";
+export{BK as codeMirrorExtensionsFacet}from"../../chunks/app-Vg48jl6t.js";
