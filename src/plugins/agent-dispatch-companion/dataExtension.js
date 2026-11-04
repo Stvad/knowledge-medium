@@ -1,1 +1,1 @@
-export{hZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-K-HHfjrL.js";
+export{hZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-BJwJiPNQ.js";

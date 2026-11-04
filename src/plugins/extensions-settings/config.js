@@ -1,1 +1,1 @@
-export{Xp as extensionsOverridesPresetCore,Zp as extensionsOverridesProp,Qp as extensionsPrefsType,$p as overridesCodec}from"../../../chunks/app-K-HHfjrL.js";
+export{Xp as extensionsOverridesPresetCore,Zp as extensionsOverridesProp,Qp as extensionsPrefsType,$p as overridesCodec}from"../../../chunks/app-BJwJiPNQ.js";

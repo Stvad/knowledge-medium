@@ -1,1 +1,1 @@
-export{ip as contributorsPlugin}from"../../../chunks/app-K-HHfjrL.js";
+export{ip as contributorsPlugin}from"../../../chunks/app-BJwJiPNQ.js";

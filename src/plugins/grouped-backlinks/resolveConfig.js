@@ -1,1 +1,1 @@
-export{Ig as resolveGroupedBacklinksConfig}from"../../../chunks/app-K-HHfjrL.js";
+export{Ig as resolveGroupedBacklinksConfig}from"../../../chunks/app-BJwJiPNQ.js";
