@@ -1,0 +1,1 @@
+export{XF as ExtensionRenderBoundary}from"../../chunks/app-DAjybV0M.js";

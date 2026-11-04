@@ -1,0 +1,1 @@
+export{zR as BlockProperties}from"../../chunks/app-DAjybV0M.js";

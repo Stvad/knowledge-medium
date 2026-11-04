@@ -1,0 +1,1 @@
+export{bm as lintExtensionSource}from"../../../chunks/app-DAjybV0M.js";

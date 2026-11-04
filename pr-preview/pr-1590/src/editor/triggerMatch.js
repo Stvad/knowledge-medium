@@ -1,0 +1,1 @@
+export{EK as matchCharTrigger}from"../../chunks/app-DAjybV0M.js";

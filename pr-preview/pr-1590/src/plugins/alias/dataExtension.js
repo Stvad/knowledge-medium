@@ -1,0 +1,1 @@
+export{MX as aliasDataExtension}from"../../../chunks/app-DAjybV0M.js";

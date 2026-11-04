@@ -1,0 +1,1 @@
+export{kx as videoPlayerPlugin}from"../../../chunks/app-DAjybV0M.js";

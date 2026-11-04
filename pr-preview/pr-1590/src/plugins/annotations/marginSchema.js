@@ -1,0 +1,1 @@
+export{DJ as annotationMarginOpenProp}from"../../../chunks/app-DAjybV0M.js";

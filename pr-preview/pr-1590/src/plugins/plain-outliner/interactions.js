@@ -1,0 +1,1 @@
+export{ow as blockEditingContentRenderer}from"../../../chunks/app-DAjybV0M.js";

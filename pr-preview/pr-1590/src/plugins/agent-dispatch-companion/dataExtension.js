@@ -1,0 +1,1 @@
+export{hZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-DAjybV0M.js";
