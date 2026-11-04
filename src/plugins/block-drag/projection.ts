@@ -66,8 +66,7 @@ export const projectDrop = (
 export interface SlotRows {
   readonly count: number
   top(index: number): number
-  /** Bottom of the row's OWN line — where its first rendered child
-   *  starts, or its full height when it shows none. */
+  /** Bottom of the row's OWN line, without anything rendered under it. */
   ownBottom(index: number): number
   /** Bottom of the row including everything it renders below its line. */
   bottom(index: number): number
