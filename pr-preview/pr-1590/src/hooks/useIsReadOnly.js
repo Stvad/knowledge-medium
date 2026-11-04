@@ -1,1 +1,0 @@
-export{Zv as useIsReadOnly}from"../../chunks/app-BlRsFwC-.js";

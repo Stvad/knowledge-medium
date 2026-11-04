@@ -1,1 +1,0 @@
-export{xa as MigrationGate}from"../../../chunks/app-BlRsFwC-.js";

@@ -1,1 +1,0 @@
-export{QG as geoDataExtension}from"../../../chunks/app-BlRsFwC-.js";

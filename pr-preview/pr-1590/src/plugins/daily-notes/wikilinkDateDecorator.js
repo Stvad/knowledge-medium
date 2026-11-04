@@ -1,1 +1,0 @@
-export{CO as dailyDateWikilinkDecorator}from"../../../chunks/app-BlRsFwC-.js";

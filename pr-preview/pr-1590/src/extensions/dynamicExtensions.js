@@ -1,1 +1,0 @@
-export{vN as dynamicExtensionsExtension}from"../../chunks/app-BlRsFwC-.js";

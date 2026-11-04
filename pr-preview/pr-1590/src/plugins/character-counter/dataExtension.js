@@ -1,1 +1,0 @@
-export{QJ as characterCounterDataExtension}from"../../../chunks/app-BlRsFwC-.js";
