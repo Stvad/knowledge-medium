@@ -20,6 +20,7 @@ import {waitForRenderOrder} from '@/test/domOrder'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
+import {breadcrumbsPlugin} from '@/plugins/breadcrumbs'
 import {backlinksPlugin} from '@/plugins/backlinks'
 import {backlinksViewPlugin} from '@/plugins/backlinks-view'
 import {topLevelBlockIdProp} from '@/data/properties'
@@ -84,6 +85,7 @@ describe('where a block\'s backlinks render', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
+        breadcrumbsPlugin,
         backlinksPlugin,
         backlinksViewPlugin,
       ],
@@ -136,7 +138,6 @@ describe('where a block\'s backlinks render', () => {
     await repo.block('ui-state').set(topLevelBlockIdProp, TARGET)
     await renderTarget(TARGET)
     await screen.findByText(REFERRER, {exact: false})
-    // The reference inside the referrer draws the child again once it resolves: the first copy is the block's own.
-    await waitForRenderOrder(() => screen.getAllByText(CHILD)[0], () => screen.getByText(REFERRER, {exact: false}))
+    await waitForRenderOrder(() => screen.getByText(CHILD), () => screen.getByText(REFERRER, {exact: false}))
   }, 20_000)
 })
