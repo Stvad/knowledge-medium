@@ -1,1 +1,1 @@
-export{QI as BlockEditor}from"../../chunks/app-Cly6wae2.js";
+export{QI as BlockEditor}from"../../chunks/app-DrtbBLzr.js";
