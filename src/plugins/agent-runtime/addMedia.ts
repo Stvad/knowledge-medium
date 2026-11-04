@@ -20,11 +20,7 @@ const decode = (encoded: string): Uint8Array<ArrayBuffer> => {
 }
 
 /** A file's bytes as a media block under the workspace's Assets page, deduplicated
- *  by content. Placing it in a note is the caller's next write, of `reference`.
- *
- *  The block carries no contributor: capture mints it pristine so two devices' first
- *  captures reconcile to one row, and attribution skips a pristine row. `recent_changes`
- *  still lists the write. */
+ *  by content. Placing it in a note is the caller's next write, of `reference`. */
 export const addMedia = async (
   repo: Repo,
   workspaceId: string,

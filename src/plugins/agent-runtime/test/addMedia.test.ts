@@ -21,6 +21,7 @@ import {
   mediaSizeProp,
 } from '@/plugins/attachments/mediaBlock'
 import {createAssetResolver} from '@/plugins/attachments/resolver'
+import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {computeContentHash} from '@/sync/crypto/contentHash'
 import type {Materializability} from '@/sync/transform'
 import {createAgentRuntimeContext, executeCommand} from '../commands'
@@ -139,6 +140,30 @@ describe('the add-media command', () => {
     const changes = await executeCommand({type: 'recent-changes', since: 0, commandId: 'c2'} as never, context)
     expect(JSON.stringify(changes)).toContain(added.id)
     expect(JSON.stringify(changes)).toContain('agent runtime add-media')
+  })
+
+  it('credits the agent on the block, which stays pristine', async () => {
+    const {id: agent} = await executeCommand({type: 'create-contributor', name: 'Atlas', commandId: 'k'} as never, context) as {id: string}
+    const added = await add(PNG, {contributorId: agent})
+    const block = await context.repo.load(added.id)
+    expect(block?.properties[attributionCreatorsProp.name]).toEqual([agent])
+    expect(block?.updatedAt).toBe(0)
+  })
+
+  it('leaves the first contributor in place when another agent adds the same bytes', async () => {
+    const contributor = async (name: string) =>
+      (await executeCommand({type: 'create-contributor', name, commandId: 'k'} as never, context) as {id: string}).id
+    const first = await contributor('Atlas')
+    const added = await add(PNG, {contributorId: first})
+    await add(PNG, {contributorId: await contributor('Scout')})
+    expect((await context.repo.load(added.id))?.properties[attributionCreatorsProp.name]).toEqual([first])
+  })
+
+  it('takes one undo to remove the upload', async () => {
+    const {id: agent} = await executeCommand({type: 'create-contributor', name: 'Atlas', commandId: 'k'} as never, context) as {id: string}
+    const added = await add(PNG, {contributorId: agent})
+    await context.repo.undo()
+    expect(await context.repo.load(added.id)).toBeNull()
   })
 
   it('refuses a filename linking a block that does not exist, writing nothing', async () => {

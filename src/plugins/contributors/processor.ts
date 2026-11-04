@@ -3,6 +3,7 @@ import {isFieldValueChild, isPropertyFieldInstance} from '@/data/propertyChildre
 import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
+import {MEDIA_TYPE} from '@/plugins/attachments/mediaBlock'
 import {assertContributor, ensureHumanContributor} from './profiles'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindOf} from './schema'
 
@@ -20,8 +21,9 @@ const authoredFields = ['content', 'properties', 'deleted', 'parentId', 'orderKe
 
 const meaningfulChange = ({before, after}: ChangedRow): boolean => {
   if (!after) return false
-  // Alias resolution creates visible pages with the speculative-mint stamp.
-  if (after.updatedAt === 0 && !hasBlockType(after, PAGE_TYPE)) return false
+  // The speculative-mint stamp marks a row the system made on the side, except for
+  // the visible pages alias resolution creates and the media a capture asked for.
+  if (after.updatedAt === 0 && !hasBlockType(after, PAGE_TYPE) && !hasBlockType(after, MEDIA_TYPE)) return false
   if (!before || authoredFields.some(field => field !== 'properties' && before[field] !== after[field])) return true
   const keys = new Set([...Object.keys(before.properties), ...Object.keys(after.properties)])
   return [...keys].some(name => !attributionNames.has(name)
@@ -54,8 +56,6 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
   }
   return false
 }
-
-export const CHOOSE_CONTRIBUTOR_MESSAGE = 'Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.'
 
 export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
@@ -100,7 +100,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const external = context?.contributorSource === 'agent'
     if (external) {
       if (context.contributorId === undefined) {
-        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+        throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
       }
       if (selectedId !== undefined) await assertContributor(ctx.tx, selectedId, event.workspaceId, {allowHuman: false})
       for (const [id, {corrections}] of targets) {
