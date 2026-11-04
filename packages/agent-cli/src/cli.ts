@@ -53,6 +53,7 @@ import {
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
 import {helpSections} from './cliHelp.js'
+import {readMediaFileBase64} from './mediaFile.js'
 import {
   appendPositionOption,
   attributeCommandToWorkspace,
@@ -847,6 +848,24 @@ cli
     }))
     await fs.writeFile(options.out, Buffer.from(base64, 'base64'))
     process.stdout.write(`${toDisplayJson({...media, path: options.out})}\n`)
+  })
+
+cli
+  .command('add-media <path>', wireDescription('add-media'))
+  .option('--filename <name>', 'The block\'s content (default: the file\'s own name)')
+  .option('--mime <type>', 'MIME type, for bytes that are no recognised image or PDF')
+  .option('--workspace <id>', 'Assert the workspace open in the app tab')
+  .action(async (filePath: unknown, options: {filename?: unknown, mime?: unknown, workspace?: unknown}) => {
+    const file = String(filePath)
+    const encoded = await readMediaFileBase64(file)
+    await ensureBridgeRunning()
+    await runAndPrint({
+      type: 'add-media',
+      base64: encoded,
+      filename: options.filename !== undefined ? String(options.filename) : path.basename(file),
+      ...(options.mime !== undefined ? {mime: String(options.mime)} : {}),
+      ...workspaceAssertion(options.workspace),
+    })
   })
 
 cli

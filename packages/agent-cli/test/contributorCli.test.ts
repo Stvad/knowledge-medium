@@ -58,6 +58,8 @@ const startStubBridge = async (): Promise<StubBridge> => {
           }
           contributors.push(contributor)
           results.set(id, contributor)
+        } else if (command.type === 'add-media') {
+          results.set(id, {id: 'media-1', deduped: false, reference: '((media-1))'})
         } else if (command.type === 'read-media') {
           results.set(id, {
             id: 'media-1',
@@ -146,6 +148,17 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     const printed = JSON.parse(stdout) as Record<string, unknown>
     expect(printed).toMatchObject({id: 'media-1', mime: 'application/pdf', size: 3, path: out})
     expect(printed).not.toHaveProperty('base64')
+  })
+
+  it('add-media sends any file, named for the file, without the media-only limit', async () => {
+    const file = path.join(tempDir, 'notes.txt')
+    await fs.writeFile(file, Buffer.from([1, 2, 255]))
+    const {stdout} = await runCli(['--contributor', 'none', 'add-media', file, '--mime', 'text/plain', '--workspace', 'ws-1'])
+
+    const sent = bridge.commands.find(command => command.type === 'add-media')
+    expect(sent).toMatchObject({base64: Buffer.from([1, 2, 255]).toString('base64'), filename: 'notes.txt', mime: 'text/plain', workspaceId: 'ws-1'})
+    expect(sent).not.toHaveProperty('recognizedOnly')
+    expect(stdout).toContain('((media-1))')
   })
 
   it('read-media without --out refuses before reaching the bridge', async () => {

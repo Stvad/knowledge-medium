@@ -30,7 +30,10 @@ import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
+import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
+import { assertActiveWorkspace } from './workspaceGuard.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -2377,6 +2380,24 @@ const executeAttributedCommand = async (
         requireString(command.ref, 'ref'),
         getAssetResolver(),
       )
+
+    case 'add-media': {
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      assertActiveWorkspace(context.repo, workspaceId)
+      if (context.runtime.read(blockRenderersFacet).media === undefined) {
+        throw new Error('Enable the Attachments plugin to add media.')
+      }
+      return addMedia(
+        workspaceId,
+        {
+          base64: requireString(command.base64, 'base64'),
+          filename: command.filename,
+          mime: command.mime,
+          recognizedOnly: command.recognizedOnly,
+        },
+        async file => (await captureMediaFromFiles(context.repo, workspaceId, [file]))[0],
+      )
+    }
 
     case 'comments':
       requireComments(context)

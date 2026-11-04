@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import {base64} from '@scure/base'
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {MEDIA_READ_MAX_BYTES} from '@knowledge-medium/agent-cli/protocol'
+import {MEDIA_BRIDGE_MAX_BYTES} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {aliasesProp, typesProp} from '@/data/properties'
@@ -150,16 +150,16 @@ describe('readMedia', () => {
 
   it('refuses bytes past what the bridge can carry, naming both sizes', async () => {
     await createMedia({hash: await computeContentHash(PNG_BYTES)})
-    const tooBig = new Uint8Array(MEDIA_READ_MAX_BYTES + 1)
+    const tooBig = new Uint8Array(MEDIA_BRIDGE_MAX_BYTES + 1)
     await expect(readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: true, bytes: tooBig})}))
-      .rejects.toThrow(new RegExp(`${tooBig.length} bytes.*${MEDIA_READ_MAX_BYTES}`))
+      .rejects.toThrow(new RegExp(`${tooBig.length} bytes.*${MEDIA_BRIDGE_MAX_BYTES}`))
   })
 
   it('carries bytes exactly at the limit', async () => {
     await createMedia({hash: await computeContentHash(PNG_BYTES)})
-    const atLimit = new Uint8Array(MEDIA_READ_MAX_BYTES)
+    const atLimit = new Uint8Array(MEDIA_BRIDGE_MAX_BYTES)
     const result = await readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: true, bytes: atLimit})})
-    expect(result.size).toBe(MEDIA_READ_MAX_BYTES)
+    expect(result.size).toBe(MEDIA_BRIDGE_MAX_BYTES)
   })
 
   it('resolves the block through the same refs the views take', async () => {

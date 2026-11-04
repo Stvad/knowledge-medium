@@ -23,6 +23,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['read-media', {type: 'read-media', ref: 'b-1'}],
+    ['add-media', {type: 'add-media', base64: 'AQID'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['create-contributor', {type: 'create-contributor', name: 'Vlad'}],
     ['list-contributors', {type: 'list-contributors'}],

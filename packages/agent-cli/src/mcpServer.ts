@@ -12,16 +12,20 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
+import { readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
   createContributorCommandSchema,
   listContributorsCommandSchema,
-  MEDIA_READ_MAX_BYTES,
+  addMediaCommandSchema,
+  addMediaResultSchema,
+  MEDIA_BRIDGE_MAX_BYTES,
   moveBlockPositionSchema,
   readMediaCommandSchema,
   readMediaResultSchema,
@@ -52,7 +56,7 @@ Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`unde
 
 The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, embedded in notes as !((id))) holds only metadata: read_media returns the image or file itself.
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, embedded in notes as !((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them, and backlinks shows where one is used.
 
 Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
 
@@ -75,6 +79,7 @@ export type GraphMcpWriteOperation =
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
+  | {type: 'add_media', path: string, filename: string, workspaceId?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
@@ -93,6 +98,10 @@ export interface GraphMcpServerOptions {
   contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
+  /** Offer `add_media`, which reads a local path the model names. Off unless the
+   *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
+   *  must not turn a note into a read of this machine's files. */
+  localMediaFiles?: boolean
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
@@ -151,7 +160,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   server.registerTool('read_media' satisfies KmMcpToolName, {
     description: 'The bytes of a media block (type media, embedded in notes as !((id))), hash-verified. An image comes '
     + 'back inline for you to look at; any other file as a binary resource, which your client may save for you to open. '
-    + `Refused past ${MEDIA_READ_MAX_BYTES} bytes.`,
+    + `Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     inputSchema: {
       ref: readMediaCommandSchema.shape.ref,
       workspaceId: readMediaCommandSchema.shape.workspaceId,
@@ -175,6 +184,30 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       ],
     }
   })
+
+  if (options.localMediaFiles === true) {
+    server.registerTool('add_media' satisfies KmMcpToolName, {
+      description: 'Store a local image or PDF as a media block under the workspace\'s Assets page; the same bytes added '
+      + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
+      + `to show it there. Other kinds of file are refused here (\`kmagent add-media\` takes any). Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+      inputSchema: {
+        path: z.string().describe('Absolute path of the file'),
+        filename: addMediaCommandSchema.shape.filename,
+        workspaceId: addMediaCommandSchema.shape.workspaceId,
+      },
+    }, async ({path: filePath, filename, workspaceId}) => {
+      if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
+      const name = filename ?? path.basename(filePath)
+      await beforeWrite({type: 'add_media', path: filePath, filename: name, workspaceId})
+      return json(addMediaResultSchema.parse(await client.runCommand({
+        type: 'add-media',
+        base64: await readMediaFileBase64(filePath),
+        filename: name,
+        recognizedOnly: true,
+        ...(workspaceId !== undefined ? {workspaceId} : {}),
+      })))
+    })
+  }
 
   server.registerTool('list_contributors' satisfies KmMcpToolName, {
     description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',

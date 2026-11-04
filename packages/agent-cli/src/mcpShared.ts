@@ -22,6 +22,7 @@ export const KM_MCP_TOOL_NAMES = [
   'append_markdown',
   'edit_block',
   'create_page',
+  'add_media',
   'list_contributors',
   'create_contributor',
   'recent_changes',

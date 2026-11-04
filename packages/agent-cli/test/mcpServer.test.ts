@@ -1,10 +1,11 @@
-import {afterEach, describe, expect, it, vi} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
-import type {KnownCommand} from '../src/protocol'
+import {MEDIA_BRIDGE_MAX_BYTES, type KnownCommand} from '../src/protocol'
 import {createGraphMcpServer, KM_MCP_INSTRUCTIONS, type GraphMcpWriteOperation} from '../src/mcpServer'
 import {KM_MCP_TOOL_NAMES} from '../src/mcpShared'
 import {GRAPH_READ_TOOLS} from '../src/readTools'
@@ -51,6 +52,75 @@ const clientFrom = (
 })
 
 describe('createGraphMcpServer', () => {
+  describe('add_media', () => {
+    let dir: string
+    beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'km-add-media-')) })
+    afterEach(async () => { await fs.rm(dir, {recursive: true, force: true}) })
+
+    const setup = (guard?: (operation: GraphMcpWriteOperation) => void) => {
+      const runCommand = vi.fn<BridgeClient['runCommand']>(async () => (
+        {id: 'media-1', deduped: false, reference: '((media-1))'} as never
+      ))
+      const server = createGraphMcpServer({
+        contributorId: null,
+        localMediaFiles: true,
+        client: clientFrom(runCommand),
+        ...(guard ? {writeGuard: {beforeWrite: guard}} : {}),
+      })
+      const tool = (server as unknown as RegisteredToolHarness)._registeredTools.add_media
+      return {runCommand, call: (input: Record<string, unknown>) => tool.handler(tool.inputSchema.parse(input), {})}
+    }
+
+    it('sends the file\'s bytes, named for the file, limited to recognised media', async () => {
+      const file = path.join(dir, 'shot.png')
+      await fs.writeFile(file, Buffer.from([1, 2, 255]))
+      const {runCommand, call} = setup()
+
+      const result = await call({path: file})
+
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({
+        type: 'add-media',
+        base64: Buffer.from([1, 2, 255]).toString('base64'),
+        filename: 'shot.png',
+        recognizedOnly: true,
+      })
+      expect(result.content[0]).toMatchObject({text: expect.stringContaining('((media-1))')})
+    })
+
+    it('runs the write guard before reading the file', async () => {
+      const file = path.join(dir, 'never-created.png')
+      const operations: GraphMcpWriteOperation[] = []
+      const {runCommand, call} = setup(operation => {
+        operations.push(operation)
+        throw new Error('blocked by guard')
+      })
+      await expect(call({path: file})).rejects.toThrow('blocked by guard')
+      expect(operations).toEqual([{type: 'add_media', path: file, filename: 'never-created.png', workspaceId: undefined}])
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('refuses a relative path, which would resolve against the server\'s own directory', async () => {
+      const {runCommand, call} = setup()
+      await expect(call({path: 'shot.png'})).rejects.toThrow(/absolute path/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('refuses what is not a regular file', async () => {
+      const {runCommand, call} = setup()
+      await expect(call({path: dir})).rejects.toThrow(/not a regular file/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('refuses a file past the limit without sending it', async () => {
+      const file = path.join(dir, 'big.bin')
+      await fs.writeFile(file, '')
+      await fs.truncate(file, MEDIA_BRIDGE_MAX_BYTES + 1)
+      const {runCommand, call} = setup()
+      await expect(call({path: file})).rejects.toThrow(new RegExp(`${MEDIA_BRIDGE_MAX_BYTES + 1} bytes`))
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+  })
+
   describe('read_media', () => {
     const media = {
       id: 'media-1',
@@ -298,10 +368,20 @@ describe('recent_changes', () => {
   it('registers exactly the advertised tool names', () => {
     const server = createGraphMcpServer({
       client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
+      localMediaFiles: true,
       serverOptions: {capabilities: {tools: {}}},
     })
     const tools = (server as unknown as RegisteredToolHarness)._registeredTools
     expect(new Set(Object.keys(tools))).toEqual(new Set(KM_MCP_TOOL_NAMES))
+  })
+
+  it('offers no tool that reads a local path unless the entry point asks', () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    expect(Object.keys(tools)).not.toContain('add_media')
   })
 
   it('keeps contributor selection out of registered read tool arguments', () => {

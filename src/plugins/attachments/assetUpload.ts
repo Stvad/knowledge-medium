@@ -242,7 +242,7 @@ export const captureMediaFromFiles = async (
  *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
  *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
  *  it worked. */
-const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
+export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
   'no-user': 'Sign in to attach media.',
   empty: 'That file is empty — nothing to attach.',
   'too-large': 'That file is too large to attach.',

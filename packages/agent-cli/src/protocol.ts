@@ -678,9 +678,9 @@ export const viewBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** The largest media a `read-media` result carries. Base64 of this plus the result
- *  envelope must fit the bridge's default result body limit (`maxBodyBytes`, 10 MiB). */
-export const MEDIA_READ_MAX_BYTES = 7 * 1024 * 1024
+/** The largest media `read-media` or `add-media` carries. Base64 of this plus the
+ *  envelope must fit the bridge's default body limit (`maxBodyBytes`, 10 MiB). */
+export const MEDIA_BRIDGE_MAX_BYTES = 7 * 1024 * 1024
 
 export const readMediaCommandSchema = z.looseObject({
   type: z.literal('read-media'),
@@ -703,6 +703,28 @@ export const readMediaResultSchema = z.object({
   base64: z.string(),
 })
 export type ReadMediaResult = z.infer<typeof readMediaResultSchema>
+
+export const addMediaCommandSchema = z.looseObject({
+  type: z.literal('add-media'),
+  base64: z.string(),
+  filename: z.string().optional().describe('The block\'s content; the file\'s own name by default'),
+  mime: z.string().optional().describe(
+    'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream',
+  ),
+  recognizedOnly: z.boolean().optional(),
+  workspaceId: z.string().optional().describe('Asserts the workspace open in the app tab; a write goes nowhere else'),
+  ...contributorField,
+  ...commandIdField,
+})
+
+export const addMediaResultSchema = z.object({
+  id: z.string(),
+  /** These bytes were already a media block in this workspace, and this is that block. */
+  deduped: z.boolean(),
+  /** What to write in a block's content to show it there. */
+  reference: z.string(),
+})
+export type AddMediaResult = z.infer<typeof addMediaResultSchema>
 
 export const viewOutlineCommandSchema = z.looseObject({
   type: z.literal('view-outline'),
@@ -998,6 +1020,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   viewSearchCommandSchema,
   commentsCommandSchema,
   readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1060,6 +1083,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   viewSearchCommandSchema,
   commentsCommandSchema,
   readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1317,10 +1341,17 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
     readOnly: true,
   },
+  'add-media': {
+    usage: 'kmagent add-media <path> [--filename <name>] [--mime <type>] [--workspace <id>]',
+    description: 'Store a local file as a media block. It goes under the workspace\'s Assets page, and the same bytes '
+      + 'added twice are one block. Write the returned ((id)) in a block\'s content to show it there. Refused past '
+      + `${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    readOnly: false,
+  },
   'read-media': {
     usage: 'kmagent read-media <ref> --out <path> [--workspace <id>]',
     description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes embed them as !((id)). The '
-      + `bytes are base64 in the result, with the mime, size and filename. Refused past ${MEDIA_READ_MAX_BYTES} bytes.`,
+      + `bytes are base64 in the result, with the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     readOnly: true,
   },
   // The views read what the raw commands above read, so they classify the same.

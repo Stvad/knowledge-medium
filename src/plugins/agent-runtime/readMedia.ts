@@ -1,5 +1,5 @@
 import { base64 } from '@scure/base'
-import { MEDIA_READ_MAX_BYTES, type ReadMediaResult } from '@knowledge-medium/agent-cli/protocol'
+import { MEDIA_BRIDGE_MAX_BYTES, type ReadMediaResult } from '@knowledge-medium/agent-cli/protocol'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { hasBlockType } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -43,8 +43,8 @@ export const readMedia = async (
   const resolved = await resolver.resolve({workspaceId, contentHash: hash})
   if (!resolved.ok) throw new Error(`Cannot read media block ${block.id}: ${FAILURE_TEXT[resolved.reason]}.`)
   const {bytes} = resolved
-  if (bytes.length > MEDIA_READ_MAX_BYTES) {
-    throw new Error(`Media block ${block.id} is ${bytes.length} bytes; read-media carries at most ${MEDIA_READ_MAX_BYTES}.`)
+  if (bytes.length > MEDIA_BRIDGE_MAX_BYTES) {
+    throw new Error(`Media block ${block.id} is ${bytes.length} bytes; read-media carries at most ${MEDIA_BRIDGE_MAX_BYTES}.`)
   }
 
   return {

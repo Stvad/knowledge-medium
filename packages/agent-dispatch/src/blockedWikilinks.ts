@@ -408,6 +408,10 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs(operation.content)
           await assertNoBlockedRefs(operation.replacement)
           return
+        case 'add_media':
+          // The file's name becomes the block's content.
+          await assertNoBlockedRefs(operation.filename)
+          return
         case 'create_page':
           // A date's note is got or created the way opening that day does,
           // repairs included; its own row is not inspected (accepted — that
