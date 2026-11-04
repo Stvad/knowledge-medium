@@ -23,29 +23,30 @@
  *   cited at its assertion below:
  *     - never throws, and returns `null` exactly when the parsed paste has
  *       no root to absorb (a blank/whitespace-only paste).
- *     - `parsed` is the parser's full output, unfiltered, returned verbatim
- *       — content sequence conservation, checked against a
- *       fresh `parseMarkdownToBlocks` call. (ids/orderKeys are `uuidv4`/
+ *     - `parsed` is the parser's full output in order — content sequence
+ *       conservation, checked against a fresh `parseMarkdownToBlocks` call —
+ *       with the text after the caret either glued onto its last block or
+ *       appended as one block more. (ids/orderKeys are `uuidv4`/
  *       jittered-key random per call — see markdownParser.fuzz.test.ts's
  *       note on `fractional-indexing-jittered` — so only `content` is
  *       compared, never `id`/`orderKey`.)
  *     - effective from/to are clamped into `[0, currentContent.length]`.
  *     - `targetContent` always starts with `currentContent.slice(0,
- *       clampedFrom)` (`prefix + mergedFirstContent` is always a
- *       leading segment of `targetContent`, in both branches).
- *     - `suffix`/`targetContent`'s trailing segment reconstruct
- *       `currentContent.slice(clampedTo)` exactly, branching on
- *       `createsAdditionalBlocks` — which is equivalent to
- *       `parsed.length > 1` (every id is unique, so "some block other than
- *       the absorbed root" reduces to "more than one block total").
- *     - `focusOffsetInTarget` is always
- *       `contentBeforeStructuralBreak.length`; derived exactly per branch
- *       below, which also implies the weaker `[0, targetContent.length]`
- *       range the task asked for.
+ *       clampedFrom)`.
+ *     - block syntax never shares a line with the text at the caret
+ *       (`blockSyntaxOnLine`): a first root that opens with it is not
+ *       absorbed after non-blank text, and non-blank text after the caret
+ *       becomes a block of its own after a last block that closes with it.
+ *       Otherwise the first root merges at the caret and the text after it
+ *       lands on the end of the paste's last block, the edited one when the
+ *       paste is one absorbed block.
+ *     - the caret ends at the end of the pasted text: `focus` names the
+ *       paste's last block, or is absent and `focusOffsetInTarget` points
+ *       just before the text after the caret in `targetContent`.
  *     - fenced-code root: a multi-line absorbed root (an atomic token — the
- *       only parses that yield one block spanning newlines) is kept whole (`mergedFirstContent =
- *       absorbedRoot.content`), so `targetContent` contains the full fence
- *       body verbatim — checked directly with a fence-only generator.
+ *       only parses that yield one block spanning newlines) is kept whole,
+ *       in `targetContent` or in a block of its own — checked directly with
+ *       a fence-only generator.
  *
  *   Left out: full conservation for the *single-line* absorbed-root case
  *   (i.e. proving `mergedFirstContent` — the first pasted line, bullet
@@ -68,7 +69,7 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { lineFragmentArb } from '@/test/arbitraries/markdownSoup'
-import { parseMarkdownToBlocks } from '@/utils/markdownParser'
+import { blockSyntaxOnLine, parseMarkdownToBlocks } from '@/utils/markdownParser'
 import {
   pasteChordIntent,
   planEditModeMultilinePaste,
@@ -154,20 +155,15 @@ describe('planEditModeMultilinePaste', () => {
       fc.assert(
         fc.property(pastedTextArb, currentContentArb, rawSelectionArb, (pastedText, currentContent, selection) => {
           const plan = planEditModeMultilinePaste(pastedText, currentContent, selection)
-          const freshParsed = parseMarkdownToBlocks(pastedText)
+          const fresh = parseMarkdownToBlocks(pastedText).map(b => b.content)
 
-          if (freshParsed.length === 0) {
+          if (fresh.length === 0) {
             // No root block to absorb.
             expect(plan).toBeNull()
             return
           }
           expect(plan).not.toBeNull()
           if (!plan) return
-
-          // Conservation: `parsed` is the parser's full, unfiltered output.
-          // ids/orderKeys are randomized per call
-          // (uuidv4 / jittered keys), so compare content only.
-          expect(plan.parsed.map(b => b.content)).toEqual(freshParsed.map(b => b.content))
 
           const clampedFrom = Math.max(0, Math.min(selection.from, currentContent.length))
           const clampedTo = Math.max(clampedFrom, Math.min(selection.to ?? selection.from, currentContent.length))
@@ -176,34 +172,36 @@ describe('planEditModeMultilinePaste', () => {
           expect(clampedTo).toBeGreaterThanOrEqual(clampedFrom)
           expect(clampedTo).toBeLessThanOrEqual(currentContent.length)
 
-          // targetContent always starts with the clamped prefix.
           const prefix = currentContent.slice(0, clampedFrom)
-          expect(plan.targetContent.startsWith(prefix)).toBe(true)
-
-          // `createsAdditionalBlocks` reduces to
-          // `parsed.length > 1`: every parsed id is unique, so "some block
-          // other than the absorbed root" is exactly "more than one block".
-          const createsAdditionalBlocks = freshParsed.length > 1
           const trueSuffix = currentContent.slice(clampedTo)
+          const isBlank = (text: string) => text.trim() === ''
+          const headSplits = !isBlank(prefix) && blockSyntaxOnLine(fresh[0], 'first')
+          const tailSplits = !isBlank(trueSuffix) && blockSyntaxOnLine(fresh.at(-1)!, 'last')
+          const tailIsTarget = fresh.length === 1 && !headSplits
 
-          // Suffix reconstruction, branch-exact.
-          if (createsAdditionalBlocks) {
-            expect(plan.suffix).toBe(trueSuffix)
+          expect(plan.targetContent.startsWith(prefix)).toBe(true)
+          expect(plan.absorbedRoot === undefined).toBe(headSplits)
+          if (headSplits) expect(plan.targetContent).toBe(prefix)
+          else expect(plan.absorbedRoot).toBe(plan.parsed[0])
+
+          // Conservation, with the text after the caret placed branch-exact.
+          // ids/orderKeys are randomized per call (uuidv4 / jittered keys), so
+          // compare content only.
+          const contents = plan.parsed.map(b => b.content)
+          if (tailSplits) {
+            expect(contents).toEqual([...fresh, trueSuffix])
+          } else if (tailIsTarget) {
+            expect(contents).toEqual(fresh)
           } else {
-            expect(plan.suffix).toBe('')
-            expect(plan.targetContent.endsWith(trueSuffix)).toBe(true)
+            expect(contents).toEqual([...fresh.slice(0, -1), `${fresh.at(-1)}${trueSuffix}`])
           }
 
-          // focusOffsetInTarget = contentBeforeStructuralBreak.length always;
-          // branch-exact value, which implies the
-          // [0, targetContent.length] range.
-          expect(plan.focusOffsetInTarget).toBeGreaterThanOrEqual(0)
-          expect(plan.focusOffsetInTarget).toBeLessThanOrEqual(plan.targetContent.length)
-          if (createsAdditionalBlocks) {
-            expect(plan.focusOffsetInTarget).toBe(plan.targetContent.length)
-          } else {
-            expect(plan.focusOffsetInTarget).toBe(plan.targetContent.length - trueSuffix.length)
-          }
+          const suffixOnTarget = tailIsTarget && !tailSplits
+          expect(plan.targetContent.endsWith(suffixOnTarget ? trueSuffix : '')).toBe(true)
+          expect(plan.focusOffsetInTarget).toBe(plan.targetContent.length - (suffixOnTarget ? trueSuffix.length : 0))
+          expect(plan.focus).toEqual(tailIsTarget
+            ? undefined
+            : {parsedId: plan.parsed[fresh.length - 1].id, offset: fresh.at(-1)!.length})
         }),
         fuzzParams(150),
       )
@@ -224,7 +222,7 @@ describe('planEditModeMultilinePaste', () => {
         return [fence, ...innerLines, fence].join('\n')
       })
 
-    it('targetContent contains the full fence body verbatim', () => {
+    it('the fence body is kept verbatim in the block that holds it', () => {
       fc.assert(
         fc.property(fenceTextArb, currentContentArb, rawSelectionArb, (fenceText, currentContent, selection) => {
           const plan = planEditModeMultilinePaste(fenceText, currentContent, selection)
@@ -236,7 +234,7 @@ describe('planEditModeMultilinePaste', () => {
 
           expect(plan).not.toBeNull()
           if (!plan) return
-          expect(plan.targetContent).toContain(freshParsed[0].content)
+          expect(plan.absorbedRoot ? plan.targetContent : plan.parsed[0].content).toContain(freshParsed[0].content)
         }),
         fuzzParams(80),
       )

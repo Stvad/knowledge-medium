@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser'
+import { blockSyntaxOnLine, parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser'
 
 /** Find the unique block whose content matches `content`. Throws on
  *  missing or duplicate matches. */
@@ -438,5 +438,30 @@ Root
         '| 1 | 2 |',
       ])
     })
+  })
+})
+
+describe('blockSyntaxOnLine', () => {
+  it.each([
+    ['## Getting started', true],
+    ['```js\nconst x = 1\n```', true],
+    ['| a | b |\n| - | - |\n| 1 | 2 |', true],
+    ['> quoted\n> on', true],
+    ['plain words', false],
+    // An ordered item glued after text still reads as text.
+    ['1. step', false],
+    ['#tag', false],
+    ['\\# escaped', false],
+  ])('%j: %s', (content, expected) => {
+    expect(blockSyntaxOnLine(content, 'first')).toBe(expected)
+    expect(blockSyntaxOnLine(content, 'last')).toBe(expected)
+  })
+
+  it('reads only the line asked for', () => {
+    const fenceAfterText = 'intro\n```\ncode\n```'
+    expect(blockSyntaxOnLine(fenceAfterText, 'first')).toBe(false)
+    expect(blockSyntaxOnLine(fenceAfterText, 'last')).toBe(true)
+    expect(blockSyntaxOnLine('> quoted\noutro', 'first')).toBe(true)
+    expect(blockSyntaxOnLine('> quoted\noutro', 'last')).toBe(false)
   })
 })
