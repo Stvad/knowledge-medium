@@ -1,1 +1,1 @@
-export{UK as codeMirrorExtensionsFacet}from"../../chunks/app-D1EF7NCb.js";
+export{GK as codeMirrorExtensionsFacet}from"../../chunks/app-kPMqkjNp.js";

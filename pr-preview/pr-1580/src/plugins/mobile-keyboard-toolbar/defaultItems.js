@@ -1,1 +1,1 @@
-export{wC as defaultToolbarItems}from"../../../chunks/app-D1EF7NCb.js";
+export{TC as defaultToolbarItems}from"../../../chunks/app-kPMqkjNp.js";

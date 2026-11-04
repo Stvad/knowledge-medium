@@ -1,1 +1,1 @@
-export{WB as useTypes}from"../../chunks/app-D1EF7NCb.js";
+export{KB as useTypes}from"../../chunks/app-kPMqkjNp.js";

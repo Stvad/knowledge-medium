@@ -1,2 +1,2 @@
-import{xot as e}from"../../../chunks/app-D1EF7NCb.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{Sot as e}from"../../../chunks/app-kPMqkjNp.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map
