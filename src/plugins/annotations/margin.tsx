@@ -4,7 +4,9 @@
  *
  * A panel mount, so it composes with whatever layout renders the panel, and it
  * uses the width a wide panel leaves empty beside the text instead of
- * squeezing it. The cost is that it lives outside the scrollport: it finds the
+ * squeezing it, moving the text left, unchanged in width, when the right side
+ * alone is short of the widest column (`fitColumn`, `PANEL_RIGHT_CLEARANCE`).
+ * The cost is that it lives outside the scrollport: it finds the
  * panel's rows in the DOM (mounted rows and lazy placeholders alike, of the
  * panel's own render scope), reads their positions and moves the cards within
  * one animation frame of a scroll, a resize or a re-render.
@@ -24,10 +26,11 @@ import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.j
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {runActionByIdSafely} from '@/shortcuts/runAction.js'
+import {PANEL_RIGHT_CLEARANCE} from '@/utils/panelClearance.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
-import {placeCards} from './placement.ts'
+import {fitColumn, placeCards} from './placement.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
 import {ThreadCard, useThreadSummaries} from './ui.tsx'
 import {
@@ -42,9 +45,9 @@ import {
 } from './uiStore.ts'
 
 /** The column's width bounds, and the space kept between it and the text. A
- *  panel with less room than the minimum shows no margin. */
-const MIN_COLUMN_PX = 240
-const MAX_COLUMN_PX = 340
+ *  panel with less room than the minimum shows no margin. The maximum keeps
+ *  deeply nested replies readable without the column outweighing the text. */
+const COLUMN_BOUNDS = {min: 240, max: 520}
 const EDGE_PX = 16
 const CARD_GAP_PX = 8
 
@@ -53,6 +56,8 @@ interface ColumnFrame {
   top: number
   width: number
   height: number
+  /** How far the text is moved left to make the width. */
+  textShift: number
 }
 
 const sameFrame = (a: ColumnFrame | null, b: ColumnFrame | null): boolean =>
@@ -131,15 +136,32 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
      *  is re-found each pass, since the row can remount. */
     let observedTopRow: Element | null = null
 
+    /** Padding the pane by twice the shift moves the centred text left by the
+     *  shift and keeps its width: `fitColumn` never shifts past the room on the
+     *  left, so the text still fits. */
+    let textShift = 0
+    const setTextShift = (px: number) => {
+      if (px === textShift) return
+      textShift = px
+      if (px > 0) panelEl.style.setProperty(PANEL_RIGHT_CLEARANCE, `${2 * px}px`)
+      else panelEl.style.removeProperty(PANEL_RIGHT_CLEARANCE)
+    }
+
     const measure = (top: Element | null, portRect: DOMRect): ColumnFrame | null => {
+      if (!top) return null
       const panelRect = panelEl.getBoundingClientRect()
-      const textRight = top ? top.getBoundingClientRect().right : portRect.right
-      const width = Math.min(MAX_COLUMN_PX, Math.floor(portRect.right - textRight - 2 * EDGE_PX))
-      return width < MIN_COLUMN_PX ? null : {
-        left: Math.round(textRight - panelRect.left + EDGE_PX),
+      const textRect = top.getBoundingClientRect()
+      const centredRight = textRect.right + textShift
+      const fit = fitColumn({
+        left: textRect.left + textShift - portRect.left - EDGE_PX,
+        right: portRect.right - centredRight - 2 * EDGE_PX,
+      }, COLUMN_BOUNDS)
+      return fit && {
+        left: Math.round(centredRight - fit.shift - panelRect.left + EDGE_PX),
         top: Math.round(portRect.top - panelRect.top),
-        width,
+        width: fit.width,
         height: Math.round(portRect.height),
+        textShift: fit.shift,
       }
     }
 
@@ -154,6 +176,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const portRect = scrollport.getBoundingClientRect()
       const nextFrame = measure(topRow, portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
+      setTextShift(nextFrame?.textShift ?? 0)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll<HTMLElement>(selector)) {
         const id = scopeRowBlockId(el)
@@ -220,6 +243,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       scrollport.removeEventListener('scroll', schedule)
       unsubscribe()
       setExtraBottom(0)
+      setTextShift(0)
       scheduleRef.current = () => {}
     }
   }, [panelId, scope, topLevelBlockId])

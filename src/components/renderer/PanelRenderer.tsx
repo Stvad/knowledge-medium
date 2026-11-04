@@ -344,7 +344,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
       <div
-        className="pointer-events-none absolute inset-x-0 top-1 z-10"
+        className="pointer-events-none absolute inset-x-0 top-1 z-10 pr-[var(--panel-right-clearance,0px)]"
       >
         <div
           className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
@@ -361,8 +361,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
         data-panel-scrollport=""
         // Bottom clearance: below md the bottom nav's; from md up, whatever
         // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
-        // (`@/utils/panelClearance`), named literally here for Tailwind.
-        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}
+        // (`@/utils/panelClearance`), named literally here for Tailwind. On the
+        // right, whatever panel mount declares PANEL_RIGHT_CLEARANCE.
+        className={`pr-[var(--panel-right-clearance,0px)] ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
         onPointerDownCapture={activatePanel}
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}

@@ -5,3 +5,8 @@
  *  height instead. `PanelRenderer` and `LayoutRenderer` name it literally in
  *  their classes, since Tailwind reads class names from source. */
 export const PANEL_BOTTOM_CLEARANCE = '--panel-bottom-clearance'
+
+/** CSS custom property a panel mount beside the text sets on its panel to take
+ *  width from the right of the pane; the panel's centred frames centre in what
+ *  is left. `PanelRenderer` names it literally in its classes, as above. */
+export const PANEL_RIGHT_CLEARANCE = '--panel-right-clearance'
