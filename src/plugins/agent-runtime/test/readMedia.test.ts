@@ -8,7 +8,6 @@ import {aliasesProp, typesProp} from '@/data/properties'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {resolveFacetRuntimeSync} from '@/facets/facet'
 import type {BlobStore} from '@/plugins/attachments/blobStore'
 import {InMemoryByteStore} from '@/plugins/attachments/byteStore'
 import {
@@ -20,7 +19,8 @@ import {
 } from '@/plugins/attachments/mediaBlock'
 import {createAssetResolver, type AssetResolver} from '@/plugins/attachments/resolver'
 import {computeContentHash} from '@/sync/crypto/contentHash'
-import {createAgentRuntimeContext, executeCommand} from '../commands'
+import {executeCommand} from '../commands'
+import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
 import {readMedia} from '../readMedia'
 
@@ -73,10 +73,7 @@ const createMedia = async (over: {hash?: string, mime?: string, filename?: strin
 beforeEach(async () => {
   await resetTestDb(db.db)
   const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, staticDataExtensions)
   await context.repo.tx(async tx => {
     await tx.create({id: PAGE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Notes',
       properties: {[typesProp.name]: [PAGE_TYPE], [aliasesProp.name]: ['Notes']}})

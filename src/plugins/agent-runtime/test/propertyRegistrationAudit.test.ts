@@ -12,10 +12,10 @@ import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { executeCommand } from '../commands'
+import { createTestAgentContext } from './createTestAgentContext'
 import type { AgentRuntimeContext } from '../protocol'
 import { auditPropertyRegistration, describeUnregisteredProperty } from '../propertyRegistrationAudit'
 
@@ -72,14 +72,11 @@ const installRepo = (
     ...(backfillSyncGate ? {backfillSyncGate} : {}),
     ...(syncObserverDeps ? {syncObserverDeps} : {}),
   }).repo
-  repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync([
+  context = createTestAgentContext(repo, WS, [
     kernelDataExtension,
     definitionSeedsFacet.of(declaredProp, {source: 'test'}),
     typeSeedsFacet.of(thingType, {source: 'test'}),
-  ], {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  ])
 }
 
 beforeEach(async () => {
