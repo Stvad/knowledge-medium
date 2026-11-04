@@ -1,0 +1,1 @@
+export{UU as BootFallback}from"../../../chunks/app-B8eMv1hC.js";

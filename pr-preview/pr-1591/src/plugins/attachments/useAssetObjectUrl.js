@@ -1,0 +1,1 @@
+export{Xb as useAssetObjectUrl}from"../../../chunks/app-B8eMv1hC.js";

@@ -1,0 +1,1 @@
+export{BD as Label}from"../../../chunks/app-B8eMv1hC.js";

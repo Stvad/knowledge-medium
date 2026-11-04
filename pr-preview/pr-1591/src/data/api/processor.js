@@ -1,0 +1,1 @@
+export{vot as definePostCommitProcessor}from"../../../chunks/app-B8eMv1hC.js";
