@@ -172,7 +172,7 @@ const backlinksWatcherSchema = z.strictObject({
    *  write of an edit lands before the daemon snapshots the block. */
   settleMs: z.number().int().nonnegative()
     .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(1_000),
+    .default(250),
   /** A mention still open in an editor is not claimed until it has gone
    *  unedited this long: the user may just be thinking, but a device that
    *  vanished mid-edit leaves its editing flag set forever. */
