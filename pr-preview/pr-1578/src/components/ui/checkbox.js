@@ -1,1 +1,1 @@
-export{QR as Checkbox}from"../../../chunks/app-Vg48jl6t.js";
+export{ez as Checkbox}from"../../../chunks/app-_RD54my9.js";

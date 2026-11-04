@@ -1,1 +1,1 @@
-export{gh as createWatchEventsRegistry,_h as watchEventsRegistry}from"../../../chunks/app-Vg48jl6t.js";
+export{_h as createWatchEventsRegistry,vh as watchEventsRegistry}from"../../../chunks/app-_RD54my9.js";
