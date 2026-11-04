@@ -132,7 +132,7 @@ const ascii = (text: string): number[] => Array.from(text, char => char.charCode
 
 /** Sniff a common raster image MIME from the leading magic bytes. Returns `null`
  *  for anything unrecognized (incl. a too-short buffer). Each check is long enough
- *  that ordinary text cannot pass it, since a match overrides a declared type: a
+ *  that text which merely starts alike does not pass it, since a match overrides a declared type: a
  *  note starting "BM" or "GIF8" is not an image. */
 export const sniffImageMime = (b: Uint8Array): string | null => {
   if (matchesAt(b, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'

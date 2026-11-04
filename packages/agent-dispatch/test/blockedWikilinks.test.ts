@@ -469,6 +469,14 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
   })
 })
 
+describe('add_media under the blocked-wikilink guard', () => {
+  it('refuses a filename linking a blocked target, since it becomes the block\'s content', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom() as BridgeGraph, ['claude'])
+    await expect(guard.beforeWrite({type: 'add_media', path: '/tmp/x', filename: '[[claude]] x.png'})).rejects.toThrow()
+    await expect(guard.beforeWrite({type: 'add_media', path: '/tmp/x', filename: 'x.png'})).resolves.toBeUndefined()
+  })
+})
+
 describe('createBlockedWikilinkWriteGuard — anchored appends', () => {
   // An anchored append re-keys siblings tied with the anchor, as a move does,
   // so those rows are inspected the same way.

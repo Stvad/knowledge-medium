@@ -316,7 +316,30 @@ describe('automatic contributor attribution', () => {
     it.each([['page', PAGE_TYPE], ['media block', MEDIA_TYPE]])('credits the contributor for a %s, which stays pristine', async (_, type) => {
       await mint(agent(), 'minted', [type])
       expect(await read('minted', attributionCreatorsProp.name)).toEqual(['atlas'])
+      await repo.awaitProcessors()
       expect((await repo.load('minted'))?.updatedAt).toBe(0)
+    })
+
+    it('carries the attribution\'s references in the mint, and leaves an ordinary row\'s to the parse', async () => {
+      // No references plugin here, so nothing but the attribution write can put them there.
+      await mint(agent(), 'minted', [MEDIA_TYPE])
+      expect((await repo.load('minted'))?.references).toEqual([
+        {id: 'atlas', alias: 'atlas', sourceField: attributionCreatorsProp.name},
+      ])
+      await create(agent(), 'ordinary')
+      expect((await repo.load('ordinary'))?.references).toEqual([])
+    })
+
+    it('adds to what the mint already references', async () => {
+      await agent().tx(async tx => {
+        await tx.create({id: 'minted', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'minted',
+          references: [{id: 'elsewhere', alias: 'elsewhere'}]}, {systemMint: true})
+        await tx.setProperty('minted', typesProp, [MEDIA_TYPE])
+      }, opts)
+      expect((await repo.load('minted'))?.references).toEqual(expect.arrayContaining([
+        {id: 'elsewhere', alias: 'elsewhere'},
+        {id: 'atlas', alias: 'atlas', sourceField: attributionCreatorsProp.name},
+      ]))
     })
 
     it('requires a contributor choice for a media block from an agent', async () => {

@@ -2,10 +2,12 @@
  * km MCP server — live Knowledge Medium graph tools over the kmagent
  * bridge, for any MCP client.
  *
- * Deliberately narrower than the bridge: read tools (generated from
+ * Deliberately narrower than the bridge: read tools (most generated from
  * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
+ * `add_media` is the one tool that reaches past the graph, and an entry
+ * point has to ask for it (`localMediaFiles`).
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
@@ -56,7 +58,7 @@ Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`unde
 
 The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them, and backlinks shows where one is used.
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them (if that name shows no Assets type, it is another page: select from block_types where type = 'media'), and backlinks shows where one is used.
 
 Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
 
@@ -207,6 +209,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
         mime: addMediaCommandSchema.shape.mime,
         workspaceId: addMediaCommandSchema.shape.workspaceId,
       },
+      // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
+      annotations: {destructiveHint: true, openWorldHint: true},
     }, async ({path: filePath, filename, mime, workspaceId}) => {
       if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
       const name = filename ?? path.basename(filePath)

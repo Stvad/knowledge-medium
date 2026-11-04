@@ -410,6 +410,16 @@ describe('recent_changes', () => {
     expect(Object.keys(tools)).not.toContain('add_media')
   })
 
+  it('marks add_media for clients that decide from annotations whether to ask', () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
+      localMediaFiles: true,
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const {add_media: tool} = (server as unknown as {_registeredTools: Record<string, {annotations?: Record<string, boolean>}>})._registeredTools
+    expect(tool.annotations).toMatchObject({destructiveHint: true})
+  })
+
   it('keeps contributor selection out of registered read tool arguments', () => {
     const server = createGraphMcpServer({
       client: clientFrom(vi.fn<BridgeClient['runCommand']>()),

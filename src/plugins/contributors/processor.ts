@@ -4,6 +4,7 @@ import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
 import {MEDIA_TYPE} from '@/plugins/attachments/mediaBlock'
+import {projectPropertyReferences} from '@/plugins/references/referenceProjection'
 import {assertContributor, ensureHumanContributor} from './profiles'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindOf} from './schema'
 
@@ -57,6 +58,22 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
   return false
 }
 
+export const CHOOSE_CONTRIBUTOR_MESSAGE = 'Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.'
+
+/** A pristine row's property references, written beside its attribution rather than
+ *  left to the post-commit parse. The server keeps a pristine row's first upload, so
+ *  they must travel in it: as a later write they would stamp the row off pristine, and
+ *  on a second device replace the first device's references with ones the kept value
+ *  does not hold. Add-only, like the parse. Accepted: in a children-backed workspace a
+ *  yielding device's field rows survive under the kept cell, as the rest of a mint's do. */
+const carryPropertyReferences = async (ctx: SameTxCtx, id: string): Promise<void> => {
+  const row = await ctx.tx.get(id)
+  if (row?.updatedAt !== 0) return
+  await ctx.tx.update(id, {
+    references: [...row.references, ...projectPropertyReferences(row, ctx.propertySchemas)],
+  }, {skipMetadata: true})
+}
+
 export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
   watches: {kind: 'field', table: 'blocks', fields: authoredFields},
@@ -100,7 +117,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const external = context?.contributorSource === 'agent'
     if (external) {
       if (context.contributorId === undefined) {
-        throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
+        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
       }
       if (selectedId !== undefined) await assertContributor(ctx.tx, selectedId, event.workspaceId, {allowHuman: false})
       for (const [id, {corrections}] of targets) {
@@ -132,6 +149,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       const prop = created ? attributionCreatorsProp : attributionEditorsProp
       if (targets.get(id)!.corrections.has(prop)) continue
       await ctx.tx.setProperty(id, prop, current => [...new Set([...(current ?? []), contributorId])], {skipMetadata: true})
+      await carryPropertyReferences(ctx, id)
     }
   },
 })

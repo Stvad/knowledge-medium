@@ -6,9 +6,10 @@ import type { Repo } from '@/data/repo'
  *  every tx a bridge verb opens takes its options from {@link agentTxOptions},
  *  and the change-history views filter on this prefix.
  *
- *  Not attributed: `eval`, `sql execute` and `run-action` (arbitrary code), a
- *  Journal or Assets page bootstrapped on the way to its first entry, and the
- *  follow-up txs post-commit processors open for an agent write. */
+ *  Not described as agent writes, so not in the change-history views: `eval`,
+ *  `sql execute` and `run-action` (arbitrary code), a Journal or Assets page
+ *  bootstrapped on the way to its first entry, and the follow-up txs post-commit
+ *  processors open for an agent write. */
 export const AGENT_TX_DESCRIPTION_PREFIX = 'agent runtime '
 
 export const agentTxOptions = (verb: string) => ({

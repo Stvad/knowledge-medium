@@ -3,8 +3,8 @@
  * pure capture / drain / reconcile pieces with the real app deps and runs the
  * background lane SINGLE-OWNER across tabs.
  *
- *   - capture  — {@link captureMediaFromFiles}: the renderer's paste entry (the
- *     File-list plumbing is drop-ready, but only paste is wired today).
+ *   - capture  — {@link captureMediaFromFiles}: the renderer's paste entry and the
+ *     agent bridge's add-media verb (the File-list plumbing is drop-ready).
  *   - drain    — {@link armUploadDrain}: fire-and-forget after a capture.
  *   - reconcile — {@link runUploadReconcile}: at app start, AFTER PowerSync settles.
  *

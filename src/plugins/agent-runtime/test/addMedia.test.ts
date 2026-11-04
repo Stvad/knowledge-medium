@@ -137,6 +137,7 @@ describe('the add-media command', () => {
   it('credits the agent on the block, which stays pristine', async () => {
     const agent = await contributor()
     const added = await add(PNG, {contributorId: agent})
+    await context.repo.awaitProcessors()
     const block = await context.repo.load(added.id)
     expect(block?.properties[attributionCreatorsProp.name]).toEqual([agent])
     expect(block?.updatedAt).toBe(0)
@@ -162,10 +163,13 @@ describe('the add-media command', () => {
     expect(await countRows()).toBe(before)
   })
 
-  it('refuses with no contributor chosen, whether or not Assets exists yet', async () => {
+  it('refuses with no contributor chosen before storing anything, whether or not Assets exists yet', async () => {
+    const stored = () => getByteStore().listWorkspaceKeys('vlad', WS)
+    const keysBefore = await stored()
     const before = await countRows()
-    await expect(add(PNG, {contributorId: undefined})).rejects.toThrow(/Choose a contributor/)
+    await expect(add(new Uint8Array([9, 8, 7]), {contributorId: undefined})).rejects.toThrow(/Choose a contributor/)
     expect(await countRows()).toBe(before)
+    expect(await stored()).toEqual(keysBefore)
 
     await add(PDF)
     await expect(add(PNG, {contributorId: undefined})).rejects.toThrow(/Choose a contributor/)
