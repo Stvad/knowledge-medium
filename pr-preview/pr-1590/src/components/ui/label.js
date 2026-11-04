@@ -1,1 +1,1 @@
-export{BD as Label}from"../../../chunks/app-DAjybV0M.js";
+export{BD as Label}from"../../../chunks/app-BlRsFwC-.js";
