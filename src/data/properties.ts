@@ -594,7 +594,7 @@ export const setBlockTypesInProperties = (
  *  short-circuit, but this gate keeps any new caller honest. */
 export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   if (editing && uiStateBlock.repo.isReadOnly) return
-  if (!editing) flushPendingEditorContent()
+  flushPendingEditorContent()
   void uiStateBlock.set(isEditingProp, editing)
 }
 
@@ -689,7 +689,7 @@ export const focusBlock = async (
     blockId,
     renderScopeId: renderScopeId ?? fallbackRenderScopeId,
   }
-  if (!sameFocusedBlockLocation(currentLocation, location)) flushPendingEditorContent()
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     const current = targetEdit ? null : await tx.get(uiStateBlock.id)
     const preserveCurrentEditMode = !targetEdit &&

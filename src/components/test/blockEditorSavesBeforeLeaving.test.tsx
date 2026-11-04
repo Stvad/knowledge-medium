@@ -17,8 +17,8 @@ import {
   focusBlock,
   setIsEditing,
 } from '@/data/properties'
-import { registerPendingContentFlush } from '@/data/pendingEditorContent'
 import { navigateInPanel } from '@/utils/panelHistory'
+import { deletePanelRow } from '@/utils/panelLayoutProjection'
 import { commitSelectionRange } from '@/utils/selection'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -112,15 +112,23 @@ describe('a block editor saves its text before focus leaves it', () => {
     )).map(row => row.description)
 
   const expectContentCommittedBefore = async (leaveWrite: string) => {
-    await vi.waitFor(async () => {
-      const order = await committed()
-      expect(order).toContain('set content on block-a')
-      expect(order).toContain(leaveWrite)
+    const order = await vi.waitFor(async () => {
+      const committedSoFar = await committed()
+      expect(committedSoFar).toContain('set content on block-a')
+      expect(committedSoFar).toContain(leaveWrite)
+      return committedSoFar
     })
-    const order = await committed()
     expect(order.lastIndexOf('set content on block-a')).toBeLessThan(order.lastIndexOf(leaveWrite))
     expect(repo.block('block-a').peek()?.content).toBe('first typed')
   }
+
+  const selectInto = (clearEditing: boolean) => commitSelectionRange({
+    uiStateBlock: panel(),
+    anchorBlockId: 'block-a',
+    targetLocation: TARGET,
+    selectedBlockIds: ['block-a', 'block-b'],
+    clearEditing,
+  })
 
   const leaveWrites: ReadonlyArray<[name: string, description: string, leave: () => Promise<unknown>]> = [
     ['focusBlock to another block', 'focus block', () =>
@@ -128,13 +136,9 @@ describe('a block editor saves its text before focus leaves it', () => {
     ['setIsEditing(false)', 'set property isEditing on panel', async () => setIsEditing(panel(), false)],
     ['exitEditModeForBlock', 'exit edit mode', () => exitEditModeForBlock(panel(), 'block-a', SOURCE_SCOPE)],
     ['navigateInPanel', 'navigate in panel', () => navigateInPanel(panel(), 'block-b')],
-    ['a selection write that clears editing', 'extend selection', () => commitSelectionRange({
-      uiStateBlock: panel(),
-      anchorBlockId: 'block-a',
-      targetLocation: TARGET,
-      selectedBlockIds: ['block-a', 'block-b'],
-      clearEditing: true,
-    })],
+    ['a selection write that clears editing', 'extend selection', () => selectInto(true)],
+    ['a selection write that keeps the edit flag', 'extend selection', () => selectInto(false)],
+    ['closing the panel', 'close panel', () => deletePanelRow(repo, PANEL)],
   ]
 
   it.each(leaveWrites)('%s', async (_name, description, leave) => {
@@ -155,40 +159,12 @@ describe('a block editor saves its text before focus leaves it', () => {
     expect(panel().peekProperty(editorSelection)).toEqual({blockId: 'block-b', start: 2})
   })
 
-  describe('writes that do not leave the editor flush nothing', () => {
-    const flushCalls = async (write: () => Promise<unknown>): Promise<number> => {
-      const flush = vi.fn()
-      const stop = registerPendingContentFlush(flush)
-      try {
-        await write()
-      } finally {
-        stop()
-      }
-      return flush.mock.calls.length
-    }
-
-    it('focusBlock to the location that already has focus', async () => {
-      expect(await flushCalls(() =>
-        focusBlock(panel(), 'block-a', {edit: true, renderScopeId: SOURCE_SCOPE}))).toBe(0)
-      expect(await flushCalls(() =>
-        focusBlock(panel(), 'block-b', {edit: true, renderScopeId: TARGET_SCOPE}))).toBe(1)
-    })
-
-    it('setIsEditing(true)', async () => {
-      expect(await flushCalls(async () => setIsEditing(panel(), true))).toBe(0)
-      expect(await flushCalls(async () => setIsEditing(panel(), false))).toBe(1)
-    })
-
-    it('a selection write that keeps editing', async () => {
-      const select = (clearEditing: boolean) => commitSelectionRange({
-        uiStateBlock: panel(),
-        anchorBlockId: 'block-a',
-        targetLocation: TARGET,
-        selectedBlockIds: ['block-a', 'block-b'],
-        clearEditing,
-      })
-      expect(await flushCalls(() => select(false))).toBe(0)
-      expect(await flushCalls(() => select(true))).toBe(1)
-    })
+  it('a writer that skips the flush still saves, as the editor unmounts', async () => {
+    await typeInSource(' typed')
+    expect(repo.block('block-a').peek()?.content).toBe('first')
+    cleanup()
+    // The unmount's write is queued ahead of this fence.
+    await repo.tx(async () => {}, {scope: ChangeScope.UiState, description: 'fence'})
+    expect(repo.block('block-a').peek()?.content).toBe('first typed')
   })
 })

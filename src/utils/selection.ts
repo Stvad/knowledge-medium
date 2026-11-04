@@ -398,7 +398,7 @@ export async function commitSelectionRange(
   if (selectedBlockIds.length === 0) return false
 
   const validatedIds = await validateSelectionHierarchy([...selectedBlockIds], uiStateBlock.repo)
-  if (clearEditing) flushPendingEditorContent()
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     await tx.setProperty(uiStateBlock.id, selectionStateProp, {
       selectedBlockIds: validatedIds,

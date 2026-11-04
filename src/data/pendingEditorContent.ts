@@ -1,15 +1,18 @@
 /** Saving what open block editors hold before focus leaves them.
  *
  *  `BlockEditor` debounces its content write, so the stored row lags the view.
- *  A writer that moves focus or clears the edit flag calls
- *  `flushPendingEditorContent()` synchronously, immediately before its own
- *  `repo.tx`. The content write then takes the FIFO write lock first, so it
- *  commits and uploads ahead of the focus write, and whoever reads "not being
- *  edited", on this device or another, also finds the text.
+ *  A writer of focus or the edit flag calls `flushPendingEditorContent()`
+ *  synchronously, immediately before its own `repo.tx`. The content write then
+ *  takes the FIFO write lock first, and the upload queue keeps that order, so
+ *  whoever reads "not being edited" also finds the text.
  *
- *  It flushes every mounted editor: another panel's text saved a little early
- *  costs nothing. A writer that misses this still saves, through the editor's
- *  unmount flush, just after its focus write.
+ *  The order rests on `Block.setContent` and `repo.tx` reaching the lock in call
+ *  order: an `await` ahead of the lock on only one of those paths breaks it.
+ *
+ *  Writers don't ask whether they really leave an editor, and it flushes every
+ *  mounted one: an early save costs what a pause in typing costs, one undo
+ *  boundary. A writer that skips this still saves, through the editor's unmount
+ *  flush, just after its focus write.
  *
  *  `flushEditorContent` (`@/editor/contentFlush`) is the per-view flush for
  *  commit points inside an editor, which keep focus where it is. */
