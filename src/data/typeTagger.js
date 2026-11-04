@@ -1,1 +1,1 @@
-export{B$ as TypeTagger,V$ as applyTypeTagInTx}from"../../chunks/app-DrtbBLzr.js";
+export{B$ as TypeTagger,V$ as applyTypeTagInTx}from"../../chunks/app-CY7zTimL.js";
