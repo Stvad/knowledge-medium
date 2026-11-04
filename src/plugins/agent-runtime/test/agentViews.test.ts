@@ -10,7 +10,6 @@ import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { type Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
@@ -18,7 +17,8 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { searchSourcesFacet } from '@/data/facets'
 import { hasLoneSurrogate } from '@/utils/string'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { executeCommand } from '../commands'
+import { createTestAgentContext } from './createTestAgentContext'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef } from '../agentViews/resolveRef'
 import type { OutlineView } from '../agentViews/outline'
@@ -42,13 +42,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
-  repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync(
-    [kernelDataExtension, backlinksDataExtension, groupedBacklinksDataExtension],
-    {repo, workspaceId: WS, safeMode: false},
-  )
-  repo.setFacetRuntime(runtime)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, [kernelDataExtension, backlinksDataExtension, groupedBacklinksDataExtension])
 })
 
 let orderCounter = 0

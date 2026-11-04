@@ -6,7 +6,7 @@ import {kernelPageBlockId} from '@/data/kernelPage'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
+import type {AppExtension} from '@/facets/facet'
 import {attachmentsPlugin} from '@/plugins/attachments'
 import type {BlobStore} from '@/plugins/attachments/blobStore'
 import {getByteStore} from '@/plugins/attachments/byteStore'
@@ -22,7 +22,8 @@ import {createContributor} from '@/plugins/contributors/profiles'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {computeContentHash} from '@/sync/crypto/contentHash'
 import type {Materializability} from '@/sync/transform'
-import {createAgentRuntimeContext, executeCommand} from '../commands'
+import {executeCommand} from '../commands'
+import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
 import {readMedia} from '../readMedia'
 
@@ -57,16 +58,11 @@ let context: AgentRuntimeContext
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
-const contextWith = (extensions: AppExtension[]) => {
-  const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
-  const runtime = resolveFacetRuntimeSync([
-    staticDataExtensions,
-    ...extensions,
-  ], {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  return createAgentRuntimeContext({repo, runtime, safeMode: false})
-}
+const contextWith = (extensions: AppExtension[]) => createTestAgentContext(
+  createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}}).repo,
+  WS,
+  [staticDataExtensions, ...extensions],
+)
 
 beforeEach(async () => {
   await resetTestDb(db.db)

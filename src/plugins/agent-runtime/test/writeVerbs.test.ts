@@ -17,9 +17,9 @@ import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNotes'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { executeCommand } from '../commands'
+import { createTestAgentContext } from './createTestAgentContext'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId, resolvePageTarget } from '../targets'
 import { agentTxOptions } from '../agentWrites'
@@ -58,10 +58,7 @@ beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   // Real uuids, so created blocks get ids like production ones.
   repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo.withTxContext({contributorId: null})
-  const runtime = resolveFacetRuntimeSync([staticDataExtensions], {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, [staticDataExtensions])
 })
 
 const seed = async (
