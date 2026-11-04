@@ -1,1 +1,0 @@
-export{rp as contributorsPlugin}from"../../../chunks/app-CMGVebeq.js";

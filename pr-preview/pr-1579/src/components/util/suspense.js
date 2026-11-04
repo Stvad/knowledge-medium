@@ -1,1 +1,0 @@
-export{LU as SuspenseFallback}from"../../../chunks/app-CMGVebeq.js";

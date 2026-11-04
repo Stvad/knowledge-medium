@@ -1,1 +1,0 @@
-export{WF as ExtensionRenderBoundary}from"../../chunks/app-CMGVebeq.js";

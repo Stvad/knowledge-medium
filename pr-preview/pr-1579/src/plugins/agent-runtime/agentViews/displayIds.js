@@ -1,1 +1,0 @@
-export{eg as boundDisplayId,tg as idMark}from"../../../../chunks/app-CMGVebeq.js";

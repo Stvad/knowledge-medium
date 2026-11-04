@@ -1,1 +1,0 @@
-export{vN as extensionDisplayName,yN as extensionName,bN as userExtensionShellToggle,xN as userExtensionToggle}from"../../chunks/app-CMGVebeq.js";

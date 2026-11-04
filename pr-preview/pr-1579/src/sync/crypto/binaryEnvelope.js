@@ -1,1 +1,0 @@
-export{oT as BINARY_ENVELOPE_MAGIC,sT as BINARY_ENVELOPE_MIN_BYTES,cT as BINARY_ENVELOPE_OVERHEAD_BYTES,lT as BINARY_MAGIC_BYTES,uT as decodeBinaryEnvelope,dT as encodeBinaryEnvelope,fT as hasBinaryEnvelopeMagic}from"../../../chunks/app-CMGVebeq.js";

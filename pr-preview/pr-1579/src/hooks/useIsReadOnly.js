@@ -1,1 +1,0 @@
-export{qv as useIsReadOnly}from"../../chunks/app-CMGVebeq.js";

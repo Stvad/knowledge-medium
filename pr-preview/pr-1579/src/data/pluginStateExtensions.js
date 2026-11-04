@@ -1,1 +1,0 @@
-export{NY as pluginPrefsExtension,PY as pluginUIStateExtension}from"../../chunks/app-CMGVebeq.js";

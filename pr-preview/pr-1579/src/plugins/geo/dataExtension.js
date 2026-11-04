@@ -1,1 +1,0 @@
-export{JG as geoDataExtension}from"../../../chunks/app-CMGVebeq.js";

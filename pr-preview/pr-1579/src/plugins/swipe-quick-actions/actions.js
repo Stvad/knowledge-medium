@@ -1,1 +1,0 @@
-export{WA as DEFAULT_QUICK_ACTION_ITEMS,GA as SWIPE_RIGHT_BLOCK_ACTION_ID,KA as isQuickActionItem,qA as quickActionItemsFacet}from"../../../chunks/app-CMGVebeq.js";

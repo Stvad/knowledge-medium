@@ -1,1 +1,0 @@
-export{_w as getOrCreateShortcutsBlock,vw as journalShortcutBlockId,yw as shortcutsBlockId}from"../../../chunks/app-CMGVebeq.js";

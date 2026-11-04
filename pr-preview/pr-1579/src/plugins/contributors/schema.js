@@ -1,1 +1,0 @@
-export{IJ as CONTRIBUTOR_TYPE,LJ as attributionCreatorsProp,RJ as attributionEditorsProp,zJ as contributorForProp,BJ as contributorKindOf,VJ as contributorKindProp,HJ as contributorProfileType,UJ as contributorRoleProp}from"../../../chunks/app-CMGVebeq.js";

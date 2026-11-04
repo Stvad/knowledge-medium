@@ -1,1 +1,0 @@
-export{TA as SWIPE_QUICK_ACTIONS_GESTURE_ID,EA as SWIPE_TRIGGER_PX,DA as swipeRecognizer}from"../../../chunks/app-CMGVebeq.js";

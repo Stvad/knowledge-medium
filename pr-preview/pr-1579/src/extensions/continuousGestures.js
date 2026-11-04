@@ -1,1 +1,0 @@
-export{nF as GESTURE_ACTIVE,rF as GESTURE_CANCEL,iF as GESTURE_IDLE,aF as TOUCH_HOLD_MS,oF as TOUCH_SLOP_PX,sF as continuousGestureRecognizersFacet,cF as createBlockGestureController,lF as enabledTouchAction,uF as suppressNextClick,dF as unionTouchAction,fF as useContinuousGestures}from"../../chunks/app-CMGVebeq.js";

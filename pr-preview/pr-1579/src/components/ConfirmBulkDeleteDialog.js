@@ -1,1 +1,0 @@
-export{QP as ConfirmBulkDeleteDialog}from"../../chunks/app-CMGVebeq.js";

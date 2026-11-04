@@ -1,1 +1,0 @@
-export{NS as SpatialNavigationShellDecorator}from"../../../chunks/app-CMGVebeq.js";

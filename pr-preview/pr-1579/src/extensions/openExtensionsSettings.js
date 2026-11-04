@@ -1,1 +1,0 @@
-export{_P as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,vP as openExtensionsSettings}from"../../chunks/app-CMGVebeq.js";

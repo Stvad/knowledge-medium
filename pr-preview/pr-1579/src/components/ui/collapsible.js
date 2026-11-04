@@ -1,1 +1,0 @@
-"use client";export{OR as Collapsible,kR as CollapsibleContent,AR as CollapsibleTrigger}from"../../../chunks/app-CMGVebeq.js";

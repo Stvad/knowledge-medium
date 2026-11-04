@@ -1,1 +1,0 @@
-export{eM as BlockPasteShellDecorator,tM as blockPasteShellDecorator}from"../../chunks/app-CMGVebeq.js";

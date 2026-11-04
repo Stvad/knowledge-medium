@@ -1,1 +1,0 @@
-export{pA as CommandPaletteHeaderItem}from"../../../chunks/app-CMGVebeq.js";

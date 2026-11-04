@@ -1,1 +1,0 @@
-export{Sy as richPastePlugin}from"../../../chunks/app-CMGVebeq.js";

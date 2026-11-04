@@ -1,1 +1,0 @@
-export{SZ as SYNCED_TABLES,CZ as syncedWriteTarget,wZ as writeTargets}from"../../chunks/app-CMGVebeq.js";

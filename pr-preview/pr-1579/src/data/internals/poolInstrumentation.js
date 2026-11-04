@@ -1,1 +1,0 @@
-export{OQ as instrumentAdapter}from"../../../chunks/app-CMGVebeq.js";

@@ -1,1 +1,0 @@
-export{KC as BreadcrumbRenderer}from"../../../chunks/app-CMGVebeq.js";

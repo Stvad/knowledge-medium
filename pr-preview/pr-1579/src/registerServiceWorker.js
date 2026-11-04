@@ -1,1 +1,0 @@
-export{IM as checkForAppUpdate,LM as registerServiceWorker}from"../chunks/app-CMGVebeq.js";

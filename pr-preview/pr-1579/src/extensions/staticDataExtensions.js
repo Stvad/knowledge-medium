@@ -1,1 +1,0 @@
-export{aW as staticDataExtensions}from"../../chunks/app-CMGVebeq.js";

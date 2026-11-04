@@ -1,1 +1,0 @@
-export{WJ as characterCounterDataExtension}from"../../../chunks/app-CMGVebeq.js";

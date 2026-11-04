@@ -1,1 +1,0 @@
-export{Jk as COMMAND_PALETTE_ACTION_ID,Yk as COMMAND_PALETTE_CONTEXT,Xk as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,Zk as commandPaletteActionContext}from"../../../chunks/app-CMGVebeq.js";

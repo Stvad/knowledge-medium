@@ -1,1 +1,0 @@
-export{_O as dailyDateWikilinkDecorator}from"../../../chunks/app-CMGVebeq.js";

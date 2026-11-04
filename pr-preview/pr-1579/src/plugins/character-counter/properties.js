@@ -1,1 +1,0 @@
-export{XJ as RAW_CHARACTER_COUNT_PROFILE_ID,ZJ as WORDS_COUNT_PROFILE_ID,QJ as charLimitProp,$J as charProfileProp,eY as charScopeProp}from"../../../chunks/app-CMGVebeq.js";

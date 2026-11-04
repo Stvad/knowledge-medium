@@ -1,1 +1,0 @@
-export{YC as BreadcrumbList,KC as BreadcrumbRenderer,JC as Breadcrumbs,GC as PromotableBreadcrumbList,HC as breadcrumbRendererContribution,UC as breadcrumbsPlugin,qC as getBreadcrumbContentPreview,WC as usePromotableBreadcrumb}from"../../../chunks/app-CMGVebeq.js";

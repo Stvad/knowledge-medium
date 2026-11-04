@@ -1,1 +1,0 @@
-export{nG as preferredSpanReplacement}from"../../../chunks/app-CMGVebeq.js";

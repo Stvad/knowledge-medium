@@ -1,1 +1,0 @@
-export{Pv as BLOCK_HOLD_GESTURE,Fv as BLOCK_HOLD_RECOGNIZER_ID,Iv as blockHoldRecognizer}from"../../../chunks/app-CMGVebeq.js";

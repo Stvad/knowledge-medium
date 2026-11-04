@@ -1,1 +1,0 @@
-export{IU as BootFallback}from"../../../chunks/app-CMGVebeq.js";

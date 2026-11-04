@@ -1,1 +1,0 @@
-export{qp as extensionApiCatalog,Jp as extensionApiRuntimeExports}from"../../chunks/app-CMGVebeq.js";

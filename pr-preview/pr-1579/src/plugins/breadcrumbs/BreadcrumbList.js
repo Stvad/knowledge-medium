@@ -1,1 +1,0 @@
-export{YC as BreadcrumbList}from"../../../chunks/app-CMGVebeq.js";

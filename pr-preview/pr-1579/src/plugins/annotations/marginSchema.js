@@ -1,1 +1,0 @@
-export{CJ as annotationMarginOpenProp}from"../../../chunks/app-CMGVebeq.js";
