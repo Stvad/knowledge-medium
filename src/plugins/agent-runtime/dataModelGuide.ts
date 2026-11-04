@@ -148,6 +148,12 @@ mislead) | \`'<json>'\`.
 
 The graph is more than pages. The common typed blocks (by frequency):
 
+- **media** — an image or file attachment. The block holds metadata (\`media:hash\`,
+  \`media:mime\`, \`media:size\`; its content is the filename) and the bytes live elsewhere.
+  Media sits under the \`Assets\` page and notes show it as \`((id))\`.
+  \`read-media <ref> --out <path>\` (MCP \`read_media\`) returns the bytes; \`add-media <path>\`
+  (MCP \`add_media\`, where offered) stores a file. Deleting the block turns each \`((id))\` in
+  notes into its filename, and leaves the stored bytes in place.
 - **todo** — a task. Completion lives in \`properties_json\`, not a type:
   \`status = 'done'\` (KM-native; open = \`'open'\`) or \`roam:todo-state = 'DONE'\`
   (imported Roam; open = \`'TODO'\`). Check both when triaging.

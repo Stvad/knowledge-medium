@@ -10,7 +10,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
-  commentsFooterContribution,
+  commentsBelowContentContribution,
   inCard,
   pillClick,
   threadsUnderComment,
@@ -37,13 +37,13 @@ describe('where the comments UI attaches', () => {
 
   it('puts the pill and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
     expect(commentPillContribution(ctx({}))).toBeTruthy()
-    expect(commentsFooterContribution(ctx({}))).toBeTruthy()
+    expect(commentsBelowContentContribution(ctx({}))).toBeTruthy()
     // Unlike the reference pill: nothing else shows a focal block's comments.
     expect(commentPillContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    expect(commentsFooterContribution(ctx({isTopLevel: true}))).toBeTruthy()
+    expect(commentsBelowContentContribution(ctx({isTopLevel: true}))).toBeTruthy()
     expect(commentContextMenuItem(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
     expect(commentPillContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
-    expect(commentsFooterContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
+    expect(commentsBelowContentContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
   })
 
   it('gives Reply and Delete to comments inside a card, not to the root or to blocks outside one', () => {

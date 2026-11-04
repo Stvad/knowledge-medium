@@ -354,6 +354,8 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
 
 Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). Deliberately excluded: `eval`, `sql execute`, extension lifecycle. The standalone `agent-cli` `km-mcp` server does not apply dispatch watcher-target guards; use `packages/agent-dispatch/dist/mcp.js` when the session is acting as part of an agent-dispatch watcher loop.
 
+Started this way, the server also offers `read_media`, and `add_media`, which uploads any local file the model names: keep it off your client's auto-approve list. Dispatch runs never get `add_media`. They do get `read_media`, whose images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that.
+
 ## Security posture
 
 - The daemon's bridge token is scoped to its own profile — revoke it in the app's token dialog to kill all graph access at once.

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
-import { chipStateFor, chipTitle } from '../chipState.ts'
+import { chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
 import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 import { contentWithAgentMention } from '../askAgent.ts'
 
@@ -70,6 +70,28 @@ describe('chipTitle', () => {
     expect(withActivity).toContain('Searching the web')
     const withoutActivity = chipTitle(chipStateFor({'agent:status': 'running'})!)
     expect(withoutActivity).not.toContain('—')
+  })
+
+  it('says a running chip is being cancelled, since the pill has no room for the executor then', () => {
+    expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:cancel': 1})!))
+      .toBe('Cancelling the Claude run')
+  })
+})
+
+describe('elapsedLabel', () => {
+  it('steps up a unit before the number reaches three digits', () => {
+    expect(elapsedLabel(0)).toBe('0s')
+    expect(elapsedLabel(99)).toBe('99s')
+    expect(elapsedLabel(100)).toBe('2m')
+    expect(elapsedLabel(99 * 60)).toBe('99m')
+    expect(elapsedLabel(99.5 * 60)).toBe('2h')
+    expect(elapsedLabel(5 * 3600)).toBe('5h')
+  })
+
+  it('stays three characters wide for any run shorter than 100 hours', () => {
+    for (let seconds = 0; seconds < 99 * 3600; seconds += 7) {
+      expect(elapsedLabel(seconds).length).toBeLessThanOrEqual(3)
+    }
   })
 })
 
