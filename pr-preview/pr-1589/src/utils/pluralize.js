@@ -1,1 +1,0 @@
-export{U4 as agree,W4 as pluralize}from"../../chunks/app-BjOf3v7i.js";

@@ -1,1 +1,0 @@
-export{iot as SYSTEM_AUTHOR_PREFIX,aot as isSystemAuthor,oot as systemAuthor}from"../../../chunks/app-BjOf3v7i.js";

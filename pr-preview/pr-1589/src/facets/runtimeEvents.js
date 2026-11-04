@@ -1,1 +1,0 @@
-export{gU as appRuntimeUpdateEvent,_U as refreshAppRuntime}from"../../chunks/app-BjOf3v7i.js";
