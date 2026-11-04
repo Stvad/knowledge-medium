@@ -38,10 +38,7 @@ vi.mock('@/context/repo.tsx', () => ({
   },
 }))
 
-vi.mock('@/components/Login.tsx', () => ({
-  useUser: () => ({id: 'alex', name: 'Alex'}),
-  useIsLocalOnly: () => true,
-}))
+vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'alex', name: 'Alex'})}))
 
 vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
   LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,

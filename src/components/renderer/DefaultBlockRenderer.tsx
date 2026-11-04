@@ -64,6 +64,7 @@ import {
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
+  type BlockSectionsResolver,
   type BlockShellDecorator,
   type BlockShellRender,
   type BlockShellSlot,
@@ -584,7 +585,7 @@ function BlockShell({
  *  its own error boundary. Memoized because the layout mounts the returned
  *  component: a new identity would remount every section. */
 const useSectionsSlot = <Input,>(
-  facet: Facet<Input, (context: BlockResolveContext) => readonly BlockRenderer[]>,
+  facet: Facet<Input, BlockSectionsResolver>,
   block: Block,
   resolveContext: BlockResolveContext,
 ): ComponentType => {

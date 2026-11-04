@@ -171,51 +171,35 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockResolveContext) => BlockContentSurfaceProps
 
-// Slot for sections rendered above a block's body — navigation chrome
-// such as top-level breadcrumbs lives here. Mirrors
-// `blockChildrenFooterFacet` exactly: each contribution returns a
-// renderer (or null/undefined/false to opt out for this block); the
-// layout renders all returned components in contribution order.
-export type BlockHeaderContribution =
+// A section slot's contribution returns a renderer, or null/undefined/false to
+// opt out for this block; the resolver gives what's left in contribution order.
+type BlockSectionContribution =
   (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
-export type BlockHeaderResolver =
+export type BlockSectionsResolver =
   (context: BlockResolveContext) => readonly BlockRenderer[]
+
+// Slot for sections rendered above a block's body — navigation chrome
+// such as top-level breadcrumbs lives here.
+export type BlockHeaderContribution = BlockSectionContribution
 
 // Slot for sections rendered directly under a block's own content and
 // properties, ahead of its children — what a block expands to show about
 // itself (its comments, its references) stays next to it however long the
-// subtree is. Same contribution shape as `blockChildrenFooterFacet`, which is
-// for what follows the subtree.
-export type BlockBelowContentContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
-
-export type BlockBelowContentResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+// subtree is. What follows the subtree goes in `blockChildrenFooterFacet`.
+export type BlockBelowContentContribution = BlockSectionContribution
 
 // Slot for sections rendered after a block's children — Roam-style "Linked
-// References" lives here. Each contribution returns a renderer (or null/
-// undefined/false to opt out for this block); the DefaultBlockRenderer
-// renders all returned components in contribution order.
-export type BlockChildrenFooterContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
-
-export type BlockChildrenFooterResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+// References" lives here.
+export type BlockChildrenFooterContribution = BlockSectionContribution
 
 // Slot for sections rendered inside a block's bullet hover-card — block
-// metadata (created/edited/by, counts, id) lives here. Mirrors
-// `blockHeaderFacet`: each contribution returns a renderer (or null/
-// undefined/false to opt out for this block); `BlockBullet` shows a
-// floating card populated with all returned components in contribution
-// order when the bullet is hovered. When NO contribution returns a
+// metadata (created/edited/by, counts, id) lives here. `BlockBullet` shows a
+// floating card populated with all returned components when the bullet is
+// hovered. When NO contribution returns a
 // renderer, the bullet attaches no hover listeners and renders no card —
 // the feature is pure opt-in and costs nothing on a stock build.
-export type BlockBulletHoverContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
-
-export type BlockBulletHoverResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+export type BlockBulletHoverContribution = BlockSectionContribution
 
 // Block layout — owns the entire shape of a block as rendered (the
 // outer wrapper, controls placement, collapse behavior, and where the
@@ -396,18 +380,13 @@ export type BlockLayoutResolver =
 
 /**
  * The `combine` shared by every "each plugin offers zero or more <things>
- * for this block" facet below — header, children-footer, bullet-hover,
- * context-menu items, shell decorators. Runs each contribution against
+ * for this block" facet below. Runs each contribution against
  * the context and keeps what it returns, in registration order; a
  * contribution opts out for this block by returning null/undefined/false.
  *
  * A contribution may return one value or a list of them. Distinguishing
- * the two by `Array.isArray` is safe for all five: their payloads are
+ * the two by `Array.isArray` is safe for all of them: their payloads are
  * components, decorators and plain item objects, never arrays themselves.
- *
- * Named rather than inlined five times because the loop is where these
- * facets drifted before — same reason `mergeBlockContentSurfaceProps` and
- * `resolveShortcutActivations` below are their own functions.
  */
 const collectPerContext = <Context, Value>(
   contributions: readonly ((context: Context) => Value | readonly Value[] | null | undefined | false)[],
@@ -424,7 +403,7 @@ const collectPerContext = <Context, Value>(
 
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
-  BlockHeaderResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-header',
   combine: collectPerContext,
@@ -434,7 +413,7 @@ export const blockHeaderFacet = defineFacet<
 
 export const blockBelowContentFacet = defineFacet<
   BlockBelowContentContribution,
-  BlockBelowContentResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-below-content',
   combine: collectPerContext,
@@ -444,7 +423,7 @@ export const blockBelowContentFacet = defineFacet<
 
 export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterContribution,
-  BlockChildrenFooterResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-children-footer',
   combine: collectPerContext,
@@ -454,7 +433,7 @@ export const blockChildrenFooterFacet = defineFacet<
 
 export const blockBulletHoverFacet = defineFacet<
   BlockBulletHoverContribution,
-  BlockBulletHoverResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-bullet-hover',
   combine: collectPerContext,
