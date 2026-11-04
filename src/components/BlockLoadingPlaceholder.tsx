@@ -38,7 +38,7 @@ export function BlockLoadingPlaceholder({
       aria-hidden
     >
       <div className="block-controls flex items-center">
-        {!isMobile && <span className="expand-collapse-button h-6 w-3" />}
+        {!isMobile && <span className="h-6 w-3" />}
         <span className="bullet-link flex items-center justify-center h-6 w-5">
           <BulletDot />
         </span>

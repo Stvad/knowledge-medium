@@ -300,12 +300,6 @@ const CARD_CHAIN_KEY = 'annotations.cardChain'
 const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
   Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
 
-/** A card has little width, so the expand chevron takes no row width at any
- *  nesting level: it covers the left of the bullet's box, staying inside the
- *  row because a parent's body clips anything further left. The dot moves right
- *  in its box to leave the chevron room. */
-const CARD_CHEVRON_CLASS = '[&_.block-controls>.expand-collapse-button]:absolute [&_.block-controls>.expand-collapse-button]:w-[9px] [&_.block-controls>.bullet-link]:pl-2'
-
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
  *  distinct render scopes. */
@@ -313,7 +307,7 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
-    <div className={`rounded border bg-background px-1 py-0.5 ${CARD_CHEVRON_CLASS}`} data-testid="comment-thread">
+    <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
       <NestedBlockContextProvider overrides={{
         isNestedSurface: true,
         layoutBoundary: false,
