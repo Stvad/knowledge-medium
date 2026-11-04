@@ -1,0 +1,1 @@
+export{Pj as bindBlockActionContext,Fj as createSharedBlockActions,Ij as enterEditMode,Lj as extendSelectionDown,Rj as extendSelectionUp,zj as requestEditorFocusIfEditing}from"../../chunks/app-CMGVebeq.js";

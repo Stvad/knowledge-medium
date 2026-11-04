@@ -1,0 +1,1 @@
+export{kE as useMinuteClock}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{Zg as blockInfoPlugin}from"../../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{Lv as blockDragPlugin}from"../../../chunks/app-CMGVebeq.js";

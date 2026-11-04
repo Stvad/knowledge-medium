@@ -1,0 +1,1 @@
+export{WC as usePromotableBreadcrumb}from"../../../chunks/app-CMGVebeq.js";

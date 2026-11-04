@@ -1,0 +1,1 @@
+export{Xat as SYSTEM_AUTHOR_PREFIX,Zat as isSystemAuthor,Qat as systemAuthor}from"../../../chunks/app-CMGVebeq.js";

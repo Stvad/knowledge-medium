@@ -1,0 +1,1 @@
+export{p2 as kernelDataExtension}from"../../chunks/app-CMGVebeq.js";

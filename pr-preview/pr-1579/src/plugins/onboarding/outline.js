@@ -1,0 +1,1 @@
+export{Sk as EXTENSIONS_PAGE_TITLE,Ck as TUTORIAL_DEFAULT_TITLE,wk as TUTORIAL_VIM_TITLE,Tk as extensionsPageOutline,Ek as tutorialOutline}from"../../../chunks/app-CMGVebeq.js";

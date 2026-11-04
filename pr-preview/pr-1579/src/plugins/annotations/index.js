@@ -1,0 +1,1 @@
+export{Ju as annotationsPlugin}from"../../../chunks/app-CMGVebeq.js";

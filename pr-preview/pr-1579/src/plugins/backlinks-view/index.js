@@ -1,0 +1,1 @@
+export{o_ as backlinksViewPlugin}from"../../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{BI as defaultPasteDecision,VI as pasteDecisionVerb}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{_R as defineVariant,vR as defineVariantFacet}from"../../chunks/app-CMGVebeq.js";

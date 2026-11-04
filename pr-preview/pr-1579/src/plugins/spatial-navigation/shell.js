@@ -1,0 +1,1 @@
+export{MS as spatialNavigationShellDecorator}from"../../../chunks/app-CMGVebeq.js";

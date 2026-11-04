@@ -1,0 +1,1 @@
+export{RS as extendSelectionToSpatialTarget,zS as getSpatialNavigationActionTransforms,BS as getSpatialNavigationActions,VS as getSpatialNavigationDispatchDecorators,HS as spatialNavigationActionDecoratorsExtension,US as spatialNavigationActionsExtension,WS as spatialSelectionClickDecorator}from"../../../chunks/app-CMGVebeq.js";

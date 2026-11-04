@@ -1,0 +1,1 @@
+export{GC as PromotableBreadcrumbList}from"../../../chunks/app-CMGVebeq.js";

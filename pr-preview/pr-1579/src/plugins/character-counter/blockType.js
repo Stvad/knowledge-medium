@@ -1,0 +1,1 @@
+export{GJ as CHAR_COUNTER_TYPE,KJ as CHAR_COUNTER_TYPE_CONTRIBUTIONS,qJ as COUNTER_TYPES,JJ as WORD_COUNTER_TYPE,YJ as wordCounterInitialValues}from"../../../chunks/app-CMGVebeq.js";

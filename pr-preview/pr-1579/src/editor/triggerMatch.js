@@ -1,0 +1,1 @@
+export{SK as matchCharTrigger}from"../../chunks/app-CMGVebeq.js";

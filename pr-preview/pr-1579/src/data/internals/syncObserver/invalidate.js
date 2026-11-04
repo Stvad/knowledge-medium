@@ -1,0 +1,1 @@
+export{t2 as applySyncInvalidation}from"../../../../chunks/app-CMGVebeq.js";

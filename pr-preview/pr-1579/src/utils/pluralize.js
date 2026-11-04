@@ -1,0 +1,1 @@
+export{F4 as agree,I4 as pluralize}from"../../chunks/app-CMGVebeq.js";

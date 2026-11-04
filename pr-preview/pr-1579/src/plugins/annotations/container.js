@@ -1,0 +1,1 @@
+export{wJ as COMMENTS_PAGE_ALIAS,TJ as commentsPageBlockId,EJ as commentsPageSpec,DJ as getOrCreateCommentsPage}from"../../../chunks/app-CMGVebeq.js";

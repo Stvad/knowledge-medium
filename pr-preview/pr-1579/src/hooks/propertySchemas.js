@@ -1,0 +1,1 @@
+export{nU as usePropertySchemas}from"../../chunks/app-CMGVebeq.js";

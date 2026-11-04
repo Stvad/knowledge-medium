@@ -1,0 +1,1 @@
+export{RC as MobileBottomNavButton}from"../../../chunks/app-CMGVebeq.js";

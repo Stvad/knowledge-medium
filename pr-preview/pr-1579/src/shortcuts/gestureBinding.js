@@ -1,0 +1,1 @@
+export{YM as gestureBindingDescriptor,XM as matchesGestureEvent}from"../../chunks/app-CMGVebeq.js";

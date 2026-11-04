@@ -1,0 +1,1 @@
+export{IF as useIsMobile,LF as usePointerCoarse}from"../../chunks/app-CMGVebeq.js";

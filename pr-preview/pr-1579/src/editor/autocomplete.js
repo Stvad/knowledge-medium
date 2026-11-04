@@ -1,0 +1,1 @@
+export{uM as editorAutocompleteExtension}from"../../chunks/app-CMGVebeq.js";

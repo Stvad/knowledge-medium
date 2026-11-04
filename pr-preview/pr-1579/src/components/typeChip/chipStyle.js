@@ -1,0 +1,1 @@
+export{gj as chipStyle}from"../../../chunks/app-CMGVebeq.js";

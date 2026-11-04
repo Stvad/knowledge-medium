@@ -1,0 +1,1 @@
+export{mv as Wikilink}from"../../../../../chunks/app-CMGVebeq.js";

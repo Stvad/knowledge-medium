@@ -1,0 +1,1 @@
+export{Nj as ensureMetricsConsoleHook}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{qN as LazyBlockComponent}from"../../chunks/app-CMGVebeq.js";

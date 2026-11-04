@@ -1,0 +1,1 @@
+export{ket as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Aet as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,jet as __resetLayoutSessionIdForTesting,Met as getLayoutSessionId,Net as isInstalledAppDisplayMode,Pet as readOrCreateLayoutSessionId}from"../../chunks/app-CMGVebeq.js";

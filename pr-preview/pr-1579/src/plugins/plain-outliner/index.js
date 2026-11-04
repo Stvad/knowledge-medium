@@ -1,0 +1,1 @@
+export{XC as plainOutlinerPlugin}from"../../../chunks/app-CMGVebeq.js";

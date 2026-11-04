@@ -1,0 +1,1 @@
+export{C_ as DEFAULT_BACKLINKS_VIEW_ID,w_ as FLAT_BACKLINKS_VIEW_ID,T_ as GROUPED_BACKLINKS_VIEW_ID,E_ as backlinksViewProp,D_ as defaultBacklinksViewIdForBlock}from"../../../chunks/app-CMGVebeq.js";

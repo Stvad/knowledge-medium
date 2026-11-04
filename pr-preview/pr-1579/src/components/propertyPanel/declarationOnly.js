@@ -1,0 +1,1 @@
+export{iz as declarationOnlyDefinitionForName,az as declarationOnlyStatusText}from"../../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{wA as SwipeActionMenu}from"../../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{Ey as attachmentsPlugin}from"../../../chunks/app-CMGVebeq.js";

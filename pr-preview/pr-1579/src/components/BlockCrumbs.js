@@ -1,0 +1,1 @@
+export{nD as BlockCrumbs}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{DM as appUpdatePromptExtension}from"../../../chunks/app-CMGVebeq.js";

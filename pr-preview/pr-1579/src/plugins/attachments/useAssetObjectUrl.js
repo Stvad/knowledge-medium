@@ -1,0 +1,1 @@
+export{Gb as useAssetObjectUrl}from"../../../chunks/app-CMGVebeq.js";

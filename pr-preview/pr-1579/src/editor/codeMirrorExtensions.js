@@ -1,0 +1,1 @@
+export{BK as codeMirrorExtensionsFacet}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{XN as BlockLoadingPlaceholder}from"../../chunks/app-CMGVebeq.js";

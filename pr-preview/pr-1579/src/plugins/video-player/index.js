@@ -1,0 +1,1 @@
+export{wx as videoPlayerPlugin}from"../../../chunks/app-CMGVebeq.js";

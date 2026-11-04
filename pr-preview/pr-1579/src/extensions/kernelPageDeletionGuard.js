@@ -1,0 +1,1 @@
+export{BM as kernelPageDeletionGuard}from"../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{ZM as dispatchPointerAction,QM as setPointerActionDispatcher}from"../../chunks/app-CMGVebeq.js";

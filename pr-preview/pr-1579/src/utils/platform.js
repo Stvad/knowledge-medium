@@ -1,0 +1,1 @@
+export{UV as isIOS,WV as isMacPlatform}from"../../chunks/app-CMGVebeq.js";

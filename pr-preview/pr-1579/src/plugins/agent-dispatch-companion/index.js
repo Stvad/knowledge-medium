@@ -1,0 +1,1 @@
+export{op as agentDispatchCompanionPlugin}from"../../../chunks/app-CMGVebeq.js";

@@ -1,0 +1,1 @@
+export{sZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-CMGVebeq.js";
