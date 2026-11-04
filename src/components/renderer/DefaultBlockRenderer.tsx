@@ -44,10 +44,12 @@ import { useBlockContext } from '@/context/block.js'
 import { useBlockAliases, useHasChildren, usePropertyValue } from '@/hooks/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import type { Facet } from '@/facets/facet.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
   blockBulletClassFacet,
   blockBulletHoverFacet,
+  blockBelowContentFacet,
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
@@ -62,6 +64,7 @@ import {
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
+  type BlockSectionsResolver,
   type BlockShellDecorator,
   type BlockShellRender,
   type BlockShellSlot,
@@ -365,7 +368,7 @@ const ExpandButton = ({block}: { block: Block }) => {
  */
 export const DefaultBlockLayout: BlockLayout = ({
   block,
-  Content, Properties, Children, Footer,
+  Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
 }) => {
@@ -410,6 +413,8 @@ export const DefaultBlockLayout: BlockLayout = ({
                   <Content/>
                   {Properties && <Properties/>}
                 </div>
+
+                <BelowContent/>
 
                 <CollapsibleContent>
                   <Children/>
@@ -576,6 +581,30 @@ function BlockShell({
   )
 }
 
+/** A layout slot rendering a section facet's contributions in order, each in
+ *  its own error boundary. Memoized because the layout mounts the returned
+ *  component: a new identity would remount every section. */
+const useSectionsSlot = <Input,>(
+  facet: Facet<Input, BlockSectionsResolver>,
+  block: Block,
+  resolveContext: BlockResolveContext,
+): ComponentType => {
+  const runtime = useAppRuntime()
+  return useMemo(() => function BlockSectionsSlot() {
+    const resolveSections = runtime.read(facet)
+    const sections = useMemo(() => resolveSections(resolveContext), [resolveSections])
+    return (
+      <>
+        {sections.map((SectionRenderer, index) => (
+          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <SectionRenderer block={block}/>
+          </ErrorBoundary>
+        ))}
+      </>
+    )
+  }, [facet, block, resolveContext, runtime])
+}
+
 export function DefaultBlockRenderer(
   {
     block,
@@ -668,7 +697,7 @@ export function DefaultBlockRenderer(
   // Only the layout is resolved eagerly — it decides which slots get mounted,
   // and each slot owns (and only then pays for) its own machinery: the gesture
   // ref + content/click/surface facets live in `Content`, the section facets in
-  // `Header`/`Footer`, and the whole interactive surface (paste, shell
+  // `Header`/`BelowContent`/`Footer`, and the whole interactive surface (paste, shell
   // decorators, shortcut activations) in `Shell`. A read-only layout (a block
   // reference) that mounts only `RawContent` therefore runs none of those
   // hooks — the lazy-slot equivalent of "don't allocate what you don't use".
@@ -767,24 +796,9 @@ export function DefaultBlockRenderer(
     }
   }, [block])
 
-  const FooterSlot = useMemo<ComponentType>(() => {
-    return function BlockFooterSlot() {
-      const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
-      const childrenFooterSections = useMemo(
-        () => resolveChildrenFooterSections(resolveContext),
-        [resolveChildrenFooterSections],
-      )
-      return (
-        <>
-          {childrenFooterSections.map((SectionRenderer, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-              <SectionRenderer block={block}/>
-            </ErrorBoundary>
-          ))}
-        </>
-      )
-    }
-  }, [block, resolveContext, runtime])
+  const BelowContentSlot = useSectionsSlot(blockBelowContentFacet, block, resolveContext)
+  const FooterSlot = useSectionsSlot(blockChildrenFooterFacet, block, resolveContext)
+  const HeaderSlot = useSectionsSlot(blockHeaderFacet, block, resolveContext)
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
   // (returns null since top-level blocks have no bullet) and of mobile
@@ -813,25 +827,6 @@ export function DefaultBlockRenderer(
       )
     }
   }, [block, resolveContext])
-
-  const HeaderSlot = useMemo<ComponentType>(() => {
-    return function BlockHeaderSlot() {
-      const resolveHeaderSections = runtime.read(blockHeaderFacet)
-      const headerSections = useMemo(
-        () => resolveHeaderSections(resolveContext),
-        [resolveHeaderSections],
-      )
-      return (
-        <>
-          {headerSections.map((SectionRenderer, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-              <SectionRenderer block={block}/>
-            </ErrorBoundary>
-          ))}
-        </>
-      )
-    }
-  }, [block, resolveContext, runtime])
 
   // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
   // to become focusable/editable; the shell's machinery (paste/click, shell
@@ -867,6 +862,7 @@ export function DefaultBlockRenderer(
     Content: ContentSlot,
     RawContent: RawContentSlot,
     Properties: PropertiesSlot,
+    BelowContent: BelowContentSlot,
     Children: ChildrenSlot,
     Footer: FooterSlot,
     Controls: ControlsSlot,

@@ -7,7 +7,7 @@ import { backlinksPlugin } from '../../index.ts'
 import { inlineBacklinksApplies } from '../applies.ts'
 import {
   inlineBacklinkCountDecoratorContribution,
-  inlineBacklinkExpansionFooterContribution,
+  inlineBacklinkExpansionContribution,
 } from '../InlineBacklinkCount.tsx'
 
 /** Minimal `BlockResolveContext` — the inline-counts gate reads only
@@ -49,13 +49,13 @@ describe('inlineBacklinksApplies gate', () => {
 })
 
 describe('inline-counts facet contributions', () => {
-  it('decorate + footer attach only where the gate applies', () => {
+  it('decorate + expansion attach only where the gate applies', () => {
     expect(inlineBacklinkCountDecoratorContribution(REGULAR)).toBeTruthy()
-    expect(inlineBacklinkExpansionFooterContribution(REGULAR)).toBeTruthy()
+    expect(inlineBacklinkExpansionContribution(REGULAR)).toBeTruthy()
 
     for (const skipped of [FOCAL, NESTED]) {
       expect(inlineBacklinkCountDecoratorContribution(skipped)).toBeNull()
-      expect(inlineBacklinkExpansionFooterContribution(skipped)).toBeNull()
+      expect(inlineBacklinkExpansionContribution(skipped)).toBeNull()
     }
   })
 })
