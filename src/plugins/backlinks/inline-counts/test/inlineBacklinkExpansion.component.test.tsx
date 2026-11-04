@@ -136,6 +136,7 @@ describe('where a block\'s backlinks render', () => {
     await repo.block('ui-state').set(topLevelBlockIdProp, TARGET)
     await renderTarget(TARGET)
     await screen.findByText(REFERRER, {exact: false})
-    await waitForRenderOrder(() => screen.getByText(CHILD), () => screen.getByText(REFERRER, {exact: false}))
+    // The reference inside the referrer draws the child again once it resolves: the first copy is the block's own.
+    await waitForRenderOrder(() => screen.getAllByText(CHILD)[0], () => screen.getByText(REFERRER, {exact: false}))
   }, 20_000)
 })
