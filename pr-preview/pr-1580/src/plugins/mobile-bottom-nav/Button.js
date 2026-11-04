@@ -1,1 +1,0 @@
-export{WC as MobileBottomNavButton}from"../../../chunks/app-ClObUBrf.js";

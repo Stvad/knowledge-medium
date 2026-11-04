@@ -1,1 +1,0 @@
-export{lG as preferredSpanReplacement}from"../../../chunks/app-ClObUBrf.js";

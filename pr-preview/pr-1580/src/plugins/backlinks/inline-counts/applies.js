@@ -1,1 +1,0 @@
-export{C_ as inlineBacklinksApplies}from"../../../../chunks/app-ClObUBrf.js";

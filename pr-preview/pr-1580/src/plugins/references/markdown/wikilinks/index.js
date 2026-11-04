@@ -1,1 +1,0 @@
-export{gv as wikilinkMarkdownExtension}from"../../../../../chunks/app-ClObUBrf.js";

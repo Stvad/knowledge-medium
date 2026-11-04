@@ -1,1 +1,0 @@
-export{QC as BreadcrumbRenderer}from"../../../chunks/app-ClObUBrf.js";

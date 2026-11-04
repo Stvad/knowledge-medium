@@ -1,1 +1,0 @@
-export{wR as defineVariant,TR as defineVariantFacet}from"../../chunks/app-ClObUBrf.js";

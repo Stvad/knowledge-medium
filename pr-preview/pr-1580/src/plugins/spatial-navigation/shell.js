@@ -1,1 +1,0 @@
-export{LS as spatialNavigationShellDecorator}from"../../../chunks/app-ClObUBrf.js";

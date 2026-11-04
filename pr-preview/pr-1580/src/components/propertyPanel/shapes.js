@@ -1,1 +1,0 @@
-export{pU as propertyShapeLabel}from"../../../chunks/app-ClObUBrf.js";

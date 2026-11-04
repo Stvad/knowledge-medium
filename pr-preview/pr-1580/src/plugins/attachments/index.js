@@ -1,1 +1,0 @@
-export{Ay as attachmentsPlugin}from"../../../chunks/app-ClObUBrf.js";

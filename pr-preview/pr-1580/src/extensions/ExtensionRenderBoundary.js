@@ -1,1 +1,0 @@
-export{XF as ExtensionRenderBoundary}from"../../chunks/app-ClObUBrf.js";

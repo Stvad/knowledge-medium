@@ -1,1 +1,0 @@
-export{nw as plainOutlinerPlugin}from"../../../chunks/app-ClObUBrf.js";

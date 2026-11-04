@@ -1,1 +1,0 @@
-export{Cm as BLOCK_HISTORY_CONTENT_CHARS,wm as LISTED_PROPERTY_NAMES,Tm as MAX_LISTED_CHANGES,Em as blockHistory,Dm as recentChanges}from"../../../chunks/app-ClObUBrf.js";

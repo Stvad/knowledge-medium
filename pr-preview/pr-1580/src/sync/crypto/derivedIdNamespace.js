@@ -1,1 +1,0 @@
-export{Wnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-ClObUBrf.js";

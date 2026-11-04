@@ -1,1 +1,0 @@
-export{FE as useMinuteClock}from"../../chunks/app-ClObUBrf.js";

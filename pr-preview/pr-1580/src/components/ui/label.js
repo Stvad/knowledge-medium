@@ -1,1 +1,0 @@
-export{BD as Label}from"../../../chunks/app-ClObUBrf.js";

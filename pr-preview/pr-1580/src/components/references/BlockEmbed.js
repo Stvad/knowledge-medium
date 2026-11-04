@@ -1,1 +1,0 @@
-export{fj as BlockEmbed}from"../../../chunks/app-ClObUBrf.js";

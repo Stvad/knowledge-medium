@@ -1,1 +1,0 @@
-export{l2 as applySyncInvalidation}from"../../../../chunks/app-ClObUBrf.js";

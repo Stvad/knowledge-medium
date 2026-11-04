@@ -1,1 +1,0 @@
-export{GC as mobileBottomNavItemsFacet}from"../../../chunks/app-ClObUBrf.js";

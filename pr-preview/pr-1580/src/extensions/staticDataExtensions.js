@@ -1,1 +1,0 @@
-export{fW as staticDataExtensions}from"../../chunks/app-ClObUBrf.js";

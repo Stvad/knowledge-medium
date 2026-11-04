@@ -1,1 +1,0 @@
-export{xj as TypeChip}from"../../../chunks/app-ClObUBrf.js";

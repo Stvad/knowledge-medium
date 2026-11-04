@@ -1,1 +1,0 @@
-export{lU as usePropertySchemas}from"../../chunks/app-ClObUBrf.js";

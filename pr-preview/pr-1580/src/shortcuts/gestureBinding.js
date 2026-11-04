@@ -1,1 +1,0 @@
-export{tN as gestureBindingDescriptor,nN as matchesGestureEvent}from"../../chunks/app-ClObUBrf.js";

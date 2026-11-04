@@ -1,1 +1,0 @@
-export{Jk as useCommandPaletteActions}from"../../../chunks/app-ClObUBrf.js";
