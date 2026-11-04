@@ -81,11 +81,21 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
   }
 }
 
+/** At most three characters for any realistic run, so the fixed-width pill
+ *  never truncates it. */
+export const elapsedLabel = (seconds: number): string => {
+  if (seconds < 100) return `${Math.round(seconds)}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 100) return `${minutes}m`
+  return `${Math.round(seconds / 3_600)}h`
+}
+
 export const chipTitle = (chip: ChipState): string => {
   switch (chip.kind) {
     case 'queued':
       return `Queued for ${chip.executorLabel}`
     case 'running': {
+      if (chip.cancelling) return `Cancelling the ${chip.executorLabel} run`
       const base = chip.attempts > 1
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`
         : `${chip.executorLabel} is working`

@@ -6,7 +6,7 @@
  *
  *  Same gutter pattern as the inline backlink count badge: with no
  *  chip, content renders untouched (no wrapper). */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ClipboardCopy, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
@@ -19,9 +19,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
+import { chipStateFor, chipTitle, elapsedLabel, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
@@ -34,10 +35,17 @@ const useElapsedLabel = (sinceMs: number | null): string | null => {
     return () => clearInterval(timer)
   }, [])
   if (sinceMs === null) return null
-  const seconds = Math.max(0, Math.round((nowMs - sinceMs) / 1_000))
-  if (seconds < 100) return `${seconds}s`
-  return `${Math.round(seconds / 60)}m`
+  return elapsedLabel(Math.max(0, Math.round((nowMs - sinceMs) / 1_000)))
 }
+
+/** One width for every state and every tick: the pill sits in the block's row,
+ *  so any change in its width re-wraps the block's text. Anything variable
+ *  (the run's activity, a long executor name) goes in the title and the menu. */
+const CHIP_CLASS = 'group mt-0.5 inline-flex h-4 w-24 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1 text-xs leading-none text-muted-foreground'
+
+const ChipLabel = ({children}: {children: ReactNode}) => (
+  <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>
+)
 
 const RunningChip = ({ chip }: { chip: ChipState }) => {
   const elapsed = useElapsedLabel(chip.updatedAtMs)
@@ -45,11 +53,11 @@ const RunningChip = ({ chip }: { chip: ChipState }) => {
     <>
       <span className="animate-pulse text-amber-600">●</span>
       {chip.cancelling ? (
-        <span>{chip.executorLabel} · cancelling…</span>
+        <ChipLabel>cancelling…</ChipLabel>
       ) : (
         <>
-          <span>{chip.executorLabel}{elapsed ? ` · ${elapsed}` : ''}</span>
-          {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
+          <ChipLabel>{chip.executorLabel}</ChipLabel>
+          {elapsed && <span className="shrink-0 tabular-nums">{elapsed}</span>}
         </>
       )}
     </>
@@ -62,7 +70,7 @@ const chipBody = (chip: ChipState) => {
       return (
         <>
           <span className="text-muted-foreground">●</span>
-          <span>{chip.executorLabel}…</span>
+          <ChipLabel>{chip.executorLabel}…</ChipLabel>
         </>
       )
     case 'running':
@@ -71,14 +79,14 @@ const chipBody = (chip: ChipState) => {
       return (
         <>
           <span className="text-emerald-600">✓</span>
-          <span>{chip.executorLabel}</span>
+          <ChipLabel>{chip.executorLabel}</ChipLabel>
         </>
       )
     case 'error':
       return (
         <>
           <span className="text-red-600">⚠</span>
-          <span>{chip.executorLabel}</span>
+          <ChipLabel>{chip.executorLabel}</ChipLabel>
         </>
       )
   }
@@ -101,7 +109,7 @@ const AgentStatusChipMenu = ({
       <span
         title={chipTitle(chip)}
         data-agent-dispatch-chip={chip.kind}
-        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
+        className={CHIP_CLASS}
       >
         {chipBody(chip)}
       </span>
@@ -117,12 +125,17 @@ const AgentStatusChipMenu = ({
           aria-label={`${chip.executorLabel} task actions`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
-          className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={`${CHIP_CLASS} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           {chipBody(chip)}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        {canStop && chip.activity && (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            {chip.activity}
+          </DropdownMenuLabel>
+        )}
         {chip.resumeCommand && (
           <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
             <ClipboardCopy className="h-4 w-4" />
