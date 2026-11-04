@@ -1,1 +1,1 @@
-export{Qtt as getOrCreateTypesPage,$tt as typesPageBlockId,ent as typesPageSpec}from"../../chunks/app-BGfW5HSS.js";
+export{Qtt as getOrCreateTypesPage,$tt as typesPageBlockId,ent as typesPageSpec}from"../../chunks/app-WpSjJ7-l.js";

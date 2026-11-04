@@ -1,1 +1,1 @@
-export{OM as appUpdatePromptExtension}from"../../../chunks/app-BGfW5HSS.js";
+export{OM as appUpdatePromptExtension}from"../../../chunks/app-WpSjJ7-l.js";

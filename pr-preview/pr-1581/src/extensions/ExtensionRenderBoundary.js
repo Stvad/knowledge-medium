@@ -1,1 +1,1 @@
-export{GF as ExtensionRenderBoundary}from"../../chunks/app-BGfW5HSS.js";
+export{GF as ExtensionRenderBoundary}from"../../chunks/app-WpSjJ7-l.js";

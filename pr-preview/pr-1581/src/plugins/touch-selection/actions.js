@@ -1,1 +1,1 @@
-export{Nv as selectHeldBlockAction,Pv as toggleTappedBlockAction}from"../../../chunks/app-BGfW5HSS.js";
+export{Nv as selectHeldBlockAction,Pv as toggleTappedBlockAction}from"../../../chunks/app-WpSjJ7-l.js";
