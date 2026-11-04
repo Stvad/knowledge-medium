@@ -697,7 +697,7 @@ export function DefaultBlockRenderer(
   // Only the layout is resolved eagerly — it decides which slots get mounted,
   // and each slot owns (and only then pays for) its own machinery: the gesture
   // ref + content/click/surface facets live in `Content`, the section facets in
-  // `Header`/`Footer`, and the whole interactive surface (paste, shell
+  // `Header`/`BelowContent`/`Footer`, and the whole interactive surface (paste, shell
   // decorators, shortcut activations) in `Shell`. A read-only layout (a block
   // reference) that mounts only `RawContent` therefore runs none of those
   // hooks — the lazy-slot equivalent of "don't allocate what you don't use".

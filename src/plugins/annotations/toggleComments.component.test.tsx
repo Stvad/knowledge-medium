@@ -7,6 +7,7 @@ import {act, cleanup, render, screen, waitFor, within} from '@testing-library/re
 import {useEffect} from 'react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
+import {isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -22,6 +23,7 @@ import {ActiveContextsProvider, useActiveContextsDispatch} from '@/shortcuts/Act
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
 import {ActionContextTypes} from '@/shortcuts/types'
+import {waitForRenderOrder} from '@/test/domOrder'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
@@ -193,12 +195,36 @@ describe('the block comments toggle action', () => {
         </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
-    const child = await screen.findByText(CHILD)
+    await screen.findByText(CHILD)
     await invoke(ActionContextTypes.NORMAL_MODE, deps)
 
     try {
-      const comment = await screen.findByText(COMMENT)
-      expect(comment.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      await screen.findByText(COMMENT)
+      await waitForRenderOrder(() => screen.getByText(COMMENT), () => screen.getByText(CHILD))
+    } finally {
+      await invoke(ActionContextTypes.NORMAL_MODE, deps)
+    }
+  })
+
+  it('keeps expanded comments showing when the block is collapsed', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'child', workspaceId: WS, parentId: 'target', orderKey: 'a0', content: CHILD})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block('target').set(isCollapsedProp, true)
+    const deps = {block: repo.block('target'), uiStateBlock: repo.block('ui-state'), renderScopeId: panelRenderScopeId('collapsed-panel', 'page')}
+    render(
+      <AppRuntimeContextProvider value={repo.facetRuntime!}>
+        <ActiveContextsProvider>
+          {panel('collapsed-panel', <DefaultBlockRenderer block={repo.block('target')}/>)}
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+    await screen.findByText(BLOCK)
+    await invoke(ActionContextTypes.NORMAL_MODE, deps)
+
+    try {
+      expect(await screen.findByText(COMMENT)).toBeTruthy()
+      expect(screen.queryByText(CHILD)).toBeNull()
     } finally {
       await invoke(ActionContextTypes.NORMAL_MODE, deps)
     }

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
+import {afterAll, afterEach, beforeAll, beforeEach, describe, it, vi} from 'vitest'
 import {act, cleanup, render, screen} from '@testing-library/react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
@@ -16,6 +16,7 @@ import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
+import {waitForRenderOrder} from '@/test/domOrder'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
@@ -63,9 +64,6 @@ vi.mock('@/data/globalState.ts', async () => {
     useIsSelected: (): boolean => false,
   }
 })
-
-const expectBefore = (earlier: Element, later: Element) =>
-  expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
 describe('where a block\'s backlinks render', () => {
   let db: TestDb
@@ -124,10 +122,11 @@ describe('where a block\'s backlinks render', () => {
 
   it('an inline expansion goes directly under the block, ahead of its children', async () => {
     await renderTarget('page')
-    const child = await screen.findByText(CHILD)
+    await screen.findByText(CHILD)
     await act(async () => toggleBacklinkExpansion(TARGET))
     try {
-      expectBefore(await screen.findByText(REFERRER, {exact: false}), child)
+      await screen.findByText(REFERRER, {exact: false})
+      await waitForRenderOrder(() => screen.getByText(REFERRER, {exact: false}), () => screen.getByText(CHILD))
     } finally {
       await act(async () => toggleBacklinkExpansion(TARGET))
     }
@@ -136,6 +135,7 @@ describe('where a block\'s backlinks render', () => {
   it('the focal block keeps its linked references after its children', async () => {
     await repo.block('ui-state').set(topLevelBlockIdProp, TARGET)
     await renderTarget(TARGET)
-    expectBefore(await screen.findByText(CHILD), await screen.findByText(REFERRER, {exact: false}))
+    await screen.findByText(REFERRER, {exact: false})
+    await waitForRenderOrder(() => screen.getByText(CHILD), () => screen.getByText(REFERRER, {exact: false}))
   }, 20_000)
 })

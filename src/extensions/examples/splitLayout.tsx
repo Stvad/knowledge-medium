@@ -4,8 +4,8 @@ import { blockLayoutFacet, type BlockLayout, type BlockLayoutSlots } from '@/ext
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { defineVariant } from '@/facets/variantFacet.js'
 
-// blockLayoutFacet contributions arrange the five slots (Content,
-// Properties, BelowContent, Children, Footer) inside a block's body. Each slot is
+// blockLayoutFacet contributions arrange the slots (Content, Properties,
+// BelowContent, Children, Footer) inside a block's body. Each slot is
 // already wrapped in its own ErrorBoundary + interaction provider
 // boundary, so swapping the layout doesn't change shortcut-surface
 // scoping or accidentally nest descendant blocks inside the parent's
