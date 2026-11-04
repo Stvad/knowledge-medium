@@ -301,9 +301,10 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
   Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
 
 /** A card has little width, so the expand chevron takes no row width at any
- *  nesting level: it covers the blank left of the bullet's box, staying inside
- *  the row because a parent's body clips anything further left. */
-const CARD_CHEVRON_CLASS = '[&_.block-controls>.expand-collapse-button]:absolute [&_.block-controls>.expand-collapse-button]:w-[7px]'
+ *  nesting level: it covers the left of the bullet's box, staying inside the
+ *  row because a parent's body clips anything further left. The dot moves right
+ *  in its box to leave the chevron room. */
+const CARD_CHEVRON_CLASS = '[&_.block-controls>.expand-collapse-button]:absolute [&_.block-controls>.expand-collapse-button]:w-[9px] [&_.block-controls>.bullet-link]:pl-2'
 
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
