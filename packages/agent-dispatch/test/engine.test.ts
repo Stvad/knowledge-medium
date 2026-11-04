@@ -674,6 +674,34 @@ describe('mention lifecycle', () => {
     expect(propWrites).toEqual([])
   })
 
+  it('reads edit state before the text, so a leave between the reads cannot pass stale text', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] stale text', editedAtMs: NOW - 30_000}},
+    })
+    // Not being edited at the scan, then back in the editor, then out again
+    // the moment the text has been read.
+    let editing = false
+    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      const result = new Set(editing ? ['b-1'] : [])
+      editing = true
+      return result
+    })
+    const readBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const block = await readBlock(id)
+      editing = false
+      return block
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+  })
+
   it('replies with a failure note and marks error on a failed run', async () => {
     const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],

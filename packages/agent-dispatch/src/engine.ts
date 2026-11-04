@@ -246,9 +246,11 @@ export const createEngine = (deps: EngineDeps) => {
   ) => {
     const {runner} = watcher
     // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
+    // Edit state first: a block read after "not being edited" can't be older
+    // than the edit that ended, and the prompt is built from this read.
+    const beingEdited = (await graph.beingEditedBlockIds()).has(sourceId)
     const block = await graph.getBlock(sourceId)
     if (!block) return refundLaunch(launchStamp)
-    const beingEdited = (await graph.beingEditedBlockIds()).has(sourceId)
     const decision = decidePending({
       source: block, nowMs: now(), settleMs: watcher.settleMs, beingEdited, editHoldMs: watcher.editHoldMs, baselineMs,
     })
