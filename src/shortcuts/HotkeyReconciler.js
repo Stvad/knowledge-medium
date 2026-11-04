@@ -1,1 +1,1 @@
-export{GM as HotkeyReconciler}from"../../chunks/app-CTr5bbXd.js";
+export{KM as HotkeyReconciler}from"../../chunks/app-C40SCslk.js";

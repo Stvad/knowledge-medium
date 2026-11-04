@@ -1,1 +1,1 @@
-export{bk as seedTutorial}from"../../../chunks/app-CTr5bbXd.js";
+export{xk as seedTutorial}from"../../../chunks/app-C40SCslk.js";

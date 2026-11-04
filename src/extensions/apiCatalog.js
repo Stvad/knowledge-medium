@@ -1,1 +1,1 @@
-export{Kp as extensionApiCatalog,qp as extensionApiRuntimeExports}from"../../chunks/app-CTr5bbXd.js";
+export{qp as extensionApiCatalog,Jp as extensionApiRuntimeExports}from"../../chunks/app-C40SCslk.js";

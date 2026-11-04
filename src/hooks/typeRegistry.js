@@ -1,1 +1,1 @@
-export{BB as useTypes}from"../../chunks/app-CTr5bbXd.js";
+export{VB as useTypes}from"../../chunks/app-C40SCslk.js";

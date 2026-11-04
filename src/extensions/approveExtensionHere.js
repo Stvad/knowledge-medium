@@ -1,1 +1,1 @@
-export{xM as approveExtensionHere}from"../../chunks/app-CTr5bbXd.js";
+export{SM as approveExtensionHere}from"../../chunks/app-C40SCslk.js";

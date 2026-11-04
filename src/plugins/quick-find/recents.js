@@ -1,1 +1,1 @@
-export{RE as RECENT_BLOCKS_LIMIT,zE as loadRecentBlockIds,BE as pushRecentBlockId,VE as quickFindUIStateType,HE as recentBlockIdsProp,UE as recentItemFromBlockData}from"../../../chunks/app-CTr5bbXd.js";
+export{zE as RECENT_BLOCKS_LIMIT,BE as loadRecentBlockIds,VE as pushRecentBlockId,HE as quickFindUIStateType,UE as recentBlockIdsProp,WE as recentItemFromBlockData}from"../../../chunks/app-C40SCslk.js";

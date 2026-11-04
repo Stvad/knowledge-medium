@@ -1,1 +1,1 @@
-export{EQ as powerSyncLogger}from"../../chunks/app-CTr5bbXd.js";
+export{DQ as powerSyncLogger}from"../../chunks/app-C40SCslk.js";

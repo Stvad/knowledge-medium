@@ -1,1 +1,1 @@
-export{Gtt as hasSupabaseAuthConfig,Ktt as isAuthCallbackUrl,qtt as readPersistedSession,Jtt as sessionUserToAppUser,Ytt as supabase}from"../../chunks/app-CTr5bbXd.js";
+export{Ktt as hasSupabaseAuthConfig,qtt as isAuthCallbackUrl,Jtt as readPersistedSession,Ytt as sessionUserToAppUser,Xtt as supabase}from"../../chunks/app-C40SCslk.js";

@@ -1,1 +1,1 @@
-export{Kv as useIsReadOnly}from"../../chunks/app-CTr5bbXd.js";
+export{qv as useIsReadOnly}from"../../chunks/app-C40SCslk.js";
