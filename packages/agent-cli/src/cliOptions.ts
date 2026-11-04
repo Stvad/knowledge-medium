@@ -107,6 +107,15 @@ export const refuseRepeated = (flag: string, value: unknown): void => {
   throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
 }
 
+/** A text option as typed, or a refusal for a value CAC has changed. An empty
+ *  value reaches here as 0. */
+export const stringOption = (flag: string, value: unknown): string => {
+  refuseRepeated(flag, value)
+  if (value === 0) return ''
+  refuseNumberified(flag, value)
+  return String(value)
+}
+
 /** `append-markdown`'s --first / --after <id> / --before <id> as its
  *  `position` field; an anchor CAC numberified is refused, not re-stringified. */
 export const appendPositionOption = (

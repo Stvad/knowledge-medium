@@ -678,6 +678,57 @@ export const viewBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const BRIDGE_DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+/** The largest media `read-media` or `add-media` carries. Base64 of this plus the
+ *  envelope must fit {@link BRIDGE_DEFAULT_MAX_BODY_BYTES}. Raising
+ *  both is not enough: `read_media` needs its own cap, since an MCP client can drop the
+ *  whole connection on a much larger result rather than fail the one call. */
+export const MEDIA_BRIDGE_MAX_BYTES = 7 * 1024 * 1024
+
+export const readMediaCommandSchema = z.looseObject({
+  type: z.literal('read-media'),
+  ref: viewRefField,
+  workspaceId: viewFields.workspaceId,
+  ...contributorField,
+  ...commandIdField,
+})
+
+export const readMediaResultSchema = z.object({
+  id: z.string(),
+  hash: z.string(),
+  /** The block's `media:mime`, as stored. */
+  mime: z.string(),
+  /** Length of the bytes served, not the block's `media:size`. */
+  size: z.number(),
+  filename: z.string().nullable(),
+  /** The image format the bytes themselves are, or null when they are not a recognised one. */
+  imageMime: z.string().nullable(),
+  base64: z.string(),
+})
+export type ReadMediaResult = z.infer<typeof readMediaResultSchema>
+
+export const addMediaCommandSchema = z.looseObject({
+  type: z.literal('add-media'),
+  base64: z.string(),
+  filename: z.string().optional().describe('The block\'s content; the file\'s own name by default'),
+  mime: z.string().optional().describe(
+    'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream',
+  ),
+  workspaceId: z.string().optional().describe('Asserts the workspace open in the app tab; a write goes nowhere else'),
+  ...contributorField,
+  ...commandIdField,
+})
+
+export interface AddMediaResult {
+  id: string
+  workspaceId: string
+  /** These bytes were already a media block in this workspace, and this is that block. */
+  deduped: boolean
+  /** What to write in a block's content to show it there. */
+  reference: string
+}
+
 export const viewOutlineCommandSchema = z.looseObject({
   type: z.literal('view-outline'),
   ref: viewRefField,
@@ -971,6 +1022,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
   commentsCommandSchema,
+  readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1032,6 +1085,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
   commentsCommandSchema,
+  readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1193,8 +1248,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
-    description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
-      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole, so do not write it back.',
+    description: 'One block\'s recorded changes, newest first. Local and synced, with content before/after (cut past '
+      + '2,000 chars), to review a change. A content ending in a cut marker is not whole, so do not write it back.',
     readOnly: true,
   },
   'resolve-block-id': {
@@ -1279,7 +1334,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'daily-note': {
     usage: 'kmagent daily-note <date> [--workspace <id>]',
-    description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+    description: 'Resolve a date to its daily-note block. Takes today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday"; the id is deterministic, and it reports whether the block exists yet.',
     // Pure read: computes the deterministic daily-note id and loads it,
     // reporting existence. It does NOT create the note.
     readOnly: true,
@@ -1287,6 +1342,19 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'search': {
     usage: 'kmagent raw \'{"type":"search","query":"<query>","limit":<n>,"workspaceId":"<id>"}\'',
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
+    readOnly: true,
+  },
+  'add-media': {
+    usage: 'kmagent add-media <path> [--filename <name>] [--mime <type>] [--workspace <id>]',
+    description: 'Store a local file as a media block. It goes under the workspace\'s Assets page, and the same bytes '
+      + 'added twice are one block. Write the returned ((id)) in a block\'s content to show it there. Refused past '
+      + `${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    readOnly: false,
+  },
+  'read-media': {
+    usage: 'kmagent read-media <ref> --out <path> [--workspace <id>]',
+    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes show them as ((id)). Writes '
+      + `the bytes to --out and prints the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     readOnly: true,
   },
   // The views read what the raw commands above read, so they classify the same.

@@ -22,5 +22,6 @@ if (contributorArg !== undefined && contributorId === undefined) {
   throw new Error('Usage: km-mcp [--contributor <id|none>]')
 }
 await createGraphMcpServer({
+  localMediaFiles: true,
   ...(contributorId !== undefined ? {contributorId} : {}),
 }).connect(new StdioServerTransport())
