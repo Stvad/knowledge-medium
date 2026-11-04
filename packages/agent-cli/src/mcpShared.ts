@@ -13,6 +13,7 @@ export const KM_MCP_TOOL_NAMES = [
   'search',
   'guide',
   'sql_query',
+  'read_media',
   'create_block',
   'update_block',
   'move_block',

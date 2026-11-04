@@ -21,7 +21,10 @@ import {
   addCommentCommandSchema,
   createContributorCommandSchema,
   listContributorsCommandSchema,
+  MEDIA_READ_MAX_BYTES,
   moveBlockPositionSchema,
+  readMediaCommandSchema,
+  readMediaResultSchema,
   TODO_WRITE_HELP,
   toDisplayJson,
   WRITE_TARGET_HELP,
@@ -49,7 +52,7 @@ Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`unde
 
 The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, embedded in notes as !((id))) holds only metadata: read_media returns the image or file itself.
 
 Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
 
@@ -144,6 +147,34 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       inputSchema: tool.shape,
     }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
   }
+
+  server.registerTool('read_media' satisfies KmMcpToolName, {
+    description: 'The bytes of a media block (type media, embedded in notes as !((id))), hash-verified. An image comes '
+    + 'back inline for you to look at; any other file as a binary resource, which your client may save for you to open. '
+    + `Refused past ${MEDIA_READ_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ref: readMediaCommandSchema.shape.ref,
+      workspaceId: readMediaCommandSchema.shape.workspaceId,
+    },
+  }, async ({ref, workspaceId}) => {
+    const media = readMediaResultSchema.parse(await client.runCommand({
+      type: 'read-media',
+      ref,
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+    const summary = `Media ^${media.id}: ${media.filename ?? '(no filename)'}, ${media.mime}, ${media.size} bytes, ${media.hash}`
+    return {
+      content: [
+        {type: 'text' as const, text: summary},
+        media.imageMime !== null
+          ? {type: 'image' as const, data: media.base64, mimeType: media.imageMime}
+          : {
+              type: 'resource' as const,
+              resource: {uri: `km://media/${media.id}`, mimeType: media.mime, blob: media.base64},
+            },
+      ],
+    }
+  })
 
   server.registerTool('list_contributors' satisfies KmMcpToolName, {
     description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',

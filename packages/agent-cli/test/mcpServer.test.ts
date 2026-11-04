@@ -51,6 +51,54 @@ const clientFrom = (
 })
 
 describe('createGraphMcpServer', () => {
+  describe('read_media', () => {
+    const media = {
+      id: 'media-1',
+      hash: 'sha256:abc',
+      mime: 'image/png',
+      size: 3,
+      filename: 'shot.png',
+      imageMime: 'image/png',
+      base64: 'AQID',
+    }
+    const readMedia = async (value: unknown, input: Record<string, unknown> = {ref: 'media-1'}) => {
+      const commands: KnownCommand[] = []
+      const server = createGraphMcpServer({
+        contributorId: null,
+        client: clientFrom(async command => {
+          commands.push(command)
+          return value as never
+        }),
+      })
+      const tool = (server as unknown as RegisteredToolHarness)._registeredTools.read_media
+      const result = await tool.handler(tool.inputSchema.parse(input), {})
+      return {commands, content: result.content}
+    }
+
+    it('returns bytes that are an image inline, typed by the bytes', async () => {
+      const {commands, content} = await readMedia({...media, mime: 'application/octet-stream'}, {ref: 'media-1', workspaceId: 'ws'})
+      expect(commands).toMatchObject([{type: 'read-media', ref: 'media-1', workspaceId: 'ws'}])
+      expect(content[1]).toEqual({type: 'image', data: 'AQID', mimeType: 'image/png'})
+    })
+
+    it('returns anything else as a binary resource, whatever media:mime claims', async () => {
+      const {content} = await readMedia({...media, mime: 'image/png', imageMime: null})
+      expect(content[1]).toEqual({
+        type: 'resource',
+        resource: {uri: 'km://media/media-1', mimeType: 'image/png', blob: 'AQID'},
+      })
+    })
+
+    it('leads with a summary a model can cite', async () => {
+      const {content} = await readMedia(media)
+      expect(content[0]).toEqual({type: 'text', text: 'Media ^media-1: shot.png, image/png, 3 bytes, sha256:abc'})
+    })
+
+    it('fails loudly on a result of the wrong shape rather than returning no bytes', async () => {
+      await expect(readMedia({id: 'media-1'})).rejects.toThrow()
+    })
+  })
+
   it('advertises the package version in MCP server metadata', async () => {
     const raw = await fs.readFile(packageJsonPath, 'utf8')
     const pkg = JSON.parse(raw) as {version: string}

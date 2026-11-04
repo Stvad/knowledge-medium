@@ -29,6 +29,8 @@ import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRo
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { readMedia } from './readMedia.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -2367,6 +2369,14 @@ const executeAttributedCommand = async (
     case 'view-grouped-backlinks':
     case 'view-search':
       return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
+
+    case 'read-media':
+      return readMedia(
+        context.repo,
+        viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)),
+        requireString(command.ref, 'ref'),
+        getAssetResolver(),
+      )
 
     case 'comments':
       requireComments(context)

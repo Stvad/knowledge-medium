@@ -22,6 +22,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['sql (allowSyncedWrite)', {type: 'sql', sql: 'UPDATE blocks SET x = 1', mode: 'execute', allowSyncedWrite: true}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
+    ['read-media', {type: 'read-media', ref: 'b-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['create-contributor', {type: 'create-contributor', name: 'Vlad'}],
     ['list-contributors', {type: 'list-contributors'}],

@@ -28,6 +28,7 @@ import {
   moveBlockCommandSchema,
   sqlModeSchema,
   type WhoamiInfo,
+  readMediaResultSchema,
   toDisplayJson,
 } from './protocol.js'
 import {
@@ -829,6 +830,24 @@ for (const tool of GRAPH_READ_TOOLS) {
     process.stdout.write(`${options.raw ? toDisplayJson(value) : renderToolResult(value)}\n`)
   })
 }
+
+cli
+  .command('read-media <ref>', wireDescription('read-media'))
+  .option('--out <path>', 'File to write the bytes to (required; replaced if it exists)')
+  .option('--workspace <id>', 'Workspace to read (default: the one open in the app tab)')
+  .action(async (ref: unknown, options: {out?: unknown, workspace?: unknown}) => {
+    if (typeof options.out !== 'string' || options.out === '') {
+      throw new Error('read-media requires --out <path>: the file to write the bytes to.')
+    }
+    await ensureBridgeRunning()
+    const {base64, ...media} = readMediaResultSchema.parse(await runCommand({
+      type: 'read-media',
+      ref: String(ref),
+      ...workspaceAssertion(options.workspace),
+    }))
+    await fs.writeFile(options.out, Buffer.from(base64, 'base64'))
+    process.stdout.write(`${toDisplayJson({...media, path: options.out})}\n`)
+  })
 
 cli
   .command('create-block <json>', wireDescription('create-block'))
