@@ -5,7 +5,7 @@ import { CAPTURE_FAILURE_MESSAGE, captureMediaFromFiles } from '@/plugins/attach
 import { agentTxOptions } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 
-export interface AddMediaInput {
+interface AddMediaInput {
   base64: string
   filename?: string
   mime?: string
@@ -28,7 +28,7 @@ export const addMedia = async (
 ): Promise<AddMediaResult> => {
   const bytes = decode(input.base64)
   // The filename becomes the block's content.
-  await refuseDanglingBlockRefs(repo, 'add-media', [input.filename], async () => '')
+  await refuseDanglingBlockRefs(repo, 'add-media', [input.filename])
   const [captured] = await captureMediaFromFiles(
     repo,
     workspaceId,

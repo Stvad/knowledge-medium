@@ -1,26 +1,24 @@
 // @vitest-environment happy-dom
+import type {AddMediaResult} from '@knowledge-medium/agent-cli/protocol'
 import {base64} from '@scure/base'
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {kernelPageBlockId} from '@/data/kernelPage'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {blockRenderersFacet} from '@/extensions/core'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
+import {attachmentsPlugin} from '@/plugins/attachments'
 import type {BlobStore} from '@/plugins/attachments/blobStore'
 import {getByteStore} from '@/plugins/attachments/byteStore'
 import {
   ASSETS_NS,
-  ASSETS_TYPE_CONTRIBUTION,
-  MEDIA_PROPERTY_SCHEMAS,
-  MEDIA_TYPE_CONTRIBUTION,
   mediaFilenameProp,
   mediaHashProp,
   mediaMimeProp,
   mediaSizeProp,
 } from '@/plugins/attachments/mediaBlock'
 import {createAssetResolver} from '@/plugins/attachments/resolver'
+import {createContributor} from '@/plugins/contributors/profiles'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {computeContentHash} from '@/sync/crypto/contentHash'
 import type {Materializability} from '@/sync/transform'
@@ -63,9 +61,6 @@ const contextWith = (extensions: AppExtension[]) => {
   const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
   const runtime = resolveFacetRuntimeSync([
     staticDataExtensions,
-    typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, {source: 'test'}),
-    typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, {source: 'test'}),
-    MEDIA_PROPERTY_SCHEMAS.map(schema => definitionSeedsFacet.of(schema, {source: 'test'})),
     ...extensions,
   ], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
@@ -73,20 +68,17 @@ const contextWith = (extensions: AppExtension[]) => {
   return createAgentRuntimeContext({repo, runtime, safeMode: false})
 }
 
-const attachmentsOn = blockRenderersFacet.of({id: 'media', renderer: (() => null) as never}, {source: 'test'})
-
 beforeEach(async () => {
   await resetTestDb(db.db)
   mode.current = 'copy'
-  context = contextWith([attachmentsOn])
+  context = contextWith([attachmentsPlugin])
 })
 
-interface Added { id: string, workspaceId: string, deduped: boolean, reference: string }
-
 const send = (command: Record<string, unknown>, on = context) =>
-  executeCommand({type: 'add-media', commandId: 'c', contributorId: null, ...command} as never, on) as Promise<Added>
+  executeCommand({type: 'add-media', commandId: 'c', contributorId: null, ...command} as never, on) as Promise<AddMediaResult>
 const add = (bytes: Uint8Array, over: Record<string, unknown> = {}) => send({base64: base64.encode(bytes), ...over})
 const countRows = async () => (await db.db.getAll('SELECT id FROM blocks')).length
+const contributor = async (name = 'Atlas') => (await createContributor(context.repo, WS, {name})).id
 
 describe('the add-media command', () => {
   it('stores the bytes as a media block under Assets, and says how to place it and where it went', async () => {
@@ -143,7 +135,7 @@ describe('the add-media command', () => {
   })
 
   it('credits the agent on the block, which stays pristine', async () => {
-    const {id: agent} = await executeCommand({type: 'create-contributor', name: 'Atlas', commandId: 'k'} as never, context) as {id: string}
+    const agent = await contributor()
     const added = await add(PNG, {contributorId: agent})
     const block = await context.repo.load(added.id)
     expect(block?.properties[attributionCreatorsProp.name]).toEqual([agent])
@@ -151,16 +143,14 @@ describe('the add-media command', () => {
   })
 
   it('leaves the first contributor in place when another agent adds the same bytes', async () => {
-    const contributor = async (name: string) =>
-      (await executeCommand({type: 'create-contributor', name, commandId: 'k'} as never, context) as {id: string}).id
-    const first = await contributor('Atlas')
+    const first = await contributor()
     const added = await add(PNG, {contributorId: first})
     await add(PNG, {contributorId: await contributor('Scout')})
     expect((await context.repo.load(added.id))?.properties[attributionCreatorsProp.name]).toEqual([first])
   })
 
   it('takes one undo to remove the upload', async () => {
-    const {id: agent} = await executeCommand({type: 'create-contributor', name: 'Atlas', commandId: 'k'} as never, context) as {id: string}
+    const agent = await contributor()
     const added = await add(PNG, {contributorId: agent})
     await context.repo.undo()
     expect(await context.repo.load(added.id)).toBeNull()

@@ -24,7 +24,6 @@ import {
   createContributorCommandSchema,
   listContributorsCommandSchema,
   addMediaCommandSchema,
-  addMediaResultSchema,
   MEDIA_BRIDGE_MAX_BYTES,
   moveBlockPositionSchema,
   neutralizeDisplayText,
@@ -212,13 +211,13 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
       const name = filename ?? path.basename(filePath)
       await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
-      return json(addMediaResultSchema.parse(await client.runCommand({
+      return json(await client.runCommand({
         type: 'add-media',
         base64: await readMediaFileBase64(filePath),
         filename: name,
         ...(mime !== undefined ? {mime} : {}),
         ...(workspaceId !== undefined ? {workspaceId} : {}),
-      })))
+      }))
     })
   }
 

@@ -409,6 +409,7 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs(operation.replacement)
           return
         case 'add_media':
+          // Defence in depth: dispatch never sets localMediaFiles, so this does not run today.
           // The file's name becomes the block's content.
           await assertNoBlockedRefs(operation.filename)
           return

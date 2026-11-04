@@ -720,15 +720,14 @@ export const addMediaCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-export const addMediaResultSchema = z.object({
-  id: z.string(),
-  workspaceId: z.string(),
+export interface AddMediaResult {
+  id: string
+  workspaceId: string
   /** These bytes were already a media block in this workspace, and this is that block. */
-  deduped: z.boolean(),
+  deduped: boolean
   /** What to write in a block's content to show it there. */
-  reference: z.string(),
-})
-export type AddMediaResult = z.infer<typeof addMediaResultSchema>
+  reference: string
+}
 
 export const viewOutlineCommandSchema = z.looseObject({
   type: z.literal('view-outline'),

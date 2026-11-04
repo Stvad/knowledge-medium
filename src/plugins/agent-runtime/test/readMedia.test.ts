@@ -49,7 +49,8 @@ const resolverServing = (bytes: Uint8Array<ArrayBuffer>): AssetResolver => creat
   getContentKeyHmac: async () => null,
 })
 
-const createMedia = async (over: {hash: string, mime?: string, filename?: string, id?: string}) => {
+const createMedia = async (over: {hash?: string, mime?: string, filename?: string, id?: string} = {}) => {
+  const hash = over.hash ?? await computeContentHash(PNG_BYTES)
   await context.repo.tx(async tx => {
     await tx.create({
       id: over.id ?? MEDIA,
@@ -59,7 +60,7 @@ const createMedia = async (over: {hash: string, mime?: string, filename?: string
       content: 'image.png',
       properties: {
         [typesProp.name]: [MEDIA_TYPE],
-        [mediaHashProp.name]: over.hash,
+        [mediaHashProp.name]: hash,
         [mediaMimeProp.name]: over.mime ?? 'image/png',
         // Cosmetic and writable by any member: a result reports the bytes, not this.
         [mediaSizeProp.name]: 999_999,
@@ -119,7 +120,7 @@ describe('readMedia', () => {
   })
 
   it('reports no filename as null', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     const result = await readMedia(context.repo, WS, MEDIA, resolverServing(PNG_BYTES))
     expect(result.filename).toBeNull()
   })
@@ -137,26 +138,26 @@ describe('readMedia', () => {
   })
 
   it('serves nothing when the bytes do not match the block hash', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     await expect(readMedia(context.repo, WS, MEDIA, resolverServing(TEXT_BYTES)))
       .rejects.toThrow(/do not match its media:hash/)
   })
 
   it('says why when the workspace cannot be decoded', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     await expect(readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: false, reason: 'deferred'})}))
       .rejects.toThrow(/locked, or the app tab is signed out/)
   })
 
   it('refuses bytes past what the bridge can carry, naming both sizes', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     const tooBig = new Uint8Array(MEDIA_BRIDGE_MAX_BYTES + 1)
     await expect(readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: true, bytes: tooBig})}))
       .rejects.toThrow(new RegExp(`${tooBig.length} bytes.*${MEDIA_BRIDGE_MAX_BYTES}`))
   })
 
   it('carries bytes exactly at the limit', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     const atLimit = new Uint8Array(MEDIA_BRIDGE_MAX_BYTES)
     const result = await readMedia(context.repo, WS, MEDIA, {resolve: async () => ({ok: true, bytes: atLimit})})
     expect(result.size).toBe(MEDIA_BRIDGE_MAX_BYTES)
@@ -172,13 +173,13 @@ describe('readMedia', () => {
 
 describe('the read-media command', () => {
   it('reaches the app resolver, which fails closed while signed out', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     await expect(executeCommand({type: 'read-media', ref: MEDIA, commandId: 'c1'} as never, context))
       .rejects.toThrow(/locked, or the app tab is signed out/)
   })
 
   it('binds the workspace named in the call', async () => {
-    await createMedia({hash: await computeContentHash(PNG_BYTES)})
+    await createMedia()
     await expect(executeCommand({type: 'read-media', ref: MEDIA, workspaceId: 'other', commandId: 'c1'} as never, context))
       .rejects.toThrow(/other/)
   })
