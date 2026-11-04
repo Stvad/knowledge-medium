@@ -1,1 +1,1 @@
-export{nY as backlinksDataExtension}from"../../../chunks/app-CrG3Cmop.js";
+export{cY as backlinksDataExtension}from"../../../chunks/app-C3eYk_fb.js";

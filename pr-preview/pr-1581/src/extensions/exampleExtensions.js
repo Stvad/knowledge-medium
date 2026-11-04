@@ -1,1 +1,1 @@
-export{Wj as exampleExtensions,Gj as insertExampleExtensionsUnder}from"../../chunks/app-CrG3Cmop.js";
+export{Yj as exampleExtensions,Xj as insertExampleExtensionsUnder}from"../../chunks/app-C3eYk_fb.js";

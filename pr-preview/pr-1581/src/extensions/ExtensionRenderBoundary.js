@@ -1,1 +1,1 @@
-export{KF as ExtensionRenderBoundary}from"../../chunks/app-CrG3Cmop.js";
+export{ZF as ExtensionRenderBoundary}from"../../chunks/app-C3eYk_fb.js";

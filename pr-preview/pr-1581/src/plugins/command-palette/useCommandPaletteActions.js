@@ -1,1 +1,1 @@
-export{Wk as useCommandPaletteActions}from"../../../chunks/app-CrG3Cmop.js";
+export{Yk as useCommandPaletteActions}from"../../../chunks/app-C3eYk_fb.js";

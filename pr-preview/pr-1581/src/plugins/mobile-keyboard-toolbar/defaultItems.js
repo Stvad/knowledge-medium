@@ -1,1 +1,1 @@
-export{CC as defaultToolbarItems}from"../../../chunks/app-CrG3Cmop.js";
+export{OC as defaultToolbarItems}from"../../../chunks/app-C3eYk_fb.js";

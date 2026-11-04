@@ -1,1 +1,1 @@
-export{DA as SWIPE_QUICK_ACTIONS_GESTURE_ID,OA as SWIPE_TRIGGER_PX,kA as swipeRecognizer}from"../../../chunks/app-CrG3Cmop.js";
+export{MA as SWIPE_QUICK_ACTIONS_GESTURE_ID,NA as SWIPE_TRIGGER_PX,PA as swipeRecognizer}from"../../../chunks/app-C3eYk_fb.js";

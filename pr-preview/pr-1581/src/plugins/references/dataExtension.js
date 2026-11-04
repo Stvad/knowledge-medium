@@ -1,1 +1,1 @@
-export{SW as referencesDataExtension}from"../../../chunks/app-CrG3Cmop.js";
+export{DW as referencesDataExtension}from"../../../chunks/app-C3eYk_fb.js";

@@ -1,1 +1,1 @@
-export{vv as EmbedComponent,yv as referenceTargetOf}from"../../../../chunks/app-CrG3Cmop.js";
+export{xv as EmbedComponent,Sv as referenceTargetOf}from"../../../../chunks/app-C3eYk_fb.js";

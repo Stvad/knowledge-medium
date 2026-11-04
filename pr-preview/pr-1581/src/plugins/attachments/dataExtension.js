@@ -1,1 +1,1 @@
-export{PX as attachmentCleanerIOContribution,FX as attachmentsDataExtension}from"../../../chunks/app-CrG3Cmop.js";
+export{BX as attachmentCleanerIOContribution,VX as attachmentsDataExtension}from"../../../chunks/app-C3eYk_fb.js";

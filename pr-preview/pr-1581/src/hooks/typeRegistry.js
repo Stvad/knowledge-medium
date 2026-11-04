@@ -1,1 +1,1 @@
-export{HB as useTypes}from"../../chunks/app-CrG3Cmop.js";
+export{qB as useTypes}from"../../chunks/app-C3eYk_fb.js";
