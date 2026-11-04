@@ -1,0 +1,1 @@
+export{GF as ExtensionRenderBoundary}from"../../chunks/app-BGfW5HSS.js";

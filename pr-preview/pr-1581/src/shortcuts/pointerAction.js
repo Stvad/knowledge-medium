@@ -1,0 +1,1 @@
+export{QM as dispatchPointerAction,$M as setPointerActionDispatcher}from"../../chunks/app-BGfW5HSS.js";

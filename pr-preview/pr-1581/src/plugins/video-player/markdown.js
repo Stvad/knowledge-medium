@@ -1,0 +1,1 @@
+export{Ex as videoPlayerMarkdownExtension}from"../../../chunks/app-BGfW5HSS.js";

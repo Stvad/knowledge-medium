@@ -1,0 +1,1 @@
+export{OM as appUpdatePromptExtension}from"../../../chunks/app-BGfW5HSS.js";

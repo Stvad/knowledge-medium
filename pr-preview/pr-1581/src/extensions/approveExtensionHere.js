@@ -1,0 +1,1 @@
+export{CM as approveExtensionHere}from"../../chunks/app-BGfW5HSS.js";

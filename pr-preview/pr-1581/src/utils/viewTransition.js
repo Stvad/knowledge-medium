@@ -1,0 +1,1 @@
+export{JV as withMoveTransition}from"../../chunks/app-BGfW5HSS.js";

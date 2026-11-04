@@ -1,0 +1,1 @@
+export{kg as DATA_MODEL_GUIDE,Ag as dataModelGuide}from"../../../chunks/app-BGfW5HSS.js";

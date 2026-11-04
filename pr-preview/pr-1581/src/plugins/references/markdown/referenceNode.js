@@ -1,0 +1,1 @@
+export{vv as EmbedComponent,yv as referenceTargetOf}from"../../../../chunks/app-BGfW5HSS.js";

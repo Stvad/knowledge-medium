@@ -1,0 +1,1 @@
+export{UI as captureMediaVerb}from"../../chunks/app-BGfW5HSS.js";

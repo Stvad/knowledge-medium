@@ -1,0 +1,1 @@
+export{Cy as richPastePlugin}from"../../../chunks/app-BGfW5HSS.js";

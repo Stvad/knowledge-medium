@@ -1,0 +1,1 @@
+export{TA as SwipeActionMenu}from"../../../chunks/app-BGfW5HSS.js";

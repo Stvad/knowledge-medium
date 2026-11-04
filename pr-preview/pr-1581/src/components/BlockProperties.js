@@ -1,0 +1,1 @@
+export{jR as BlockProperties}from"../../chunks/app-BGfW5HSS.js";

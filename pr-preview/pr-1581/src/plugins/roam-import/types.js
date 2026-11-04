@@ -1,0 +1,1 @@
+export{Fu as getExtraRoamProps}from"../../../chunks/app-BGfW5HSS.js";

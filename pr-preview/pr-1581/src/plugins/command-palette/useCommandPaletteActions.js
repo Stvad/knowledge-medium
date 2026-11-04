@@ -1,0 +1,1 @@
+export{Uk as useCommandPaletteActions}from"../../../chunks/app-BGfW5HSS.js";

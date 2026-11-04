@@ -1,0 +1,1 @@
+export{Rv as blockDragPlugin}from"../../../chunks/app-BGfW5HSS.js";

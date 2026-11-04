@@ -1,0 +1,1 @@
+export{eP as defaultRegistry,tP as defaultRendererContributions,nP as defaultRenderersExtension}from"../../chunks/app-BGfW5HSS.js";

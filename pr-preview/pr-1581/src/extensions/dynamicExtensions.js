@@ -1,0 +1,1 @@
+export{pN as dynamicExtensionsExtension}from"../../chunks/app-BGfW5HSS.js";

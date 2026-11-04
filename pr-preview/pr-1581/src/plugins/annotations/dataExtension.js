@@ -1,0 +1,1 @@
+export{_q as annotationsDataExtension}from"../../../chunks/app-BGfW5HSS.js";

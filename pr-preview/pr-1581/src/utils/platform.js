@@ -1,0 +1,1 @@
+export{HV as isIOS,UV as isMacPlatform}from"../../chunks/app-BGfW5HSS.js";

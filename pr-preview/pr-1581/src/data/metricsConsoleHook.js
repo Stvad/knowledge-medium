@@ -1,0 +1,1 @@
+export{Pj as ensureMetricsConsoleHook}from"../../chunks/app-BGfW5HSS.js";

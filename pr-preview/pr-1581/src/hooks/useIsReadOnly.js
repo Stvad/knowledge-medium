@@ -1,0 +1,1 @@
+export{Jv as useIsReadOnly}from"../../chunks/app-BGfW5HSS.js";

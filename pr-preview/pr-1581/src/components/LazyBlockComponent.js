@@ -1,0 +1,1 @@
+export{JN as LazyBlockComponent}from"../../chunks/app-BGfW5HSS.js";

@@ -1,0 +1,1 @@
+export{g_ as inlineBacklinkCountDecoratorContribution,__ as inlineBacklinkExpansionFooterContribution}from"../../../../chunks/app-BGfW5HSS.js";

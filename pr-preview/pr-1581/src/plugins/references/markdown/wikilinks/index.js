@@ -1,0 +1,1 @@
+export{mv as wikilinkMarkdownExtension}from"../../../../../chunks/app-BGfW5HSS.js";

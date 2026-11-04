@@ -1,0 +1,1 @@
+export{f2 as kernelDataExtension}from"../../chunks/app-BGfW5HSS.js";

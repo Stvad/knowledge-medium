@@ -1,0 +1,1 @@
+export{tG as preferredSpanReplacement}from"../../../chunks/app-BGfW5HSS.js";

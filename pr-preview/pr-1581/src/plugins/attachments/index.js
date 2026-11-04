@@ -1,0 +1,1 @@
+export{Dy as attachmentsPlugin}from"../../../chunks/app-BGfW5HSS.js";

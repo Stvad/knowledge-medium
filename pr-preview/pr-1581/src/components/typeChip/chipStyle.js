@@ -1,0 +1,1 @@
+export{_j as chipStyle}from"../../../chunks/app-BGfW5HSS.js";

@@ -1,0 +1,1 @@
+export{ZC as plainOutlinerPlugin}from"../../../chunks/app-BGfW5HSS.js";
