@@ -1,0 +1,1 @@
+export{mot as definePostCommitProcessor}from"../../../chunks/app-673DMitm.js";

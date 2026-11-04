@@ -1,0 +1,1 @@
+export{jI as canConvertEmptyChildBlockToProperty,MI as convertEmptyChildBlockToProperty}from"../../chunks/app-673DMitm.js";

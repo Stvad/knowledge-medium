@@ -1,0 +1,1 @@
+export{lW as staticDataExtensions}from"../../chunks/app-673DMitm.js";

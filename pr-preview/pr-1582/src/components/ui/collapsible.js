@@ -1,0 +1,1 @@
+"use client";export{MR as Collapsible,NR as CollapsibleContent,PR as CollapsibleTrigger}from"../../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{$ot as CHANGE_SCOPE_POLICIES,est as ChangeScope,tst as isChangeScope,nst as policyForScope,rst as scopeAllowedInReadOnly,ist as scopeIsUndoable,ast as scopePoliciesEquivalent,ost as scopeUploadsToServer,sst as sourceForScope}from"../../../chunks/app-673DMitm.js";

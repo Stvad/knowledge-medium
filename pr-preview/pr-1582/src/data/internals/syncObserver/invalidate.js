@@ -1,0 +1,1 @@
+export{a2 as applySyncInvalidation}from"../../../../chunks/app-673DMitm.js";

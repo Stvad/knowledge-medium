@@ -1,0 +1,1 @@
+export{ME as useMinuteClock}from"../../chunks/app-673DMitm.js";

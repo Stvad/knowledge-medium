@@ -1,0 +1,1 @@
+export{Qg as blockInfoPlugin}from"../../../chunks/app-673DMitm.js";

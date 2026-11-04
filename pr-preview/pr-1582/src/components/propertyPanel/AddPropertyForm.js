@@ -1,0 +1,1 @@
+export{uz as AddPropertyForm}from"../../../chunks/app-673DMitm.js";

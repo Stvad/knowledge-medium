@@ -1,0 +1,1 @@
+export{XN as LazyBlockComponent}from"../../chunks/app-673DMitm.js";

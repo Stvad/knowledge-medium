@@ -1,0 +1,1 @@
+export{AM as appUpdatePromptExtension}from"../../../chunks/app-673DMitm.js";

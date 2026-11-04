@@ -1,0 +1,1 @@
+export{uU as propertyShapeLabel}from"../../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{VU as SuspenseFallback}from"../../../chunks/app-673DMitm.js";

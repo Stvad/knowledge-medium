@@ -1,0 +1,1 @@
+export{oG as preferredSpanReplacement}from"../../../chunks/app-673DMitm.js";

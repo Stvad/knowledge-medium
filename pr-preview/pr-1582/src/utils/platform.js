@@ -1,0 +1,1 @@
+export{qV as isIOS,JV as isMacPlatform}from"../../chunks/app-673DMitm.js";

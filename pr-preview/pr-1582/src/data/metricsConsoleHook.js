@@ -1,0 +1,1 @@
+export{Ij as ensureMetricsConsoleHook}from"../../chunks/app-673DMitm.js";

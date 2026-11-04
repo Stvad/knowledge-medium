@@ -1,0 +1,1 @@
+export{DA as SwipeActionMenu}from"../../../chunks/app-673DMitm.js";

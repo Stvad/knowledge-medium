@@ -1,0 +1,1 @@
+export{tg as boundDisplayId,ng as idMark}from"../../../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{VC as MobileBottomNavButton}from"../../../chunks/app-673DMitm.js";

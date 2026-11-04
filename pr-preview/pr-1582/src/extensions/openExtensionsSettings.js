@@ -1,0 +1,1 @@
+export{bP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,xP as openExtensionsSettings}from"../../chunks/app-673DMitm.js";

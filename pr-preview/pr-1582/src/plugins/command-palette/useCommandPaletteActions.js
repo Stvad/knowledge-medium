@@ -1,0 +1,1 @@
+export{Gk as useCommandPaletteActions}from"../../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{Jp as extensionApiCatalog,Yp as extensionApiRuntimeExports}from"../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{oX as resolvedThenable,sX as stampFulfilled}from"../../chunks/app-673DMitm.js";

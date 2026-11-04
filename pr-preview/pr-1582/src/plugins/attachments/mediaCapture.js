@@ -1,0 +1,1 @@
+export{Mb as DEFAULT_MAX_CAPTURE_BYTES,Nb as captureMedia,Pb as mediaBlockId}from"../../../chunks/app-673DMitm.js";

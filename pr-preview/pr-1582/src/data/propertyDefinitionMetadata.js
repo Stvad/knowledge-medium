@@ -1,0 +1,1 @@
+export{v5 as parsePropertyDefinitionMetadata,y5 as propertySchemaOriginForSeedKey}from"../../chunks/app-673DMitm.js";

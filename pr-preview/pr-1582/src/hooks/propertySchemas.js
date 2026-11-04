@@ -1,0 +1,1 @@
+export{oU as usePropertySchemas}from"../../chunks/app-673DMitm.js";

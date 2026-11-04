@@ -1,0 +1,1 @@
+export{$N as BlockLoadingPlaceholder}from"../../chunks/app-673DMitm.js";

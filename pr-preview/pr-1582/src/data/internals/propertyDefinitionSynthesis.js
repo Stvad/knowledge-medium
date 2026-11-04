@@ -1,0 +1,1 @@
+export{im as PROVE_DISTINCT_VALUE_LIMIT,am as applyPropertyDefinitionSynthesis,om as flipBlockedBySynthesis,sm as keyCannotBeDefined,cm as planPropertyDefinitionSynthesis,lm as provePresetId,um as resolveSynthesisNamespace,dm as synthesizedPropertyDefinitionBlockId}from"../../../chunks/app-673DMitm.js";

@@ -1,0 +1,1 @@
+export{I$ as TypeTagger,L$ as applyTypeTagInTx}from"../../chunks/app-673DMitm.js";

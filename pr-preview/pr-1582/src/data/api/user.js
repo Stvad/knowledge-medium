@@ -1,0 +1,1 @@
+export{eot as SYSTEM_AUTHOR_PREFIX,tot as isSystemAuthor,not as systemAuthor}from"../../../chunks/app-673DMitm.js";

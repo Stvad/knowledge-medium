@@ -1,0 +1,1 @@
+export{xR as defineVariant,SR as defineVariantFacet}from"../../chunks/app-673DMitm.js";

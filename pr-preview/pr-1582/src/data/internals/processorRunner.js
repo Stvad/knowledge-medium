@@ -1,0 +1,1 @@
+export{g2 as ProcessorRunner}from"../../../chunks/app-673DMitm.js";
