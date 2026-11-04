@@ -32,7 +32,7 @@ export const addMedia = async (
 ): Promise<AddMediaResult> => {
   const bytes = decode(input.base64)
   if (input.recognizedOnly === true && sniffImageMime(bytes) === null && !isPdfBytes(bytes)) {
-    throw new Error('add-media: these bytes are not a recognised image or PDF, the only files this caller may add. `kmagent add-media` takes any file.')
+    throw new Error('add-media: these bytes are not a recognised image or PDF, the only files this caller may add.')
   }
   const captured = await capture(new File([bytes], input.filename ?? '', {type: input.mime ?? ''}))
   if (!captured.ok) throw new Error(`add-media (workspace ${workspaceId}): ${CAPTURE_FAILURE_MESSAGE[captured.reason]}`)

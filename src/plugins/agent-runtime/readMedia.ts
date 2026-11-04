@@ -35,7 +35,7 @@ export const readMedia = async (
 ): Promise<ReadMediaResult> => {
   const {root: block} = await loadRoot(repo, ref, workspaceId, async id => await repo.load(id) ?? undefined)
   if (!hasBlockType(block, MEDIA_TYPE)) {
-    throw new Error(`Block ${block.id} is not a media block. A note embeds one as !((id)): read that id.`)
+    throw new Error(`Block ${block.id} is not a media block. A note shows one as ((id)): read that id.`)
   }
   const hash = mediaHashOf(block.properties)
   if (hash === null) throw new Error(`Media block ${block.id} has no content hash, so it has no bytes to read.`)

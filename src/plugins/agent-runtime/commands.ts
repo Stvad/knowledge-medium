@@ -33,7 +33,6 @@ import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
 import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
 import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
-import { assertActiveWorkspace } from './workspaceGuard.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -2383,7 +2382,6 @@ const executeAttributedCommand = async (
 
     case 'add-media': {
       const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
-      assertActiveWorkspace(context.repo, workspaceId)
       if (context.runtime.read(blockRenderersFacet).media === undefined) {
         throw new Error('Enable the Attachments plugin to add media.')
       }

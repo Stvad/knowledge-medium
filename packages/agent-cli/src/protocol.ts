@@ -1350,7 +1350,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'read-media': {
     usage: 'kmagent read-media <ref> --out <path> [--workspace <id>]',
-    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes embed them as !((id)). The '
+    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes show them as ((id)). The '
       + `bytes are base64 in the result, with the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     readOnly: true,
   },

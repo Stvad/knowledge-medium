@@ -56,7 +56,7 @@ Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`unde
 
 The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, embedded in notes as !((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them, and backlinks shows where one is used.
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them, and backlinks shows where one is used.
 
 Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
 
@@ -158,7 +158,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }
 
   server.registerTool('read_media' satisfies KmMcpToolName, {
-    description: 'The bytes of a media block (type media, embedded in notes as !((id))), hash-verified. An image comes '
+    description: 'The bytes of a media block (type media, shown in notes as ((id))), hash-verified. An image comes '
     + 'back inline for you to look at; any other file as a binary resource, which your client may save for you to open. '
     + `Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     inputSchema: {
@@ -189,7 +189,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     server.registerTool('add_media' satisfies KmMcpToolName, {
       description: 'Store a local image or PDF as a media block under the workspace\'s Assets page; the same bytes added '
       + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
-      + `to show it there. Other kinds of file are refused here (\`kmagent add-media\` takes any). Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+      + `to show it there. Other kinds of file are refused, as is anything past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
       inputSchema: {
         path: z.string().describe('Absolute path of the file'),
         filename: addMediaCommandSchema.shape.filename,
