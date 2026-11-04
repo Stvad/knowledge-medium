@@ -341,6 +341,29 @@ describe('spatial navigation selection actions', () => {
     })
   })
 
+  it('extends past a nested surface to the next row of the same scope', async () => {
+    buildPanelDom([
+      {
+        blockId: 'P',
+        renderScopeId: 'panel:outline',
+        nested: [{blockId: 'X', renderScopeId: 'panel:backlink:X'}],
+      },
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['P'], anchorBlockId: 'P'})
+
+    await pressExtendSelectionDown({
+      block: env.repo.block('P'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['P', 'B'])
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B', renderScopeId: 'panel:outline'})
+  })
+
   it('Roam-style first press selects only the focused block, not its neighbour', async () => {
     buildPanelDom([
       {blockId: 'A', renderScopeId: 'panel:outline'},
@@ -473,6 +496,40 @@ describe('spatial navigation shift-click selection', () => {
       selectedBlockIds: ['A', 'B', 'C'],
       anchorBlockId: 'A',
     })
+  })
+
+  // An expanded section renders other blocks between a row and its own children.
+  // They are not part of a range the user drew within the outline, and a selected
+  // range is what `d` deletes.
+  it('leaves nested surfaces out of a range within one scope', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {
+          blockId: 'P',
+          renderScopeId: 'panel:outline',
+          nested: [
+            {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+            {deferredBlockId: 'Y'},
+            {blockId: 'C', renderScopeId: 'panel:outline'},
+          ],
+        },
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    const selected = panel.peekProperty(selectionStateProp)?.selectedBlockIds
+    expect(selected).toContain('P')
+    expect(selected).not.toContain('X')
+    expect(selected).not.toContain('Y')
   })
 
   // A backlink entry reserves its slot without naming the scope it will mint,
