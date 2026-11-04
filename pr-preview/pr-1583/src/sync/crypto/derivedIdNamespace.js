@@ -1,1 +1,1 @@
-export{Lnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BM7Uf2vS.js";
+export{znt as deriveWorkspaceIdNamespace}from"../../../chunks/app-srHSmRAQ.js";

@@ -1,1 +1,1 @@
-export{ip as CONTRIBUTOR_CARD_MODE_KEY,ap as contributorBadgesDecoratorContribution}from"../../../chunks/app-BM7Uf2vS.js";
+export{ap as CONTRIBUTOR_CARD_MODE_KEY,op as contributorBadgesDecoratorContribution}from"../../../chunks/app-srHSmRAQ.js";

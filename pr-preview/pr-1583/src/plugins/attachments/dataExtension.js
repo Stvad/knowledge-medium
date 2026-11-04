@@ -1,1 +1,1 @@
-export{FX as attachmentCleanerIOContribution,IX as attachmentsDataExtension}from"../../../chunks/app-BM7Uf2vS.js";
+export{LX as attachmentCleanerIOContribution,RX as attachmentsDataExtension}from"../../../chunks/app-srHSmRAQ.js";

@@ -1,1 +1,1 @@
-export{JP as trimIfEdited}from"../../chunks/app-BM7Uf2vS.js";
+export{XP as trimIfEdited}from"../../chunks/app-srHSmRAQ.js";
