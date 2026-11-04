@@ -1,1 +1,1 @@
-export{UI as defaultPasteDecision,WI as pasteDecisionVerb}from"../../chunks/app-BuXhuX9G.js";
+export{KI as defaultPasteDecision,qI as pasteDecisionVerb}from"../../chunks/app-Cly6wae2.js";

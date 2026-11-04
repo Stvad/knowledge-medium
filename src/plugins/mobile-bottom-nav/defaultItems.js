@@ -1,1 +1,1 @@
-export{MC as appendTodayDailyBlockBottomNavItem,NC as commandPaletteBottomNavItem,PC as newNodeBottomNavItem,FC as openSidebarBottomNavItem,IC as searchBottomNavItem,LC as todayBottomNavItem,RC as undoBottomNavItem}from"../../../chunks/app-BuXhuX9G.js";
+export{FC as appendTodayDailyBlockBottomNavItem,IC as commandPaletteBottomNavItem,LC as newNodeBottomNavItem,RC as openSidebarBottomNavItem,zC as searchBottomNavItem,BC as todayBottomNavItem,VC as undoBottomNavItem}from"../../../chunks/app-Cly6wae2.js";
