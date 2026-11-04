@@ -1,1 +1,0 @@
-export{AM as appUpdatePromptExtension}from"../../../chunks/app-NkzjI3Cr.js";

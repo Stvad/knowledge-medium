@@ -1,1 +1,0 @@
-export{IR as BlockProperties}from"../../chunks/app-NkzjI3Cr.js";

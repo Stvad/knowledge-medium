@@ -1,1 +1,0 @@
-export{VU as SuspenseFallback}from"../../../chunks/app-NkzjI3Cr.js";

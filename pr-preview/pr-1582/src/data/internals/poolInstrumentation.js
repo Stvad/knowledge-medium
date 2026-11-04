@@ -1,1 +1,0 @@
-export{MQ as instrumentAdapter}from"../../../chunks/app-NkzjI3Cr.js";

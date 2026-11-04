@@ -1,1 +1,0 @@
-export{Net as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Pet as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Fet as __resetLayoutSessionIdForTesting,Iet as getLayoutSessionId,Let as isInstalledAppDisplayMode,Ret as readOrCreateLayoutSessionId}from"../../chunks/app-NkzjI3Cr.js";

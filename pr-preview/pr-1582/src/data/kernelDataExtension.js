@@ -1,1 +1,0 @@
-export{_2 as kernelDataExtension}from"../../chunks/app-NkzjI3Cr.js";

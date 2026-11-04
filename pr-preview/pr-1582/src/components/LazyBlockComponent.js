@@ -1,1 +1,0 @@
-export{XN as LazyBlockComponent}from"../../chunks/app-NkzjI3Cr.js";

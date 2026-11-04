@@ -1,1 +1,0 @@
-export{gv as remarkWikilinks}from"../../../../../chunks/app-NkzjI3Cr.js";
