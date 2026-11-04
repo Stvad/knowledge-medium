@@ -1,0 +1,1 @@
+export{aj as BlockEmbed}from"../../../chunks/app-DcI2k--Z.js";

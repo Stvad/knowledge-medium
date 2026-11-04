@@ -1,0 +1,1 @@
+export{GC as BreadcrumbRenderer}from"../../../chunks/app-DcI2k--Z.js";

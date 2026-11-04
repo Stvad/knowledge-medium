@@ -1,0 +1,1 @@
+export{rp as contributorsPlugin}from"../../../chunks/app-DcI2k--Z.js";

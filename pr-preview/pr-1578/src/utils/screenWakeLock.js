@@ -1,0 +1,1 @@
+export{d as holdScreenWakeLock}from"../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{Kp as extensionApiCatalog,qp as extensionApiRuntimeExports}from"../../chunks/app-DcI2k--Z.js";

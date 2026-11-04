@@ -1,0 +1,1 @@
+export{CA as SwipeActionMenu}from"../../../chunks/app-DcI2k--Z.js";

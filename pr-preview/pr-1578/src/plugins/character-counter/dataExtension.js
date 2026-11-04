@@ -1,0 +1,1 @@
+export{WJ as characterCounterDataExtension}from"../../../chunks/app-DcI2k--Z.js";

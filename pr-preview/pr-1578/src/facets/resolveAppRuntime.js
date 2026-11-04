@@ -1,0 +1,1 @@
+export{lN as resolveAppRuntime,uN as resolveAppRuntimeSync}from"../../chunks/app-DcI2k--Z.js";

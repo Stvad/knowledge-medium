@@ -1,0 +1,1 @@
+export{FM as checkForAppUpdate,IM as registerServiceWorker}from"../chunks/app-DcI2k--Z.js";

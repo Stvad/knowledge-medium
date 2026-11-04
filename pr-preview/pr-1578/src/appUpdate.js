@@ -1,0 +1,1 @@
+export{LM as appUpdate,RM as useAppUpdateAvailable}from"../chunks/app-DcI2k--Z.js";

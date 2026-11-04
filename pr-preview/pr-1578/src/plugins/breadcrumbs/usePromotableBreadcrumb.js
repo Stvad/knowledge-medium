@@ -1,0 +1,1 @@
+export{UC as usePromotableBreadcrumb}from"../../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{wo as dataIntegrityPlugin}from"../../../chunks/app-DcI2k--Z.js";

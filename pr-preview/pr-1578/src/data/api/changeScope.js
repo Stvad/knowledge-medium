@@ -1,0 +1,1 @@
+export{Yot as CHANGE_SCOPE_POLICIES,Xot as ChangeScope,Zot as isChangeScope,Qot as policyForScope,$ot as scopeAllowedInReadOnly,est as scopeIsUndoable,tst as scopePoliciesEquivalent,nst as scopeUploadsToServer,rst as sourceForScope}from"../../../chunks/app-DcI2k--Z.js";

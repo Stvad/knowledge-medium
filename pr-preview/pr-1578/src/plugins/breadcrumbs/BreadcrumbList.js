@@ -1,0 +1,1 @@
+export{JC as BreadcrumbList}from"../../../chunks/app-DcI2k--Z.js";

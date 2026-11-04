@@ -1,0 +1,1 @@
+export{UF as ExtensionRenderBoundary}from"../../chunks/app-DcI2k--Z.js";

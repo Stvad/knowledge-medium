@@ -1,0 +1,1 @@
+export{xy as richPastePlugin}from"../../../chunks/app-DcI2k--Z.js";

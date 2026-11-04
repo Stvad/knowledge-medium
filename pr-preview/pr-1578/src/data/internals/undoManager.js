@@ -1,0 +1,1 @@
+export{G$ as UndoManager}from"../../../chunks/app-DcI2k--Z.js";

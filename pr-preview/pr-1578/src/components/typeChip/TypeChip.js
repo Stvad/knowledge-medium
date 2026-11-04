@@ -1,0 +1,1 @@
+export{mj as TypeChip}from"../../../chunks/app-DcI2k--Z.js";

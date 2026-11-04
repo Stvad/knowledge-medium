@@ -1,0 +1,1 @@
+export{ks as appVersion}from"../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{GI as BlockEditor}from"../../chunks/app-DcI2k--Z.js";

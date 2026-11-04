@@ -1,0 +1,1 @@
+export{uot as definePostCommitProcessor}from"../../../chunks/app-DcI2k--Z.js";

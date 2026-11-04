@@ -1,0 +1,1 @@
+export{of as confirmThreadDeletion}from"../../../chunks/app-DcI2k--Z.js";

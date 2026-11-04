@@ -1,0 +1,1 @@
+export{vq as annotationsDataExtension}from"../../../chunks/app-DcI2k--Z.js";

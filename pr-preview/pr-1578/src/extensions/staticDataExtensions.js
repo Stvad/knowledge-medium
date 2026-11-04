@@ -1,0 +1,1 @@
+export{aW as staticDataExtensions}from"../../chunks/app-DcI2k--Z.js";

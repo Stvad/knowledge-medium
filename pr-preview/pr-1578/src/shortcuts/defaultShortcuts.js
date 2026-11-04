@@ -1,0 +1,1 @@
+export{bj as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,xj as OPEN_PREFERENCES_ACTION_ID,Sj as RELOAD_IN_SAFE_MODE_ACTION_ID,Cj as defaultActionContextsExtension,wj as defaultActionsExtension,Tj as getDefaultActionGroups,Ej as getDefaultActions}from"../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{LU as SuspenseFallback}from"../../../chunks/app-DcI2k--Z.js";

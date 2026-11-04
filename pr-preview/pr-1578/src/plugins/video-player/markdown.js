@@ -1,0 +1,1 @@
+export{wx as videoPlayerMarkdownExtension}from"../../../chunks/app-DcI2k--Z.js";

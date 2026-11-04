@@ -1,0 +1,1 @@
+export{MR as BlockProperties}from"../../chunks/app-DcI2k--Z.js";

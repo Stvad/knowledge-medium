@@ -1,0 +1,1 @@
+export{pv as Wikilink}from"../../../../../chunks/app-DcI2k--Z.js";

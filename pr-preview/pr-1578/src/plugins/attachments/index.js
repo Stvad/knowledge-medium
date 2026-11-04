@@ -1,0 +1,1 @@
+export{Ty as attachmentsPlugin}from"../../../chunks/app-DcI2k--Z.js";

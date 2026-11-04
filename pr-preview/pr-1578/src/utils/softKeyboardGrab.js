@@ -1,0 +1,1 @@
+export{QC as grabSoftKeyboard}from"../../chunks/app-DcI2k--Z.js";

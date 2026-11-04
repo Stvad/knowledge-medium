@@ -1,0 +1,1 @@
+export{_R as defineVariant,vR as defineVariantFacet}from"../../chunks/app-DcI2k--Z.js";

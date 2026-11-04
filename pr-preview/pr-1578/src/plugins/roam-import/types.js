@@ -1,0 +1,1 @@
+export{Fu as getExtraRoamProps}from"../../../chunks/app-DcI2k--Z.js";

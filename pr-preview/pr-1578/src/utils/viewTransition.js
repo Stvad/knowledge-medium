@@ -1,0 +1,1 @@
+export{YV as withMoveTransition}from"../../chunks/app-DcI2k--Z.js";

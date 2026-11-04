@@ -1,0 +1,1 @@
+export{J_ as useBacklinks}from"../../../chunks/app-DcI2k--Z.js";

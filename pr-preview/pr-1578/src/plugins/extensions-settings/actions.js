@@ -1,0 +1,1 @@
+export{_r as openExtensionsSettingsAction}from"../../../chunks/app-DcI2k--Z.js";

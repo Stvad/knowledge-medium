@@ -1,0 +1,1 @@
+export{a4 as KERNEL_PROCESSORS}from"../../../chunks/app-DcI2k--Z.js";

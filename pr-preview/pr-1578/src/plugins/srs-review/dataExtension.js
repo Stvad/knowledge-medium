@@ -1,0 +1,1 @@
+export{bc as srsReviewDataExtension}from"../../../chunks/app-DcI2k--Z.js";

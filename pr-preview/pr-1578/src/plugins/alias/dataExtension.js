@@ -1,0 +1,1 @@
+export{wX as aliasDataExtension}from"../../../chunks/app-DcI2k--Z.js";

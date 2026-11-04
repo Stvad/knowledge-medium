@@ -1,0 +1,1 @@
+export{Int as deriveWorkspaceIdNamespace}from"../../../chunks/app-DcI2k--Z.js";

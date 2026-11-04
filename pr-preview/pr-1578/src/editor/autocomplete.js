@@ -1,0 +1,1 @@
+export{lM as editorAutocompleteExtension}from"../../chunks/app-DcI2k--Z.js";

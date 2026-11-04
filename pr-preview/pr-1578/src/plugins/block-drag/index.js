@@ -1,0 +1,1 @@
+export{Iv as blockDragPlugin}from"../../../chunks/app-DcI2k--Z.js";

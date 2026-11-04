@@ -1,0 +1,1 @@
+export{OE as useMinuteClock}from"../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{JG as geoDataExtension}from"../../../chunks/app-DcI2k--Z.js";

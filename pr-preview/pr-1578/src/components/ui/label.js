@@ -1,0 +1,1 @@
+export{ND as Label}from"../../../chunks/app-DcI2k--Z.js";

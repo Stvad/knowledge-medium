@@ -1,0 +1,1 @@
+export{Yp as extensionsOverridesProp,Xp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-DcI2k--Z.js";

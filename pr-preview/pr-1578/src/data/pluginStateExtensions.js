@@ -1,0 +1,1 @@
+export{NY as pluginPrefsExtension,PY as pluginUIStateExtension}from"../../chunks/app-DcI2k--Z.js";

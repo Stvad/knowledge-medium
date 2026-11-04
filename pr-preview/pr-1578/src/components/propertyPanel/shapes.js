@@ -1,0 +1,1 @@
+export{oU as propertyShapeLabel}from"../../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{$I as useShortcutSurfaceActivations}from"../../chunks/app-DcI2k--Z.js";

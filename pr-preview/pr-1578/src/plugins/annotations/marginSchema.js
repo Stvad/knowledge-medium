@@ -1,0 +1,1 @@
+export{CJ as annotationMarginOpenProp}from"../../../chunks/app-DcI2k--Z.js";

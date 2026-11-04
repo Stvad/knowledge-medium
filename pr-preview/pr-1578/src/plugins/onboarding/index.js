@@ -1,0 +1,1 @@
+export{xk as EXTENSIONS_PAGE_TITLE,Sk as TUTORIAL_DEFAULT_TITLE,Ck as TUTORIAL_VIM_TITLE,$x as onboardingPlugin,bk as seedTutorial}from"../../../chunks/app-DcI2k--Z.js";

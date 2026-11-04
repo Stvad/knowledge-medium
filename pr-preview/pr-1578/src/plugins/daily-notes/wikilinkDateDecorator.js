@@ -1,0 +1,1 @@
+export{gO as dailyDateWikilinkDecorator}from"../../../chunks/app-DcI2k--Z.js";

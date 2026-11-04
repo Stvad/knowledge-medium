@@ -1,0 +1,1 @@
+export{IU as BootFallback}from"../../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{dN as dynamicExtensionsExtension}from"../../chunks/app-DcI2k--Z.js";

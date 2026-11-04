@@ -1,0 +1,1 @@
+export{Vk as useCommandPaletteActions}from"../../../chunks/app-DcI2k--Z.js";

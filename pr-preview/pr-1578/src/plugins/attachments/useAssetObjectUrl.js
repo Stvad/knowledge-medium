@@ -1,0 +1,1 @@
+export{Wb as useAssetObjectUrl}from"../../../chunks/app-DcI2k--Z.js";

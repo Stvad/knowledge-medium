@@ -1,0 +1,1 @@
+export{FF as useIsMobile,IF as usePointerCoarse}from"../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{KN as LazyBlockComponent}from"../../chunks/app-DcI2k--Z.js";

@@ -1,0 +1,1 @@
+export{$j as BlockPasteShellDecorator,eM as blockPasteShellDecorator}from"../../chunks/app-DcI2k--Z.js";

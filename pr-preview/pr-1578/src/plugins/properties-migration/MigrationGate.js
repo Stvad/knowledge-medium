@@ -1,0 +1,1 @@
+export{xa as MigrationGate}from"../../../chunks/app-DcI2k--Z.js";
