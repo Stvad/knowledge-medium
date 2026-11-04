@@ -28,3 +28,22 @@ export const placeCards = (cards: readonly CardBox[], focused: number, gap: numb
   }
   return tops
 }
+
+export interface ColumnFit {
+  width: number
+  /** How far left of its centred place the text moves to make the width. */
+  shift: number
+}
+
+/** The widest column that fits beside the text, given the room on each side of
+ *  it while centred, or null when not even `min` does. The text moves only as
+ *  far as the widest column still needs, so a pane with room to spare leaves it
+ *  centred. */
+export const fitColumn = (
+  room: {left: number; right: number},
+  {min, max}: {min: number; max: number},
+): ColumnFit | null => {
+  const shift = Math.max(0, Math.floor(Math.min(max - room.right, room.left)))
+  const width = Math.min(max, Math.floor(room.right + shift))
+  return width < min ? null : {width, shift}
+}

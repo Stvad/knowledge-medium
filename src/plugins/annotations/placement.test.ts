@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {placeCards} from './placement'
+import {fitColumn, placeCards} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -28,5 +28,39 @@ describe('placeCards', () => {
 
   it('places nothing for no cards', () => {
     expect(placeCards([], -1, 8, 1000)).toEqual([])
+  })
+})
+
+describe('fitColumn', () => {
+  const bounds = {min: 240, max: 520}
+
+  it('leaves the text where it is when the right side already holds the widest column', () => {
+    expect(fitColumn({left: 900, right: 900}, bounds)).toEqual({width: 520, shift: 0})
+    expect(fitColumn({left: 520, right: 520}, bounds)).toEqual({width: 520, shift: 0})
+  })
+
+  it('moves the text left by only what the widest column still needs', () => {
+    expect(fitColumn({left: 460, right: 444}, bounds)).toEqual({width: 520, shift: 76})
+  })
+
+  it('never moves the text past the room on its left', () => {
+    expect(fitColumn({left: 100, right: 300}, bounds)).toEqual({width: 400, shift: 100})
+  })
+
+  it('fits a column the right side could not hold alone', () => {
+    expect(fitColumn({left: 120, right: 120}, bounds)).toEqual({width: 240, shift: 120})
+  })
+
+  it('refuses a column under the minimum, even with the text moved all the way', () => {
+    expect(fitColumn({left: 119, right: 120}, bounds)).toBeNull()
+  })
+
+  it('treats a text frame wider than the pane as no room on either side', () => {
+    expect(fitColumn({left: -16, right: -32}, bounds)).toBeNull()
+    expect(fitColumn({left: -16, right: 300}, bounds)).toEqual({width: 300, shift: 0})
+  })
+
+  it('gives whole pixels, so the text never lands between them', () => {
+    expect(fitColumn({left: 100.5, right: 300.5}, bounds)).toEqual({width: 400, shift: 100})
   })
 })
