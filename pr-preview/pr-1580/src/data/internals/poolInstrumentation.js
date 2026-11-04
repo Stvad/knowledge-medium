@@ -1,1 +1,1 @@
-export{jQ as instrumentAdapter}from"../../../chunks/app-BauMhbK0.js";
+export{MQ as instrumentAdapter}from"../../../chunks/app-D1EF7NCb.js";

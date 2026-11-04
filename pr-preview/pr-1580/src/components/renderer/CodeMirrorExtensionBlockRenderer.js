@@ -1,1 +1,1 @@
-export{VP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-BauMhbK0.js";
+export{VP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-D1EF7NCb.js";

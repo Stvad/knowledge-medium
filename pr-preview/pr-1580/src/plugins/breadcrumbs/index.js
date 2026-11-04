@@ -1,1 +1,1 @@
-export{QC as BreadcrumbList,YC as BreadcrumbRenderer,ZC as Breadcrumbs,JC as PromotableBreadcrumbList,GC as breadcrumbRendererContribution,KC as breadcrumbsPlugin,XC as getBreadcrumbContentPreview,qC as usePromotableBreadcrumb}from"../../../chunks/app-BauMhbK0.js";
+export{QC as BreadcrumbList,YC as BreadcrumbRenderer,ZC as Breadcrumbs,JC as PromotableBreadcrumbList,GC as breadcrumbRendererContribution,KC as breadcrumbsPlugin,XC as getBreadcrumbContentPreview,qC as usePromotableBreadcrumb}from"../../../chunks/app-D1EF7NCb.js";

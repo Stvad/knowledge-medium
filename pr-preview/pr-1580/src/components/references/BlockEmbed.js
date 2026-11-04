@@ -1,1 +1,1 @@
-export{lj as BlockEmbed}from"../../../chunks/app-BauMhbK0.js";
+export{lj as BlockEmbed}from"../../../chunks/app-D1EF7NCb.js";

@@ -1,1 +1,1 @@
-export{Yv as useIsReadOnly}from"../../chunks/app-BauMhbK0.js";
+export{Yv as useIsReadOnly}from"../../chunks/app-D1EF7NCb.js";
