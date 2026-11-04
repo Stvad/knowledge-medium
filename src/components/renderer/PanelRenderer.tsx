@@ -70,6 +70,10 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   return null
 }
 
+/** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
+ *  `max-w-3xl` frame. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-var(--container-3xl))))]'
+
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
@@ -344,7 +348,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
       <div
-        className="pointer-events-none absolute inset-x-0 top-1 z-10 pr-[var(--panel-right-clearance,0px)]"
+        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
       >
         <div
           className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
@@ -361,9 +365,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
         data-panel-scrollport=""
         // Bottom clearance: below md the bottom nav's; from md up, whatever
         // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
-        // (`@/utils/panelClearance`), named literally here for Tailwind. On the
-        // right, whatever panel mount declares PANEL_RIGHT_CLEARANCE.
-        className={`pr-[var(--panel-right-clearance,0px)] ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
+        // (`@/utils/panelClearance`), named literally here for Tailwind.
+        className={`${FRAME_RIGHT_CLEARANCE_CLASS} ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
         onPointerDownCapture={activatePanel}
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}

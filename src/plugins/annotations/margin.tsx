@@ -137,12 +137,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     let observedTopRow: Element | null = null
 
     /** Padding the pane by twice the shift moves the centred text left by the
-     *  shift and keeps its width: `fitColumn` never shifts past the room on the
-     *  left, so the text still fits. */
-    let textShift = 0
+     *  shift and keeps its width. */
     const setTextShift = (px: number) => {
-      if (px === textShift) return
-      textShift = px
       if (px > 0) panelEl.style.setProperty(PANEL_RIGHT_CLEARANCE, `${2 * px}px`)
       else panelEl.style.removeProperty(PANEL_RIGHT_CLEARANCE)
     }
@@ -150,14 +146,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const measure = (top: Element | null, portRect: DOMRect): ColumnFrame | null => {
       if (!top) return null
       const panelRect = panelEl.getBoundingClientRect()
-      const textRect = top.getBoundingClientRect()
-      const centredRight = textRect.right + textShift
-      const fit = fitColumn({
-        left: textRect.left + textShift - portRect.left - EDGE_PX,
-        right: portRect.right - centredRight - 2 * EDGE_PX,
-      }, COLUMN_BOUNDS)
+      // From the widths alone, so the answer doesn't depend on the current shift.
+      const side = (portRect.width - top.getBoundingClientRect().width) / 2
+      const fit = fitColumn({left: side - EDGE_PX, right: side - 2 * EDGE_PX}, COLUMN_BOUNDS)
       return fit && {
-        left: Math.round(centredRight - fit.shift - panelRect.left + EDGE_PX),
+        left: Math.round(portRect.right - side - fit.shift - panelRect.left + EDGE_PX),
         top: Math.round(portRect.top - panelRect.top),
         width: fit.width,
         height: Math.round(portRect.height),
