@@ -1,0 +1,1 @@
+export{$N as BlockLoadingPlaceholder}from"../../chunks/app-BauMhbK0.js";

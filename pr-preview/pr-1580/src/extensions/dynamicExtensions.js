@@ -1,0 +1,1 @@
+export{hN as dynamicExtensionsExtension}from"../../chunks/app-BauMhbK0.js";

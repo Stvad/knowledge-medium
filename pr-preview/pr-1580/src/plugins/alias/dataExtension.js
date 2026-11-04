@@ -1,0 +1,1 @@
+export{DX as aliasDataExtension}from"../../../chunks/app-BauMhbK0.js";

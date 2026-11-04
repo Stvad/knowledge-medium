@@ -1,0 +1,1 @@
+export{JJ as CHAR_COUNTER_TYPE,YJ as CHAR_COUNTER_TYPE_CONTRIBUTIONS,XJ as COUNTER_TYPES,ZJ as WORD_COUNTER_TYPE,QJ as wordCounterInitialValues}from"../../../chunks/app-BauMhbK0.js";

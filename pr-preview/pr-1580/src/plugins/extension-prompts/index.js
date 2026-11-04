@@ -1,0 +1,1 @@
+export{gM as ExtensionPromptSurface,_M as extensionPromptsExtension}from"../../../chunks/app-BauMhbK0.js";

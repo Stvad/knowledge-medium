@@ -1,0 +1,1 @@
+export{yh as createWatchEventsRegistry,bh as watchEventsRegistry}from"../../../chunks/app-BauMhbK0.js";

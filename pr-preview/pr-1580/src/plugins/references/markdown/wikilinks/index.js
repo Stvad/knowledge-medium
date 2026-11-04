@@ -1,0 +1,1 @@
+export{hv as wikilinkMarkdownExtension}from"../../../../../chunks/app-BauMhbK0.js";

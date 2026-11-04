@@ -1,0 +1,1 @@
+export{S_ as inlineBacklinksApplies}from"../../../../chunks/app-BauMhbK0.js";

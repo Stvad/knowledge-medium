@@ -1,0 +1,1 @@
+export{UI as defaultPasteDecision,WI as pasteDecisionVerb}from"../../chunks/app-BauMhbK0.js";

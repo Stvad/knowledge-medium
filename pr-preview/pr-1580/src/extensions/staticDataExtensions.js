@@ -1,0 +1,1 @@
+export{cW as staticDataExtensions}from"../../chunks/app-BauMhbK0.js";

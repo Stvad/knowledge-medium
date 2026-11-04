@@ -1,0 +1,1 @@
+export{VR as PropertyRow}from"../../../chunks/app-BauMhbK0.js";

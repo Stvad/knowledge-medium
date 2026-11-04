@@ -1,0 +1,1 @@
+export{yj as chipStyle}from"../../../chunks/app-BauMhbK0.js";

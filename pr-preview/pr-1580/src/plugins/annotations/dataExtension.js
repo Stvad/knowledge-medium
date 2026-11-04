@@ -1,0 +1,1 @@
+export{xq as annotationsDataExtension}from"../../../chunks/app-BauMhbK0.js";

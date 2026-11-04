@@ -1,0 +1,1 @@
+export{g2 as kernelDataExtension}from"../../chunks/app-BauMhbK0.js";

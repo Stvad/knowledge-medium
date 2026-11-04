@@ -1,0 +1,1 @@
+export{vj as TypeChip}from"../../../chunks/app-BauMhbK0.js";

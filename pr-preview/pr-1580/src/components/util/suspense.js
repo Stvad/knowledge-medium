@@ -1,0 +1,1 @@
+export{BU as SuspenseFallback}from"../../../chunks/app-BauMhbK0.js";

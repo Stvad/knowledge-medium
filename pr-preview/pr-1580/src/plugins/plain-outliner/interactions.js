@@ -1,0 +1,1 @@
+export{rw as blockEditingContentRenderer}from"../../../chunks/app-BauMhbK0.js";

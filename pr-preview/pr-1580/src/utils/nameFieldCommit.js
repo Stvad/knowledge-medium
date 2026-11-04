@@ -1,0 +1,1 @@
+export{XP as trimIfEdited}from"../../chunks/app-BauMhbK0.js";

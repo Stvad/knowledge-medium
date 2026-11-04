@@ -1,0 +1,1 @@
+export{GI as captureMediaVerb}from"../../chunks/app-BauMhbK0.js";

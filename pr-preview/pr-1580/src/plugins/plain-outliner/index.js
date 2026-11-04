@@ -1,0 +1,1 @@
+export{$C as plainOutlinerPlugin}from"../../../chunks/app-BauMhbK0.js";

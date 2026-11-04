@@ -1,0 +1,1 @@
+export{zF as useIsMobile,BF as usePointerCoarse}from"../../chunks/app-BauMhbK0.js";

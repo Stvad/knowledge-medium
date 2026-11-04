@@ -1,0 +1,1 @@
+export{ZG as geoDataExtension}from"../../../chunks/app-BauMhbK0.js";

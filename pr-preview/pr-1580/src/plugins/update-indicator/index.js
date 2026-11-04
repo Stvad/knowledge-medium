@@ -1,0 +1,1 @@
+export{t_ as updateIndicatorPlugin}from"../../../chunks/app-BauMhbK0.js";

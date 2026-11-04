@@ -1,0 +1,1 @@
+export{aG as preferredSpanReplacement}from"../../../chunks/app-BauMhbK0.js";

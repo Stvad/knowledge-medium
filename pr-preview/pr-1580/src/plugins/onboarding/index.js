@@ -1,0 +1,1 @@
+export{Tk as EXTENSIONS_PAGE_TITLE,Ek as TUTORIAL_DEFAULT_TITLE,Dk as TUTORIAL_VIM_TITLE,rS as onboardingPlugin,wk as seedTutorial}from"../../../chunks/app-BauMhbK0.js";

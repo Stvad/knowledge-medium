@@ -1,0 +1,1 @@
+export{FR as BlockProperties}from"../../chunks/app-BauMhbK0.js";

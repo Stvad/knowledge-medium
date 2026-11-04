@@ -1,0 +1,1 @@
+export{YI as BlockEditor}from"../../chunks/app-BauMhbK0.js";

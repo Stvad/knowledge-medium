@@ -1,0 +1,1 @@
+export{EJ as annotationMarginOpenProp}from"../../../chunks/app-BauMhbK0.js";

@@ -1,0 +1,1 @@
+export{wv as blockrefCompletionSource}from"../../chunks/app-BauMhbK0.js";

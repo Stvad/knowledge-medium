@@ -1,0 +1,1 @@
+export{pot as definePostCommitProcessor}from"../../../chunks/app-BauMhbK0.js";

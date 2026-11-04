@@ -1,0 +1,1 @@
+export{of as confirmThreadDeletion}from"../../../chunks/app-BauMhbK0.js";

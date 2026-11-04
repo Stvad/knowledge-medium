@@ -1,0 +1,1 @@
+export{lj as BlockEmbed}from"../../../chunks/app-BauMhbK0.js";

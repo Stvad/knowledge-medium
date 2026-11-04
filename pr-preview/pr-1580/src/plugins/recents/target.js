@@ -1,0 +1,1 @@
+export{PE as openRecentsPage}from"../../../chunks/app-BauMhbK0.js";

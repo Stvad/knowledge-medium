@@ -1,0 +1,1 @@
+export{c4 as KERNEL_PROCESSORS}from"../../../chunks/app-BauMhbK0.js";

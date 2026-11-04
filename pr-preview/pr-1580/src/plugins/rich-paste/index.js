@@ -1,0 +1,1 @@
+export{wy as richPastePlugin}from"../../../chunks/app-BauMhbK0.js";

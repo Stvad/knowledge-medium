@@ -1,0 +1,1 @@
+export{TK as matchCharTrigger}from"../../chunks/app-BauMhbK0.js";

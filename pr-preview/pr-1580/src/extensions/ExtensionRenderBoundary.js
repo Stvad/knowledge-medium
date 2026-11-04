@@ -1,0 +1,1 @@
+export{qF as ExtensionRenderBoundary}from"../../chunks/app-BauMhbK0.js";

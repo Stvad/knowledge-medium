@@ -1,0 +1,1 @@
+export{p2 as Block,m2 as requireLoadedBlock}from"../../chunks/app-BauMhbK0.js";

@@ -1,0 +1,1 @@
+export{gA as CommandPaletteHeaderItem}from"../../../chunks/app-BauMhbK0.js";

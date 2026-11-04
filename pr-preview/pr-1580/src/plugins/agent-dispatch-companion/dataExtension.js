@@ -1,0 +1,1 @@
+export{uZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-BauMhbK0.js";

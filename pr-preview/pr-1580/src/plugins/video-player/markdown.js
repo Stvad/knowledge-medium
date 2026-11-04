@@ -1,0 +1,1 @@
+export{Ox as videoPlayerMarkdownExtension}from"../../../chunks/app-BauMhbK0.js";
