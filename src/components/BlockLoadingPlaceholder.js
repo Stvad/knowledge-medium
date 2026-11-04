@@ -1,1 +1,1 @@
-export{XN as BlockLoadingPlaceholder}from"../../chunks/app-C40SCslk.js";
+export{ZN as BlockLoadingPlaceholder}from"../../chunks/app-eBT-aODe.js";

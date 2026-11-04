@@ -1,1 +1,1 @@
-export{not as defineQuery}from"../../../chunks/app-C40SCslk.js";
+export{iot as defineQuery}from"../../../chunks/app-eBT-aODe.js";

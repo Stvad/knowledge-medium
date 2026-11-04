@@ -1,1 +1,1 @@
-export{Sv as blockrefCompletionSource}from"../../chunks/app-C40SCslk.js";
+export{Sv as blockrefCompletionSource}from"../../chunks/app-eBT-aODe.js";

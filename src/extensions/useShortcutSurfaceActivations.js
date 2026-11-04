@@ -1,1 +1,1 @@
-export{eL as useShortcutSurfaceActivations}from"../../chunks/app-C40SCslk.js";
+export{tL as useShortcutSurfaceActivations}from"../../chunks/app-eBT-aODe.js";

@@ -1,1 +1,1 @@
-export{or as extensionsDataExtension}from"../../../chunks/app-C40SCslk.js";
+export{or as extensionsDataExtension}from"../../../chunks/app-eBT-aODe.js";

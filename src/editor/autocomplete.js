@@ -1,1 +1,1 @@
-export{uM as editorAutocompleteExtension}from"../../chunks/app-C40SCslk.js";
+export{dM as editorAutocompleteExtension}from"../../chunks/app-eBT-aODe.js";

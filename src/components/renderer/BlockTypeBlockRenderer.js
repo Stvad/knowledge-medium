@@ -1,1 +1,1 @@
-export{WP as BlockTypeBlockRenderer,GP as BlockTypeContentRenderer,KP as writeBlockTypeLabel}from"../../../chunks/app-C40SCslk.js";
+export{GP as BlockTypeBlockRenderer,KP as BlockTypeContentRenderer,qP as writeBlockTypeLabel}from"../../../chunks/app-eBT-aODe.js";

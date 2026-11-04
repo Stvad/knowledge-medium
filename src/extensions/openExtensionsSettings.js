@@ -1,1 +1,1 @@
-export{_P as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,vP as openExtensionsSettings}from"../../chunks/app-C40SCslk.js";
+export{vP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,yP as openExtensionsSettings}from"../../chunks/app-eBT-aODe.js";

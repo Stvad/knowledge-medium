@@ -1,1 +1,1 @@
-export{xC as defaultToolbarItems}from"../../../chunks/app-C40SCslk.js";
+export{SC as defaultToolbarItems}from"../../../chunks/app-eBT-aODe.js";

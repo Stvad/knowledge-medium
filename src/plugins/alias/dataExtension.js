@@ -1,1 +1,1 @@
-export{wX as aliasDataExtension}from"../../../chunks/app-C40SCslk.js";
+export{EX as aliasDataExtension}from"../../../chunks/app-eBT-aODe.js";

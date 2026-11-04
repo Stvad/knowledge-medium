@@ -1,1 +1,1 @@
-export{WF as ExtensionRenderBoundary}from"../../chunks/app-C40SCslk.js";
+export{GF as ExtensionRenderBoundary}from"../../chunks/app-eBT-aODe.js";

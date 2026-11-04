@@ -1,1 +1,1 @@
-export{Sq as ANCHOR_CONTEXT_LENGTH,Cq as captureAnchor,wq as recaptureAnchor,Tq as resolveAnchor,Eq as widenToReferenceSpans,Dq as widenToSpans}from"../../../chunks/app-C40SCslk.js";
+export{wq as ANCHOR_CONTEXT_LENGTH,Tq as captureAnchor,Eq as recaptureAnchor,Dq as resolveAnchor,Oq as widenToReferenceSpans,kq as widenToSpans}from"../../../chunks/app-eBT-aODe.js";

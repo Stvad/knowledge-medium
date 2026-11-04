@@ -1,1 +1,1 @@
-export{rp as contributorsPlugin}from"../../../chunks/app-C40SCslk.js";
+export{rp as contributorsPlugin}from"../../../chunks/app-eBT-aODe.js";
