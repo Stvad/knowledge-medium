@@ -1,1 +1,1 @@
-export{wg as runHealthCommand}from"../../../chunks/app-WpSjJ7-l.js";
+export{wg as runHealthCommand}from"../../../chunks/app-CrG3Cmop.js";

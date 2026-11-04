@@ -1,1 +1,1 @@
-export{eP as defaultRegistry,tP as defaultRendererContributions,nP as defaultRenderersExtension}from"../../chunks/app-WpSjJ7-l.js";
+export{tP as defaultRegistry,nP as defaultRendererContributions,rP as defaultRenderersExtension}from"../../chunks/app-CrG3Cmop.js";

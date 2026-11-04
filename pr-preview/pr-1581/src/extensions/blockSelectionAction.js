@@ -1,1 +1,1 @@
-export{oM as EXTEND_BLOCK_SELECTION_ACTION_ID,sM as TOGGLE_BLOCK_SELECTION_ACTION_ID,cM as extendBlockSelectionAction,lM as toggleBlockInSelection,uM as toggleBlockSelectionAction}from"../../chunks/app-WpSjJ7-l.js";
+export{sM as EXTEND_BLOCK_SELECTION_ACTION_ID,cM as TOGGLE_BLOCK_SELECTION_ACTION_ID,lM as extendBlockSelectionAction,uM as toggleBlockInSelection,dM as toggleBlockSelectionAction}from"../../chunks/app-CrG3Cmop.js";

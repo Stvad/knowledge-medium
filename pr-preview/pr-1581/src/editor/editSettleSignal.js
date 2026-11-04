@@ -1,1 +1,1 @@
-export{JI as blockEditSettled,YI as notifyBlockEditSettled}from"../../chunks/app-WpSjJ7-l.js";
+export{YI as blockEditSettled,XI as notifyBlockEditSettled}from"../../chunks/app-CrG3Cmop.js";

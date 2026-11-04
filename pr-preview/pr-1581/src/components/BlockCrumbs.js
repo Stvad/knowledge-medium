@@ -1,1 +1,1 @@
-export{rD as BlockCrumbs}from"../../chunks/app-WpSjJ7-l.js";
+export{iD as BlockCrumbs}from"../../chunks/app-CrG3Cmop.js";
