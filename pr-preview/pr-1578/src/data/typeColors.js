@@ -1,1 +1,0 @@
-export{vj as DEFAULT_TYPE_COLORS,yj as defaultTypeColor,bj as pickLeastUsedTypeColor}from"../../chunks/app-_RD54my9.js";

@@ -1,1 +1,0 @@
-export{FD as Label}from"../../../chunks/app-_RD54my9.js";

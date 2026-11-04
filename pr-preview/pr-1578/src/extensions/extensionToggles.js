@@ -1,1 +1,0 @@
-export{yN as extensionDisplayName,bN as extensionName,xN as userExtensionShellToggle,SN as userExtensionToggle}from"../../chunks/app-_RD54my9.js";

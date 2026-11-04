@@ -1,1 +1,0 @@
-export{M3 as mergeProperties}from"../../chunks/app-_RD54my9.js";

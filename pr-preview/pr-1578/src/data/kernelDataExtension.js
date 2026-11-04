@@ -1,1 +1,0 @@
-export{h2 as kernelDataExtension}from"../../chunks/app-_RD54my9.js";

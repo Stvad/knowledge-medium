@@ -1,1 +1,0 @@
-export{Qg as BlockMetaCard}from"../../../chunks/app-_RD54my9.js";

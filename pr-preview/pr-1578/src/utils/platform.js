@@ -1,1 +1,0 @@
-export{GV as isIOS,KV as isMacPlatform}from"../../chunks/app-_RD54my9.js";

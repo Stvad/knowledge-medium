@@ -1,1 +1,0 @@
-export{G2 as emitKernelInvalidations,K2 as kernelInvalidationRule}from"../../../chunks/app-_RD54my9.js";

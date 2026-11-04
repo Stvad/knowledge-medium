@@ -1,1 +1,0 @@
-export{cU as propertyShapeLabel}from"../../../chunks/app-_RD54my9.js";

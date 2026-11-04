@@ -1,1 +1,0 @@
-export{nw as WorkspaceSwitcherSidebarSection,rw as pendingInvitationsHeaderItem,iw as workspaceHeaderPlugin,aw as workspaceSwitcherSidebarSection}from"../../../chunks/app-_RD54my9.js";

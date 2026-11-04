@@ -1,1 +1,0 @@
-export{GF as ExtensionRenderBoundary}from"../../chunks/app-_RD54my9.js";

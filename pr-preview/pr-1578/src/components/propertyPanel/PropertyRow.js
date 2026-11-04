@@ -1,1 +1,0 @@
-export{BR as PropertyRow}from"../../../chunks/app-_RD54my9.js";

@@ -1,1 +1,0 @@
-export{qv as useIsReadOnly}from"../../chunks/app-_RD54my9.js";

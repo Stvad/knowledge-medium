@@ -1,1 +1,0 @@
-export{LM as checkForAppUpdate,RM as registerServiceWorker}from"../chunks/app-_RD54my9.js";
