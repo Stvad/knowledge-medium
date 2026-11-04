@@ -182,6 +182,17 @@ export type BlockHeaderContribution =
 export type BlockHeaderResolver =
   (context: BlockResolveContext) => readonly BlockRenderer[]
 
+// Slot for sections rendered directly under a block's own content and
+// properties, ahead of its children — what a block expands to show about
+// itself (its comments, its references) stays next to it however long the
+// subtree is. Same contribution shape as `blockChildrenFooterFacet`, which is
+// for what follows the subtree.
+export type BlockBelowContentContribution =
+  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
+
+export type BlockBelowContentResolver =
+  (context: BlockResolveContext) => readonly BlockRenderer[]
+
 // Slot for sections rendered after a block's children — Roam-style "Linked
 // References" lives here. Each contribution returns a renderer (or null/
 // undefined/false to opt out for this block); the DefaultBlockRenderer
@@ -352,6 +363,8 @@ export interface BlockLayoutSlots {
   RawContent: ComponentType
   /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
+  /** Sections contributed via `blockBelowContentFacet`, between the block's own content and its children. Outside any collapsible: collapsing hides children, not these. */
+  BelowContent: ComponentType
   /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */
   Children: ComponentType
   /** After-children sections contributed via `blockChildrenFooterFacet`. */
@@ -417,6 +430,16 @@ export const blockHeaderFacet = defineFacet<
   combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockHeaderContribution>,
+})
+
+export const blockBelowContentFacet = defineFacet<
+  BlockBelowContentContribution,
+  BlockBelowContentResolver
+>({
+  id: 'core.block-below-content',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockBelowContentContribution>,
 })
 
 export const blockChildrenFooterFacet = defineFacet<

@@ -31,6 +31,7 @@ import {annotationsPlugin} from './index'
 const WS = 'ws'
 const BLOCK = 'A paragraph with a comment thread.'
 const COMMENT = 'Keep this note attached to the paragraph.'
+const CHILD = 'A child of the paragraph.'
 const TOGGLE_ACTION_ID = 'annotations.toggleBlockComments'
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as import('@/data/block').Block | undefined}))
@@ -177,6 +178,29 @@ describe('the block comments toggle action', () => {
       if (expanded) pressToggle()
       editor?.destroy()
       editorHost?.remove()
+    }
+  })
+
+  it('shows expanded comments directly under the block, ahead of its children', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'child', workspaceId: WS, parentId: 'target', orderKey: 'a0', content: CHILD})
+    }, {scope: ChangeScope.BlockDefault})
+    const deps = {block: repo.block('target'), uiStateBlock: repo.block('ui-state'), renderScopeId: panelRenderScopeId('order-panel', 'page')}
+    render(
+      <AppRuntimeContextProvider value={repo.facetRuntime!}>
+        <ActiveContextsProvider>
+          {panel('order-panel', <DefaultBlockRenderer block={repo.block('target')}/>)}
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+    const child = await screen.findByText(CHILD)
+    await invoke(ActionContextTypes.NORMAL_MODE, deps)
+
+    try {
+      const comment = await screen.findByText(COMMENT)
+      expect(comment.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    } finally {
+      await invoke(ActionContextTypes.NORMAL_MODE, deps)
     }
   })
 
