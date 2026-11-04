@@ -1,1 +1,0 @@
-export{MJ as contributorsDataExtension}from"../../../chunks/app-B8eMv1hC.js";
