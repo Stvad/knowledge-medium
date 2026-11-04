@@ -368,7 +368,10 @@ describe('describeRuntime', () => {
     // Declaring them is ~3KB that the string version got to omit by being
     // broken. Comments were trimmed twice to claw back what was claw-backable;
     // what is left is the warnings that proved load-bearing.
-    expect(JSON.stringify(description).length).toBeLessThan(46_000)
+    //
+    // 46k -> 47k: `apiSurface` grows with every catalogued facet and type, which
+    // brief mode keeps on purpose. The glob dumps are what this bound guards.
+    expect(JSON.stringify(description).length).toBeLessThan(47_000)
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {
