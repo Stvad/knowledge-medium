@@ -694,6 +694,23 @@ export const verticalNeighbor = (
     : lastInstanceIn(sibling, excludedSurfaces)
 }
 
+/** The nearest mounted row of `current`'s own scope in this panel, past any
+ *  nested surface rendered in between. */
+export const nextRowInScope = (
+  current: HTMLElement,
+  direction: 'up' | 'down',
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const panel = panelOf(current)
+  const scope = locationOf(current)?.renderScopeId
+  if (!panel || scope === undefined) return null
+  const instances = panelInstances(panel, excludedSurfaces)
+  const from = instances.indexOf(current)
+  if (from === -1) return null
+  const ahead = direction === 'down' ? instances.slice(from + 1) : instances.slice(0, from).reverse()
+  return ahead.find(el => locationOf(el)?.renderScopeId === scope) ?? null
+}
+
 /**
  * Returns the panel one stack-step above/below `panel` in the *same*
  * layout column. Null when the column hosts only `panel` (single-panel

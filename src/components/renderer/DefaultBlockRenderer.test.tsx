@@ -20,7 +20,14 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
-import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import {
+  blockBelowContentFacet,
+  blockChildrenFooterFacet,
+  blockContentRendererFacet,
+  blockHeaderFacet,
+  blockLayoutFacet,
+  type BlockLayout,
+} from '@/extensions/blockInteraction'
 import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -332,17 +339,26 @@ const CountingContentRenderer = ({block}: BlockRendererProps) => {
 // prop (isCollapsed) — i.e. the exact shape the default layout has. Toggling the
 // prop recreates the layout's `<Shell>` render-prop closure; the content must
 // NOT remount as a result (stable-identity invariant).
-const ContentShellLayout: BlockLayout = ({Content, Shell, block}) => {
+const ContentShellLayout: BlockLayout = ({Content, Properties, Header, BelowContent, Footer, Shell, block}) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   return (
     <Shell>
       {(shellProps) => (
-        <div {...shellProps} data-collapsed={String(isCollapsed)}>
+        <div {...shellProps} data-collapsed={String(isCollapsed)} data-has-properties={String(Boolean(Properties))}>
+          <Header />
           <Content />
+          <BelowContent />
+          <Footer />
         </div>
       )}
     </Shell>
   )
+}
+
+let sectionMountCount = 0
+const CountingSection = () => {
+  useEffect(() => { sectionMountCount++ }, [])
+  return null
 }
 
 describe('DefaultBlockRenderer slot identity', () => {
@@ -351,6 +367,7 @@ describe('DefaultBlockRenderer slot identity', () => {
 
   beforeEach(async () => {
     contentMountCount = 0
+    sectionMountCount = 0
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
       db: sharedDb.db,
@@ -358,6 +375,9 @@ describe('DefaultBlockRenderer slot identity', () => {
       newId: () => crypto.randomUUID(),
       extensions: [
         defaultEditorInteractionExtension,
+        blockHeaderFacet.of(() => CountingSection, {source: 'test'}),
+        blockBelowContentFacet.of(() => CountingSection, {source: 'test'}),
+        blockChildrenFooterFacet.of(() => CountingSection, {source: 'test'}),
         // The real alias sync processor: a content edit on an aliased block
         // rewrites its `alias` property in the SAME tx, which is what makes
         // the page case below a live-data scenario and not a synthetic one.
@@ -421,6 +441,30 @@ describe('DefaultBlockRenderer slot identity', () => {
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
     )
     expect(contentMountCount).toBe(1)
+  })
+
+  it('does not remount section slots when the renderer re-renders', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+    await waitFor(() => expect(sectionMountCount).toBe(3))
+    const shown = repo.block('block-1').peekProperty(showPropertiesProp)
+
+    // The renderer reads this itself, and hands the layout a changed slot.
+    await act(async () => {
+      await repo.block('block-1').set(showPropertiesProp, !shown)
+    })
+
+    await waitFor(() =>
+      expect(document.querySelector(`[data-has-properties="${String(!shown)}"]`)).toBeTruthy(),
+    )
+    expect(sectionMountCount).toBe(3)
   })
 
   // A page's title edit rewrites its own `alias` in the same tx (alias.sync),

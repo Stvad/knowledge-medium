@@ -31,7 +31,7 @@ import {useHandle, useWorkspaceId} from '@/hooks/block.js'
 import {
   cachedContentDecorator,
   enterEditModeForBlock,
-  type BlockChildrenFooterContribution,
+  type BlockBelowContentContribution,
   type BlockContentDecoratorContribution,
   type BlockContextMenuItemsContribution,
   type BlockResolveContext,
@@ -360,7 +360,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
   )
 }
 
-export const commentsFooterContribution: BlockChildrenFooterContribution = ctx => {
+export const commentsBelowContentContribution: BlockBelowContentContribution = ctx => {
   if (!appliesToOutlineBlock(ctx)) return null
   const Section: BlockRenderer = ({block}) =>
     useThreadsExpanded(viewKey(useBlockContext().renderScopeId, block.id)) ? <ThreadsSection block={block}/> : null
