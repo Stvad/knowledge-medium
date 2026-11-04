@@ -13,6 +13,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
+import { flushPendingEditorContent } from './pendingEditorContent'
 import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
@@ -593,6 +594,7 @@ export const setBlockTypesInProperties = (
  *  short-circuit, but this gate keeps any new caller honest. */
 export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   if (editing && uiStateBlock.repo.isReadOnly) return
+  if (!editing) flushPendingEditorContent()
   void uiStateBlock.set(isEditingProp, editing)
 }
 
@@ -687,6 +689,7 @@ export const focusBlock = async (
     blockId,
     renderScopeId: renderScopeId ?? fallbackRenderScopeId,
   }
+  if (!sameFocusedBlockLocation(currentLocation, location)) flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     const current = targetEdit ? null : await tx.get(uiStateBlock.id)
     const preserveCurrentEditMode = !targetEdit &&
@@ -721,6 +724,7 @@ export const exitEditModeForBlock = async (
   blockId: string,
   renderScopeId?: string,
 ): Promise<void> => {
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     const location = focusedBlockLocationFromProperties((await tx.get(uiStateBlock.id))?.properties)
     // Another block owns the focused location now (or a different render-scope
