@@ -1,1 +1,1 @@
-export{Pj as ensureMetricsConsoleHook}from"../../chunks/app-eBT-aODe.js";
+export{Ij as ensureMetricsConsoleHook}from"../../chunks/app-BuXhuX9G.js";

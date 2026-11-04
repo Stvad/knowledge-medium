@@ -1,1 +1,1 @@
-export{Xp as extensionsOverridesProp,Zp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-eBT-aODe.js";
+export{Zp as extensionsOverridesProp,Qp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-BuXhuX9G.js";

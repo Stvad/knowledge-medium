@@ -1,1 +1,1 @@
-export{VM as kernelPageDeletionGuard}from"../../chunks/app-eBT-aODe.js";
+export{UM as kernelPageDeletionGuard}from"../../chunks/app-BuXhuX9G.js";

@@ -1,1 +1,1 @@
-export{SG as groupedBacklinksDataExtension}from"../../../chunks/app-eBT-aODe.js";
+export{wG as groupedBacklinksDataExtension}from"../../../chunks/app-BuXhuX9G.js";

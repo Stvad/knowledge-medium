@@ -1,1 +1,1 @@
-export{h2 as kernelDataExtension}from"../../chunks/app-eBT-aODe.js";
+export{_2 as kernelDataExtension}from"../../chunks/app-BuXhuX9G.js";
