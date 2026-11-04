@@ -59,7 +59,7 @@ const startStubBridge = async (): Promise<StubBridge> => {
           contributors.push(contributor)
           results.set(id, contributor)
         } else if (command.type === 'add-media') {
-          results.set(id, {id: 'media-1', deduped: false, reference: '((media-1))'})
+          results.set(id, {id: 'media-1', workspaceId: String(command.workspaceId), deduped: false, reference: '((media-1))'})
         } else if (command.type === 'read-media') {
           results.set(id, {
             id: 'media-1',
@@ -158,6 +158,22 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     const sent = bridge.commands.find(command => command.type === 'add-media')
     expect(sent).toMatchObject({base64: Buffer.from([1, 2, 255]).toString('base64'), filename: 'notes.txt', mime: 'text/plain', workspaceId: 'ws-1'})
     expect(stdout).toContain('((media-1))')
+  })
+
+  it('add-media refuses a --filename the parser has turned into a number', async () => {
+    const file = path.join(tempDir, 'notes.txt')
+    await fs.writeFile(file, 'x')
+    await expect(runCli(['--contributor', 'none', 'add-media', file, '--filename', '007'])).rejects.toMatchObject({
+      stderr: expect.stringContaining('--filename got the number 7'),
+    })
+    expect(bridge.commands.filter(command => command.type === 'add-media')).toEqual([])
+  })
+
+  it('read-media refuses before overwriting anything when --out is not a usable path', async () => {
+    await expect(runCli(['read-media', 'media-1', '--out', '2024'])).rejects.toMatchObject({
+      stderr: expect.stringContaining('--out got the number 2024'),
+    })
+    expect(bridge.commands).toEqual([])
   })
 
   it('read-media without --out refuses before reaching the bridge', async () => {

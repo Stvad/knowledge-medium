@@ -210,6 +210,7 @@ export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
   files: readonly File[],
+  options: Pick<MediaCaptureDeps, 'txDescription'> = {},
 ): Promise<MediaCaptureResult[]> => {
   // Snapshot the lane context at the paste boundary: the user, and that user's §6
   // resolver. Capture touches no remote session (it only stages + writes the block
@@ -217,7 +218,7 @@ export const captureMediaFromFiles = async (
   // switch can't split it across accounts.
   const userId = repo.user.id
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
-  const deps = captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) })
+  const deps = {...captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) }), ...options}
   const results: MediaCaptureResult[] = []
   for (const file of files) {
     if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {

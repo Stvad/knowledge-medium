@@ -27,6 +27,7 @@ import {
   addMediaResultSchema,
   MEDIA_BRIDGE_MAX_BYTES,
   moveBlockPositionSchema,
+  neutralizeDisplayText,
   readMediaCommandSchema,
   readMediaResultSchema,
   TODO_WRITE_HELP,
@@ -63,6 +64,11 @@ Writing: append_markdown writes an outline in one call; edit_block changes one p
 Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
+
+/** The image formats model APIs take inline; any other image goes out as a file. */
+const MODEL_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+/** `media:mime` is synced and member-writable. */
+const MIME_SHAPE = /^[\w.+-]+\/[\w.+-]+$/
 
 /** What a write tool is about to do, as the write guard sees it. Block-id
  *  fields (`id`, move_block's `parentId` and `position.siblingId`) carry the
@@ -171,15 +177,21 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       ref,
       ...(workspaceId !== undefined ? {workspaceId} : {}),
     }))
-    const summary = `Media ^${media.id}: ${media.filename ?? '(no filename)'}, ${media.mime}, ${media.size} bytes, ${media.hash}`
+    const summary = neutralizeDisplayText(
+      `Media ^${media.id}: ${media.filename ?? '(no filename)'}, ${media.mime}, ${media.size} bytes, ${media.hash}`,
+    )
     return {
       content: [
         {type: 'text' as const, text: summary},
-        media.imageMime !== null
+        media.imageMime !== null && MODEL_IMAGE_MIMES.has(media.imageMime)
           ? {type: 'image' as const, data: media.base64, mimeType: media.imageMime}
           : {
               type: 'resource' as const,
-              resource: {uri: `km://media/${media.id}`, mimeType: media.mime, blob: media.base64},
+              resource: {
+                uri: `km://media/${encodeURIComponent(media.id)}`,
+                mimeType: MIME_SHAPE.test(media.mime) ? media.mime : 'application/octet-stream',
+                blob: media.base64,
+              },
             },
       ],
     }
@@ -189,7 +201,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     server.registerTool('add_media' satisfies KmMcpToolName, {
       description: 'Store a local file as a media block under the workspace\'s Assets page; the same bytes added '
       + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
-      + `to show it there. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+      + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
       inputSchema: {
         path: z.string().describe('Absolute path of the file'),
         filename: addMediaCommandSchema.shape.filename,

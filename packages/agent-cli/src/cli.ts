@@ -65,6 +65,7 @@ import {
   textArguments,
   toStringArray,
   refuseNumberified,
+  stringOption,
   workspaceAssertion,
 } from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
@@ -836,18 +837,17 @@ cli
   .command('read-media <ref>', wireDescription('read-media'))
   .option('--out <path>', 'File to write the bytes to (required; replaced if it exists)')
   .option('--workspace <id>', 'Workspace to read (default: the one open in the app tab)')
-  .action(async (ref: unknown, options: {out?: unknown, workspace?: unknown}) => {
-    if (typeof options.out !== 'string' || options.out === '') {
-      throw new Error('read-media requires --out <path>: the file to write the bytes to.')
-    }
+  .action(async (ref: string, options: {out?: unknown, workspace?: unknown}) => {
+    const out = options.out === undefined ? '' : stringOption('--out', options.out)
+    if (!out) throw new Error('read-media requires --out <path>: the file to write the bytes to.')
     await ensureBridgeRunning()
     const {base64, ...media} = readMediaResultSchema.parse(await runCommand({
       type: 'read-media',
-      ref: String(ref),
+      ref,
       ...workspaceAssertion(options.workspace),
     }))
-    await fs.writeFile(options.out, Buffer.from(base64, 'base64'))
-    process.stdout.write(`${toDisplayJson({...media, path: options.out})}\n`)
+    await fs.writeFile(out, Buffer.from(base64, 'base64'))
+    process.stdout.write(`${toDisplayJson({...media, path: out})}\n`)
   })
 
 cli
@@ -855,15 +855,14 @@ cli
   .option('--filename <name>', 'The block\'s content (default: the file\'s own name)')
   .option('--mime <type>', 'MIME type, for bytes that are no recognised image or PDF')
   .option('--workspace <id>', 'Assert the workspace open in the app tab')
-  .action(async (filePath: unknown, options: {filename?: unknown, mime?: unknown, workspace?: unknown}) => {
-    const file = String(filePath)
+  .action(async (file: string, options: {filename?: unknown, mime?: unknown, workspace?: unknown}) => {
     const encoded = await readMediaFileBase64(file)
     await ensureBridgeRunning()
     await runAndPrint({
       type: 'add-media',
       base64: encoded,
-      filename: options.filename !== undefined ? String(options.filename) : path.basename(file),
-      ...(options.mime !== undefined ? {mime: String(options.mime)} : {}),
+      filename: options.filename !== undefined ? stringOption('--filename', options.filename) : path.basename(file),
+      ...(options.mime !== undefined ? {mime: stringOption('--mime', options.mime)} : {}),
       ...workspaceAssertion(options.workspace),
     })
   })

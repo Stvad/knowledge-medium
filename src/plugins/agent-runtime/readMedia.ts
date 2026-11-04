@@ -43,6 +43,7 @@ export const readMedia = async (
   const resolved = await resolver.resolve({workspaceId, contentHash: hash})
   if (!resolved.ok) throw new Error(`Cannot read media block ${block.id}: ${FAILURE_TEXT[resolved.reason]}.`)
   const {bytes} = resolved
+  // After the read, not before it from media:size: that is member-writable, and could block a read.
   if (bytes.length > MEDIA_BRIDGE_MAX_BYTES) {
     throw new Error(`Media block ${block.id} is ${bytes.length} bytes; read-media carries at most ${MEDIA_BRIDGE_MAX_BYTES}.`)
   }

@@ -1,9 +1,9 @@
 import { base64 } from '@scure/base'
 import type { AddMediaResult } from '@knowledge-medium/agent-cli/protocol'
-import { CAPTURE_FAILURE_MESSAGE } from '@/plugins/attachments/assetUpload.js'
-import type { MediaCaptureResult } from '@/plugins/attachments/mediaCapture.js'
-
-export type MediaCapture = (file: File) => Promise<MediaCaptureResult>
+import type { Repo } from '@/data/repo'
+import { CAPTURE_FAILURE_MESSAGE, captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
+import { agentTxOptions } from './agentWrites.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 
 export interface AddMediaInput {
   base64: string
@@ -20,14 +20,25 @@ const decode = (encoded: string): Uint8Array<ArrayBuffer> => {
 }
 
 /** A file's bytes as a media block under the workspace's Assets page, deduplicated
- *  by content. Placing it in a note is the caller's next write, of `reference`. */
+ *  by content. Placing it in a note is the caller's next write, of `reference`.
+ *
+ *  The block carries no contributor: capture mints it pristine so two devices' first
+ *  captures reconcile to one row, and attribution skips a pristine row. `recent_changes`
+ *  still lists the write. */
 export const addMedia = async (
+  repo: Repo,
   workspaceId: string,
   input: AddMediaInput,
-  capture: MediaCapture,
 ): Promise<AddMediaResult> => {
   const bytes = decode(input.base64)
-  const captured = await capture(new File([bytes], input.filename ?? '', {type: input.mime ?? ''}))
+  // The filename becomes the block's content.
+  await refuseDanglingBlockRefs(repo, 'add-media', [input.filename], async () => '')
+  const [captured] = await captureMediaFromFiles(
+    repo,
+    workspaceId,
+    [new File([bytes], input.filename ?? '', {type: input.mime ?? ''})],
+    {txDescription: agentTxOptions('add-media').description},
+  )
   if (!captured.ok) throw new Error(`add-media (workspace ${workspaceId}): ${CAPTURE_FAILURE_MESSAGE[captured.reason]}`)
-  return {id: captured.assetBlockId, deduped: captured.deduped, reference: `((${captured.assetBlockId}))`}
+  return {id: captured.assetBlockId, workspaceId, deduped: captured.deduped, reference: `((${captured.assetBlockId}))`}
 }

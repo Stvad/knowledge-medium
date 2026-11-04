@@ -55,6 +55,8 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
   return false
 }
 
+export const CHOOSE_CONTRIBUTOR_MESSAGE = 'Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.'
+
 export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
   watches: {kind: 'field', table: 'blocks', fields: authoredFields},
@@ -98,7 +100,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const external = context?.contributorSource === 'agent'
     if (external) {
       if (context.contributorId === undefined) {
-        throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
+        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
       }
       if (selectedId !== undefined) await assertContributor(ctx.tx, selectedId, event.workspaceId, {allowHuman: false})
       for (const [id, {corrections}] of targets) {

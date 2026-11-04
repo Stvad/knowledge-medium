@@ -30,7 +30,7 @@ import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
-import { captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
+import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
 import { addMedia } from './addMedia.ts'
 import { readMedia } from './readMedia.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
@@ -2385,15 +2385,16 @@ const executeAttributedCommand = async (
       if (context.runtime.read(blockRenderersFacet).media === undefined) {
         throw new Error('Enable the Attachments plugin to add media.')
       }
-      return addMedia(
-        workspaceId,
-        {
-          base64: requireString(command.base64, 'base64'),
-          filename: command.filename,
-          mime: command.mime,
-        },
-        async file => (await captureMediaFromFiles(context.repo, workspaceId, [file]))[0],
-      )
+      // Up front: a pristine asset trips no attribution check, so the check would
+      // otherwise depend on whether this write also had to create the Assets page.
+      if (contributorsEnabled(context) && command.contributorId === undefined) {
+        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+      }
+      return addMedia(context.repo, workspaceId, {
+        base64: requireString(command.base64, 'base64'),
+        filename: command.filename,
+        mime: command.mime,
+      })
     }
 
     case 'comments':

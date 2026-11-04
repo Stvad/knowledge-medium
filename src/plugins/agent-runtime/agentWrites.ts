@@ -7,7 +7,7 @@ import type { Repo } from '@/data/repo'
  *  and the change-history views filter on this prefix.
  *
  *  Not attributed: `eval`, `sql execute` and `run-action` (arbitrary code), a
- *  Journal page bootstrapped on the way to a first daily note, and the
+ *  Journal or Assets page bootstrapped on the way to its first entry, and the
  *  follow-up txs post-commit processors open for an agent write. */
 export const AGENT_TX_DESCRIPTION_PREFIX = 'agent runtime '
 

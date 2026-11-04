@@ -126,18 +126,28 @@ export const isPdfMime = (mime: string | undefined): boolean =>
 /** The fallback MIME for a file with no declared type. */
 export const GENERIC_MIME = 'application/octet-stream'
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+
 /** Sniff a common raster image MIME from the leading magic bytes. Returns `null`
- *  for anything unrecognized (incl. a too-short buffer). */
+ *  for anything unrecognized (incl. a too-short buffer). Each check is long enough
+ *  that ordinary text cannot pass it, since a match overrides a declared type: a
+ *  note starting "BM" or "GIF8" is not an image. */
 export const sniffImageMime = (b: Uint8Array): string | null => {
-  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png'
+  if (PNG_SIGNATURE.every((byte, i) => b[i] === byte)) return 'image/png'
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
-  if (b.length >= 4 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif'
+  if (
+    b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 &&
+    (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61 // "GIF87a" | "GIF89a"
+  ) return 'image/gif'
   if (
     b.length >= 12 &&
     b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && // "RIFF"
     b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 // "WEBP"
   ) return 'image/webp'
-  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp' // "BM"
+  if (
+    b.length >= 10 && b[0] === 0x42 && b[1] === 0x4d && // "BM"
+    b[6] === 0 && b[7] === 0 && b[8] === 0 && b[9] === 0 // its reserved field
+  ) return 'image/bmp'
   return null
 }
 

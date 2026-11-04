@@ -33,8 +33,9 @@ export const KM_MCP_TOOL_NAMES = [
 
 export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]
 
-/** Fully-qualified tool ids as they appear to `claude --allowedTools`. */
-export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.map(
+/** Fully-qualified tool ids as they appear to `claude --allowedTools`. `add_media`
+ *  uploads any local file the model names, so it is never granted in advance. */
+export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.filter(name => name !== 'add_media').map(
   name => `mcp__${MCP_SERVER_NAME}__${name}`,
 )
 

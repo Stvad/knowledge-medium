@@ -31,7 +31,7 @@ const PLAIN = 'c20d5f8b-0000-4000-8000-0000000000c1'
 const NO_HASH = 'd30e6a9c-0000-4000-8000-0000000000d1'
 const opts = {scope: ChangeScope.BlockDefault}
 
-const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
 const TEXT_BYTES = new TextEncoder().encode('not an image at all')
 
 let db: TestDb

@@ -678,8 +678,10 @@ export const viewBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const BRIDGE_DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
+
 /** The largest media `read-media` or `add-media` carries. Base64 of this plus the
- *  envelope must fit the bridge's default body limit (`maxBodyBytes`, 10 MiB). Raising
+ *  envelope must fit {@link BRIDGE_DEFAULT_MAX_BODY_BYTES}. Raising
  *  both is not enough: `read_media` needs its own cap, since an MCP client can drop the
  *  whole connection on a much larger result rather than fail the one call. */
 export const MEDIA_BRIDGE_MAX_BYTES = 7 * 1024 * 1024
@@ -720,6 +722,7 @@ export const addMediaCommandSchema = z.looseObject({
 
 export const addMediaResultSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
   /** These bytes were already a media block in this workspace, and this is that block. */
   deduped: z.boolean(),
   /** What to write in a block's content to show it there. */
@@ -1351,8 +1354,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'read-media': {
     usage: 'kmagent read-media <ref> --out <path> [--workspace <id>]',
-    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes show them as ((id)). The '
-      + `bytes are base64 in the result, with the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes show them as ((id)). Writes '
+      + `the bytes to --out and prints the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     readOnly: true,
   },
   // The views read what the raw commands above read, so they classify the same.
