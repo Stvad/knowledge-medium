@@ -1,0 +1,1 @@
+export{fr as ExtensionsSettings}from"../../../chunks/app-BM7Uf2vS.js";

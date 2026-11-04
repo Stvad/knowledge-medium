@@ -1,0 +1,1 @@
+export{RU as BootFallback}from"../../../chunks/app-BM7Uf2vS.js";

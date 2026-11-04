@@ -1,0 +1,1 @@
+"use client";export{AR as Collapsible,jR as CollapsibleContent,MR as CollapsibleTrigger}from"../../../chunks/app-BM7Uf2vS.js";

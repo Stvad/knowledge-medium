@@ -1,0 +1,1 @@
+export{h2 as kernelDataExtension}from"../../chunks/app-BM7Uf2vS.js";

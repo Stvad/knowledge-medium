@@ -1,0 +1,1 @@
+export{cU as propertyShapeLabel}from"../../../chunks/app-BM7Uf2vS.js";

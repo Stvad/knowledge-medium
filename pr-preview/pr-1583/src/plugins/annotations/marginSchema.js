@@ -1,0 +1,1 @@
+export{TJ as annotationMarginOpenProp}from"../../../chunks/app-BM7Uf2vS.js";

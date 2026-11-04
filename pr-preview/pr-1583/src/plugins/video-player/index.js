@@ -1,0 +1,1 @@
+export{wx as videoPlayerPlugin}from"../../../chunks/app-BM7Uf2vS.js";
