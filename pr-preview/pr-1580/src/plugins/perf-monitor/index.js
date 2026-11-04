@@ -1,1 +1,1 @@
-export{vr as perfMonitorPlugin}from"../../../chunks/app-kPMqkjNp.js";
+export{vr as perfMonitorPlugin}from"../../../chunks/app-ClObUBrf.js";

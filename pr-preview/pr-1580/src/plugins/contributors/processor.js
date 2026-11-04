@@ -1,1 +1,1 @@
-export{IJ as contributorAttributionProcessor}from"../../../chunks/app-kPMqkjNp.js";
+export{FJ as CHOOSE_CONTRIBUTOR_MESSAGE,IJ as contributorAttributionProcessor}from"../../../chunks/app-ClObUBrf.js";

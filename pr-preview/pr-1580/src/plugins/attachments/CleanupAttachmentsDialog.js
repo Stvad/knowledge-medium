@@ -1,1 +1,1 @@
-export{My as CleanupAttachmentsDialog}from"../../../chunks/app-kPMqkjNp.js";
+export{Py as CleanupAttachmentsDialog}from"../../../chunks/app-ClObUBrf.js";

@@ -1,1 +1,1 @@
-export{MQ as powerSyncLogger}from"../../chunks/app-kPMqkjNp.js";
+export{FQ as powerSyncLogger}from"../../chunks/app-ClObUBrf.js";
