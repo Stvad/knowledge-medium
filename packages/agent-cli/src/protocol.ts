@@ -679,7 +679,9 @@ export const viewBlockCommandSchema = z.looseObject({
 })
 
 /** The largest media `read-media` or `add-media` carries. Base64 of this plus the
- *  envelope must fit the bridge's default body limit (`maxBodyBytes`, 10 MiB). */
+ *  envelope must fit the bridge's default body limit (`maxBodyBytes`, 10 MiB). Raising
+ *  both is not enough: `read_media` needs its own cap, since an MCP client can drop the
+ *  whole connection on a much larger result rather than fail the one call. */
 export const MEDIA_BRIDGE_MAX_BYTES = 7 * 1024 * 1024
 
 export const readMediaCommandSchema = z.looseObject({
@@ -711,7 +713,6 @@ export const addMediaCommandSchema = z.looseObject({
   mime: z.string().optional().describe(
     'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream',
   ),
-  recognizedOnly: z.boolean().optional(),
   workspaceId: z.string().optional().describe('Asserts the workspace open in the app tab; a write goes nowhere else'),
   ...contributorField,
   ...commandIdField,

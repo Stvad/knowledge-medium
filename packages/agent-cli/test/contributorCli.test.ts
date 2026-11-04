@@ -150,14 +150,13 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     expect(printed).not.toHaveProperty('base64')
   })
 
-  it('add-media sends any file, named for the file, without the media-only limit', async () => {
+  it('add-media sends any file, named for the file', async () => {
     const file = path.join(tempDir, 'notes.txt')
     await fs.writeFile(file, Buffer.from([1, 2, 255]))
     const {stdout} = await runCli(['--contributor', 'none', 'add-media', file, '--mime', 'text/plain', '--workspace', 'ws-1'])
 
     const sent = bridge.commands.find(command => command.type === 'add-media')
     expect(sent).toMatchObject({base64: Buffer.from([1, 2, 255]).toString('base64'), filename: 'notes.txt', mime: 'text/plain', workspaceId: 'ws-1'})
-    expect(sent).not.toHaveProperty('recognizedOnly')
     expect(stdout).toContain('((media-1))')
   })
 

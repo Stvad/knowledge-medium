@@ -2391,7 +2391,6 @@ const executeAttributedCommand = async (
           base64: requireString(command.base64, 'base64'),
           filename: command.filename,
           mime: command.mime,
-          recognizedOnly: command.recognizedOnly,
         },
         async file => (await captureMediaFromFiles(context.repo, workspaceId, [file]))[0],
       )

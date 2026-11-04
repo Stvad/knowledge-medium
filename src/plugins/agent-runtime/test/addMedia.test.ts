@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import {base64} from '@scure/base'
-import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -125,17 +125,7 @@ describe('addMedia', () => {
     expect((await repo.load(mislabelled.id))?.properties[mediaMimeProp.name]).toBe('image/png')
   })
 
-  it('under recognizedOnly, refuses bytes that are no image or PDF, before capturing anything', async () => {
-    const spy = vi.fn(capture)
-    await expect(addMedia(WS, input(SECRET, {recognizedOnly: true}), spy)).rejects.toThrow(/not a recognised image or PDF/)
-    expect(spy).not.toHaveBeenCalled()
-  })
-
-  it.each([['image', PNG], ['PDF', PDF]])('under recognizedOnly, accepts a %s', async (_, bytes) => {
-    await expect(addMedia(WS, input(bytes, {recognizedOnly: true}), capture)).resolves.toMatchObject({deduped: false})
-  })
-
-  it('without recognizedOnly, any bytes are a file', async () => {
+  it('takes any bytes as a file', async () => {
     await expect(addMedia(WS, input(SECRET), capture)).resolves.toMatchObject({deduped: false})
   })
 

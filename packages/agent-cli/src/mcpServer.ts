@@ -79,7 +79,7 @@ export type GraphMcpWriteOperation =
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
-  | {type: 'add_media', path: string, filename: string, workspaceId?: string}
+  | {type: 'add_media', path: string, filename: string, mime?: string, workspaceId?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
@@ -187,23 +187,24 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   if (options.localMediaFiles === true) {
     server.registerTool('add_media' satisfies KmMcpToolName, {
-      description: 'Store a local image or PDF as a media block under the workspace\'s Assets page; the same bytes added '
+      description: 'Store a local file as a media block under the workspace\'s Assets page; the same bytes added '
       + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
-      + `to show it there. Other kinds of file are refused, as is anything past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+      + `to show it there. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
       inputSchema: {
         path: z.string().describe('Absolute path of the file'),
         filename: addMediaCommandSchema.shape.filename,
+        mime: addMediaCommandSchema.shape.mime,
         workspaceId: addMediaCommandSchema.shape.workspaceId,
       },
-    }, async ({path: filePath, filename, workspaceId}) => {
+    }, async ({path: filePath, filename, mime, workspaceId}) => {
       if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
       const name = filename ?? path.basename(filePath)
-      await beforeWrite({type: 'add_media', path: filePath, filename: name, workspaceId})
+      await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
       return json(addMediaResultSchema.parse(await client.runCommand({
         type: 'add-media',
         base64: await readMediaFileBase64(filePath),
         filename: name,
-        recognizedOnly: true,
+        ...(mime !== undefined ? {mime} : {}),
         ...(workspaceId !== undefined ? {workspaceId} : {}),
       })))
     })

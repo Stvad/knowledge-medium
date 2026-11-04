@@ -71,18 +71,18 @@ describe('createGraphMcpServer', () => {
       return {runCommand, call: (input: Record<string, unknown>) => tool.handler(tool.inputSchema.parse(input), {})}
     }
 
-    it('sends the file\'s bytes, named for the file, limited to recognised media', async () => {
-      const file = path.join(dir, 'shot.png')
+    it('sends the file\'s bytes, named for the file', async () => {
+      const file = path.join(dir, 'clip.mp3')
       await fs.writeFile(file, Buffer.from([1, 2, 255]))
       const {runCommand, call} = setup()
 
-      const result = await call({path: file})
+      const result = await call({path: file, mime: 'audio/mpeg'})
 
       expect(runCommand.mock.calls[0]?.[0]).toMatchObject({
         type: 'add-media',
         base64: Buffer.from([1, 2, 255]).toString('base64'),
-        filename: 'shot.png',
-        recognizedOnly: true,
+        filename: 'clip.mp3',
+        mime: 'audio/mpeg',
       })
       expect(result.content[0]).toMatchObject({text: expect.stringContaining('((media-1))')})
     })
@@ -95,7 +95,7 @@ describe('createGraphMcpServer', () => {
         throw new Error('blocked by guard')
       })
       await expect(call({path: file})).rejects.toThrow('blocked by guard')
-      expect(operations).toEqual([{type: 'add_media', path: file, filename: 'never-created.png', workspaceId: undefined}])
+      expect(operations).toEqual([{type: 'add_media', path: file, filename: 'never-created.png', mime: undefined, workspaceId: undefined}])
       expect(runCommand).not.toHaveBeenCalled()
     })
 
