@@ -72,7 +72,7 @@ const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult
   return createEngine({
     config: parseConfig({
       workspaceId: WS,
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
     }),
     graph: createGraph(client),
     replies: createReplyWriter(client),

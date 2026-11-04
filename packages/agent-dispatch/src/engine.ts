@@ -243,13 +243,15 @@ export const createEngine = (deps: EngineDeps) => {
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
-    quietExempt: boolean,
   ) => {
     const {runner} = watcher
     // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
     const block = await graph.getBlock(sourceId)
     if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
+    const beingEdited = (await graph.beingEditedBlockIds()).has(sourceId)
+    const decision = decidePending({
+      source: block, nowMs: now(), settleMs: watcher.settleMs, beingEdited, editHoldMs: watcher.editHoldMs, baselineMs,
+    })
     if (!decision.pending) return refundLaunch(launchStamp)
     const ancestorBlocks = await graph.ancestors(sourceId)
 
@@ -558,7 +560,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const tickBacklinksWatcher = async (watcher: BacklinksWatcher, quietExemptBlockIds: ReadonlySet<string>) => {
+  const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
     // Baseline stamp is taken BEFORE any awaited scan: a mention typed
     // while the first resolve/scan is in flight must not end up with
     // editedAtMs < baseline (it would be classed pre-baseline forever).
@@ -591,6 +593,7 @@ export const createEngine = (deps: EngineDeps) => {
     // decision re-runs with a fresh read inside processMention before
     // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
+    const beingEdited = await graph.beingEditedBlockIds()
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
       // Clear a agent:cancel the daemon can't act on. sweepCancellations
@@ -618,8 +621,14 @@ export const createEngine = (deps: EngineDeps) => {
         continue
       }
       if (running.has(source.id)) continue
-      const quietExempt = quietExemptBlockIds.has(source.id)
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
+      const preview = decidePending({
+        source: view,
+        nowMs: now(),
+        settleMs: watcher.settleMs,
+        beingEdited: beingEdited.has(source.id),
+        editHoldMs: watcher.editHoldMs,
+        baselineMs,
+      })
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -635,7 +644,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
     }
   }
 
@@ -732,16 +741,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
-
-  /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
-   *  the source (blur / settle), keyed by the EMITTING watcher — only
-   *  that watcher may skip its still-typing gate for them, so a query
-   *  watcher's short settle can't vouch against a backlinks watcher's
-   *  longer quietMs. The push loop collects these from event payloads;
-   *  sweep ticks pass nothing. */
-  const tick = async (options: {quietExemptByWatcher?: ReadonlyMap<string, ReadonlySet<string>>} = {}) => {
-    const quietExemptByWatcher = options.quietExemptByWatcher
+  const tick = async () => {
     if (!launchTimesLoaded) {
       launchTimes = await state.getLaunchTimes()
       pruneLaunchTimes()
@@ -753,7 +753,7 @@ export const createEngine = (deps: EngineDeps) => {
     for (const watcher of config.watchers) {
       try {
         if (watcher.kind === 'backlinks') {
-          await tickBacklinksWatcher(watcher, quietExemptByWatcher?.get(watcher.name) ?? NO_EXEMPTIONS)
+          await tickBacklinksWatcher(watcher)
         } else {
           await tickQueryWatcher(watcher)
         }

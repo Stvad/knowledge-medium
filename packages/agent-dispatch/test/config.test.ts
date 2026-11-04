@@ -4,6 +4,13 @@ import path from 'node:path'
 import {configSchema, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
+  it('refuses the retired quietMs rather than ignoring a meaning that changed', () => {
+    expect(() => parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'backlinks', name: 'claude-mentions', target: 'claude', quietMs: 5_000}],
+    })).toThrow(/quietMs/)
+  })
+
   it('applies defaults for a minimal mention-watcher config', () => {
     const config = parseConfig({
       workspaceId: 'ws-test',

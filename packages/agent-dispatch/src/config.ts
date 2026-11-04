@@ -47,6 +47,8 @@ export const PROPS = {
    *  aborts the run, parks the task `error: cancelled`, and clears this
    *  (written as '') on the terminal write so it never re-cancels a rerun. */
   cancel: 'agent:cancel',
+  /** When the UI's Ask Agent gesture last fired: an explicit "go". */
+  askedAt: 'agent:asked-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
@@ -166,14 +168,15 @@ const backlinksWatcherSchema = z.strictObject({
   target: z.string().min(1),
   /** Resume the nearest ancestor thread session when present. */
   resume: z.boolean().default(true),
-  /** Don't claim a mention until the block has been quiet this long —
-   *  otherwise the daemon snapshots (and bills) a half-typed request.
-   *  Capped at the tab-side settleMs bound: the push watcher registers
-   *  with settleMs = quietMs, and an over-cap value would fail the
-   *  tab's schema — misdiagnosed as an unsupported bundle. */
-  quietMs: z.number().int().nonnegative()
-    .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(15_000),
+  /** Wait this long after a mention's last change, so the final debounced
+   *  write of an edit lands before the daemon snapshots the block. */
+  settleMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
+    .default(1_000),
+  /** A mention still open in an editor is not claimed until it has gone
+   *  unedited this long: the user may just be thinking, but a device that
+   *  vanished mid-edit leaves its editing flag set forever. */
+  editHoldMs: z.number().int().nonnegative().default(120_000),
   /** Show the reply being BUILT LIVE as the run streams, instead of posting
    *  it only once at the end. Orthogonal to `splitReply`: streaming just
    *  reconciles the reply subtree with the growing text on each tick (a

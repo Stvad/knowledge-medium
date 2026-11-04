@@ -14,7 +14,7 @@
  * TTL refresh) while consumers keep a slow poll as backstop.
  */
 import type { PowerSyncDb } from '@/data/internals/commitPipeline'
-import type { WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
+import { BEING_EDITED_BLOCK_IDS_SQL, type WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
 
 export type WatchEventTransport = (event: Record<string, unknown>) => Promise<void>
 
@@ -36,22 +36,15 @@ const DEFAULT_SETTLE_MS = 1_000
 const DEFAULT_TTL_MS = 10 * 60_000
 /** Collapse change bursts before re-running the watcher query. */
 const CHANGE_THROTTLE_MS = 250
-/** How long a blur (notifyBlockSettled) keeps its block quiet-exempt in
- *  flush emits — covers the editor's debounced content commit plus the
- *  recheck below. */
-const BLUR_EXEMPT_MS = 2_500
-/** Second look after a blur: the editor flushes its debounced commit on
- *  unmount, so the write may land shortly AFTER the blur signal. */
-const BLUR_RECHECK_MS = 600
-/** Bound on settledBlocks per event — a mass change (import, sync burst)
- *  degrades to an un-exempted tick, not an unbounded payload. */
-const MAX_SETTLED_IDS = 128
-
 /** Backlink watchers get a canned query so consumers never hand-roll
  *  reference-table SQL: any edit to (or arrival/removal of) a block
- *  referencing the target changes the fingerprint. */
-const BACKLINKS_WATCH_SQL = `
-  SELECT br.source_id AS id, coalesce(b.user_updated_at, b.updated_at) AS edited_at
+ *  referencing the target changes the fingerprint, and so does the block
+ *  entering or leaving an editor on any client, which is what releases a
+ *  mention the consumer is holding. */
+export const BACKLINKS_WATCH_SQL = `
+  SELECT br.source_id AS id,
+         coalesce(b.user_updated_at, b.updated_at) AS edited_at,
+         br.source_id IN (${BEING_EDITED_BLOCK_IDS_SQL}) AS being_edited
     FROM block_references br JOIN blocks b ON b.id = br.source_id
    WHERE br.target_id = ? AND b.deleted = 0
    ORDER BY br.source_id`
@@ -64,18 +57,10 @@ interface WatcherRuntime {
   settleMs: number
   /** JSON of the last result set; null until the baseline run. */
   fingerprint: string | null
-  /** id → row-JSON as of the last EMIT (or baseline) — the reference
-   *  point for which ids an emit reports as settled. */
-  lastEmittedById: Map<string, string>
-  /** id → row-JSON as of the last COMPUTE. */
-  currentById: Map<string, string>
-  /** Ids that changed since the last emit. */
-  pendingSettledIds: Set<string>
   settleTimer: ReturnType<typeof setTimeout> | null
   computing: boolean
   /** A change signal arrived that no compute has consumed yet. Makes an
-   *  in-progress computeLoop re-iterate, and is the only case where a
-   *  blur flush needs to re-run the query itself. */
+   *  in-progress computeLoop re-iterate. */
   pendingChange: boolean
   /** Set on dispose. In-flight computeLoops / armed timers hold direct
    *  runtime references across awaits; once disposed nothing observes
@@ -110,31 +95,12 @@ const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
   params: spec.kind === 'backlinks' ? [spec.targetId] : (spec.params ?? []),
   settleMs: spec.settleMs ?? DEFAULT_SETTLE_MS,
   fingerprint: null,
-  lastEmittedById: new Map(),
-  currentById: new Map(),
-  pendingSettledIds: new Set(),
   settleTimer: null,
   computing: false,
   pendingChange: false,
   disposed: false,
   disposeOnChange: null,
 })
-
-/** One serialization pass serves both the change fingerprint and the
- *  per-id diff state — this runs on every (throttled) table change.
- *  The joined fingerprint is byte-identical to JSON.stringify(rows)
- *  and is only ever compared to itself. */
-const serializeRows = (rows: unknown[]): {fingerprint: string, byId: Map<string, string>} => {
-  const byId = new Map<string, string>()
-  const rowJsons: string[] = []
-  for (const row of rows) {
-    const json = JSON.stringify(row) ?? 'null' // array-position semantics for non-serializable rows
-    rowJsons.push(json)
-    const id = (row as {id?: unknown} | null)?.id
-    if (typeof id === 'string' && id) byId.set(id, json)
-  }
-  return {fingerprint: `[${rowJsons.join(',')}]`, byId}
-}
 
 const watchTablesFor = (spec: WatchEventsWatcher): string[] =>
   spec.kind === 'backlinks' ? BACKLINKS_WATCH_TABLES : (spec.tables ?? ['blocks'])
@@ -161,54 +127,11 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     if (!active) throw new Error('watch-events registry stopped (bridge torn down)')
   }
 
-  /** blockId → exempt-until. Blocks the user explicitly left (blur /
-   *  action) — the only ids a flush emit may report as settled. */
-  const blurredUntil = new Map<string, number>()
-  const isBlurredNow = (blockId: string): boolean => {
-    const until = blurredUntil.get(blockId)
-    if (until === undefined) return false
-    if (now() > until) {
-      blurredUntil.delete(blockId)
-      return false
-    }
-    return true
-  }
-
-  /** Emit the watcher's event and advance its emitted-state reference.
-   *  `timeConfirmed` (settle timer ran its full course) may report every
-   *  pending id as settled; a blur FLUSH may only report ids the LOCAL
-   *  user blurred recently. Note the limit of that filter: it knows
-   *  which ids were blurred, not who caused a pending change — a remote
-   *  device's mid-typing edit to a block this user just blurred can
-   *  still ride the exemption (accepted residual risk; the fingerprint
-   *  carries no change origin). What it does reliably exclude is
-   *  pending ids this user never left. */
-  const emitSettled = (consumer: string, runtime: WatcherRuntime, timeConfirmed: boolean) => {
+  const emitSettled = (consumer: string, runtime: WatcherRuntime) => {
     if (runtime.disposed) return
-    const settled = [...runtime.pendingSettledIds]
-      .filter(id => timeConfirmed || isBlurredNow(id))
-      .slice(0, MAX_SETTLED_IDS)
-
-    if (timeConfirmed) {
-      runtime.pendingSettledIds.clear()
-      runtime.lastEmittedById = new Map(runtime.currentById)
-    } else {
-      for (const id of settled) {
-        runtime.pendingSettledIds.delete(id)
-        const current = runtime.currentById.get(id)
-        if (current === undefined) runtime.lastEmittedById.delete(id)
-        else runtime.lastEmittedById.set(id, current)
-      }
-    }
-
     const send = transport
     if (!send) return
-    void send({
-      type: 'watcher-settled',
-      consumer,
-      watcher: runtime.name,
-      ...(settled.length > 0 ? {settledBlocks: settled} : {}),
-    }).catch(error => {
+    void send({type: 'watcher-settled', consumer, watcher: runtime.name}).catch(error => {
       console.warn(`watch-events: failed to push ${consumer}/${runtime.name} event`, error)
     })
   }
@@ -242,7 +165,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     if (runtime.settleTimer !== null) clearTimeout(runtime.settleTimer)
     runtime.settleTimer = setTimeout(() => {
       runtime.settleTimer = null
-      emitSettled(consumer, runtime, true)
+      emitSettled(consumer, runtime)
     }, runtime.settleMs)
   }
 
@@ -256,23 +179,12 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
         // TTL expiry): this runtime no longer observes changes, so any
         // settle it armed would be a false "quiet" confirmation.
         if (runtime.disposed) return
-        const {fingerprint, byId} = serializeRows(rows)
-        runtime.currentById = byId
+        const fingerprint = JSON.stringify(rows)
+        // Every change RE-arms the timer, so the event fires settleMs
+        // after the LAST change — quiet-period semantics, detected at
+        // the source instead of guessed by a poller.
         if (runtime.fingerprint !== null && fingerprint !== runtime.fingerprint) {
-          // Record which ids drifted from the last-emitted state — they
-          // become the event's settledBlocks (quiet-exemption hints).
-          for (const [id, json] of runtime.currentById) {
-            if (runtime.lastEmittedById.get(id) !== json) runtime.pendingSettledIds.add(id)
-          }
-          for (const id of runtime.lastEmittedById.keys()) {
-            if (!runtime.currentById.has(id)) runtime.pendingSettledIds.add(id)
-          }
-          // Every change RE-arms the timer, so the event fires settleMs
-          // after the LAST change — quiet-period semantics, detected at
-          // the source instead of guessed by a poller.
           armSettle(consumer, runtime)
-        } else if (runtime.fingerprint === null) {
-          runtime.lastEmittedById = new Map(runtime.currentById)
         }
         runtime.fingerprint = fingerprint
       } while (runtime.pendingChange)
@@ -283,10 +195,8 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
 
   /** Expired registrations self-clean on their next signal — a dead
    *  consumer must not keep the tab re-running queries forever.
-   *  Disposes only the SPECIFIC entry it judged expired: callers may
-   *  hold a stale snapshot (the blur flush iterates `[...entries]`
-   *  across awaits), and a by-name dispose would kill a fresh successor
-   *  registered mid-flush. */
+   *  Disposes only the SPECIFIC entry it judged expired, never by name:
+   *  a by-name dispose could kill a fresh successor registration. */
   const pruneIfExpired = (consumer: string, entry: ConsumerEntry): boolean => {
     if (now() - entry.lastRefreshedMs <= entry.ttlMs) return false
     disposeEntry(consumer, entry)
@@ -407,84 +317,12 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     return {consumer, registered: entry.runtimes.map(runtime => runtime.name), unchanged: false}
   }
 
-  /** Blur / explicit-signal path: the user is DONE with `blockId`, so
-   *  don't wait out the settle window for changes it caused. Recompute
-   *  now, flush any pending settle that involves this block, and look
-   *  once more shortly after — the editor's debounced content commit
-   *  usually lands just AFTER the blur signal. */
-  const recheckTimers = new Set<ReturnType<typeof setTimeout>>()
-
-  const notifyBlockSettled = (blockId: string) => {
-    // The blur signal fires on EVERY block-editor unmount (any block-to-
-    // block navigation) and the bridge wires it whenever it runs — with
-    // no registrations there is nothing to flush, and recording blurs
-    // would only grow state.
-    if (entries.size === 0) return
-
-    // Opportunistic prune keeps the map proportional to blurs inside the
-    // exempt window instead of growing per block ever visited.
-    for (const [id, until] of blurredUntil) {
-      if (now() > until) blurredUntil.delete(id)
-    }
-    blurredUntil.set(blockId, now() + BLUR_EXEMPT_MS)
-
-    const flushPass = async () => {
-      for (const [consumer, entry] of [...entries]) {
-        if (pruneIfExpired(consumer, entry)) continue
-        for (const runtime of entry.runtimes) {
-          // Re-run the query only when a change signal arrived that no
-          // compute consumed yet — an edit-free navigation must not turn
-          // into a per-watcher query storm.
-          if (!runtime.computing && runtime.pendingChange) {
-            await computeLoop(entry.db, consumer, runtime).catch(error => {
-              console.warn(`watch-events: ${consumer}/${runtime.name} query failed`, error)
-            })
-          }
-          if (runtime.settleTimer !== null && runtime.pendingSettledIds.has(blockId)) {
-            clearTimeout(runtime.settleTimer)
-            runtime.settleTimer = null
-            emitSettled(consumer, runtime, false)
-            // Ids that were NOT blur-confirmed (e.g. a concurrent sync
-            // edit) keep their normal settle window.
-            if (runtime.pendingSettledIds.size > 0) armSettle(consumer, runtime)
-          }
-        }
-      }
-    }
-
-    // Deferred off the caller's stack: React flushes ALL effect
-    // destroys before ALL creates in one synchronous pass, so a
-    // remount of the actively-edited editor (indent/reorder reparents
-    // the fiber) fires settled(X) and THEN resumed(X) on the same
-    // stack. A synchronous flush here would emit X as settled before
-    // the resumed revocation lands — the microtask lets any
-    // same-stack revocation win. A genuine blur loses nothing: the
-    // emit still happens ahead of the settle window.
-    queueMicrotask(() => { void flushPass() })
-    const timer = setTimeout(() => {
-      recheckTimers.delete(timer)
-      void flushPass()
-    }, BLUR_RECHECK_MS)
-    recheckTimers.add(timer)
-  }
-
-  /** The user re-entered the block's editor: a blur exemption asserts
-   *  "quiet, confirmed by leaving" — no longer true, so revoke it before
-   *  any later flush (incl. the blur's own 600ms recheck, or another
-   *  block's flush pass) can emit this block as settled mid-retype. */
-  const notifyBlockEditing = (blockId: string) => {
-    blurredUntil.delete(blockId)
-  }
-
   const disposeAll = () => {
     active = false // until the next bridge start (setTransport)
     for (const consumer of [...entries.keys()]) disposeConsumer(consumer)
-    for (const timer of recheckTimers) clearTimeout(timer)
-    recheckTimers.clear()
-    blurredUntil.clear()
   }
 
-  return {register, setTransport, notifyBlockSettled, notifyBlockEditing, disposeAll}
+  return {register, setTransport, disposeAll}
 }
 
 export type WatchEventsRegistry = ReturnType<typeof createWatchEventsRegistry>

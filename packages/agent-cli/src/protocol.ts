@@ -849,6 +849,18 @@ export const isReadOnlySql = (sql: string): boolean => {
 
 // ----- watch-events (push detection) ----------------------------------
 
+/** Ids of the blocks open in an editor on ANY client: edit state lives on
+ *  each panel's ui-state row, which syncs, so this also sees other devices.
+ *  A flag outlives a device that vanished mid-edit, so a reader must bound how
+ *  long it believes one. Must keep the predicate of `idx_blocks_being_edited`
+ *  literally, or SQLite stops using that index. */
+export const BEING_EDITED_BLOCK_IDS_SQL = `
+  SELECT json_extract(properties_json, '$.focusedBlockLocation.blockId') AS id
+    FROM blocks
+   WHERE deleted = 0
+     AND json_extract(properties_json, '$.isEditing') = 1
+     AND json_extract(properties_json, '$.focusedBlockLocation.blockId') IS NOT NULL`
+
 /** Schema bounds, exported so consumers building registrations (e.g.
  *  the agent-dispatch daemon's config) can validate against the SAME
  *  limits — an over-cap value fails the tab's schema at registration
