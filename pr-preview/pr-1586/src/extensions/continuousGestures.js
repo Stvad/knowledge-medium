@@ -1,1 +1,0 @@
-export{aF as GESTURE_ACTIVE,oF as GESTURE_CANCEL,sF as GESTURE_IDLE,cF as TOUCH_HOLD_MS,lF as TOUCH_SLOP_PX,uF as continuousGestureRecognizersFacet,dF as createBlockGestureController,fF as enabledTouchAction,pF as suppressNextClick,mF as unionTouchAction,hF as useContinuousGestures}from"../../chunks/app-BiuS647l.js";

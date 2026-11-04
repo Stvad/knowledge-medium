@@ -1,1 +1,0 @@
-export{xR as defineVariant,SR as defineVariantFacet}from"../../chunks/app-BiuS647l.js";

@@ -1,1 +1,0 @@
-export{$C as plainOutlinerPlugin}from"../../../chunks/app-BiuS647l.js";

@@ -1,1 +1,0 @@
-export{MJ as contributorsDataExtension}from"../../../chunks/app-BiuS647l.js";

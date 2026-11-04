@@ -1,1 +1,0 @@
-export{P3 as mergeProperties}from"../../chunks/app-BiuS647l.js";

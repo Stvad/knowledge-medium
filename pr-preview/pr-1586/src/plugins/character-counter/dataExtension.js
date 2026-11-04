@@ -1,1 +1,0 @@
-export{JJ as characterCounterDataExtension}from"../../../chunks/app-BiuS647l.js";

@@ -1,1 +1,0 @@
-export{JC as PromotableBreadcrumbList}from"../../../chunks/app-BiuS647l.js";

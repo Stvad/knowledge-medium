@@ -1,1 +1,0 @@
-export{uz as AddPropertyForm}from"../../../chunks/app-BiuS647l.js";

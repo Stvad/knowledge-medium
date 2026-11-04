@@ -1,1 +1,0 @@
-export{rM as BlockPasteShellDecorator,iM as blockPasteShellDecorator}from"../../chunks/app-BiuS647l.js";

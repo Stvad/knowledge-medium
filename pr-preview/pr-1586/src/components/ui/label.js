@@ -1,1 +1,0 @@
-export{LD as Label}from"../../../chunks/app-BiuS647l.js";

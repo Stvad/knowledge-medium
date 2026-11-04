@@ -1,1 +1,0 @@
-export{Yv as useIsReadOnly}from"../../chunks/app-BiuS647l.js";

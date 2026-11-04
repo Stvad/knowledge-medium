@@ -1,1 +1,0 @@
-export{VC as MobileBottomNavButton}from"../../../chunks/app-BiuS647l.js";

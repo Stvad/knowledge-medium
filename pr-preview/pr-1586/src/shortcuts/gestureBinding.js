@@ -1,1 +1,0 @@
-export{QM as gestureBindingDescriptor,$M as matchesGestureEvent}from"../../chunks/app-BiuS647l.js";

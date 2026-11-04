@@ -1,1 +1,0 @@
-export{gA as CommandPaletteHeaderItem}from"../../../chunks/app-BiuS647l.js";

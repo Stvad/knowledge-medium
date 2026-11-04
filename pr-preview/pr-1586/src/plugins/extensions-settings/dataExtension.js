@@ -1,1 +1,0 @@
-export{or as extensionsDataExtension}from"../../../chunks/app-BiuS647l.js";

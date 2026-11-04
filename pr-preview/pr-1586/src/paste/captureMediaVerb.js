@@ -1,1 +1,0 @@
-export{GI as captureMediaVerb}from"../../chunks/app-BiuS647l.js";

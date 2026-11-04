@@ -1,1 +1,0 @@
-export{XC as getBreadcrumbContentPreview}from"../../../chunks/app-BiuS647l.js";

@@ -1,1 +1,0 @@
-export{FT as usePendingInvitations}from"../../chunks/app-BiuS647l.js";

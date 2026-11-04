@@ -1,1 +1,0 @@
-export{HC as mobileBottomNavItemsFacet}from"../../../chunks/app-BiuS647l.js";

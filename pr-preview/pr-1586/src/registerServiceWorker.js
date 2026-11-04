@@ -1,1 +1,0 @@
-export{zM as checkForAppUpdate,BM as registerServiceWorker}from"../chunks/app-BiuS647l.js";

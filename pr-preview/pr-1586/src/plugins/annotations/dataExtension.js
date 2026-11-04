@@ -1,1 +1,0 @@
-export{Sq as annotationsDataExtension}from"../../../chunks/app-BiuS647l.js";

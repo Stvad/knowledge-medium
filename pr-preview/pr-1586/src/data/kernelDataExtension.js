@@ -1,1 +1,0 @@
-export{_2 as kernelDataExtension}from"../../chunks/app-BiuS647l.js";

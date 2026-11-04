@@ -1,1 +1,0 @@
-export{Qu as quotedInFooterContribution}from"../../../chunks/app-BiuS647l.js";
