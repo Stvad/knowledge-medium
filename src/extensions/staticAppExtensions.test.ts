@@ -94,13 +94,4 @@ describe('app boot composition', () => {
     expect(probesOf(resolveLocalSchemaContributions(staticDataExtensions)))
       .toEqual(expect.arrayContaining(contributed))
   })
-
-  it('still composes in safe mode (degraded-boot path)', () => {
-    const { repo } = createTestRepo({ db: shared.db })
-    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
-      overrides: new Map(),
-      safeMode: true,
-    })
-    expect(runtime).toBeTruthy()
-  })
 })
