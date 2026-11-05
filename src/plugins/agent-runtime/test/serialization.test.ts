@@ -13,6 +13,21 @@ describe('serializeValue', () => {
     expect(serializeValue(holder)).toEqual({items: ['[Circular]']})
   })
 
+  it('serializes an array shared without a cycle in full at every sighting', () => {
+    const types = ['todo', 'page']
+    const nested = [types]
+
+    expect(serializeValue([{types}, {types}])).toEqual([{types: ['todo', 'page']}, {types: ['todo', 'page']}])
+    expect(serializeValue({a: nested, b: nested})).toEqual({a: [['todo', 'page']], b: [['todo', 'page']]})
+  })
+
+  it('answers an array that reaches itself through an object', () => {
+    const list: unknown[] = []
+    list.push({back: list})
+
+    expect(serializeValue(list)).toEqual([{back: '[Circular]'}])
+  })
+
   it('serializes maps, sets and the values JSON cannot carry', () => {
     expect(serializeValue({
       map: new Map<unknown, unknown>([[1, 'one'], ['k', new Set([2n])]]),

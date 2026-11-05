@@ -15,7 +15,19 @@ export const serializeError = (error: unknown) => {
   }
 }
 
-export const serializeValue = (value: unknown, seen = new WeakSet<object>()): unknown => {
+/** `seen` holds every object, Map and Set already entered anywhere; a second
+ *  sighting of one reads as `[Circular]`, so a densely shared graph (a live
+ *  repo object) serializes in its size, not in its number of paths.
+ *  `arrayPath` holds only the arrays enclosing the current value, so an array
+ *  shared without a cycle (a property's default list) is serialized at every
+ *  sighting (objects inside it still follow `seen`), and only an array that
+ *  reaches itself reads as `[Circular]`. Accepted: arrays of arrays shared as a
+ *  DAG serialize once per path. */
+export const serializeValue = (
+  value: unknown,
+  seen = new WeakSet<object>(),
+  arrayPath = new WeakSet<unknown[]>(),
+): unknown => {
   if (value === undefined) {
     return {type: 'undefined'}
   }
@@ -45,39 +57,39 @@ export const serializeValue = (value: unknown, seen = new WeakSet<object>()): un
     return {
       type: 'Block',
       id: value.id,
-      data: serializeValue(value.peek(), seen),
+      data: serializeValue(value.peek(), seen, arrayPath),
     }
   }
 
   if (typeof value === 'object') {
-    // Every container, arrays included, is entered at most once: a value can
-    // reach itself through any of them. Global rather than per path, so a
-    // densely shared graph (a live repo object) serializes in its size, not
-    // in its number of paths; a second sighting reads as `[Circular]`.
+    if (Array.isArray(value)) {
+      if (arrayPath.has(value)) return '[Circular]'
+      arrayPath.add(value)
+      const items = value.map(item => serializeValue(item, seen, arrayPath))
+      arrayPath.delete(value)
+      return items
+    }
+
     if (seen.has(value)) return '[Circular]'
     seen.add(value)
-
-    if (Array.isArray(value)) {
-      return value.map(item => serializeValue(item, seen))
-    }
 
     if (value instanceof Map) {
       return Object.fromEntries(
         Array.from(value.entries()).map(([key, mapValue]) => [
           String(key),
-          serializeValue(mapValue, seen),
+          serializeValue(mapValue, seen, arrayPath),
         ]),
       )
     }
 
     if (value instanceof Set) {
-      return Array.from(value.values()).map(item => serializeValue(item, seen))
+      return Array.from(value.values()).map(item => serializeValue(item, seen, arrayPath))
     }
 
     return Object.fromEntries(
       Object.entries(value).map(([key, objectValue]) => [
         key,
-        serializeValue(objectValue, seen),
+        serializeValue(objectValue, seen, arrayPath),
       ]),
     )
   }

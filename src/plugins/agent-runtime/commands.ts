@@ -2270,8 +2270,9 @@ export const createAgentRuntimeContext = ({
     refreshAppRuntime,
     React,
     ReactDOM,
-    window,
-    document,
+    // Read on access, so building a context needs no DOM until a command uses one.
+    get window() { return window },
+    get document() { return document },
   }
 
   return context

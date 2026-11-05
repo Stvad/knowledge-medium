@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // Workspace-wide "which property keys does the registry not know about"
 // audit. `audit-extension` answers this per-extension and only for blocks

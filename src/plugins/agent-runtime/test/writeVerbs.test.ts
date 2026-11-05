@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // The markdown-native, conflict-safe write verbs (`append-markdown`,
 // `edit-block`, `create-page`, `update-block`'s compare-and-set) and the target

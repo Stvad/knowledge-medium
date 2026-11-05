@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // The agent views (`view-*` commands) and the block-ref resolver, end-to-end
 // against a real Repo. Same minimal runtime as dataCommands.test.ts: kernel +

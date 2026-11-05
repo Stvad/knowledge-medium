@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {base64} from '@scure/base'
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {MEDIA_BRIDGE_MAX_BYTES} from '@knowledge-medium/agent-cli/protocol'
