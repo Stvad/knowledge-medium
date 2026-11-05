@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildContentSearchMatch,
+  caseFoldingCodePoints,
+  caseInsensitiveVariants,
   findLiteralMatches,
   previewForMatch,
   replaceLiteralMatches,
@@ -101,5 +103,32 @@ describe('buildContentSearchMatch', () => {
 
   it('short-circuits an empty query to null (no match, no preview)', () => {
     expect(buildContentSearchMatch('b1', 'any content', '', insensitive)).toBeNull()
+  })
+})
+
+describe('caseInsensitiveVariants', () => {
+  const escapeClassMember = (char: string) => char.replace(/[-\\\]^[]/g, '\\$&')
+  // Measured ~0.5s alone: two passes over every code point.
+  it('leaves out no code point with a case-insensitive partner', () => {
+    const candidates = new Set(caseFoldingCodePoints())
+    const anyCandidate = new RegExp(`[${[...candidates].map(escapeClassMember).join('')}]`, 'iu')
+    const partnered: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue
+      const char = String.fromCodePoint(codePoint)
+      if (!candidates.has(char) && anyCandidate.test(char)) partnered.push(char)
+    }
+    expect(partnered).toEqual([])
+  }, 20_000)
+
+  it('folds exactly U+017F and U+212A onto ASCII letters from outside ASCII', () => {
+    const letters = 'abcdefghijklmnopqrstuvwxyz'
+    const nonAscii = [...letters].flatMap(caseInsensitiveVariants).filter(char => char > '\x7f')
+    expect(nonAscii.sort()).toEqual(['\u017F', '\u212A'])
+  })
+
+  it('returns the whole class of a code point, itself included', () => {
+    expect(caseInsensitiveVariants('в').sort()).toEqual(['В', 'в', '\u1C80'].sort())
+    expect(caseInsensitiveVariants('日')).toEqual(['日'])
   })
 })

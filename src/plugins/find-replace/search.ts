@@ -29,6 +29,36 @@ const passesWholeWordBoundary = (
 const escapeRegExp = (text: string): string =>
   text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
 
+const caseFlags = (matchCase: boolean): string => matchCase ? 'u' : 'iu'
+
+/** A code point outside this class has no case-insensitive partner under
+ *  `caseFlags(false)`: the regex matches it only against itself. */
+const HAS_CASE_PARTNER_CANDIDATE = /[\p{CWCF}\p{CWCM}]/u
+
+let caseFoldingCodePointList: readonly string[] | undefined
+
+/** Every code point in `HAS_CASE_PARTNER_CANDIDATE`, computed once on demand. */
+export const caseFoldingCodePoints = (): readonly string[] => {
+  if (caseFoldingCodePointList === undefined) {
+    const found: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue
+      const char = String.fromCodePoint(codePoint)
+      if (HAS_CASE_PARTNER_CANDIDATE.test(char)) found.push(char)
+    }
+    caseFoldingCodePointList = found
+  }
+  return caseFoldingCodePointList
+}
+
+/** Every code point a case-insensitive `findLiteralMatches` treats as equal
+ *  to the single code point `char`, `char` itself included. */
+export const caseInsensitiveVariants = (char: string): string[] => {
+  if (!HAS_CASE_PARTNER_CANDIDATE.test(char)) return [char]
+  const pattern = new RegExp(`^${escapeRegExp(char)}$`, caseFlags(false))
+  return caseFoldingCodePoints().filter(candidate => pattern.test(candidate))
+}
+
 /** Matches are offsets into `content` itself. Case-insensitivity is the
  *  regex's per-code-point folding, never a lowercased copy of the content:
  *  lowercasing can change a string's length (`İ` becomes two code units), and
@@ -42,7 +72,7 @@ export const findLiteralMatches = (
 ): LiteralMatch[] => {
   if (needle.length === 0) return []
 
-  const pattern = new RegExp(escapeRegExp(needle), options.matchCase ? 'gu' : 'giu')
+  const pattern = new RegExp(escapeRegExp(needle), `g${caseFlags(options.matchCase)}`)
   const matches: LiteralMatch[] = []
 
   for (let found = pattern.exec(content); found; found = pattern.exec(content)) {

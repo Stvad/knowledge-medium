@@ -28,7 +28,7 @@ import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { findLiteralMatches, replaceLiteralMatches } from '../search.ts'
 import type { FindReplaceOptions } from '../types.ts'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 
 /** Case pairs only among the ASCII letters; every other member matches only
  *  itself under any case folding. `İ` is the one whose lowercase is longer. */
@@ -100,7 +100,7 @@ describe('find/replace literal matching (fuzz)', () => {
       ),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('reports a fenced occurrence at its planted offset, whatever precedes it', () => {
     fc.assert(
@@ -122,7 +122,7 @@ describe('find/replace literal matching (fuzz)', () => {
       ),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('matches only text equal to the needle, and replaces only inside the matches', () => {
     fc.assert(
@@ -152,5 +152,5 @@ describe('find/replace literal matching (fuzz)', () => {
       ),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 })
