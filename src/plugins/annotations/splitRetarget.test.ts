@@ -192,6 +192,33 @@ describe('anchorAfterSplit', () => {
     const pieces = [{blockId: 'before', start: 0, end: 3}, {blockId: 'after', start: 3, end: content.length}]
     expect(anchorAfterSplit({content, pieces}, anchor)).toBeNull()
   })
+
+  it('only moves the offset of a moved quote, still flagged, where that offset finds its own text', () => {
+    const anchor = captureAnchor('cba cba', 2, 3)!
+    const content = 'ba cba cba'
+    expect(resolveAnchor(content, anchor)).toEqual({state: 'moved', from: 5, to: 6})
+    const pieces = [{blockId: 'before', start: 0, end: 9}, {blockId: 'after', start: 9, end: 10}]
+    // Unmoved, the anchor would land on the repeat at 1 in the piece.
+    expect(resolveAnchor(content.slice(0, 9), anchor)).toEqual({state: 'moved', from: 1, to: 2})
+
+    const followed = anchorAfterSplit({content, pieces}, anchor)
+
+    expect(followed).toEqual({blockId: 'before', anchor: {...anchor, quoteStart: 5}})
+    expect(resolveAnchor(content.slice(0, 9), followed!.anchor!)).toEqual({state: 'moved', from: 5, to: 6})
+  })
+
+  it('captures a moved quote again in its piece when the cut took the context it resolved by', () => {
+    const anchor = captureAnchor('aa', 0, 1)!
+    expect(anchor).toEqual({quote: 'a', quoteStart: 0, prefix: '', suffix: 'a'})
+    const content = 'caa'
+    expect(resolveAnchor(content, anchor)).toEqual({state: 'moved', from: 1, to: 2})
+    const pieces = [{blockId: 'before', start: 0, end: 2}, {blockId: 'after', start: 2, end: 3}]
+
+    const followed = anchorAfterSplit({content, pieces}, anchor)
+
+    expect(followed).toEqual({blockId: 'before', anchor: {quote: 'a', quoteStart: 1, prefix: 'c', suffix: ''}})
+    expect(resolveAnchor('ca', followed!.anchor!)).toEqual({state: 'exact', from: 1, to: 2})
+  })
 })
 
 describe('a split, in a workspace whose properties are child blocks', () => {

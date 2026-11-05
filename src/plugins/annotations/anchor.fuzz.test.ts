@@ -21,9 +21,9 @@
  * 4. A confirmed anchor (`confirmedAnchor`) is one the write path accepts.
  * 5. A split (`anchorAfterSplit`) moves a thread only to the piece holding its
  *    quote whole and keeps an exact anchor exact there. A moved anchor keeps
- *    its quote and context and only takes its piece-relative offset; it is not
- *    guaranteed to resolve in the piece, since the cut can take every context
- *    character that agreed.
+ *    its quote, and never resolves stale in a piece that captures the quote
+ *    as itself where it showed; it keeps its context and only takes its
+ *    piece-relative offset, unless it is captured again exact at that offset.
  *
  * The oracles are independent of the implementation: string slicing and the
  * reference parser the reference processors themselves use.
@@ -215,7 +215,15 @@ describe('anchor fuzz', () => {
       } else if (followed.anchor === null) {
         expect(resolveAnchor(pieceText, anchor)).toEqual({state: expect.any(String), from: at, to: at + anchor.quote.length})
       } else {
-        expect(followed.anchor).toEqual({...anchor, quoteStart: at})
+        const inPiece = resolveAnchor(pieceText, followed.anchor)
+        expect(followed.anchor.quote).toBe(anchor.quote)
+        if (captureAnchor(pieceText, at, at + anchor.quote.length)?.quote === anchor.quote) {
+          expect(inPiece.state).not.toBe('stale')
+        }
+        const offsetOnly = {...anchor, quoteStart: at}
+        if (JSON.stringify(followed.anchor) !== JSON.stringify(offsetOnly)) {
+          expect(inPiece).toEqual({state: 'exact', from: at, to: at + anchor.quote.length})
+        }
       }
     }), fuzzParams(400))
   }, fuzzTestTimeout())
