@@ -1,1 +1,1 @@
-export{TN as extensionDisplayName,EN as extensionName,DN as userExtensionShellToggle,ON as userExtensionToggle}from"../../chunks/app-CdkIZ3yd.js";
+export{TN as extensionDisplayName,EN as extensionName,DN as userExtensionShellToggle,ON as userExtensionToggle}from"../../chunks/app-GRhAo-_P.js";

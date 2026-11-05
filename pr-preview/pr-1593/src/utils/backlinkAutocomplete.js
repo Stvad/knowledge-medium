@@ -1,1 +1,1 @@
-export{Dv as backlinkCompletionSource,Ov as createBacklinkAutocomplete,kv as isInsideBacklinkBrackets}from"../../chunks/app-CdkIZ3yd.js";
+export{Dv as backlinkCompletionSource,Ov as createBacklinkAutocomplete,kv as isInsideBacklinkBrackets}from"../../chunks/app-GRhAo-_P.js";

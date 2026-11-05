@@ -1,1 +1,1 @@
-export{Aw as WorkspaceSwitcher}from"../../../chunks/app-CdkIZ3yd.js";
+export{Aw as WorkspaceSwitcher}from"../../../chunks/app-GRhAo-_P.js";
