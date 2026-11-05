@@ -34,8 +34,9 @@ let db: TestDb
 let repo: Repo
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
-beforeEach(async () => {
-  vi.clearAllMocks()
+beforeEach(() => { vi.clearAllMocks() })
+
+const setup = async () => {
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: {id: 'user'}, newId: () => crypto.randomUUID()}).repo
   const runtime = resolveAppRuntimeSync(staticAppExtensions({repo}), {
@@ -51,7 +52,7 @@ beforeEach(async () => {
   await repo.ensureSystemPages(WS)
   await materializePropertySeeds(repo, WS, runtime.read(definitionSeedsFacet))
   await materializeTypeSeeds(repo, WS, runtime.read(typeSeedsFacet))
-})
+}
 
 // Independent of the facet: a missing owner contribution must fail its case.
 const expectedPages = [
@@ -67,35 +68,13 @@ const expectedPages = [
 ]
 
 describe('kernel page UI deletion under the static app runtime', () => {
+  beforeEach(setup)
+
   it('bootstraps eager pages without creating lazy pages', async () => {
     for (const id of [propertiesPageBlockId(WS), typesPageBlockId(WS), recentsPageBlockId(WS),
       journalBlockId(WS), locationsPageBlockId(WS)]) expect(await repo.load(id)).not.toBeNull()
     for (const id of [migrationsPageBlockId(WS), kernelPageBlockId(WS, assetsPageSpec.namespace),
       commentsPageBlockId(WS), reviewDeckBlockId(WS)]) expect(await repo.load(id)).toBeNull()
-  })
-
-  it.each(expectedPages)('refuses $alias before any write or confirmation', async ({alias, ensure}) => {
-    const page = await ensure(repo, WS)
-    if (alias !== 'Comments (km)') {
-      await repo.mutate.createChild({parentId: page.id, content: 'Filed record'})
-    }
-    await page.load()
-    const subtree = await repo.runQuery<SubtreeRow[]>('core.subtree', {id: page.id})
-    expect(subtree.length).toBeGreaterThan(0)
-    if (alias === 'Comments (km)') expect(subtree).toHaveLength(1)
-    if (alias === 'Properties' || alias === 'Types') expect(subtree.length).toBeGreaterThan(20)
-    const tx = vi.spyOn(repo, 'tx')
-    try {
-      expect(await resolveDeletionRefusal(repo, page)).toContain(alias)
-      expect(await deleteBlocksThroughUi([page])).toBe(false)
-      expect(tx).not.toHaveBeenCalled()
-      expect(openDialog).not.toHaveBeenCalled()
-      const after = await repo.runQuery<SubtreeRow[]>('core.subtree', {id: page.id})
-      expect(after).toEqual(subtree)
-      for (const row of subtree) expect(await repo.load(row.id)).not.toBeNull()
-    } finally {
-      tx.mockRestore()
-    }
   })
 
   // All nine point-of-use helpers take ~0.8s before full-gate contention.
@@ -128,5 +107,35 @@ describe('kernel page UI deletion under the static app runtime', () => {
     expect(await resolveDeletionRefusal(repo, page)).toBeNull()
     expect(await deleteBlocksThroughUi([page])).toBe(true)
     for (const id of [page.id, threadId, commentId!]) expect(await repo.load(id)).toBeNull()
+  })
+})
+
+// Each refusal case only reads, plus it creates its own page's records, so one
+// seeded workspace serves them all; each asserts its page's subtree unchanged.
+describe('kernel page refusals under the static app runtime', () => {
+  beforeAll(setup)
+
+  it.each(expectedPages)('refuses $alias before any write or confirmation', async ({alias, ensure}) => {
+    const page = await ensure(repo, WS)
+    if (alias !== 'Comments (km)') {
+      await repo.mutate.createChild({parentId: page.id, content: 'Filed record'})
+    }
+    await page.load()
+    const subtree = await repo.runQuery<SubtreeRow[]>('core.subtree', {id: page.id})
+    expect(subtree.length).toBeGreaterThan(0)
+    if (alias === 'Comments (km)') expect(subtree).toHaveLength(1)
+    if (alias === 'Properties' || alias === 'Types') expect(subtree.length).toBeGreaterThan(20)
+    const tx = vi.spyOn(repo, 'tx')
+    try {
+      expect(await resolveDeletionRefusal(repo, page)).toContain(alias)
+      expect(await deleteBlocksThroughUi([page])).toBe(false)
+      expect(tx).not.toHaveBeenCalled()
+      expect(openDialog).not.toHaveBeenCalled()
+      const after = await repo.runQuery<SubtreeRow[]>('core.subtree', {id: page.id})
+      expect(after).toEqual(subtree)
+      for (const row of subtree) expect(await repo.load(row.id)).not.toBeNull()
+    } finally {
+      tx.mockRestore()
+    }
   })
 })

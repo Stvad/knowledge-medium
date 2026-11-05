@@ -195,8 +195,10 @@ export const normalizeChord = (chord: string): string =>
  * the display spelling stays intact (`ArrowDown`, not `arrowdown`).
  * Canonical-bucket agreement holds by construction:
  * `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`
- * (both sides run the same parse/format; canonicalize just adds the case
- * fold) — pinned by keybindingOverrides.fuzz.test.ts.
+ * (both sides run the same parse/format; canonicalize just adds the key-case
+ * and platform-modifier folds) — pinned by keybindingOverrides.fuzz.test.ts.
+ * That the canonical key matches tinykeys' own dispatch is pinned by
+ * canonicalizeChord.fuzz.test.ts.
  */
 export const normalizeChordSequence = (chord: string): string =>
   splitSequence(chord).map(normalizeChord).join(' ')
@@ -219,6 +221,18 @@ export const normalizeChordSequence = (chord: string): string =>
 const CODE_ONLY_KEY =
   /^(?:Key[A-Z]|Digit[0-9]|Numpad\w+|Space|Period|Comma|Slash|Backslash|Semicolon|Quote|Backquote|Minus|Equal|BracketLeft|BracketRight|Intl[A-Za-z]+)$/
 
+/** Fold modifiers that are one physical key on this platform: off-Mac
+ *  tinykeys resolves `$mod` to `Control`, so `Control+k` and `$mod+k` fire on
+ *  the same press and must share a bucket. (On a Mac the same fold happens
+ *  for `Meta` in {@link resolveModifier}.) Comparison-key only: the installed
+ *  and stored spellings keep `Control`, which would change meaning if synced
+ *  to a Mac as `$mod`. */
+const dispatchedModifiers = (mods: readonly Modifier[]): readonly Modifier[] => {
+  if (isMacPlatform() || !mods.includes('Control')) return mods
+  const folded: readonly Modifier[] = mods.map(m => (m === 'Control' ? '$mod' : m))
+  return MODIFIER_ORDER.filter(m => folded.includes(m))
+}
+
 /**
  * Canonicalise a whole chord, sequence-aware: splits on space first, then
  * canonicalises each press, so 'Cmd+K Cmd+S' becomes '$mod+k $mod+s'
@@ -240,7 +254,10 @@ export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
     // those keep their case.
     .map(press => {
       const {mods, key} = parsePress(press)
-      return formatPress({mods, key: CODE_ONLY_KEY.test(key) ? key : key.toLowerCase()})
+      return formatPress({
+        mods: dispatchedModifiers(mods),
+        key: CODE_ONLY_KEY.test(key) ? key : key.toLowerCase(),
+      })
     })
     .join(' ')
   return phase ? `${phase}:${canonical}` : canonical
