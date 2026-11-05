@@ -174,7 +174,7 @@ const visiblePanelRowsForLayoutSession = async (
   await layoutSessionBlock.load()
   return visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock), {
     activePanelId: layoutSessionBlock.peekProperty(activePanelIdProp),
-    canRenderSplit: !isMobileViewport(),
+    canRenderSplit: canRenderSplit(),
   })
 }
 
@@ -198,6 +198,12 @@ export const resolveActivePanelRow = async (
   return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
+/** Can this viewport show a second pane? Below the mobile breakpoint the
+ *  layout renders ONE pane (`soloPanelRow`), so a destination that adds a row
+ *  there adds a pane the user never sees and never closes. Read synchronously
+ *  per navigation, like `currentViewport`. */
+const canRenderSplit = (): boolean => !isMobileViewport()
+
 /** Where a resolved navigation should go: an existing panel to swap, or a fresh
  *  panel to create. The single decision both the WRITE (`applyNavigation`) and
  *  the READ (`resolveGlobalCommandTarget`) share, so they can't drift — every
@@ -216,8 +222,10 @@ const resolveDestination = async (
   const {workspaceId} = input
   switch (input.target) {
     case 'new-panel':
+      if (!canRenderSplit()) return activeDestination(repo, workspaceId)
       return {kind: 'create-row', workspaceId, afterPanelId: input.sourcePanelId}
     case 'sidebar-stack':
+      if (!canRenderSplit()) return activeDestination(repo, workspaceId)
       return {kind: 'create-stack', workspaceId, sourcePanelId: input.sourcePanelId}
     case 'panel':
       // Guard a stale/fabricated panelId via block existence (NOT layout-row
@@ -235,14 +243,21 @@ const resolveDestination = async (
         ? {kind: 'panel', workspaceId, panelId: panels[0].id}
         : {kind: 'create-row', workspaceId}
     }
-    case 'active': {
-      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panel = await resolveActivePanelRow(ls)
-      return panel
-        ? {kind: 'panel', workspaceId, panelId: panel.id}
-        : {kind: 'create-row', workspaceId}
-    }
+    case 'active':
+      return activeDestination(repo, workspaceId)
   }
+}
+
+/** The active pane, or a first row when the layout is empty. Also where
+ *  `new-panel` / `sidebar-stack` land on a viewport that cannot render a
+ *  split: the open swaps the visible pane's content (Back still returns, via
+ *  panel history) instead of minting a row the layout would never show. */
+const activeDestination = async (repo: Repo, workspaceId: string): Promise<NavDestination> => {
+  const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+  const panel = await resolveActivePanelRow(ls)
+  return panel
+    ? {kind: 'panel', workspaceId, panelId: panel.id}
+    : {kind: 'create-row', workspaceId}
 }
 
 /** Apply a resolved navigation by mutating layout-session panel rows, returning
