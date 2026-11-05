@@ -124,6 +124,11 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('`#not-a-tag` and ```js\n#still-not\n``` and [[tag]]')
   })
 
+  it('keeps code spans protected after an earlier #[[page]] rewrite shortens the text', () => {
+    const {content} = rewriteRoamContent('#[[two words]] and `#a`', new Map())
+    expect(content).toBe('[[two words]] and `#a`')
+  })
+
   it('does not rewrite URL fragments in markdown link destinations', () => {
     const {content} = rewriteRoamContent(
       '[comments](https://vlad.roam.garden/post?#comments) #tag',
