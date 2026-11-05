@@ -11,12 +11,6 @@ const createIndentedContent = (content: string, depth: number): string => {
   return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
 }
 
-/** Every block bulleted at its depth below its own copied root. A lone block
- *  alone may go out bare: a raw line next to bulleted ones would be re-read as
- *  markdown on paste (a childless `b` before `- a` adopts `a`). */
-const outlineMarkdown = (blocks: readonly {content: string; depth: number}[]): string =>
-  blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n')
-
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // One SQL query hydrates the entire subtree in document order
   // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
@@ -47,7 +41,7 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   }
 
   return {
-    markdown: outlineMarkdown(blocks),
+    markdown: blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n'),
     blocks,
   }
 }
@@ -120,11 +114,15 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
+  // Only a copy of one lone block goes out bare: next to other roots a raw
+  // line is re-read as markdown on paste (a childless `b` before `- a`
+  // adopts `a`).
   if (validResults.length === 1) return validResults[0]
-  const blocks = validResults.flatMap(r => r.blocks)
   return {
-    markdown: outlineMarkdown(blocks),
-    blocks,
+    markdown: validResults
+      .map(r => r.blocks.length === 1 ? createIndentedContent(r.blocks[0].content, 0) : r.markdown)
+      .join('\n'),
+    blocks: validResults.flatMap(r => r.blocks),
   }
 }
 
