@@ -1,1 +1,1 @@
-export{KP as ExtensionLoadErrorStore,qP as ExtensionLoadErrorsProvider,JP as useExtensionLoadError,YP as useExtensionLoadErrors}from"../../chunks/app-BC1nA--U.js";
+export{qP as ExtensionLoadErrorStore,JP as ExtensionLoadErrorsProvider,YP as useExtensionLoadError,XP as useExtensionLoadErrors}from"../../chunks/app-B79UHbV0.js";

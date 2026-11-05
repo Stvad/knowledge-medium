@@ -1,1 +1,1 @@
-export{nh as adoptTypedBlock,rh as createTypedChild,xrt as derivedBlockId,ih as getOrCreateTypedChild}from"../../chunks/app-BC1nA--U.js";
+export{rh as adoptTypedBlock,ih as createTypedChild,Srt as derivedBlockId,ah as getOrCreateTypedChild}from"../../chunks/app-B79UHbV0.js";

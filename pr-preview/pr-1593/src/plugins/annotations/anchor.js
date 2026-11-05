@@ -1,1 +1,1 @@
-export{kq as ANCHOR_CONTEXT_LENGTH,Aq as captureAnchor,jq as recaptureAnchor,Mq as resolveAnchor,Nq as widenToReferenceSpans,Pq as widenToSpans}from"../../../chunks/app-BC1nA--U.js";
+export{Aq as ANCHOR_CONTEXT_LENGTH,jq as captureAnchor,Mq as recaptureAnchor,Nq as resolveAnchor,Pq as widenToReferenceSpans,Fq as widenToSpans}from"../../../chunks/app-B79UHbV0.js";

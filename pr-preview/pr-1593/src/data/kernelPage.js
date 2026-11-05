@@ -1,1 +1,1 @@
-export{ott as getOrCreateKernelPage,stt as kernelPageBlockId}from"../../chunks/app-BC1nA--U.js";
+export{stt as getOrCreateKernelPage,ctt as kernelPageBlockId}from"../../chunks/app-B79UHbV0.js";

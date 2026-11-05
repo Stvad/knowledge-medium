@@ -1,1 +1,1 @@
-export{cot as SYSTEM_AUTHOR_PREFIX,lot as isSystemAuthor,uot as systemAuthor}from"../../../chunks/app-BC1nA--U.js";
+export{lot as SYSTEM_AUTHOR_PREFIX,uot as isSystemAuthor,dot as systemAuthor}from"../../../chunks/app-B79UHbV0.js";

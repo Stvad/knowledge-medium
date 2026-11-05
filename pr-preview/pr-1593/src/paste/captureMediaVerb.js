@@ -1,1 +1,1 @@
-export{YI as captureMediaVerb}from"../../chunks/app-BC1nA--U.js";
+export{XI as captureMediaVerb}from"../../chunks/app-B79UHbV0.js";
