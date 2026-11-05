@@ -6,6 +6,7 @@ import { decodeRowProperty } from '@/data/rowProperty'
 import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
+import { normalizeLineEndings } from '@/utils/string.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import { readAsyncClipboard } from './clipboard.js'
@@ -108,7 +109,7 @@ export const planSingleBlockPaste = (
   pastedText: string,
   selection: { from: number; to: number },
 ): SingleBlockPastePlan => {
-  const insert = pastedText.replace(/\r\n?/g, '\n')
+  const insert = normalizeLineEndings(pastedText)
   return {
     insert,
     from: selection.from,

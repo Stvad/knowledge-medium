@@ -1,12 +1,18 @@
 import { Block } from '../data/block'
-import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type SubtreeRow } from '@/data/api'
 import { armCut, disarmCut } from '@/paste/armedCut.js'
 import { clipboardHtmlFor, clipboardTextFor } from '@/paste/clipboardOutline.js'
 
-export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
+export interface ClipboardData {
+  markdown: string
+  blocks: SubtreeRow[]
+}
+
+const clipboardDataFor = (blocks: SubtreeRow[]): ClipboardData => ({markdown: clipboardTextFor(blocks), blocks})
+
+const subtreeRows = async (block: Block): Promise<SubtreeRow[]> => {
   // One SQL query hydrates the entire subtree in document order
   // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
   // the root (0 for the root). No per-parent handle creation, no recursive
@@ -28,8 +34,11 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
 
-  return {markdown: clipboardTextFor(blocks), blocks}
+  return blocks
 }
+
+export const serializeBlock = async (block: Block): Promise<ClipboardData> =>
+  clipboardDataFor(await subtreeRows(block))
 
 const createClipboardItem = ({markdown, blocks}: ClipboardData): ClipboardItem => {
   const html = clipboardHtmlFor(blocks, markdown)
@@ -81,12 +90,12 @@ export const serializeSelectedBlocks = async (
   blockIds: string[],
   repo: Repo,
 ): Promise<ClipboardData> => {
-  const blockResults = await Promise.all(
+  const rowsPerBlock = await Promise.all(
     blockIds
       .map(id => repo.block(id))
       .map(async block => {
         try {
-          return await serializeBlock(block)
+          return await subtreeRows(block)
         } catch (error) {
           console.error(`Failed to serialize block ${block.id}:`, error)
           return null
@@ -94,14 +103,13 @@ export const serializeSelectedBlocks = async (
       }),
   )
 
-  const validResults = blockResults.filter((result): result is ClipboardData => result !== null)
+  const validRows = rowsPerBlock.filter(rows => rows !== null)
 
-  if (validResults.length === 0) {
+  if (validRows.length === 0) {
     throw new Error('No block data could be serialized for copying')
   }
 
-  const blocks = validResults.flatMap(r => r.blocks)
-  return {markdown: clipboardTextFor(blocks), blocks}
+  return clipboardDataFor(validRows.flat())
 }
 
 export const copySelectedBlocksToClipboard = async (

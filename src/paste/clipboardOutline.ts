@@ -15,12 +15,14 @@
  * text/plain alone.
  */
 
+import { escape as escapeHtml } from 'lodash-es'
 import {
   outlineFromTokens,
   parseMarkdownToBlocks,
   type OutlineNode,
   type OutlineToken,
 } from '@/utils/markdownParser.js'
+import { normalizeLineEndings } from '@/utils/string.js'
 
 /** One copied block, in document order; `depth` is below its copied root. */
 export interface OutlineEntry {
@@ -50,12 +52,8 @@ export const clipboardTextFor = (entries: readonly OutlineEntry[]): string => {
     .join('\n')
 }
 
-/** The clipboard's text as a paste reads it: `Blob`s encode UTF-8, which
- *  replaces an unpaired surrogate. */
-const asWrittenToClipboard = (text: string): string => text.replace(/\p{Cs}/gu, '�')
-
 const parsesBack = (entries: readonly OutlineEntry[], text: string): boolean => {
-  const parsed = parseMarkdownToBlocks(asWrittenToClipboard(text))
+  const parsed = parseMarkdownToBlocks(text)
   const depthById = new Map<string | undefined, number>([[undefined, -1]])
   return parsed.length === entries.length && parsed.every((block, index) => {
     const depth = depthById.get(block.parentId)! + 1
@@ -65,9 +63,6 @@ const parsesBack = (entries: readonly OutlineEntry[], text: string): boolean => 
     return depth === entries[index].depth && block.content === entries[index].content
   })
 }
-
-const escapeHtml = (text: string): string =>
-  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
 
 /** The text/html of a copy, or undefined when `text` parses back to exactly
  *  `entries` and needs none. A rich app sees the same lines as `text`. Carries
@@ -79,26 +74,15 @@ export const clipboardHtmlFor = (entries: readonly OutlineEntry[], text: string)
   return `<meta name="${OUTLINE_META_NAME}" content="${escapeHtml(payload)}"><div style="white-space:pre-wrap">${lines}</div>`
 }
 
-const isOutlineEntries = (value: unknown): value is OutlineEntry[] => {
-  if (!Array.isArray(value) || value.length === 0) return false
-  let deepestAllowed = 0
-  return value.every((entry: Partial<OutlineEntry> | null) => {
-    const depth = entry?.depth
-    if (typeof entry?.content !== 'string' || !Number.isInteger(depth)) return false
-    if (depth! < 0 || depth! > deepestAllowed) return false
-    deepestAllowed = depth! + 1
-    return true
-  })
-}
+const isOutlineEntries = (value: unknown): value is OutlineEntry[] =>
+  Array.isArray(value) && value.length > 0 && value.every((entry: Partial<OutlineEntry> | null) =>
+    typeof entry?.content === 'string' && Number.isInteger(entry.depth) && entry.depth! >= 0)
 
 /** The indentation `entries` serialize to, the one part of the text that grows
  *  beyond the payload's own size: a chain of N entries is N² of it. Bounding it
  *  by the text beside it, before serializing, keeps a crafted payload linear. */
 const indentationWidth = (entries: readonly OutlineEntry[]): number =>
   entries.reduce((width, {depth, content}) => width + 2 * depth * content.split('\n').length, 0)
-
-/** Normalizes what the platform and the UTF-8 write may have rewritten. */
-const comparable = (text: string): string => asWrittenToClipboard(text).replace(/\r\n?/g, '\n')
 
 /** The outline this app copied, when `html` carries one that serializes to
  *  exactly `text`: anything else on the clipboard (a stale or foreign html
@@ -115,9 +99,9 @@ export const outlineFromClipboard = (html: string | undefined, text: string): Ou
   }
   if (!isOutlineEntries(entries)) return null
   if (indentationWidth(entries) > text.length) return null
-  if (comparable(clipboardTextFor(entries)) !== comparable(text)) return null
+  if (normalizeLineEndings(clipboardTextFor(entries)) !== normalizeLineEndings(text)) return null
   // Line endings normalize as they do on the text path: an editor can't hold a
   // `\r`, so one would put a caret offset past the end of its document.
   return outlineFromTokens(entries.map(({depth, content}): OutlineToken =>
-    ({kind: 'list-item', indent: depth, content: content.replace(/\r\n?/g, '\n')})))
+    ({kind: 'list-item', indent: depth, content: normalizeLineEndings(content)})))
 }

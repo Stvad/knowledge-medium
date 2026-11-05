@@ -7,14 +7,14 @@
  * they do on every other way into a block.
  *
  * The generator has no carve-outs: content may be empty, span lines, carry
- * edge whitespace or `\r`, hold whole fences, tables and quotes, start with
- * markdown structure, or hold unpaired surrogates (which the clipboard's
- * UTF-8 `Blob`s rewrite in the text, so they are written through a real one).
+ * edge whitespace or `\r`, hold whole fences, tables and quotes, or start with
+ * markdown structure. It draws no unpaired surrogates because no stored block
+ * holds one: the text columns replace them.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { codePointUnitArb, utf16UnitArb } from '@/test/arbitraries/utf16'
+import { fuzzParams, fuzzTestTimeout, happyDomGcYield } from '@/test/fuzz'
+import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { readClipboardContent } from '@/paste/clipboard'
@@ -23,14 +23,6 @@ import { planEditModeMultilinePaste, planSingleBlockPaste } from '@/paste/operat
 import { copyBlockIdsToClipboard } from '@/utils/copy'
 import { parsedBlocksFromOutline, parseMarkdownToBlocks } from '@/utils/markdownParser'
 import { outlineOf } from './outline'
-
-/** happy-dom keeps every document its `DOMParser` parses, and each paste here
- *  parses one, so an uncapped deep run exhausts the heap. */
-const MAX_RUNS = 5000
-const cappedFuzzParams = <T>(smokeRuns: number): fc.Parameters<T> => {
-  const params = fuzzParams<T>(smokeRuns)
-  return {...params, numRuns: Math.min(params.numRuns ?? smokeRuns, MAX_RUNS)}
-}
 
 interface Node {
   content: string
@@ -43,10 +35,7 @@ const leadArb = fc.constantFrom(
   '| a | b |', '```', '~~~', '\t', '  ',
 )
 const midArb = fc.constantFrom('', '', ' ', ' ', ' ', '\u0085', ' | ', ' - ')
-const textArb = fc.oneof(
-  fc.string({unit: codePointUnitArb, maxLength: 6}),
-  fc.string({unit: utf16UnitArb, maxLength: 4}),
-)
+const textArb = fc.string({unit: codePointUnitArb, maxLength: 6})
 const lineArb = fc.tuple(leadArb, textArb, midArb, textArb).map(parts => parts.join(''))
 const edgeArb = fc.constantFrom('', '', '', ' ', '   ', '\t', '\n', ' \n', '\n\n', '\r\n', '\r')
 const wholeArb = fc.constantFrom(
@@ -153,6 +142,8 @@ const pastedInEditor = (from: Clipboard): Node[] => {
 }
 
 describe('copy → paste round-trip', () => {
+  const yieldForGc = happyDomGcYield()
+
   beforeEach(() => {
     clipboard = null
     vi.stubGlobal('ClipboardItem', class {
@@ -171,15 +162,21 @@ describe('copy → paste round-trip', () => {
 
   it('a copied subtree pastes back as the same tree on both surfaces', async () => {
     await fc.assert(
-      fc.asyncProperty(treeArb, root => expectRoundTrip([root])),
-      cappedFuzzParams(150),
+      fc.asyncProperty(treeArb, async root => {
+        await expectRoundTrip([root])
+        await yieldForGc()
+      }),
+      fuzzParams(150),
     )
   }, fuzzTestTimeout())
 
   it('several copied subtrees paste back as the same forest, in order', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.array(treeArb, {minLength: 2, maxLength: 4}), expectRoundTrip),
-      cappedFuzzParams(100),
+      fc.asyncProperty(fc.array(treeArb, {minLength: 2, maxLength: 4}), async roots => {
+        await expectRoundTrip(roots)
+        await yieldForGc()
+      }),
+      fuzzParams(100),
     )
   }, fuzzTestTimeout())
 

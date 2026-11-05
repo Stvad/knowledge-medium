@@ -3,6 +3,7 @@ import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { v4 as uuidv4 } from 'uuid'
 import { keyAtEnd } from '../data/orderKey.ts'
+import { normalizeLineEndings } from './string.ts'
 
 /** Lightweight intermediate shape produced by the markdown parser.
  *  Holds only the fields the importer actually needs — id, content,
@@ -94,7 +95,7 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
 /** Split markdown/outline text into tokens, one per non-blank line except
  *  for fenced code blocks, tables and quotes, which are consumed whole. */
 const lexMarkdownLines = (text: string): OutlineToken[] => {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  const lines = normalizeLineEndings(text).split('\n')
   const tokens: OutlineToken[] = []
   let idx = 0
   while (idx < lines.length) {

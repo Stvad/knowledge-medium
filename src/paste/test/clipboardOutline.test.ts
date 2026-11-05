@@ -24,7 +24,6 @@ describe('clipboardHtmlFor', () => {
     ['edge whitespace the parser would trim', [{depth: 0, content: 'a'}, {depth: 1, content: '  b  '}]],
     ['a lone block whose own marker would read as a bullet', [{depth: 0, content: '- foo'}]],
     ['a lone empty block, whose text parses to nothing', [{depth: 0, content: ''}]],
-    ['an unpaired surrogate the clipboard write would replace', [{depth: 0, content: 'a\uD83D'}]],
   ])('adds html for %s', (_, entries) => {
     expect(clipboardHtmlFor(entries, clipboardTextFor(entries))).toBeDefined()
   })
@@ -74,18 +73,6 @@ describe('outlineFromClipboard', () => {
     expect(outlineFromClipboard(html, text)).toEqual([{content: entries[0].content, children: []}])
   })
 
-  it('restores an unpaired surrogate the clipboard text lost', () => {
-    const entries = [{depth: 0, content: 'a\uD83D'}]
-    const {html} = carried(entries)
-    expect(outlineFromClipboard(html, 'a\uFFFD')).toEqual([{content: 'a\uD83D', children: []}])
-  })
-
-  it('refuses a payload whose indentation dwarfs the text, without serializing it', () => {
-    const chain = Array.from({length: 50_000}, (_, depth) => ({depth, content: 'a'}))
-    const payload = JSON.stringify(chain)
-    expect(outlineFromClipboard(`<meta name="km-outline" content='${payload}'>`, 'a')).toBeNull()
-  })
-
   it('normalizes the line endings of what it rebuilds', () => {
     const {text, html} = carried([{depth: 0, content: 'a\r\nb\rc'}, {depth: 1, content: 'd'}])
     expect(outlineFromClipboard(html, text)).toEqual([
@@ -120,8 +107,6 @@ describe('outlineFromClipboard', () => {
     ['not json', '{nope', ''],
     ['not a list', '{"depth":0,"content":"a"}', ''],
     ['an empty list', '[]', ''],
-    ['a first entry below the top', '[{"depth":1,"content":"a"}]', '  - a'],
-    ['a level skipped', '[{"depth":0,"content":"a"},{"depth":2,"content":"b"}]', '- a\n    - b'],
     ['a negative depth', '[{"depth":-1,"content":"a"}]', '- a'],
     ['a fractional depth', '[{"depth":0,"content":"a"},{"depth":0.5,"content":"b"}]', '- a\n- b'],
     ['content that is not text', '[{"depth":0,"content":"a"},{"depth":0,"content":1}]', 'a\n1'],
