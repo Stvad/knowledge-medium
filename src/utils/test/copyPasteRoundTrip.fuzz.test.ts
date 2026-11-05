@@ -3,7 +3,8 @@
  * Fuzz suite for the in-app copy → paste round-trip, from the real clipboard
  * writer (`copyBlockIdsToClipboard`) through the real paste decision and plan
  * on both surfaces. The oracle: what the paste would create is the copied
- * forest, content verbatim.
+ * forest, content verbatim but for line endings, which normalize to `\n` as
+ * they do on every other way into a block.
  *
  * The generator has no carve-outs: content may be empty, span lines, carry
  * edge whitespace or `\r`, hold whole fences, tables and quotes, start with
@@ -103,6 +104,18 @@ interface Clipboard {
   html: string
 }
 
+const withNormalizedLineEndings = (node: Node): Node => ({
+  content: node.content.replace(/\r\n?/g, '\n'),
+  children: node.children.map(withNormalizedLineEndings),
+})
+
+const expectRoundTrip = async (roots: Node[]): Promise<void> => {
+  const from = await copied(roots)
+  const expected = roots.map(withNormalizedLineEndings)
+  expect(pastedOnShell(from)).toEqual(expected)
+  expect(pastedInEditor(from)).toEqual(expected)
+}
+
 let clipboard: Clipboard | null
 
 const copied = async (roots: readonly Node[]): Promise<Clipboard> => {
@@ -158,22 +171,14 @@ describe('copy → paste round-trip', () => {
 
   it('a copied subtree pastes back as the same tree on both surfaces', async () => {
     await fc.assert(
-      fc.asyncProperty(treeArb, async root => {
-        const from = await copied([root])
-        expect(pastedOnShell(from)).toEqual([root])
-        expect(pastedInEditor(from)).toEqual([root])
-      }),
+      fc.asyncProperty(treeArb, root => expectRoundTrip([root])),
       cappedFuzzParams(150),
     )
   }, fuzzTestTimeout())
 
   it('several copied subtrees paste back as the same forest, in order', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.array(treeArb, {minLength: 2, maxLength: 4}), async roots => {
-        const from = await copied(roots)
-        expect(pastedOnShell(from)).toEqual(roots)
-        expect(pastedInEditor(from)).toEqual(roots)
-      }),
+      fc.asyncProperty(fc.array(treeArb, {minLength: 2, maxLength: 4}), expectRoundTrip),
       cappedFuzzParams(100),
     )
   }, fuzzTestTimeout())
@@ -186,13 +191,10 @@ describe('copy → paste round-trip', () => {
     ['an empty block stays empty', {content: 'a\nb', children: [{content: '', children: []}, {content: 'c', children: []}]}],
     ['a lone bullet-shaped block keeps its marker', {content: '- foo', children: []}],
     ['a lone empty block stays a block', {content: '', children: []}],
+    ['a CRLF in the first root stays a valid caret paste', {content: 'a\r\nb', children: [{content: 'c', children: []}]}],
     ['an empty root keeps no marker', {content: '', children: [{content: '', children: []}]}],
     ['a U+2028 does not cut a block short', {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}],
-  ])('%s', async (_, root) => {
-    const from = await copied([root])
-    expect(pastedOnShell(from)).toEqual([root])
-    expect(pastedInEditor(from)).toEqual([root])
-  })
+  ])('%s', (_, root) => expectRoundTrip([root]))
 
   it('a lone marker right under a prose line stays text', () => {
     expect(parseMarkdownToBlocks('Pros\n-\nCons').map(block => block.content))

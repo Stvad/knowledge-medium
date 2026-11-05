@@ -4,10 +4,11 @@
  * block's continuation lines read back as children, and parsing trims edge
  * whitespace and reads a block's own markers as structure.
  *
- * It rides as an attribute in a text/html item because that is the one
- * carrier every engine's `ClipboardItem` takes that a paste event can read
- * synchronously; a web custom format is Chromium-only, and only
- * `clipboard.read()` sees it.
+ * It rides in a text/html item because that is the one carrier every engine's
+ * `ClipboardItem` takes that a paste event can read synchronously; a web custom
+ * format is Chromium-only, and only `clipboard.read()` sees it. Within the html
+ * it is a `<meta>`, which an editor's insert drops: an attribute or comment
+ * stays in the document it is pasted into, holding text the user then deletes.
  *
  * Rich apps read that html instead of the text, so it goes on the clipboard
  * only for a copy whose text does not parse back exactly. Any other copy stays
@@ -27,7 +28,7 @@ export interface OutlineEntry {
   readonly content: string
 }
 
-const OUTLINE_ATTRIBUTE = 'data-km-outline'
+const OUTLINE_META_NAME = 'km-outline'
 
 const bulleted = ({depth, content}: OutlineEntry): string => {
   const indent = '  '.repeat(depth)
@@ -70,12 +71,12 @@ const escapeHtml = (text: string): string =>
 
 /** The text/html of a copy, or undefined when `text` parses back to exactly
  *  `entries` and needs none. A rich app sees the same lines as `text`. Carries
- *  only depth and content, so it exposes nothing the text doesn't. */
+ *  only depth and content, no ids or properties. */
 export const clipboardHtmlFor = (entries: readonly OutlineEntry[], text: string): string | undefined => {
   if (parsesBack(entries, text)) return undefined
   const payload = JSON.stringify(entries.map(({depth, content}) => ({depth, content})))
   const lines = text.split('\n').map(line => `<div>${escapeHtml(line) || '<br>'}</div>`).join('')
-  return `<div ${OUTLINE_ATTRIBUTE}="${escapeHtml(payload)}" style="white-space:pre-wrap">${lines}</div>`
+  return `<meta name="${OUTLINE_META_NAME}" content="${escapeHtml(payload)}"><div style="white-space:pre-wrap">${lines}</div>`
 }
 
 const isOutlineEntries = (value: unknown): value is OutlineEntry[] => {
@@ -101,18 +102,22 @@ const comparable = (text: string): string => asWrittenToClipboard(text).replace(
 
 /** The outline this app copied, when `html` carries one that serializes to
  *  exactly `text`: anything else on the clipboard (a stale or foreign html
- *  item, text rewritten since) reads as null, and the text pastes as usual. */
+ *  item, text rewritten since, a leading BOM a browser stripped from the text)
+ *  reads as null, and the text pastes as usual. */
 export const outlineFromClipboard = (html: string | undefined, text: string): OutlineNode[] | null => {
-  if (!html?.includes(OUTLINE_ATTRIBUTE)) return null
+  if (!html?.includes(OUTLINE_META_NAME)) return null
   let entries: unknown
   try {
-    const carrier = new DOMParser().parseFromString(html, 'text/html').querySelector(`[${OUTLINE_ATTRIBUTE}]`)
-    entries = JSON.parse(carrier?.getAttribute(OUTLINE_ATTRIBUTE) ?? '')
+    const carrier = new DOMParser().parseFromString(html, 'text/html').querySelector(`meta[name="${OUTLINE_META_NAME}"]`)
+    entries = JSON.parse(carrier?.getAttribute('content') ?? '')
   } catch {
     return null
   }
   if (!isOutlineEntries(entries)) return null
   if (indentationWidth(entries) > text.length) return null
   if (comparable(clipboardTextFor(entries)) !== comparable(text)) return null
-  return outlineFromTokens(entries.map(({depth, content}): OutlineToken => ({kind: 'list-item', indent: depth, content})))
+  // Line endings normalize as they do on the text path: an editor can't hold a
+  // `\r`, so one would put a caret offset past the end of its document.
+  return outlineFromTokens(entries.map(({depth, content}): OutlineToken =>
+    ({kind: 'list-item', indent: depth, content: content.replace(/\r\n?/g, '\n')})))
 }

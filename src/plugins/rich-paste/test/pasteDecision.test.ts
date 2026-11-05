@@ -82,4 +82,14 @@ describe('rich paste of this app\'s own copy', () => {
     const text = clipboardTextFor(entries)
     expect(decide(shell({text, html: clipboardHtmlFor(entries, text)}))).toEqual({kind: 'split', blocks})
   })
+
+  // A browser's parser turns a `\r` in the html into a line break, which reads
+  // as structure; markup stands in for it here, since happy-dom's doesn't.
+  it('keeps the copied outline even when the html around it reads as structure', () => {
+    const html = `<meta name="km-outline" content='[{"depth":0,"content":"Title\\nBody"}]'><h2>Title</h2><p>Body</p>`
+    expect(decide(shell({text: 'Title\nBody', html}))).toEqual({
+      kind: 'split',
+      blocks: [{content: 'Title\nBody', children: []}],
+    })
+  })
 })

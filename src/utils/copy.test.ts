@@ -106,7 +106,7 @@ describe('the clipboard item a copy writes', () => {
     await copyBlockIdsToClipboard(['page'], repo)
 
     expect(clipboardText).toBe('- Page\n  - A\n  - B\n  - one\n    two')
-    expect(clipboardHtml).toContain('data-km-outline')
+    expect(clipboardHtml).toContain('km-outline')
   })
 
   it('is the same for a cut, so a paste elsewhere still rebuilds it', async () => {
@@ -114,7 +114,7 @@ describe('the clipboard item a copy writes', () => {
     await cutBlockIdsToClipboard(['multi'], repo)
 
     expect(clipboardText).toBe('one\ntwo')
-    expect(clipboardHtml).toContain('data-km-outline')
+    expect(clipboardHtml).toContain('km-outline')
   })
 })
 

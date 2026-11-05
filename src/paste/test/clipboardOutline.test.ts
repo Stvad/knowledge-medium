@@ -37,13 +37,13 @@ describe('clipboardHtmlFor', () => {
   it('renders the html as the text, one element per line', () => {
     const {text, html} = carried(MULTI_LINE)
     const body = new DOMParser().parseFromString(html, 'text/html').body
-    const lines = [...body.firstElementChild!.children].map(line => line.textContent)
+    const lines = [...body.querySelector('div')!.children].map(line => line.textContent)
     expect(lines).toEqual(text.split('\n'))
   })
 
   it('keeps a blank line visible', () => {
     const html = carried([{depth: 0, content: 'a\n\nb'}]).html
-    const [, blank] = new DOMParser().parseFromString(html, 'text/html').body.firstElementChild!.children
+    const [, blank] = new DOMParser().parseFromString(html, 'text/html').body.querySelector('div')!.children
     expect(blank.innerHTML).toBe('<br>')
   })
 
@@ -83,7 +83,14 @@ describe('outlineFromClipboard', () => {
   it('refuses a payload whose indentation dwarfs the text, without serializing it', () => {
     const chain = Array.from({length: 50_000}, (_, depth) => ({depth, content: 'a'}))
     const payload = JSON.stringify(chain)
-    expect(outlineFromClipboard(`<div data-km-outline='${payload}'></div>`, 'a')).toBeNull()
+    expect(outlineFromClipboard(`<meta name="km-outline" content='${payload}'>`, 'a')).toBeNull()
+  })
+
+  it('normalizes the line endings of what it rebuilds', () => {
+    const {text, html} = carried([{depth: 0, content: 'a\r\nb\rc'}, {depth: 1, content: 'd'}])
+    expect(outlineFromClipboard(html, text)).toEqual([
+      {content: 'a\nb\nc', children: [{content: 'd', children: []}]},
+    ])
   })
 
   it('accepts text whose line endings a platform rewrote', () => {
@@ -105,7 +112,7 @@ describe('outlineFromClipboard', () => {
     expect(outlineFromClipboard(html, 'text')).toBeNull()
   })
 
-  const withPayload = (payload: string) => `<div data-km-outline='${payload}'></div>`
+  const withPayload = (payload: string) => `<meta name="km-outline" content='${payload}'>`
 
   // Each text is what that payload's entries would serialize to, so only the
   // shape check can refuse it.
