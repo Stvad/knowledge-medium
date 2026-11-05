@@ -1,1 +1,1 @@
-export{Dd as ANCHOR_BADGES,Od as useAnchorState}from"../../../chunks/app-GRhAo-_P.js";
+export{Dd as ANCHOR_BADGES,Od as useAnchorState}from"../../../chunks/app-BayP7Gy_.js";

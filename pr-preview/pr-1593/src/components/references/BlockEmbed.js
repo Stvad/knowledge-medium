@@ -1,1 +1,1 @@
-export{pj as BlockEmbed}from"../../../chunks/app-GRhAo-_P.js";
+export{pj as BlockEmbed}from"../../../chunks/app-BayP7Gy_.js";

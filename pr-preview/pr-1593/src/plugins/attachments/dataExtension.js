@@ -1,1 +1,1 @@
-export{WX as attachmentCleanerIOContribution,GX as attachmentsDataExtension}from"../../../chunks/app-GRhAo-_P.js";
+export{WX as attachmentCleanerIOContribution,GX as attachmentsDataExtension}from"../../../chunks/app-BayP7Gy_.js";

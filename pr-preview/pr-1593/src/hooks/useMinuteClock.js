@@ -1,1 +1,1 @@
-export{IE as useMinuteClock}from"../../chunks/app-GRhAo-_P.js";
+export{IE as useMinuteClock}from"../../chunks/app-BayP7Gy_.js";

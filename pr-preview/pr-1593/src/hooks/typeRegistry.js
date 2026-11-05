@@ -1,1 +1,1 @@
-export{XB as useTypes}from"../../chunks/app-GRhAo-_P.js";
+export{XB as useTypes}from"../../chunks/app-BayP7Gy_.js";
