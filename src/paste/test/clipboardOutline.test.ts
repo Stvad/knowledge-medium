@@ -29,6 +29,11 @@ describe('clipboardHtmlFor', () => {
     expect(clipboardHtmlFor(entries, clipboardTextFor(entries))).toBeDefined()
   })
 
+  it('adds html for text whose contents parse back at the wrong depths', () => {
+    const entries = [{depth: 0, content: 'a'}, {depth: 0, content: 'b'}]
+    expect(clipboardHtmlFor(entries, '- a\n  - b')).toBeDefined()
+  })
+
   it('renders the html as the text, one element per line', () => {
     const {text, html} = carried(MULTI_LINE)
     const body = new DOMParser().parseFromString(html, 'text/html').body
@@ -73,6 +78,12 @@ describe('outlineFromClipboard', () => {
     const entries = [{depth: 0, content: 'a\uD83D'}]
     const {html} = carried(entries)
     expect(outlineFromClipboard(html, 'a\uFFFD')).toEqual([{content: 'a\uD83D', children: []}])
+  })
+
+  it('refuses a payload whose indentation dwarfs the text, without serializing it', () => {
+    const chain = Array.from({length: 50_000}, (_, depth) => ({depth, content: 'a'}))
+    const payload = JSON.stringify(chain)
+    expect(outlineFromClipboard(`<div data-km-outline='${payload}'></div>`, 'a')).toBeNull()
   })
 
   it('accepts text whose line endings a platform rewrote', () => {

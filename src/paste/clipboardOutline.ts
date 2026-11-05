@@ -59,6 +59,8 @@ const parsesBack = (entries: readonly OutlineEntry[], text: string): boolean => 
   return parsed.length === entries.length && parsed.every((block, index) => {
     const depth = depthById.get(block.parentId)! + 1
     depthById.set(block.id, depth)
+    // Depth is defence in depth: no text the copy writes parses to the right
+    // contents at the wrong depths.
     return depth === entries[index].depth && block.content === entries[index].content
   })
 }
@@ -88,6 +90,12 @@ const isOutlineEntries = (value: unknown): value is OutlineEntry[] => {
   })
 }
 
+/** The indentation `entries` serialize to, the one part of the text that grows
+ *  beyond the payload's own size: a chain of N entries is N² of it. Bounding it
+ *  by the text beside it, before serializing, keeps a crafted payload linear. */
+const indentationWidth = (entries: readonly OutlineEntry[]): number =>
+  entries.reduce((width, {depth, content}) => width + 2 * depth * content.split('\n').length, 0)
+
 /** Normalizes what the platform and the UTF-8 write may have rewritten. */
 const comparable = (text: string): string => asWrittenToClipboard(text).replace(/\r\n?/g, '\n')
 
@@ -104,6 +112,7 @@ export const outlineFromClipboard = (html: string | undefined, text: string): Ou
     return null
   }
   if (!isOutlineEntries(entries)) return null
+  if (indentationWidth(entries) > text.length) return null
   if (comparable(clipboardTextFor(entries)) !== comparable(text)) return null
   return outlineFromTokens(entries.map(({depth, content}): OutlineToken => ({kind: 'list-item', indent: depth, content})))
 }
