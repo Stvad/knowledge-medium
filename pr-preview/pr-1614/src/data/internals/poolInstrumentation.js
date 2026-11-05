@@ -1,0 +1,1 @@
+export{BQ as instrumentAdapter}from"../../../chunks/app-BizfM1YE.js";

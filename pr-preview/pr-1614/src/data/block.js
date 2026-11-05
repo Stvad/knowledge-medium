@@ -1,0 +1,1 @@
+export{S2 as Block,C2 as requireLoadedBlock}from"../../chunks/app-BizfM1YE.js";

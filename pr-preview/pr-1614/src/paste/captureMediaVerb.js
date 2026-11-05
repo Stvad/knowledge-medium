@@ -1,0 +1,1 @@
+export{XI as captureMediaVerb}from"../../chunks/app-BizfM1YE.js";

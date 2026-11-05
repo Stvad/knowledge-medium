@@ -1,0 +1,1 @@
+export{fU as usePropertySchemas}from"../../chunks/app-BizfM1YE.js";

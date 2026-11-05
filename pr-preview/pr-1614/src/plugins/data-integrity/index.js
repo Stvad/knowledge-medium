@@ -1,0 +1,1 @@
+export{wo as dataIntegrityPlugin}from"../../../chunks/app-BizfM1YE.js";

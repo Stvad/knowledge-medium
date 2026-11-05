@@ -1,0 +1,1 @@
+export{KM as appUpdate,qM as useAppUpdateAvailable}from"../chunks/app-BizfM1YE.js";

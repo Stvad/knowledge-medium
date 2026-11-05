@@ -1,0 +1,1 @@
+export{Oy as richPastePlugin}from"../../../chunks/app-BizfM1YE.js";

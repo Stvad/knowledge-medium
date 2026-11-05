@@ -1,0 +1,1 @@
+export{_r as openExtensionsSettingsAction}from"../../../chunks/app-BizfM1YE.js";

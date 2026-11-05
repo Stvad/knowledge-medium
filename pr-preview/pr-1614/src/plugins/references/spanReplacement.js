@@ -1,0 +1,1 @@
+export{fG as preferredSpanReplacement}from"../../../chunks/app-BizfM1YE.js";

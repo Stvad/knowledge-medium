@@ -1,0 +1,1 @@
+export{bv as remarkWikilinks}from"../../../../../chunks/app-BizfM1YE.js";

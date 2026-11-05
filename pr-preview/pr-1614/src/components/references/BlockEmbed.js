@@ -1,0 +1,1 @@
+export{mj as BlockEmbed}from"../../../chunks/app-BizfM1YE.js";
