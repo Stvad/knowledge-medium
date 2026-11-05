@@ -40,6 +40,8 @@ const ORACLE_ALPHABET = ['a', 'A', 'b', 'B', '_', '1', ' ', '.', '-', '*', '(', 
 const TRICKY_ALPHABET = [
   ...ORACLE_ALPHABET,
   'i', 'I', '\u0131', 's', 'S', '\u017F', 'k', 'K', '\u212A', '\u1E9E', '\u03A3', '\u03C3', '\u03C2', '\u00C9', 'e\u0301', '\uFB00',
+  // An astral case pair: a word edge must be read per code point.
+  '\u{10400}', '\u{10428}',
 ]
 
 const textOf = (alphabet: string[], minLength: number, maxLength: number) =>
@@ -49,10 +51,16 @@ const optionsArb: fc.Arbitrary<FindReplaceOptions> =
   fc.record({matchCase: fc.boolean(), wholeWord: fc.boolean()})
 
 const isAsciiLetter = (c: string): boolean => /^[A-Za-z]$/.test(c)
-/** Letters, marks, digits and connectors in any script; the alphabets here
- *  hold no astral letter, so testing code units is exact. */
+/** Letters, marks, digits and connectors in any script. */
 const isWordChar = (c: string | undefined): boolean =>
   c !== undefined && /^[\p{L}\p{M}\p{N}\p{Pc}]$/u.test(c)
+
+/** The code point starting at / ending at a UTF-16 offset (the oracle reads
+ *  edges per code point, as a user sees letters). */
+const pointAt = (text: string, index: number): string | undefined =>
+  index < text.length ? String.fromCodePoint(text.codePointAt(index)!) : undefined
+const pointBefore = (text: string, index: number): string | undefined =>
+  index <= 0 ? undefined : [...text.slice(0, index)].at(-1)
 
 const unitsEqual = (a: string, b: string, matchCase: boolean): boolean =>
   a === b || (!matchCase && isAsciiLetter(a) && isAsciiLetter(b) && a.toLowerCase() === b.toLowerCase())
@@ -132,11 +140,15 @@ describe('find/replace literal matching (fuzz)', () => {
   it('matches only text equal to the needle, on word boundaries when asked, and replaces only inside the matches', () => {
     fc.assert(
       fc.property(
-        textOf(TRICKY_ALPHABET, 0, 30),
+        textOf(TRICKY_ALPHABET, 0, 15),
         textOf(TRICKY_ALPHABET, 1, 3),
+        textOf(TRICKY_ALPHABET, 0, 15),
         optionsArb,
         fc.string({maxLength: 3}),
-        (content, needle, options, replace) => {
+        (before, needle, after, options, replace) => {
+          // The needle is planted so every case has a candidate whose edges
+          // the whole-word check must judge.
+          const content = before + needle + after
           const spans = findLiteralMatches(content, needle, options)
           let cursor = 0
           for (const {index, length} of spans) {
@@ -147,8 +159,8 @@ describe('find/replace literal matching (fuzz)', () => {
             else expect(caseFolded(text)).toBe(caseFolded(needle))
             if (options.wholeWord) {
               const end = index + length
-              expect(!isWordChar(content[index]) || !isWordChar(content[index - 1])).toBe(true)
-              expect(!isWordChar(content[end - 1]) || !isWordChar(content[end])).toBe(true)
+              expect(!isWordChar(pointAt(content, index)) || !isWordChar(pointBefore(content, index))).toBe(true)
+              expect(!isWordChar(pointBefore(content, end)) || !isWordChar(pointAt(content, end))).toBe(true)
             }
             cursor = index + length
           }
