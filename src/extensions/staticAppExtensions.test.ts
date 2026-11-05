@@ -7,7 +7,7 @@
 // runtime. This composes the REAL production plugin set
 // (`staticAppExtensions`) through the same resolver `AppRuntimeProvider` uses
 // and asserts it both succeeds and actually produces contributions.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
@@ -20,6 +20,8 @@ import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
+import { findKeybindingConflicts } from '@/shortcuts/keybindingConflicts.js'
+import * as platform from '@/utils/platform.js'
 import { ALIAS_SYNC_PROCESSOR } from '@/plugins/alias'
 import { RENAME_BACKLINKS_PROCESSOR } from '@/plugins/references/renameProcessor.js'
 
@@ -43,6 +45,20 @@ describe('app boot composition', () => {
     // legitimately remove enough plugins to fall below them.
     expect(runtime.read(actionsFacet).length).toBeGreaterThan(100)
     expect(runtime.read(appMountsFacet).length).toBeGreaterThan(8)
+  })
+
+  // `$mod` is Cmd on a Mac and Control elsewhere, so two defaults can collide
+  // on one platform only.
+  describe('default keybindings', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it.each([true, false])('do not conflict (mac: %s)', mac => {
+      vi.spyOn(platform, 'isMacPlatform').mockReturnValue(mac)
+      const { repo } = createTestRepo({ db: shared.db })
+      const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+      const conflicts = findKeybindingConflicts(runtime.read(actionsFacet))
+      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([])
+    })
   })
 
   // Same-tx processors run in facet INSERTION order, so a plugin-list
