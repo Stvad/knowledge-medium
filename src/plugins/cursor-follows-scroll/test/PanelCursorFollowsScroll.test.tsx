@@ -216,7 +216,7 @@ describe('PanelCursorFollowsScroll', () => {
 
   it('leaves a cursor that is still on screen alone', async () => {
     const panel = repo.block(PANEL_ID)
-    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['x', 100], ['b', 200]])
     await focusBlock(panel, 'b', {renderScopeId: SCOPE})
     const fence = await withFence()
 
@@ -227,9 +227,11 @@ describe('PanelCursorFollowsScroll', () => {
       </>,
     )
 
-    // The panel scrolled, but not far enough to take the cursor off screen.
-    dom.moveRow('a', -200)
-    dom.moveRow('b', 40)
+    // The panel scrolled, but not far enough to take the cursor off screen;
+    // `x`, not the cursor, is now the topmost visible row.
+    dom.moveRow('a', -40)
+    dom.moveRow('x', 40)
+    dom.moveRow('b', 140)
     dom.scroll()
     fence.scrollAway()
 
