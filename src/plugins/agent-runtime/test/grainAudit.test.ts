@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // Value-level grain checks. These are the half the source lint can't do:
 // deciding whether a string is a block id needs a lookup, and deciding

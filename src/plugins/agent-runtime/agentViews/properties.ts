@@ -50,7 +50,7 @@ const SUMMARY_KEYS = 3
  *  show — with its real length kept for the "+N more" count. Only for a
  *  codec that declares its array member-wise (`memberCodecOf`), or none: an
  *  atomic array encoding may need its tail, so that one is decoded whole. */
-const MAX_DECODED_ITEMS = 100
+export const MAX_DECODED_ITEMS = 100
 
 export type Decoded =
   | {kind: 'refs', ids: string[], total: number}

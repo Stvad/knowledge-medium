@@ -74,9 +74,10 @@ export const parseParentDeletedError = (err: unknown): {parentId: string} | null
   const idx = msg.indexOf(needle)
   if (idx === -1) return null
   const tail = msg.slice(idx + needle.length)
-  // SQLite wrappers may append context text after the payload, so
-  // split on the unit separator and take the first part. Block ids
-  // never contain `\x1f`, so the first part is the id verbatim.
+  // The id is the message's last field and runs to its end: a wrapper
+  // that appended text with no separator would land it in the id.
+  // Splitting on the separator only keeps a later trailing field out;
+  // block ids never contain `\x1f`.
   const parentId = tail.split(RAISE_FIELD_SEP)[0]
   if (parentId.length === 0) return null
   return {parentId}

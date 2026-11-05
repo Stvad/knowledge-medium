@@ -315,12 +315,21 @@ describe('blocksAlreadyReflects', () => {
   })
 
   it('a stamp-0 local row only reflects when the sealed columns match too; a nonzero stamp vouches', () => {
+    // Clear columns equal, at least one sealed column different, both live
+    // (equal clear columns include `deleted`, so live keeps the tombstone arm out).
+    const clearEqualSealedDifferArb = fc
+      .record({
+        local: rowArb.map((row): BlockRow => ({ ...row, deleted: 0 })),
+        changed: fc.subarray([...SEALED], { minLength: 1 }),
+      })
+      .map(({ local, changed }) => {
+        const staged: BlockRow = { ...local }
+        for (const column of changed) staged[column] = `${local[column]}~`
+        return { local, staged }
+      })
     fc.assert(
-      fc.property(rowPairArb, ({ local, staged }) => {
-        const l = asReflectsLocal(local)
-        fc.pre(l !== undefined && sameOn(CLEAR, l, staged) && !sameOn(SEALED, l, staged))
-        fc.pre(!(staged.deleted === 1 && l!.deleted === 1))
-        expect(blocksAlreadyReflects(staged, l)).toBe(l!.updated_at !== 0)
+      fc.property(clearEqualSealedDifferArb, ({ local, staged }) => {
+        expect(blocksAlreadyReflects(staged, local)).toBe(local.updated_at !== 0)
       }),
       fuzzParams(400),
     )

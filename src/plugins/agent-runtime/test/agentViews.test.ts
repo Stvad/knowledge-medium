@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // The agent views (`view-*` commands) and the block-ref resolver, end-to-end
 // against a real Repo. Same minimal runtime as dataCommands.test.ts: kernel +
@@ -23,6 +23,7 @@ import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef } from '../agentViews/resolveRef'
 import type { OutlineView } from '../agentViews/outline'
 import type { BlockView } from '../agentViews/block'
+import { MAX_DECODED_ITEMS } from '../agentViews/properties'
 import { renderBacklinksView, type BacklinksView, type GroupedBacklinksView } from '../agentViews/backlinks'
 import type { SearchView } from '../agentViews/search'
 
@@ -972,10 +973,12 @@ describe('structural edge cases', () => {
     const targets = Array.from({length: 3}, (_, i) => uuid(`8b8b8b8${i}`, i))
     for (const [i, target] of targets.entries()) await create({id: target, content: `t${i}`, properties: {alias: [`t${i}`]}})
     const id = uuid('8c8c8c8c', 1)
+    // Far past the decoded head (`MAX_DECODED_ITEMS`), so every list is cut.
+    const length = 5_000
     await create({id, content: 'lists', properties: {
-      groupWith: [...targets, ...Array.from({length: 200_000}, (_, i) => uuid('8d8d8d8d', i))],
-      numbers: Array.from({length: 200_000}, (_, i) => i),
-      history: [{at: 1}, ...Array.from({length: 200_000}, (_, i) => i)],
+      groupWith: [...targets, ...Array.from({length}, (_, i) => uuid('8d8d8d8d', i))],
+      numbers: Array.from({length}, (_, i) => i),
+      history: [{at: 1}, ...Array.from({length}, (_, i) => i)],
     }})
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
     const value = (name: string) => out.properties.find(property => property.name === name)!.value
@@ -983,7 +986,7 @@ describe('structural edge cases', () => {
       `^${targets.map((target, i) => `\\[\\[t${i}\\]\\] \\^${target}, `).join('')}.*, …\\+\\d+ more$`,
     ))
     expect(value('numbers')).toMatch(/…\+\d+ more$/)
-    expect(value('history')).toBe('[200001 items]')
+    expect(value('history')).toBe(`[${length + 1} items]`)
   })
 
   it('omits an out-of-range edit time instead of failing the view', async () => {
@@ -1048,10 +1051,20 @@ describe('structural edge cases', () => {
 
   it('reads only a head of a huge types list, counting the rest', async () => {
     const id = uuid('9d1d1d1d', 1)
-    await create({id, content: 'typed', properties: {types: Array.from({length: 200_000}, (_, i) => `kind-${i}`)}})
+    await create({id, content: 'typed', properties: {types: Array.from({length: 5_000}, (_, i) => `kind-${i}`)}})
+    const registry = repo.types
+    let lookups = 0
+    const types = vi.spyOn(repo, 'types', 'get').mockReturnValue(new Proxy(registry, {
+      get: (target, key) => key === 'get'
+        ? (typeId: string) => { if (typeId.startsWith('kind-')) lookups++; return target.get(typeId) }
+        : Reflect.get(target, key, target),
+    }))
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+      .finally(() => types.mockRestore())
     expect(out.types).toHaveLength(11)
-    expect(out.types.at(-1)).toBe('+199,990 more')
+    expect(out.types.at(-1)).toBe('+4,990 more')
+    expect(lookups).toBeGreaterThan(0)
+    expect(lookups).toBeLessThanOrEqual(MAX_DECODED_ITEMS)
   })
 
   it('folds only exactly identical text into one search hit', async () => {

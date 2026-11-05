@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { User } from '@/data/api'

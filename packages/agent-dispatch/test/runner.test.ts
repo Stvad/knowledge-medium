@@ -280,16 +280,23 @@ describe('runClaude', () => {
     expect(result.timedOut).toBe(false) // killed by abort, not the timeout
   })
 
-  it('retains the session id from a run that timed out before the result line', async () => {
-    // The init line arrives, then the child hangs past the timeout — no
-    // result line. The (billed) session id must still come back so a
-    // retry can --resume it.
+  it('retains the session id from a run killed before the result line', async () => {
+    // The init line arrives, then the child hangs and is killed — no result
+    // line. The (billed) session id must still come back so a retry can
+    // --resume it. Killed once the init line is seen, so the kill can never
+    // land before it.
+    const controller = new AbortController()
     const result = await runClaude(
-      {...baseOptions, timeoutMs: 300},
-      fakeClaude(`${streamResult({type: 'system', subtype: 'init', session_id: 'sess-timeout'})}; setTimeout(() => {}, 60_000)`),
+      {
+        ...baseOptions,
+        timeoutMs: 60_000,
+        signal: controller.signal,
+        onEvent: event => { if (event.kind === 'session') controller.abort() },
+      },
+      fakeClaude(`${streamResult({type: 'system', subtype: 'init', session_id: 'sess-killed'})}; setTimeout(() => {}, 60_000)`),
     )
-    expect(result.timedOut).toBe(true)
-    expect(result.sessionId).toBe('sess-timeout')
+    expect(result.ok).toBe(false)
+    expect(result.sessionId).toBe('sess-killed')
   })
 
   it('scrubs billing vars from the child environment', async () => {

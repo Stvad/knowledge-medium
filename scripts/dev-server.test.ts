@@ -29,6 +29,13 @@ import { tempDirs } from './hook-test-support'
 
 const ROOT = realpathSync(dirname(dirname(fileURLToPath(import.meta.url))))
 const hasLsof = spawnSync('lsof', ['-v']).error === undefined
+const hasIpv6 = await new Promise<boolean>(resolve => {
+  const server = createServer()
+  server.once('error', () => resolve(false))
+  server.listen({ port: 0, host: '::1' }, () => server.close(() => resolve(true)))
+})
+/** The loopback a holder binds where the family does not matter: `::1`, as vite binds, where the machine has it. */
+const LOOPBACK = hasIpv6 ? '::1' : '127.0.0.1'
 
 // Each case below spawns a listener process and runs lsof/ps/git against it:
 // ~40–150ms on a quiet machine, up to 4s at a load average of 700.
@@ -148,7 +155,7 @@ describe('output parsers', () => {
 })
 
 describe('port probes', () => {
-  it('sees an IPv6-only holder, as vite binds localhost when it resolves to ::1', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
+  it.skipIf(!hasIpv6)('sees an IPv6-only holder, as vite binds localhost when it resolves to ::1', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
     const { port } = await holdPort('::1')
     expect(await loopbackFree(port)).toBe(false)
   })
@@ -172,8 +179,13 @@ describe('port probes', () => {
     expect(await canBind(5173, '192.0.2.1')).toBe(true)
   })
 
+  it.skipIf(hasIpv6)('treats an address family this machine lacks as holding nothing', async () => {
+    // Without IPv6 a `::1` bind fails EAFNOSUPPORT, which must not make every port look busy.
+    expect(await canBind(await freePort(), '::1')).toBe(true)
+  })
+
   it('reports a port nothing holds as free', { timeout: SPAWNING_TEST_TIMEOUT }, async () => {
-    const { port } = await holdPort('::1')
+    const { port } = await holdPort(LOOPBACK)
     children.forEach(child => child.kill())
     await vi.waitFor(async () => expect(await loopbackFree(port)).toBe(true), { timeout: 10_000 })
     expect(await portIsBusy(port, new Map())).toBe(false)
@@ -181,8 +193,8 @@ describe('port probes', () => {
 })
 
 /** A port nothing listens on: the OS hands one out, and it is closed again at once. */
-const freePort = () => new Promise<number>(resolve => {
-  const server = createServer().listen({ port: 0, host: '::1' }, () => {
+const freePort = () => new Promise<number>((resolve, reject) => {
+  const server = createServer().once('error', reject).listen({ port: 0, host: LOOPBACK }, () => {
     const { port } = server.address() as AddressInfo
     server.close(() => resolve(port))
   })
@@ -190,7 +202,7 @@ const freePort = () => new Promise<number>(resolve => {
 
 describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   it('names the holder and the checkout it runs in', async () => {
-    const { pid, port } = await holdPort('::1')
+    const { pid, port } = await holdPort(LOOPBACK)
     const [line] = await whoHolds([port])
     expect(line).toContain(`port ${port}: node (pid ${pid}, up `)
     expect(line).toContain(`in ${ROOT} on `)
@@ -201,7 +213,7 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
     // ps formats its start time with the locale's date names: `Do. 22 Okt.` under German.
     vi.stubEnv('LC_ALL', 'de_DE.UTF-8')
     try {
-      const { pid, port } = await holdPort('::1')
+      const { pid, port } = await holdPort(LOOPBACK)
       expect(await whoHolds([port])).toEqual([expect.stringContaining(`port ${port}: node (pid ${pid}, up `)])
     } finally {
       vi.unstubAllEnvs()
@@ -210,7 +222,7 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
 
   it('says when the holder runs outside any checkout', async () => {
     const dir = tempDir()
-    const { port } = await holdPort('::1', dir)
+    const { port } = await holdPort(LOOPBACK, dir)
     expect(await whoHolds([port])).toEqual([expect.stringContaining(`in ${dir} (not a checkout)`)])
   })
 
@@ -219,7 +231,7 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
     const done = spawn(process.execPath, ['-e', ''])
     const deadPid = done.pid!
     await new Promise(resolve => done.once('exit', resolve))
-    const { pid, port } = await holdPort('::1')
+    const { pid, port } = await holdPort(LOOPBACK)
     const servers = inspectServers(new Map([[port, new Set([pid, deadPid])]]))
     expect(servers.find(server => server.pid === pid)?.checkout?.toplevel).toBe(ROOT)
   })
@@ -232,7 +244,7 @@ describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => 
 
 describe('whoHolds without lsof', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   it('still calls a held port taken, by the launcher\'s own bind probe', async () => {
-    const { port } = await holdPort('::1')
+    const { port } = await holdPort(LOOPBACK)
     expect(await whoHolds([port], { exec: () => null })).toEqual([
       `port ${port}: held by a process lsof cannot name (another user's, one starting or stopping right now, or lsof is missing)`,
     ])

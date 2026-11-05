@@ -114,8 +114,17 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
+  // Next to other roots a bare single line is re-read as markdown on paste (a
+  // childless `b` before `- a` adopts `a`), so it is bulleted. A multi-line
+  // lone block stays bare: a fence, quote or table pastes back whole only
+  // unbulleted.
+  if (validResults.length === 1) return validResults[0]
+  const bulletsAsRoot = (r: ClipboardData): boolean =>
+    r.blocks.length === 1 && !r.blocks[0].content.includes('\n')
   return {
-    markdown: validResults.map(r => r.markdown).join('\n'),
+    markdown: validResults
+      .map(r => bulletsAsRoot(r) ? createIndentedContent(r.blocks[0].content, 0) : r.markdown)
+      .join('\n'),
     blocks: validResults.flatMap(r => r.blocks),
   }
 }
