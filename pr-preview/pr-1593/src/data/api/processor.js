@@ -1,1 +1,1 @@
-export{Cot as definePostCommitProcessor}from"../../../chunks/app-BayP7Gy_.js";
+export{Sot as definePostCommitProcessor}from"../../../chunks/app-BC1nA--U.js";

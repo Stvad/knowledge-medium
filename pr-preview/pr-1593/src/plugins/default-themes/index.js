@@ -1,1 +1,1 @@
-export{vE as DEFAULT_THEME_ID_DARK,yE as DEFAULT_THEME_ID_LIGHT,rE as defaultThemeContributions,nE as defaultThemesPlugin}from"../../../chunks/app-BayP7Gy_.js";
+export{vE as DEFAULT_THEME_ID_DARK,yE as DEFAULT_THEME_ID_LIGHT,rE as defaultThemeContributions,nE as defaultThemesPlugin}from"../../../chunks/app-BC1nA--U.js";

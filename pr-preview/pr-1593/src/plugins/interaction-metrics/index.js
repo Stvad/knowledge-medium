@@ -1,1 +1,1 @@
-export{wi as interactionMetricsPlugin}from"../../../chunks/app-BayP7Gy_.js";
+export{wi as interactionMetricsPlugin}from"../../../chunks/app-BC1nA--U.js";

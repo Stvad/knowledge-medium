@@ -1,1 +1,1 @@
-export{$I as BlockEditor}from"../../chunks/app-BayP7Gy_.js";
+export{$I as BlockEditor}from"../../chunks/app-BC1nA--U.js";
