@@ -10,20 +10,38 @@ interface LiteralMatch {
   length: number
 }
 
+/** A word character in any script. Closed under the case-insensitive
+ *  matcher's folding (folding never turns a letter into a non-letter), so a
+ *  match's edges classify the same as the needle's. */
+const WORD_CHAR = /^[\p{L}\p{M}\p{N}\p{Pc}]$/u
+
 const isWordChar = (char: string | undefined): boolean =>
-  char !== undefined && /[A-Za-z0-9_]/.test(char)
+  char !== undefined && WORD_CHAR.test(char)
+
+/** The code point starting at `index`, or `undefined` past the end. */
+const codePointFrom = (text: string, index: number): string | undefined => {
+  const codePoint = text.codePointAt(index)
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint)
+}
+
+/** The code point ending at `index`, or `undefined` at the start. */
+const codePointBefore = (text: string, index: number): string | undefined => {
+  if (index <= 0) return undefined
+  const pairStart = index - 2
+  if (pairStart >= 0 && /^[\uD800-\uDBFF][\uDC00-\uDFFF]$/.test(text.slice(pairStart, index))) {
+    return text.slice(pairStart, index)
+  }
+  return text[index - 1]
+}
 
 const passesWholeWordBoundary = (
   content: string,
   index: number,
   length: number,
 ): boolean => {
-  const first = content[index]
-  const last = content[index + length - 1]
-  const before = content[index - 1]
-  const after = content[index + length]
-  return (!isWordChar(first) || !isWordChar(before))
-    && (!isWordChar(last) || !isWordChar(after))
+  const end = index + length
+  return (!isWordChar(codePointFrom(content, index)) || !isWordChar(codePointBefore(content, index)))
+    && (!isWordChar(codePointBefore(content, end)) || !isWordChar(codePointFrom(content, end)))
 }
 
 const escapeRegExp = (text: string): string =>

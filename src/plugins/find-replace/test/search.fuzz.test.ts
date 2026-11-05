@@ -19,6 +19,8 @@
  *  - a planted occurrence fenced by `\n` (which folds to nothing else) must be
  *    reported at its planted offset whatever precedes it — including text whose
  *    lowercase form is longer than itself;
+ *  - a whole-word match has no word character across either edge, where a
+ *    word character is a letter, mark, digit or connector in any script;
  *  - every case-insensitive match equals the needle after a lower-upper-lower
  *    round trip through the string case mappings (which folds `ſ` to `s` and
  *    `ς` to `σ`, as case folding does), and every case-sensitive one is
@@ -47,7 +49,10 @@ const optionsArb: fc.Arbitrary<FindReplaceOptions> =
   fc.record({matchCase: fc.boolean(), wholeWord: fc.boolean()})
 
 const isAsciiLetter = (c: string): boolean => /^[A-Za-z]$/.test(c)
-const isWordChar = (c: string | undefined): boolean => c !== undefined && /^[A-Za-z0-9_]$/.test(c)
+/** Letters, marks, digits and connectors in any script; the alphabets here
+ *  hold no astral letter, so testing code units is exact. */
+const isWordChar = (c: string | undefined): boolean =>
+  c !== undefined && /^[\p{L}\p{M}\p{N}\p{Pc}]$/u.test(c)
 
 const unitsEqual = (a: string, b: string, matchCase: boolean): boolean =>
   a === b || (!matchCase && isAsciiLetter(a) && isAsciiLetter(b) && a.toLowerCase() === b.toLowerCase())
@@ -124,7 +129,7 @@ describe('find/replace literal matching (fuzz)', () => {
     )
   }, fuzzTestTimeout())
 
-  it('matches only text equal to the needle, and replaces only inside the matches', () => {
+  it('matches only text equal to the needle, on word boundaries when asked, and replaces only inside the matches', () => {
     fc.assert(
       fc.property(
         textOf(TRICKY_ALPHABET, 0, 30),
@@ -140,6 +145,11 @@ describe('find/replace literal matching (fuzz)', () => {
             const text = content.slice(index, index + length)
             if (options.matchCase) expect(text).toBe(needle)
             else expect(caseFolded(text)).toBe(caseFolded(needle))
+            if (options.wholeWord) {
+              const end = index + length
+              expect(!isWordChar(content[index]) || !isWordChar(content[index - 1])).toBe(true)
+              expect(!isWordChar(content[end - 1]) || !isWordChar(content[end])).toBe(true)
+            }
             cursor = index + length
           }
           expect(cursor).toBeLessThanOrEqual(content.length)

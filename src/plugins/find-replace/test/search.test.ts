@@ -56,6 +56,17 @@ describe('find/replace literal matching', () => {
       .toEqual([{index: 3, length: 3}])
   })
 
+  // The matcher folds the Kelvin sign onto `k` and `ſ` onto `s`; a word
+  // boundary that saw them as punctuation would let a replace cut into a word.
+  it('keeps whole-word boundaries for letters in any script, case-folded ones included', () => {
+    const wholeWord = {matchCase: false, wholeWord: true}
+    expect(findLiteralMatches('foo\u212Abar', 'k', wholeWord)).toEqual([])
+    expect(findLiteralMatches('foo\u017Fbar', 's', wholeWord)).toEqual([])
+    expect(findLiteralMatches('café', 'caf', wholeWord)).toEqual([])
+    expect(findLiteralMatches('a \u212A b', 'k', wholeWord)).toEqual([{index: 2, length: 1}])
+    expect(findLiteralMatches('\u{1D400}x x', 'x', wholeWord)).toEqual([{index: 4, length: 1}])
+  })
+
   it('replaces each literal match without treating the find text as regex', () => {
     expect(replaceLiteralMatches('a.b a?b a.b', 'a.b', 'x', insensitive)).toEqual({
       content: 'x a?b x',
