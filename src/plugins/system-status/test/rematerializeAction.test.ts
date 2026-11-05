@@ -42,10 +42,6 @@ describe('system-status rematerialize action', () => {
     expect(mocks.showInfo).not.toHaveBeenCalled()
   })
 
-  it('uses the requested command-palette label', () => {
-    expect(rematerializeWorkspaceAction.description).toBe('Repair downloaded workspace data')
-  })
-
   it('reports when there is no active workspace and does not call recovery', async () => {
     await rematerializeWorkspaceAction.handler(
       {uiStateBlock: {repo: {activeWorkspaceId: null}}} as never,

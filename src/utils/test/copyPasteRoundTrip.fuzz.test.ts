@@ -13,18 +13,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { utf16UnitArb } from '@/test/arbitraries/utf16'
+import { codePointUnitArb, utf16UnitArb } from '@/test/arbitraries/utf16'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { readClipboardContent } from '@/paste/clipboard'
 import { defaultPasteDecision } from '@/paste/decision'
 import { planEditModeMultilinePaste, planSingleBlockPaste } from '@/paste/operations'
 import { copyBlockIdsToClipboard } from '@/utils/copy'
-import {
-  parsedBlocksFromOutline,
-  parseMarkdownToBlocks,
-  type ParsedBlock,
-} from '@/utils/markdownParser'
+import { parsedBlocksFromOutline, parseMarkdownToBlocks } from '@/utils/markdownParser'
+import { outlineOf } from './outline'
 
 /** happy-dom keeps every document its `DOMParser` parses, and each paste here
  *  parses one, so an uncapped deep run exhausts the heap. */
@@ -46,7 +43,7 @@ const leadArb = fc.constantFrom(
 )
 const midArb = fc.constantFrom('', '', ' ', ' ', ' ', '\u0085', ' | ', ' - ')
 const textArb = fc.oneof(
-  fc.string({unit: 'binary', maxLength: 6}),
+  fc.string({unit: codePointUnitArb, maxLength: 6}),
   fc.string({unit: utf16UnitArb, maxLength: 4}),
 )
 const lineArb = fc.tuple(leadArb, textArb, midArb, textArb).map(parts => parts.join(''))
@@ -100,12 +97,6 @@ const fakeRepo = (roots: readonly Node[]): Repo => {
   }
   return repo as unknown as Repo
 }
-
-const outlineOf = (blocks: readonly ParsedBlock[], parentId?: string): Node[] =>
-  blocks
-    .filter(block => block.parentId === parentId)
-    .sort((a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
-    .map(block => ({content: block.content, children: outlineOf(blocks, block.id)}))
 
 interface Clipboard {
   text: string
@@ -195,9 +186,15 @@ describe('copy → paste round-trip', () => {
     ['an empty block stays empty', {content: 'a\nb', children: [{content: '', children: []}, {content: 'c', children: []}]}],
     ['a lone bullet-shaped block keeps its marker', {content: '- foo', children: []}],
     ['a lone empty block stays a block', {content: '', children: []}],
+    ['a U+2028 does not cut a block short', {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}],
   ])('%s', async (_, root) => {
     const from = await copied([root])
     expect(pastedOnShell(from)).toEqual([root])
     expect(pastedInEditor(from)).toEqual([root])
+  })
+
+  it('a lone marker right under a prose line stays text', () => {
+    expect(parseMarkdownToBlocks('Pros\n-\nCons').map(block => block.content))
+      .toEqual(['Pros', '-', 'Cons'])
   })
 })

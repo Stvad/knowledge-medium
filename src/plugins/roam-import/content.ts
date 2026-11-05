@@ -99,15 +99,18 @@ const collectBlockRefRewrites = (
   const overlapsConsumed = (start: number, end: number) =>
     consumed.some(([s, e]) => start < e && end > s)
 
-  const collect = (re: RegExp, makeMatch: (m: RegExpExecArray) => BlockRefMatch) => {
+  // `rewrite` resolves uids, and resolving records a miss as unresolved, so it
+  // runs only for a match that is kept.
+  const collect = (re: RegExp, rewrite: (m: RegExpExecArray) => Omit<BlockRefMatch, 'start' | 'end'>) => {
     re.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = re.exec(raw)) !== null) {
-      const match = makeMatch(m)
-      if (isProtected(protectedRanges, match.start, match.end)) continue
-      if (overlapsConsumed(match.start, match.end)) continue
-      found.push(match)
-      consumed.push([match.start, match.end])
+      const start = m.index
+      const end = m.index + m[0].length
+      if (isProtected(protectedRanges, start, end)) continue
+      if (overlapsConsumed(start, end)) continue
+      found.push({start, end, ...rewrite(m)})
+      consumed.push([start, end])
     }
   }
 
@@ -115,28 +118,11 @@ const collectBlockRefRewrites = (
   // isn't double-counted.
   collect(EMBED_PATH_RE, m => {
     const target = resolve(m[1])
-    return {
-      start: m.index,
-      end: m.index + m[0].length,
-      replacement: `!((${target}))`,
-      embedPathTarget: target,
-    }
+    return {replacement: `!((${target}))`, embedPathTarget: target}
   })
-  collect(EMBED_RE, m => ({
-    start: m.index,
-    end: m.index + m[0].length,
-    replacement: `!((${resolve(m[1])}))`,
-  }))
-  collect(ALIASED_BLOCK_REF_RE, m => ({
-    start: m.index,
-    end: m.index + m[0].length,
-    replacement: `[${m[1]}](((${resolve(m[2])})))`,
-  }))
-  collect(BLOCK_REF_RE, m => ({
-    start: m.index,
-    end: m.index + m[0].length,
-    replacement: `((${resolve(m[1])}))`,
-  }))
+  collect(EMBED_RE, m => ({replacement: `!((${resolve(m[1])}))`}))
+  collect(ALIASED_BLOCK_REF_RE, m => ({replacement: `[${m[1]}](((${resolve(m[2])})))`}))
+  collect(BLOCK_REF_RE, m => ({replacement: `((${resolve(m[1])}))`}))
 
   return found.sort((a, b) => a.start - b.start)
 }

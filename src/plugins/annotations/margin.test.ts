@@ -1,4 +1,3 @@
-// @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import {marginHosts} from './margin'
 import type {ScopeThread} from './scopeThreads'

@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {COMMENT_THREAD_TYPE, type CommentsView} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'

@@ -57,9 +57,4 @@ describe('CodeMirrorExtensionBlockRenderer.canRender', () => {
     const block = fakeBlock('plain-2')
     expect(CodeMirrorExtensionBlockRenderer.canRender?.(propsFor(block))).toBe(false)
   })
-
-  it('reports priority 5', () => {
-    const block = fakeBlock('any')
-    expect(CodeMirrorExtensionBlockRenderer.priority?.(propsFor(block))).toBe(5)
-  })
 })

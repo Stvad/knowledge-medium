@@ -23,8 +23,7 @@ describe('clipboardHtmlFor', () => {
     ['a block its continuation line would split', [{depth: 0, content: 'a\nb'}]],
     ['edge whitespace the parser would trim', [{depth: 0, content: 'a'}, {depth: 1, content: '  b  '}]],
     ['a lone block whose own marker would read as a bullet', [{depth: 0, content: '- foo'}]],
-    ['a bare root the next root would nest under', [{depth: 0, content: 'b'}, {depth: 0, content: 'a'}, {depth: 1, content: 'c'}]],
-    ['a trailing empty block the parser would drop', [{depth: 0, content: 'a'}, {depth: 0, content: ''}]],
+    ['a lone empty block, whose text parses to nothing', [{depth: 0, content: ''}]],
     ['an unpaired surrogate the clipboard write would replace', [{depth: 0, content: 'a\uD83D'}]],
   ])('adds html for %s', (_, entries) => {
     expect(clipboardHtmlFor(entries, clipboardTextFor(entries))).toBeDefined()

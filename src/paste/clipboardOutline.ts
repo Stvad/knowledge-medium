@@ -34,13 +34,20 @@ const bulleted = ({depth, content}: OutlineEntry): string => {
   return `${indent}- ${content.split('\n').join(`\n${indent}  `)}`
 }
 
-/** The text/plain of a copy: a root with no children stays bare, everything
- *  else is a bullet indented by depth. */
-export const clipboardTextFor = (entries: readonly OutlineEntry[]): string =>
-  entries
-    .map((entry, index) =>
-      entry.depth === 0 && (entries[index + 1]?.depth ?? 0) === 0 ? entry.content : bulleted(entry))
+/** The text/plain of a copy: every block is a bullet indented by depth, except
+ *  a childless root that is the copy's only root, or that spans lines. Next to
+ *  other roots a bare single line is re-read as markdown on paste (a childless
+ *  `b` before `- a` adopts `a`), while a fence, quote or table pastes back whole
+ *  to another app only unbulleted. */
+export const clipboardTextFor = (entries: readonly OutlineEntry[]): string => {
+  const severalRoots = entries.filter(entry => entry.depth === 0).length > 1
+  return entries
+    .map((entry, index) => {
+      const childlessRoot = entry.depth === 0 && (entries[index + 1]?.depth ?? 0) === 0
+      return childlessRoot && (!severalRoots || entry.content.includes('\n')) ? entry.content : bulleted(entry)
+    })
     .join('\n')
+}
 
 /** The clipboard's text as a paste reads it: `Blob`s encode UTF-8, which
  *  replaces an unpaired surrogate. */

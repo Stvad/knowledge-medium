@@ -128,7 +128,7 @@ const editorContentForFirstPastedLine = (
   const line = pastedText.split('\n').find(item => item.trim().length > 0)
   if (line === undefined) return fallback
 
-  const bullet = line.trim().match(/^[-*+]\s+(.*)$/)
+  const bullet = line.trim().match(/^[-*+]\s+(.*)$/s)
   if (bullet) return bullet[1]
 
   return line.replace(/\r$/, '')
