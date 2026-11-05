@@ -134,12 +134,12 @@ describe('serializeBlock', () => {
 })
 
 describe('serializeSelectedBlocks', () => {
-  it('combines multiple subtrees in selection order', async () => {
+  it('combines multiple subtrees in selection order, bulleting a childless root', async () => {
     await seed({id: 'a', content: 'a', children: [{id: 'a1', content: 'a1'}]})
     await seed({id: 'b', content: 'b'})
 
     const result = await serializeSelectedBlocks(['a', 'b'], env.repo)
-    expect(result.markdown).toBe('- a\n  - a1\nb')
+    expect(result.markdown).toBe('- a\n  - a1\n- b')
     expect(result.blocks.map(x => x.id)).toEqual(['a', 'a1', 'b'])
   })
 

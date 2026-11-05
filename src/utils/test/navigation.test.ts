@@ -30,6 +30,7 @@ import {
 } from '@/utils/panelLayoutProjection'
 import { WorkspaceRegistryUnavailableError, type User } from '@/data/api'
 import { activePanelIdProp, panelMaximizedProp, topLevelBlockIdProp } from '@/data/properties'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -99,7 +100,7 @@ describe('navigate', () => {
   it("target 'main' creates the main panel when the layout is empty", async () => {
     navigate(env.repo, {blockId: 'b-main', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main'])
     })
   })
@@ -110,7 +111,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-next', target: 'panel', panelId})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-next'])
       expect(await currentActivePanelId()).toBe(panelId)
     })
@@ -124,7 +125,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-new-main', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-new-main', 'b-side'])
     })
   })
@@ -136,7 +137,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-active-next', target: 'active'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-active-next'])
       expect(await currentActivePanelId()).toBe(activePanel)
     })
@@ -153,7 +154,7 @@ describe('navigate', () => {
       sourcePanelId: firstPanelId,
     })
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-a', 'b-b', 'b-c'])
       const rows = await currentPanelRows()
       expect(await currentActivePanelId()).toBe(rows[1].id)
@@ -172,7 +173,7 @@ describe('navigate', () => {
       sourcePanelId: firstPanelId,
     })
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentLayoutBlockIds()).toEqual(['b-a', 'b-x', 'b-b', 'b-c'])
     })
     expect(layoutSlotsFromRows(layoutSession.id, await currentLayoutRows())).toEqual([
@@ -331,7 +332,7 @@ describe('navigateFromGlobalCommand', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
     })
     expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
@@ -345,7 +346,7 @@ describe('navigateFromGlobalCommand', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
     })
     expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
@@ -421,7 +422,7 @@ describe('navigationVerb (intent seam)', () => {
 
     expect(result?.blockId).toBe('b1')
     expect(typeof result?.panelId).toBe('string')
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b1'])
     })
   })
@@ -457,7 +458,7 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b1', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['rewritten'])
     })
   })
@@ -476,7 +477,7 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b1', target: 'main'})
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(calls).toContain('after:b1:b1')
     })
     expect(calls).toContain('before:b1')
@@ -516,7 +517,7 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b-zoomed', target: 'main', origin: 'zoom'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       // Redirected from main to the active (last) panel by the origin rule.
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-zoomed'])
       expect(await currentActivePanelId()).toBe(activePanel)
@@ -549,7 +550,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
     })
   })
@@ -623,7 +624,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     // Reads from ws-2 (the retargeted workspace), not WS's b-ws1 — and returns
     // the resolved workspace so callers validate/create against ws-2, not WS.
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await resolveGlobalCommandTarget(env.repo, WS)).toEqual({blockId: 'b-ws2', workspaceId: 'ws-2'})
     })
   })
@@ -649,7 +650,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
       expect(await currentActivePanelId()).toBe(activePanel)
     })
@@ -666,7 +667,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
     })
   })
@@ -694,7 +695,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // navigator command to the (empty-layout) main panel.
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global'])
     })
     expect(consoleError).toHaveBeenCalled()
@@ -730,7 +731,7 @@ describe('applyNavigationDecision (DOM routing)', () => {
     applyNavigationDecision(env.repo, e as unknown as ClickArg, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-go'])
     })
   })
@@ -755,7 +756,7 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-open', workspaceId: WS})
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-open'])
     })
   })
@@ -790,7 +791,7 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const e = fakeMouseEvent({metaKey: true})
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-cmd-nav', workspaceId: WS})
     expect(e.preventDefault).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-cmd-nav'])
     })
   })

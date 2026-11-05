@@ -63,7 +63,7 @@ const NOW = 1_700_000_000_000
 // ──── P1: totality ────
 
 /** Arbitrary UTF-16 content, mirroring the soup style in
- *  routing.fuzz.test.ts: whole code points (astral included) from `'binary'`,
+ *  routing.fuzz.test.ts: whole code points (astral included) from `codePointUnitArb`,
  *  and ill-formed sequences carrying lone surrogates from `utf16UnitArb`. */
 const wildStringArb = (maxLength: number) =>
   fc.oneof(fc.string({unit: codePointUnitArb, maxLength}), fc.string({unit: utf16UnitArb, maxLength}))

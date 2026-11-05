@@ -129,8 +129,11 @@ const lineToken = (trimmed: string, indent: number): OutlineToken => {
   // the content.
   const heading = /^(#{1,6})(?:[ \t]|$)/.exec(trimmed)
   if (heading) return {kind: 'heading', level: heading[1].length, indent, content: trimmed}
-  const bullet = /^[-*+]\s+(.*)/.exec(trimmed)
-  if (bullet) return {kind: 'list-item', indent, content: bullet[1]}
+  // A bare marker is an empty item (CommonMark), which is how a copy writes an
+  // empty block. `s`: lines are split on `\n` only, so `.` must not stop at
+  // U+2028 / U+2029, which JS counts as line terminators, inside the content.
+  const bullet = /^[-*+](?:\s+(.*)|$)/s.exec(trimmed)
+  if (bullet) return {kind: 'list-item', indent, content: bullet[1] ?? ''}
   // Keep the number, e.g. "1. item".
   if (/^\d+\.\s+/.test(trimmed)) return {kind: 'list-item', indent, content: trimmed}
   return {kind: 'paragraph', indent, content: trimmed}
