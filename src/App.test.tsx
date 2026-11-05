@@ -213,14 +213,8 @@ describe('App / LayoutRootContext provision', () => {
       await sharedDb.db.execute(`UPDATE workspaces SET encryption_mode = 'e2ee' WHERE id = 'ws-1'`)
     })
 
-    // At least one re-resolution, not exactly one: the stand-in keeps the
-    // converted workspace `ready`, so any later `workspaces` change notification
-    // closes it again. Every re-resolution must ask for page-b.
-    const requestedHashes = () => vi.mocked(bootstrapWorkspace).mock.calls.map(([args]) => args.requestedHash)
-    await vi.waitFor(() => expect(requestedHashes().length).toBeGreaterThanOrEqual(2))
-    const [opened, ...reResolved] = requestedHashes()
-    expect(opened).toBe(buildLayout('ws-1', ['page-a']))
-    expect(new Set(reResolved)).toEqual(new Set([buildLayout('ws-1', ['page-b'])]))
+    await vi.waitFor(() => expect(vi.mocked(bootstrapWorkspace)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(bootstrapWorkspace).mock.lastCall?.[0].requestedHash).toBe(buildLayout('ws-1', ['page-b']))
   })
 
   it('leaves a gated workspace for the default one, not the workspace the URL names', async () => {

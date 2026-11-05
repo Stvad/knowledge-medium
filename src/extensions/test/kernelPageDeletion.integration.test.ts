@@ -6,6 +6,7 @@ import {typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {releaseTestRepos} from '@/data/test/testRepoScope'
 import {resolveAppRuntimeSync} from '@/facets/resolveAppRuntime'
 import {staticAppExtensions} from '@/extensions/staticAppExtensions'
 import {resolveDeletionRefusal} from '@/extensions/core'
@@ -114,6 +115,7 @@ describe('kernel page UI deletion under the static app runtime', () => {
 // seeded workspace serves them all; each asserts its page's subtree unchanged.
 describe('kernel page refusals under the static app runtime', () => {
   beforeAll(setup)
+  afterAll(async () => { await releaseTestRepos([repo]) })
 
   it.each(expectedPages)('refuses $alias before any write or confirmation', async ({alias, ensure}) => {
     const page = await ensure(repo, WS)

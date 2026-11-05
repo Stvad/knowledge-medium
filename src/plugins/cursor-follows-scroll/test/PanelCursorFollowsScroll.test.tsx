@@ -365,14 +365,21 @@ describe('PanelCursorFollowsScroll', () => {
     const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE, edit: true})
     expect(panel.peekProperty(isEditingProp)).toBe(true)
+    const fence = await withFence()
 
-    render(<PanelCursorFollowsScroll block={panel}/>)
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
 
     // Scrolling with the editor open is refused — the cursor stays on `a`.
     dom.moveRow('a', -400)
     dom.moveRow('b', 20)
     dom.scroll()
-    await act(() => vi.advanceTimersByTimeAsync(250))
+    fence.scrollAway()
+    await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Escape, with no further scrolling.
@@ -387,17 +394,24 @@ describe('PanelCursorFollowsScroll', () => {
   // still placeholders when the settle fires. Dropping that attempt strands the
   // cursor off screen, because a row mounting need not move `scrollTop` and so
   // nothing schedules another.
-  it('retries when the rows that scrolled into view have not mounted yet', async () => {
+  it('re-settles when the rows that scrolled into view mount after the settle', async () => {
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    const fence = await withFence()
 
-    render(<PanelCursorFollowsScroll block={panel}/>)
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
 
     // The cursor leaves, and nothing else is rendered yet to anchor to.
     dom.moveRow('a', -400)
     dom.scroll()
-    await act(() => vi.advanceTimersByTimeAsync(200))
+    fence.scrollAway()
+    await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // The destination row mounts, with no scroll event of its own.
@@ -487,14 +501,21 @@ describe('PanelCursorFollowsScroll', () => {
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    const fence = await withFence()
 
-    render(<PanelCursorFollowsScroll block={panel}/>)
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
     // Seen on screen first, as any settled cursor is — and let the settle that
     // scroll arms run to completion. Without this wait the rows below move
     // BEFORE that timer fires, and it re-anchors on its own: the resize path
     // under test would then be doing nothing while the test still went green.
     dom.scroll()
-    await act(() => vi.advanceTimersByTimeAsync(250))
+    fence.scrollAway()
+    await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Rows above grow: `a` is shoved below the fold, `b` takes the top. No
@@ -517,10 +538,17 @@ describe('PanelCursorFollowsScroll', () => {
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    const fence = await withFence()
 
-    render(<PanelCursorFollowsScroll block={panel}/>)
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
     dom.scroll()
-    await act(() => vi.advanceTimersByTimeAsync(250))
+    fence.scrollAway()
+    await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Five pixels of `a` remain inside the port — less than a line, so the

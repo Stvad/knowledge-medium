@@ -265,6 +265,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       : undefined
     editedLocation.current = isEditing ? (current ?? null) : null
     if (!wasEditing || isEditing) return
+    // Defence in depth: the destination's settle was just re-created with nothing suppressed, so it would no-op.
     if (!sameFocusedBlockLocation(wasEditing, current)) return
     settleRef.current?.()
   }, [isEditing, focusedBlockId, renderScopeId])

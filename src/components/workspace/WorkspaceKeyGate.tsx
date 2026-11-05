@@ -190,6 +190,7 @@ function KeyPromptGate({
   }
 
   const confirmPlaintext = async () => {
+    // Defence in depth: the button is `disabled` while busy.
     if (busy) return
     setBusy('confirming')
     setError(null)

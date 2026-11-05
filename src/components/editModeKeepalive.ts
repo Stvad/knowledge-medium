@@ -67,6 +67,8 @@ export const resolveEditModeKeepalive = (): 'exit' | 'refocus' | 'yield' => {
  *  suppress; 400ms covers the worst case with headroom. */
 const KEEPALIVE_RELEASE_DELAY_MS = 400
 
+const delayedReleases = new Map<ReturnType<typeof setTimeout>, () => void>()
+
 /** Hold an edit-mode keepalive for the duration of `fn`, then release it on a
  *  delay (so the late post-commit blur above still sees the hold). The standard
  *  wrapper for fire-and-forget edit-mode surfaces — a mobile toolbar button, the
@@ -96,6 +98,20 @@ export const withEditModeKeepalive = async <T>(
   } finally {
     // Bare `setTimeout` (not `window.`) keeps this module env-agnostic — it's
     // pure latch state otherwise, and its unit test runs in the node env.
-    setTimeout(release, KEEPALIVE_RELEASE_DELAY_MS)
+    const timer = setTimeout(() => {
+      delayedReleases.delete(timer)
+      release()
+    }, KEEPALIVE_RELEASE_DELAY_MS)
+    delayedReleases.set(timer, release)
   }
+}
+
+/** Release now every {@link withEditModeKeepalive} hold still waiting out its
+ *  delay, so a test starts from an empty latch. */
+export const __flushDelayedKeepaliveReleasesForTests = (): void => {
+  for (const [timer, release] of delayedReleases) {
+    clearTimeout(timer)
+    release()
+  }
+  delayedReleases.clear()
 }
