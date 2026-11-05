@@ -1,1 +1,0 @@
-export{xM as ExtensionPromptSurface,SM as extensionPromptsExtension}from"../../../chunks/app-w_i0dpwN.js";
