@@ -1,8 +1,12 @@
+// @vitest-environment node
+/** The kernel `optionalRef` codec behind geo's `location` property (the `optional-ref` preset).
+ *  Belongs beside the other codec unit tests in `src/data/api/codecs.test.ts`. */
 import { describe, expect, it } from 'vitest'
-import { CodecError } from '@/data/api/codecs'
-import { optionalRefCodec } from '../codecs'
+import { CodecError, codecs } from '@/data/api/codecs'
 
-describe('optionalRefCodec', () => {
+const optionalRefCodec = codecs.optionalRef
+
+describe('codecs.optionalRef', () => {
   it('round-trips a string id', () => {
     const codec = optionalRefCodec()
     const encoded = codec.encode('block-123')

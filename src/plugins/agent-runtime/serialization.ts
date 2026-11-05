@@ -49,13 +49,17 @@ export const serializeValue = (value: unknown, seen = new WeakSet<object>()): un
     }
   }
 
-  if (Array.isArray(value)) {
-    return value.map(item => serializeValue(item, seen))
-  }
-
   if (typeof value === 'object') {
+    // Every container, arrays included, is entered at most once: a value can
+    // reach itself through any of them. Global rather than per path, so a
+    // densely shared graph (a live repo object) serializes in its size, not
+    // in its number of paths; a second sighting reads as `[Circular]`.
     if (seen.has(value)) return '[Circular]'
     seen.add(value)
+
+    if (Array.isArray(value)) {
+      return value.map(item => serializeValue(item, seen))
+    }
 
     if (value instanceof Map) {
       return Object.fromEntries(
