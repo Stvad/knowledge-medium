@@ -1,0 +1,1 @@
+export{LS as spatialNavigationShellDecorator}from"../../../chunks/app-BhluSeV0.js";

@@ -1,0 +1,1 @@
+export{Zp as extensionsOverridesProp,Qp as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-BhluSeV0.js";

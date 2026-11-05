@@ -1,0 +1,1 @@
+export{yA as CommandPaletteHeaderItem}from"../../../chunks/app-BhluSeV0.js";

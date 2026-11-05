@@ -1,0 +1,1 @@
+export{ip as contributorsPlugin}from"../../../chunks/app-BhluSeV0.js";

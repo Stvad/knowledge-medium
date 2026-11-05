@@ -1,0 +1,1 @@
+export{QG as PLACES_UNDER_BLOCK_QUERY,$G as placesUnderBlockQuery}from"../../../chunks/app-BhluSeV0.js";

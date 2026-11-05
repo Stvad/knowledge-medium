@@ -1,0 +1,1 @@
+export{ow as blockEditingContentRenderer}from"../../../chunks/app-BhluSeV0.js";

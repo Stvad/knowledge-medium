@@ -1,0 +1,1 @@
+export{b2 as kernelDataExtension}from"../../chunks/app-BhluSeV0.js";

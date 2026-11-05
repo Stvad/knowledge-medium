@@ -1,0 +1,1 @@
+export{_2 as Block,v2 as requireLoadedBlock}from"../../chunks/app-BhluSeV0.js";

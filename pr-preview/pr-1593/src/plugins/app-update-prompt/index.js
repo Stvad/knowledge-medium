@@ -1,0 +1,1 @@
+export{NM as appUpdatePromptExtension}from"../../../chunks/app-BhluSeV0.js";

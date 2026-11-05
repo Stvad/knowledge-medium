@@ -1,0 +1,1 @@
+export{pU as propertyShapeLabel}from"../../../chunks/app-BhluSeV0.js";

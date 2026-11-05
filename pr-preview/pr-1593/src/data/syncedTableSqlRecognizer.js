@@ -1,0 +1,1 @@
+export{kZ as SYNCED_TABLES,AZ as syncedWriteTarget,jZ as writeTargets}from"../../chunks/app-BhluSeV0.js";

@@ -1,0 +1,1 @@
+export{$N as LazyBlockComponent}from"../../chunks/app-BhluSeV0.js";

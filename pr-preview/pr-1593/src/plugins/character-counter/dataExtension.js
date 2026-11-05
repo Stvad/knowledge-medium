@@ -1,0 +1,1 @@
+export{ZJ as characterCounterDataExtension}from"../../../chunks/app-BhluSeV0.js";

@@ -1,0 +1,1 @@
+export{GC as mobileBottomNavItemsFacet}from"../../../chunks/app-BhluSeV0.js";

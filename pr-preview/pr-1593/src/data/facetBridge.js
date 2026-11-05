@@ -1,0 +1,1 @@
+export{M$ as FacetBridge}from"../../chunks/app-BhluSeV0.js";

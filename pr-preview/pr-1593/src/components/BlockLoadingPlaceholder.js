@@ -1,0 +1,1 @@
+export{nP as BlockLoadingPlaceholder}from"../../chunks/app-BhluSeV0.js";

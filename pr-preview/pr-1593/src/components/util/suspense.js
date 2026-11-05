@@ -1,0 +1,1 @@
+export{WU as SuspenseFallback}from"../../../chunks/app-BhluSeV0.js";

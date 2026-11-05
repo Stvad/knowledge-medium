@@ -1,0 +1,1 @@
+export{xj as TypeChip}from"../../../chunks/app-BhluSeV0.js";

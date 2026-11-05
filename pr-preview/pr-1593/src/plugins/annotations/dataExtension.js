@@ -1,0 +1,1 @@
+export{xq as annotationsDataExtension}from"../../../chunks/app-BhluSeV0.js";

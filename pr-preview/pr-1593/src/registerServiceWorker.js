@@ -1,0 +1,1 @@
+export{HM as checkForAppUpdate,UM as registerServiceWorker}from"../chunks/app-BhluSeV0.js";

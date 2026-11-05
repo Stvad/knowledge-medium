@@ -1,0 +1,1 @@
+export{lD as useAncestorCrumbs}from"../../chunks/app-BhluSeV0.js";

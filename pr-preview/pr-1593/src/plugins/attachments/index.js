@@ -1,0 +1,1 @@
+export{Ay as attachmentsPlugin}from"../../../chunks/app-BhluSeV0.js";

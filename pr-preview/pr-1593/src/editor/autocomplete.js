@@ -1,0 +1,1 @@
+export{gM as editorAutocompleteExtension}from"../../chunks/app-BhluSeV0.js";

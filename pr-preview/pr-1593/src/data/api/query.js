@@ -1,0 +1,1 @@
+export{uot as defineQuery}from"../../../chunks/app-BhluSeV0.js";
