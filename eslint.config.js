@@ -133,7 +133,7 @@ const clipboardWriteRestriction = {
 // generates and shrinks the same values seed for seed without it.
 const fcBinaryUnitRestriction = {
   selector: "CallExpression[callee.object.name='fc'][callee.property.name='string'] Property[key.name='unit'][value.value='binary']",
-  message: "Use `fc.string({unit: codePointUnitArb})` (@/test/arbitraries/utf16): same values and shrinking per seed, without the ~0.9s reverse map `'binary'` builds per test file.",
+  message: "Use `fc.string({unit: codePointUnitArb})` (@/test/arbitraries/utf16): same values and shrinking per seed, without the reverse map `'binary'` builds per test file (cost: docs/fuzzing.md).",
 }
 
 const uiDeleteSubtreeRestriction = {

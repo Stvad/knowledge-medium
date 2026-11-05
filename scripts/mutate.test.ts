@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, 
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { tempDirs } from './hook-test-support'
+import { permissionBitsIgnored, tempDirs } from './hook-test-support'
 import { changedLines, deleteOnce, parseMutateArgs, statePaths, verdictOf } from './mutate.mjs'
 
 describe('parseMutateArgs', () => {
@@ -302,8 +302,8 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(mod(dir)).toBe(MOD)
   })
 
-  // Root writes a mode-444 file, so the restore fails only for other users.
-  it.skipIf(process.getuid?.() === 0)('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
+  // Root writes a mode-444 file, so the restore fails only where mode bits bind.
+  it.skipIf(permissionBitsIgnored())('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
     const dir = fixture()
     try {
       const r = mutate(dir, ['--edit', 'printf x >> "$MUTATE_FILE" && chmod 444 "$MUTATE_FILE"', '--no-baseline'])

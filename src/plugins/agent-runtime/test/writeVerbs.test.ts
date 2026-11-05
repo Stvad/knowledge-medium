@@ -913,7 +913,7 @@ describe('todo writes through the raw property bag', () => {
   })
 })
 
-describe('review round 1', () => {
+describe('id resolution, daily-note creation, anchored appends and quoted diagnostics', () => {
   it('resolve-block-id reads an id the way the write verbs do, and never takes a name', async () => {
     await seed([{id: NOTE}])
     expect(await run({type: 'resolve-block-id', ref: `^${NOTE}`})).toEqual({id: NOTE})
@@ -978,7 +978,7 @@ describe('review round 1', () => {
   })
 })
 
-describe('review round 2', () => {
+describe('create reports, and append refusals before parsing', () => {
   it('names the properties a create set', async () => {
     await seed([{id: NOTE}])
     await run({type: 'create-block', parentId: NOTE, content: 'task', properties: {types: ['todo'], status: 'open'}})
@@ -1030,7 +1030,7 @@ describe('review round 2', () => {
   })
 })
 
-describe('review round 3', () => {
+describe('mixed-case ids and neutralized not-found suggestions', () => {
   // `blockId.ts` admits a non-lowercase id that sync or a restore brings in.
   it('acts on a mixed-case id exactly as given, never on its lowercase twin', async () => {
     const upper = NOTE.toUpperCase()
@@ -1052,7 +1052,7 @@ describe('review round 3', () => {
   })
 })
 
-describe('review round 4', () => {
+describe('reference syntax beside planted ids that look like it', () => {
   // Sync and restore admit non-canonical ids, including ones shaped like
   // reference syntax. Such a row must not capture a reference meant for the
   // real block or page; it stays reachable by wrapping its id in ((…)).
@@ -1087,7 +1087,7 @@ describe('review round 4', () => {
   })
 })
 
-describe('review round 5', () => {
+describe('recent-changes and property storage rows', () => {
   // The rows a same-tx materialization writes for a property are storage for
   // the owner's property, which the owner's own change already names.
   it('leaves property field/value rows out of recent-changes', async () => {
@@ -1142,7 +1142,7 @@ describe('review round 5', () => {
   })
 })
 
-describe('review round 6', () => {
+describe('recent-changes attributes a created daily note', () => {
   it('attributes a daily note it creates, so recent-changes shows it', async () => {
     const created = await run({type: 'create-page', date: '2026-10-15'}) as {id: string, created: boolean}
     expect(created.created).toBe(true)
@@ -1154,7 +1154,7 @@ describe('review round 6', () => {
   })
 })
 
-describe('review round 7', () => {
+describe('exactIds takes id fields as stored ids', () => {
   // `exactIds` says the id fields are already stored ids — km-mcp resolves
   // before its write guard and must not have the write read them as refs again.
   it('acts on exactIds values as stored ids, never re-reading them as refs', async () => {
@@ -1202,7 +1202,7 @@ describe('review round 7', () => {
   })
 })
 
-describe('review round 8', () => {
+describe('recent-changes net changes, append-markdown child reads, and create reports', () => {
   /** Reads of `parentId`'s children inside the txs `run` opens. */
   const countChildReads = async (parentId: string, action: () => Promise<unknown>): Promise<number> => {
     const original = repo.tx.bind(repo)

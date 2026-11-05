@@ -106,9 +106,10 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
     }
     const indent = getIndentationLevel(line)
 
-    const token = interruptsParagraph(trimmed) || tokens.at(-1)?.kind !== 'paragraph'
-      ? lineToken(trimmed, indent)
-      : {kind: 'paragraph' as const, indent, content: trimmed}
+    let token = lineToken(trimmed, indent)
+    // CommonMark: an empty item cannot interrupt a paragraph, so right under
+    // a paragraph line a bare marker stays text.
+    if (isEmptyItem(token) && tokens.at(-1)?.kind === 'paragraph') token = {kind: 'paragraph', indent, content: trimmed}
     const atomicEnd = token.kind === 'paragraph'
       ? fencedCodeEnd(lines, idx) ?? tableEnd(lines, idx) ?? quoteEnd(lines, idx)
       : undefined
@@ -125,9 +126,10 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
   return tokens
 }
 
-/** A bare list marker is an empty item, but (CommonMark) an empty item cannot
- *  interrupt a paragraph, so right under a paragraph line it stays text. */
-const interruptsParagraph = (trimmed: string): boolean => !/^[-*+]$/.test(trimmed)
+/** Only a bare marker lexes to an empty item: `trimmed` has no trailing
+ *  whitespace for the bullet capture to stop at, and a numbered item keeps
+ *  its number. */
+const isEmptyItem = (token: OutlineToken): boolean => token.kind === 'list-item' && token.content === ''
 
 const lineToken = (trimmed: string, indent: number): OutlineToken => {
   // CommonMark's ATX heading: 1-6 '#'s, then a space or the end of the line

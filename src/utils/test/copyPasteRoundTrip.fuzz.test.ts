@@ -35,7 +35,8 @@ import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { serializeBlock, serializeSelectedBlocks } from '@/utils/copy'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser'
+import { parseMarkdownToBlocks } from '@/utils/markdownParser'
+import { outlineOf } from './outline'
 
 interface Node {
   content: string
@@ -97,16 +98,10 @@ const fakeRepo = (roots: readonly Node[]): Repo => {
   return repo as unknown as Repo
 }
 
-const rebuild = (blocks: readonly ParsedBlock[], parentId: string | undefined): Node[] =>
-  blocks
-    .filter(block => block.parentId === parentId)
-    .sort((a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
-    .map(block => ({content: block.content, children: rebuild(blocks, block.id)}))
-
 const pasted = (markdown: string): Node[] => {
   // Only a multi-line paste is parsed; every copy generated here has two lines.
   expect(markdown).toContain('\n')
-  return rebuild(parseMarkdownToBlocks(markdown), undefined)
+  return outlineOf(parseMarkdownToBlocks(markdown))
 }
 
 describe('copy → paste round-trip', () => {

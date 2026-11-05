@@ -353,39 +353,15 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
   {maxKeys: 4},
 )
 
-/** Arbitrary id suffix — including the SAME hostile-char soup as content
- *  (vertical-motion chars, ESC/C1, ANSI sequences, backspace, DEL) and
- *  fully arbitrary Unicode (which can include literal `%`): caller-supplied
- *  ids (`createBlock`'s `data.id`) reach the renderer with no shape
- *  validation, so restricting
- *  the generator to `[a-zA-Z0-9_-]` could never have exposed the
- *  missing-id-neutralization bug. The benign shape stays in the mix so
- *  "ordinary" ids are still exercised too.
+/** Arbitrary id suffix, from the same hostile soup as content plus arbitrary
+ *  Unicode: caller-supplied ids (`createBlock`'s `data.id`) reach the renderer
+ *  with no shape validation. The benign shape keeps ordinary ids in the mix.
  *
- *  The `fc.string()` branch explicitly sets `unit: codePointUnitArb`: fast-check
- *  4.9's `fc.string()` DEFAULTS to
- *  `unit: 'grapheme-ascii'` (printable ASCII only), so an unqualified
- *  call here would have silently contradicted this comment's own "fully
- *  arbitrary Unicode" claim — the branch would only ever have emitted
- *  ASCII, and every non-ASCII codepoint actually exercised would have
- *  come from the separately hard-coded control-character soup, never
- *  from "arbitrary Unicode." `codePointUnitArb` was chosen (over `'grapheme'`/
- *  `'grapheme-composite'`) because it produces ANY codepoint in the full
- *  Unicode range (U+0000-U+10FFFF, excluding lone surrogates) regardless
- *  of printability or grapheme-combination — the closest match to what a
- *  truly unrestricted `data.id: string` could contain, including
- *  combining marks, supplementary-plane characters, and Unicode
- *  formatting characters, none of which `'grapheme-ascii'` could ever
- *  produce. It still excludes LONE surrogates by construction (it draws from
- *  outside the surrogate block), which is exactly
- *  why `idCategoryHazardArb` (below) generates them deliberately — `id`'s
- *  `\p{C}` boundary must cover Cs too.
+ *  `codePointUnitArb`, not `fc.string()`'s printable-ASCII default: any code point,
+ *  astral, combining marks and formatting included, but never a lone surrogate.
  *
- *  `idCategoryHazardArb` and `zwjZwnjArb` are mixed in explicitly (rather
- *  than left to chance from the code-point branch above) so bidi
- *  controls, lone surrogates, private-use, unassigned codepoints, and
- *  ZWJ/ZWNJ are exercised with real weight, not just whatever the random
- *  code-point sampler happens to land on. */
+ *  `idCategoryHazardArb` (bidi, private-use, unassigned, and lone surrogates since
+ *  `id`'s `\p{C}` boundary covers Cs) and `zwjZwnjArb` weight what the sampler rarely hits. */
 const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-zA-Z0-9_-]{0,10}$/),
   contentSoupArb,
@@ -538,7 +514,7 @@ const encodedIdToken = (id: string): string => {
   return outline.slice('- ['.length, outline.length - '] '.length)
 }
 
-describe('encodeOutlineId is injective — distinct ids never render the same [id] token (PR #447 review comment 3676752546)', () => {
+describe('encodeOutlineId is injective — distinct ids never render the same [id] token', () => {
   it('holds for arbitrary distinct ids drawn from the same hostile-char domain as content', () => {
     fc.assert(
       fc.property(
@@ -579,7 +555,7 @@ describe('encodeOutlineId is injective — distinct ids never render the same [i
   }, fuzzTestTimeout())
 })
 
-describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 review comment 3676752546)', () => {
+describe('decodeOutlineId is the exact inverse of encodeOutlineId', () => {
   it('decodeOutlineId(encodeOutlineId(id)) === id for arbitrary ids, including hostile-char and %-bearing ones', () => {
     fc.assert(
       fc.property(idSuffixArb, (id) => {
@@ -599,7 +575,7 @@ describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 revie
 //      handles a leading depth indent, which is a no-op for the
 //      always-unindented single-row lines these properties render). ────
 
-describe('whole-grammar round-trip: the documented first-] parse rule recovers the exact id through the FULL line, not just the encoder (PR #447 review comment 3677029933)', () => {
+describe('whole-grammar round-trip: the documented first-] parse rule recovers the exact id through the FULL line, not just the encoder', () => {
   it('parseIdFromLine(renderSubtreeOutline([{id, content}])) === id for arbitrary (id, content) pairs, including ids/content containing [ and ]', () => {
     fc.assert(
       fc.property(idSuffixArb, contentSoupArb, (id, content) => {
@@ -610,7 +586,7 @@ describe('whole-grammar round-trip: the documented first-] parse rule recovers t
     )
   }, fuzzTestTimeout())
 
-  it('Codex\'s exact counterexample: an id-side ] and a content-side ] parse back to their own distinct ids', () => {
+  it('an id-side ] and a content-side ] parse back to their own distinct ids', () => {
     const idHasBracket = renderSubtreeOutline([{id: 'a] b', parentId: null, content: 'c', depth: 0}])
     const contentHasBracket = renderSubtreeOutline([{id: 'a', parentId: null, content: 'b] c', depth: 0}])
     expect(idHasBracket).not.toBe(contentHasBracket)
@@ -633,7 +609,7 @@ describe('whole-grammar round-trip: the documented first-] parse rule recovers t
  *  and are never neutralized, so they don't need to be excluded here. */
 const controlCharFreeContentArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 .,!?[\]-]{0,15}$/)
 
-describe('whole-line injectivity: distinct (id, content) pairs never render the same line, with content-side lossiness controlled for (PR #447 review comment 3677029933)', () => {
+describe('whole-line injectivity: distinct (id, content) pairs never render the same line, with content-side lossiness controlled for', () => {
   it('holds for arbitrary distinct (id, content) pairs — id from the full hostile domain (incl. [ and ]), content control-char-free so only the id/grammar fix is under test', () => {
     fc.assert(
       fc.property(
@@ -651,7 +627,7 @@ describe('whole-line injectivity: distinct (id, content) pairs never render the 
     )
   }, fuzzTestTimeout())
 
-  it('Codex\'s exact counterexample no longer collides', () => {
+  it('an id-side ] and a content-side ] render different lines', () => {
     const idHasBracket = renderSubtreeOutline([{id: 'a] b', parentId: null, content: 'c', depth: 0}])
     const contentHasBracket = renderSubtreeOutline([{id: 'a', parentId: null, content: 'b] c', depth: 0}])
     expect(idHasBracket).not.toBe(contentHasBracket)
@@ -691,7 +667,7 @@ describe('TAB survives content untouched — the one deliberate exclusion from t
 //      the implementation's hand-enumerated bidi range and this suite's
 //      mirrored `BIDI_CODEPOINTS` list omitted the SAME character). ────
 
-describe('id: the categorical \\p{C} boundary — no control/format/surrogate/private-use/unassigned character survives in a rendered id (PR #447 review comment 3677343389)', () => {
+describe('id: the categorical \\p{C} boundary — no control/format/surrogate/private-use/unassigned character survives in a rendered id', () => {
   it('/\\p{C}/u never matches the rendered [id] token, for ids drawn from bidi controls, lone surrogates, private-use, and unassigned codepoints', () => {
     fc.assert(
       fc.property(idSuffixArb, (id) => {
@@ -715,7 +691,7 @@ describe('id: the categorical \\p{C} boundary — no control/format/surrogate/pr
   }, fuzzTestTimeout())
 })
 
-describe('no bidi formatting control survives anywhere in the rendered outline, whether it came from id or content (PR #447 review comment 3677343389)', () => {
+describe('no bidi formatting control survives anywhere in the rendered outline, whether it came from id or content', () => {
   it('holds for arbitrary rows whose id and/or content carry bidi controls', () => {
     fc.assert(
       fc.property(rowsArb, fc.boolean(), (rows, includeProperties) => {
@@ -759,7 +735,7 @@ describe('no bidi formatting control survives anywhere in the rendered outline, 
     expect(outline.includes(String.fromCodePoint(0x202e))).toBe(false)
   })
 
-  it('the omitted member itself: U+061C ARABIC LETTER MARK in content is neutralized, not just the eleven originally-listed controls (PR #447 review comment 3677564794)', () => {
+  it('U+061C ARABIC LETTER MARK in content is neutralized', () => {
     // The concrete regression this fix closes: U+061C is a Unicode
     // `Bidi_Control` codepoint exactly like LRM/RLM/the embedding and
     // isolate formers, but the original bidi fix hand-enumerated the
@@ -777,7 +753,7 @@ describe('no bidi formatting control survives anywhere in the rendered outline, 
   })
 })
 
-describe('ZWJ/ZWNJ survive in content untouched — the deliberate exception to bidi neutralization (PR #447 review comment 3677343389)', () => {
+describe('ZWJ/ZWNJ survive in content untouched — the deliberate exception to bidi neutralization', () => {
   it('preserves every ZWJ/ZWNJ occurrence in content exactly, at any count/position', () => {
     fc.assert(
       fc.property(
@@ -807,7 +783,7 @@ describe('ZWJ/ZWNJ survive in content untouched — the deliberate exception to 
   })
 })
 
-describe('id treats ZWJ/ZWNJ like any other \\p{C} character — encoded, unlike the content-side exception above (PR #447 review comment 3677343389)', () => {
+describe('id treats ZWJ/ZWNJ like any other \\p{C} character — encoded, unlike the content-side exception above', () => {
   it('percent-encodes ZWJ/ZWNJ when they appear in an id (no content-style carve-out for identifiers)', () => {
     fc.assert(
       fc.property(zwjZwnjArb, (zw) => {

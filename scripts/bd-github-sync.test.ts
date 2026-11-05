@@ -51,7 +51,7 @@ import {
   type BeadRow,
   type IssueInfo,
 } from './bd-github-sync.mjs'
-import { RESOLVE } from './bd-github-sync-test-support'
+import { RESOLVE } from './hook-test-support'
 
 const ref = (n: number) => `https://github.com/${REPO}/issues/${n}`
 const issues = (entries: [number, IssueInfo][]) => new Map<number, IssueInfo>(entries)

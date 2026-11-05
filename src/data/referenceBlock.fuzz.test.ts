@@ -51,8 +51,7 @@ const isUuidShaped = (s: string): boolean => {
 }
 
 /** UUIDs with each hex letter's case drawn independently. */
-const mixedCaseUuid = fc.tuple(fc.uuid(), fc.array(fc.boolean(), {minLength: 36, maxLength: 36}))
-  .map(([id, upper]) => [...id].map((c, i) => (upper[i] ? c.toUpperCase() : c)).join(''))
+const mixedCaseUuid = fc.mixedCase(fc.uuid())
 
 const idCandidate = fc.oneof(grammarSoup, mixedCaseUuid, fc.string({maxLength: 12}))
 

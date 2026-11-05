@@ -21,30 +21,26 @@
  *    palette — so the blur handler must leave focus alone; the surface refocuses
  *    the editor itself when it closes.
  *
- * The latch is a pair of counters (not booleans) so overlapping holds compose —
- * e.g. two quick toolbar taps. `yield-focus` wins over `refocus` when both are
- * held: if any surface has claimed focus, stealing it back would break that
- * surface, so we only refocus when nothing has.
+ * Each mode's latch is a set of per-hold tokens (not a boolean) so overlapping
+ * holds compose — e.g. two quick toolbar taps. `yield-focus` wins over
+ * `refocus` when both are held: if any surface has claimed focus, stealing it
+ * back would break that surface, so we only refocus when nothing has.
  */
 
 export type EditModeKeepaliveMode = 'refocus' | 'yield-focus'
 
-let refocusHolds = 0
-let yieldHolds = 0
+const holds: Record<EditModeKeepaliveMode, Set<symbol>> = {
+  refocus: new Set(),
+  'yield-focus': new Set(),
+}
 
 /** Acquire a keepalive hold. Returns the release fn; callers MUST schedule the
  *  release (timer / cleanup / finally). Idempotent — the returned fn is safe to
- *  call more than once but only decrements its counter once. */
+ *  call more than once but only ever frees its own hold. */
 export const acquireEditModeKeepalive = (mode: EditModeKeepaliveMode): (() => void) => {
-  if (mode === 'refocus') refocusHolds++
-  else yieldHolds++
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    if (mode === 'refocus') refocusHolds--
-    else yieldHolds--
-  }
+  const hold = Symbol(mode)
+  holds[mode].add(hold)
+  return () => { holds[mode].delete(hold) }
 }
 
 /** What the editor's blur handler should do, given any active holds:
@@ -54,8 +50,8 @@ export const acquireEditModeKeepalive = (mode: EditModeKeepaliveMode): (() => vo
  *   - 'yield'   — a surface owns focus; keep edit mode but leave focus where it
  *                 is (the surface restores editor focus on close). */
 export const resolveEditModeKeepalive = (): 'exit' | 'refocus' | 'yield' => {
-  if (yieldHolds > 0) return 'yield'
-  if (refocusHolds > 0) return 'refocus'
+  if (holds['yield-focus'].size > 0) return 'yield'
+  if (holds.refocus.size > 0) return 'refocus'
   return 'exit'
 }
 
@@ -66,8 +62,6 @@ export const resolveEditModeKeepalive = (): 'exit' | 'refocus' | 'yield' => {
  *  instant the action resolves would drop the hold before the blur it's meant to
  *  suppress; 400ms covers the worst case with headroom. */
 const KEEPALIVE_RELEASE_DELAY_MS = 400
-
-const delayedReleases = new Map<ReturnType<typeof setTimeout>, () => void>()
 
 /** Hold an edit-mode keepalive for the duration of `fn`, then release it on a
  *  delay (so the late post-commit blur above still sees the hold). The standard
@@ -98,20 +92,13 @@ export const withEditModeKeepalive = async <T>(
   } finally {
     // Bare `setTimeout` (not `window.`) keeps this module env-agnostic — it's
     // pure latch state otherwise, and its unit test runs in the node env.
-    const timer = setTimeout(() => {
-      delayedReleases.delete(timer)
-      release()
-    }, KEEPALIVE_RELEASE_DELAY_MS)
-    delayedReleases.set(timer, release)
+    setTimeout(release, KEEPALIVE_RELEASE_DELAY_MS)
   }
 }
 
-/** Release now every {@link withEditModeKeepalive} hold still waiting out its
- *  delay, so a test starts from an empty latch. */
-export const __flushDelayedKeepaliveReleasesForTests = (): void => {
-  for (const [timer, release] of delayedReleases) {
-    clearTimeout(timer)
-    release()
-  }
-  delayedReleases.clear()
+/** Drop every hold, so a test starts from an empty latch. A delayed release
+ *  still pending from {@link withEditModeKeepalive} then frees nothing. */
+export const __resetEditModeKeepaliveForTests = (): void => {
+  holds.refocus.clear()
+  holds['yield-focus'].clear()
 }

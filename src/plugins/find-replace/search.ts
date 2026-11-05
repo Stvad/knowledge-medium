@@ -1,3 +1,4 @@
+import { escapeRegExp } from 'lodash-es'
 import type { ContentSearchMatch, FindReplaceOptions } from './types.ts'
 
 export const DEFAULT_FIND_REPLACE_OPTIONS: FindReplaceOptions = {
@@ -13,39 +14,11 @@ interface LiteralMatch {
 /** A word character in any script. Closed under the case-insensitive
  *  matcher's folding (folding never turns a letter into a non-letter), so a
  *  match's edges classify the same as the needle's. */
-const WORD_CHAR = /^[\p{L}\p{M}\p{N}\p{Pc}]$/u
+const WORD_CLASS = String.raw`[\p{L}\p{M}\p{N}\p{Pc}]`
+const WORD_CHAR = new RegExp(`^${WORD_CLASS}$`, 'u')
 
-const isWordChar = (char: string | undefined): boolean =>
-  char !== undefined && WORD_CHAR.test(char)
-
-/** The code point starting at `index`, or `undefined` past the end. */
-const codePointFrom = (text: string, index: number): string | undefined => {
-  const codePoint = text.codePointAt(index)
-  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint)
-}
-
-/** The code point ending at `index`, or `undefined` at the start. */
-const codePointBefore = (text: string, index: number): string | undefined => {
-  if (index <= 0) return undefined
-  const pairStart = index - 2
-  if (pairStart >= 0 && /^[\uD800-\uDBFF][\uDC00-\uDFFF]$/.test(text.slice(pairStart, index))) {
-    return text.slice(pairStart, index)
-  }
-  return text[index - 1]
-}
-
-const passesWholeWordBoundary = (
-  content: string,
-  index: number,
-  length: number,
-): boolean => {
-  const end = index + length
-  return (!isWordChar(codePointFrom(content, index)) || !isWordChar(codePointBefore(content, index)))
-    && (!isWordChar(codePointBefore(content, end)) || !isWordChar(codePointFrom(content, end)))
-}
-
-const escapeRegExp = (text: string): string =>
-  text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+const isWordCodePoint = (codePoint: number | undefined): boolean =>
+  codePoint !== undefined && WORD_CHAR.test(String.fromCodePoint(codePoint))
 
 const caseFlags = (matchCase: boolean): string => matchCase ? 'u' : 'iu'
 
@@ -81,8 +54,8 @@ export const caseInsensitiveVariants = (char: string): string[] => {
  *  regex's per-code-point folding, never a lowercased copy of the content:
  *  lowercasing can change a string's length (`İ` becomes two code units), and
  *  offsets taken from the copy would splice a replacement into the wrong place.
- *  A whole-word rejection advances one code point, not past the candidate, so
- *  an overlapping later candidate is still considered. */
+ *  Whole-word is a lookaround on each needle edge that is a word character, so
+ *  a rejected candidate never hides an overlapping later one. */
 export const findLiteralMatches = (
   content: string,
   needle: string,
@@ -90,20 +63,15 @@ export const findLiteralMatches = (
 ): LiteralMatch[] => {
   if (needle.length === 0) return []
 
-  const pattern = new RegExp(escapeRegExp(needle), `g${caseFlags(options.matchCase)}`)
-  const matches: LiteralMatch[] = []
+  const lastCodePoint = [...needle].at(-1)?.codePointAt(0)
+  const guardStart = options.wholeWord && isWordCodePoint(needle.codePointAt(0))
+  const guardEnd = options.wholeWord && isWordCodePoint(lastCodePoint)
+  const source = (guardStart ? `(?<!${WORD_CLASS})` : '')
+    + escapeRegExp(needle)
+    + (guardEnd ? `(?!${WORD_CLASS})` : '')
+  const pattern = new RegExp(source, `g${caseFlags(options.matchCase)}`)
 
-  for (let found = pattern.exec(content); found; found = pattern.exec(content)) {
-    const {index} = found
-    const length = found[0].length
-    if (!options.wholeWord || passesWholeWordBoundary(content, index, length)) {
-      matches.push({index, length})
-    } else {
-      pattern.lastIndex = index + ((content.codePointAt(index) ?? 0) > 0xffff ? 2 : 1)
-    }
-  }
-
-  return matches
+  return [...content.matchAll(pattern)].map(found => ({index: found.index, length: found[0].length}))
 }
 
 export const replaceLiteralMatches = (

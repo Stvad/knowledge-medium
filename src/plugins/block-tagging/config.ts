@@ -37,13 +37,9 @@ import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
 export const isValidTagName = (name: string): boolean =>
   tagNameIssue(name) === null
 
-/** WHY a tag name was rejected, so the entry points can say something
- *  true. They used to hard-code "can't contain `[[` or `]]`", which was
- *  the only rule; the length rule made that message a lie for an input
- *  containing neither delimiter — the control went disabled with an
- *  error naming characters that weren't there and no hint that
- *  shortening would fix it. A reason code rather than
- *  a string so each surface keeps its own markup for the delimiters. */
+/** WHY a tag name was rejected, so the entry points' hint names the rule
+ *  the input actually broke. A reason code rather than a string so the
+ *  hint (`TagNameIssueHint`) can mark up the delimiters. */
 export type TagNameIssue = 'empty' | 'delimiters' | 'unmatched-bracket' | 'too-long'
 
 export const tagNameIssue = (name: string): TagNameIssue | null => {

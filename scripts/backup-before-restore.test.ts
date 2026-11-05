@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { restoreInvocations } from './backup-before-restore.mjs'
 import { NOTE_BUDGET } from './hook-context.mjs'
-import { contextOf as context, git, tempDirs } from './hook-test-support'
+import { contextOf as context, git, permissionBitsIgnored, tempDirs } from './hook-test-support'
 
 const specs = (cmd: string) => restoreInvocations(cmd).map(r => r.pathspecs)
 
@@ -272,8 +272,8 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   mkdirSync(join(edge, 'dir-now')) // tracked file replaced by a directory
   writeFileSync(join(edge, 'locked.txt'), 'edited\n')
   chmodSync(join(edge, 'locked.txt'), 0o000)
-  // Root reads a mode-000 file, so locked.txt is unreadable only to other users.
-  const asRoot = process.getuid?.() === 0
+  // Root reads a mode-000 file, so locked.txt is unreadable only where mode bits bind.
+  const asRoot = permissionBitsIgnored()
 
   it('copies a retargeted symlink as a link', () => {
     const dir = backupDir(context(hook('git checkout -- link', edge).stdout))

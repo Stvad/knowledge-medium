@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
-import { __flushDelayedKeepaliveReleasesForTests, resolveEditModeKeepalive } from '@/components/editModeKeepalive'
+import { __resetEditModeKeepaliveForTests, resolveEditModeKeepalive } from '@/components/editModeKeepalive'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
@@ -260,7 +260,7 @@ describe('bulk-delete confirmation', () => {
     // The latch is process-global and each hold lingers past its dialog
     // closing, so every earlier test here leaves one behind. Drain first or
     // this reads someone else's hold and stays green with the keepalive gone.
-    __flushDelayedKeepaliveReleasesForTests()
+    __resetEditModeKeepaliveForTests()
     expect(resolveEditModeKeepalive()).toBe('exit')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))

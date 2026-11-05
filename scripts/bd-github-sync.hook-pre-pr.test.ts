@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { RESOLVE } from './bd-github-sync-test-support'
+import { permissionBitsIgnored, RESOLVE } from './hook-test-support'
 
 // The two gh-side fixtures the hook tests reach for. Named because the whole
 // distinction is `pull_request` being present at all — a close keyword aimed
@@ -12,19 +12,6 @@ import { RESOLVE } from './bd-github-sync-test-support'
 // literal took a second look every time.
 const AN_ISSUE = { title: 'Real GC failure', state: 'open' }
 const A_PR = { title: 'Some PR', state: 'open', pull_request: {} }
-
-// Whether this process reads through permission bits, as root does.
-const permissionBitsIgnored = () => {
-  const probe = join(mkdtempSync(join(tmpdir(), 'perm-probe-')), 'f')
-  writeFileSync(probe, '')
-  chmodSync(probe, 0o000)
-  try {
-    readFileSync(probe)
-    return true
-  } catch {
-    return false
-  }
-}
 
 // Process-level pins for hookPrePr's composition — the ordering and gating
 // that unit tests on the pure functions cannot see. Runs the real entry point

@@ -935,7 +935,7 @@ describe('Dependencies + invalidate()', () => {
     await waitFor(() => expect(fired).toEqual([1]))
   })
 
-  it('a matching invalidate on a ready handle runs the loader exactly once (reviewer P2 #3)', async () => {
+  it('a matching invalidate on a ready handle runs the loader exactly once', async () => {
     // Pre-fix shape: invalidate() spun up a fresh load, then
     // observeDuringLoad recorded the same change because inflight was
     // now truthy. After settle, queue replay matched the freshly-
@@ -1437,7 +1437,7 @@ describe('Batched notify across multiple matching handles', () => {
   })
 })
 
-describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
+describe('Mid-load invalidations are not dropped', () => {
   it('upfront-declared deps match a mid-load invalidate', async () => {
     // The loader declares its dep BEFORE awaiting — invalidate during
     // the load should match the declared dep, set pendingReinvalidate,
