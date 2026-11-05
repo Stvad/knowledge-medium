@@ -1,1 +1,1 @@
-export{cy as moveBlocksTo}from"../../../chunks/app-BhluSeV0.js";
+export{cy as moveBlocksTo}from"../../../chunks/app-u_Drx1Xv.js";
