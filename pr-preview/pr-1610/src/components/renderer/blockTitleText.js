@@ -1,0 +1,1 @@
+export{KL as BLOCK_TITLE_TEXT_CLASS,qL as useBlockTitleTextClass}from"../../../chunks/app-w_i0dpwN.js";

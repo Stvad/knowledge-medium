@@ -1,0 +1,1 @@
+export{nY as characterCounterDataExtension}from"../../../chunks/app-w_i0dpwN.js";

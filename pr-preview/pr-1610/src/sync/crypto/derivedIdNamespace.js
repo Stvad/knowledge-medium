@@ -1,0 +1,1 @@
+export{Jnt as deriveWorkspaceIdNamespace}from"../../../chunks/app-w_i0dpwN.js";

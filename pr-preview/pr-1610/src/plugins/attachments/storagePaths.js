@@ -1,0 +1,1 @@
+export{Dx as attachmentObjectPath,Ox as authenticatedObjectUrl,kx as deriveObjectKey,Ax as storageObjectUrl}from"../../../chunks/app-w_i0dpwN.js";

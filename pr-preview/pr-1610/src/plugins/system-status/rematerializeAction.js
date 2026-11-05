@@ -1,0 +1,1 @@
+export{fs as REMATERIALIZE_WORKSPACE_ACTION_ID,ps as rematerializeWorkspaceAction,ms as rematerializeWorkspaceActionContribution}from"../../../chunks/app-w_i0dpwN.js";

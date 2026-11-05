@@ -1,0 +1,2 @@
+var e=/\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/,t=new Set([`script`,`style`,`worker`,`font`,`image`]),n=(n,r,i)=>i&&(t.has(n)||e.test(r));export{e as ASSET_EXTENSION,n as isCacheableAsset};
+//# sourceMappingURL=assets.js.map

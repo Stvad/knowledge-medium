@@ -1,0 +1,1 @@
+export{GX as attachmentCleanerIOContribution,KX as attachmentsDataExtension}from"../../../chunks/app-w_i0dpwN.js";

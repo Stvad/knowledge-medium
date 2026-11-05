@@ -1,0 +1,1 @@
+export{hW as staticDataExtensions}from"../../chunks/app-w_i0dpwN.js";
