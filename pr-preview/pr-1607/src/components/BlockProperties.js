@@ -1,0 +1,1 @@
+export{BR as BlockProperties}from"../../chunks/app-yZkZnfQA.js";

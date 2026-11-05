@@ -1,0 +1,1 @@
+export{TR as defineVariant,ER as defineVariantFacet}from"../../chunks/app-yZkZnfQA.js";

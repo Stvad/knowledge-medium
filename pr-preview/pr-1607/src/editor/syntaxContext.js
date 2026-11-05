@@ -1,0 +1,1 @@
+export{IK as isInsideLiteralMarkdown}from"../../chunks/app-yZkZnfQA.js";

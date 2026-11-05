@@ -1,0 +1,1 @@
+export{IW as referencesDataExtension}from"../../../chunks/app-yZkZnfQA.js";

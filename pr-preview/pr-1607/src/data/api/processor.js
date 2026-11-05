@@ -1,0 +1,1 @@
+export{kot as definePostCommitProcessor}from"../../../chunks/app-yZkZnfQA.js";

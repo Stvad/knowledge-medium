@@ -1,0 +1,1 @@
+export{KR as PropertyRow}from"../../../chunks/app-yZkZnfQA.js";

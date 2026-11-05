@@ -1,0 +1,1 @@
+export{xot as defineQuery}from"../../../chunks/app-yZkZnfQA.js";

@@ -1,0 +1,1 @@
+export{GQ as instrumentAdapter}from"../../../chunks/app-yZkZnfQA.js";
