@@ -139,6 +139,7 @@
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
 import {fuzzParams, fuzzTestTimeout} from '@/test/fuzz'
+import {codePointUnitArb} from '@/test/arbitraries/utf16'
 import {decodeOutlineId, renderSubtreeOutline, type SubtreeOutlineRow} from '../src/subtreeOutline'
 
 // ──── shared building blocks ────
@@ -361,34 +362,34 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
  *  missing-id-neutralization bug. The benign shape stays in the mix so
  *  "ordinary" ids are still exercised too.
  *
- *  The `fc.string()` branch explicitly sets `unit: 'binary'`: fast-check
+ *  The `fc.string()` branch explicitly sets `unit: codePointUnitArb`: fast-check
  *  4.9's `fc.string()` DEFAULTS to
  *  `unit: 'grapheme-ascii'` (printable ASCII only), so an unqualified
  *  call here would have silently contradicted this comment's own "fully
  *  arbitrary Unicode" claim — the branch would only ever have emitted
  *  ASCII, and every non-ASCII codepoint actually exercised would have
  *  come from the separately hard-coded control-character soup, never
- *  from "arbitrary Unicode." `'binary'` was chosen (over `'grapheme'`/
+ *  from "arbitrary Unicode." `codePointUnitArb` was chosen (over `'grapheme'`/
  *  `'grapheme-composite'`) because it produces ANY codepoint in the full
  *  Unicode range (U+0000-U+10FFFF, excluding lone surrogates) regardless
  *  of printability or grapheme-combination — the closest match to what a
  *  truly unrestricted `data.id: string` could contain, including
  *  combining marks, supplementary-plane characters, and Unicode
  *  formatting characters, none of which `'grapheme-ascii'` could ever
- *  produce. It still excludes LONE surrogates by construction (fast-check's
- *  own `'binary'` doc: "except half surrogate pairs"), which is exactly
+ *  produce. It still excludes LONE surrogates by construction (it draws from
+ *  outside the surrogate block), which is exactly
  *  why `idCategoryHazardArb` (below) generates them deliberately — `id`'s
  *  `\p{C}` boundary must cover Cs too.
  *
  *  `idCategoryHazardArb` and `zwjZwnjArb` are mixed in explicitly (rather
- *  than left to chance from the `'binary'` branch above) so bidi
+ *  than left to chance from the code-point branch above) so bidi
  *  controls, lone surrogates, private-use, unassigned codepoints, and
  *  ZWJ/ZWNJ are exercised with real weight, not just whatever the random
- *  binary-unit sampler happens to land on. */
+ *  code-point sampler happens to land on. */
 const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-zA-Z0-9_-]{0,10}$/),
   contentSoupArb,
-  fc.string({maxLength: 20, unit: 'binary'}),
+  fc.string({maxLength: 20, unit: codePointUnitArb}),
   idCategoryHazardArb,
   zwjZwnjArb,
 )

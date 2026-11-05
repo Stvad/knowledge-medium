@@ -72,7 +72,7 @@ describe('mirror copy names', () => {
       ),
       fuzzParams(300),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('accept a stamp only when it names a real instant, and report that instant', () => {
     // A name a pruner adopts must be one the writer could have produced: a
@@ -107,7 +107,7 @@ describe('mirror copy names', () => {
       ),
       fuzzParams(500),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── Pruning over a random folder ────

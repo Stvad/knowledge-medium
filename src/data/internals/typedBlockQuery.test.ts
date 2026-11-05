@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { waitFor } from './test/waitFor'
+import { waitFor } from '@/test/waitFor'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,

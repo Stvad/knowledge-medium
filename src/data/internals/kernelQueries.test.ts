@@ -11,7 +11,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { waitFor } from './test/waitFor'
+import { waitFor } from '@/test/waitFor'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {

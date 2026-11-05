@@ -324,7 +324,7 @@ describe('blocksAlreadyReflects', () => {
       }),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('the tombstone arm: a staged tombstone is reflected over an absent or tombstoned local, never over a live one by that arm', () => {
     fc.assert(

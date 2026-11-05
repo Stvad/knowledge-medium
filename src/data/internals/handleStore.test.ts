@@ -24,7 +24,7 @@ import {
   stableArgsKey,
   type Dependency,
 } from './handleStore'
-import { waitFor } from './test/waitFor'
+import { waitFor } from '@/test/waitFor'
 
 interface ManualScheduler {
   schedule: (cb: () => void, ms: number) => () => void

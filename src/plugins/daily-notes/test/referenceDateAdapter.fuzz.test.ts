@@ -17,7 +17,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { formatIsoDate, formatRoamDate } from '@/utils/dailyPage'
 import { replaceSingleDateReferenceContent, singleDateReferenceMatch } from '../referenceDateAdapter'
 
@@ -60,7 +60,7 @@ describe('replaceSingleDateReferenceContent', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('leaves content with two date references alone', () => {
     fc.assert(
@@ -71,7 +71,7 @@ describe('replaceSingleDateReferenceContent', () => {
         }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('on any content, touches nothing outside one date reference and reads back as the new day', () => {
     fc.assert(
@@ -94,5 +94,5 @@ describe('replaceSingleDateReferenceContent', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })

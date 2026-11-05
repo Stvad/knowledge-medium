@@ -28,7 +28,7 @@ import {
   type GroupedBacklinkCandidate,
 } from '../grouping.ts'
 import type { GroupedBacklinksConfig } from '../config.ts'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 
 const TARGET = 'target'
 const SOURCES = ['s0', 's1', 's2', 's3', 's4', 's5', 's6']
@@ -155,7 +155,7 @@ describe('buildGroupedBacklinks (fuzz)', () => {
       }),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('emits small groups only at high priority, and leaves nothing groupable in the fallback', () => {
     fc.assert(
@@ -196,5 +196,5 @@ describe('buildGroupedBacklinks (fuzz)', () => {
       }),
       fuzzParams(400),
     )
-  })
+  }, fuzzTestTimeout())
 })

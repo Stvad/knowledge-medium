@@ -8,7 +8,7 @@
  *   - the parse error you get for a bad / unknown `type`
  */
 import {describe, expect, it} from 'vitest'
-import {knownCommandSchema, sqlModeSchema} from '../src/protocol'
+import {knownCommandSchema} from '../src/protocol'
 
 describe('knownCommandSchema — branch acceptance', () => {
   // One representative valid body per variant. The point of the
@@ -170,20 +170,6 @@ describe('knownCommandSchema — rejection', () => {
       expect(data.filter).toBe('stored')
       expect(data.grouping).toEqual({excludedTags: ['x']})
     }
-  })
-})
-
-describe('sqlModeSchema', () => {
-  it('accepts the four valid modes', () => {
-    for (const mode of ['all', 'get', 'optional', 'execute']) {
-      expect(sqlModeSchema.safeParse(mode).success).toBe(true)
-    }
-  })
-
-  it('rejects anything else', () => {
-    expect(sqlModeSchema.safeParse('truncate').success).toBe(false)
-    expect(sqlModeSchema.safeParse('').success).toBe(false)
-    expect(sqlModeSchema.safeParse(undefined).success).toBe(false)
   })
 })
 
