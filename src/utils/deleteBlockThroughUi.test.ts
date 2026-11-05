@@ -5,6 +5,7 @@ import { resolveEditModeKeepalive } from '@/components/editModeKeepalive'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { keysBetween } from '@/data/orderKey'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog'
@@ -38,14 +39,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** `count` children of `parentId`, ids `<prefix>-0…`. */
+/** `count` children of a CHILDLESS `parentId`, ids `<prefix>-0…`, in one tx. */
 const seedChildren = async (parentId: string, count: number, prefix: string): Promise<string[]> => {
-  const ids: string[] = []
-  for (let i = 0; i < count; i++) {
-    const id = `${prefix}-${i}`
-    await repo.mutate.createChild({parentId, id, content: id})
-    ids.push(id)
-  }
+  const ids = Array.from({length: count}, (_, i) => `${prefix}-${i}`)
+  const orderKeys = keysBetween(null, null, count)
+  await repo.tx(async tx => {
+    for (const [i, id] of ids.entries()) {
+      await tx.create({id, workspaceId: WS, parentId, orderKey: orderKeys[i], content: id})
+    }
+  }, {scope: ChangeScope.BlockDefault})
   return ids
 }
 
