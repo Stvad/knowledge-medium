@@ -34,12 +34,12 @@ import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 
 /** Case pairs only among the ASCII letters; every other member matches only
  *  itself under any case folding. `İ` is the one whose lowercase is longer. */
-const ORACLE_ALPHABET = ['a', 'A', 'b', 'B', '_', '1', ' ', '.', '-', '*', '(', '\n', 'İ', 'ß', 'é', '😀']
+const ORACLE_ALPHABET = ['a', 'A', 'b', 'B', '_', '1', ' ', '.', '-', '*', '(', '\n', '\u0130', '\u00DF', '\u00E9', '\u{1F600}']
 
 /** Members with case relations that reach beyond ASCII. */
 const TRICKY_ALPHABET = [
   ...ORACLE_ALPHABET,
-  'i', 'I', 'ı', 's', 'S', 'ſ', 'k', 'K', 'K', 'ẞ', 'Σ', 'σ', 'ς', 'É', 'é', 'ﬀ',
+  'i', 'I', '\u0131', 's', 'S', '\u017F', 'k', 'K', '\u212A', '\u1E9E', '\u03A3', '\u03C3', '\u03C2', '\u00C9', 'e\u0301', '\uFB00',
 ]
 
 const textOf = (alphabet: string[], minLength: number, maxLength: number) =>

@@ -23,6 +23,7 @@ import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef } from '../agentViews/resolveRef'
 import type { OutlineView } from '../agentViews/outline'
 import type { BlockView } from '../agentViews/block'
+import { MAX_DECODED_ITEMS } from '../agentViews/properties'
 import { renderBacklinksView, type BacklinksView, type GroupedBacklinksView } from '../agentViews/backlinks'
 import type { SearchView } from '../agentViews/search'
 
@@ -1051,9 +1052,19 @@ describe('structural edge cases', () => {
   it('reads only a head of a huge types list, counting the rest', async () => {
     const id = uuid('9d1d1d1d', 1)
     await create({id, content: 'typed', properties: {types: Array.from({length: 5_000}, (_, i) => `kind-${i}`)}})
+    const registry = repo.types
+    let lookups = 0
+    const types = vi.spyOn(repo, 'types', 'get').mockReturnValue(new Proxy(registry, {
+      get: (target, key) => key === 'get'
+        ? (typeId: string) => { if (typeId.startsWith('kind-')) lookups++; return target.get(typeId) }
+        : Reflect.get(target, key, target),
+    }))
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+      .finally(() => types.mockRestore())
     expect(out.types).toHaveLength(11)
     expect(out.types.at(-1)).toBe('+4,990 more')
+    expect(lookups).toBeGreaterThan(0)
+    expect(lookups).toBeLessThanOrEqual(MAX_DECODED_ITEMS)
   })
 
   it('folds only exactly identical text into one search hit', async () => {

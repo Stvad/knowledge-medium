@@ -147,8 +147,13 @@ describe('copy → paste round-trip', () => {
   })
 
   it('a U+2028 inside a block does not cut its content short', async () => {
-    const root: Node = {content: 'a b', children: [{content: 'c d', children: []}]}
+    const root: Node = {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}
     const {markdown} = await serializeBlock(fakeRepo([root]).block('0'))
     expect(pasted(markdown)).toEqual([root])
+  })
+
+  it('a lone marker right under a prose line stays text', () => {
+    expect(parseMarkdownToBlocks('Pros\n-\nCons').map(block => block.content))
+      .toEqual(['Pros', '-', 'Cons'])
   })
 })

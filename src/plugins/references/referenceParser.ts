@@ -24,7 +24,7 @@ import {
   UUID_RE_SOURCE,
   aliasedBlockRefSpanSource,
   blockRefSpanSource,
-  hasBalancedBrackets,
+  endsInUnmatchedBracket,
 } from '@/data/referenceBlock'
 
 export interface ParsedReference {
@@ -425,7 +425,7 @@ const renderWikilinkUnchecked = (alias: string): string => {
   // simply is not spellable as a wikilink. Callers that need identity rather
   // than syntax find out via `faithfulWikilinkReplacement`, which round-trips
   // and refuses.
-  const padded = safe.endsWith(']') && !hasBalancedBrackets(safe) ? safe + ' ' : safe
+  const padded = endsInUnmatchedBracket(safe) ? safe + ' ' : safe
   return `[[${padded}]]`
 }
 

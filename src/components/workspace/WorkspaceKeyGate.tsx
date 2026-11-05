@@ -190,7 +190,8 @@ function KeyPromptGate({
   }
 
   const confirmPlaintext = async () => {
-    // Defence in depth: the button is `disabled` while busy.
+    // Defence in depth, not pinned: the button is `disabled` while busy, so no
+    // click reaches this.
     if (busy) return
     setBusy('confirming')
     setError(null)

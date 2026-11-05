@@ -265,7 +265,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       : undefined
     editedLocation.current = isEditing ? (current ?? null) : null
     if (!wasEditing || isEditing) return
-    // Defence in depth: the destination's settle was just re-created with nothing suppressed, so it would no-op.
+    // Defence in depth, not pinned: no test reaches this through the component.
     if (!sameFocusedBlockLocation(wasEditing, current)) return
     settleRef.current?.()
   }, [isEditing, focusedBlockId, renderScopeId])

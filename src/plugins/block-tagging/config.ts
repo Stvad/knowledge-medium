@@ -6,7 +6,7 @@ import {
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
-import { hasBalancedBrackets } from '@/data/referenceBlock'
+import { endsInUnmatchedBracket } from '@/data/referenceBlock'
 import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
@@ -50,7 +50,7 @@ export const tagNameIssue = (name: string): TagNameIssue | null => {
   const trimmed = name.trim()
   if (!trimmed) return 'empty'
   if (trimmed.includes('[[') || trimmed.includes(']]')) return 'delimiters'
-  if (trimmed.endsWith(']') && !hasBalancedBrackets(trimmed)) return 'unmatched-bracket'
+  if (endsInUnmatchedBracket(trimmed)) return 'unmatched-bracket'
   if (!canRenderAsWikilink(trimmed)) return 'too-long'
   return null
 }

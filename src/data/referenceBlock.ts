@@ -240,7 +240,7 @@ export const referenceBlockContentForId = (id: string): string => {
  *  brackets, so a nested `[[b]]` counts as balanced. The inline reader
  *  (`@/plugins/references/referenceParser`) decides how many of a `]]]…` run
  *  belong to the alias by this count. */
-export const hasBalancedBrackets = (s: string): boolean => {
+const hasBalancedBrackets = (s: string): boolean => {
   let depth = 0
   for (const ch of s) {
     if (ch === '[') depth++
@@ -248,6 +248,11 @@ export const hasBalancedBrackets = (s: string): boolean => {
   }
   return depth === 0
 }
+
+/** The inline reader ends `[[s]]` at an unmatched trailing `]`, so a name
+ *  ending in one cannot be linked as itself; `renderWikilink` pads it. */
+export const endsInUnmatchedBracket = (s: string): boolean =>
+  s.endsWith(']') && !hasBalancedBrackets(s)
 
 /** The labels {@link isRoundTrippableReferenceLabel} refuses, as one
  *  sentence for every message that sends a name back. Keep in step with it. */
@@ -266,7 +271,7 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   // The inline reader lets an alias absorb a trailing `]` only to close a `[`
   // it opened, so `[[a]]]` links to `a` even though the whole-block reading
   // below gets `a]` back intact.
-  if (label.endsWith(']') && !hasBalancedBrackets(label)) return false
+  if (endsInUnmatchedBracket(label)) return false
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
   return parsed !== null && parsed.kind === 'alias' && parsed.alias === label
 }

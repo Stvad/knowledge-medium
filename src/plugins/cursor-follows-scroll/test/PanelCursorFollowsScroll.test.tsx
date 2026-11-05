@@ -391,9 +391,10 @@ describe('PanelCursorFollowsScroll', () => {
   })
 
   // A fast scroll outruns lazy mounting: the rows now filling the viewport are
-  // still placeholders when the settle fires. Dropping that attempt strands the
-  // cursor off screen, because a row mounting need not move `scrollTop` and so
-  // nothing schedules another.
+  // still placeholders when the settle fires, and the cursor must still land
+  // once they mount. Either the bounded retry or the mount watcher gets it
+  // there; 'retries for a cursor on a row that holds the rows' pins the retry
+  // alone.
   it('re-settles when the rows that scrolled into view mount after the settle', async () => {
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20]])

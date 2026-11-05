@@ -106,7 +106,9 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
     }
     const indent = getIndentationLevel(line)
 
-    const token = lineToken(trimmed, indent)
+    const token = interruptsParagraph(trimmed) || tokens.at(-1)?.kind !== 'paragraph'
+      ? lineToken(trimmed, indent)
+      : {kind: 'paragraph' as const, indent, content: trimmed}
     const atomicEnd = token.kind === 'paragraph'
       ? fencedCodeEnd(lines, idx) ?? tableEnd(lines, idx) ?? quoteEnd(lines, idx)
       : undefined
@@ -123,14 +125,18 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
   return tokens
 }
 
+/** A bare list marker is an empty item, but (CommonMark) an empty item cannot
+ *  interrupt a paragraph, so right under a paragraph line it stays text. */
+const interruptsParagraph = (trimmed: string): boolean => !/^[-*+]$/.test(trimmed)
+
 const lineToken = (trimmed: string, indent: number): OutlineToken => {
   // CommonMark's ATX heading: 1-6 '#'s, then a space or the end of the line
   // (`#tag` and `#######` are text). Keep the '#'s: the level renders from
   // the content.
   const heading = /^(#{1,6})(?:[ \t]|$)/.exec(trimmed)
   if (heading) return {kind: 'heading', level: heading[1].length, indent, content: trimmed}
-  // A bare marker is an empty item (CommonMark), which is how a copy writes an
-  // empty block. `s`: lines are split on `\n` only, so `.` must not stop at
+  // A bare marker is an empty item, which is how a copy writes an empty
+  // block. `s`: lines are split on `\n` only, so `.` must not stop at
   // U+2028 / U+2029, which JS counts as line terminators, inside the content.
   const bullet = /^[-*+](?:\s+(.*)|$)/s.exec(trimmed)
   if (bullet) return {kind: 'list-item', indent, content: bullet[1] ?? ''}
