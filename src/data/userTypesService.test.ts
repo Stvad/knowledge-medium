@@ -27,7 +27,9 @@ import { Repo } from '@/data/repo'
 import { UserTypesService } from '@/data/userTypesService'
 
 const WS = 'ws-user-types'
-const SUBSCRIPTION_TIMEOUT_MS = 3_000
+/** Polled tightly: every test fences on republishes, and the default 50ms
+ *  interval would otherwise be most of each test's cost. */
+const SUBSCRIPTION_SETTLES = {timeout: 3_000, interval: 5}
 
 interface Harness {
   h: TestDb
@@ -71,7 +73,7 @@ const waitForTypeRegistration = async (
 ): Promise<void> => {
   await vi.waitFor(() => {
     expect(repo.types.get(typeId)?.label).toBe(label)
-  }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  }, SUBSCRIPTION_SETTLES)
 }
 
 const createBlockTypeBlock = async (
@@ -190,7 +192,7 @@ describe('UserTypesService subscription', () => {
     }, {scope: ChangeScope.BlockDefault})
     await vi.waitFor(() => {
       expect(env.repo.types.get(id)?.hideFromCompletion).toBeUndefined()
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
   })
 
   it('lifts hide-from-block-display and color onto the contribution, and republishes on change', async () => {
@@ -211,7 +213,7 @@ describe('UserTypesService subscription', () => {
     }, {scope: ChangeScope.BlockDefault})
     await vi.waitFor(() => {
       expect(env.repo.types.get(id)?.color).toBe('tomato')
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
 
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeHideFromBlockDisplayProp, false)
@@ -220,7 +222,7 @@ describe('UserTypesService subscription', () => {
       const updated = env.repo.types.get(id)
       expect(updated?.color).toBe('tomato')
       expect(updated?.hideFromBlockDisplay).toBeUndefined()
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
   })
 
   it('a malformed display-config value degrades to defaults without unregistering the type', async () => {
@@ -241,7 +243,7 @@ describe('UserTypesService subscription', () => {
         const contribution = env.repo.types.get(bad)
         expect(contribution?.label).toBe('Bad')
         expect(contribution?.hideFromBlockDisplay).toBeUndefined()
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
     } finally {
       warn.mockRestore()
     }
@@ -266,7 +268,7 @@ describe('UserTypesService subscription', () => {
       await vi.waitFor(() => {
         expect(env.repo.types.get(good)?.label).toBe('Good v2')
         expect(env.repo.types.get(bad)).toBeUndefined()
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
     } finally {
       warn.mockRestore()
     }
@@ -333,7 +335,7 @@ describe('UserTypesService subscription', () => {
         expect(definitions?.definitionsByFieldId.get(fieldId)?.seedKey).toBe(seed.seedKey)
         expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
         expect(definitions?.seedsByKey.has(seed.seedKey)).toBe(false)
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
 
       const typeId = await createBlockTypeBlock(env.repo, {
         label: 'Late seeded type',
@@ -353,7 +355,7 @@ describe('UserTypesService subscription', () => {
             changeScope: seed.changeScope,
           }),
         ])
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
     } finally {
       warn.mockRestore()
     }
@@ -397,7 +399,7 @@ describe('UserTypesService subscription', () => {
         expect(winnerFieldId).not.toBe(userFieldId)
         expect(definitions?.definitionsByFieldId.get(seedFieldId)?.seedKey).toBe(seed.seedKey)
         expect(definitions?.schemasByFieldId.has(seedFieldId)).toBe(false)
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
 
       const typeId = await createBlockTypeBlock(env.repo, {
         label: 'Seeded type over a same-name user schema',
@@ -456,7 +458,7 @@ describe('UserTypesService subscription', () => {
         const definitions = env.repo.propertyDefinitions
         expect(definitions?.definitionsByFieldId.get(fieldId)?.name).toBe(seed.name)
         expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
 
       const typeId = await createBlockTypeBlock(env.repo, {
         label: 'Renamed seeded type',
@@ -473,7 +475,7 @@ describe('UserTypesService subscription', () => {
             changeScope: seed.changeScope,
           }),
         ])
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
 
       const targetId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
       await env.repo.addType(targetId, typeId, {[seed.name]: 'canonical value'})
@@ -512,7 +514,7 @@ describe('UserTypesService subscription', () => {
           changeScope: schema.changeScope,
         }),
       ])
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
   })
 
   it('stops cleanly at a null Repo pin: clears the bucket and later edits do not republish', async () => {

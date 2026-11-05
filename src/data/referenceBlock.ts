@@ -236,6 +236,18 @@ export const referenceBlockContentForId = (id: string): string => {
   return content
 }
 
+/** Every `]` in `s` closes an earlier `[`, and every `[` is closed. The
+ *  inline reader (`@/plugins/references/referenceParser`) decides how many of
+ *  a `]]]…` run belong to the alias by this count. */
+export const hasBalancedBrackets = (s: string): boolean => {
+  let depth = 0
+  for (const ch of s) {
+    if (ch === '[') depth++
+    else if (ch === ']' && --depth < 0) return false
+  }
+  return depth === 0
+}
+
 /** Does `label` survive the wikilink round trip intact? A name containing
  *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a
  *  clean `[[name]]` reference. `addSchema` and the rename flow reject
@@ -243,6 +255,10 @@ export const referenceBlockContentForId = (id: string): string => {
  *  are id-addressed (`((fieldId))`, docs/properties-as-blocks-migration.html §7) and no longer embed the
  *  name. */
 export const isRoundTrippableReferenceLabel = (label: string): boolean => {
+  // The inline reader lets an alias absorb a trailing `]` only to close a `[`
+  // it opened, so `[[a]]]` links to `a` even though the whole-block reading
+  // below gets `a]` back intact.
+  if (label.endsWith(']') && !hasBalancedBrackets(label)) return false
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
   return parsed !== null && parsed.kind === 'alias' && parsed.alias === label
 }

@@ -587,7 +587,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
    *  this poll expiring — carrying the last assertion error — rather than as
    *  an opaque test timeout. */
   const waitForMaterialization = (check: () => Promise<void>): Promise<void> =>
-    vi.waitFor(check, {timeout: 15_000, interval: 50})
+    vi.waitFor(check, {timeout: 15_000, interval: 5})
 
   type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
 

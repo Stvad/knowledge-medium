@@ -67,6 +67,9 @@ import {
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
 const FIELD_OLDER = 'field-older-peer'
+/** Polled tightly: every test fences on the projector, and the default 50ms
+ *  interval would otherwise be most of each test's cost. */
+const REGISTRY_SETTLES = {timeout: 3000, interval: 5}
 
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -121,7 +124,7 @@ const awaitDefinition = async (
         `[test] ${name} is ${schema?.codec.type ?? 'absent'} in the registry, want ${codecType}`,
       )
     }
-  }, {timeout: 3000})
+  }, REGISTRY_SETTLES)
   return schema!
 }
 
@@ -263,7 +266,7 @@ const withPresetUnloaded = async (
     if (repo.propertySchemas.get('status') !== undefined) {
       throw new Error('[test] status still has behaviour in the registry')
     }
-  }, {timeout: 3000})
+  }, REGISTRY_SETTLES)
   return {repo, valueRowId}
 }
 
@@ -585,7 +588,7 @@ describe('rename', () => {
     await vi.waitFor(() => {
       const claimants = propertyDefinitionClaimantsForName(repo.propertyDefinitions!, 'status')
       expect(claimants).toEqual([FIELD_SUCCESSOR])
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
     await awaitDefinition(repo, 'status', 'string')
     // The predecessor's value is still in the cell, under the name the
     // successor now answers to — and the successor has no field row on `p`.
@@ -945,7 +948,7 @@ describe('codec change', () => {
       vi.waitFor(() => {
         const codec = schemaFor(repo, 'status').codec
         for (const value of values) codec.encode(value)
-      }, {timeout: 3000})
+      }, REGISTRY_SETTLES)
 
     const setupChoice = async (...values: readonly string[]) => {
       await seedWorkspace('children')
@@ -1105,7 +1108,7 @@ describe('codec change', () => {
       if (repo.propertySchemas.get('status') !== undefined) {
         throw new Error('[test] status still has behaviour in the registry')
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
 
     await rename(repo, FIELD_ID, 'state')
 
@@ -1423,7 +1426,7 @@ describe('a workspace this client cannot judge', () => {
       if (repo.propertyDefinitions?.workspaceId === WS) {
         throw new Error('[test] the registry has not moved off the definition\'s workspace')
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
     await expect(repo.tx(
       tx => tx.setProperty(FIELD_ID, propertyNameProp, 'state'),
       {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
@@ -1456,7 +1459,7 @@ describe('a workspace this client cannot judge', () => {
       if (repo.propertyDefinitions?.workspaceId === WS) {
         throw new Error('[test] the registry has not moved off the definition\'s workspace')
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
     await expect(repo.tx(tx => tx.restore(FIELD_OLDER), {
       scope: ChangeScope.BlockDefault,
       allowUnloadedWorkspace: true,
@@ -1494,7 +1497,7 @@ describe('claimants the batch itself adds or removes', () => {
       if (claimants[0] !== FIELD_ID) {
         throw new Error(`[test] head claimant is ${claimants[0]}, want ${FIELD_ID}`)
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
 
     await retype(repo, FIELD_ID, 'number')
 
@@ -1545,7 +1548,7 @@ describe('claimants the batch itself adds or removes', () => {
       if (repo.propertySchemas.get('archived') !== undefined) {
         throw new Error('[test] the peer still has behaviour in the registry')
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
 
     await repo.tx(async tx => {
       await tx.setProperty(FIELD_PEER, propertyNameProp, 'retired')
@@ -2351,7 +2354,7 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
       if (repo.propertySchemas.get('status') !== undefined) {
         throw new Error('[test] status is still published')
       }
-    }, {timeout: 3000})
+    }, REGISTRY_SETTLES)
 
     await repo.tx(tx => tx.restore(FIELD_OLDER), {scope: ChangeScope.BlockDefault})
 
