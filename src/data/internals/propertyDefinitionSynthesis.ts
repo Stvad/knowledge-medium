@@ -367,12 +367,12 @@ export const resolveSynthesisNamespace = async (
  *  CHOOSING and can send back for another pick, but a cell key is already in
  *  the data — refusing it only makes the workspace permanently unable to
  *  flip. Its `isRoundTrippableReferenceLabel` rule is dropped for that reason:
- *  it also rejects any padding (`" padded "` fails it), which would turn a
- *  padded import key into a permanent blocker for a benefit that's already
- *  bounded (field rows have been id-addressed since §7). Minting the trimmed
- *  name instead doesn't fix it either — `addSchema` trims, so it would define
- *  `"padded"` and leave the cell key `" padded "` still definition-less, the
- *  same unsatisfiable state by a longer route. */
+ *  it also rejects any padding (`" padded "` fails it, told to "rename without
+ *  \"]]\""), which would turn a padded import key into a permanent blocker for
+ *  a benefit that's already bounded (field rows have been id-addressed since
+ *  §7). Minting the trimmed name instead doesn't fix it either — `addSchema`
+ *  trims, so it would define `"padded"` and leave the cell key `" padded "`
+ *  still definition-less, the same unsatisfiable state by a longer route. */
 export const keyCannotBeDefined = (key: string): string | null => {
   if (key === '') {
     return 'the empty property key: a definition with no name is unusable ' +

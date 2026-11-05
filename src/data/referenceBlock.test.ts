@@ -245,19 +245,6 @@ describe('assertRoundTrippableReferenceLabel', () => {
       .toThrow(LossyLabelError)
   })
 
-  it('refuses a name ending in an unbalanced `]`, which the inline reader cuts short', () => {
-    for (const name of ['foo]', 'foo ]', '[a[b]', 'a]b]']) {
-      expect(parseReferences(referenceBlockContentForLabel(name))[0]?.alias).not.toBe(name)
-      expect(() => assertRoundTrippableReferenceLabel(name, 'ctx')).toThrow(LossyLabelError)
-    }
-    // A `]` that closes the name's own `[`, or one not at the end, survives
-    // both readers.
-    for (const name of ['[foo]', 'Book of [x]', 'foo]bar', '[foo', ']foo']) {
-      expect(parseReferences(referenceBlockContentForLabel(name))[0]?.alias).toBe(name)
-      expect(() => assertRoundTrippableReferenceLabel(name, 'ctx')).not.toThrow()
-    }
-  })
-
   it('refuses a name past the alias cap', () => {
     expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH + 1), 'ctx'))
       .toThrow(LossyLabelError)

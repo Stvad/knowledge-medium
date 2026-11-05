@@ -609,6 +609,22 @@ describe('block-type typeify processor', () => {
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
   })
 
+  // The whole-block reader keeps a name ending in an unmatched `]`, so a type
+  // under one keeps answering to it, through an edit and through a rename.
+  it('keeps and moves the claim of a type named with a trailing unmatched `]`', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Foo]')
+    const resolves = async (alias: string) =>
+      (await env.repo.query.aliasLookup({workspaceId: WS, alias}).load())?.id
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Foo] '}), {scope: ChangeScope.BlockDefault})
+    expect((await env.repo.load(id))!.properties[aliasesProp.name]).toEqual(['Foo]'])
+    expect(await resolves('Foo]')).toBe(id)
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Bar]'}), {scope: ChangeScope.BlockDefault})
+    expect(await resolves('Bar]')).toBe(id)
+  })
+
   // Same rule as the tag path, one tx later — a name that can't be written
   // as `[[name]]` leaves the type unlinkable, so the rename is refused whole
   // instead of propagated into a label nothing can address.
