@@ -1,1 +1,1 @@
-export{XP as BlockTypeBlockRenderer,ZP as BlockTypeContentRenderer,QP as writeBlockTypeLabel}from"../../../chunks/app-C_J8Mskv.js";
+export{ZP as BlockTypeBlockRenderer,QP as BlockTypeContentRenderer,$P as writeBlockTypeLabel}from"../../../chunks/app-CdkIZ3yd.js";

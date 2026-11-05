@@ -1,1 +1,1 @@
-export{aP as defaultRegistry,oP as defaultRendererContributions,sP as defaultRenderersExtension}from"../../chunks/app-C_J8Mskv.js";
+export{oP as defaultRegistry,sP as defaultRendererContributions,cP as defaultRenderersExtension}from"../../chunks/app-CdkIZ3yd.js";

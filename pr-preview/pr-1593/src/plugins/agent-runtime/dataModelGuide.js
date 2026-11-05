@@ -1,1 +1,1 @@
-export{jg as DATA_MODEL_GUIDE,Mg as dataModelGuide}from"../../../chunks/app-C_J8Mskv.js";
+export{Mg as DATA_MODEL_GUIDE,Ng as dataModelGuide}from"../../../chunks/app-CdkIZ3yd.js";

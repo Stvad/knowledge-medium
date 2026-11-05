@@ -1,1 +1,1 @@
-export{WP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-C_J8Mskv.js";
+export{GP as CodeMirrorExtensionBlockRenderer}from"../../../chunks/app-CdkIZ3yd.js";

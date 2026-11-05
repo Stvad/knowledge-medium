@@ -1,1 +1,1 @@
-export{Ax as videoPlayerMarkdownExtension}from"../../../chunks/app-C_J8Mskv.js";
+export{jx as videoPlayerMarkdownExtension}from"../../../chunks/app-CdkIZ3yd.js";
