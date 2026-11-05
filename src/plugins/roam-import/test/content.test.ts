@@ -125,8 +125,8 @@ describe('rewriteRoamContent', () => {
   })
 
   it('keeps code spans protected after an earlier #[[page]] rewrite shortens the text', () => {
-    const {content} = rewriteRoamContent('#[[two words]] and `#a`', new Map())
-    expect(content).toBe('[[two words]] and `#a`')
+    const {content} = rewriteRoamContent('#[[a b]] #[[c d]] #[[e f]] `#a`', new Map())
+    expect(content).toBe('[[a b]] [[c d]] [[e f]] `#a`')
   })
 
   it('does not rewrite URL fragments in markdown link destinations', () => {
