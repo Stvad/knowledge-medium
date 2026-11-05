@@ -77,6 +77,25 @@ const MarkdownOrderedList: NonNullable<Components['ol']> = (
   return createElement('ol', {...props, className: withListClass(className)}, children)
 }
 
+/** The table's scroller, and the mark its styling keys on — stamped here for
+ *  the reason `MARKDOWN_LIST_CLASS` is. A block clips its overflow, so the
+ *  columns past its edge are only reachable by scrolling this wrapper. */
+const MarkdownTable: NonNullable<Components['table']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement(
+    'div',
+    {className: 'markdown-table-scroll'},
+    createElement(
+      'table',
+      {...props, className: [className, 'markdown-table'].filter(Boolean).join(' ')},
+      children,
+    ),
+  )
+}
+
 export const gfmMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkGfm],
   rehypePlugins: [rehypeTrimBlockSeparators],
@@ -84,6 +103,7 @@ export const gfmMarkdownExtension: MarkdownExtension = () => ({
     a: MarkdownAnchor,
     img: MarkdownImage,
     ol: MarkdownOrderedList,
+    table: MarkdownTable,
     ul: MarkdownUnorderedList,
   },
 })

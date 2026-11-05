@@ -117,6 +117,16 @@ describe('gfm markdown extension', () => {
       .toBe('contains-task-list markdown-list')
   })
 
+  it('puts a markdown table in its own scroller, keeping gfm\'s alignment', () => {
+    renderMarkdown('| a | b |\n|:--|--:|\n| 1 | 2 |')
+
+    const table = screen.getByRole('table')
+    expect(table).toHaveClass('markdown-table')
+    expect(table.parentElement).toHaveClass('markdown-table-scroll')
+    expect(screen.getByRole('columnheader', {name: 'b'})).toHaveStyle({textAlign: 'right'})
+    expect(screen.getByRole('cell', {name: '2'})).toHaveStyle({textAlign: 'right'})
+  })
+
   it('drops every newline separator inside a tight list', () => {
     const {container} = renderMarkdown('1. one\n2. two')
 

@@ -337,6 +337,30 @@
     list-style-type: none;
   }
 
+  .markdown-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .markdown-table {
+    border-collapse: collapse;
+  }
+
+  /* `em` so the cells scale with the surrounding text, like the list gutter. */
+  .markdown-table th,
+  .markdown-table td {
+    border: 1px solid hsl(var(--border));
+    padding: 0.3em 0.65em;
+    vertical-align: top;
+  }
+
+  /* A column's own alignment arrives as an inline style and still wins. */
+  .markdown-table th {
+    background-color: hsl(var(--muted));
+    font-weight: 600;
+    text-align: start;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit
