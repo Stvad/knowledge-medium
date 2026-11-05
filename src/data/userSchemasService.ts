@@ -38,7 +38,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel, LOSSY_LABEL_RULE } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -60,7 +60,7 @@ import {createChild as createChildMutator} from '@/data/mutators'
 export const propertySchemaNameRejection = (name: string): string | null => {
   if (!name) return 'name is required'
   if (!isRoundTrippableReferenceLabel(name)) {
-    return `name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; rename without "]]"`
+    return `name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; rename it. ${LOSSY_LABEL_RULE}`
   }
   if (isGrammarShapedLabel(name)) {
     return `name ${JSON.stringify(name)} is itself a reference span; rename it`

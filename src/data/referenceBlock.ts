@@ -236,9 +236,10 @@ export const referenceBlockContentForId = (id: string): string => {
   return content
 }
 
-/** Every `]` in `s` closes an earlier `[`, and every `[` is closed. The
- *  inline reader (`@/plugins/references/referenceParser`) decides how many of
- *  a `]]]…` run belong to the alias by this count. */
+/** Every `]` in `s` closes an earlier `[`, and every `[` is closed — single
+ *  brackets, so a nested `[[b]]` counts as balanced. The inline reader
+ *  (`@/plugins/references/referenceParser`) decides how many of a `]]]…` run
+ *  belong to the alias by this count. */
 export const hasBalancedBrackets = (s: string): boolean => {
   let depth = 0
   for (const ch of s) {
@@ -248,12 +249,19 @@ export const hasBalancedBrackets = (s: string): boolean => {
   return depth === 0
 }
 
+/** The labels {@link isRoundTrippableReferenceLabel} refuses, as one
+ *  sentence for every message that sends a name back. Keep in step with it. */
+export const LOSSY_LABEL_RULE =
+  'Names cannot contain "[[" or "]]", start or end with whitespace, end in an '
+  + `unmatched "]", or be longer than ${MAX_ALIAS_LENGTH} characters.`
+
 /** Does `label` survive the wikilink round trip intact? A name containing
- *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a
- *  clean `[[name]]` reference. `addSchema` and the rename flow reject
- *  non-round-trippable property names as name hygiene — field rows themselves
- *  are id-addressed (`((fieldId))`, docs/properties-as-blocks-migration.html §7) and no longer embed the
- *  name. */
+ *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`), a padded one reads back
+ *  trimmed, and one ending in an unmatched `]` links to the name without it,
+ *  so none can be written as a clean `[[name]]` reference. `addSchema` and
+ *  the rename flow reject non-round-trippable property names as name hygiene
+ *  — field rows themselves are id-addressed (`((fieldId))`,
+ *  docs/properties-as-blocks-migration.html §7) and no longer embed the name. */
 export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   // The inline reader lets an alias absorb a trailing `]` only to close a `[`
   // it opened, so `[[a]]]` links to `a` even though the whole-block reading
@@ -343,14 +351,13 @@ export const assertNotGrammarShapedLabel = (label: string, context: string): voi
 }
 
 /** A label that cannot be written as a clean `[[label]]` and read back as
- *  itself — `]]`-lossy, or longer than `MAX_ALIAS_LENGTH`. */
+ *  itself — see {@link LOSSY_LABEL_RULE}. */
 export class LossyLabelError extends UnwritableLabelError {
   constructor(public readonly label: string, context: string) {
     super(
       `${context}: ${JSON.stringify(label)} cannot be written as a "[[name]]" reference `
       + 'and read back unchanged, so anything that links to it by name would resolve '
-      + `somewhere else or not at all. Names containing "]]" render lossily, and names `
-      + `longer than ${MAX_ALIAS_LENGTH} characters are not read as references at all.`,
+      + `somewhere else or not at all. ${LOSSY_LABEL_RULE}`,
     )
     this.name = 'LossyLabelError'
   }

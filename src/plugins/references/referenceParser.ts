@@ -24,6 +24,7 @@ import {
   UUID_RE_SOURCE,
   aliasedBlockRefSpanSource,
   blockRefSpanSource,
+  hasBalancedBrackets,
 } from '@/data/referenceBlock'
 
 export interface ParsedReference {
@@ -99,22 +100,6 @@ export const parseBlockRefTarget = (target: string): string | null => {
  *  way. Closing it for real means parsing the index side through markdown
  *  too, which is issue #542. */
 export { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
-
-/** Every `]` in `s` is closed by an earlier `[`, and every `[` is closed.
- *  Single brackets only — `[[`/`]]` are just two of each, which is what
- *  makes a nested `[[b]]` inside an alias balanced too.
- *
- *  Not used by the scanner (which tracks the same quantity incrementally,
- *  see `closingDelimiterFor`); this is `renderWikilink`'s copy of the
- *  question, asked about a bare alias with no surrounding content. */
-const hasBalancedBrackets = (s: string): boolean => {
-  let depth = 0
-  for (const ch of s) {
-    if (ch === '[') depth++
-    else if (ch === ']' && --depth < 0) return false
-  }
-  return depth === 0
-}
 
 /** One unclosed `[[` the scanner is carrying, plus the bracket bookkeeping
  *  that lets `closingDelimiterFor` answer without re-reading the alias.

@@ -100,6 +100,11 @@ export const AddTagDialog = ({
               Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
             </p>
           )}
+          {queryIssue === 'unmatched-bracket' && (
+            <p className="text-xs text-destructive">
+              Tag names can&apos;t end in an unmatched <code>]</code>.
+            </p>
+          )}
           {queryIssue === 'too-long' && (
             <p className="text-xs text-destructive">
               Tag names must be under {MAX_ALIAS_LENGTH} characters.
