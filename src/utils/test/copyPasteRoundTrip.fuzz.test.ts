@@ -186,6 +186,7 @@ describe('copy → paste round-trip', () => {
     ['an empty block stays empty', {content: 'a\nb', children: [{content: '', children: []}, {content: 'c', children: []}]}],
     ['a lone bullet-shaped block keeps its marker', {content: '- foo', children: []}],
     ['a lone empty block stays a block', {content: '', children: []}],
+    ['an empty root keeps no marker', {content: '', children: [{content: '', children: []}]}],
     ['a U+2028 does not cut a block short', {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}],
   ])('%s', async (_, root) => {
     const from = await copied([root])

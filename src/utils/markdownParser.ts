@@ -131,17 +131,23 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
  *  its number. */
 const isEmptyItem = (token: OutlineToken): boolean => token.kind === 'list-item' && token.content === ''
 
+/** The content of a bullet line, or undefined when `trimmed` is not one. A bare
+ *  marker is an empty item, which is how a copy writes an empty block. `s`:
+ *  lines are split on `\n` only, so `.` must not stop at U+2028 / U+2029, which
+ *  JS counts as line terminators, inside the content. */
+export const bulletContent = (trimmed: string): string | undefined => {
+  const bullet = /^[-*+](?:\s+(.*)|$)/s.exec(trimmed)
+  return bullet ? bullet[1] ?? '' : undefined
+}
+
 const lineToken = (trimmed: string, indent: number): OutlineToken => {
   // CommonMark's ATX heading: 1-6 '#'s, then a space or the end of the line
   // (`#tag` and `#######` are text). Keep the '#'s: the level renders from
   // the content.
   const heading = /^(#{1,6})(?:[ \t]|$)/.exec(trimmed)
   if (heading) return {kind: 'heading', level: heading[1].length, indent, content: trimmed}
-  // A bare marker is an empty item, which is how a copy writes an empty
-  // block. `s`: lines are split on `\n` only, so `.` must not stop at
-  // U+2028 / U+2029, which JS counts as line terminators, inside the content.
-  const bullet = /^[-*+](?:\s+(.*)|$)/s.exec(trimmed)
-  if (bullet) return {kind: 'list-item', indent, content: bullet[1] ?? ''}
+  const bullet = bulletContent(trimmed)
+  if (bullet !== undefined) return {kind: 'list-item', indent, content: bullet}
   // Keep the number, e.g. "1. item".
   if (/^\d+\.\s+/.test(trimmed)) return {kind: 'list-item', indent, content: trimmed}
   return {kind: 'paragraph', indent, content: trimmed}

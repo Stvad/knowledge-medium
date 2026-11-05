@@ -10,6 +10,7 @@ import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
 import { readAsyncClipboard } from './clipboard.js'
 import {
+  bulletContent,
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
   type OutlineNode,
@@ -128,10 +129,7 @@ const editorContentForFirstPastedLine = (
   const line = pastedText.split('\n').find(item => item.trim().length > 0)
   if (line === undefined) return fallback
 
-  const bullet = line.trim().match(/^[-*+]\s+(.*)$/s)
-  if (bullet) return bullet[1]
-
-  return line.replace(/\r$/, '')
+  return bulletContent(line.trim()) ?? line.replace(/\r$/, '')
 }
 
 const insertionForFirstChild = (
