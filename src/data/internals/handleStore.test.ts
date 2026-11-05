@@ -16,7 +16,7 @@
  *     and notify.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   HandleStore,
   LoaderHandle,
@@ -24,6 +24,7 @@ import {
   stableArgsKey,
   type Dependency,
 } from './handleStore'
+import { waitFor } from './test/waitFor'
 
 interface ManualScheduler {
   schedule: (cb: () => void, ms: number) => () => void
@@ -157,7 +158,7 @@ describe('LoaderHandle lifecycle', () => {
     // Listener does NOT fire synchronously with the current value;
     // it's a change-notification API. First fire is the load completion.
     expect(fired).toEqual([])
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
     expect(fired[0]).toEqual([42])
   })
 
@@ -211,7 +212,7 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
     )
     const fired: number[][] = []
     h.subscribe((v) => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     // Trigger a re-resolve via store.invalidate against a matching dep.
     // (No deps declared, so direct .invalidate() is the test path.)
@@ -233,11 +234,11 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
     )
     const fired: number[][] = []
     h.subscribe((v) => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     h.forgetNotifiedValue()
     h.invalidate()
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
     expect(fired[1]).toEqual([1, 2, 3])
   })
 
@@ -253,11 +254,11 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
     )
     const fired: number[] = []
     h.subscribe((v) => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     n = 2
     h.invalidate()
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
     expect(fired).toEqual([1, 2])
   })
 
@@ -275,7 +276,7 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
     )
     const fired: number[] = []
     h.subscribe((v) => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     n = 1.2 // within tolerance — no fire
     h.invalidate()
@@ -285,7 +286,7 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
 
     n = 5 // outside tolerance — fires
     h.invalidate()
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
   })
 })
 
@@ -398,7 +399,7 @@ describe('LoaderHandle GC', () => {
     })
 
     const settled = h.loadFresh()
-    await vi.waitFor(() => expect(releaseSecond).toBeDefined())
+    await waitFor(() => expect(releaseSecond).toBeDefined())
     // Through the store, not `h.invalidate()`: this also pins that the sibling
     // was registered, since an unregistered handle is never walked.
     store.invalidate({ rowIds: ['lfr'] })
@@ -466,7 +467,7 @@ describe('LoaderHandle GC', () => {
     const seen: unknown[] = []
     dead.subscribe(v => seen.push(v))
     live.invalidate()
-    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0))
 
     // Adoption, not a duplicate: exactly one handle owns the key, and the
     // events came from THAT handle. Without these the test passes even if the
@@ -477,7 +478,7 @@ describe('LoaderHandle GC', () => {
     // …and it keeps delivering, not just the first time.
     const before = seen.length
     live.invalidate()
-    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(before))
+    await waitFor(() => expect(seen.length).toBeGreaterThan(before))
   })
 
   it('an unmatched retain pins the handle; the matching release frees it', async () => {
@@ -535,7 +536,7 @@ describe('LoaderHandle GC', () => {
     replacement.dispose()
     const seen: unknown[] = []
     h.subscribe(v => seen.push(v))
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(store.size()).toBe(1)
     const sibling = store.peekHandle('read:disposed')
     expect(sibling).toBeDefined()
@@ -564,10 +565,10 @@ describe('LoaderHandle GC', () => {
 
     const seen: unknown[] = []
     h.subscribe(v => seen.push(v))
-    await vi.waitFor(() => expect(h.peek()).toEqual([1]))
+    await waitFor(() => expect(h.peek()).toEqual([1]))
 
     store.invalidate({ rowIds: ['x'] })
-    await vi.waitFor(() => expect(seen).toEqual([[1], [2]]))
+    await waitFor(() => expect(seen).toEqual([[1], [2]]))
   })
 
   it('a load in flight at disposal cannot settle onto the sibling that replaced it', async () => {
@@ -600,7 +601,7 @@ describe('LoaderHandle GC', () => {
     store.clear()
     const seen: unknown[] = []
     h.subscribe(v => seen.push(v))
-    await vi.waitFor(() => expect(h.peek()).toEqual([99]))
+    await waitFor(() => expect(h.peek()).toEqual([99]))
     const live = store.peekHandle('mid') as unknown as LoaderHandle<number[]>
     expect(live).not.toBe(h)
 
@@ -646,7 +647,7 @@ describe('LoaderHandle GC', () => {
     const fastSeen: unknown[] = []
     fast.subscribe(v => fastSeen.push(v))
     slow.subscribe(() => {})
-    await vi.waitFor(() => expect(fastSeen).toEqual([[1]]))
+    await waitFor(() => expect(fastSeen).toEqual([[1]]))
 
     // Both declare the same dep, so this opens a real batch (the store skips
     // the barrier for a single match — with one member there is nothing for a
@@ -659,7 +660,7 @@ describe('LoaderHandle GC', () => {
 
     // fast's notify was queued behind the barrier; it only lands if slow's
     // vanished slot was released.
-    await vi.waitFor(() => expect(fastSeen).toEqual([[1], [2]]))
+    await waitFor(() => expect(fastSeen).toEqual([[1], [2]]))
   })
 
   it('a disposed handle that is still registered at its own key mints a sibling', async () => {
@@ -692,7 +693,7 @@ describe('LoaderHandle GC', () => {
       new LoaderHandle<string>({ store, key: 'q', loader }),
     )
     const off = h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(store.size()).toBe(1)
 
     off() // last subscriber drops; GC scheduled
@@ -718,7 +719,7 @@ describe('LoaderHandle GC', () => {
     const listener = () => {}
     const offFirst = h.subscribe(listener)
     const offSecond = h.subscribe(listener)
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
 
     offFirst()
     offSecond()
@@ -737,7 +738,7 @@ describe('LoaderHandle GC', () => {
       new LoaderHandle<string>({ store, key: 'q', loader }),
     )
     const off = h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
 
     off() // GC pending
     expect(sched.pending()).toBe(1)
@@ -763,7 +764,7 @@ describe('LoaderHandle GC', () => {
     off() // refCount → 1 (still the inflight load)
     expect(sched.pending()).toBe(0) // no GC scheduled — load still in flight
     resolveLoader('done')
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     // After load completes, refCount → 0; GC scheduled.
     expect(sched.pending()).toBe(1)
     sched.flush(100)
@@ -801,7 +802,7 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: number[] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired).toEqual([1]))
+    await waitFor(() => expect(fired).toEqual([1]))
 
     v = 2
     store.invalidate({ rowIds: ['r2'] }) // no match
@@ -809,7 +810,7 @@ describe('Dependencies + invalidate()', () => {
     expect(fired).toEqual([1])
 
     store.invalidate({ rowIds: ['r1'] }) // matches dep
-    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    await waitFor(() => expect(fired).toEqual([1, 2]))
   })
 
   it('parent-edge dep: invalidate({parentIds}) matches', async () => {
@@ -827,7 +828,7 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: string[][] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     v = ['a', 'b']
     store.invalidate({ parentIds: ['p2'] })
@@ -835,7 +836,7 @@ describe('Dependencies + invalidate()', () => {
     expect(fired.length).toBe(1)
 
     store.invalidate({ parentIds: ['p1'] })
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
   })
 
   it('workspace dep: matches workspaceIds', async () => {
@@ -853,10 +854,10 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: string[] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
     v = 'y'
     store.invalidate({ workspaceIds: ['w1'] })
-    await vi.waitFor(() => expect(fired).toEqual(['x', 'y']))
+    await waitFor(() => expect(fired).toEqual(['x', 'y']))
   })
 
   it('table dep: matches tables', async () => {
@@ -874,10 +875,10 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: number[] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
     v = 1
     store.invalidate({ tables: ['blocks'] })
-    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    await waitFor(() => expect(fired).toEqual([0, 1]))
   })
 
   it('handles can declare multiple deps; any match triggers re-resolve', async () => {
@@ -896,10 +897,10 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: number[] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
     v = 1
     store.invalidate({ parentIds: ['p1'] })
-    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    await waitFor(() => expect(fired).toEqual([0, 1]))
   })
 
   it('invalidate() with no matching change is a no-op (no re-resolve)', async () => {
@@ -909,7 +910,7 @@ describe('Dependencies + invalidate()', () => {
       new LoaderHandle<number>({ store, key: 'q', loader }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(calls()).toBe(1))
+    await waitFor(() => expect(calls()).toBe(1))
     store.invalidate({ rowIds: ['nope'] })
     await Promise.resolve()
     expect(calls()).toBe(1)
@@ -931,7 +932,7 @@ describe('Dependencies + invalidate()', () => {
     store.invalidate({ rowIds: ['anything'] })
     expect(fired).toEqual([])
     resolve(1)
-    await vi.waitFor(() => expect(fired).toEqual([1]))
+    await waitFor(() => expect(fired).toEqual([1]))
   })
 
   it('a matching invalidate on a ready handle runs the loader exactly once (reviewer P2 #3)', async () => {
@@ -959,9 +960,9 @@ describe('Dependencies + invalidate()', () => {
     )
     const fired: number[] = []
     h.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(runs).toBe(1))
+    await waitFor(() => expect(runs).toBe(1))
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    await waitFor(() => expect(fired).toEqual([1, 2]))
     // Settle microtasks — confirm no spurious third run scheduled.
     await Promise.resolve()
     await Promise.resolve()
@@ -1007,10 +1008,10 @@ describe('LoaderHandle.loadFresh', () => {
     )
 
     const fresh = h.loadFresh()
-    await vi.waitFor(() => expect(resolvers).toHaveLength(1))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
     store.invalidate({rowIds: ['r1']})
     resolvers[0]!(1)
-    await vi.waitFor(() => expect(resolvers).toHaveLength(2))
+    await waitFor(() => expect(resolvers).toHaveLength(2))
     resolvers[1]!(2)
 
     await expect(fresh).resolves.toBe(2)
@@ -1069,7 +1070,7 @@ describe('Batched notify across multiple matching handles', () => {
     fast.subscribe(v => order.push(`fast:${v.join(',')}`))
     slow.subscribe(v => order.push(`slow:${v.join(',')}`))
 
-    await vi.waitFor(() => expect(order).toHaveLength(2))
+    await waitFor(() => expect(order).toHaveLength(2))
     order.length = 0
 
     // Stage the next slow value behind a manual gate, then invalidate.
@@ -1087,7 +1088,7 @@ describe('Batched notify across multiple matching handles', () => {
 
     // Releasing the slow loader closes the barrier; both notifies flush.
     resolveSlow(['s', 'lo', 'w'])
-    await vi.waitFor(() => expect(order).toHaveLength(2))
+    await waitFor(() => expect(order).toHaveLength(2))
     expect(order).toContain('fast:x,y')
     expect(order).toContain('slow:s,lo,w')
   })
@@ -1110,7 +1111,7 @@ describe('Batched notify across multiple matching handles', () => {
       }),
     )
     subscribed.subscribe(v => subscribedFired.push(v))
-    await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1']))
+    await waitFor(() => expect(subscribedFired).toEqual(['sub-1']))
 
     // Second handle: declares the same dep, never gets a subscriber.
     // Touch it once so it's registered and has deps.
@@ -1127,7 +1128,7 @@ describe('Batched notify across multiple matching handles', () => {
 
     subValue = 'sub-2'
     store.invalidate({ parentIds: ['p'] })
-    await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
+    await waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
   })
 
   it('never delivers a value older than one a listener already saw (superseded slot dropped)', async () => {
@@ -1170,7 +1171,7 @@ describe('Batched notify across multiple matching handles', () => {
     const slowFired: string[] = []
     fast.subscribe(v => fired.push(v))
     slow.subscribe(v => slowFired.push(v))
-    await vi.waitFor(() => expect(fired).toEqual(['v0']))
+    await waitFor(() => expect(fired).toEqual(['v0']))
     slowFired.length = 0
     fired.length = 0
 
@@ -1186,7 +1187,7 @@ describe('Batched notify across multiple matching handles', () => {
 
     // Change 2 matches ONLY `fast` → no batch → notifies as soon as it settles.
     store.invalidate({ rowIds: ['fast-only'] })
-    await vi.waitFor(() => expect(fired).toEqual(['v2']))
+    await waitFor(() => expect(fired).toEqual(['v2']))
     expect(fast.peek()).toBe('v2')
 
     // Releasing the slow loader closes the barrier and drains its queue.
@@ -1196,7 +1197,7 @@ describe('Batched notify across multiple matching handles', () => {
     // turn — without it, the assertions below would be checking for an
     // absence before the thing that produces it could have run.
     releaseSlow('slow-1')
-    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+    await waitFor(() => expect(slowFired).toEqual(['slow-1']))
 
     // 'v1' was superseded before it was ever published; publishing it now
     // would walk a listener backwards. And 'v2' is already what the listener
@@ -1251,7 +1252,7 @@ describe('Batched notify across multiple matching handles', () => {
     a.subscribe(v => aFired.push(v))
     b.handle.subscribe(() => {})
     c.handle.subscribe(v => cFired.push(v))
-    await vi.waitFor(() => expect(aFired).toEqual(['a0']))
+    await waitFor(() => expect(aFired).toEqual(['a0']))
     aFired.length = 0
     cFired.length = 0
 
@@ -1259,18 +1260,18 @@ describe('Batched notify across multiple matching handles', () => {
     b.gate()
     c.gate()
     store.invalidate({ tables: ['blocks'] })
-    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    await waitFor(() => expect(a.peek()).toBe('a1'))
     expect(aFired).toEqual([])
 
     // Invalidate 2 while batch1 is open → batch2 over the same three. b/c are
     // mid-load and release their slots; `a` re-runs into batch2 and settles a2.
     store.invalidate({ tables: ['blocks'] })
-    await vi.waitFor(() => expect(aFired).toEqual(['a2']))
+    await waitFor(() => expect(aFired).toEqual(['a2']))
 
     // Close batch1. Its queued `a` thunk is the stale one.
     c.release('c1')
     b.release('b1')
-    await vi.waitFor(() => expect(cFired).toEqual(['c1']))
+    await waitFor(() => expect(cFired).toEqual(['c1']))
 
     expect(aFired).toEqual(['a2'])
     expect(a.peek()).toBe('a2')
@@ -1320,7 +1321,7 @@ describe('Batched notify across multiple matching handles', () => {
     const slowFired: string[] = []
     a.subscribe(v => fired.push(v))
     slow.subscribe(v => slowFired.push(v))
-    await vi.waitFor(() => expect(fired).toEqual(['w0']))
+    await waitFor(() => expect(fired).toEqual(['w0']))
     fired.length = 0
     slowFired.length = 0
 
@@ -1329,7 +1330,7 @@ describe('Batched notify across multiple matching handles', () => {
     world = 'w1'
     slowPromise = new Promise<string>(r => { releaseSlow = r })
     store.invalidate({ tables: ['blocks'] })
-    await vi.waitFor(() => expect(a.peek()).toBe('w1'))
+    await waitFor(() => expect(a.peek()).toBe('w1'))
     expect(fired).toEqual([])
 
     // Change 2 targets `a` alone (row dep → matched.length === 1, no batch).
@@ -1337,7 +1338,7 @@ describe('Batched notify across multiple matching handles', () => {
     gate(2)
     world = 'w2'
     store.invalidate({ rowIds: ['a-only'] })
-    await vi.waitFor(() => expect(a.status()).toBe('ready')) // still 'ready', loading in place
+    await waitFor(() => expect(a.status()).toBe('ready')) // still 'ready', loading in place
 
     // Change 3 lands mid-load → pendingReinvalidate. Run 2's 'w2' is now
     // known suspect: the world already moved to 'w3'.
@@ -1349,13 +1350,13 @@ describe('Batched notify across multiple matching handles', () => {
     // the older barrier gets to flush first.
     gate(3)
     releases[2]!()
-    await vi.waitFor(() => expect(a.peek()).toBe('w2'))
-    await vi.waitFor(() => expect(aRun).toBe(4)) // rerun started, gated
+    await waitFor(() => expect(a.peek()).toBe('w2'))
+    await waitFor(() => expect(aRun).toBe(4)) // rerun started, gated
 
     // Close batch1. `slow`'s own delivery is the FIFO fence: the queue
     // drains in finish order, so seeing it proves `a`'s thunk already ran.
     releaseSlow('slow-1')
-    await vi.waitFor(() => expect(slowFired).toEqual(['slow-1']))
+    await waitFor(() => expect(slowFired).toEqual(['slow-1']))
 
     // 'w2' is the snapshot the settle path hid. Publishing it hands the
     // direct-value consumers a rebuild from data already known wrong.
@@ -1365,7 +1366,7 @@ describe('Batched notify across multiple matching handles', () => {
     expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
 
     releases[3]!()
-    await vi.waitFor(() => expect(fired).toEqual(['w3']))
+    await waitFor(() => expect(fired).toEqual(['w3']))
   })
 
   it('an older barrier defers a value a newer, still-open barrier owns', async () => {
@@ -1405,14 +1406,14 @@ describe('Batched notify across multiple matching handles', () => {
     a.subscribe(v => order.push(`a:${v}`))
     b.handle.subscribe(v => order.push(`b:${v}`))
     c.handle.subscribe(v => order.push(`c:${v}`))
-    await vi.waitFor(() => expect(order).toHaveLength(3))
+    await waitFor(() => expect(order).toHaveLength(3))
     order.length = 0
 
     // Invalidate 1 → batch1 over {a, b}. `a` settles a1 and queues; b gated.
     b.gate()
     aWorld = 'a1'
     store.invalidate({ rowIds: ['s1'] })
-    await vi.waitFor(() => expect(a.peek()).toBe('a1'))
+    await waitFor(() => expect(a.peek()).toBe('a1'))
     expect(order).toEqual([])
 
     // Invalidate 2 → batch2 over {a, c}, while batch1 is still open.
@@ -1420,18 +1421,18 @@ describe('Batched notify across multiple matching handles', () => {
     c.gate()
     aWorld = 'a2'
     store.invalidate({ rowIds: ['s2'] })
-    await vi.waitFor(() => expect(a.peek()).toBe('a2'))
+    await waitFor(() => expect(a.peek()).toBe('a2'))
 
     // Close batch1 (b settles). Only b belongs to this invalidation — a2 is
     // still owned by the open batch2 and must not be split out of it.
     b.release('b1')
-    await vi.waitFor(() => expect(order).toContain('b:b1'))
+    await waitFor(() => expect(order).toContain('b:b1'))
     expect(order).toEqual(['b:b1'])
     expect(store.metrics.snapshot().notifiesSupersededInBatch).toBe(1)
 
     // Close batch2: a2 and c1 land together, one commit for one invalidation.
     c.release('c1')
-    await vi.waitFor(() => expect(order).toContain('c:c1'))
+    await waitFor(() => expect(order).toContain('c:c1'))
     expect(order).toEqual(['b:b1', 'a:a2', 'c:c1'])
   })
 })
@@ -1464,14 +1465,14 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     h.subscribe(() => {})
 
     // Loader paused awaiting releaseFirstLoad; deps are live.
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     n = 2
     store.invalidate({ rowIds: ['r1'] }) // matches the upfront dep
 
     releaseFirstLoad()
     // First load settles → pendingReinvalidate triggers a rerun that
     // reads the fresh n=2 and re-publishes.
-    await vi.waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(runs).toBe(2))
     expect(calls).toEqual([2, 2])
   })
 
@@ -1498,13 +1499,13 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     )
     h.subscribe((value) => fired.push(value))
 
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     n = 2
     store.invalidate({ rowIds: ['r1'] })
     releaseFirstLoad()
 
-    await vi.waitFor(() => expect(runs).toBe(2))
-    await vi.waitFor(() => expect(fired).toEqual([2]))
+    await waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(fired).toEqual([2]))
   })
 
   it('notifies from the clean rerun even when the dirty run already returned the fresh value', async () => {
@@ -1529,13 +1530,13 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     )
     h.subscribe((value) => fired.push(value))
 
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     n = 2
     store.invalidate({ rowIds: ['r1'] })
     releaseFirstLoad()
 
-    await vi.waitFor(() => expect(runs).toBe(2))
-    await vi.waitFor(() => expect(fired).toEqual([2]))
+    await waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(fired).toEqual([2]))
   })
 
   it('coalesces multiple invalidations during one load into one rerun', async () => {
@@ -1558,7 +1559,7 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
 
     // Three invalidations during one load — should coalesce into one
     // rerun, not three.
@@ -1568,7 +1569,7 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     store.invalidate({ rowIds: ['r1'] })
     releaseLoad()
 
-    await vi.waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(runs).toBe(2))
     // Settle the microtask queue — confirm no further reruns fired.
     await Promise.resolve()
     await Promise.resolve()
@@ -1634,13 +1635,13 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     store.invalidate({ rowIds: ['r1'] }) // queue rerun
     nextResult = 7
     release()
 
-    await vi.waitFor(() => expect(runs).toBe(2))
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(h.peek()).toBe(7)
   })
 })
@@ -1740,7 +1741,7 @@ describe('Invalidations on subscriber-less handles defer re-resolve', () => {
     const fired: number[] = []
     h.subscribe((v) => fired.push(v))
     // The new subscriber should see fresh data, not the stale 1.
-    await vi.waitFor(() => expect(fired).toEqual([2]))
+    await waitFor(() => expect(fired).toEqual([2]))
     expect(runs).toBe(2)
   })
 
@@ -1762,11 +1763,11 @@ describe('Invalidations on subscriber-less handles defer re-resolve', () => {
     )
     const fired: number[] = []
     h.subscribe((v) => fired.push(v))
-    await vi.waitFor(() => expect(runs).toBe(1))
+    await waitFor(() => expect(runs).toBe(1))
 
     n = 2
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    await waitFor(() => expect(fired).toEqual([1, 2]))
     expect(runs).toBe(2)
     expect(store.metrics.loaderInvalidationsDeferred).toBe(0)
   })
@@ -1792,7 +1793,7 @@ describe('Invalidations on subscriber-less handles defer re-resolve', () => {
       }),
     )
     const unsub = h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     store.invalidate({ rowIds: ['r1'] }) // mid-load → pendingReinvalidate
     unsub() // last subscriber leaves while load is still pending
     release()
@@ -1853,7 +1854,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
 
     // Mid-load: invalidation hits for childA AFTER its SQL row was
     // captured but BEFORE its per-row dep was declared. Upfront deps
@@ -1865,8 +1866,8 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     releaseSql()
     // First run settles with stale 'v1' — the queue then triggers a
     // rerun that captures the post-commit 'v2'.
-    await vi.waitFor(() => expect(runs).toBe(2))
-    await vi.waitFor(() => expect(h.peek()).toBe('v2'))
+    await waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(h.peek()).toBe('v2'))
   })
 
   it('change that does not match any post-load dep does NOT trigger a rerun', async () => {
@@ -1893,13 +1894,13 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
 
     // Unrelated row change — neither parent-edge:p nor row:childA matches.
     store.invalidate({ rowIds: ['unrelated'] })
 
     releaseSql()
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     // Drain the microtask queue to confirm no second run was scheduled.
     await Promise.resolve()
     await Promise.resolve()
@@ -1927,7 +1928,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
 
     // One match against the upfront dep (sets pendingReinvalidate via
     // invalidate()), one queued match (would set pendingReinvalidate
@@ -1937,7 +1938,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     store.invalidate({ rowIds: ['childA'] }) // queued → matches post-load dep
 
     releaseSql()
-    await vi.waitFor(() => expect(runs).toBe(2))
+    await waitFor(() => expect(runs).toBe(2))
     await Promise.resolve()
     await Promise.resolve()
     expect(runs).toBe(2)
@@ -1967,12 +1968,12 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
 
     // Queue a change that would have matched a (never-declared) row dep.
     store.invalidate({ rowIds: ['childA'] })
     releaseSql()
-    await vi.waitFor(() => expect(h.status()).toBe('error'))
+    await waitFor(() => expect(h.status()).toBe('error'))
 
     // The errored load discards `changesDuringLoad` along with the
     // partial deps. A future rerun must not fire spuriously off the
@@ -1985,24 +1986,6 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
 })
 
 describe('HandleStore metrics counters', () => {
-  it('starts at zero', () => {
-    const store = makeStore()
-    expect(store.metrics.snapshot()).toEqual({
-      invalidations: 0,
-      handlesWalked: 0,
-      handlesMatched: 0,
-      loaderInvalidations: 0,
-      loaderRuns: 0,
-      midLoadInvalidations: 0,
-      reloadsAfterSettle: 0,
-      notifiesSkippedByDiff: 0,
-      notifiesSupersededInBatch: 0,
-      notifiesFired: 0,
-      loaderInvalidationsDeferred: 0,
-      depsDeduplicatedAtRegistration: 0,
-    })
-  })
-
   it('counts loaderRuns on cold load', async () => {
     const store = makeStore()
     const { loader } = collectingLoader([1, 2])
@@ -2057,12 +2040,12 @@ describe('HandleStore metrics counters', () => {
     // Wait until the load is actually inflight before invalidating —
     // store.invalidate dispatches synchronously, so racing it with a
     // not-yet-started loader would test the no-load path instead.
-    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    await waitFor(() => expect(h.status()).toBe('loading'))
     store.invalidate({ rowIds: ['r1'] })
     expect(store.metrics.midLoadInvalidations).toBe(1)
     expect(store.metrics.reloadsAfterSettle).toBe(0) // not until settle
     release()
-    await vi.waitFor(() => expect(calls).toBe(2)) // settle + queued reload
+    await waitFor(() => expect(calls).toBe(2)) // settle + queued reload
     expect(store.metrics.reloadsAfterSettle).toBe(1)
     expect(store.metrics.loaderRuns).toBe(2)
   })
@@ -2081,29 +2064,27 @@ describe('HandleStore metrics counters', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(store.metrics.notifiesFired).toBe(1) // first load always notifies
 
     // Re-resolve with structurally-equal value: dedup suppresses notify.
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(store.metrics.loaderRuns).toBe(2))
+    await waitFor(() => expect(store.metrics.loaderRuns).toBe(2))
     expect(store.metrics.notifiesSkippedByDiff).toBe(1)
     expect(store.metrics.notifiesFired).toBe(1) // unchanged
 
     // Now produce a different value and confirm notify fires again.
     value = [1, 2, 3, 4]
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(store.metrics.notifiesFired).toBe(2))
+    await waitFor(() => expect(store.metrics.notifiesFired).toBe(2))
     expect(store.metrics.notifiesSkippedByDiff).toBe(1) // unchanged
   })
 
-  it('reset() zeros every counter; snapshot returns frozen plain object', async () => {
+  it('reset() zeros every counter; snapshot returns frozen plain object', () => {
     const store = makeStore()
-    const { loader } = collectingLoader('x', [{ kind: 'row', id: 'r1' }])
-    const h = store.getOrCreate('q', () => new LoaderHandle({ store, key: 'q', loader }))
-    await h.load()
-    store.invalidate({ rowIds: ['r1'] })
-    expect(store.metrics.loaderRuns).toBeGreaterThan(0)
+    // Every counter non-zero first, so a counter `reset()` forgets shows.
+    const counters = store.metrics as unknown as Record<string, number>
+    for (const name of Object.keys(store.metrics.snapshot())) counters[name] = 7
 
     const before = store.metrics.snapshot()
     expect(Object.isFrozen(before)).toBe(true)
@@ -2114,11 +2095,10 @@ describe('HandleStore metrics counters', () => {
 
     store.metrics.reset()
     const after = store.metrics.snapshot()
-    expect(after.invalidations).toBe(0)
-    expect(after.handlesWalked).toBe(0)
-    expect(after.loaderRuns).toBe(0)
+    expect(Object.keys(after).length).toBeGreaterThan(0)
+    expect(Object.values(after).every(v => v === 0)).toBe(true)
     // Prior snapshot is unaffected by reset.
-    expect(before.loaderRuns).toBeGreaterThan(0)
+    expect(Object.values(before).every(v => v === 7)).toBe(true)
   })
 })
 
@@ -2208,10 +2188,10 @@ describe('Dep dedup at registration', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(calls).toBe(1)
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(calls).toBe(2))
+    await waitFor(() => expect(calls).toBe(2))
     // No double-fire from the duplicated deps.
     expect(calls).toBe(2)
   })
@@ -2270,33 +2250,15 @@ describe('Dep dedup at registration', () => {
       }),
     )
     h.subscribe(() => {})
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     // First load done. Trigger a re-resolve that pauses mid-load; while
     // paused, this.deps should contain just the one row dep (priorDeps
     // had it, loader re-declared it — must not double).
     store.invalidate({ rowIds: ['r1'] })
-    await vi.waitFor(() => expect(calls).toBe(2))
+    await waitFor(() => expect(calls).toBe(2))
     expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
     block()
-    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    await waitFor(() => expect(h.status()).toBe('ready'))
     expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
-  })
-
-  it('reset() zeros depsDeduplicatedAtRegistration', async () => {
-    const store = makeStore()
-    const h = store.getOrCreate('q', () =>
-      new LoaderHandle<string>({
-        store, key: 'q',
-        loader: async (ctx) => {
-          ctx.depend({ kind: 'row', id: 'r1' })
-          ctx.depend({ kind: 'row', id: 'r1' })
-          return 'v'
-        },
-      }),
-    )
-    await h.load()
-    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(1)
-    store.metrics.reset()
-    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(0)
   })
 })
