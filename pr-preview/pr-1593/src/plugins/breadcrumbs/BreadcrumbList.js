@@ -1,1 +1,1 @@
-export{rw as BreadcrumbList}from"../../../chunks/app-B79UHbV0.js";
+export{rw as BreadcrumbList}from"../../../chunks/app-DUrxPzm7.js";
