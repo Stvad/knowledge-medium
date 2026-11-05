@@ -1,1 +1,1 @@
-export{wG as groupedBacklinksDataExtension}from"../../../chunks/app-BJwJiPNQ.js";
+export{DG as groupedBacklinksDataExtension}from"../../../chunks/app-4r_Y_wzP.js";

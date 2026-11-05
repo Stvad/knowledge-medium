@@ -1,1 +1,1 @@
-export{WU as SuspenseFallback}from"../../../chunks/app-BJwJiPNQ.js";
+export{qU as SuspenseFallback}from"../../../chunks/app-4r_Y_wzP.js";
