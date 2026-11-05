@@ -7,6 +7,8 @@ export default defineConfig({
   ...base,
   test: {
     ...base.test,
+    // The base config's projects would replace this include with the whole suite.
+    projects: undefined,
     include: [SUPABASE_STACK_TESTS],
     exclude: ['**/node_modules/**'],
   },
