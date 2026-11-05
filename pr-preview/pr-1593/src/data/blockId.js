@@ -1,1 +1,1 @@
-export{fet as InvalidBlockIdError,pet as assertCanonicalBlockId}from"../../chunks/app-u_Drx1Xv.js";
+export{fet as InvalidBlockIdError,pet as assertCanonicalBlockId}from"../../chunks/app-C_J8Mskv.js";

@@ -1,1 +1,1 @@
-export{yA as CommandPaletteHeaderItem}from"../../../chunks/app-u_Drx1Xv.js";
+export{yA as CommandPaletteHeaderItem}from"../../../chunks/app-C_J8Mskv.js";

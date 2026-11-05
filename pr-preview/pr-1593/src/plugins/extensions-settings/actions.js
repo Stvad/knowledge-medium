@@ -1,1 +1,1 @@
-export{_r as openExtensionsSettingsAction}from"../../../chunks/app-u_Drx1Xv.js";
+export{_r as openExtensionsSettingsAction}from"../../../chunks/app-C_J8Mskv.js";
