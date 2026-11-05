@@ -1,0 +1,1 @@
+export{El as blockTaggingPrefsType,Dl as blockTagsConfigCodec,Ol as blockTagsConfigPresetCore,kl as blockTagsConfigProp,Al as isValidTagName,jl as normalizeBlockTagsConfig,Ml as selectableTagNames,Nl as tagNameIssue}from"../../../chunks/app-DqrB8s_P.js";

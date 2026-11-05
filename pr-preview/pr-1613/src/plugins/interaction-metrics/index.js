@@ -1,0 +1,1 @@
+export{wi as interactionMetricsPlugin}from"../../../chunks/app-DqrB8s_P.js";

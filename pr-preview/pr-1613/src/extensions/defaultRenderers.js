@@ -1,0 +1,1 @@
+export{sP as defaultRegistry,cP as defaultRendererContributions,lP as defaultRenderersExtension}from"../../chunks/app-DqrB8s_P.js";

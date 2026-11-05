@@ -1,0 +1,1 @@
+export{HR as BlockProperties}from"../../chunks/app-DqrB8s_P.js";
