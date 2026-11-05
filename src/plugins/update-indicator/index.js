@@ -1,1 +1,1 @@
-export{i_ as updateIndicatorPlugin}from"../../../chunks/app-4r_Y_wzP.js";
+export{i_ as updateIndicatorPlugin}from"../../../chunks/app-DzI0NGEe.js";
