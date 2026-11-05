@@ -1,0 +1,1 @@
+export{Vj as ensureMetricsConsoleHook}from"../../chunks/app-DfnFvQey.js";

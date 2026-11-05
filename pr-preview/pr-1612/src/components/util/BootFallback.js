@@ -1,0 +1,1 @@
+export{KU as BootFallback}from"../../../chunks/app-DfnFvQey.js";

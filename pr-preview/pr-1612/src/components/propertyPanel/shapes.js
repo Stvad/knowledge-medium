@@ -1,0 +1,1 @@
+export{gU as propertyShapeLabel}from"../../../chunks/app-DfnFvQey.js";

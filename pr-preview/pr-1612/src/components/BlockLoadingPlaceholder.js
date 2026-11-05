@@ -1,0 +1,1 @@
+export{iP as BlockLoadingPlaceholder}from"../../chunks/app-DfnFvQey.js";

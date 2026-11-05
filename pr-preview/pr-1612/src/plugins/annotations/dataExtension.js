@@ -1,0 +1,1 @@
+export{Eq as annotationsDataExtension}from"../../../chunks/app-DfnFvQey.js";

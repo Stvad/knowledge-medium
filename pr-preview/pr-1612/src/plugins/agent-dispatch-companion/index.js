@@ -1,0 +1,1 @@
+export{cp as agentDispatchCompanionPlugin}from"../../../chunks/app-DfnFvQey.js";

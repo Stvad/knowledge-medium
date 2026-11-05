@@ -1,0 +1,1 @@
+export{WM as checkForAppUpdate,GM as registerServiceWorker}from"../chunks/app-DfnFvQey.js";

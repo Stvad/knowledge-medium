@@ -1,0 +1,1 @@
+export{yZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-DfnFvQey.js";

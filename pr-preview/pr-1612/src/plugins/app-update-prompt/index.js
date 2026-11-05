@@ -1,0 +1,1 @@
+export{FM as appUpdatePromptExtension}from"../../../chunks/app-DfnFvQey.js";

@@ -1,0 +1,1 @@
+export{i_ as updateIndicatorPlugin}from"../../../chunks/app-DfnFvQey.js";

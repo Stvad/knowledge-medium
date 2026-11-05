@@ -1,0 +1,1 @@
+export{QF as ExtensionRenderBoundary}from"../../chunks/app-DfnFvQey.js";

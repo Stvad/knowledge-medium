@@ -1,0 +1,1 @@
+export{nY as characterCounterDataExtension}from"../../../chunks/app-DfnFvQey.js";

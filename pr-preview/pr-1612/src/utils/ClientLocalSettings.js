@@ -1,0 +1,1 @@
+export{gN as ClientLocalSettings,_N as clientLocalSettings}from"../../chunks/app-DfnFvQey.js";
