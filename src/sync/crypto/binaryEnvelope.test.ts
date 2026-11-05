@@ -52,11 +52,6 @@ describe('encb:v1: binary envelope', () => {
     expect(() => decodeBinaryEnvelope(utf8('enc:v1:not-binary'))).toThrow(/magic/)
   })
 
-  it('rejects a payload too short to hold a nonce and tag', () => {
-    const tooShort = encodeBinaryEnvelope(filled(NONCE_BYTES, 0), filled(GCM_TAG_BYTES - 1, 0))
-    expect(() => decodeBinaryEnvelope(tooShort)).toThrow(/too short/)
-  })
-
   it('pins the nonce+tag floor: rejects every payload below it, accepts it exactly', () => {
     // The floor is the smallest legal payload: a nonce plus a bare GCM tag
     // (what empty plaintext seals to). This brackets the `< floor` check so a

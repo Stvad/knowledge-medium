@@ -302,7 +302,8 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(mod(dir)).toBe(MOD)
   })
 
-  it('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
+  // Root writes a mode-444 file, so the restore fails only for other users.
+  it.skipIf(process.getuid?.() === 0)('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
     const dir = fixture()
     try {
       const r = mutate(dir, ['--edit', 'printf x >> "$MUTATE_FILE" && chmod 444 "$MUTATE_FILE"', '--no-baseline'])

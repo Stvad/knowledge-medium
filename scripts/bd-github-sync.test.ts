@@ -1988,7 +1988,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // still cannot be taken is broken, and the run fails on record.
   it('skips on a lock a live run holds, and fails on a lock path it cannot take', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
-    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], env: { KM_BD_SYNC_LOCK_WAIT_MS: '600' } }
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], env: { KM_BD_SYNC_LOCK_WAIT_MS: '1' } }
 
     const held = makeSyncRepo(repo)
     writeFileSync(join(held.repo, '.beads', 'github-sync.lock'), String(process.pid))
