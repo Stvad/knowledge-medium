@@ -136,6 +136,21 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
 let sharedDb: TestDb
 let repo: Repo
 
+/** Past the scroll settle plus every bounded retry the component arms. */
+const SETTLE_HORIZON_MS = 1_500
+
+/** The settle and its retries run on fake timers: play that whole timeline
+ *  out, then poll for the focus write it made, which is real database I/O. A
+ *  timer armed only once that write lands is still reached — `vi.waitFor`
+ *  advances fake time on every check. */
+const afterSettling = async (
+  assertion: () => void,
+  options?: Parameters<typeof vi.waitFor>[1],
+): Promise<void> => {
+  await act(() => vi.advanceTimersByTimeAsync(SETTLE_HORIZON_MS))
+  await vi.waitFor(assertion, options)
+}
+
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
@@ -149,9 +164,11 @@ beforeEach(async () => {
     await tx.create({id: PANEL_ID, workspaceId: WS, parentId: null, orderKey: 'a0'})
     await tx.create({id: FENCE_PANEL_ID, workspaceId: WS, parentId: null, orderKey: 'a1'})
   }, {scope: ChangeScope.UiState})
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']})
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
@@ -192,7 +209,7 @@ describe('PanelCursorFollowsScroll', () => {
     dom.moveRow('b', 20)
     dom.scroll()
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)).toEqual({blockId: 'b', renderScopeId: SCOPE})
     })
   })
@@ -269,7 +286,7 @@ describe('PanelCursorFollowsScroll', () => {
     dom.moveRow('b', 900)
     dom.scroll()
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
     })
   })
@@ -289,19 +306,19 @@ describe('PanelCursorFollowsScroll', () => {
 
     // The row hydrates, on screen, with no scroll event anywhere near it.
     dom.addRow('late', 200)
-    // Drain to the next macrotask rather than sleeping: MutationObserver
-    // delivers on the microtask checkpoint, so one turn of the loop is a
-    // guarantee the watcher has run, not a bet on how loaded the machine is.
+    // Drain rather than sleep: MutationObserver delivers on the microtask
+    // checkpoint, which an async timer advance flushes, so this is a guarantee
+    // the watcher has run, not a bet on how loaded the machine is.
     // It has to have run BEFORE the scroll below — that scroll is one-shot, and
     // after it the row is off screen, where no later sample can help.
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await act(() => vi.advanceTimersByTimeAsync(0))
 
     // One coarse gesture takes it straight off screen.
     dom.moveRow('a', 40)
     dom.moveRow('late', 900)
     dom.scroll()
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
     })
   })
@@ -355,13 +372,13 @@ describe('PanelCursorFollowsScroll', () => {
     dom.moveRow('a', -400)
     dom.moveRow('b', 20)
     dom.scroll()
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await act(() => vi.advanceTimersByTimeAsync(250))
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Escape, with no further scrolling.
     await panel.set(isEditingProp, false)
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     })
   })
@@ -380,13 +397,13 @@ describe('PanelCursorFollowsScroll', () => {
     // The cursor leaves, and nothing else is rendered yet to anchor to.
     dom.moveRow('a', -400)
     dom.scroll()
-    await new Promise(resolve => setTimeout(resolve, 200))
+    await act(() => vi.advanceTimersByTimeAsync(200))
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // The destination row mounts, with no scroll event of its own.
     dom.addRow('b', 20)
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     }, {timeout: 2000})
   })
@@ -423,7 +440,7 @@ describe('PanelCursorFollowsScroll', () => {
     // container — so only the retry gets the cursor onto the note.
     dom.addRow('note-b', 20, container)
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-b')
     }, {timeout: 2000})
   })
@@ -457,7 +474,7 @@ describe('PanelCursorFollowsScroll', () => {
     // ...and this panel's own scroll still moves it, so the gate narrowed the
     // trigger rather than switching it off.
     dom.scroll()
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-a')
     }, {timeout: 2000})
   })
@@ -477,7 +494,7 @@ describe('PanelCursorFollowsScroll', () => {
     // BEFORE that timer fires, and it re-anchors on its own: the resize path
     // under test would then be doing nothing while the test still went green.
     dom.scroll()
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await act(() => vi.advanceTimersByTimeAsync(250))
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Rows above grow: `a` is shoved below the fold, `b` takes the top. No
@@ -487,7 +504,7 @@ describe('PanelCursorFollowsScroll', () => {
     dom.moveRow('b', 20)
     fireResize(dom.shellOf('a'))
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     })
   })
@@ -503,7 +520,7 @@ describe('PanelCursorFollowsScroll', () => {
 
     render(<PanelCursorFollowsScroll block={panel}/>)
     dom.scroll()
-    await new Promise(resolve => setTimeout(resolve, 250))
+    await act(() => vi.advanceTimersByTimeAsync(250))
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Five pixels of `a` remain inside the port — less than a line, so the
@@ -511,7 +528,7 @@ describe('PanelCursorFollowsScroll', () => {
     dom.moveRow('a', PORT_HEIGHT - 5)
     fireResize(dom.shellOf('a'))
 
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     })
   })
@@ -521,6 +538,9 @@ describe('PanelCursorFollowsScroll', () => {
   // must not run the retry: nothing was ever suppressed, and re-anchoring here
   // would move the cursor off the very row the app is scrolling toward.
   it('does not retry on Escape when nothing was suppressed', async () => {
+    // Real time: the edit-exit retry runs synchronously inside a React effect,
+    // and fake time cannot wait for React to get there.
+    vi.useRealTimers()
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20], ['far', 900]])
     await focusBlock(panel, 'far', {renderScopeId: SCOPE, edit: true})
@@ -540,6 +560,9 @@ describe('PanelCursorFollowsScroll', () => {
   // would run against the DESTINATION's settle — treating a row the app is
   // still scrolling toward as a stale cursor and re-anchoring away from it.
   it('does not re-anchor when leaving edit mode moved focus elsewhere', async () => {
+    // Real time: the edit-exit retry runs synchronously inside a React effect,
+    // and fake time cannot wait for React to get there.
+    vi.useRealTimers()
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['far', 900]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE, edit: true})
@@ -612,7 +635,7 @@ describe('range origin after the cursor follows a scroll', () => {
     dom.moveRow(from, -400)
     dom.moveRow(to, 20)
     dom.scroll()
-    await vi.waitFor(() => {
+    await afterSettling(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe(to)
     })
   }

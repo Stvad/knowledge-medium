@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'

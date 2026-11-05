@@ -15,17 +15,26 @@ const isWordChar = (char: string | undefined): boolean =>
 
 const passesWholeWordBoundary = (
   content: string,
-  needle: string,
   index: number,
+  length: number,
 ): boolean => {
-  const first = needle[0]
-  const last = needle[needle.length - 1]
+  const first = content[index]
+  const last = content[index + length - 1]
   const before = content[index - 1]
-  const after = content[index + needle.length]
+  const after = content[index + length]
   return (!isWordChar(first) || !isWordChar(before))
     && (!isWordChar(last) || !isWordChar(after))
 }
 
+const escapeRegExp = (text: string): string =>
+  text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+
+/** Matches are offsets into `content` itself. Case-insensitivity is the
+ *  regex's per-code-point folding, never a lowercased copy of the content:
+ *  lowercasing can change a string's length (`İ` becomes two code units), and
+ *  offsets taken from the copy would splice a replacement into the wrong place.
+ *  A whole-word rejection advances one code point, not past the candidate, so
+ *  an overlapping later candidate is still considered. */
 export const findLiteralMatches = (
   content: string,
   needle: string,
@@ -33,18 +42,17 @@ export const findLiteralMatches = (
 ): LiteralMatch[] => {
   if (needle.length === 0) return []
 
-  const haystack = options.matchCase ? content : content.toLocaleLowerCase()
-  const target = options.matchCase ? needle : needle.toLocaleLowerCase()
+  const pattern = new RegExp(escapeRegExp(needle), options.matchCase ? 'gu' : 'giu')
   const matches: LiteralMatch[] = []
-  let start = 0
 
-  for (;;) {
-    const index = haystack.indexOf(target, start)
-    if (index < 0) break
-    if (!options.wholeWord || passesWholeWordBoundary(content, needle, index)) {
-      matches.push({index, length: needle.length})
+  for (let found = pattern.exec(content); found; found = pattern.exec(content)) {
+    const {index} = found
+    const length = found[0].length
+    if (!options.wholeWord || passesWholeWordBoundary(content, index, length)) {
+      matches.push({index, length})
+    } else {
+      pattern.lastIndex = index + ((content.codePointAt(index) ?? 0) > 0xffff ? 2 : 1)
     }
-    start = index + needle.length
   }
 
   return matches

@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {afterEach, describe, expect, it} from 'vitest'
 import {extensionPromptStore} from '../store.js'
 import {extensionPromptDiagnosticSource} from '../status.js'

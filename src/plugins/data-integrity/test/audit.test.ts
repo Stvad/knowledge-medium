@@ -98,7 +98,10 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
                '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
     )
 
-    const result = await runConsistencyAuditNow(env.repo, 'ws-5')
+    // The engine directly: the raw row has no `blocks_synced` twin, so the
+    // scheduled runner would read it as stranded and wait out the divergence
+    // recheck delay.
+    const result = await runConsistencyAudit(sharedDb.db, 'ws-5', 0)
 
     const mirror = result.checks.references_index_mirror
     expect(mirror.status).toBe('anomaly')

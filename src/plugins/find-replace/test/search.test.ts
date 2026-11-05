@@ -35,6 +35,25 @@ describe('find/replace literal matching', () => {
     ])
   })
 
+  it('splices a case-insensitive replacement at offsets into the original text', () => {
+    // `İ` lowercases to two code units, so offsets read off a lowercased copy
+    // land one character late for everything after it.
+    expect(replaceLiteralMatches('İstanbul foo bar', 'foo', 'X', insensitive)).toEqual({
+      content: 'İstanbul X bar',
+      replacementCount: 1,
+    })
+    // ...and the `i` inside that expansion is not a character of the original.
+    expect(replaceLiteralMatches('xİy', 'i', 'Z', insensitive)).toEqual({
+      content: 'xİy',
+      replacementCount: 0,
+    })
+  })
+
+  it('still considers a whole-word candidate that overlaps a rejected one', () => {
+    expect(findLiteralMatches('xa.a.a', 'a.a', {matchCase: false, wholeWord: true}))
+      .toEqual([{index: 3, length: 3}])
+  })
+
   it('replaces each literal match without treating the find text as regex', () => {
     expect(replaceLiteralMatches('a.b a?b a.b', 'a.b', 'x', insensitive)).toEqual({
       content: 'x a?b x',
