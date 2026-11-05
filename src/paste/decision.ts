@@ -1,5 +1,6 @@
 import { defineVerbFacet } from '@/facets/verbFacet.ts'
 import type { OutlineNode } from '@/utils/markdownParser.ts'
+import { outlineFromClipboard } from './clipboardOutline.ts'
 import type { PasteChordIntent } from './operations.ts'
 
 export type { OutlineNode }
@@ -97,6 +98,7 @@ interface PasteRequestBase {
  * The historical paste decision, now the replaceable `defaultImpl` of the
  * paste verb:
  *   - `single-block` chord → verbatim into the current block.
+ *   - plain chord on this app's own copy → the copied outline, exactly.
  *   - plain chord with a newline → split into an outline.
  *   - plain chord, single line → `single-block` in the `editor` (a verbatim
  *     caret insert, like the browser's native paste) but `split` in the
@@ -120,6 +122,8 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   // independent aspects of one paste (a spreadsheet copy = TSV + a PNG → attach the
   // image AND keep the data), and the text half still gets every plugin contribution.
   if (request.intent === 'single-block') return {kind: 'single-block'}
+  const copied = outlineFromClipboard(request.html, request.text)
+  if (copied) return {kind: 'split', blocks: copied}
   if (request.text.includes('\n')) return {kind: 'split'}
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
 }

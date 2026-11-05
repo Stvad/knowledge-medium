@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { clipboardHtmlFor, clipboardTextFor } from '@/paste/clipboardOutline'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from '@/paste/decision'
 import { richPasteDecisionContribution } from '../pasteDecision'
 
@@ -68,5 +69,17 @@ describe('rich paste decision', () => {
     ])('yields to a media capture registered %s it', (_, contributions) => {
       expect(pasteDecisionVerb.runSync(resolveFacetRuntimeSync(contributions), withFiles)).toEqual({kind: 'media'})
     })
+  })
+})
+
+describe('rich paste of this app\'s own copy', () => {
+  it.each([
+    ['a multi-line block', [{depth: 0, content: 'a\nb'}, {depth: 1, content: 'c'}], [{content: 'a\nb', children: [{content: 'c', children: []}]}]],
+    ['a blank line', [{depth: 0, content: 'a\n\nb'}, {depth: 1, content: 'c'}], [{content: 'a\n\nb', children: [{content: 'c', children: []}]}]],
+    ['content that looks like html', [{depth: 0, content: '<b>a</b>\n<ul><li>b'}], [{content: '<b>a</b>\n<ul><li>b', children: []}]],
+    ['a lone empty block', [{depth: 0, content: ''}], [{content: '', children: []}]],
+  ])('does not take over the copied outline: %s', (_, entries, blocks) => {
+    const text = clipboardTextFor(entries)
+    expect(decide(shell({text, html: clipboardHtmlFor(entries, text)}))).toEqual({kind: 'split', blocks})
   })
 })

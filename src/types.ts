@@ -1,5 +1,5 @@
 import { FunctionComponent } from 'react'
-import type { BlockData } from '@/data/api'
+import type { SubtreeRow } from '@/data/api'
 import { Block } from './data/block'
 
 // BlockData / BlockReference are the canonical domain shape — their definition
@@ -178,5 +178,5 @@ export interface User {
 
 export interface ClipboardData {
   markdown: string;
-  blocks: BlockData[];
+  blocks: SubtreeRow[];
 }

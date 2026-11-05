@@ -4,12 +4,7 @@ import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
 import { ChangeScope } from '@/data/api'
 import { armCut, disarmCut } from '@/paste/armedCut.js'
-
-const createIndentedContent = (content: string, depth: number): string => {
-  const indentBy = '  '
-  const indentation = depth > 0 ? indentBy.repeat(depth) : ''
-  return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
-}
+import { clipboardHtmlFor, clipboardTextFor } from '@/paste/clipboardOutline.js'
 
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // One SQL query hydrates the entire subtree in document order
@@ -33,25 +28,16 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
 
-  if (blocks.length === 1) {
-    return {
-      markdown: blocks[0].content,
-      blocks,
-    }
-  }
-
-  return {
-    markdown: blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n'),
-    blocks,
-  }
+  return {markdown: clipboardTextFor(blocks), blocks}
 }
 
-const createClipboardItem = (data: ClipboardData): ClipboardItem =>
-  new ClipboardItem({
-    'text/plain': new Blob([data.markdown], {type: 'text/plain'}),
-    // Todo
-    // 'application/json': new Blob([JSON.stringify(data.blocks)], {type: 'application/json'}),
+const createClipboardItem = ({markdown, blocks}: ClipboardData): ClipboardItem => {
+  const html = clipboardHtmlFor(blocks, markdown)
+  return new ClipboardItem({
+    'text/plain': new Blob([markdown], {type: 'text/plain'}),
+    ...(html === undefined ? {} : {'text/html': new Blob([html], {type: 'text/html'})}),
   })
+}
 
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
   // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
@@ -114,10 +100,8 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
-  return {
-    markdown: validResults.map(r => r.markdown).join('\n'),
-    blocks: validResults.flatMap(r => r.blocks),
-  }
+  const blocks = validResults.flatMap(r => r.blocks)
+  return {markdown: clipboardTextFor(blocks), blocks}
 }
 
 export const copySelectedBlocksToClipboard = async (
@@ -157,8 +141,8 @@ export const copyBlockIdsToClipboard = async (
  *  claim.
  *
  *  `'empty'`: the blocks serialize to no text (one blank, childless block),
- *  and a paste of no text never reaches the paste handlers, so nothing could
- *  complete the cut. Nothing is written or armed. */
+ *  and an armed cut is matched by its text, so any paste carrying no text (a
+ *  lone file) would complete it. Nothing is written or armed. */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,

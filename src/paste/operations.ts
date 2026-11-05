@@ -8,6 +8,7 @@ import { visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
+import { readAsyncClipboard } from './clipboard.js'
 import {
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
@@ -746,18 +747,14 @@ export async function resolvePasteWithMediaCapture(
  *  paste exactly as they do to the DOM block-shell paste; keeping all
  *  clipboard paste behind this one funnel stops a new call site from
  *  silently bypassing the seam. Falls back to the raw outline paste only
- *  when no runtime is installed yet (very early boot / minimal harness).
- *
- *  The clipboard API read is text-only, so `PasteRequest.html` is undefined
- *  on this surface — a format-aware override keyed on `text/html` (e.g.
- *  CSV→table from a spreadsheet copy) fires for DOM paste but not here. */
+ *  when no runtime is installed yet (very early boot / minimal harness). */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
   options: PasteOptions = {},
 ): Promise<Block[]> {
-  const text = await navigator.clipboard.readText()
-  if (!text) return []
+  const {text, html} = await readAsyncClipboard()
+  if (!text && !html) return []
   const cutPaste = await pasteArmedCut(text, pasteTarget, repo, options)
   if (cutPaste) return cutPaste.kind === 'moved' ? cutPaste.blocks : []
 
@@ -766,9 +763,8 @@ export async function pasteFromClipboard(
 
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
-  const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
-  // This path is text-only (navigator.clipboard.readText carries no files), so a
-  // `media` decision can't arise — fall back to the text paste if one does.
+  const decision = pasteDecisionVerb.runSync(runtime, {text, html, intent: 'split', surface: 'shell'})
+  // This path reads no files, so a `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
   return pasteResolvedDecision({decision, text: decision.text ?? text}, pasteTarget, repo, options)
 }
