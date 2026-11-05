@@ -1,1 +1,0 @@
-export{T2 as kernelDataExtension}from"../../chunks/app-DUrxPzm7.js";

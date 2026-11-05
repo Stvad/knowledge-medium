@@ -1,1 +1,0 @@
-export{WM as checkForAppUpdate,GM as registerServiceWorker}from"../chunks/app-DUrxPzm7.js";

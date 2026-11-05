@@ -1,1 +1,0 @@
-export{$C as PromotableBreadcrumbList}from"../../../chunks/app-DUrxPzm7.js";

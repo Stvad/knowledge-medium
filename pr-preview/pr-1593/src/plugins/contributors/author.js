@@ -1,1 +1,0 @@
-export{Rm as authorIdOf}from"../../../chunks/app-DUrxPzm7.js";

@@ -1,1 +1,0 @@
-export{mj as BlockEmbed}from"../../../chunks/app-DUrxPzm7.js";

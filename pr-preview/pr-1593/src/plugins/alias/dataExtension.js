@@ -1,1 +1,0 @@
-export{IX as aliasDataExtension}from"../../../chunks/app-DUrxPzm7.js";

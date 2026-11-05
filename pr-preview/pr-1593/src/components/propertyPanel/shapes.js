@@ -1,1 +1,0 @@
-export{gU as propertyShapeLabel}from"../../../chunks/app-DUrxPzm7.js";

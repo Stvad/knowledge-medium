@@ -1,1 +1,0 @@
-export{FM as appUpdatePromptExtension}from"../../../chunks/app-DUrxPzm7.js";

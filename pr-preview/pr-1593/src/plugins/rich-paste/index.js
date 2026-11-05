@@ -1,1 +1,0 @@
-export{Oy as richPastePlugin}from"../../../chunks/app-DUrxPzm7.js";
