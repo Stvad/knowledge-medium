@@ -1,1 +1,0 @@
-export{hW as staticDataExtensions}from"../../chunks/app-DfnFvQey.js";

@@ -1,1 +1,0 @@
-export{xM as ExtensionPromptSurface,SM as extensionPromptsExtension}from"../../../chunks/app-DfnFvQey.js";

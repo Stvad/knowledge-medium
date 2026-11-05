@@ -1,1 +1,0 @@
-export{WF as useIsMobile,GF as usePointerCoarse}from"../../chunks/app-DfnFvQey.js";

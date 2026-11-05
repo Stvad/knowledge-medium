@@ -1,1 +1,0 @@
-export{hot as defineQuery}from"../../../chunks/app-DfnFvQey.js";

@@ -1,1 +1,0 @@
-export{IX as aliasDataExtension}from"../../../chunks/app-DfnFvQey.js";

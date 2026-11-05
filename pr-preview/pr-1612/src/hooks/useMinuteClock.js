@@ -1,1 +1,0 @@
-export{LE as useMinuteClock}from"../../chunks/app-DfnFvQey.js";

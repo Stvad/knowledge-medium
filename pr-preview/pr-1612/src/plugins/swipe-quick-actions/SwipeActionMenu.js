@@ -1,1 +1,0 @@
-export{MA as SwipeActionMenu}from"../../../chunks/app-DfnFvQey.js";

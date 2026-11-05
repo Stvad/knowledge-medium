@@ -1,1 +1,0 @@
-export{n_ as blockInfoPlugin}from"../../../chunks/app-DfnFvQey.js";

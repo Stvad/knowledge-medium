@@ -1,1 +1,0 @@
-export{jx as videoPlayerPlugin}from"../../../chunks/app-DfnFvQey.js";

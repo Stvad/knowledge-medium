@@ -1,1 +1,0 @@
-export{yv as Wikilink}from"../../../../../chunks/app-DfnFvQey.js";

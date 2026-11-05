@@ -1,1 +1,0 @@
-export{fU as usePropertySchemas}from"../../chunks/app-DfnFvQey.js";
