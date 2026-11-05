@@ -80,7 +80,7 @@ For each row under "Eligible majors", read the release notes or migration guide 
 
 - `pnpm install --frozen-lockfile` passes, both here and in `agent-extensions/social-media-publisher`.
 - `pnpm run check` ends in `check: PASS`, and the test count doesn't drop below the baseline. If it ends in `check: FAIL`:
-  - if every verdict reads `failed only under load`, re-run the whole gate once;
+  - if every verdict reads `failed only in the full run`, re-run the whole gate once;
   - if the re-run again shows only load verdicts, proceed and list those files under Verification as load flakes;
   - any `fails alone too` is a real break.
 - `pnpm build` passes.
