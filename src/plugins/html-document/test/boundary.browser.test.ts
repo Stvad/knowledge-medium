@@ -37,6 +37,13 @@ const CONTROL_CANNOT: Record<Engine, readonly string[]> = {
   firefox: ['ping'],
 }
 
+/** A document takes keyboard focus from the app with no click, on these engines. */
+const TAKES_THE_KEYBOARD: Record<Engine, boolean> = {
+  chromium: true,
+  webkit: true,
+  firefox: true,
+}
+
 /** `history.back()` in a frame moves the top window's history on these engines.
  *  It cannot choose a new URL, but it is a real gap, and the threat model says so. */
 const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
@@ -99,6 +106,10 @@ describe.each(selectedEngines())('%s', engine => {
     const READS: Record<string, string> = {
       'the embedding document': `parent.document && 'KM_SECRET_embedder'`,
       'the top document': `top.document.getElementById('secret').textContent`,
+      // The app's URL holds the workspace and the open blocks.
+      'the app URL through its base URL': `document.baseURI`,
+      'the app URL through a relative link': `Object.assign(document.createElement('a'), {href: ''}).href`,
+      'the app URL through a removed base': `(document.querySelector('base')?.remove(), document.baseURI)`,
       'a global on the top window': `top.kmSecret`,
       'the frame element': `window.frameElement && window.frameElement.ownerDocument.getElementById('secret').textContent`,
       'cookies': `document.cookie`,
@@ -377,6 +388,16 @@ describe.each(selectedEngines())('%s', engine => {
       })
     })
 
+    it('follows an in-document anchor without leaving the document', async () => {
+      await mount(host, 'sandboxed', `<a href="#end" style="${COVER}">go</a><div style="height:2000px"></div><p id="end">end</p>${script(`
+        addEventListener('hashchange', () => top.postMessage({hash: location.hash, stillHere: Boolean(document.getElementById('end'))}, '*'))
+        ${ARMED}
+      `)}`)
+      await untilReported(host, 'armed')
+      await host.page.frameLocator('#mount iframe').frameLocator('iframe').locator('a').click()
+      await untilReported(host, {hash: '#end', stillHere: true})
+    })
+
     it('keeps source that tries to break out of the attribute inside the inner frame', async () => {
       // In the inner frame the navigation is refused. If this ever reached the
       // outer document, nothing above it would refuse.
@@ -490,6 +511,41 @@ describe.each(selectedEngines())('%s', engine => {
   // Not promises: what the threat model says a document can still do. These are
   // pinned where they were measured, so a browser closing one shows up here.
   describe('what a document can still do', () => {
+    it('takes the keyboard from the app with no click, only where the threat model says', async () => {
+      const typeIntoApp = async (source: string) => {
+        const host = await openHost(browser, servers.hostUrl)
+        await host.page.evaluate(() => {
+          const input = document.createElement('input')
+          input.id = 'app-input'
+          document.body.prepend(input)
+          input.focus()
+        })
+        await mount(host, 'sandboxed', source + script(ARMED))
+        await untilReported(host, 'armed')
+        await settle(host)
+        await host.page.keyboard.type('abcde', {delay: 60})
+        await settle(host)
+        const reports = await host.reports() as {stolen?: string}[]
+        const result = {
+          inApp: await host.page.locator('#app-input').inputValue(),
+          stolen: reports.map(report => report.stolen ?? '').join(''),
+        }
+        await host.close()
+        return result
+      }
+
+      expect(await typeIntoApp('<p>harmless</p>')).toEqual({inApp: 'abcde', stolen: ''})
+
+      const taken = await typeIntoApp(`<input id="field">${script(`
+        addEventListener('keydown', event => top.postMessage({stolen: event.key}, '*'), true)
+        setInterval(() => {
+          window.focus()
+          document.getElementById('field').focus()
+        }, 30)
+      `)}`)
+      expect(taken.stolen.length > 0).toBe(TAKES_THE_KEYBOARD[engine])
+    })
+
     it('reaches a host of its choosing over WebRTC', async () => {
       const peer = script(`
         const peer = new RTCPeerConnection({iceServers: [{urls: ${JSON.stringify(servers.stunUrls)}}]})

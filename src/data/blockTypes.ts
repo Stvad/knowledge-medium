@@ -59,6 +59,15 @@ export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
+/** Does the row's own `types` say extension? `block_types` is not enough to run
+ *  one: SQLite's `json_each` and `JSON.parse` disagree on a duplicated key, so a
+ *  crafted row can be listed as an extension while every reader of its properties
+ *  sees another type, and shows a reviewer something other than its source. */
+export const declaresExtensionType = (row: Pick<BlockData, 'properties'>): boolean => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) && types.includes(EXTENSION_TYPE)
+}
+
 const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
 
 /** Is this row's `content` source code rather than markdown? Then it is not text:

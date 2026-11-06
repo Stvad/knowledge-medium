@@ -78,9 +78,13 @@ const innerDocument = (source: string, themeCss: string): string =>
   `<script>${HEIGHT_REPORTER}</script>` +
   source
 
+/** A srcdoc document takes its base URL from its embedder, and at the top of that
+ *  chain is the app's URL, which holds the workspace and the open blocks. Hence the
+ *  `<base>`, and in the outer document because the source could remove its own. It
+ *  also gives `#anchor` links the document they mean, rather than the app's URL. */
 export const buildFrameDocument = (source: string, themeCss: string): string =>
-  '<!doctype html><html><head><meta charset="utf-8">' +
-  `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(FRAME_CSP)}">` +
+  '<!doctype html><html><head><meta charset="utf-8"><base href="about:srcdoc">' +
+  `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">` +
   `<style>${themeCss}html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style>` +
   '</head><body>' +
   `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocument(source, themeCss))}"></iframe>` +

@@ -144,7 +144,7 @@ export const openHost = async (browser: Browser, hostUrl: string): Promise<HostP
     dialogs += 1
     void dialog.dismiss().catch(() => {})
   })
-  await page.goto(hostUrl)
+  await page.goto(`${hostUrl}/?q=KM_SECRET_query#KM_SECRET_hash`)
   await page.waitForFunction(() => typeof window.mountSandboxed === 'function')
   await page.evaluate(() => window.secretsReady)
   return {
