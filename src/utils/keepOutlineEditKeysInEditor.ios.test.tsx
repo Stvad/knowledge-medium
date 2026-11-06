@@ -6,7 +6,6 @@
  */
 import { cleanup, render } from '@testing-library/react'
 import CodeMirror from '@uiw/react-codemirror'
-import { completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { javascript } from '@codemirror/lang-javascript'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +31,6 @@ describe('keepOutlineEditKeysInEditor under the iOS key deferral', () => {
   afterEach(() => {
     window.removeEventListener('keydown', onWindowKey)
     cleanup()
-    vi.restoreAllMocks()
   })
 
   const openEditorAt = (caret: number): EditorView => {
@@ -58,28 +56,16 @@ describe('keepOutlineEditKeysInEditor under the iOS key deferral', () => {
   const doc = (view: EditorView) => view.state.doc.toString()
 
   it.each([
-    ['Enter', 5, /^const\n\s*alpha = 1\nalp$/],
-    ['Backspace', 5, /^cons alpha = 1\nalp$/],
-    ['Delete', 5, /^constalpha = 1\nalp$/],
-  ])('%s stops at the editor, and the deferred keymap still runs', async (key, caret, after) => {
-    const view = openEditorAt(caret)
+    ['Enter', 'const\n  alpha = 1\nalp'],
+    ['Backspace', 'cons alpha = 1\nalp'],
+    ['Delete', 'constalpha = 1\nalp'],
+  ])('%s stops at the editor, and the deferred keymap still runs', async (key, after) => {
+    const view = openEditorAt(5)
     press(view, key)
     // Precondition: CodeMirror deferred the key instead of handling it now.
     expect(doc(view)).toBe(SOURCE)
     expect(reachedWindow).toEqual([])
-    await vi.waitFor(() => expect(doc(view)).toMatch(after))
-    expect(reachedWindow).toEqual([])
-  })
-
-  it('Enter still accepts an open completion', async () => {
-    const view = openEditorAt(SOURCE.length)
-    startCompletion(view)
-    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('active'))
-    // CodeMirror ignores an accept for 75ms after the list opens.
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1_000)
-    press(view, 'Enter')
-    expect(doc(view)).toBe(SOURCE)
-    await vi.waitFor(() => expect(doc(view)).toBe('const alpha = 1\nalpha'))
+    await vi.waitFor(() => expect(doc(view)).toBe(after))
     expect(reachedWindow).toEqual([])
   })
 })

@@ -219,19 +219,19 @@ export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptComplet
  *  Enter before it can reach a window shortcut). */
 export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
 
-/** Bare keys the EDIT_MODE_CM shortcuts read as outline edits: Enter splits the
- *  block, Tab re-nests it, Backspace and Delete at its edges merge it with a
+/** Keys the EDIT_MODE_CM shortcuts read as outline edits: Enter splits the block,
+ *  Tab and Shift+Tab re-nest it, Backspace and Delete at its edges merge it with a
  *  neighbour. */
 const OUTLINE_EDIT_KEYS: ReadonlySet<string> = new Set(['Enter', 'Tab', 'Backspace', 'Delete'])
 
 /** `onKeyDown` for a `BlockEditor` holding source, where those keys edit the text
- *  and must not reach the window-level block shortcuts. A chord is still the app's.
+ *  and must not reach the window-level block shortcuts. Pressed with Alt, Ctrl or
+ *  Cmd they are left to the app.
  *
- *  Bubble phase on purpose: CodeMirror has run its keymap by now (or, on iOS and
- *  Android, deferred it, which is what leaves the real event bubbling), so its
- *  keymap keeps deciding what the key does. Taking the key in the capture phase
- *  would mean re-implementing that keymap: accepting a completion, the next snippet
- *  field, a key typed in the search panel. */
+ *  Bubble phase on purpose: CodeMirror has run its keymap or deferred it by now, so
+ *  its keymap keeps deciding what the key does, and only the way on to window is
+ *  cut. Taking the key in the capture phase would mean re-implementing that keymap:
+ *  accepting a completion, the next snippet field, a key typed in the search panel. */
 export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()

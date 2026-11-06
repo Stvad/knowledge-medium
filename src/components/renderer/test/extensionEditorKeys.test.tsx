@@ -85,17 +85,13 @@ describe('the extension source editor keeps the outline-edit keys', () => {
 
   const doc = (view: EditorView) => view.state.doc.toString()
 
-  it('Enter adds a line and stays in the editor', async () => {
+  it.each<[string, KeyboardEventInit]>([
+    ['Enter', {}],
+    ['Shift+Enter', {shiftKey: true}],
+  ])('%s adds a line and stays in the editor', async (_name, init) => {
     const view = await openEditorAt(5)
-    press(view, 'Enter')
-    expect(doc(view)).toMatch(/^const\n\s*alpha = 1\nalp$/)
-    expect(reachedWindow).toEqual([])
-  })
-
-  it('Shift+Enter adds a line and stays in the editor', async () => {
-    const view = await openEditorAt(5)
-    press(view, 'Enter', {shiftKey: true})
-    expect(doc(view)).toMatch(/^const\n\s*alpha = 1\nalp$/)
+    press(view, 'Enter', init)
+    expect(doc(view)).toBe('const\n  alpha = 1\nalp')
     expect(reachedWindow).toEqual([])
   })
 
