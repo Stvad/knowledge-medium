@@ -1,1 +1,1 @@
-export{xA as useCommandPaletteActions}from"../../../chunks/app-B5NwJwy8.js";
+export{TA as useCommandPaletteActions}from"../../../chunks/app-CKjHkBAU.js";

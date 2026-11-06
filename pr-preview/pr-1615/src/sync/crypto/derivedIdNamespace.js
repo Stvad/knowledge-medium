@@ -1,1 +1,1 @@
-export{wrt as deriveWorkspaceIdNamespace}from"../../../chunks/app-B5NwJwy8.js";
+export{Ort as deriveWorkspaceIdNamespace}from"../../../chunks/app-CKjHkBAU.js";
