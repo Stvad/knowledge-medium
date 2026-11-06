@@ -1342,6 +1342,19 @@ describe('default CodeMirror shortcuts', () => {
       expect(env.repo.block('second').peek()?.content).toBe('second')
     }
 
+    it('Enter mid-source does not split it', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'first')
+      await findEditModeAction(env.repo, 'split_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView: codeMirrorEditorView('first', 2),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(await childIds('root')).toEqual(['first', 'second'])
+    })
+
     it.each([
       ['prose, with source above', type, undefined],
       ['source, with prose above', undefined, type],

@@ -7,6 +7,7 @@
  */
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block'
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   parseOutermostReferences,
   type ParsedReference,
@@ -69,7 +70,7 @@ export const referenceDateAdapter: BlockDateAdapter = {
   id: REFERENCE_DATE_ADAPTER_ID,
   canHandle: (block: Block) => {
     const data = block.peek()
-    if (!data) return false
+    if (!data || hasSourceContent(data)) return false
     return singleDateReferenceMatch(data.content) !== null
   },
   getCurrentIso: async (block: Block) => {

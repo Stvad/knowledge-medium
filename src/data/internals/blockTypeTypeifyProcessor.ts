@@ -63,7 +63,7 @@ import {
   type SameTxCtx,
   type TxWriteOpts,
 } from '@/data/api'
-import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE, hasSourceContent } from '@/data/blockTypes'
 import {
   addBlockTypeToProperties,
   addedTypes,
@@ -389,6 +389,8 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
         await completeNewType(row, after, ctx)
         continue
       }
+      // Source isn't a name, so editing it renames nothing.
+      if (hasSourceContent(after)) continue
       await followRenamedContent(row, after, ctx)
     }
   },

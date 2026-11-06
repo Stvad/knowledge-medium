@@ -93,6 +93,13 @@ export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean =>
   return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
 }
 
+/** {@link hasSourceContent} for a handle. One not loaded yet reads as not source, so
+ *  a gesture that may hold such a block loads it first. */
+export const holdsSource = (block: {peek: () => BlockData | null | undefined}): boolean => {
+  const data = block.peek()
+  return data != null && hasSourceContent(data)
+}
+
 /** Types whose blocks are the app's own bookkeeping rather than anything
  *  the user authored — the rows the activity surface
  *  (`core.recentActivity`) must not report as an edit.

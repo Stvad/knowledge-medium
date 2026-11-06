@@ -151,6 +151,17 @@ describe('blockDateAdapter dispatch', () => {
 })
 
 describe('referenceDateAdapter', () => {
+  it('canHandle refuses source, with a date reference in it or not', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'doc', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '<p>[[2026-04-29]]</p>', properties: {types: ['html-document']},
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('doc')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(false)
+  })
+
   it('canHandle accepts blocks with exactly one date reference', async () => {
     const repo = makeRepo()
     await repo.tx(async tx => {

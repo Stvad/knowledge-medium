@@ -14,7 +14,7 @@ import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
-import { hasSourceContent } from '@/data/blockTypes'
+import { holdsSource } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -172,13 +172,6 @@ const splitAtCursor = async (
     keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
     () => block.repo.mutate.split({id: block.id, before, after, placement}))
   return keepsBefore ? newId : block.id
-}
-
-/** Source code isn't text to join: one side would absorb the other's source and
- *  its type. Refusing costs nothing, since the blocks stay side by side. */
-const holdsSource = (block: Block): boolean => {
-  const data = block.peek()
-  return data != null && hasSourceContent(data)
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -773,6 +766,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
+          if (holdsSource(block)) return
           const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
           await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
           await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})

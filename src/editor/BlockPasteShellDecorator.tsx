@@ -5,6 +5,7 @@ import {
   type BlockShellDecoratorProps,
   type BlockShellState,
 } from '@/extensions/blockInteraction.js'
+import { hasSourceContent } from '@/data/blockTypes'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
 import { readClipboardContent } from '@/paste/clipboard.js'
@@ -48,6 +49,14 @@ export function BlockPasteShellDecorator({
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, { renderScopeId })
         }
+        return
+      }
+
+      // An empty source block is where this was meant to go, whole: parsing it as an
+      // outline would leave a line in the block and the rest shredded around it.
+      const target = block.peek()
+      if (target && hasSourceContent(target) && target.content === '' && content.text !== '') {
+        await block.setContent(content.text)
         return
       }
 
