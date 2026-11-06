@@ -1,4 +1,4 @@
-import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type TypeSeedDeclaration } from '@/data/api'
+import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type BlockData, type TypeSeedDeclaration } from '@/data/api'
 import {
   aliasesProp,
   blockTypeColorProp,
@@ -12,10 +12,24 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  typesProp,
   userIdProp,
 } from '@/data/properties'
 
 export const EXTENSION_TYPE = 'extension'
+const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE]
+
+/** Is this row's `content` source code rather than markdown? Then it is not text
+ *  to join with a neighbour.
+ *
+ *  A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and throws on a malformed `types` value: a wrong-shaped
+ *  value reading as "not source" is the right answer here. */
+export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
+}
+
 export const PAGE_TYPE = 'page'
 export const PANEL_TYPE = 'panel'
 export const PANEL_STACK_TYPE = 'panel-stack'
