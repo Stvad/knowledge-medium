@@ -36,8 +36,6 @@ export const FRAME_CSP = [
   'img-src data: blob:',
   'font-src data:',
   'media-src data: blob:',
-  // The one channel the rest of this leaves open, wherever an engine honours it.
-  "webrtc 'block'",
 ].join('; ')
 
 export const MIN_FRAME_HEIGHT = 24

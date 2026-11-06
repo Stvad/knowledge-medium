@@ -45,13 +45,6 @@ const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
   firefox: true,
 }
 
-/** STUN packets leave for a host the document names, on these engines. */
-const WEBRTC_REACHES_THE_NETWORK: Record<Engine, boolean> = {
-  chromium: true,
-  webkit: true,
-  firefox: false,
-}
-
 let servers: BoundaryServers
 beforeAll(async () => {
   servers = await startServers()
@@ -395,6 +388,42 @@ describe.each(selectedEngines())('%s', engine => {
     })
   })
 
+  it('DIAGNOSTIC what the top window sees of a height report', async () => {
+    const host = await openHost(browser, servers.hostUrl)
+    await host.page.evaluate(() => {
+      const seen: unknown[] = []
+      ;(window as unknown as {seen: unknown[]}).seen = seen
+      window.addEventListener('message', event => {
+        const outer = document.querySelector('#mount iframe') as HTMLIFrameElement | null
+        const content = outer?.contentWindow as Window | null | undefined
+        const record: Record<string, unknown> = {data: event.data, origin: event.origin, sourceIsNull: event.source === null}
+        const attempt = (name: string, read: () => unknown) => {
+          try { record[name] = read() } catch (error) { record[name] = 'THREW ' + (error as Error).name }
+        }
+        attempt('sameFrames0', () => event.source === content?.frames[0])
+        attempt('sameIndexed', () => event.source === (content as unknown as Record<number, unknown>)?.[0])
+        attempt('sameContent', () => event.source === content)
+        attempt('sourceParentIsOuter', () => (event.source as Window).parent === content)
+        attempt('outerLength', () => content?.length)
+        attempt('frames0Type', () => typeof content?.frames[0])
+        seen.push(record)
+      })
+    })
+    await mount(host, 'sandboxed', '<style>body{margin:0}</style><div style="height:300px"></div>')
+    await host.page.waitForTimeout(1500)
+    const result = await host.page.evaluate(async () => ({
+      visibility: document.visibilityState,
+      rafFired: await new Promise(done => {
+        requestAnimationFrame(() => done(true))
+        setTimeout(() => done(false), 1000)
+      }),
+      height: document.querySelector('#mount iframe')?.getBoundingClientRect().height,
+      seen: (window as unknown as {seen: unknown[]}).seen,
+    }))
+    process.stderr.write(`DIAGNOSTIC ${engine} ${JSON.stringify(result)}\n`)
+    await host.close()
+  })
+
   describe('sizing the frame', () => {
     let host: HostPage
     beforeEach(async () => {
@@ -497,7 +526,7 @@ describe.each(selectedEngines())('%s', engine => {
   // Not promises: what the threat model says a document can still do. These are
   // pinned where they were measured, so a browser closing one shows up here.
   describe('what a document can still do', () => {
-    it('reaches a host of its choosing over WebRTC only where the threat model says', async () => {
+    it('reaches a host of its choosing over WebRTC', async () => {
       const peer = script(`
         const peer = new RTCPeerConnection({iceServers: [{urls: ${JSON.stringify(servers.stunUrls)}}]})
         peer.createDataChannel('x')
@@ -516,7 +545,7 @@ describe.each(selectedEngines())('%s', engine => {
       }
 
       expect(await packetsFrom('control')).toBeGreaterThan(0)
-      expect(await packetsFrom('sandboxed') > 0).toBe(WEBRTC_REACHES_THE_NETWORK[engine])
+      expect(await packetsFrom('sandboxed')).toBeGreaterThan(0)
     })
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {
