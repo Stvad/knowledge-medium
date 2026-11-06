@@ -18,9 +18,10 @@ const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
  *
  *  Note the predicate reads COMPUTED `overflowY`, which CSS propagates from
  *  `overflow-x` — an `overflow-x: auto` element with no explicit `overflow-y`
- *  computes `auto` here and counts as a match. Fine for today's callers (such
- *  a wrapper still clips vertically), but it's why this asks about a
- *  scrollport rather than claiming the element definitely scrolls. */
+ *  computes `auto` here and counts as a match, which is why this asks about a
+ *  scrollport rather than claiming the element definitely scrolls. A sideways
+ *  scroller that can hold block rows therefore has to set `overflow-y` itself,
+ *  as `.markdown-table-scroll` does. */
 export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | null => {
   let ancestor = element.parentElement
   while (ancestor) {
