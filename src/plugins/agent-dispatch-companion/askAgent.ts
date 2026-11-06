@@ -2,9 +2,9 @@
  * Ask Agent — the explicit trigger. One gesture: make sure the block
  * carries the [[claude]] mention, clear any previous terminal
  * agent:* state (so a done/error block re-queues; the session id is
- * kept so the new run resumes the thread), mark the optimistic chip,
- * and fire the edit-settled signal so push detection skips the settle
- * window entirely — the daemon reacts in bridge-round-trip time.
+ * kept so the new run resumes the thread), stamp agent:asked-at, which
+ * tells the daemon not to wait for the block to leave its editor, and
+ * mark the optimistic chip.
  */
 import type { Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
@@ -12,7 +12,6 @@ import {
   ActionContextTypes,
   type ActionConfig,
 } from '@/shortcuts/types.js'
-import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { AGENT_PROPS } from './chipState.ts'
 import {
   agentActivityProp,
@@ -101,9 +100,6 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   if (!wrote) return
 
   markAskedAgent(block.id)
-  // Explicit ask = the user is done by construction: skip the settle
-  // window (the signal's delayed recheck catches this write's commit).
-  notifyBlockEditSettled(block.id)
 }
 
 const normalModeAsk: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {

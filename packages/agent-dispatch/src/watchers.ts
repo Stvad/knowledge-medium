@@ -12,7 +12,7 @@ export interface BlockView {
   content?: string
   properties?: Record<string, unknown>
   parentId?: string | null
-  /** Last user edit (ms) — gates the quiet period before claiming. */
+  /** Last user edit (ms) — gates the settle and the edit hold before claiming. */
   editedAtMs?: number | null
 }
 
@@ -23,6 +23,7 @@ export interface PendingDecision {
     | 'already-processed'
     | 'is-reply'
     | 'still-typing'
+    | 'being-edited'
     | 'stale-running'
     | 'attempts-exhausted'
     | 'pre-baseline'
@@ -57,15 +58,15 @@ export const MAX_ATTEMPTS = 3
 export interface PendingArgs {
   source: BlockView
   nowMs: number
-  /** Minimum quiet time since the last user edit before claiming. */
-  quietMs?: number
+  /** Minimum time since the last user edit before claiming. */
+  settleMs?: number
+  /** Is the block open in an editor on some client? */
+  beingEdited?: boolean
+  /** How long since the last edit `beingEdited` is believed. */
+  editHoldMs?: number
   /** Watcher's first-tick timestamp: unclaimed blocks last edited before
    *  it are pre-existing content, never tasks. null/undefined = no gate. */
   baselineMs?: number | null
-  /** The quiet period was already confirmed at the SOURCE (the tab saw
-   *  the user leave the block, or its settle window elapsed) — skip the
-   *  clock-based still-typing gate. Baseline/status gates still apply. */
-  quietExempt?: boolean
 }
 
 /**
@@ -78,9 +79,10 @@ export interface PendingArgs {
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
  * - skip unclaimed blocks that predate the watcher baseline — pointing a
  *   watcher at an established page must not claim (and bill) its history;
- * - wait out the quiet period so half-typed requests aren't claimed.
+ * - hold a block open in an editor, up to the cap, unless explicitly asked;
+ * - wait out the settle window so an edit's last write isn't missed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExempt = false}: PendingArgs): PendingDecision => {
+export const decidePending = ({source, nowMs, settleMs = 0, beingEdited = false, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
   const status = taskStatus(source)
@@ -102,9 +104,11 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExem
     return {pending: false, reason: 'pre-baseline'}
   }
 
-  if (!quietExempt && quietMs > 0 && typeof source.editedAtMs === 'number' && nowMs - source.editedAtMs < quietMs) {
-    return {pending: false, reason: 'still-typing'}
+  const editedAgoMs = typeof source.editedAtMs === 'number' ? nowMs - source.editedAtMs : Number.POSITIVE_INFINITY
+  if (beingEdited && !prop(source, PROPS.askedAt) && editedAgoMs < editHoldMs) {
+    return {pending: false, reason: 'being-edited'}
   }
+  if (editedAgoMs < settleMs) return {pending: false, reason: 'still-typing'}
 
   return {pending: true, reason: 'pending'}
 }

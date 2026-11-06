@@ -4,7 +4,7 @@
  * business logic belongs in this package.
  */
 import type { BridgeClient } from './client.js'
-import type { CommentsView } from './protocol.js'
+import { BEING_EDITED_BLOCK_IDS_SQL, type CommentsView } from './protocol.js'
 
 export interface HydratedRef {
   id: string
@@ -302,6 +302,11 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return views
   }
 
+  const beingEditedBlockIds = async (): Promise<Set<string>> => {
+    const rows = await sqlAll(BEING_EDITED_BLOCK_IDS_SQL)
+    return new Set(rows.map(row => (row as {id: string}).id))
+  }
+
   return {
     resolvePageId,
     backlinkSources,
@@ -324,6 +329,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     updateBlockContent,
     sqlAll,
     blockViews,
+    beingEditedBlockIds,
   }
 }
 

@@ -10,6 +10,7 @@ import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
 const NOW = 1_800_000_000_000
 
 interface FakeGraphSeed {
+  beingEdited?: string[]
   pageId?: string
   backlinks?: Array<{id: string, deepLink?: string, sourceFields?: string[]}>
   blocks?: Record<string, Partial<BlockData>>
@@ -109,6 +110,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       const view = thread ? seed.threads?.[thread] : undefined
       return {total: view ? 1 : 0, offset: 0, nextOffset: null, threads: view ? [view] : []}
     }),
+    beingEditedBlockIds: vi.fn(async () => new Set(seed.beingEdited ?? [])),
     blockViews: async ids => new Map(
       ids.flatMap(id => {
         const target = blocks.get(id)
@@ -150,7 +152,7 @@ const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
 
 const mentionConfig = (overrides: object = {}) => parseConfig({
     workspaceId: 'ws-test',
-  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0}],
   ...overrides,
 })
 
@@ -280,7 +282,7 @@ describe('channel delivery', () => {
     const deliverToChannel = vi.fn(async () => {})
     const engine = engineWith({
       graph, deliverToChannel,
-      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}]}),
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}]}),
     })
 
     await engine.tick()
@@ -616,21 +618,88 @@ describe('mention lifecycle', () => {
     expect(propWrites.map(write => write.id)).toContain('linked')
   })
 
-  it('waits for the quiet period before claiming a just-edited mention', async () => {
+  it('waits out the settle window before claiming a just-edited mention', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] half-typed…', editedAtMs: NOW - 2_000}},
+      blocks: {'b-1': {content: '[[claude]] half-typed…', editedAtMs: NOW - 500}},
     })
     const runTask = vi.fn(async () => okRun())
     const engine = engineWith({
       graph,
       runTask,
-      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 15_000}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 1_000}]}),
     })
 
     await engine.tick()
     await engine.drain()
     expect(runTask).not.toHaveBeenCalled()
+  })
+
+  it('holds a mention open in an editor, and claims it once it leaves', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] still thinking', editedAtMs: NOW - 30_000}},
+      beingEdited: ['b-1'],
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    // Held at the scan, so it never spends a launch slot on the re-check.
+    expect(graph.beingEditedBlockIds).toHaveBeenCalledTimes(1)
+
+    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>).mockResolvedValue(new Set())
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-checks the editor right before claiming, against a re-entry since the scan', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] back to it', editedAtMs: NOW - 30_000}},
+    })
+    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Set())
+      .mockResolvedValue(new Set(['b-1']))
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+  })
+
+  it('reads edit state before the text, so a leave between the reads cannot pass stale text', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] stale text', editedAtMs: NOW - 30_000}},
+    })
+    // Not being edited at the scan, then back in the editor, then out again
+    // the moment the text has been read.
+    let editing = false
+    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      const result = new Set(editing ? ['b-1'] : [])
+      editing = true
+      return result
+    })
+    const readBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const block = await readBlock(id)
+      editing = false
+      return block
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
   })
 
   it('replies with a failure note and marks error on a failed run', async () => {
@@ -862,7 +931,7 @@ describe('mention lifecycle', () => {
     // fail the run outright, so it must start FRESH instead.
     const codexConfig = () => parseConfig({
     workspaceId: 'ws-test',
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'codex'}}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor: 'codex'}}],
     })
     {
       const {graph, blocks} = fakeGraph({
@@ -931,7 +1000,7 @@ describe('mention lifecycle', () => {
       const engine = engineWith({
         graph,
         runTask,
-        config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor}}]}),
+        config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor}}]}),
       })
       await engine.tick()
       await engine.drain()
@@ -1114,7 +1183,7 @@ describe('mention lifecycle', () => {
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {executor: 'claude', allowedTools: ['Bash(git:*)']},
         }],
       }),
@@ -1141,7 +1210,7 @@ describe('mention lifecycle', () => {
       runTask,
       config: parseConfig({
         workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'claude', effort: 'high'}}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor: 'claude', effort: 'high'}}],
       }),
     })
 
@@ -1163,7 +1232,7 @@ describe('mention lifecycle', () => {
       config: parseConfig({
     workspaceId: 'ws-test',
         defaultAllowedTools: [],
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0}],
       }),
     })
 
@@ -1191,7 +1260,7 @@ describe('mention lifecycle', () => {
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {
             executor: 'codex',
             sandbox: 'workspace-write',
@@ -1233,7 +1302,7 @@ describe('mention lifecycle', () => {
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {
             executor: 'codex',
             cwd: '/Users/vlad/project',
@@ -1301,7 +1370,7 @@ describe('live progress streaming', () => {
       return okRun({resultText: 'Once upon a time, the end.'})
     })
     const engine = engineWith({
-      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true, splitReply: false}]}),
       graph,
       runTask, now: () => clock,
     })
@@ -1333,7 +1402,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1354,7 +1423,7 @@ describe('live progress streaming', () => {
       runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
       config: parseConfig({
     workspaceId: 'ws-test',
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
       }),
     })
 
@@ -1381,7 +1450,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
     })
 
     await engine.tick()
@@ -1410,7 +1479,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1440,7 +1509,7 @@ describe('live progress streaming', () => {
       graph,
       delay: async () => {},
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1487,7 +1556,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
     const engine = engineWith({
-      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
       graph,
       runTask,
     })
@@ -1509,7 +1578,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
     const engine = engineWith({
-      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
       graph,
       runTask,
     })
@@ -1612,7 +1681,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
 describe('channel delivery (experimental)', () => {
   const channelConfig = () => parseConfig({
     workspaceId: 'ws-test',
-    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}],
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}],
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {

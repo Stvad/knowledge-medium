@@ -46,6 +46,7 @@ import {
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
   CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
+  CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -131,6 +132,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // No-op on a fresh table (CREATE carries the local columns) — mirrors the
   // production upgrade ordering so the harness exercises the same path.
   await ensureBlockLocalColumns(db)
+  await db.execute(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
@@ -201,6 +203,7 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL)
   hash.update('\0')
+  hash.update(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
