@@ -79,14 +79,20 @@ export const startServers = async (): Promise<BoundaryServers> => {
   })
 
   let hits: string[] = []
+  // Only what a probe asked for. The browser fetches a favicon for a decoy page a
+  // control navigated to, and that can land after the reset, on the sandboxed half.
+  const noteHit = (url: string | undefined) => {
+    const path = (url ?? '').split('?')[0]
+    if (path.startsWith('/hit/')) hits.push(path)
+  }
   const decoy = http.createServer((request, response) => {
-    hits.push((request.url ?? '').split('?')[0])
+    noteHit(request.url)
     response.setHeader('Access-Control-Allow-Origin', '*')
     response.setHeader('Content-Type', request.url?.endsWith('.css') ? 'text/css' : request.url?.endsWith('.js') ? 'text/javascript' : 'text/html')
     response.end('')
   })
   decoy.on('upgrade', (request, socket) => {
-    hits.push((request.url ?? '').split('?')[0])
+    noteHit(request.url)
     socket.destroy()
   })
 
