@@ -38,6 +38,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { buildLayoutFromSlots } from '@/utils/routing'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
@@ -818,6 +819,29 @@ describe('applyCurrentLayoutUrl', () => {
 
     expect(result.kind).toBe('ignored')
     expect(panelBlockIds(await rows())).toEqual([])
+  })
+})
+
+describe('reconcilePanelRows: an open editor', () => {
+  it('saves its pending text ahead of a Back navigation that replaces it', async () => {
+    await createPanelRows(['a', 'b'])
+    await env.repo.tx(tx => tx.create({
+      id: 'edited', workspaceId: WS, parentId: null, orderKey: 'n0', content: 'stored',
+    }).then(() => undefined), {scope: ChangeScope.BlockDefault, description: 'seed edited block'})
+    const stop = registerPendingContentFlush(() => {
+      void env.repo.mutate.setContent({id: 'edited', content: 'typed'})
+    })
+    try {
+      await reconcilePanelRows(env.repo, layoutSessionBlock(), ['c', 'b'])
+    } finally {
+      stop()
+    }
+    const order = (await env.h.db.getAll<{description: string}>(
+      'SELECT description FROM command_events ORDER BY rowid',
+    )).map(row => row.description)
+    expect(order).toContain('set content on edited')
+    expect(order.indexOf('set content on edited'))
+      .toBeLessThan(order.indexOf('reconcile panel layout from URL'))
   })
 })
 
