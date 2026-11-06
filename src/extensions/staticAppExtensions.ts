@@ -75,6 +75,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { htmlDocumentPlugin } from '@/plugins/html-document'
 import { supertagsPlugin } from '@/plugins/supertags'
 import type { AppExtension } from '@/facets/facet.js'
 
@@ -150,6 +151,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
+  htmlDocumentPlugin,
   supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,

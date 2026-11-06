@@ -27,6 +27,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { HTML_DOCUMENT_TYPE } from '@/plugins/html-document/blockType.ts'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
@@ -45,7 +46,7 @@ import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
   cleanupOrphanAliasesProcessor,
-  isExtensionSource,
+  hasSourceContent,
   parseReferencesProcessor,
   reapOrphanAliasSeatsProcessor,
 } from '../referencesProcessor.ts'
@@ -342,15 +343,14 @@ describe('parseReferences — ref-typed properties', () => {
   })
 })
 
-// An installed extension's SOURCE lives in `blocks.content` on a block
-// typed `extension`, and code hands the wikilink grammar unbalanced `[[`
-// openers for free (regex character classes, nested array literals).
-// Three pages — one named after 205 KB of bundled JavaScript — were
-// minted from a single extension's source before this gate existed.
-describe('parseReferences — extension source is not scanned for content refs', () => {
+// Source code in `blocks.content` hands the wikilink grammar unbalanced `[[`
+// openers for free (regex character classes, nested array literals). Three
+// pages — one named after 205 KB of bundled JavaScript — were minted from a
+// single extension's source before this gate existed.
+describe('parseReferences — source content is not scanned for content refs', () => {
   const SOME_UUID = '550e8400-e29b-41d4-a716-446655440000'
 
-  it('mints no alias target and records no content refs', async () => {
+  it.each([EXTENSION_TYPE, HTML_DOCUMENT_TYPE])('mints no alias target and records no content refs for %s', async type => {
     await env.repo.tx(
       tx => tx.create({
         id: 'ext',
@@ -358,7 +358,7 @@ describe('parseReferences — extension source is not scanned for content refs',
         parentId: null,
         orderKey: 'a0',
         content: `const RE = /[[\\]]/g\nsee [[foo]] and ((${SOME_UUID}))`,
-        properties: {types: [EXTENSION_TYPE]},
+        properties: {types: [type]},
       }),
       {scope: ChangeScope.BlockDefault},
     )
@@ -396,10 +396,10 @@ describe('parseReferences — extension source is not scanned for content refs',
     expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
   })
 
-  // `isExtensionSource` must stay TOTAL: a local write can store a malformed
+  // `hasSourceContent` must stay TOTAL: a local write can store a malformed
   // `types` cell, and a future "simplify it to hasBlockType" would throw in
   // a post-commit read phase, where the user's write has already landed.
-  describe('isExtensionSource is total', () => {
+  describe('hasSourceContent is total', () => {
     it.each([
       ['a scalar', 'extension'],
       ['an array with a non-string element', ['page', 42]],
@@ -421,12 +421,12 @@ describe('parseReferences — extension source is not scanned for content refs',
       ['an object', {0: 'extension'}],
       ['null', null],
     ])('reads %s as not-an-extension instead of throwing', (_label, types) => {
-      const source = {properties: {types}} as unknown as Parameters<typeof isExtensionSource>[0]
-      expect(isExtensionSource(source)).toBe(false)
+      const source = {properties: {types}} as unknown as Parameters<typeof hasSourceContent>[0]
+      expect(hasSourceContent(source)).toBe(false)
     })
 
-    it('still recognises a well-formed extension block', () => {
-      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE]}})).toBe(true)
+    it.each([EXTENSION_TYPE, HTML_DOCUMENT_TYPE])('still recognises a well-formed %s block', type => {
+      expect(hasSourceContent({properties: {types: [type]}})).toBe(true)
     })
 
     // Deliberate, and the direction matters. The codec would call this
@@ -438,7 +438,7 @@ describe('parseReferences — extension source is not scanned for content refs',
     // exists to stop. Membership wins over element-wise validity on
     // purpose.
     it('honours an extension claim even in an otherwise malformed array', () => {
-      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
+      expect(hasSourceContent({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
     })
   })
 

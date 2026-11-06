@@ -29,6 +29,8 @@ describe('parseMutateArgs', () => {
   it('requires exactly one mutation, both paths, and a positive timeout', () => {
     expect(() => parseMutateArgs(base, '/r')).toThrow(/--delete or --edit/)
     expect(() => parseMutateArgs([...base, '--delete', 'x', '--edit', 'y'], '/r')).toThrow(/not both/)
+    expect(parseMutateArgs([...base, '--edit', 'true', '--config', 'vitest.browser.config.ts'], '/r').vitestConfig)
+      .toBe('/r/vitest.browser.config.ts')
     expect(() => parseMutateArgs(['--test', 't', '--delete', 'x'], '/r')).toThrow(/--file/)
     expect(() => parseMutateArgs(['--file', 'f', '--delete', 'x'], '/r')).toThrow(/--test/)
     expect(() => parseMutateArgs([...base, '--delete', ''], '/r')).toThrow(/empty/)

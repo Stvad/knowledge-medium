@@ -323,10 +323,15 @@ export const createMinimalMarkdownConfig = (
   return extensions
 }
 
-export const createTypeScriptConfig = (): Extension[] => [
-  javascript({jsx: true, typescript: true}),
+export const createTypeScriptConfig = (): Extension[] =>
+  createSourceEditorConfig(javascript({jsx: true, typescript: true}))
+
+/** An editor for source in `language` rather than a block's markdown. */
+export const createSourceEditorConfig = (language: Extension): Extension[] => [
+  language,
   EditorView.theme({
     '&': {background: 'transparent', color: 'inherit'},
+    '&.cm-focused': {outline: 'none'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
     // Wrapping (below) means no horizontal scroll, so the scroller can be a

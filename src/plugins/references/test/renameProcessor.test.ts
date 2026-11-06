@@ -734,23 +734,23 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
   })
 
-  it("never rewrites an installed extension's source code", async () => {
+  it.each(['extension', 'html-document'])('never rewrites the source code in a %s block', async type => {
     // `references.parseReferences` deliberately does not run the wikilink
-    // grammar over extension source (code hands it `[[`
+    // grammar over source code (code hands it `[[`
     // openers for free — one real extension minted three phantom pages before
-    // that gate). So extension blocks have NO edge, which is exactly why the
+    // that gate). So these blocks have NO edge, which is exactly why the
     // edge-keyed leg never reached them and the content leg would. Rewriting a
-    // span inside stored source corrupts an extension so it no longer loads.
+    // span inside stored source corrupts it.
     await seedTarget('t', 'Old', ['Old'])
     const code = 'const re = /[[Old]]/g // matches [[Old]]'
     await env.repo.tx(async tx => {
       await tx.create({
         id: 'ext', workspaceId: WS, parentId: null, orderKey: 'e0',
-        content: code, properties: {types: ['extension']},
+        content: code, properties: {types: [type]},
       })
     }, {scope: ChangeScope.BlockDefault})
     await flush()
-    // Precondition, asserted not assumed: the extension really has no edge,
+    // Precondition, asserted not assumed: the block really has no edge,
     // so this test is about the content leg and nothing else.
     expect(await blockReferences('ext', 't')).toEqual([])
 

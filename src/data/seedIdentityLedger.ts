@@ -219,6 +219,7 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
   ['system:geo/type/map', 'map'],
   ['system:geo/type/place', 'place'],
   ['system:grouped-backlinks/type/grouped-backlinks-prefs', 'grouped-backlinks-prefs'],
+  ['system:html-document/type/html-document', 'html-document'],
   ['system:interaction-metrics/type/interaction-metrics', 'interaction-metrics'],
   ['system:interaction-metrics/type/interaction-record', 'interaction-metrics-record'],
   ['system:kernel-data/type/block-type', 'block-type'],
