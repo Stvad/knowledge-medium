@@ -1,0 +1,1 @@
+export{hG as preferredSpanReplacement}from"../../../chunks/app-DcNpC0SC.js";

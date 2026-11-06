@@ -1,0 +1,1 @@
+export{yN as ClientLocalSettings,bN as clientLocalSettings}from"../../chunks/app-DcNpC0SC.js";

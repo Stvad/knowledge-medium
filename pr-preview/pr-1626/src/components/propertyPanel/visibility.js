@@ -1,0 +1,1 @@
+export{vV as isPropertyPanelHiddenProperty,yV as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-DcNpC0SC.js";

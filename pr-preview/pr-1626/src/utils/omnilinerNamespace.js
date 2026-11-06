@@ -1,0 +1,1 @@
+export{KZ as omnilinerNamespace}from"../../chunks/app-DcNpC0SC.js";

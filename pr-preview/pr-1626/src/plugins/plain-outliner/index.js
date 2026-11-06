@@ -1,0 +1,1 @@
+export{sw as plainOutlinerPlugin}from"../../../chunks/app-DcNpC0SC.js";

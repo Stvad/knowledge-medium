@@ -1,0 +1,1 @@
+export{qM as checkForAppUpdate,JM as registerServiceWorker}from"../chunks/app-DcNpC0SC.js";

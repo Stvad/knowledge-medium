@@ -1,0 +1,1 @@
+export{O2 as kernelDataExtension}from"../../chunks/app-DcNpC0SC.js";

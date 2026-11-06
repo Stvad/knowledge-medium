@@ -1,0 +1,1 @@
+export{GD as Label}from"../../../chunks/app-DcNpC0SC.js";

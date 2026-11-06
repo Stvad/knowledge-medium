@@ -1,0 +1,1 @@
+export{SZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-DcNpC0SC.js";

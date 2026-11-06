@@ -1,0 +1,1 @@
+export{Qp as extensionApiCatalog,$p as extensionApiRuntimeExports}from"../../chunks/app-DcNpC0SC.js";

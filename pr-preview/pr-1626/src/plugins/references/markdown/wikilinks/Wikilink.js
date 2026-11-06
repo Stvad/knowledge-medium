@@ -1,0 +1,1 @@
+export{Sv as Wikilink}from"../../../../../chunks/app-DcNpC0SC.js";

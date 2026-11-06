@@ -1,0 +1,1 @@
+export{RM as appUpdatePromptExtension}from"../../../chunks/app-DcNpC0SC.js";

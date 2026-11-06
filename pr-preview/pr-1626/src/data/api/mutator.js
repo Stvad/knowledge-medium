@@ -1,0 +1,1 @@
+export{Dot as defineMutator}from"../../../chunks/app-DcNpC0SC.js";

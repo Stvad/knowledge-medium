@@ -1,0 +1,1 @@
+export{_z as declarationOnlyDefinitionForName,vz as declarationOnlyStatusText}from"../../../chunks/app-DcNpC0SC.js";

@@ -1,0 +1,1 @@
+export{Fy as attachmentsPlugin}from"../../../chunks/app-DcNpC0SC.js";

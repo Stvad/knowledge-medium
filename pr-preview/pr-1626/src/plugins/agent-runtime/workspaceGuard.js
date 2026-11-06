@@ -1,0 +1,1 @@
+export{_h as assertActiveWorkspace}from"../../../chunks/app-DcNpC0SC.js";

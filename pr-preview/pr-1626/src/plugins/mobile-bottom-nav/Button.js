@@ -1,0 +1,1 @@
+export{YC as MobileBottomNavButton}from"../../../chunks/app-DcNpC0SC.js";

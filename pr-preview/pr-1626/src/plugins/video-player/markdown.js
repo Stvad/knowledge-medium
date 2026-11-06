@@ -1,0 +1,1 @@
+export{Fx as videoPlayerMarkdownExtension}from"../../../chunks/app-DcNpC0SC.js";

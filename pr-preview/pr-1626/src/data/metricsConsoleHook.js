@@ -1,0 +1,1 @@
+export{Wj as ensureMetricsConsoleHook}from"../../chunks/app-DcNpC0SC.js";

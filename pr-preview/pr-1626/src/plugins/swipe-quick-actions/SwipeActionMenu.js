@@ -1,0 +1,1 @@
+export{FA as SwipeActionMenu}from"../../../chunks/app-DcNpC0SC.js";

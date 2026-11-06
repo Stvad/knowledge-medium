@@ -1,0 +1,1 @@
+export{sP as BlockLoadingPlaceholder}from"../../chunks/app-DcNpC0SC.js";

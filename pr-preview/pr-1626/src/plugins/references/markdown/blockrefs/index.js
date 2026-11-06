@@ -1,0 +1,1 @@
+export{wv as blockrefMarkdownExtension}from"../../../../../chunks/app-DcNpC0SC.js";

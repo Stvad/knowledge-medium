@@ -1,0 +1,1 @@
+export{ny as useIsReadOnly}from"../../chunks/app-DcNpC0SC.js";

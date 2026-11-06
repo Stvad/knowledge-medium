@@ -1,0 +1,1 @@
+export{dw as blockEditingContentRenderer}from"../../../chunks/app-DcNpC0SC.js";

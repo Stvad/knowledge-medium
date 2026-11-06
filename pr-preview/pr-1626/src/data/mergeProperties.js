@@ -1,0 +1,1 @@
+export{G3 as mergeProperties}from"../../chunks/app-DcNpC0SC.js";

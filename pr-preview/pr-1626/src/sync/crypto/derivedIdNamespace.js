@@ -1,0 +1,1 @@
+export{Znt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DcNpC0SC.js";

@@ -1,0 +1,1 @@
+export{b4 as KERNEL_PROCESSORS}from"../../../chunks/app-DcNpC0SC.js";

@@ -1,0 +1,1 @@
+export{YU as BootFallback}from"../../../chunks/app-DcNpC0SC.js";

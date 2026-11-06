@@ -1,0 +1,1 @@
+export{wh as createWatchEventsRegistry,Th as watchEventsRegistry}from"../../../chunks/app-DcNpC0SC.js";

@@ -1,0 +1,1 @@
+export{HE as openRecentsPage}from"../../../chunks/app-DcNpC0SC.js";

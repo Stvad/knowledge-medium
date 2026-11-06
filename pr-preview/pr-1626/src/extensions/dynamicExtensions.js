@@ -1,0 +1,1 @@
+export{CN as dynamicExtensionsExtension}from"../../chunks/app-DcNpC0SC.js";

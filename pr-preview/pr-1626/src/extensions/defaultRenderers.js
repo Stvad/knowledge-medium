@@ -1,0 +1,1 @@
+export{uP as defaultRegistry,dP as defaultRendererContributions,fP as defaultRenderersExtension}from"../../chunks/app-DcNpC0SC.js";

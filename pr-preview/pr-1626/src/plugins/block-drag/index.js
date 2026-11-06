@@ -1,0 +1,1 @@
+export{Kv as blockDragPlugin}from"../../../chunks/app-DcNpC0SC.js";

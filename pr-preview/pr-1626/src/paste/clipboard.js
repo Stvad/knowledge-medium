@@ -1,0 +1,1 @@
+export{VI as readClipboardContent}from"../../chunks/app-DcNpC0SC.js";

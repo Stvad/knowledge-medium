@@ -1,0 +1,1 @@
+export{I$ as BlockCache,L$ as BlockCacheMetrics}from"../../chunks/app-DcNpC0SC.js";

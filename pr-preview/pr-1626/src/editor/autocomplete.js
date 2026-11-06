@@ -1,0 +1,1 @@
+export{xM as editorAutocompleteExtension}from"../../chunks/app-DcNpC0SC.js";

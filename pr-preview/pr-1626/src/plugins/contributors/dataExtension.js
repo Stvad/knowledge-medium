@@ -1,0 +1,1 @@
+export{zJ as contributorsDataExtension}from"../../../chunks/app-DcNpC0SC.js";

@@ -1,0 +1,1 @@
+export{Vm as authorIdOf}from"../../../chunks/app-DcNpC0SC.js";
