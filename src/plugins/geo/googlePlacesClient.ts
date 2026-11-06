@@ -8,6 +8,8 @@
  *      autocomplete call so Google bills the pair as one unit.
  *    - `searchNearby({lat, lng, radiusM}, ctx)` — distance-ranked POIs
  *      near a coordinate. Drives the current-location picker (Phase F).
+ *    - `searchText(query, {bias})` — full details for the places a text
+ *      query finds. Matches a pasted Google Maps link to its POI.
  *
  *  The client is stateless w.r.t. session tokens — callers create one
  *  via `newSessionToken()` at the start of a picker session and pass it
@@ -38,6 +40,11 @@ const DETAILS_FIELD_MASK = [
   'types',
 ].join(',')
 
+const SEARCH_TEXT_FIELD_MASK = DETAILS_FIELD_MASK
+  .split(',')
+  .map(field => `places.${field}`)
+  .join(',')
+
 const NEARBY_FIELD_MASK = [
   'places.id',
   'places.displayName',
@@ -59,7 +66,7 @@ export interface AutocompleteContext {
   /** Optional bias — when set, results are ranked higher if they're
    *  near `{lat, lng}` within `radiusM`. Used by the property editor
    *  when the user has already dropped a pin. */
-  bias?: { lat: number; lng: number; radiusM?: number }
+  bias?: LocationBias
 }
 
 export interface AutocompleteSuggestion {
@@ -68,6 +75,12 @@ export interface AutocompleteSuggestion {
   primary: string
   /** Secondary line — address / locality for disambiguation. */
   secondary?: string
+}
+
+export interface LocationBias {
+  lat: number
+  lng: number
+  radiusM?: number
 }
 
 export interface PlaceDetails {
@@ -159,7 +172,7 @@ interface GoogleDetailsResponse {
   types?: string[]
 }
 
-interface GoogleNearbyResponse {
+interface GooglePlacesListResponse {
   places?: GoogleDetailsResponse[]
 }
 
@@ -167,6 +180,7 @@ export interface GooglePlacesClient {
   autocomplete(input: string, ctx: AutocompleteContext): Promise<AutocompleteSuggestion[]>
   getDetails(placeId: string, ctx: { sessionToken?: string }): Promise<PlaceDetails>
   searchNearby(opts: NearbyOptions): Promise<NearbyCandidate[]>
+  searchText(query: string, opts: { bias?: LocationBias }): Promise<PlaceDetails[]>
 }
 
 /** Per-session token. Google requires a UUID-shaped string; the actual
@@ -223,6 +237,13 @@ export const createGooglePlacesClient = (
     }
   }
 
+  const locationBias = (bias: LocationBias) => ({
+    circle: {
+      center: {latitude: bias.lat, longitude: bias.lng},
+      radius: clampRadius(bias.radiusM),
+    },
+  })
+
   const toDetails = (raw: GoogleDetailsResponse): PlaceDetails => {
     if (!raw.id || !raw.location) {
       throw new GooglePlacesError('invalid-response', null, 'Place details missing id or location')
@@ -248,14 +269,7 @@ export const createGooglePlacesClient = (
         input,
         sessionToken: ctx.sessionToken,
       }
-      if (ctx.bias) {
-        body.locationBias = {
-          circle: {
-            center: {latitude: ctx.bias.lat, longitude: ctx.bias.lng},
-            radius: clampRadius(ctx.bias.radiusM),
-          },
-        }
-      }
+      if (ctx.bias) body.locationBias = locationBias(ctx.bias)
       const result = await callJson<AutocompleteResponse>(
         `${PLACES_API_BASE}/places:autocomplete`,
         {method: 'POST', body, fieldMask: AUTOCOMPLETE_FIELD_MASK},
@@ -296,7 +310,7 @@ export const createGooglePlacesClient = (
         maxResultCount: max,
         rankPreference: 'DISTANCE',
       }
-      const result = await callJson<GoogleNearbyResponse>(
+      const result = await callJson<GooglePlacesListResponse>(
         `${PLACES_API_BASE}/places:searchNearby`,
         {method: 'POST', body, fieldMask: NEARBY_FIELD_MASK},
       )
@@ -317,6 +331,18 @@ export const createGooglePlacesClient = (
       }
       candidates.sort((a, b) => a.distanceM - b.distanceM)
       return candidates
+    },
+
+    searchText: async (query, opts) => {
+      const body: Record<string, unknown> = {textQuery: query}
+      if (opts.bias) body.locationBias = locationBias(opts.bias)
+      const result = await callJson<GooglePlacesListResponse>(
+        `${PLACES_API_BASE}/places:searchText`,
+        {method: 'POST', body, fieldMask: SEARCH_TEXT_FIELD_MASK},
+      )
+      return (result.places ?? [])
+        .filter(raw => raw.id && raw.location)
+        .map(toDetails)
     },
   }
 }

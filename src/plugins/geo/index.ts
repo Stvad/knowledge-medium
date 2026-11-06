@@ -9,17 +9,19 @@
 
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
 import { referencesPlugin } from '@/plugins/references'
 import { geoDataExtension } from './dataExtension'
 import { geoContentDecoratorContribution } from './geoContentDecorator'
+import { convertMapsLinkAction, editModeConvertMapsLinkAction } from './mapsLinkActions'
 import { locationPropertyEditorOverride } from './propertyEditorOverrides'
 
 export const geoPlugin: AppExtension = systemToggle({
   id: 'system:geo',
   name: 'Locations',
-  description: 'Physical-world location references — Place blocks, @ autocomplete, and map views.',
+  description: 'Physical-world location references — Place blocks, @ autocomplete, Google Maps link conversion, and map views.',
 }).of([
   // Dependency chain: the @ autocomplete inserts [[Name]] wikilinks
   // which the references plugin parses. Including it here means we
@@ -28,4 +30,6 @@ export const geoPlugin: AppExtension = systemToggle({
   geoDataExtension,
   blockContentDecoratorsFacet.of(geoContentDecoratorContribution, {source: 'geo'}),
   propertyEditorOverridesFacet.of(locationPropertyEditorOverride, {source: 'geo'}),
+  actionsFacet.of(convertMapsLinkAction, {source: 'geo'}),
+  actionsFacet.of(editModeConvertMapsLinkAction, {source: 'geo'}),
 ])
