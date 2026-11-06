@@ -71,7 +71,6 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
-  ensureWorkspaceHadOtherMembersColumn,
   ensureWorkspacePropertiesMigrationColumn,
   readWorkspaceEncryptionMode,
 } from '@/data/workspaceSchema'
@@ -572,7 +571,6 @@ export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
   // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6) — nullable; absence
   // reads as 'cell' (dormant) via parseWorkspaceRow.
   await ensureWorkspacePropertiesMigrationColumn(db)
-  await ensureWorkspaceHadOtherMembersColumn(db)
   // workspace_members, then tx_context / row_events / command_events /
   // block_aliases / types / FTS and their indexes.
   await runDdl(db, [

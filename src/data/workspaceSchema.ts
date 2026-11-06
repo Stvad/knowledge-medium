@@ -55,9 +55,6 @@ export interface WorkspaceRow {
   // DEFAULT would fail the insert — same trap as user_updated_at);
   // `parseWorkspaceRow` falls back to 'cell'.
   properties_migration: string | null
-  // One-way server fact: has anyone but the owner ever been a member? NULL until a
-  // deployed sync rule delivers it, which readers must treat as "may have had".
-  had_other_members: number | null
 }
 
 export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
@@ -76,8 +73,6 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
   // back to 'cell'. Mirrors the server column in
   // supabase/migrations/*_add_workspaces_properties_migration.sql.
   {name: 'properties_migration', definition: 'properties_migration TEXT'},
-  // Nullable for the same reason.
-  {name: 'had_other_members', definition: 'had_other_members INTEGER'},
 ]
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)
@@ -115,16 +110,6 @@ export const ensureWorkspacePropertiesMigrationColumn = async (db: {
   const columns = await db.getAll<{ name: string }>('PRAGMA table_info(workspaces)')
   if (!columns.some((c) => c.name === 'properties_migration')) {
     await db.execute('ALTER TABLE workspaces ADD COLUMN properties_migration TEXT')
-  }
-}
-
-export const ensureWorkspaceHadOtherMembersColumn = async (db: {
-  execute: (sql: string) => Promise<unknown>
-  getAll: <T>(sql: string) => Promise<T[]>
-}): Promise<void> => {
-  const columns = await db.getAll<{ name: string }>('PRAGMA table_info(workspaces)')
-  if (!columns.some((c) => c.name === 'had_other_members')) {
-    await db.execute('ALTER TABLE workspaces ADD COLUMN had_other_members INTEGER')
   }
 }
 

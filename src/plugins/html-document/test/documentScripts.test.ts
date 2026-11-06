@@ -1,49 +1,23 @@
 // @vitest-environment happy-dom
 import {beforeEach, describe, expect, it} from 'vitest'
-import {decideScripts, hasScripts, isOnlyEverViewer} from '../documentScripts.ts'
+import {decideScripts, hasScripts} from '../documentScripts.ts'
 import {grantConsent, readConsent, revokeConsent, subscribeToConsent} from '../scriptConsent.ts'
 
-describe('isOnlyEverViewer', () => {
-  it('trusts the server saying nobody else has ever been a member', () => {
-    expect(isOnlyEverViewer(0, true)).toBe(true)
-  })
-
-  it('holds once anyone else has been a member, whether or not they are still', () => {
-    expect(isOnlyEverViewer(1, true)).toBe(false)
-    expect(isOnlyEverViewer(1, false)).toBe(false)
-  })
-
-  it.each([[null], [undefined]])('reads %s from a synced workspace as may have had', value => {
-    expect(isOnlyEverViewer(value, true)).toBe(false)
-  })
-
-  it.each([[null], [undefined]])('reads %s in a local-only workspace as nobody else', value => {
-    expect(isOnlyEverViewer(value, false)).toBe(true)
-  })
-})
-
 describe('decideScripts', () => {
-  const decide = (over: Partial<Parameters<typeof decideScripts>[0]>) =>
-    decideScripts({onlyEverViewer: false, consentedHash: null, sourceHash: 'hash-a', ...over})
-
-  it('runs a document only the viewer could have written', () => {
-    expect(decide({onlyEverViewer: true})).toBe('run')
-  })
-
-  it('holds a document anyone else could have written', () => {
-    expect(decide({})).toBe('hold')
+  it('holds a document the viewer has not allowed', () => {
+    expect(decideScripts(null, 'hash-a')).toBe('hold')
   })
 
   it('runs the version the viewer allowed on this device', () => {
-    expect(decide({consentedHash: 'hash-a'})).toBe('run')
+    expect(decideScripts('hash-a', 'hash-a')).toBe('run')
   })
 
   it('holds again once the source changes', () => {
-    expect(decide({consentedHash: 'hash-a', sourceHash: 'hash-b'})).toBe('hold')
+    expect(decideScripts('hash-a', 'hash-b')).toBe('hold')
   })
 
   it('holds when the source could not be hashed, even against a matching absence', () => {
-    expect(decide({consentedHash: null, sourceHash: null})).toBe('hold')
+    expect(decideScripts(null, null)).toBe('hold')
   })
 })
 

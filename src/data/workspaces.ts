@@ -48,9 +48,6 @@ type RpcWorkspaceRow = {
   // deployed before the column exist return rows without it; absence
   // parses as 'cell' (dormant).
   properties_migration?: string | null
-  // Deliberately not carried into the domain Workspace: only the synced row answers
-  // this, read through `useDocumentScripts`. See `primeLocalWorkspace`.
-  had_other_members?: boolean
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
@@ -668,12 +665,11 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
   // catches up (§7). Same reasoning for properties_migration: dropping it
   // would locally reset a flipped workspace to 'cell', silently routing
   // property writes down the cell-only path until PowerSync replays the row.
-  // had_other_members isn't in the RPC payload, so it keeps what this device has.
   await repo.db.execute(
     `INSERT OR REPLACE INTO workspaces
        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
-        properties_migration, had_other_members)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT had_other_members FROM workspaces WHERE id = ?))`,
+        properties_migration)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       workspace.id,
       workspace.name,
@@ -683,7 +679,6 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.encryptionMode,
       workspace.wkCanary,
       workspace.propertiesMigration,
-      workspace.id,
     ],
   )
 }
