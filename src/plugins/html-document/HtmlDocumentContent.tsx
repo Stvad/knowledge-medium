@@ -12,10 +12,9 @@ import type {
 import {defineVariant} from '@/facets/variantFacet.js'
 import {useContent} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
-import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig} from '@/utils/codemirror.js'
+import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig, keepOutlineEditKeysInEditor} from '@/utils/codemirror.js'
 import {HTML_DOCUMENT_TYPE} from './blockType.ts'
 import {HtmlFrame} from './HtmlFrame.tsx'
-import {sourceEditingKeys} from './sourceEditing.ts'
 import {useDocumentScripts} from './useDocumentScripts.ts'
 
 const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
@@ -43,16 +42,20 @@ const HtmlDocumentView = ({block}: BlockRendererProps) => {
   )
 }
 
-const HtmlSourceEditor = ({block}: BlockRendererProps) => {
+/** The markdown editor leaves its keys to the app; source needs CodeMirror's own
+ *  for Enter and the rest to edit the text. */
+const SOURCE_BASIC_SETUP = {...BLOCK_EDITOR_BASIC_SETUP, defaultKeymap: true}
+
+export const HtmlSourceEditor = ({block}: BlockRendererProps) => {
   // Auto-closing doubles every closing tag typed by hand. Source stays as written.
-  const extensions = useMemo(() => [...createSourceEditorConfig(html({autoCloseTags: false})), sourceEditingKeys], [])
+  const extensions = useMemo(() => createSourceEditorConfig(html({autoCloseTags: false})), [])
   return (
     <BlockEditor
       block={block}
       extensions={extensions}
       className="w-full rounded-md border border-border"
-      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
-      indentWithTab={false}
+      basicSetup={SOURCE_BASIC_SETUP}
+      onKeyDown={keepOutlineEditKeysInEditor}
     />
   )
 }
