@@ -1,1 +1,1 @@
-export{pn as grantConsent,mn as readConsent,hn as revokeConsent,gn as subscribeToConsent}from"../../../chunks/app-CKjHkBAU.js";
+export{mn as grantConsent,hn as readConsent,gn as revokeConsent,_n as subscribeToConsent}from"../../../chunks/app-CoVT5Q59.js";

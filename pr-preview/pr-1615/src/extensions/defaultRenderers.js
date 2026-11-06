@@ -1,1 +1,1 @@
-export{IP as defaultRegistry,LP as defaultRendererContributions,RP as defaultRenderersExtension}from"../../chunks/app-CKjHkBAU.js";
+export{IP as defaultRegistry,LP as defaultRendererContributions,RP as defaultRenderersExtension}from"../../chunks/app-CoVT5Q59.js";
