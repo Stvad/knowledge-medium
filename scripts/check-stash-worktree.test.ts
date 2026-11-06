@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   amendInvocations,
+  commandsInContext,
   baseBranch,
   decide,
   effectiveCwd,
@@ -16,7 +17,14 @@ import {
   unresolvedTarget,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
-import { SUBSTITUTED, shellCommandsWithDepth, shellSegments, shellSegmentsWithDepth, withoutLiteralHeredocs } from './shell-segments.mjs'
+import {
+  SUBSTITUTED,
+  inputRedirectTargets,
+  shellCommandsWithDepth,
+  shellSegments,
+  shellSegmentsWithDepth,
+  withoutLiteralHeredocs,
+} from './shell-segments.mjs'
 
 describe('shellSegments', () => {
   it('splits on unquoted separators and strips quotes', () => {
@@ -70,6 +78,10 @@ describe('shellSegments', () => {
     })
   })
 
+  it('keeps a quoted here-string glued to its operator as a word, for the scanners that read words', () => {
+    expect(shellSegments(`git commit -F - <<<"fix x"`).flat().some(t => t.includes('fix x'))).toBe(true)
+  })
+
   it('drops redirections and their targets instead of splitting on them', () => {
     expect(shellSegments('git push origin 2>&1 | tail -5')).toEqual([['git', 'push', 'origin'], ['tail', '-5']])
     expect(shellSegments('git push origin > /tmp/log 2>&1; ls')).toEqual([['git', 'push', 'origin'], ['ls']])
@@ -88,17 +100,60 @@ describe('shellSegments', () => {
     expect(shellSegments('git restore f>/dev/null a2>err 2>x')).toEqual([['git', 'restore', 'f', 'a2']])
   })
 
-  it('annotates each segment with its subshell depth', () => {
+  it('annotates each segment with its subshell depth, and a scope opened since the last with fresh', () => {
     expect(shellSegmentsWithDepth('(cd /x && true); ls')).toEqual([
-      { tokens: ['cd', '/x'], depth: 1 },
+      { tokens: ['cd', '/x'], depth: 1, fresh: 1 },
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
     ])
     expect(shellSegmentsWithDepth('echo "$(cd /y && true)" && ls')).toEqual([
       { tokens: ['echo', ''], depth: 0 },
-      { tokens: ['cd', '/y'], depth: 1 },
+      { tokens: ['cd', '/y'], depth: 1, fresh: 1 },
       { tokens: ['true'], depth: 1 },
       { tokens: ['ls'], depth: 0 },
+    ])
+    // a list a lone & ends runs in a background subshell, its && and | included
+    expect(shellCommandsWithDepth('a; cd /z && b | c & d; e &')).toEqual([
+      { tokens: ['a'], depth: 0 },
+      { tokens: ['cd', '/z'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 2, fresh: 2 },
+      { tokens: ['c'], depth: 1 },
+      { tokens: ['d'], depth: 0 },
+      { tokens: ['e'], depth: 1, fresh: 1 },
+    ])
+    // each of a pipeline's commands but its last runs in a subshell; && and || end a pipeline
+    expect(shellCommandsWithDepth('a | b && c | d |& e || f')).toEqual([
+      { tokens: ['a'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 0 },
+      { tokens: ['c'], depth: 1, fresh: 1 },
+      { tokens: ['d'], depth: 1, fresh: 1 },
+      { tokens: ['e'], depth: 0 },
+      { tokens: ['f'], depth: 0 },
+    ])
+    // a compound command is one command of its pipeline, its own ; and newlines included
+    expect(shellCommandsWithDepth('{ cd /z; b; } | c')).toEqual([
+      { tokens: ['{', 'cd', '/z'], depth: 1, fresh: 1 },
+      { tokens: ['b'], depth: 1 },
+      { tokens: ['}'], depth: 1 },
+      { tokens: ['c'], depth: 0 },
+    ])
+    // a pipeline's command holds its substitutions whole, and one inside a substitution starts there
+    expect(shellCommandsWithDepth('echo $(a; b) | c')).toEqual([
+      { tokens: ['a'], depth: 2, fresh: 1 },
+      { tokens: ['b'], depth: 2 },
+      { tokens: ['echo', SUBSTITUTED], depth: 1 },
+      { tokens: ['c'], depth: 0 },
+    ])
+    expect(shellCommandsWithDepth('echo $(p) $(a | b)')).toEqual([
+      { tokens: ['p'], depth: 1, fresh: 1 },
+      { tokens: ['a'], depth: 2, fresh: 2 },
+      { tokens: ['b'], depth: 1 },
+      { tokens: ['echo', SUBSTITUTED, SUBSTITUTED], depth: 0 },
+    ])
+    expect(shellCommandsWithDepth('a && b $(c) &')).toEqual([
+      { tokens: ['a'], depth: 1, fresh: 1 },
+      { tokens: ['c'], depth: 2, fresh: 2 },
+      { tokens: ['b', SUBSTITUTED], depth: 1 },
     ])
   })
 })
@@ -106,11 +161,11 @@ describe('shellSegments', () => {
 describe('shellCommandsWithDepth', () => {
   it('keeps a command whole across a substitution, which comes back ahead of it', () => {
     expect(shellCommandsWithDepth(`git log $(git rev-parse "a)b") --oneline -1`)).toEqual([
-      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1 },
+      { tokens: ['git', 'rev-parse', 'a)b'], depth: 1, fresh: 1 },
       { tokens: ['git', 'log', SUBSTITUTED, '--oneline', '-1'], depth: 0 },
     ])
     expect(shellCommandsWithDepth('echo "a `date` b" x')).toEqual([
-      { tokens: ['date'], depth: 1 },
+      { tokens: ['date'], depth: 1, fresh: 1 },
       { tokens: ['echo', `a ${SUBSTITUTED} b`, 'x'], depth: 0 },
     ])
     // nested, and one left unclosed
@@ -127,6 +182,13 @@ describe('shellCommandsWithDepth', () => {
   })
 
   it('cuts out the data of a quoted-delimiter heredoc only', () => {
+    // an assignment on the line runs nothing, so it leaves the data literal
+    expect(withoutLiteralHeredocs("S=/tmp; cat > $S/f <<'EOF'\nx\nEOF\nls")).toBe("S=/tmp; cat > $S/f <<'EOF'\nls")
+    // unless its value substitutes: the data can land in the variable, and an eval runs it
+    expect(withoutLiteralHeredocs("S=$(cat <<'EOF'\nx\nEOF\n)\neval \"$S\"")).toBe("S=$(cat <<'EOF'\nx\nEOF\n)\neval \"$S\"")
+    expect(withoutLiteralHeredocs("S=$(date); cat > f <<'EOF'\nx\nEOF")).toBe("S=$(date); cat > f <<'EOF'\nx\nEOF")
+    expect(withoutLiteralHeredocs("S=$(cat) <<'EOF'\nx\nEOF")).toBe("S=$(cat) <<'EOF'\nx\nEOF")
+    expect(withoutLiteralHeredocs("A=1 S=$(cat <<'EOF'\nx\nEOF\n)")).toBe("A=1 S=$(cat <<'EOF'\nx\nEOF\n)")
     expect(withoutLiteralHeredocs("cat <<'EOF' > f\nliteral `x`\nEOF\ncat <<EOF\nruns `y`\nEOF\nls")).toBe('cat <<\'EOF\' > f\ncat <<EOF\nruns `y`\nEOF\nls')
     expect(withoutLiteralHeredocs('cat <<\\EOF\nx\nEOF\n')).toBe('cat <<\\EOF\n')
     // a shell reading it runs it, wherever it sits on the line
@@ -171,7 +233,36 @@ describe('shellCommandsWithDepth', () => {
     // a line a shell reads is read as the commands it would be; text nothing runs is split into words
     expect(shellCommandsWithDepth("bash <<'EOF'\nx;gh api y # it's\nEOF").map(s => s.tokens)).toEqual([['bash'], ['x'], ['gh', 'api', 'y']])
     expect(shellCommandsWithDepth("cat <<'EOF'\nx;gh `api` y\nEOF").map(s => s.tokens)).toEqual([['cat'], ['x;gh', '`api`', 'y']])
-    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
+    // unquoted data's substitutions first come back alone, as the supplying shell runs them
+    expect(shellCommandsWithDepth('cat <<EOF\nsee `gh api y`\nEOF').map(s => s.tokens)).toEqual([['cat'], ['gh', 'api', 'y'], ['gh', 'api', 'y'], ['see', SUBSTITUTED]])
+    expect(shellCommandsWithDepth('bash <<EOF\n$(x)\nEOF')).toEqual([
+      { tokens: ['bash'], depth: 0 },
+      { tokens: ['x'], depth: 1, heredoc: true, fresh: 1 },
+      { tokens: ['x'], depth: 1, heredoc: true, fresh: 1, reread: true },
+      { tokens: [SUBSTITUTED], depth: 0, heredoc: true },
+    ])
+    // data read whole and a line at a time differs here, so both come back:
+    // whole first, where a subshell spans its lines
+    expect(shellCommandsWithDepth("bash <<'EOF'\n(\ncd x\n)\nls\nEOF")).toEqual([
+      { tokens: ['bash'], depth: 0 },
+      { tokens: ['cd', 'x'], depth: 1, heredoc: true, fresh: 1 },
+      { tokens: ['ls'], depth: 0, heredoc: true },
+      { tokens: ['cd', 'x'], depth: 0, heredoc: true, reread: true },
+      { tokens: ['ls'], depth: 0, heredoc: true },
+    ])
+    // only when the heredoc's own command is a shell reading its script from stdin
+    expect(shellCommandsWithDepth("cat <<'EOF' | sh x.sh\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("bash -c 'cat' <<'EOF'\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("bash -c'cat' <<'EOF'\nsay don't\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("X=1 <<'EOF'\ncat y\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'y'])
+    expect(shellCommandsWithDepth("sh -s <<'EOF'\n(\ncd x\n)\nEOF").find(s => s.tokens[0] === 'cd')?.depth).toBe(1)
+    // quoted data a reader of its own language takes is still read a line at a time
+    expect(shellCommandsWithDepth("osascript <<'EOF'\nsay don't\ncat x\nEOF").map(s => s.tokens)).toContainEqual(['cat', 'x'])
+    // unquoted data is expanded before the shell reads it, so an apostrophe
+    // there cannot hide the next line's substitution
+    expect(shellCommandsWithDepth("bash <<EOF\necho don't\n$(gh api y)\nEOF").map(s => s.tokens)).toContainEqual(['gh', 'api', 'y'])
+    // data a text reader takes runs only its substitutions, a line at a time
+    expect(shellCommandsWithDepth("cat <<EOF\ndon't\n$(gh api y)\nEOF").map(s => s.tokens)).toContainEqual(['gh', 'api', 'y'])
   })
 
   it('keeps a command whole across a process substitution', () => {
@@ -220,6 +311,58 @@ describe('shellCommandsWithDepth', () => {
   })
 })
 
+describe('inputRedirectTargets', () => {
+  it.each([
+    ['cat < a', ['a']],
+    ['cat<a', ['a']],
+    ['sort 0< a', ['a']],
+    ['x=$(<a)', ['a']],
+    ['make 2>&1 < in > out', ['in']],
+    ["bash <<'EOF'\nsort < a\nEOF", ['a']],
+    ['echo "a < b"', []],
+    ['cat <<< word', []],
+    ['cat <<EOF\nx\nEOF', []],
+    ["cat <<'EOF'\nsort < a\nEOF", []],
+    ['cat <&3', []],
+    ['echo x >out 2>err', []],
+    ['cat <\\a', ['a']],
+    ["cat <$'a'", ['a']],
+    ['cat <>a', ['a']],
+    ['exec 3<> a', ['a']],
+    ['cat <>"a"', ['a']],
+    // unquoted heredoc data is read again as its supplying shell expands it, where it is text
+    ['cat <<EOF\n<a $(b)\nEOF', ['a']],
+  ])('%s → %j', (cmd, targets) => {
+    expect(inputRedirectTargets(cmd)).toEqual(targets)
+  })
+})
+
+describe('commandsInContext', () => {
+  it('scopes a heredoc nested in a heredoc inside it, in the whole reading on its own', () => {
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'OUT'\nbash <<'INNER'\ncd /tmp/a\nls\nINNER\npwd\nOUT"))
+    // the whole reading comes first; its first ls and pwd are the ones it scoped
+    expect(read.find(c => c.words[0] === 'ls')?.cdPath).toBe('/tmp/a')
+    expect(read.find(c => c.words[0] === 'pwd')?.cdPath).toBe(null)
+  })
+
+  it("starts a nested heredoc's second reading where its first began", () => {
+    // the inner data reads differently whole and by line, so it comes back twice
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'OUT'\nbash <<'INNER'\ncd a\n(\nls\n)\nINNER\nOUT"))
+    expect(read.filter(c => c.words[0] === 'ls').map(c => c.cdPath)).not.toContain('a/a')
+  })
+
+  it('reads a second reading with no first reading before it from where it is', () => {
+    const read = commandsInContext([{ tokens: ['ls'], depth: 0, heredoc: true, reread: true }])
+    expect(read.map(c => [c.words[0], c.cdPath])).toEqual([['ls', null]])
+  })
+
+  it('drops a cd in data three heredocs deep when that data ends', () => {
+    // read a line at a time the nesting is not seen, so that reading keeps the cd
+    const read = commandsInContext(shellCommandsWithDepth("bash <<'A'\nbash <<'B'\nbash <<'C'\ncd a\nC\nls\nB\nA"))
+    expect(read.filter(c => c.words[0] === 'ls').map(c => c.cdPath)).toContain(null)
+  })
+})
+
 describe('stashInvocations', () => {
   it('finds bare, subcommand, and wrapped invocations', () => {
     expect(stashInvocations('git stash')).toEqual([
@@ -245,6 +388,8 @@ describe('stashInvocations', () => {
 
   it('recognizes cd behind a reserved-word prefix', () => {
     expect(stashInvocations('{ cd /wt && git stash pop stash@{0}; }')[0].cdPath).toBe('/wt')
+    // segments keep comments, so a & there is not read as one that runs the list in the background
+    expect(stashInvocations('cd /wt # notes & more\ngit stash pop stash@{0}')[0].cdPath).toBe('/wt')
   })
 
   it('accumulates consecutive relative cds, and an absolute one resets', () => {
@@ -254,6 +399,19 @@ describe('stashInvocations', () => {
     expect(stashInvocations('cd a && cd ~/b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd ~ && cd b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd a && (cd b && true); git stash pop')[0].cdPath).toBe('a')
+    expect(stashInvocations('exec git stash pop')).toHaveLength(1)
+    expect(stashInvocations('<<<"x" git stash pop')).toHaveLength(1)
+    expect(stashInvocations('git --git-dir /r/.git stash pop')[0].cArgs).toEqual(['--git-dir', '/r/.git'])
+    expect(stashInvocations('git --namespace n stash pop')).toHaveLength(1)
+    expect(stashInvocations('git --config-env a=B --attr-source t --super-prefix p stash pop')).toHaveLength(1)
+    expect(stashInvocations('builtin cd /tmp/a && git stash pop')[0].cdPath).toBe('/tmp/a')
+    // a sibling subshell starts from its parent's directory
+    expect(stashInvocations('(cd /tmp/a); (git stash pop)')[0].cdPath).toBe(null)
+    expect(stashInvocations('cd /tmp/b; (cd /tmp/a)(git stash pop)')[0].cdPath).toBe('/tmp/b')
+    // a heredoc whose line closes a subshell: the cd in that subshell dies with it
+    expect(stashInvocations('(cd /tmp/a; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe(null)
+    expect(stashInvocations('cd /tmp/a; (cd /tmp/b; cat <<EOF)\nbody\nEOF\n(git stash pop)')[0].cdPath).toBe('/tmp/a')
+    expect(stashInvocations('(cd /tmp/a; (cd /tmp/b; cat <<EOF)\nbody\nEOF\ngit stash pop)')[0].cdPath).toBe('/tmp/a')
     expect(stashInvocations('cd "$S" && cd .. && git stash pop')[0].cdPath).toBe('$S/..')
   })
 

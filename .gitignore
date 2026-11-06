@@ -16,6 +16,7 @@ packed
 .env
 .env.*
 !.env.example
+.envrc
 powersync/cli.yaml
 supabase/.temp
 supabase/.branches
