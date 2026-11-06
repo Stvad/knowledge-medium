@@ -1,1 +1,1 @@
-export{MP as defaultRegistry,AP as refreshRendererRegistry,jP as useRenderer}from"../../chunks/app-CYpg-eKR.js";
+export{MP as defaultRegistry,AP as refreshRendererRegistry,jP as useRenderer}from"../../chunks/app-B5NwJwy8.js";

@@ -1,1 +1,1 @@
-export{XP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,ZP as openExtensionsSettings}from"../../chunks/app-CYpg-eKR.js";
+export{XP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,ZP as openExtensionsSettings}from"../../chunks/app-B5NwJwy8.js";

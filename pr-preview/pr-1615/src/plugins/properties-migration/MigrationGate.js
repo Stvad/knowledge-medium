@@ -1,1 +1,1 @@
-export{Ka as MigrationGate}from"../../../chunks/app-CYpg-eKR.js";
+export{Ka as MigrationGate}from"../../../chunks/app-B5NwJwy8.js";

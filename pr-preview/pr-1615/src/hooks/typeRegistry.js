@@ -1,1 +1,1 @@
-export{CV as useTypes}from"../../chunks/app-CYpg-eKR.js";
+export{TV as useTypes}from"../../chunks/app-B5NwJwy8.js";

@@ -1,1 +1,1 @@
-export{Lr as ExtensionsSettings}from"../../../chunks/app-CYpg-eKR.js";
+export{Lr as ExtensionsSettings}from"../../../chunks/app-B5NwJwy8.js";

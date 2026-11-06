@@ -1,1 +1,1 @@
-export{MP as defaultRegistry,NP as defaultRendererContributions,PP as defaultRenderersExtension}from"../../chunks/app-CYpg-eKR.js";
+export{MP as defaultRegistry,NP as defaultRendererContributions,PP as defaultRenderersExtension}from"../../chunks/app-B5NwJwy8.js";

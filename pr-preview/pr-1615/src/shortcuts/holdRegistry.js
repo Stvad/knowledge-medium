@@ -1,1 +1,1 @@
-export{EN as cancelArmedHolds,DN as registerArmedHold}from"../../chunks/app-CYpg-eKR.js";
+export{EN as cancelArmedHolds,DN as registerArmedHold}from"../../chunks/app-B5NwJwy8.js";

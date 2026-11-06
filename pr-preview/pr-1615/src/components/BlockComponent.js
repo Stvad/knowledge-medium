@@ -1,1 +1,1 @@
-export{wP as BlockChildren,TP as BlockComponent}from"../../chunks/app-CYpg-eKR.js";
+export{wP as BlockChildren,TP as BlockComponent}from"../../chunks/app-B5NwJwy8.js";
