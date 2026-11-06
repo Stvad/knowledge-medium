@@ -1,0 +1,1 @@
+export{TN as dynamicExtensionsExtension}from"../../chunks/app-BAmF8pxb.js";

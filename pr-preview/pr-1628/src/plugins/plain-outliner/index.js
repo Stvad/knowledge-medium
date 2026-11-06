@@ -1,0 +1,1 @@
+export{lw as plainOutlinerPlugin}from"../../../chunks/app-BAmF8pxb.js";

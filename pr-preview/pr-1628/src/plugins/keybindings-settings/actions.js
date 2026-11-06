@@ -1,0 +1,1 @@
+export{Bk as openKeybindingsSettingsAction}from"../../../chunks/app-BAmF8pxb.js";

@@ -1,0 +1,1 @@
+export{RJ as annotationMarginOpenProp}from"../../../chunks/app-BAmF8pxb.js";

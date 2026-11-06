@@ -1,0 +1,1 @@
+export{uN as dispatchPointerAction,dN as setPointerActionDispatcher}from"../../chunks/app-BAmF8pxb.js";

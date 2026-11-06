@@ -1,0 +1,1 @@
+export{rM as resolveStructuralEditPolicy,iM as structuralEditPolicyForBlock}from"../../chunks/app-BAmF8pxb.js";

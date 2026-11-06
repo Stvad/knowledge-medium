@@ -1,0 +1,1 @@
+export{rm as extensionsOverridesProp,im as extensionsPrefsType,ar as extensionsSettingsPlugin}from"../../../chunks/app-BAmF8pxb.js";

@@ -1,0 +1,1 @@
+export{UJ as contributorsDataExtension}from"../../../chunks/app-BAmF8pxb.js";

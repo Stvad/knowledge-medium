@@ -1,0 +1,1 @@
+export{wv as Wikilink}from"../../../../../chunks/app-BAmF8pxb.js";

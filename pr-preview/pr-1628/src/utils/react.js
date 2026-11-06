@@ -1,0 +1,1 @@
+export{XF as useIsMobile,ZF as usePointerCoarse}from"../../chunks/app-BAmF8pxb.js";

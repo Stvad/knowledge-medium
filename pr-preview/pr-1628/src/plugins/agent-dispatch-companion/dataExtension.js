@@ -1,0 +1,1 @@
+export{EZ as agentDispatchCompanionDataExtension}from"../../../chunks/app-BAmF8pxb.js";

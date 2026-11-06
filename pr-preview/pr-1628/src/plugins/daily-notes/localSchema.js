@@ -1,0 +1,1 @@
+export{mq as dailyNotesLocalSchema}from"../../../chunks/app-BAmF8pxb.js";

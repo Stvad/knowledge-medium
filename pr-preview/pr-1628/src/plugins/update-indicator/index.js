@@ -1,0 +1,1 @@
+export{l_ as updateIndicatorPlugin}from"../../../chunks/app-BAmF8pxb.js";

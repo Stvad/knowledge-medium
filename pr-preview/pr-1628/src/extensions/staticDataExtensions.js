@@ -1,0 +1,1 @@
+export{SW as staticDataExtensions}from"../../chunks/app-BAmF8pxb.js";

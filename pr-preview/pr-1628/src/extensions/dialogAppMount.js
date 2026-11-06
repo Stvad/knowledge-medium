@@ -1,0 +1,1 @@
+export{xP as DialogHost,SP as dialogAppMountExtension}from"../../chunks/app-BAmF8pxb.js";

@@ -1,0 +1,1 @@
+export{NB as anyBlockTombstoned,PB as isBlockTombstoned}from"../../chunks/app-BAmF8pxb.js";

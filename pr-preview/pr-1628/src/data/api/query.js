@@ -1,0 +1,1 @@
+export{Cot as defineQuery}from"../../../chunks/app-BAmF8pxb.js";

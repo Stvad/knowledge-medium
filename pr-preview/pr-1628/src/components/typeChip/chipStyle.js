@@ -1,0 +1,1 @@
+export{kj as chipStyle}from"../../../chunks/app-BAmF8pxb.js";

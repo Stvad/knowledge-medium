@@ -1,0 +1,1 @@
+export{pM as BlockPasteShellDecorator,mM as blockPasteShellDecorator}from"../../chunks/app-BAmF8pxb.js";

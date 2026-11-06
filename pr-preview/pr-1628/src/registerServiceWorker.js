@@ -1,0 +1,1 @@
+export{YM as checkForAppUpdate,XM as registerServiceWorker}from"../chunks/app-BAmF8pxb.js";

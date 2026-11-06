@@ -1,0 +1,1 @@
+export{w4 as KERNEL_PROCESSORS}from"../../../chunks/app-BAmF8pxb.js";

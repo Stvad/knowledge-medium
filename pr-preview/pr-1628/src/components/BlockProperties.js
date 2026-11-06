@@ -1,0 +1,1 @@
+export{YR as BlockProperties}from"../../chunks/app-BAmF8pxb.js";

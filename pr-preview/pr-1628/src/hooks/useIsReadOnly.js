@@ -1,0 +1,1 @@
+export{iy as useIsReadOnly}from"../../chunks/app-BAmF8pxb.js";
