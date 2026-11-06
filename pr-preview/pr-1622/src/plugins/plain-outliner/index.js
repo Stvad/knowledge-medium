@@ -1,1 +1,0 @@
-export{iw as plainOutlinerPlugin}from"../../../chunks/app-Rm1GvxZG.js";
