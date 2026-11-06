@@ -14,9 +14,8 @@ const numberSchema: Schema<number> = {
 
 /** Backlink *count* for the inline badge: how many sources the unfiltered
  *  `backlinks.forBlock` list holds. Both are projections of one batched
- *  statement (`sourceBatch.ts`) — a count here, the ids there — so membership,
- *  the property-machinery exclusion and invalidation match by construction,
- *  and every badge in a wave of visible blocks is answered by one read.
+ *  statement (`sourceBatch.ts`) — a count here, the ids there — so membership
+ *  and invalidation match by construction, and every badge in a wave of visible blocks is answered by one read.
  *
  *  Intentionally unfiltered with respect to the USER filter, even though the
  *  expanded `LinkedReferences` may apply a page / daily-note backlink filter
@@ -24,10 +23,10 @@ const numberSchema: Schema<number> = {
  *  denominator the user sees on expand — so "5" on the badge and "2 / 5" in the
  *  expanded header agree.
  *
- *  The property-machinery exclusion is a DIFFERENT axis and must apply here: it
- *  is source de-duplication, not a user filter, so a hidden value row's
- *  `[[Target]]` must not inflate the badge past the list the user gets on
- *  expand. */
+ *  Listing a property subtree's owner in place of its rows is a DIFFERENT axis
+ *  and applies here: it decides what a source is, not which sources the user
+ *  wants, so a value row's `[[Target]]` counts once, as its owner, on the badge
+ *  as on the list the user gets on expand. */
 export const backlinksCountForBlockQuery = defineQuery<{ workspaceId: string; id: string }, number>({
   name: BACKLINKS_COUNT_FOR_BLOCK_QUERY,
   argsSchema: z.object({

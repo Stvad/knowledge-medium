@@ -206,7 +206,7 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - ★ \`aliasLookup({workspaceId, alias})\` → page by exact name (\`page\` verb).
 - ★ \`aliasMatches({workspaceId, filter, limit?})\` → name substring candidates.
 - ★ \`searchByContent({workspaceId, query, limit?})\` → content FTS (\`search\` verb).
-- ★ \`backlinks.forBlock({workspaceId, id, filter?, rawSources?})\` → backlink source ids (default hides property-machinery value rows; \`rawSources: true\` for the raw index).
+- ★ \`backlinks.forBlock({workspaceId, id, filter?, rawSources?})\` → backlink source ids (default lists a property subtree's owner in place of its value rows; \`rawSources: true\` for the raw index).
 - ★ \`groupedBacklinks.forBlock({workspaceId, id, filter?, groupingConfig?})\`.
 - \`byType({workspaceId, type})\` → all blocks of a type (e.g. \`todo\`, \`srs-sm2.5\`).
 - \`recentBlocks({workspaceId, limit?})\` → recently-touched blocks.
