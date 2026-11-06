@@ -1,0 +1,1 @@
+export{D2 as kernelDataExtension}from"../../chunks/app-Dzrvb7He.js";

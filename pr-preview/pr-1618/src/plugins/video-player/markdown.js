@@ -1,0 +1,1 @@
+export{Mx as videoPlayerMarkdownExtension}from"../../../chunks/app-Dzrvb7He.js";

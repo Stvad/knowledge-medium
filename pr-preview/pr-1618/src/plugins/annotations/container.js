@@ -1,0 +1,1 @@
+export{PJ as COMMENTS_PAGE_ALIAS,FJ as commentsPageBlockId,IJ as commentsPageSpec,LJ as getOrCreateCommentsPage}from"../../../chunks/app-Dzrvb7He.js";

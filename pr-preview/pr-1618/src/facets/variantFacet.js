@@ -1,0 +1,1 @@
+export{kR as defineVariant,AR as defineVariantFacet}from"../../chunks/app-Dzrvb7He.js";

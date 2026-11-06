@@ -1,0 +1,1 @@
+export{JU as BootFallback}from"../../../chunks/app-Dzrvb7He.js";

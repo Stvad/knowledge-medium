@@ -1,0 +1,1 @@
+export{nK as geoDataExtension}from"../../../chunks/app-Dzrvb7He.js";

@@ -1,0 +1,1 @@
+export{tP as LazyBlockComponent}from"../../chunks/app-Dzrvb7He.js";

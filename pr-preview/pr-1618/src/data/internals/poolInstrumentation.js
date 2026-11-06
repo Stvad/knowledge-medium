@@ -1,0 +1,1 @@
+export{HQ as instrumentAdapter}from"../../../chunks/app-Dzrvb7He.js";

@@ -1,0 +1,1 @@
+export{Srt as isChildBackedPropertiesWorkspace}from"../chunks/app-Dzrvb7He.js";

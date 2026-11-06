@@ -1,0 +1,1 @@
+export{Zc as srsBlockDateAdapter}from"../../../chunks/app-Dzrvb7He.js";

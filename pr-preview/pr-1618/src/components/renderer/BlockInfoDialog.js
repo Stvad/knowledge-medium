@@ -1,0 +1,1 @@
+export{QF as BlockInfoDialog}from"../../../chunks/app-Dzrvb7He.js";
