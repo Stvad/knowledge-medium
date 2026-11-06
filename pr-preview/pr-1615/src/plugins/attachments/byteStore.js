@@ -1,1 +1,1 @@
-export{jx as ASSETS_ROOT,Mx as InMemoryByteStore,Nx as OpfsByteStore,Px as assetPathSegments,Fx as createByteStore,Ix as getByteStore}from"../../../chunks/app-CDUk7J4t.js";
+export{jx as ASSETS_ROOT,Mx as InMemoryByteStore,Nx as OpfsByteStore,Px as assetPathSegments,Fx as createByteStore,Ix as getByteStore}from"../../../chunks/app-NySvq4I5.js";
