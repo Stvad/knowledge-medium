@@ -37,10 +37,12 @@ const CONTROL_CANNOT: Record<Engine, readonly string[]> = {
   firefox: ['ping'],
 }
 
-/** A document takes keyboard focus from the app with no click, on these engines. */
+/** A document takes keyboard focus from the app with no click, on these builds.
+ *  Playwright's, whose focus handling differs from a shipped browser's: `webkit`
+ *  here says nothing about Safari on an iPhone. */
 const TAKES_THE_KEYBOARD: Record<Engine, boolean> = {
   chromium: true,
-  webkit: true,
+  webkit: false,
   firefox: true,
 }
 
