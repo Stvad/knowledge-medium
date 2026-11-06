@@ -1,1 +1,0 @@
-export{wn as birthdayPlugin}from"../../../chunks/app-5JGV_Nkc.js";

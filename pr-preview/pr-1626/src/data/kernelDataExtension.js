@@ -1,1 +1,0 @@
-export{M2 as kernelDataExtension}from"../../chunks/app-5JGV_Nkc.js";

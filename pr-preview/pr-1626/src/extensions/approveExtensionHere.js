@@ -1,1 +1,0 @@
-export{FM as approveExtensionHere}from"../../chunks/app-5JGV_Nkc.js";

@@ -1,1 +1,0 @@
-export{YR as BlockProperties}from"../../chunks/app-5JGV_Nkc.js";

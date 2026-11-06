@@ -1,1 +1,0 @@
-export{SW as staticDataExtensions}from"../../chunks/app-5JGV_Nkc.js";

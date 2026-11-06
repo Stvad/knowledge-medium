@@ -1,1 +1,0 @@
-export{CU as propertyShapeLabel}from"../../../chunks/app-5JGV_Nkc.js";
