@@ -1,5 +1,5 @@
 import {useLayoutEffect, useMemo, useRef, useState} from 'react'
-import {buildFrameDocument, documentWindowOf, FRAME_SANDBOX, MIN_FRAME_HEIGHT, readReportedHeight} from './frameDocument.ts'
+import {buildFrameDocument, documentWindowOf, FRAME_SANDBOX, readReportedHeight} from './frameDocument.ts'
 import {useFrameThemeCss} from './frameTheme.ts'
 
 const INITIAL_FRAME_HEIGHT = 150
@@ -19,7 +19,7 @@ export const HtmlFrame = ({source}: {source: string}) => {
   // run after it, and that report would be lost with no second one coming.
   useLayoutEffect(() => {
     let scheduled: number | undefined
-    let latest = MIN_FRAME_HEIGHT
+    let latest = INITIAL_FRAME_HEIGHT
     const onMessage = (event: MessageEvent) => {
       const frame = frameRef.current
       if (!frame || event.source !== documentWindowOf(frame)) return

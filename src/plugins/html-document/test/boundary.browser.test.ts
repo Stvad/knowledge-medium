@@ -44,8 +44,8 @@ const TAKES_THE_KEYBOARD: Record<Engine, boolean> = {
   firefox: true,
 }
 
-/** `history.back()` in a frame moves the top window's history on these engines.
- *  It cannot choose a new URL, but it is a real gap, and the threat model says so. */
+/** `history.back()` in a frame moves the top window's history on these engines. It
+ *  cannot choose a new URL, but it is a real gap. */
 const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
   chromium: false,
   webkit: true,
@@ -65,6 +65,7 @@ const mount = (host: HostPage, shape: Shape, source: string) =>
   }, [shape, source] as const)
 
 const script = (body: string) => `<script>${body}</script>`
+const decoy = (name: string) => `${servers.decoyUrl}/hit/${name}`
 const ARMED = `top.postMessage('armed', '*');`
 
 const untilReported = (host: HostPage, report: unknown) =>
@@ -178,32 +179,31 @@ describe.each(selectedEngines())('%s', engine => {
   })
 
   describe('making requests', () => {
-    const hit = (name: string) => `${servers.decoyUrl}/hit/${name}`
     const swallow = `.catch(() => {})`
 
     const requests = (): Record<string, string> => ({
-      'fetch': script(`fetch('${hit('fetch')}')${swallow}`),
-      'XMLHttpRequest': script(`const xhr = new XMLHttpRequest(); xhr.open('GET', '${hit('XMLHttpRequest')}'); xhr.send()`),
-      'sendBeacon': script(`try { navigator.sendBeacon('${hit('sendBeacon')}', 'x') } catch {}`),
-      'WebSocket': script(`try { new WebSocket('${hit('WebSocket').replace('http', 'ws')}') } catch {}`),
-      'EventSource': script(`try { new EventSource('${hit('EventSource')}') } catch {}`),
-      'an image': `<img src="${hit('an image')}">`,
-      'a script': `<script src="${hit('a script')}.js"></script>`,
-      'a stylesheet': `<link rel="stylesheet" href="${hit('a stylesheet')}.css">`,
-      'a CSS background': `<div style="width:9px;height:9px;background:url('${hit('a CSS background')}')"></div>`,
-      'a web font': `<style>@font-face{font-family:probe;src:url('${hit('a web font')}')}</style><p style="font-family:probe">text</p>`,
-      'a video': `<video src="${hit('a video')}" preload="auto"></video>`,
-      'an audio element': `<audio src="${hit('an audio element')}" preload="auto"></audio>`,
-      'an object': `<object data="${hit('an object')}"></object>`,
-      'an embed': `<embed src="${hit('an embed')}">`,
-      'a child frame': `<iframe src="${hit('a child frame')}"></iframe>`,
-      'a data: child frame': `<iframe src="data:text/html,<script>new Image().src='${hit('a data: child frame')}'</script>"></iframe>`,
-      'a srcdoc child frame': `<iframe srcdoc="<script>new Image().src='${hit('a srcdoc child frame')}'</script>"></iframe>`,
-      'the realm of a blank child frame': script(`const frame = document.createElement('iframe'); document.documentElement.append(frame); new frame.contentWindow.Image().src = '${hit('the realm of a blank child frame')}'`),
-      'a worker': script(`try { new Worker(URL.createObjectURL(new Blob(["fetch('${hit('a worker')}')"], {type: 'text/javascript'}))) } catch {}`),
-      'a dynamic import': script(`import('${hit('a dynamic import')}.js')${swallow}`),
-      'rel=preload': `<link rel="preload" as="image" href="${hit('rel=preload')}">`,
-      'rel=modulepreload': `<link rel="modulepreload" href="${hit('rel=modulepreload')}.js">`,
+      'fetch': script(`fetch('${decoy('fetch')}')${swallow}`),
+      'XMLHttpRequest': script(`const xhr = new XMLHttpRequest(); xhr.open('GET', '${decoy('XMLHttpRequest')}'); xhr.send()`),
+      'sendBeacon': script(`try { navigator.sendBeacon('${decoy('sendBeacon')}', 'x') } catch {}`),
+      'WebSocket': script(`try { new WebSocket('${decoy('WebSocket').replace('http', 'ws')}') } catch {}`),
+      'EventSource': script(`try { new EventSource('${decoy('EventSource')}') } catch {}`),
+      'an image': `<img src="${decoy('an image')}">`,
+      'a script': `<script src="${decoy('a script')}.js"></script>`,
+      'a stylesheet': `<link rel="stylesheet" href="${decoy('a stylesheet')}.css">`,
+      'a CSS background': `<div style="width:9px;height:9px;background:url('${decoy('a CSS background')}')"></div>`,
+      'a web font': `<style>@font-face{font-family:probe;src:url('${decoy('a web font')}')}</style><p style="font-family:probe">text</p>`,
+      'a video': `<video src="${decoy('a video')}" preload="auto"></video>`,
+      'an audio element': `<audio src="${decoy('an audio element')}" preload="auto"></audio>`,
+      'an object': `<object data="${decoy('an object')}"></object>`,
+      'an embed': `<embed src="${decoy('an embed')}">`,
+      'a child frame': `<iframe src="${decoy('a child frame')}"></iframe>`,
+      'a data: child frame': `<iframe src="data:text/html,<script>new Image().src='${decoy('a data: child frame')}'</script>"></iframe>`,
+      'a srcdoc child frame': `<iframe srcdoc="<script>new Image().src='${decoy('a srcdoc child frame')}'</script>"></iframe>`,
+      'the realm of a blank child frame': script(`const frame = document.createElement('iframe'); document.documentElement.append(frame); new frame.contentWindow.Image().src = '${decoy('the realm of a blank child frame')}'`),
+      'a worker': script(`try { new Worker(URL.createObjectURL(new Blob(["fetch('${decoy('a worker')}')"], {type: 'text/javascript'}))) } catch {}`),
+      'a dynamic import': script(`import('${decoy('a dynamic import')}.js')${swallow}`),
+      'rel=preload': `<link rel="preload" as="image" href="${decoy('rel=preload')}">`,
+      'rel=modulepreload': `<link rel="modulepreload" href="${decoy('rel=modulepreload')}.js">`,
     })
 
     const hitsFor = async (shape: Shape) => {
@@ -241,7 +241,6 @@ describe.each(selectedEngines())('%s', engine => {
     })
     afterEach(() => host.close())
 
-    const url = (name: string) => `${servers.decoyUrl}/hit/${name}`
     const COVER = 'display:block;height:120px;background:#eee'
 
     /** Mounts `source`, clicks it if asked, and gives whatever that started time
@@ -257,56 +256,57 @@ describe.each(selectedEngines())('%s', engine => {
 
     const decoyWasAsked = () => servers.decoyHits().length > 0
 
+    /** A page of its own for the sandboxed half, after the control half moved or
+     *  scribbled on the last one. */
+    const replaceHost = async () => {
+      servers.reset()
+      const previous = host
+      host = await openHost(browser, servers.hostUrl)
+      await previous.close()
+    }
+
     describe('its own frame somewhere else', () => {
-      const SELF_NAVIGATIONS: readonly [string, (name: string) => string, boolean][] = [
-        ['location.href', name => script(`setTimeout(() => { location.href = '${url(name)}' })`), false],
-        ['location.replace', name => script(`setTimeout(() => location.replace('${url(name)}'))`), false],
-        ['a meta refresh', name => `<meta http-equiv="refresh" content="0;url=${url(name)}">`, false],
-        ['a data: document', name => script(`setTimeout(() => { location.href = "data:text/html,<script>new Image().src='${url(name)}'<\\/script>" })`), false],
-        ['a blob: document', name => script(`setTimeout(() => { location.href = URL.createObjectURL(new Blob(["<script>new Image().src='${url(name)}'<\\/script>"], {type: 'text/html'})) })`), false],
-        ['a clicked link', name => `<a href="${url(name)}" style="${COVER}">go</a>`, true],
+      const SELF_NAVIGATIONS: readonly [string, () => string, boolean][] = [
+        ['location.href', () => script(`setTimeout(() => { location.href = '${decoy('nav')}' })`), false],
+        ['location.replace', () => script(`setTimeout(() => location.replace('${decoy('nav')}'))`), false],
+        ['a meta refresh', () => `<meta http-equiv="refresh" content="0;url=${decoy('nav')}">`, false],
+        ['a data: document', () => script(`setTimeout(() => { location.href = "data:text/html,<script>new Image().src='${decoy('nav')}'<\\/script>" })`), false],
+        ['a blob: document', () => script(`setTimeout(() => { location.href = URL.createObjectURL(new Blob(["<script>new Image().src='${decoy('nav')}'<\\/script>"], {type: 'text/html'})) })`), false],
+        ['a clicked link', () => `<a href="${decoy('nav')}" style="${COVER}">go</a>`, true],
       ]
 
       it.each(SELF_NAVIGATIONS)('cannot load a remote document through %s', async (_name, source, click) => {
-        await attempt('control', source('self'), {click})
+        await attempt('control', source(), {click})
         await vi.waitFor(() => expect(decoyWasAsked()).toBe(true), {timeout: 5_000})
 
-        servers.reset()
-        const sandboxedHost = await openHost(browser, servers.hostUrl)
-        const previous = host
-        host = sandboxedHost
-        await previous.close()
-        await attempt('sandboxed', source('self'), {click})
+        await replaceHost()
+        await attempt('sandboxed', source(), {click})
         expect(servers.decoyHits()).toEqual([])
       })
     })
 
     describe('the top window', () => {
-      const TOP_NAVIGATIONS: readonly [string, (name: string) => string, boolean][] = [
-        ['top.location', name => script(`setTimeout(() => { try { top.location = '${url(name)}' } catch {} })`), false],
-        ['parent.location', name => script(`setTimeout(() => { try { parent.location = '${url(name)}' } catch {} })`), false],
-        ['a click running top.location', name => `<button style="${COVER};width:100%" onclick="top.location = '${url(name)}'">go</button>`, true],
-        ['a click running parent.location', name => `<button style="${COVER};width:100%" onclick="parent.location = '${url(name)}'">go</button>`, true],
-        ['a clicked target=_top link', name => `<a href="${url(name)}" target="_top" style="${COVER}">go</a>`, true],
-        ['a clicked target=_parent link', name => `<a href="${url(name)}" target="_parent" style="${COVER}">go</a>`, true],
+      const TOP_NAVIGATIONS: readonly [string, () => string, boolean][] = [
+        ['top.location', () => script(`setTimeout(() => { try { top.location = '${decoy('nav')}' } catch {} })`), false],
+        ['parent.location', () => script(`setTimeout(() => { try { parent.location = '${decoy('nav')}' } catch {} })`), false],
+        ['a click running top.location', () => `<button style="${COVER};width:100%" onclick="top.location = '${decoy('nav')}'">go</button>`, true],
+        ['a click running parent.location', () => `<button style="${COVER};width:100%" onclick="parent.location = '${decoy('nav')}'">go</button>`, true],
+        ['a clicked target=_top link', () => `<a href="${decoy('nav')}" target="_top" style="${COVER}">go</a>`, true],
+        ['a clicked target=_parent link', () => `<a href="${decoy('nav')}" target="_parent" style="${COVER}">go</a>`, true],
       ]
 
       it.each(TOP_NAVIGATIONS)('cannot move it through %s', async (_name, source, click) => {
         const start = host.page.url()
-        await attempt('control', source('top'), {click})
+        await attempt('control', source(), {click})
         await vi.waitFor(() => expect(host.page.url()).not.toBe(start), {timeout: 5_000})
 
-        servers.reset()
-        const sandboxedHost = await openHost(browser, servers.hostUrl)
-        const previous = host
-        host = sandboxedHost
-        await previous.close()
-        await attempt('sandboxed', source('top'), {click})
+        await replaceHost()
+        await attempt('sandboxed', source(), {click})
         expect(host.page.url()).toBe(start)
         expect(servers.decoyHits()).toEqual([])
       })
 
-      it('moves it with history.back() only on the engines the threat model names', async () => {
+      it('moves it with history.back() only on the engines named above', async () => {
         const historyDocument = script(`setTimeout(() => history.back())`)
         const pushTwoEntries = () => host.page.evaluate(() => {
           history.pushState({}, '', '#a')
@@ -316,9 +316,7 @@ describe.each(selectedEngines())('%s', engine => {
         await attempt('control', historyDocument)
         await vi.waitFor(() => expect(host.page.url()).toMatch(/#a$/), {timeout: 5_000})
 
-        const previous = host
-        host = await openHost(browser, servers.hostUrl)
-        await previous.close()
+        await replaceHost()
         await pushTwoEntries()
         await attempt('sandboxed', historyDocument)
         expect(host.page.url().endsWith('#a')).toBe(HISTORY_ESCAPES_THE_SANDBOX[engine])
@@ -326,28 +324,21 @@ describe.each(selectedEngines())('%s', engine => {
     })
 
     describe('opening or submitting anything', () => {
-      const replaceHost = async () => {
-        servers.reset()
-        const previous = host
-        host = await openHost(browser, servers.hostUrl)
-        await previous.close()
-      }
-
-      it.each<[string, (name: string) => string]>([
-        ['a click running window.open', name => `<button style="${COVER};width:100%" onclick="window.open('${url(name)}')">go</button>`],
-        ['a clicked target=_blank link', name => `<a href="${url(name)}" target="_blank" style="${COVER}">go</a>`],
+      it.each<[string, () => string]>([
+        ['a click running window.open', () => `<button style="${COVER};width:100%" onclick="window.open('${decoy('nav')}')">go</button>`],
+        ['a clicked target=_blank link', () => `<a href="${decoy('nav')}" target="_blank" style="${COVER}">go</a>`],
       ])('cannot open a popup through %s', async (_name, source) => {
-        await attempt('control', source('popup'), {click: true})
+        await attempt('control', source(), {click: true})
         await vi.waitFor(() => expect(host.popups()).toBe(1), {timeout: 5_000})
 
         await replaceHost()
-        await attempt('sandboxed', source('popup'), {click: true})
+        await attempt('sandboxed', source(), {click: true})
         expect(host.popups()).toBe(0)
         expect(servers.decoyHits()).toEqual([])
       })
 
       it('cannot submit a form', async () => {
-        const form = `<form action="${url('form')}"><button style="${COVER};width:100%">go</button></form>`
+        const form = `<form action="${decoy('form')}"><button style="${COVER};width:100%">go</button></form>`
         await attempt('control', form, {click: true})
         await vi.waitFor(() => expect(decoyWasAsked()).toBe(true), {timeout: 5_000})
 
@@ -357,7 +348,7 @@ describe.each(selectedEngines())('%s', engine => {
       })
 
       it('cannot ping a server from a clicked link', async () => {
-        const link = `<a href="#x" ping="${url('ping')}" style="${COVER}">go</a>`
+        const link = `<a href="#x" ping="${decoy('ping')}" style="${COVER}">go</a>`
         if (!provesNothingHere('ping')) {
           await attempt('control', link, {click: true})
           await vi.waitFor(() => expect(decoyWasAsked()).toBe(true), {timeout: 5_000})
@@ -401,7 +392,7 @@ describe.each(selectedEngines())('%s', engine => {
     it('keeps source that tries to break out of the attribute inside the inner frame', async () => {
       // In the inner frame the navigation is refused. If this ever reached the
       // outer document, nothing above it would refuse.
-      const hostile = `"></iframe></body>${script(`location.href = '${url('escaped')}'`)}<iframe srcdoc="`
+      const hostile = `"></iframe></body>${script(`location.href = '${decoy('escaped')}'`)}<iframe srcdoc="`
       await mount(host, 'sandboxed', script(ARMED) + hostile)
       await untilReported(host, 'armed')
       await settle(host)
@@ -430,6 +421,33 @@ describe.each(selectedEngines())('%s', engine => {
       await untilHeight(200)
     })
 
+    // Spread over tasks: React already batches a burst inside one task.
+    it('applies far fewer heights than a flood of messages sends', async () => {
+      await mount(host, 'sandboxed', blockOf(300))
+      await untilHeight(300)
+      await host.page.evaluate(() => {
+        const frame = document.querySelector('#mount iframe') as HTMLElement
+        const writes = {count: 0}
+        ;(window as unknown as {writes: typeof writes}).writes = writes
+        new MutationObserver(records => {
+          writes.count += records.length
+        }).observe(frame, {attributes: true, attributeFilter: ['style']})
+      })
+      await documentFrame(host).evaluate(type => {
+        let sent = 0
+        const send = () => {
+          window.parent.parent.postMessage(sent < 600 ? {type, height: 300 + (sent % 2)} : 'flood over', '*')
+          sent += 1
+          if (sent <= 600) setTimeout(send, 0)
+        }
+        send()
+      }, HEIGHT_MESSAGE_TYPE)
+      await untilReported(host, 'flood over')
+      await nextRender(host)
+      const writes = await host.page.evaluate(() => (window as unknown as {writes: {count: number}}).writes.count)
+      expect(writes).toBeLessThan(200)
+    })
+
     it('measures a document whose body is pinned to the frame', async () => {
       await mount(host, 'sandboxed', `<style>html,body{height:100%}</style>${blockOf(900)}`)
       await untilHeight(900)
@@ -440,6 +458,15 @@ describe.each(selectedEngines())('%s', engine => {
       await untilHeight(MAX_FRAME_HEIGHT)
     })
 
+    const mountNested = (message: string) =>
+      documentFrame(host).evaluate(body => {
+        const nested = document.createElement('iframe')
+        // Out of flow, or the document would legitimately report a new height.
+        nested.style.cssText = 'position:absolute;width:0;height:0;border:0'
+        nested.srcdoc = `<script>top.postMessage(${body}, '*')</script>`
+        document.body.append(nested)
+      }, message)
+
     it.each<[string, (message: string) => Promise<unknown>]>([
       ['the top window itself', message => host.page.evaluate(body => window.postMessage(JSON.parse(body), '*'), message)],
       ['a sibling frame', message => host.page.evaluate(body => {
@@ -447,7 +474,7 @@ describe.each(selectedEngines())('%s', engine => {
         sibling.srcdoc = `<script>top.postMessage(${body}, '*')</script>`
         document.body.append(sibling)
       }, message)],
-      ['a frame the document opened inside itself', message => mountNested(message)],
+      ['a frame the document opened inside itself', mountNested],
     ])('takes a height only from the document\'s own window, not %s', async (_name, spoof) => {
       const spoofed = JSON.stringify({type: HEIGHT_MESSAGE_TYPE, height: 777})
       await mount(host, 'sandboxed', blockOf(300))
@@ -463,15 +490,6 @@ describe.each(selectedEngines())('%s', engine => {
       await documentFrame(host).evaluate(body => window.parent.parent.postMessage(JSON.parse(body), '*'), spoofed)
       await untilHeight(777)
     })
-
-    const mountNested = (message: string) =>
-      documentFrame(host).evaluate(body => {
-        const nested = document.createElement('iframe')
-        // Out of flow, or the document would legitimately report a new height.
-        nested.style.cssText = 'position:absolute;width:0;height:0;border:0'
-        nested.srcdoc = `<script>top.postMessage(${body}, '*')</script>`
-        document.body.append(nested)
-      }, message)
   })
 
   describe('the theme', () => {
@@ -508,10 +526,10 @@ describe.each(selectedEngines())('%s', engine => {
     })
   })
 
-  // Not promises: what the threat model says a document can still do. These are
-  // pinned where they were measured, so a browser closing one shows up here.
+  // Not promises: the boundary's known gaps, pinned where they were measured, so a
+  // browser closing one shows up here.
   describe('what a document can still do', () => {
-    it('takes the keyboard from the app with no click, only where the threat model says', async () => {
+    it('takes the keyboard from the app with no click, on the engines named above', async () => {
       const typeIntoApp = async (source: string) => {
         const host = await openHost(browser, servers.hostUrl)
         await host.page.evaluate(() => {
@@ -570,14 +588,12 @@ describe.each(selectedEngines())('%s', engine => {
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {
       const host = await openHost(browser, servers.hostUrl)
-      await mount(host, 'sandboxed', `<textarea id="source">x</textarea><button style="display:block;height:120px;width:100%" onclick="
+      await mount(host, 'sandboxed', `<button style="display:block;height:120px;width:100%" onclick="
         document.getElementById('source').select()
         top.postMessage({copied: document.execCommand('copy')}, '*')
-      ">go</button>${script(ARMED)}`)
+      ">go</button><textarea id="source">x</textarea>${script(ARMED)}`)
       await untilReported(host, 'armed')
-      const box = await host.page.locator('#mount iframe').boundingBox()
-      if (!box) throw new Error('frame has no box')
-      await host.page.mouse.click(box.x + box.width / 2, box.y + box.height - 30)
+      await clickFrame(host)
       await untilReported(host, {copied: true})
       await host.close()
     })

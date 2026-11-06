@@ -22,8 +22,8 @@ const THEME_TOKENS = [
 
 /** `color-scheme` must match the app's or the browser paints the frame's canvas
  *  opaque. Both documents get this, so it holds at both frame boundaries. */
-export const readFrameThemeCss = (root: HTMLElement = document.documentElement): string => {
-  const style = getComputedStyle(root)
+const readFrameThemeCss = (): string => {
+  const style = getComputedStyle(document.documentElement)
   const tokens = THEME_TOKENS
     .map(name => `--${name}:${style.getPropertyValue(`--${name}`).trim()};`)
     .join('')

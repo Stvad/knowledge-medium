@@ -1,7 +1,8 @@
 /**
  * What an `html-document` block runs in. A block's source is written by any
  * workspace member and runs in every member's client, so nothing crosses this
- * boundary except a clamped height (see the threat model in the plugin's PR).
+ * boundary except a clamped height. `test/boundary.browser.test.ts` pins what holds
+ * and, under "what a document can still do", what doesn't.
  *
  * Two nested frames, both `sandbox="allow-scripts"`:
  *

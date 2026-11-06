@@ -8,12 +8,12 @@ import type {AddressInfo} from 'node:net'
 import {networkInterfaces} from 'node:os'
 import {resolve} from 'node:path'
 import react from '@vitejs/plugin-react'
-import {chromium, firefox, webkit, type Browser, type BrowserContext, type Page} from 'playwright'
+import {chromium, firefox, webkit, type Browser, type Page} from 'playwright'
 import {build, type Rollup} from 'vite'
 
-export type Engine = 'chromium' | 'webkit' | 'firefox'
-
 const ENGINES = {chromium, webkit, firefox}
+
+export type Engine = keyof typeof ENGINES
 
 /** Every engine unless narrowed, and a missing browser fails with Playwright's
  *  install instructions: a boundary suite that quietly skips an engine reads as
@@ -119,7 +119,6 @@ export const startServers = async (): Promise<BoundaryServers> => {
 
 export interface HostPage {
   page: Page
-  context: BrowserContext
   popups: () => number
   downloads: () => number
   dialogs: () => number
@@ -149,7 +148,6 @@ export const openHost = async (browser: Browser, hostUrl: string): Promise<HostP
   await page.evaluate(() => window.secretsReady)
   return {
     page,
-    context,
     popups: () => popups,
     downloads: () => downloads,
     dialogs: () => dialogs,

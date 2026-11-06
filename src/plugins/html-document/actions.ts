@@ -12,13 +12,11 @@ const insertExampleHtmlDocument: BlockAction = {
   handler: async ({block, uiStateBlock, renderScopeId}) => {
     const repo = block.repo
     if (repo.isReadOnly) return
-    const typeSnapshot = repo.snapshotTypeRegistries()
     const id = await repo.tx(
       tx => createTypedChild(repo, tx, {
         parentId: block.id,
         content: exampleSource,
         types: [HTML_DOCUMENT_TYPE],
-        typeSnapshot,
       }),
       {scope: ChangeScope.BlockDefault, description: 'insert example HTML document'},
     )

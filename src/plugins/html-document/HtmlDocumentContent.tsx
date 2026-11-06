@@ -2,7 +2,6 @@ import {useMemo} from 'react'
 import {html} from '@codemirror/lang-html'
 import {BlockEditor} from '@/components/BlockEditor.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.tsx'
-import {useRepo} from '@/context/repo'
 import {EXTENSION_TYPE} from '@/data/blockTypes'
 import {useInEditMode} from '@/data/globalState.js'
 import type {
@@ -24,12 +23,11 @@ import {sourceEditingKeys} from './sourceEditing.ts'
  *  click on it falls through to the block's own click-to-edit. */
 const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
-  const repo = useRepo()
   return (
     <div className="w-full overflow-hidden rounded-md border border-border">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground select-none">
         <span>HTML document (sandboxed)</span>
-        {!repo.isReadOnly && <span>Edit source</span>}
+        {!block.repo.isReadOnly && <span>Edit source</span>}
       </div>
       <HtmlFrame source={source}/>
     </div>

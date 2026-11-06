@@ -5,6 +5,7 @@
 
 import {indentLess, indentMore, insertNewlineAndIndent} from '@codemirror/commands'
 import {ViewPlugin, type EditorView} from '@codemirror/view'
+import {isImeKeyEvent} from '@/shortcuts/utils.js'
 
 const caretAt = (view: EditorView, position: number): boolean => {
   const {main} = view.state.selection
@@ -14,7 +15,7 @@ const caretAt = (view: EditorView, position: number): boolean => {
 /** Whether this key is handled here. A key that only has to stay away from the
  *  block-level shortcut, Backspace at the very start, does nothing else. */
 const runSourceKey = (event: KeyboardEvent, view: EditorView): boolean => {
-  if (event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return false
+  if (isImeKeyEvent(event) || event.altKey || event.ctrlKey || event.metaKey) return false
   switch (event.key) {
     case 'Enter': return insertNewlineAndIndent(view)
     case 'Tab': return event.shiftKey ? indentLess(view) : indentMore(view)
