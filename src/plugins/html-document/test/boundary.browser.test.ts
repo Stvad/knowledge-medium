@@ -111,6 +111,65 @@ describe.each(selectedEngines())('%s', engine => {
 
   const provesNothingHere = (probe: string) => CONTROL_CANNOT[engine].includes(probe)
 
+  const mountRunning = async (host: HostPage, source: string) => {
+    await mount(host, 'sandboxed', source + script(ARMED))
+    await untilReported(host, 'armed')
+  }
+
+  /** No author script runs to fence on here, so the fence is the height report. */
+  const mountHeld = async (host: HostPage, source: string) => {
+    await host.page.evaluate(held => window.mountSandboxed(held, 'hold'), source)
+    await vi.waitFor(async () => {
+      const reports = await host.reports() as {type?: string}[]
+      expect(reports.some(report => report.type === HEIGHT_MESSAGE_TYPE)).toBe(true)
+    }, {timeout: 10_000, interval: 25})
+  }
+
+  const KEYBOARD_THIEF = `<input id="field">${script(`
+    addEventListener('keydown', event => top.postMessage({stolen: event.key}, '*'), true)
+    setInterval(() => {
+      window.focus()
+      document.getElementById('field').focus()
+    }, 30)
+  `)}`
+
+  const typeIntoApp = async (mountDocument: (host: HostPage) => Promise<void>) => {
+    const host = await openHost(browser, servers.hostUrl)
+    await host.page.evaluate(() => {
+      const input = document.createElement('input')
+      input.id = 'app-input'
+      document.body.prepend(input)
+      input.focus()
+    })
+    await mountDocument(host)
+    await settle(host)
+    await host.page.keyboard.type('abcde', {delay: 60})
+    await settle(host)
+    const reports = await host.reports() as {stolen?: string}[]
+    const result = {
+      inApp: await host.page.locator('#app-input').inputValue(),
+      stolen: reports.map(report => report.stolen ?? '').join(''),
+    }
+    await host.close()
+    return result
+  }
+
+  const stunProbe = () => script(`
+    const peer = new RTCPeerConnection({iceServers: [{urls: ${JSON.stringify(servers.stunUrls)}}]})
+    peer.createDataChannel('x')
+    peer.createOffer().then(offer => peer.setLocalDescription(offer))
+    window.keepAlive = peer
+  `)
+
+  const stunPacketsFrom = async (mountDocument: (host: HostPage) => Promise<void>) => {
+    servers.reset()
+    const host = await openHost(browser, servers.hostUrl)
+    await mountDocument(host)
+    await vi.waitFor(() => expect(servers.stunPackets()).toBeGreaterThan(0), {timeout: 3_000}).catch(() => {})
+    await host.close()
+    return servers.stunPackets()
+  }
+
   describe('reading what the app holds', () => {
     const READS: Record<string, string> = {
       'the embedding document': `parent.document && 'KM_SECRET_embedder'`,
@@ -533,41 +592,97 @@ describe.each(selectedEngines())('%s', engine => {
     })
   })
 
+  // A document anyone else could have written starts like this.
+  describe('with scripts held', () => {
+    let host: HostPage
+    beforeEach(async () => {
+      servers.reset()
+      host = await openHost(browser, servers.hostUrl)
+    })
+    afterEach(() => host.close())
+
+    const ATTEMPTS = {
+      'an inline script': script(`top.postMessage({ran: 'an inline script'}, '*')`),
+      'an event handler': `<img src="x" onerror="top.postMessage({ran: 'an event handler'}, '*')">`,
+      'an SVG onload': `<svg onload="top.postMessage({ran: 'an SVG onload'}, '*')"></svg>`,
+      'a child frame': `<iframe srcdoc="<script>top.postMessage({ran: 'a child frame'}, '*')</script>"></iframe>`,
+    }
+    const ATTEMPTS_DOCUMENT = Object.values(ATTEMPTS).join('')
+    const LINK = `<a href="javascript:top.postMessage({ran: 'a javascript: link'}, '*')">go</a>`
+
+    const ranSoFar = async () => (await host.reports() as {ran?: string}[]).flatMap(report => report.ran ?? [])
+
+    it('runs none of the code the same document runs when allowed', async () => {
+      await mountRunning(host, ATTEMPTS_DOCUMENT)
+      for (const name of Object.keys(ATTEMPTS)) await untilReported(host, {ran: name})
+
+      const previous = host
+      host = await openHost(browser, servers.hostUrl)
+      await previous.close()
+      await mountHeld(host, ATTEMPTS_DOCUMENT)
+      await settle(host)
+      expect(await ranSoFar()).toEqual([])
+    })
+
+    it('does not follow a javascript: link, which an unsandboxed frame does', async () => {
+      await mount(host, 'control', LINK)
+      await host.page.frameLocator('#mount iframe').locator('a').click()
+      await untilReported(host, {ran: 'a javascript: link'})
+
+      const previous = host
+      host = await openHost(browser, servers.hostUrl)
+      await previous.close()
+      await mountHeld(host, LINK)
+      await host.page.frameLocator('#mount iframe').frameLocator('iframe').locator('a').click()
+      await settle(host)
+      expect(await ranSoFar()).toEqual([])
+    })
+
+    it('leaves the keyboard with the app', async () => {
+      expect(await typeIntoApp(mounted => mountHeld(mounted, KEYBOARD_THIEF))).toEqual({inApp: 'abcde', stolen: ''})
+    })
+
+    it('sends nothing over WebRTC', async () => {
+      expect(await stunPacketsFrom(mounted => mountHeld(mounted, stunProbe()).then(() => settle(mounted)))).toBe(0)
+    })
+
+    it('still renders the document and sizes the frame to it', async () => {
+      await mountHeld(host, '<style>body{margin:0}#box{height:640px;color:rgb(1,2,3)}</style><div id="box">text</div>')
+      await vi.waitFor(async () => expect(await frameHeight(host)).toBe(640), {timeout: 5_000, interval: 25})
+      const box = host.page.frameLocator('#mount iframe').frameLocator('iframe').locator('#box')
+      expect(await box.evaluate(element => getComputedStyle(element).color)).toBe('rgb(1, 2, 3)')
+    })
+
+    it('starts running when allowed and holds again when stopped', async () => {
+      const source = `<p>text</p>${script(`top.postMessage({ran: 'an inline script'}, '*')`)}`
+      await mountHeld(host, source)
+      await settle(host)
+      expect(await ranSoFar()).toEqual([])
+
+      await mount(host, 'sandboxed', source)
+      await untilReported(host, {ran: 'an inline script'})
+
+      await host.page.evaluate(() => {
+        window.reports.length = 0
+      })
+      await mountHeld(host, source)
+      await settle(host)
+      expect(await ranSoFar()).toEqual([])
+    })
+
+    it('still sends a prerender GET on the engines named above, with nothing computed in it', async () => {
+      await mountHeld(host, `<link rel="prerender" href="${decoy('prerender')}?fixed">`)
+      await settle(host)
+      expect(servers.decoyHits()).toEqual(PRERENDER_REACHES_THE_NETWORK[engine] ? ['/hit/prerender'] : [])
+    })
+  })
+
   // Not promises: the boundary's known gaps, pinned where they were measured, so a
   // browser closing one shows up here.
   describe('what a document can still do', () => {
     it('takes the keyboard from the app with no click, on the engines named above', async () => {
-      const typeIntoApp = async (source: string) => {
-        const host = await openHost(browser, servers.hostUrl)
-        await host.page.evaluate(() => {
-          const input = document.createElement('input')
-          input.id = 'app-input'
-          document.body.prepend(input)
-          input.focus()
-        })
-        await mount(host, 'sandboxed', source + script(ARMED))
-        await untilReported(host, 'armed')
-        await settle(host)
-        await host.page.keyboard.type('abcde', {delay: 60})
-        await settle(host)
-        const reports = await host.reports() as {stolen?: string}[]
-        const result = {
-          inApp: await host.page.locator('#app-input').inputValue(),
-          stolen: reports.map(report => report.stolen ?? '').join(''),
-        }
-        await host.close()
-        return result
-      }
-
-      expect(await typeIntoApp('<p>harmless</p>')).toEqual({inApp: 'abcde', stolen: ''})
-
-      const taken = await typeIntoApp(`<input id="field">${script(`
-        addEventListener('keydown', event => top.postMessage({stolen: event.key}, '*'), true)
-        setInterval(() => {
-          window.focus()
-          document.getElementById('field').focus()
-        }, 30)
-      `)}`)
+      expect(await typeIntoApp(host => mountRunning(host, '<p>harmless</p>'))).toEqual({inApp: 'abcde', stolen: ''})
+      const taken = await typeIntoApp(host => mountRunning(host, KEYBOARD_THIEF))
       expect(taken.stolen.length > 0).toBe(TAKES_THE_KEYBOARD[engine])
     })
 
@@ -588,25 +703,8 @@ describe.each(selectedEngines())('%s', engine => {
     })
 
     it('reaches a host of its choosing over WebRTC', async () => {
-      const peer = script(`
-        const peer = new RTCPeerConnection({iceServers: [{urls: ${JSON.stringify(servers.stunUrls)}}]})
-        peer.createDataChannel('x')
-        peer.createOffer().then(offer => peer.setLocalDescription(offer))
-        window.keepAlive = peer
-        ${ARMED}
-      `)
-      const packetsFrom = async (shape: Shape) => {
-        servers.reset()
-        const host = await openHost(browser, servers.hostUrl)
-        await mount(host, shape, peer)
-        await untilReported(host, 'armed')
-        await vi.waitFor(() => expect(servers.stunPackets()).toBeGreaterThan(0), {timeout: 3_000}).catch(() => {})
-        await host.close()
-        return servers.stunPackets()
-      }
-
-      expect(await packetsFrom('control')).toBeGreaterThan(0)
-      expect(await packetsFrom('sandboxed')).toBeGreaterThan(0)
+      expect(await stunPacketsFrom(host => mount(host, 'control', stunProbe() + script(ARMED)).then(() => untilReported(host, 'armed')))).toBeGreaterThan(0)
+      expect(await stunPacketsFrom(host => mountRunning(host, stunProbe()))).toBeGreaterThan(0)
     })
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {

@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
+import {createHash} from 'node:crypto'
 import {
   buildFrameDocument,
-  FRAME_CSP,
+  framePolicy,
   FRAME_SANDBOX,
+  HEIGHT_REPORTER,
+  HEIGHT_REPORTER_HASH,
   HEIGHT_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   MIN_FRAME_HEIGHT,
@@ -20,15 +23,15 @@ const innerDocumentOf = (outerHtml: string) => {
 
 describe('buildFrameDocument', () => {
   it('puts the policy on the outer document, ahead of the frame that holds the source', () => {
-    const outer = parse(buildFrameDocument('<p>hello</p>', ''))
+    const outer = parse(buildFrameDocument('<p>hello</p>', '', 'run'))
     const policy = outer.querySelector('meta[http-equiv="Content-Security-Policy"]')
-    expect(policy?.getAttribute('content')).toBe(FRAME_CSP)
+    expect(policy?.getAttribute('content')).toBe(framePolicy('run'))
     expect(outer.head.contains(policy)).toBe(true)
   })
 
   // Defence in depth: the browser suite passes without it, on inherited flags.
   it('sandboxes the inner frame itself, not only through what it inherits', () => {
-    const inner = innerDocumentOf(buildFrameDocument('<p>hello</p>', ''))
+    const inner = innerDocumentOf(buildFrameDocument('<p>hello</p>', '', 'run'))
     expect(inner.getAttribute('sandbox')).toBe(FRAME_SANDBOX)
   })
 
@@ -39,7 +42,7 @@ describe('buildFrameDocument', () => {
     ['an unterminated comment', '<!-- <iframe>'],
     ['a closing head tag', '</head></html><script>alert(1)</script>'],
   ])('keeps %s inside the inner document', (_name, source) => {
-    const outerHtml = buildFrameDocument(source, '')
+    const outerHtml = buildFrameDocument(source, '', 'run')
     const outer = parse(outerHtml)
     expect(outer.querySelectorAll('script')).toHaveLength(0)
     expect(innerDocumentOf(outerHtml).getAttribute('srcdoc')).toContain(source)
@@ -47,7 +50,7 @@ describe('buildFrameDocument', () => {
 
   it('opens the source in head context so a whole document keeps its own head and body', () => {
     const source = '<!doctype html><html lang="fr"><head><title>Own title</title></head><body class="own"><p>hi</p></body></html>'
-    const inner = parse(innerDocumentOf(buildFrameDocument(source, '')).getAttribute('srcdoc') ?? '')
+    const inner = parse(innerDocumentOf(buildFrameDocument(source, '', 'run')).getAttribute('srcdoc') ?? '')
     expect(inner.title).toBe('Own title')
     expect(inner.documentElement.getAttribute('lang')).toBe('fr')
     expect(inner.body.className).toBe('own')
@@ -55,9 +58,22 @@ describe('buildFrameDocument', () => {
   })
 
   it('hands the theme to both documents', () => {
-    const outerHtml = buildFrameDocument('', ':root{--foreground:1 2% 3%}')
+    const outerHtml = buildFrameDocument('', ':root{--foreground:1 2% 3%}', 'run')
     expect(parse(outerHtml).querySelector('style')?.textContent).toContain('--foreground:1 2% 3%')
     expect(innerDocumentOf(outerHtml).getAttribute('srcdoc')).toContain('--foreground:1 2% 3%')
+  })
+})
+
+describe('framePolicy', () => {
+  it('lets author scripts run only when asked to', () => {
+    expect(framePolicy('run')).toContain("script-src 'unsafe-inline'")
+    expect(framePolicy('hold')).not.toContain("script-src 'unsafe-inline'")
+    expect(framePolicy('hold')).toContain(`script-src '${HEIGHT_REPORTER_HASH}'`)
+  })
+
+  it('holds the hash of the reporter as it ships', () => {
+    const digest = createHash('sha256').update(HEIGHT_REPORTER).digest('base64')
+    expect(HEIGHT_REPORTER_HASH).toBe(`sha256-${digest}`)
   })
 })
 

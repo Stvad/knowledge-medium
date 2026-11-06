@@ -1,5 +1,5 @@
 import {useLayoutEffect, useMemo, useRef, useState} from 'react'
-import {buildFrameDocument, documentWindowOf, FRAME_SANDBOX, readReportedHeight} from './frameDocument.ts'
+import {buildFrameDocument, documentWindowOf, FRAME_SANDBOX, readReportedHeight, type FrameScripts} from './frameDocument.ts'
 import {useFrameThemeCss} from './frameTheme.ts'
 
 const INITIAL_FRAME_HEIGHT = 150
@@ -8,10 +8,10 @@ const INITIAL_FRAME_HEIGHT = 150
  *  reads back is a height, from the one window that may report it; any other
  *  frame on the page can post here too. Heights apply once per frame of the
  *  page's own rendering, so a document posting in a loop can't drive React. */
-export const HtmlFrame = ({source}: {source: string}) => {
+export const HtmlFrame = ({source, scripts}: {source: string; scripts: FrameScripts}) => {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const themeCss = useFrameThemeCss()
-  const srcDoc = useMemo(() => buildFrameDocument(source, themeCss), [source, themeCss])
+  const srcDoc = useMemo(() => buildFrameDocument(source, themeCss, scripts), [source, themeCss, scripts])
   const [height, setHeight] = useState(INITIAL_FRAME_HEIGHT)
 
   // Layout, not passive: a document may report once, as soon as it loads. A message

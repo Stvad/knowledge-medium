@@ -7,7 +7,7 @@ import {HtmlFrame} from '../HtmlFrame.tsx'
 describe('HtmlFrame', () => {
   // Defence in depth: the browser suite passes without it, on the inner frame's.
   it('sandboxes the outer frame with exactly the agreed flags', () => {
-    const {container} = render(<HtmlFrame source="<p>hello</p>"/>)
+    const {container} = render(<HtmlFrame source="<p>hello</p>" scripts="run"/>)
     expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe(FRAME_SANDBOX)
     expect(FRAME_SANDBOX).toBe('allow-scripts')
   })

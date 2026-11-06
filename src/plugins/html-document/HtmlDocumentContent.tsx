@@ -16,20 +16,29 @@ import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig} from '@/utils/codemi
 import {HTML_DOCUMENT_TYPE} from './blockType.ts'
 import {HtmlFrame} from './HtmlFrame.tsx'
 import {sourceEditingKeys} from './sourceEditing.ts'
+import {useDocumentScripts} from './useDocumentScripts.ts'
+
+const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
 
 /** The strip above the frame is the app's own, drawn where a document cannot
- *  reach: it marks what is sandboxed, and it is the click target for editing,
- *  since clicks inside the frame never reach the block. Not a button: a plain
- *  click on it falls through to the block's own click-to-edit. */
+ *  reach: it marks what is sandboxed, it is the only place scripts can be allowed
+ *  from, and it is the click target for editing, since clicks inside the frame
+ *  never reach the block. "Edit source" is not a button: a plain click on it falls
+ *  through to the block's own click-to-edit. */
 const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
+  const scripts = useDocumentScripts(block, source)
   return (
     <div className="w-full overflow-hidden rounded-md border border-border">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground select-none">
-        <span>HTML document (sandboxed)</span>
-        {!block.repo.isReadOnly && <span>Edit source</span>}
+        <span>{scripts.allow ? 'HTML document (sandboxed, scripts off)' : 'HTML document (sandboxed)'}</span>
+        <span className="flex items-center gap-2">
+          {scripts.allow && <button type="button" className={STRIP_ACTION} onClick={scripts.allow}>Run scripts</button>}
+          {scripts.stop && <button type="button" className={STRIP_ACTION} onClick={scripts.stop}>Stop scripts</button>}
+          {!block.repo.isReadOnly && <span>Edit source</span>}
+        </span>
       </div>
-      <HtmlFrame source={source}/>
+      {scripts.mode && <HtmlFrame source={source} scripts={scripts.mode}/>}
     </div>
   )
 }

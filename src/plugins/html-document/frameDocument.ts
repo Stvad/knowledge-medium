@@ -1,8 +1,9 @@
 /**
  * What an `html-document` block runs in. A block's source is written by any
- * workspace member and runs in every member's client, so nothing crosses this
+ * workspace member and renders in every member's client, so nothing crosses this
  * boundary except a clamped height. `test/boundary.browser.test.ts` pins what holds
- * and, under "what a document can still do", what doesn't.
+ * and, under "what a document can still do", what doesn't. The second list is why
+ * scripts don't always run: see `documentScripts.ts`.
  *
  * Two nested frames, both `sandbox="allow-scripts"`:
  *
@@ -28,11 +29,16 @@
 
 export const FRAME_SANDBOX = 'allow-scripts'
 
+/** `run` lets the source's scripts run. `hold` lets only {@link HEIGHT_REPORTER}
+ *  run, so a document still renders and sizes itself but no author code executes:
+ *  no inline script, event handler, `javascript:` link or child frame's script. */
+export type FrameScripts = 'run' | 'hold'
+
 /** Forms and popups are the sandbox's to refuse, not this policy's. */
-export const FRAME_CSP = [
+export const framePolicy = (scripts: FrameScripts): string => [
   // Also the `frame-src` the outer frame exists to apply.
   "default-src 'none'",
-  "script-src 'unsafe-inline'",
+  scripts === 'run' ? "script-src 'unsafe-inline'" : `script-src '${HEIGHT_REPORTER_HASH}'`,
   "style-src 'unsafe-inline'",
   'img-src data: blob:',
   'font-src data:',
@@ -47,7 +53,7 @@ export const HEIGHT_MESSAGE_TYPE = 'km:html-document:height'
 
 /** Runs in the inner document, so the source can replace or spoof it. That is
  *  fine: {@link readReportedHeight} treats whatever arrives as untrusted. */
-const HEIGHT_REPORTER = `(function () {
+export const HEIGHT_REPORTER = `(function () {
   var last = -1
   var report = function () {
     var body = document.body
@@ -64,6 +70,10 @@ const HEIGHT_REPORTER = `(function () {
   addEventListener('DOMContentLoaded', function () { observer.observe(document.body); report() })
   addEventListener('load', report)
 })()`
+
+/** {@link HEIGHT_REPORTER}'s CSP hash. A constant because the policy is built
+ *  synchronously; a unit test fails if the two drift. */
+export const HEIGHT_REPORTER_HASH = 'sha256-nykZiRQdhwEYtgW9jgKOEzQCQuJjS3MmTt/Gxku/oN0='
 
 /** The one barrier between the source and the outer document. In a double-quoted
  *  attribute only `"` ends the value and only `&` is decoded. */
@@ -83,9 +93,9 @@ const innerDocument = (source: string, themeCss: string): string =>
  *  chain is the app's URL, which holds the workspace and the open blocks. Hence the
  *  `<base>`, and in the outer document because the source could remove its own. It
  *  also gives `#anchor` links the document they mean, rather than the app's URL. */
-export const buildFrameDocument = (source: string, themeCss: string): string =>
+export const buildFrameDocument = (source: string, themeCss: string, scripts: FrameScripts): string =>
   '<!doctype html><html><head><meta charset="utf-8"><base href="about:srcdoc">' +
-  `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">` +
+  `<meta http-equiv="Content-Security-Policy" content="${framePolicy(scripts)}">` +
   `<style>${themeCss}html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style>` +
   '</head><body>' +
   `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocument(source, themeCss))}"></iframe>` +

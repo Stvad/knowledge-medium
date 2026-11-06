@@ -3,6 +3,7 @@
  *  anything. Bundled and served by `boundaryHarness.ts`. */
 
 import {createRoot} from 'react-dom/client'
+import type {FrameScripts} from '../frameDocument.ts'
 import {HtmlFrame} from '../HtmlFrame.tsx'
 
 declare global {
@@ -11,7 +12,7 @@ declare global {
     channelReports: unknown[]
     kmSecret: string
     secretsReady: Promise<void>
-    mountSandboxed: (source: string) => void
+    mountSandboxed: (source: string, scripts?: FrameScripts) => void
     mountControl: (source: string) => void
   }
 }
@@ -61,7 +62,7 @@ window.secretsReady = storeSecrets()
 const mount = document.getElementById('mount') as HTMLElement
 const root = createRoot(mount)
 
-window.mountSandboxed = source => root.render(<HtmlFrame source={source}/>)
+window.mountSandboxed = (source, scripts = 'run') => root.render(<HtmlFrame source={source} scripts={scripts}/>)
 
 /** The same document with no sandbox: every probe must succeed here, or its
  *  failure under the sandbox proves nothing. */
