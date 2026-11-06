@@ -1,1 +1,1 @@
-export{tA as EXTENSIONS_PAGE_TITLE,nA as TUTORIAL_DEFAULT_TITLE,rA as TUTORIAL_VIM_TITLE,iA as extensionsPageOutline,aA as tutorialOutline}from"../../../chunks/app-DJK1r4Jp.js";
+export{tA as EXTENSIONS_PAGE_TITLE,nA as TUTORIAL_DEFAULT_TITLE,rA as TUTORIAL_VIM_TITLE,iA as extensionsPageOutline,aA as tutorialOutline}from"../../../chunks/app-DSFu7F2R.js";

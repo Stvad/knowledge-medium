@@ -1,1 +1,1 @@
-export{U4 as assertAliasClaimable,W4 as claimedAliases}from"../../chunks/app-DJK1r4Jp.js";
+export{U4 as assertAliasClaimable,W4 as claimedAliases}from"../../chunks/app-DSFu7F2R.js";

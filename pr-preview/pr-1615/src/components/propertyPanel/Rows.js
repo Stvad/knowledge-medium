@@ -1,1 +1,1 @@
-export{hz as MetadataRow,gz as PropertySectionLabel}from"../../../chunks/app-DJK1r4Jp.js";
+export{hz as MetadataRow,gz as PropertySectionLabel}from"../../../chunks/app-DSFu7F2R.js";

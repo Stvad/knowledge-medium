@@ -1,1 +1,1 @@
-export{XM as extensionPromptStore,ZM as pendingExtensionPrompts}from"../../../chunks/app-DJK1r4Jp.js";
+export{XM as extensionPromptStore,ZM as pendingExtensionPrompts}from"../../../chunks/app-DSFu7F2R.js";

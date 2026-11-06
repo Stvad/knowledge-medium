@@ -1,1 +1,1 @@
-export{EP as LazyBlockComponent}from"../../chunks/app-DJK1r4Jp.js";
+export{EP as LazyBlockComponent}from"../../chunks/app-DSFu7F2R.js";

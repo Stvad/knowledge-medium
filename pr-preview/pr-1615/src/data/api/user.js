@@ -1,1 +1,1 @@
-export{Bot as SYSTEM_AUTHOR_PREFIX,Vot as isSystemAuthor,Hot as systemAuthor}from"../../../chunks/app-DJK1r4Jp.js";
+export{Vot as SYSTEM_AUTHOR_PREFIX,Hot as isSystemAuthor,Uot as systemAuthor}from"../../../chunks/app-DSFu7F2R.js";

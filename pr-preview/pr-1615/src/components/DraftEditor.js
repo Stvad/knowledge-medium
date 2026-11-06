@@ -1,1 +1,1 @@
-export{tf as DraftEditor}from"../../chunks/app-DJK1r4Jp.js";
+export{tf as DraftEditor}from"../../chunks/app-DSFu7F2R.js";
