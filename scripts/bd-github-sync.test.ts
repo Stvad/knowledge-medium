@@ -1560,6 +1560,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
     bdVersionOutput?: string
+    /** `bd dolt commit` reports an error. */
+    failCommit?: boolean
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1641,6 +1643,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '  close)',
         `    case " ${(opts.blockedCloseIds ?? []).join(' ')} " in *" $2 "*) case "$*" in *--force*) ;; *) echo "cannot close $2: blocked (use --force to override)" >&2; exit 1;; esac;; esac`,
         `    if [ "$2" = "${opts.failCloseId ?? ''}" ]; then echo "Error: cannot close"; else echo ok; fi;;`,
+        `  dolt) ${opts.failCommit ? 'echo "Error: commit exploded"' : 'echo Committed.'};;`,
         '  *) echo ok;;',
         'esac',
         'exit 0',
@@ -1859,8 +1862,52 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     expect(run().status).toBe(0)
     const commands = bdAutoPush().filter(l => !l.startsWith('--version'))
-    expect(new Set(commands.map(l => l.split(' ')[0]))).toEqual(new Set(['export', 'close', 'github']))
+    expect(new Set(commands.map(l => l.split(' ')[0]))).toEqual(new Set(['export', 'close', 'github', 'dolt']))
     expect(commands.filter(l => !l.endsWith(' false'))).toEqual([])
+  })
+
+  describe('committing what bd github sync wrote', () => {
+    const unminted = pushable({ id: 'km-c', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const minted = { ...unminted, external_ref: ref(5) }
+    const mintRepo = { issues: [ghIssue(5, '2026-08-20T00:00:00Z')], reads: [[unminted], [minted]] }
+    // The sync and commit calls in order, without the reads around them.
+    const writes = (log: string) =>
+      log.split('\n').flatMap(l =>
+        /^bd dolt commit\b/.test(l) ? ['commit']
+        : /--push-only/.test(l) ? ['push']
+        : /--pull-only/.test(l) ? ['pull']
+        : [],
+      )
+
+    it('commits right after each sync, so a following bd dolt push carries the refs', () => {
+      const { run, shimCalls } = makeSyncRepo({ ...mintRepo, issues: [...mintRepo.issues, unlinkedIssue()] })
+      expect(run().status).toBe(0)
+      expect(writes(shimCalls())).toEqual(['push', 'commit', 'pull', 'commit'])
+    })
+
+    // A failed push can still have minted: an earlier chunk, or bd aborting midway.
+    it('commits after a failed sync too, and still reports the sync failure', () => {
+      const { run, shimCalls } = makeSyncRepo({ ...mintRepo, failPushCall: 1 })
+      const r = run()
+      expect(r.status).not.toBe(0)
+      expect(r.stderr).toContain('push exploded')
+      expect(writes(shimCalls())).toEqual(['push', 'commit'])
+    })
+
+    it('fails the run when the commit fails, keeping the minted mapping', () => {
+      const { run, runLog } = makeSyncRepo({ ...mintRepo, failCommit: true })
+      const r = run()
+      expect(r.status).not.toBe(0)
+      expect(r.stdout).toContain('minted: km-c → #5')
+      expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('commit exploded') }])
+    })
+
+    it('commits nothing on a dry run', () => {
+      const { run, shimCalls } = makeSyncRepo({ issues: [unlinkedIssue()], reads: [[unminted]] })
+      expect(run('--dry-run').status).toBe(0)
+      expect(shimCalls()).toContain('--pull-only')
+      expect(writes(shimCalls())).not.toContain('commit')
+    })
   })
 
   it('prints the km→#N mapping for an issue this run minted', () => {
