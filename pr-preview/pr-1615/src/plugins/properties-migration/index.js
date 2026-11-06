@@ -1,1 +1,1 @@
-export{za as migratePropertiesToBlocksAction,Fa as propertiesMigrationPlugin}from"../../../chunks/app-DmtDmhe2.js";
+export{Ya as migratePropertiesToBlocksAction,Ga as propertiesMigrationPlugin}from"../../../chunks/app-DJK1r4Jp.js";

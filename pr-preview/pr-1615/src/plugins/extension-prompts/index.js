@@ -1,1 +1,1 @@
-export{IM as ExtensionPromptSurface,LM as extensionPromptsExtension}from"../../../chunks/app-DmtDmhe2.js";
+export{KM as ExtensionPromptSurface,qM as extensionPromptsExtension}from"../../../chunks/app-DJK1r4Jp.js";
