@@ -43,7 +43,7 @@ $$;
 
 drop trigger if exists workspace_members_mark_had_other_members on public.workspace_members;
 create trigger workspace_members_mark_had_other_members
-    after insert or update of user_id on public.workspace_members
+    after insert or update of user_id, workspace_id on public.workspace_members
     for each row execute function private.mark_workspace_had_other_members();
 
 create or replace function public.workspaces_prevent_had_other_members_reset()

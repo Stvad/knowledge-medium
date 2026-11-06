@@ -37,6 +37,7 @@ type Call = {kind: 'execute' | 'getAll' | 'getOptional' | 'tx'; sql: string}
 const PRESENT_COLUMNS = [
   ...BLOCK_LOCAL_COLUMNS.map(column => column.name),
   'user_updated_at', 'group_id', 'encryption_mode', 'wk_canary', 'properties_migration',
+  'had_other_members',
 ].map(name => ({name}))
 
 const fakeDb = (opts: {sentinelRows?: number; storedTriggers?: ReadonlyMap<string, string>} = {}) => {

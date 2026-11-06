@@ -3,7 +3,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(10);
+SELECT plan(11);
 
 CREATE TEMP TABLE ids AS
 SELECT extensions.gen_random_uuid()::text AS owner, extensions.gen_random_uuid()::text AS member;
@@ -46,6 +46,19 @@ UPDATE public.workspace_members SET user_id = (SELECT owner FROM ids)
  WHERE workspace_id = (SELECT solo FROM created);
 DROP TRIGGER workspaces_prevent_had_other_members_reset ON public.workspaces;
 UPDATE public.workspaces SET had_other_members = false WHERE id = (SELECT solo FROM created);
+
+-- So does moving someone else's membership in from another workspace.
+UPDATE public.workspace_members SET workspace_id = (SELECT solo FROM created)
+ WHERE workspace_id = (SELECT shared FROM created) AND user_id = (SELECT member FROM ids);
+SELECT is(
+  (SELECT had_other_members FROM public.workspaces WHERE id = (SELECT solo FROM created)),
+  true,
+  'moving a membership in from another workspace sets it'
+);
+UPDATE public.workspace_members SET workspace_id = (SELECT shared FROM created)
+ WHERE workspace_id = (SELECT solo FROM created) AND user_id = (SELECT member FROM ids);
+UPDATE public.workspaces SET had_other_members = false WHERE id = (SELECT solo FROM created);
+
 CREATE TRIGGER workspaces_prevent_had_other_members_reset
     BEFORE UPDATE OF had_other_members ON public.workspaces
     FOR EACH ROW EXECUTE FUNCTION public.workspaces_prevent_had_other_members_reset();
