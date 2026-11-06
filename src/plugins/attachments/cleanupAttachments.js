@@ -1,1 +1,1 @@
-export{Ny as CLEANUP_ATTACHMENTS_ACTION_ID,Py as cleanupAttachmentsAction,Fy as prepareCleanup}from"../../../chunks/app-bCXEiTck.js";
+export{Ny as CLEANUP_ATTACHMENTS_ACTION_ID,Py as cleanupAttachmentsAction,Fy as prepareCleanup}from"../../../chunks/app-BKKTIr5w.js";

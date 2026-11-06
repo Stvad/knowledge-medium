@@ -1,1 +1,1 @@
-export{iP as BlockLoadingPlaceholder}from"../../chunks/app-bCXEiTck.js";
+export{iP as BlockLoadingPlaceholder}from"../../chunks/app-BKKTIr5w.js";

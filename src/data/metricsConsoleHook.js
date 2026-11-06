@@ -1,1 +1,1 @@
-export{Vj as ensureMetricsConsoleHook}from"../../chunks/app-bCXEiTck.js";
+export{Vj as ensureMetricsConsoleHook}from"../../chunks/app-BKKTIr5w.js";

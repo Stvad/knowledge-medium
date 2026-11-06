@@ -1,1 +1,1 @@
-export{Cd as acceptSuggestion,wd as appliedContent,Td as rejectSuggestion}from"../../../chunks/app-bCXEiTck.js";
+export{Cd as acceptSuggestion,wd as appliedContent,Td as rejectSuggestion}from"../../../chunks/app-BKKTIr5w.js";
