@@ -337,6 +337,35 @@
     list-style-type: none;
   }
 
+  /* `overflow-y` is spelled out because `overflow-x: auto` alone computes it to
+     `auto`, which would make this the scrollport of a block embedded in a cell. */
+  .markdown-table-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  /* `em` so the cells scale with the surrounding text, like the list gutter. */
+  .markdown-table > * > tr > :is(th, td) {
+    border: 1px solid hsl(var(--border));
+    padding: 0.3em 0.65em;
+    vertical-align: top;
+  }
+
+  /* A column's own alignment arrives as an inline style and still wins.
+     Translucent because some themes make `muted` equal `border`, which would
+     hide the dividers, and so a focused block's wash shows through. */
+  .markdown-table > * > tr > th {
+    background-color: hsl(var(--muted) / 0.7);
+    font-weight: 600;
+    text-align: start;
+  }
+
+  /* The global `max-width: 100%` of an auto-sized cell collapses an image to
+     the width of the column's other content. */
+  .markdown-table img {
+    max-width: 20rem;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit
