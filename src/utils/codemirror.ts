@@ -1,3 +1,4 @@
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -217,6 +218,24 @@ export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptComplet
 /** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
  *  Enter before it can reach a window shortcut). */
 export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
+
+/** Bare keys the EDIT_MODE_CM shortcuts read as outline edits: Enter splits the
+ *  block, Tab re-nests it, Backspace and Delete at its edges merge it with a
+ *  neighbour. */
+const OUTLINE_EDIT_KEYS: ReadonlySet<string> = new Set(['Enter', 'Tab', 'Backspace', 'Delete'])
+
+/** `onKeyDown` for a `BlockEditor` holding source, where those keys edit the text
+ *  and must not reach the window-level block shortcuts. A chord is still the app's.
+ *
+ *  Bubble phase on purpose: CodeMirror has run its keymap by now (or, on iOS and
+ *  Android, deferred it, which is what leaves the real event bubbling), so its
+ *  keymap keeps deciding what the key does. Taking the key in the capture phase
+ *  would mean re-implementing that keymap: accepting a completion, the next snippet
+ *  field, a key typed in the search panel. */
+export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
+}
 
 /** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
  *  for bracket closing. Keys, history and completion come from the app. */
