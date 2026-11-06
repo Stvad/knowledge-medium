@@ -1,1 +1,0 @@
-export{vot as defineQuery}from"../../../chunks/app-oVuXPo1I.js";

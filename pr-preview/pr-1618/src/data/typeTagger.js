@@ -1,1 +1,0 @@
-export{K$ as TypeTagger,q$ as applyTypeTagInTx}from"../../chunks/app-oVuXPo1I.js";
