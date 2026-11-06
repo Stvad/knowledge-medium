@@ -1,1 +1,1 @@
-export{KP as CodeMirrorExtensionBlockRenderer,qP as ExtensionEditor}from"../../../chunks/app-Dzrvb7He.js";
+export{KP as CodeMirrorExtensionBlockRenderer,qP as ExtensionEditor}from"../../../chunks/app-oVuXPo1I.js";

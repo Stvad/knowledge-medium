@@ -1,1 +1,1 @@
-export{h2 as applySyncInvalidation}from"../../../../chunks/app-Dzrvb7He.js";
+export{h2 as applySyncInvalidation}from"../../../../chunks/app-oVuXPo1I.js";

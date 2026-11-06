@@ -1,1 +1,1 @@
-export{_ot as defineQuery}from"../../../chunks/app-Dzrvb7He.js";
+export{vot as defineQuery}from"../../../chunks/app-oVuXPo1I.js";
