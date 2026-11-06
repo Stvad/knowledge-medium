@@ -1,1 +1,0 @@
-export{UZ as omnilinerNamespace}from"../../chunks/app-DY-S8rSh.js";

@@ -1,1 +1,0 @@
-export{hW as staticDataExtensions}from"../../chunks/app-DY-S8rSh.js";

@@ -1,1 +1,0 @@
-export{xA as CommandPaletteHeaderItem}from"../../../chunks/app-DY-S8rSh.js";

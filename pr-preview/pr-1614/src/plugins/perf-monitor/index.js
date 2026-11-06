@@ -1,1 +1,0 @@
-export{vr as perfMonitorPlugin}from"../../../chunks/app-DY-S8rSh.js";

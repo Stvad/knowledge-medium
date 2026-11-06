@@ -1,1 +1,0 @@
-export{vM as editorAutocompleteExtension}from"../../chunks/app-DY-S8rSh.js";

@@ -1,1 +1,0 @@
-export{QC as usePromotableBreadcrumb}from"../../../chunks/app-DY-S8rSh.js";
