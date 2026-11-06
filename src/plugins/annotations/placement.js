@@ -1,1 +1,1 @@
-export{jd as fitColumn,Md as placeCards}from"../../../chunks/app-CFZ3LzFh.js";
+export{jd as fitColumn,Md as placeCards}from"../../../chunks/app-BHqQ05_5.js";
