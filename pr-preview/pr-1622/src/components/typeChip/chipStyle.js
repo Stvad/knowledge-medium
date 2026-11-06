@@ -1,0 +1,1 @@
+export{wj as chipStyle}from"../../../chunks/app-Rm1GvxZG.js";

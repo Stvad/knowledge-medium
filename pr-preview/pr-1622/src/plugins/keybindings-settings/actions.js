@@ -1,0 +1,1 @@
+export{Fk as openKeybindingsSettingsAction}from"../../../chunks/app-Rm1GvxZG.js";

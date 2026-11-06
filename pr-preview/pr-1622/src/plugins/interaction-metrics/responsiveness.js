@@ -1,0 +1,1 @@
+export{Oi as ResponsivenessTotals,ki as SLOW_MS,Ai as observeResponsiveness}from"../../../chunks/app-Rm1GvxZG.js";

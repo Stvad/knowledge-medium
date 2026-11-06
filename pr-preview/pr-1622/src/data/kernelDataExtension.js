@@ -1,0 +1,1 @@
+export{T2 as kernelDataExtension}from"../../chunks/app-Rm1GvxZG.js";

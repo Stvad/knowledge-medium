@@ -1,0 +1,1 @@
+export{qC as mobileBottomNavItemsFacet}from"../../../chunks/app-Rm1GvxZG.js";
