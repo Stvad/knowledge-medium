@@ -1,1 +1,1 @@
-export{QT as forgetRememberedWorkspace,$T as recallRememberedWorkspace,eE as rememberWorkspace}from"../../chunks/app-nuSnWwrb.js";
+export{QT as forgetRememberedWorkspace,$T as recallRememberedWorkspace,eE as rememberWorkspace}from"../../chunks/app-Rp0grNt5.js";

@@ -1,1 +1,1 @@
-export{az as BlockProperties}from"../../chunks/app-nuSnWwrb.js";
+export{az as BlockProperties}from"../../chunks/app-Rp0grNt5.js";
