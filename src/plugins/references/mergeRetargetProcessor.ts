@@ -22,6 +22,7 @@ import {
   type SpanReplacement,
 } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
+import { hasSourceContent } from './referencesProcessor.ts'
 import {
   SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
   inlineDeletedBlockRefsProcessor,
@@ -276,12 +277,14 @@ const retargetSource = async (
     }
   }
 
-  const nextContent = retargetReferenceContent(
-    current.content,
-    event.fromId,
-    event.intoId,
-    aliasReplacements,
-  )
+  const nextContent = hasSourceContent(current)
+    ? current.content
+    : retargetReferenceContent(
+      current.content,
+      event.fromId,
+      event.intoId,
+      aliasReplacements,
+    )
   // Aliases this merge MEANT to rewrite whose span is still standing in
   // the rewritten content. Two ways in, one treatment:
   //   - the replacement could not be rendered at all (`null`), so the span

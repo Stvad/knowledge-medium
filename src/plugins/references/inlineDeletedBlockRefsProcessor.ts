@@ -46,6 +46,7 @@ import {
 } from '@/data/internals/referenceTargetProcessor'
 import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
 import { inlineBlockRefs } from './referenceParser.ts'
+import { hasSourceContent } from './referencesProcessor.ts'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
   'references.inlineDeletedBlockReferences'
@@ -130,6 +131,7 @@ const inlineSource = async (
   // DEFINITION — every field row keyed to it is an ordinary referrer).
   if (await isPropertyValueRow(tx, current)) return
   if (await isPropertyFieldRow(tx, current)) return
+  if (hasSourceContent(current)) return
 
   const nextContent = inlineBlockRefs(current.content, deletedId, inlineContent)
   const nextReferences = normalizeReferences(

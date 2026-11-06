@@ -112,6 +112,11 @@ const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_T
 
 /** Is this row's content source code, out of reach of the content grammars?
  *
+ *  Every writer that rewrites spans in `content` asks this of the row it is about
+ *  to write, not only the parser. Its edges can outlive the type arriving (they
+ *  clear at the next parse, and a block typed before this gate keeps them until
+ *  its next write), so finding a row through `block_references` proves nothing.
+ *
  *  A raw-array read rather than `hasBlockType`, which decodes through the
  *  `string-list` codec and THROWS a `CodecError` on a malformed `types`
  *  value — a non-array, or an array holding a non-string. A throw in this

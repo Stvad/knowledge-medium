@@ -763,6 +763,26 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('ext'))!.content).toBe(code)
   })
 
+  // Tagging only clears a block's edges at the next parse. Until then the
+  // edge-keyed leg still reaches it, and the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never rewrites a block newly typed %s through its old edge', async type => {
+    await seedTarget('t', 'Old', ['Old'])
+    const code = 'const label = "[[Old]]"'
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'e0', content: code})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await blockReferences('src', 't')).not.toEqual([])
+
+    await env.repo.tx(async tx => {
+      await tx.update('src', {properties: {types: [type]}})
+      await tx.setProperty('t', aliasesProp, ['New'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('src'))!.content).toBe(code)
+  })
+
   it('skips the content leg when TWO targets release the same alias in one commit', async () => {
     // #460's sync-induced state: the alias-uniqueness trigger fires only for
     // local user txs, so two blocks can co-claim one name. If both release it
