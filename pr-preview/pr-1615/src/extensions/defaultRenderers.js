@@ -1,0 +1,1 @@
+export{CP as defaultRegistry,wP as defaultRendererContributions,TP as defaultRenderersExtension}from"../../chunks/app-CDUk7J4t.js";

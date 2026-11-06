@@ -1,0 +1,1 @@
+export{gw as BreadcrumbRenderer}from"../../../chunks/app-CDUk7J4t.js";

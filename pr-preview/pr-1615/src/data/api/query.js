@@ -1,0 +1,1 @@
+export{Iot as defineQuery}from"../../../chunks/app-CDUk7J4t.js";

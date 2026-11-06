@@ -1,0 +1,1 @@
+export{KG as HTML_DOCUMENT_TYPE,cn as htmlDocumentPlugin}from"../../../chunks/app-CDUk7J4t.js";

@@ -1,0 +1,1 @@
+export{qx as videoPlayerPlugin}from"../../../chunks/app-CDUk7J4t.js";

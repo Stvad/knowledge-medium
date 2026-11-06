@@ -1,0 +1,1 @@
+export{rY as contributorsDataExtension}from"../../../chunks/app-CDUk7J4t.js";

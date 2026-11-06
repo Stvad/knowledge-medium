@@ -1,0 +1,1 @@
+export{wf as confirmThreadDeletion}from"../../../chunks/app-CDUk7J4t.js";

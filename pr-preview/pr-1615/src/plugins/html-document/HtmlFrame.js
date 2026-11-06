@@ -1,0 +1,1 @@
+export{fn as HtmlFrame}from"../../../chunks/app-CDUk7J4t.js";

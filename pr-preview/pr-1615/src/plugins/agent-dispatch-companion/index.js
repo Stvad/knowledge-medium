@@ -1,0 +1,1 @@
+export{wp as agentDispatchCompanionPlugin}from"../../../chunks/app-CDUk7J4t.js";

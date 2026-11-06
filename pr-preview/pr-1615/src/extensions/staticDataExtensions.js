@@ -1,0 +1,1 @@
+export{MW as staticDataExtensions}from"../../chunks/app-CDUk7J4t.js";

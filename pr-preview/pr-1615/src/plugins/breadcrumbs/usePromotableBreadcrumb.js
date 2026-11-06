@@ -1,0 +1,1 @@
+export{mw as usePromotableBreadcrumb}from"../../../chunks/app-CDUk7J4t.js";

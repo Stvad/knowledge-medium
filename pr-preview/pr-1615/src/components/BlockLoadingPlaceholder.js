@@ -1,0 +1,1 @@
+export{bP as BlockLoadingPlaceholder}from"../../chunks/app-CDUk7J4t.js";

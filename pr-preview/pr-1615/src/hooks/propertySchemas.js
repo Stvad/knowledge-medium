@@ -1,0 +1,1 @@
+export{kU as usePropertySchemas}from"../../chunks/app-CDUk7J4t.js";

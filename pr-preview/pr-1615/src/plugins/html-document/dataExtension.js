@@ -1,0 +1,1 @@
+export{GG as htmlDocumentDataExtension}from"../../../chunks/app-CDUk7J4t.js";

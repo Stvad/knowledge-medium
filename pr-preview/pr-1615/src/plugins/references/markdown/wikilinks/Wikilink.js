@@ -1,0 +1,1 @@
+export{Fv as Wikilink}from"../../../../../chunks/app-CDUk7J4t.js";

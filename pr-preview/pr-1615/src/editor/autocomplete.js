@@ -1,0 +1,1 @@
+export{PM as editorAutocompleteExtension}from"../../chunks/app-CDUk7J4t.js";

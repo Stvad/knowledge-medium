@@ -1,0 +1,1 @@
+export{ZM as appUpdatePromptExtension}from"../../../chunks/app-CDUk7J4t.js";

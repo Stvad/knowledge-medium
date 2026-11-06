@@ -1,0 +1,1 @@
+export{Dn as characterCountDecoratorContribution}from"../../../chunks/app-CDUk7J4t.js";

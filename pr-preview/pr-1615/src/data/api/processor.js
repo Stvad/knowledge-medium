@@ -1,0 +1,1 @@
+export{Wot as definePostCommitProcessor}from"../../../chunks/app-CDUk7J4t.js";

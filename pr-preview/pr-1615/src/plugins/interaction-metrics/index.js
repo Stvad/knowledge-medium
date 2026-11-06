@@ -1,0 +1,1 @@
+export{Bi as interactionMetricsPlugin}from"../../../chunks/app-CDUk7J4t.js";

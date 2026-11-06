@@ -1,0 +1,1 @@
+export{MN as ClientLocalSettings,NN as clientLocalSettings}from"../../chunks/app-CDUk7J4t.js";

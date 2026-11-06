@@ -1,0 +1,1 @@
+export{K2 as kernelDataExtension}from"../../chunks/app-CDUk7J4t.js";

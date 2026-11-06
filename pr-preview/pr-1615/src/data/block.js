@@ -1,0 +1,1 @@
+export{U2 as Block,W2 as requireLoadedBlock}from"../../chunks/app-CDUk7J4t.js";
