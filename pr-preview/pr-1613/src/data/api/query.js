@@ -1,1 +1,0 @@
-export{hot as defineQuery}from"../../../chunks/app-DqrB8s_P.js";
