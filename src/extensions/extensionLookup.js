@@ -1,1 +1,1 @@
-export{Sm as findExtensionBlock}from"../../chunks/app-BHqQ05_5.js";
+export{Sm as findExtensionBlock}from"../../chunks/app-CCRpeoxA.js";

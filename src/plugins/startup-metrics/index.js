@@ -1,1 +1,1 @@
-export{Bi as startupMetricsPlugin}from"../../../chunks/app-BHqQ05_5.js";
+export{Bi as startupMetricsPlugin}from"../../../chunks/app-CCRpeoxA.js";

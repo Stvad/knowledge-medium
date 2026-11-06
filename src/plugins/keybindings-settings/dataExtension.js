@@ -1,1 +1,1 @@
-export{Qn as keybindingsSettingsDataExtension}from"../../../chunks/app-BHqQ05_5.js";
+export{Qn as keybindingsSettingsDataExtension}from"../../../chunks/app-CCRpeoxA.js";

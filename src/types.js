@@ -1,1 +1,1 @@
-export{brt as isChildBackedPropertiesWorkspace}from"../chunks/app-BHqQ05_5.js";
+export{brt as isChildBackedPropertiesWorkspace}from"../chunks/app-CCRpeoxA.js";
