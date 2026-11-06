@@ -11,8 +11,6 @@ import {htmlDocumentActions} from './actions.ts'
 import {htmlDocumentDataExtension} from './dataExtension.ts'
 import {htmlDocumentContentContribution, htmlDocumentReferenceLayout} from './HtmlDocumentContent.tsx'
 
-export {HTML_DOCUMENT_TYPE} from './blockType.ts'
-
 const SOURCE = 'html-document'
 
 export const htmlDocumentPlugin: AppExtension = systemToggle({

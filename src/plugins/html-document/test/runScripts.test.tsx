@@ -22,23 +22,23 @@ describe('Run scripts on the strip', () => {
 
   it('allows nothing until the dialog is confirmed, and ignores a click that follows straight on', async () => {
     const dialog = await openDialogFromStrip()
-    expect(readConsent(SOURCE_BLOCK)).toBeNull()
+    expect(readConsent(SOURCE_BLOCK)).toBe('')
 
     const confirm = within(dialog).getByRole<HTMLButtonElement>('button', {name: 'Run scripts'})
     fireEvent.click(confirm)
     expect(screen.queryByRole('dialog')).not.toBeNull()
-    expect(readConsent(SOURCE_BLOCK)).toBeNull()
+    expect(readConsent(SOURCE_BLOCK)).toBe('')
 
     await waitFor(() => expect(confirm.disabled).toBe(false))
     fireEvent.click(confirm)
     await screen.findByRole('button', {name: 'Stop scripts'})
-    expect(readConsent(SOURCE_BLOCK)).not.toBeNull()
+    expect(readConsent(SOURCE_BLOCK)).not.toBe('')
   })
 
   it('stays held on Cancel', async () => {
     const dialog = await openDialogFromStrip()
     fireEvent.click(within(dialog).getByRole('button', {name: 'Cancel'}))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(readConsent(SOURCE_BLOCK)).toBeNull()
+    expect(readConsent(SOURCE_BLOCK)).toBe('')
   })
 })

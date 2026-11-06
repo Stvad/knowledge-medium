@@ -2,6 +2,7 @@
  *  purpose: anywhere synced, the people it guards against could write it. */
 
 import {CallbackSet} from '@/utils/callbackSet'
+import {clientLocalSettings} from '@/utils/ClientLocalSettings.js'
 
 const keyFor = (blockId: string): string => `km.html-document.scripts-allowed.${blockId}`
 
@@ -18,29 +19,15 @@ export const subscribeToConsent = (listener: () => void): (() => void) => {
   }
 }
 
-/** Blocked storage reads as no consent, which holds the document. */
-export const readConsent = (blockId: string): string | null => {
-  try {
-    return localStorage.getItem(keyFor(blockId))
-  } catch {
-    return null
-  }
-}
+/** Empty when nothing is allowed or storage is blocked, which matches no hash. */
+export const readConsent = (blockId: string): string => clientLocalSettings.getString(keyFor(blockId))
 
 export const grantConsent = (blockId: string, sourceHash: string): void => {
-  try {
-    localStorage.setItem(keyFor(blockId), sourceHash)
-  } catch {
-    return
-  }
+  clientLocalSettings.setString(keyFor(blockId), sourceHash)
   listeners.notify()
 }
 
 export const revokeConsent = (blockId: string): void => {
-  try {
-    localStorage.removeItem(keyFor(blockId))
-  } catch {
-    return
-  }
+  clientLocalSettings.remove(keyFor(blockId))
   listeners.notify()
 }

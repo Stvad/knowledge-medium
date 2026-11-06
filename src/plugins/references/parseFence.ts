@@ -66,8 +66,8 @@ interface CandidateRow extends ReferrerRow {
 /** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
  *  by design: this is a candidate FILTER, and a row whose JSON is
  *  unparseable is not source content (its `types` can't say so), so
- *  it falls through to the ordinary content path — the same answer the
- *  processor's own raw-array read gives for a wrong-shaped value. */
+ *  it falls through to the ordinary content path — the same answer
+ *  `hasSourceContent` gives for a wrong-shaped value. */
 const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
   if (json === null) return {}
   try {
@@ -202,8 +202,7 @@ export const wikilinkSourcesByContent = async (
     // source code in `blocks.content`, so those blocks have no edge: the
     // edge-keyed leg could never reach them, and this leg reads content
     // directly and WOULD. Rewriting a span inside stored source is not a missed
-    // rewrite, it is corrupted source. The exclusion is imported from the
-    // processor that owns it rather than restated, so the two cannot drift.
+    // rewrite, it is corrupted source.
     .filter(row => !rowHasSourceContent(row.propertiesJson))
     .filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
     .map(({sourceId, content}) => ({sourceId, content}))

@@ -4,8 +4,6 @@
 import {seedType, type TypeSeedDeclaration} from '@/data/api'
 import {HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
 
-export {HTML_DOCUMENT_TYPE}
-
 export const htmlDocumentTypeSeed: TypeSeedDeclaration = seedType({
   seedKey: 'system:html-document/type/html-document',
   revision: 1,

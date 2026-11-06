@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
-import {EXTENSION_TYPE} from '@/data/blockTypes'
+import {EXTENSION_TYPE, HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
 import {typeSeedsFacet} from '@/data/facets'
 import {blockContentRendererFacet, blockLayoutFacet, type BlockResolveContext} from '@/extensions/blockInteraction.js'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions.js'
 import {resolveFacetRuntimeSync} from '@/facets/facet.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
-import {HTML_DOCUMENT_TYPE, htmlDocumentPlugin} from '../index.ts'
+import {htmlDocumentPlugin} from '../index.ts'
 
 const contextFor = (types: readonly string[], blockContext: BlockResolveContext['blockContext'] = {}) =>
   ({types, blockContext, contentRenderers: [{id: 'primary', renderer: () => null}]}) as unknown as BlockResolveContext

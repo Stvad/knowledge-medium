@@ -59,14 +59,23 @@ export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
+/** A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types` value. A
+ *  local write can store one (the kernel's same-tx processors let it through), and
+ *  a throw here lands after the user's write committed, freezing references for
+ *  every row in the event. A wrong-shaped value reading as having no types is the
+ *  right answer: the block gets parsed like ordinary content. */
+const declaredTypes = (row: Pick<BlockData, 'properties'>): readonly unknown[] => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) ? types : []
+}
+
 /** Does the row's own `types` say extension? `block_types` is not enough to run
  *  one: SQLite's `json_each` and `JSON.parse` disagree on a duplicated key, so a
  *  crafted row can be listed as an extension while every reader of its properties
  *  sees another type, and shows a reviewer something other than its source. */
-export const declaresExtensionType = (row: Pick<BlockData, 'properties'>): boolean => {
-  const types = row.properties[typesProp.name]
-  return Array.isArray(types) && types.includes(EXTENSION_TYPE)
-}
+export const declaresExtensionType = (row: Pick<BlockData, 'properties'>): boolean =>
+  declaredTypes(row).includes(EXTENSION_TYPE)
 
 const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
 
@@ -80,17 +89,10 @@ const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_T
  *  finding one through `block_references` proves nothing.
  *
  *  A plain list rather than a facet: it is a fact about the stored row and has to
- *  hold with the owning plugin off, or the next write mints pages from the source.
- *
- *  A raw-array read rather than `hasBlockType`, which decodes through the
- *  `string-list` codec and THROWS a `CodecError` on a malformed `types` value. A
- *  local write can store one (the kernel's same-tx processors let it through), and
- *  a throw here lands after the user's write committed, freezing references for
- *  every row in the event. A wrong-shaped value reading as "not source" is the
- *  right answer: the block gets parsed like ordinary content. */
+ *  hold with the owning plugin off, or the next write mints pages from the source. */
 export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
-  const types = row.properties[typesProp.name]
-  return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
+  const types = declaredTypes(row)
+  return SOURCE_CONTENT_TYPES.some(type => types.includes(type))
 }
 
 /** {@link hasSourceContent} for a handle. One not loaded yet reads as not source, so

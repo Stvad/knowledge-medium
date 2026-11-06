@@ -3,7 +3,7 @@
  * workspace member and renders in every member's client, so nothing crosses this
  * boundary except a clamped height. `test/boundary.browser.test.ts` pins what holds
  * and, under "what a document can still do", what doesn't. The second list is why
- * scripts don't always run: see `documentScripts.ts`.
+ * scripts don't always run: see `useDocumentScripts.ts`.
  *
  * Two nested frames, both `sandbox="allow-scripts"`:
  *

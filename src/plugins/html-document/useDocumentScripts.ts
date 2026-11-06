@@ -1,45 +1,29 @@
-import {useEffect, useState, useSyncExternalStore} from 'react'
-import type {Block} from '@/data/block'
-import {computeContentHash} from '@/sync/crypto/contentHash'
-import {decideScripts, hasScripts} from './documentScripts.ts'
+import {useMemo, useSyncExternalStore} from 'react'
+import {sha256Hex} from '@/sync/crypto/sha256Hex.js'
 import type {FrameScripts} from './frameDocument.ts'
 import {grantConsent, readConsent, revokeConsent, subscribeToConsent} from './scriptConsent.ts'
 
 export interface DocumentScripts {
-  /** Undefined until known. Starting held and then running would load twice, and
-   *  starting to run and then holding would run scripts that should have waited. */
-  mode: FrameScripts | undefined
+  mode: FrameScripts
   allow?: () => void
   stop?: () => void
 }
 
-/** `null` when it can't be hashed, which holds the document; `undefined` while
- *  this source's hash is still on its way. */
-const useSourceHash = (source: string): string | null | undefined => {
-  const [computed, setComputed] = useState<{source: string; hash: string | null} | null>(null)
-  useEffect(() => {
-    let current = true
-    computeContentHash(new TextEncoder().encode(source))
-      .catch(() => null)
-      .then(hash => {
-        if (current) setComputed({source, hash})
-      })
-    return () => {
-      current = false
-    }
-  }, [source])
-  return computed?.source === source ? computed.hash : undefined
-}
+/** Whether a held document has anything to run, so a static one offers nothing.
+ *  Only decides that: a miss costs an offer, and the policy holds regardless. */
+export const hasScripts = (source: string): boolean =>
+  /<script\b|\bon[a-z]+\s*=|javascript:/i.test(source)
 
-export const useDocumentScripts = (block: Block, source: string): DocumentScripts => {
-  const sourceHash = useSourceHash(source)
-  const consentedHash = useSyncExternalStore(subscribeToConsent, () => readConsent(block.id))
+/** A document's scripts can take the keyboard and reach the network, so they wait
+ *  for the viewer to allow that version on this device. Being alone in a workspace
+ *  doesn't skip that: current membership can't show who wrote a document, since a
+ *  member can write one and then leave. */
+export const useDocumentScripts = (blockId: string, source: string): DocumentScripts => {
+  const sourceHash = useMemo(() => sha256Hex(new TextEncoder().encode(source)), [source])
+  const consentedHash = useSyncExternalStore(subscribeToConsent, () => readConsent(blockId))
 
-  if (sourceHash === undefined) return {mode: undefined}
-
-  const mode = decideScripts(consentedHash, sourceHash)
-  if (mode === 'run') return {mode, stop: () => revokeConsent(block.id)}
-  return sourceHash !== null && hasScripts(source)
-    ? {mode, allow: () => grantConsent(block.id, sourceHash)}
-    : {mode}
+  if (consentedHash === sourceHash) return {mode: 'run', stop: () => revokeConsent(blockId)}
+  return hasScripts(source)
+    ? {mode: 'hold', allow: () => grantConsent(blockId, sourceHash)}
+    : {mode: 'hold'}
 }

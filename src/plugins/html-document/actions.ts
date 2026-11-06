@@ -3,7 +3,7 @@ import {focusBlock} from '@/data/properties.js'
 import {createTypedChild} from '@/data/typedRecords.js'
 import {bindBlockActionContext, type BlockAction} from '@/shortcuts/blockActions.js'
 import {ActionContextTypes} from '@/shortcuts/types.js'
-import {HTML_DOCUMENT_TYPE} from './blockType.ts'
+import {HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
 import exampleSource from './example.html?raw'
 
 const insertExampleHtmlDocument: BlockAction = {

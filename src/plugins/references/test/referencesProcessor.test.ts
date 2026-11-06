@@ -418,7 +418,7 @@ describe('parseReferences — source content is not scanned for content refs', (
       ['an array with a non-string element', ['page', 42]],
       ['an object', {0: 'extension'}],
       ['null', null],
-    ])('reads %s as not-an-extension instead of throwing', (_label, types) => {
+    ])('reads %s as not source instead of throwing', (_label, types) => {
       const source = {properties: {types}} as unknown as Parameters<typeof hasSourceContent>[0]
       expect(hasSourceContent(source)).toBe(false)
     })

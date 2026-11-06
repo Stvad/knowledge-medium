@@ -4,7 +4,7 @@ import {html} from '@codemirror/lang-html'
 import {keymap} from '@codemirror/view'
 import {BlockEditor} from '@/components/BlockEditor.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.tsx'
-import {EXTENSION_TYPE} from '@/data/blockTypes'
+import {EXTENSION_TYPE, HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
 import {useInEditMode} from '@/data/globalState.js'
 import type {
   BlockContentRendererContribution,
@@ -15,7 +15,6 @@ import {defineVariant} from '@/facets/variantFacet.js'
 import {useContent} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig, keepOutlineEditKeysInEditor} from '@/utils/codemirror.js'
-import {HTML_DOCUMENT_TYPE} from './blockType.ts'
 import {confirmRunScripts} from './confirmRunScripts.tsx'
 import {HtmlFrame} from './HtmlFrame.tsx'
 import {useDocumentScripts} from './useDocumentScripts.ts'
@@ -29,7 +28,7 @@ const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
  *  through to the block's own click-to-edit. */
 export const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
-  const scripts = useDocumentScripts(block, source)
+  const scripts = useDocumentScripts(block.id, source)
   const {allow} = scripts
   return (
     <div className="w-full overflow-hidden rounded-md border border-border">
@@ -41,7 +40,7 @@ export const HtmlDocumentView = ({block}: BlockRendererProps) => {
           {!block.repo.isReadOnly && <span>Edit source</span>}
         </span>
       </div>
-      {scripts.mode && <HtmlFrame source={source} scripts={scripts.mode}/>}
+      <HtmlFrame source={source} scripts={scripts.mode}/>
     </div>
   )
 }

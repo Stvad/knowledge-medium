@@ -5,6 +5,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js'
+import { sha256Hex } from '../../crypto/sha256Hex.js'
 import { untilStopped } from '@/utils/untilStopped.js'
 import { bytesToHex } from '../../crypto/hex.js'
 
@@ -213,4 +214,4 @@ export const bundleFolderIn = async (picked: BundleFolder, name: string, signal?
   }
 }
 
-export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes))
+export {sha256Hex}

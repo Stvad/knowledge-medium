@@ -4,7 +4,6 @@ import {
   buildFrameDocument,
   framePolicy,
   FRAME_SANDBOX,
-  HEIGHT_REPORTER,
   HEIGHT_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   MIN_FRAME_HEIGHT,
