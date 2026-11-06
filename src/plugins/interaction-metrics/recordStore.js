@@ -1,1 +1,1 @@
-export{Zi as appendClientRecord,Qi as clientGroupId,$i as clientSeriesQuery,ea as updateClientRecord}from"../../../chunks/app-BKKTIr5w.js";
+export{Zi as appendClientRecord,Qi as clientGroupId,$i as clientSeriesQuery,ea as updateClientRecord}from"../../../chunks/app-BucD-6fM.js";

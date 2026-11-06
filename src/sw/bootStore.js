@@ -1,2 +1,2 @@
-import{Jnt as e,Knt as t,qnt as n}from"../../chunks/app-BKKTIr5w.js";var r=e=>n(e),i=(t,n)=>e(t,n),a=()=>{let e=new t(`km-boot`,`entries`);return{get:t=>e.tx(`readonly`,e=>e.get(t)),putAll:t=>e.runTransaction(`readwrite`,async e=>{for(let[n,r]of t)e.put(r,n)}),deletePrefix:t=>e.deleteByPrefix(t)}};export{i as bootKey,r as bootKeyPrefix,a as idbBootStore};
+import{$nt as e,Qnt as t,Znt as n}from"../../chunks/app-BucD-6fM.js";var r=e=>t(e),i=(t,n)=>e(t,n),a=()=>{let e=new n(`km-boot`,`entries`);return{get:t=>e.tx(`readonly`,e=>e.get(t)),putAll:t=>e.runTransaction(`readwrite`,async e=>{for(let[n,r]of t)e.put(r,n)}),deletePrefix:t=>e.deleteByPrefix(t)}};export{i as bootKey,r as bootKeyPrefix,a as idbBootStore};
 //# sourceMappingURL=bootStore.js.map

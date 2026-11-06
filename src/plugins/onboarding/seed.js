@@ -1,1 +1,1 @@
-export{kk as seedTutorial}from"../../../chunks/app-BKKTIr5w.js";
+export{Pk as seedTutorial}from"../../../chunks/app-BucD-6fM.js";
