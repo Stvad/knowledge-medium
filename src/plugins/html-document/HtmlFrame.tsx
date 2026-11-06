@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react'
+import {useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {buildFrameDocument, documentWindowOf, FRAME_SANDBOX, MIN_FRAME_HEIGHT, readReportedHeight} from './frameDocument.ts'
 import {useFrameThemeCss} from './frameTheme.ts'
 
@@ -14,7 +14,10 @@ export const HtmlFrame = ({source}: {source: string}) => {
   const srcDoc = useMemo(() => buildFrameDocument(source, themeCss), [source, themeCss])
   const [height, setHeight] = useState(INITIAL_FRAME_HEIGHT)
 
-  useEffect(() => {
+  // Layout, not passive: a document may report once, as soon as it loads. A message
+  // is always delivered in a later task than this commit, but a passive effect can
+  // run after it, and that report would be lost with no second one coming.
+  useLayoutEffect(() => {
     let scheduled: number | undefined
     let latest = MIN_FRAME_HEIGHT
     const onMessage = (event: MessageEvent) => {
