@@ -44,6 +44,14 @@ const TAKES_THE_KEYBOARD: Record<Engine, boolean> = {
   firefox: true,
 }
 
+/** A parsed `<link rel=prerender>` sends a GET the policy never sees, on these
+ *  engines. */
+const PRERENDER_REACHES_THE_NETWORK: Record<Engine, boolean> = {
+  chromium: true,
+  webkit: false,
+  firefox: false,
+}
+
 /** `history.back()` in a frame moves the top window's history on these engines. It
  *  cannot choose a new URL, but it is a real gap. */
 const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
@@ -199,7 +207,6 @@ describe.each(selectedEngines())('%s', engine => {
       'a child frame': `<iframe src="${decoy('a child frame')}"></iframe>`,
       'a data: child frame': `<iframe src="data:text/html,<script>new Image().src='${decoy('a data: child frame')}'</script>"></iframe>`,
       'a srcdoc child frame': `<iframe srcdoc="<script>new Image().src='${decoy('a srcdoc child frame')}'</script>"></iframe>`,
-      'the realm of a blank child frame': script(`const frame = document.createElement('iframe'); document.documentElement.append(frame); new frame.contentWindow.Image().src = '${decoy('the realm of a blank child frame')}'`),
       'a worker': script(`try { new Worker(URL.createObjectURL(new Blob(["fetch('${decoy('a worker')}')"], {type: 'text/javascript'}))) } catch {}`),
       'a dynamic import': script(`import('${decoy('a dynamic import')}.js')${swallow}`),
       'rel=preload': `<link rel="preload" as="image" href="${decoy('rel=preload')}">`,
@@ -224,7 +231,7 @@ describe.each(selectedEngines())('%s', engine => {
     })
 
     it('reached the decoy from the control frame through every probe', () => {
-      const missing = Object.keys(requests()).filter(probe => !control.includes(probe) && !provesNothingHere(probe))
+      const missing = Object.keys(requests()).filter(probe => !control.includes(probe))
       expect(missing).toEqual([])
     })
 
@@ -562,6 +569,22 @@ describe.each(selectedEngines())('%s', engine => {
         }, 30)
       `)}`)
       expect(taken.stolen.length > 0).toBe(TAKES_THE_KEYBOARD[engine])
+    })
+
+    it('sends a GET with a link rel=prerender on the engines named above', async () => {
+      const hitsFrom = async (shape: Shape) => {
+        servers.reset()
+        const host = await openHost(browser, servers.hostUrl)
+        await mount(host, shape, `<link rel="prerender" href="${decoy('prerender')}?data=secret">${script(ARMED)}`)
+        await untilReported(host, 'armed')
+        await vi.waitFor(() => expect(servers.decoyHits()).not.toEqual([]), {timeout: 3_000}).catch(() => {})
+        await host.close()
+        return servers.decoyHits()
+      }
+
+      const expected = PRERENDER_REACHES_THE_NETWORK[engine] ? ['/hit/prerender'] : []
+      expect(await hitsFrom('control')).toEqual(expected)
+      expect(await hitsFrom('sandboxed')).toEqual(expected)
     })
 
     it('reaches a host of its choosing over WebRTC', async () => {

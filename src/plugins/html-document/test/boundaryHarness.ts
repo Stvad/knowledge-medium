@@ -21,7 +21,10 @@ export type Engine = keyof typeof ENGINES
 export const selectedEngines = (): Engine[] =>
   (process.env.KM_BOUNDARY_ENGINES?.split(',') ?? Object.keys(ENGINES)) as Engine[]
 
-export const launchEngine = (engine: Engine): Promise<Browser> => ENGINES[engine].launch({headless: true})
+/** Full Chromium, not Playwright's default headless shell: the shell isolates no
+ *  frames and has no prerender, so it hides what a real Chrome does. */
+export const launchEngine = (engine: Engine): Promise<Browser> =>
+  ENGINES[engine].launch(engine === 'chromium' ? {headless: true, channel: 'chromium'} : {headless: true})
 
 const bundleHost = async (): Promise<string> => {
   const here = import.meta.dirname
@@ -144,7 +147,7 @@ export const openHost = async (browser: Browser, hostUrl: string): Promise<HostP
     void dialog.dismiss().catch(() => {})
   })
   await page.goto(`${hostUrl}/?q=KM_SECRET_query#KM_SECRET_hash`)
-  await page.waitForFunction(() => typeof window.mountSandboxed === 'function')
+  await page.waitForFunction(() => typeof window.mountSandboxed === 'function', null, {timeout: 5_000})
   await page.evaluate(() => window.secretsReady)
   return {
     page,
