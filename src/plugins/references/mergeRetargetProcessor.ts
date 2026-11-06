@@ -22,7 +22,7 @@ import {
   type SpanReplacement,
 } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
-import { hasSourceContent } from './referencesProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
   inlineDeletedBlockRefsProcessor,

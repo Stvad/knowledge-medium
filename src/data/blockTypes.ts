@@ -1,4 +1,4 @@
-import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type TypeSeedDeclaration } from '@/data/api'
+import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type BlockData, type TypeSeedDeclaration } from '@/data/api'
 import {
   aliasesProp,
   blockTypeColorProp,
@@ -12,10 +12,14 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  typesProp,
   userIdProp,
 } from '@/data/properties'
 
 export const EXTENSION_TYPE = 'extension'
+/** Owned by the html-document plugin, named here because {@link hasSourceContent}
+ *  has to hold with that plugin off. */
+export const HTML_DOCUMENT_TYPE = 'html-document'
 export const PAGE_TYPE = 'page'
 export const PANEL_TYPE = 'panel'
 export const PANEL_STACK_TYPE = 'panel-stack'
@@ -54,6 +58,31 @@ export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
  *  letting `block_types`-indexed lookups enumerate users and attribution
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
+
+const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
+
+/** Is this row's `content` source code rather than markdown? Then it is not text:
+ *  the content grammars don't parse it, nothing rewrites spans in it, it isn't a
+ *  name, and it doesn't join with a neighbour.
+ *
+ *  Every writer asks this of the row it is about to write, not of how it found
+ *  the row. A block's edges outlive the type arriving (they clear at the next
+ *  parse, and a block typed before this rule keeps them until its next write), so
+ *  finding one through `block_references` proves nothing.
+ *
+ *  A plain list rather than a facet: it is a fact about the stored row and has to
+ *  hold with the owning plugin off, or the next write mints pages from the source.
+ *
+ *  A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types` value. A
+ *  local write can store one (the kernel's same-tx processors let it through), and
+ *  a throw here lands after the user's write committed, freezing references for
+ *  every row in the event. A wrong-shaped value reading as "not source" is the
+ *  right answer: the block gets parsed like ordinary content. */
+export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
+}
 
 /** Types whose blocks are the app's own bookkeeping rather than anything
  *  the user authored — the rows the activity surface

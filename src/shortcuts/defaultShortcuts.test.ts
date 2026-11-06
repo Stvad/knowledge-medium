@@ -1117,6 +1117,55 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
+  describe.each(['extension', 'html-document'])('next to a %s block', type => {
+    const seed = async (firstType?: string, secondType?: string) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'second', content: 'second'})
+      await env.repo.tx(async tx => {
+        if (firstType) await tx.update('first', {properties: {types: [firstType]}})
+        if (secondType) await tx.update('second', {properties: {types: [secondType]}})
+      }, {scope: ChangeScope.BlockDefault})
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(topLevelBlockIdProp, 'root')
+      return uiStateBlock
+    }
+
+    const expectBothIntact = () => {
+      expect(env.repo.block('first').peek()?.content).toBe('first')
+      expect(env.repo.block('second').peek()?.content).toBe('second')
+    }
+
+    it('Backspace at the start of prose does not join it to the source above', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'second')
+      await findEditModeAction(env.repo, 'delete_empty_block_cm').handler({
+        block: env.repo.block('second'),
+        editorView: codeMirrorEditorView('second', 0),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+    })
+
+    it('Delete at the end of prose does not join the source below to it', async () => {
+      const uiStateBlock = await seed(undefined, type)
+      await focusBlock(uiStateBlock, 'first')
+      const editorView = codeMirrorEditorView('first', 'first'.length)
+      await findEditModeAction(env.repo, 'merge_next_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView,
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(editorView.state.doc.toString()).toBe('first')
+    })
+  })
+
   it('does not merge when both blocks have independent children', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})

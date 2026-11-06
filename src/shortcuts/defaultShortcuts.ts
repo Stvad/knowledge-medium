@@ -14,6 +14,7 @@ import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -171,6 +172,13 @@ const splitAtCursor = async (
     keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
     () => block.repo.mutate.split({id: block.id, before, after, placement}))
   return keepsBefore ? newId : block.id
+}
+
+/** Source code isn't text to join: one side would absorb the other's source and
+ *  its type. Refusing costs nothing, since the blocks stay side by side. */
+const holdsSource = (block: Block): boolean => {
+  const data = block.peek()
+  return data != null && hasSourceContent(data)
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -1025,6 +1033,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // for. When the source is the target's only child, there is no
         // independent target subtree: source children replace source's slot.
         await Promise.all([block.load(), prevVisible.load()])
+        if (holdsSource(block) || holdsSource(prevVisible)) return
         const fromChildIds = await block.childIds.load()
         const intoChildIds = await prevVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
@@ -1103,6 +1112,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // user asked for. When `next` is this block's only child there is no
         // independent target subtree: next's children take next's slot.
         await Promise.all([block.load(), nextVisible.load()])
+        if (holdsSource(block) || holdsSource(nextVisible)) return
         const intoChildIds = await block.childIds.load()
         const fromChildIds = await nextVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)

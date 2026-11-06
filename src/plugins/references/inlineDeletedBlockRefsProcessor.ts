@@ -46,7 +46,7 @@ import {
 } from '@/data/internals/referenceTargetProcessor'
 import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
 import { inlineBlockRefs } from './referenceParser.ts'
-import { hasSourceContent } from './referencesProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
   'references.inlineDeletedBlockReferences'
@@ -180,6 +180,9 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
     for (const emitted of event.emittedEvents) {
       const {blockId, workspaceId} = emitted.payload as CoreBlockDeletedEvent
       const block = await ctx.tx.get(blockId)
+      // Its citations stay dangling and restorable: spliced into prose, source
+      // would be parsed as prose.
+      if (block !== null && hasSourceContent(block)) continue
       deletedContent.set(blockId, block?.content ?? '')
       workspaceById.set(blockId, workspaceId)
     }

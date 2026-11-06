@@ -47,7 +47,7 @@
 
 import type { SameTxReadDb } from '@/data/api'
 import { parseReferences } from './referenceParser.ts'
-import { hasSourceContent } from './referencesProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 
 /** One enumerated referrer: the id plus the content every caller needs
  *  anyway (to classify the row and to splice its spans). */

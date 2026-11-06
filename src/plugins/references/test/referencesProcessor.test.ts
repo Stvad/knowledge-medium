@@ -26,8 +26,7 @@ import { ChangeScope, codecs, defineProperty, type AnyPostCommitProcessor, type 
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { HTML_DOCUMENT_TYPE } from '@/plugins/html-document/blockType.ts'
+import { EXTENSION_TYPE, hasSourceContent, HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
@@ -46,7 +45,6 @@ import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
   cleanupOrphanAliasesProcessor,
-  hasSourceContent,
   parseReferencesProcessor,
   reapOrphanAliasSeatsProcessor,
 } from '../referencesProcessor.ts'

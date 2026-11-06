@@ -1,10 +1,10 @@
 /** The `html-document` block type: `content` holds an HTML document, not
- *  markdown. Leaf module (no React) because the references plugin reads the
- *  type id: the content grammars must not run over this source. */
+ *  markdown. */
 
 import {seedType, type TypeSeedDeclaration} from '@/data/api'
+import {HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
 
-export const HTML_DOCUMENT_TYPE = 'html-document'
+export {HTML_DOCUMENT_TYPE}
 
 export const htmlDocumentTypeSeed: TypeSeedDeclaration = seedType({
   seedKey: 'system:html-document/type/html-document',

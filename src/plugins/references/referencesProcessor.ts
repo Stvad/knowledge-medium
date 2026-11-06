@@ -82,11 +82,10 @@ import {
   resolveAliasSeatNamespaces,
   type AliasSeatNamespaces,
 } from '@/data/aliasSeatNamespace'
-import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { HTML_DOCUMENT_TYPE } from '@/plugins/html-document/blockType.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -103,37 +102,6 @@ export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases
  *  check. Adding a new parse-relevant column is a single-edit change here. */
 const planBasisOf = (row: BlockData): string =>
   JSON.stringify([row.content, row.properties, row.references])
-
-/** Types whose `blocks.content` is source code rather than markdown. A plain
- *  list, not a facet: the answer is a fact about the stored row and has to hold
- *  with the owning plugin switched off, or the next write to such a block mints
- *  pages from its source. */
-const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
-
-/** Is this row's content source code, out of reach of the content grammars?
- *
- *  Every writer that rewrites spans in `content` asks this of the row it is about
- *  to write, not only the parser. Its edges can outlive the type arriving (they
- *  clear at the next parse, and a block typed before this gate keeps them until
- *  its next write), so finding a row through `block_references` proves nothing.
- *
- *  A raw-array read rather than `hasBlockType`, which decodes through the
- *  `string-list` codec and THROWS a `CodecError` on a malformed `types`
- *  value — a non-array, or an array holding a non-string. A throw in this
- *  processor's read phase would land AFTER the user's write committed and
- *  abort the whole `apply`, freezing references for its own row and every
- *  other row in the same event.
- *
- *  Load-bearing: a local write can store a malformed `types` cell (the
- *  kernel's same-tx processors read it tolerantly and let it through). A
- *  wrong-shaped value reading as "not source" is the right answer —
- *  the block gets parsed like ordinary content. Same shape as
- *  `MediaBlockRenderer.canRender`, which documents the identical
- *  `getBlockTypes` hazard on the render side. */
-export const hasSourceContent = (source: Pick<BlockData, 'properties'>): boolean => {
-  const types = source.properties[typesProp.name]
-  return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
-}
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */

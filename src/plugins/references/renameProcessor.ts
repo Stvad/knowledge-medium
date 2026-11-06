@@ -101,7 +101,7 @@ import {
   type ReferrerRow,
 } from './parseFence.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
-import { hasSourceContent } from './referencesProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
