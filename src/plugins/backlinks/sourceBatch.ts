@@ -2,9 +2,10 @@
  * The backlink sources of a target, answered for every target asked about in
  * the same microtask by ONE statement per kind of edge: the mentions (every
  * edge but those another surface owns, `edgeExclusions.ts`) or the edges of one
- * property (`{field}`, how a thread's target finds its threads). Self and
- * property machinery are always excluded. This is the one place that decides
- * what a backlink source is; the filtered route (`sources.ts`) narrows it.
+ * property (`{field}`, how a thread's target finds its threads). Self is always
+ * excluded, and an edge from inside a property subtree counts as its owner's
+ * (`interiorEdgesAsOwnersSql`). This is the one place that decides what a
+ * backlink source is; the filtered route (`sources.ts`) narrows it.
  *
  * The badge count and the unfiltered `backlinks.forBlock` list both come from
  * here: two projections of one statement, which keeps "3" on the badge equal
@@ -30,6 +31,37 @@ import { machineryInteriorCtes, workspaceHasPropertyMachinery } from './machiner
 type Projection = 'ids' | 'count'
 type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
 
+/** `sources(target_id, id)`: `pairs` with each edge from inside a property
+ *  subtree restated as an edge from the block holding the subtree. A property
+ *  value's text is shown as part of its owner, so the owner is what links, and
+ *  `UNION` is what keeps a link stated both ways to one backlink.
+ *
+ *  An interior edge names the owner only when that owner could state the edge
+ *  itself: live along the whole walk, in this workspace, and not the target. An
+ *  owner with its own property edge to the target already answered for it in
+ *  `pairs`, excluded or not, so its value row cannot bring it back. Over the
+ *  owner, `edges.owner` applies what `edges.sql` applied to a row of its own.
+ *
+ *  Bind the workspace and `edges.owner.params`, in that order, after the
+ *  recognition params. */
+const interiorEdgesAsOwnersSql = (edges: EdgePredicate): string => `
+  sources(target_id, id) AS (
+    SELECT p.target_id, p.id FROM pairs p WHERE p.id NOT IN (SELECT id FROM machinery)
+    UNION
+    SELECT m.target_id, m.owner_id
+      FROM machinery m
+      JOIN blocks o ON o.id = m.owner_id
+     WHERE m.live
+       AND o.deleted = 0
+       AND o.workspace_id = ?
+       AND o.id != m.target_id
+       AND NOT EXISTS (
+         SELECT 1 FROM block_references own
+          WHERE own.source_id = o.id AND own.target_id = m.target_id AND own.source_field != ''
+       )
+       AND (${edges.owner.sql})
+  )`
+
 /** The candidate predicate is a COPY of the typed-query compiler's
  *  `referencedBy` branch plus `backlinks.forBlock`'s self filter, ordered as
  *  `created-desc` orders, with the edge predicate added. Built from the
@@ -45,7 +77,7 @@ type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
 const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
-  excludeMachinery: boolean,
+  hasMachinery: boolean,
   edges: EdgePredicate,
 ): string => {
   const ctes = [`pairs(target_id, id) AS (
@@ -58,19 +90,19 @@ const backlinkSourcesSql = (
        AND b.id != br.target_id
        AND (${edges.sql})
   )`]
-  if (excludeMachinery) ctes.push(machineryInteriorCtes('SELECT id FROM pairs'))
-  const where = excludeMachinery ? 'WHERE p.id NOT IN (SELECT id FROM machinery)' : ''
+  if (hasMachinery) ctes.push(machineryInteriorCtes('SELECT target_id, id FROM pairs'), interiorEdgesAsOwnersSql(edges))
+  const sources = hasMachinery ? 'sources' : 'pairs'
   return projection === 'count'
     ? `WITH RECURSIVE ${ctes.join(',\n')}
-       SELECT p.target_id, COUNT(*) AS count FROM pairs p ${where} GROUP BY p.target_id`
+       SELECT p.target_id, COUNT(*) AS count FROM ${sources} p GROUP BY p.target_id`
     : `WITH RECURSIVE ${ctes.join(',\n')}
-       SELECT p.target_id, p.id FROM pairs p JOIN blocks b ON b.id = p.id ${where}
+       SELECT p.target_id, p.id FROM ${sources} p JOIN blocks b ON b.id = p.id
         ORDER BY p.target_id, b.created_at DESC, b.id`
 }
 
 interface Resolved<P extends Projection> {
   value: Answer<P>
-  /** Whether the machinery exclusion ran, i.e. whether recognition could
+  /** Whether property subtrees were read, i.e. whether recognition could
    *  change this answer. */
   machinery: boolean
 }
@@ -108,7 +140,7 @@ export class BacklinkSourceBatcher {
         const machinery = await workspaceHasPropertyMachinery(db, workspaceId)
         const rows = await db.getAll<{target_id: string; id?: string; count?: number}>(
           backlinkSourcesSql(targets.length, projection, machinery, edges),
-          [workspaceId, ...targets, ...edges.params, ...(machinery ? recognitionParams : [])],
+          [workspaceId, ...targets, ...edges.params, ...(machinery ? [...recognitionParams, workspaceId, ...edges.owner.params] : [])],
         )
         const answers = new Map<string, string[] | number>()
         for (const row of rows) {
@@ -143,9 +175,9 @@ const batcherFor = readBatcherPerDb(db => new BacklinkSourceBatcher(db))
 /** Resolve one target through the batch and declare what its answer depends
  *  on: the target's reference channel, as `core.typedBlockIds` does for
  *  `referencedBy: {id}` (or, for one property's edges, that field's key), and
- *  field recognition whenever the exclusion ran.
+ *  field recognition whenever property subtrees were read.
  *
- *  KNOWN: the machinery exclusion walks each SOURCE's ancestry, but no
+ *  KNOWN: naming an interior edge's owner walks each SOURCE's ancestry, but no
  *  dependency is declared on it. Moving a source out from under a field row,
  *  or editing an ancestor between `((D))` and `::((D))`, changes membership
  *  with nothing to invalidate on, so a mounted view stays stale until the next
@@ -170,8 +202,9 @@ const resolveSources = async <P extends Projection>(
   return value
 }
 
-/** Sources of `targetId` over `edges` (default: mentions), newest first, self
- *  and property machinery excluded. */
+/** Sources of `targetId` over `edges` (default: mentions), newest first: never
+ *  the target itself, and never a row inside a property subtree, which counts
+ *  as its owner. */
 export const backlinkSourceIds = async (
   ctx: QueryCtx,
   workspaceId: string,

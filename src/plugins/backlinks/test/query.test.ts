@@ -32,7 +32,7 @@ import {
   backlinksForBlockQuery,
   mergeBacklinksFilters,
 } from '../query.ts'
-import { propertyMachinerySourceIds, workspaceHasPropertyMachinery } from '../machinery.ts'
+import { propertyMachineryOwners, workspaceHasPropertyMachinery } from '../machinery.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
   dailyNoteBacklinksDefaultsProp,
@@ -223,7 +223,7 @@ describe('backlinksDataExtension query', () => {
     expect(out).toEqual([])
   })
 
-  describe('property-machinery source exclusion (#20)', () => {
+  describe('property-machinery sources (#20)', () => {
     const FLIP_WS = 'ws-flip'
     const seedFlipped = async () => {
       await sharedDb.db.execute(
@@ -252,7 +252,7 @@ describe('backlinksDataExtension query', () => {
         referenceTargetId: args.referenceTargetId, references: args.references ?? [],
       }), {scope: ChangeScope.BlockDefault})
 
-    it('excludes a property VALUE source by default; rawSources returns it', async () => {
+    it('lists a property VALUE source as its owner by default; rawSources returns it', async () => {
       await seedFlipped()
       // `D` is a recognized property definition; `F` is a field row stamped at
       // it; `V` is F's value child carrying a `[[Foo]]` reference (the hidden
@@ -270,18 +270,13 @@ describe('backlinksDataExtension query', () => {
         {workspaceId: FLIP_WS, id: 'Foo', rawSources: true}).load())
       expect(raw.sort()).toEqual(['Q', 'V'])
 
-      // Default view drops the hidden value-row source (the owning block's
-      // cell reprojection is what carries this backlink, not `V`).
       const filtered = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
         {workspaceId: FLIP_WS, id: 'Foo'}).load())
-      expect(filtered).toEqual(['Q'])
+      expect(filtered.sort()).toEqual(['O', 'Q'])
     })
 
-    it('excludes a property VALUE source in an UN-flipped workspace too', async () => {
-      // The exclusion used to be flip-gated, on the premise that an un-flipped
-      // workspace has no value rows. The cell->children backfill mints them
-      // before the flip, and `V`'s `[[Foo]]` then duplicates the owner's
-      // projected property edge on every backlink surface.
+    it('lists a property VALUE source as its owner in an UN-flipped workspace too', async () => {
+      // The cell->children backfill mints value rows before the flip.
       const UNFLIPPED = 'ws-unflipped-backlinks'
       await sharedDb.db.execute(
         `INSERT OR REPLACE INTO workspaces
@@ -308,7 +303,7 @@ describe('backlinksDataExtension query', () => {
 
       const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
         {workspaceId: UNFLIPPED, id: 'UFoo'}).load())
-      expect(out).toEqual(['UQ'])
+      expect(out.sort()).toEqual(['UO', 'UQ'])
     })
 
     it('still filters when the only field ancestor is TOMBSTONED', async () => {
@@ -382,14 +377,12 @@ describe('backlinksDataExtension query', () => {
         id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D',
         references: [{id: 'D', alias: 'D'}],
       })
-      // An INTERIOR row that also points at D is still machinery: its backlink
-      // would duplicate the owner's reprojected edge and be sourced from a
-      // hidden row.
+      // An INTERIOR row that also points at D counts as its owner.
       await createIn({id: 'V', parentId: 'F', references: [{id: 'D', alias: 'D'}]})
 
       const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
         {workspaceId: FLIP_WS, id: 'D'}).load())
-      expect(out).toEqual(['F'])
+      expect(out.sort()).toEqual(['F', 'O'])
     })
 
     it('unions machinery across chunk boundaries (SQLite variable-cap safety)', async () => {
@@ -404,10 +397,10 @@ describe('backlinksDataExtension query', () => {
       await createIn({id: 'V2', parentId: 'F'})
       await createIn({id: 'Q'})
 
-      const machinery = await propertyMachinerySourceIds(
+      const owners = await propertyMachineryOwners(
         env.h.db, ['V1', 'Q', 'V2'], NO_REGISTRY_RECOGNITION_PARAMS, 1,
       )
-      expect([...machinery].sort()).toEqual(['V1', 'V2'])
+      expect(owners).toEqual(new Map([['V1', 'O'], ['V2', 'O']]))
     })
 
     it('recognizes a field row keyed to a seed definition `block_types` does not carry yet', async () => {
@@ -425,10 +418,10 @@ describe('backlinksDataExtension query', () => {
 
       // No `block_types` row exists for SEED, so only the bound seed set can
       // classify it — with an empty set the walk must NOT classify it.
-      expect([...await propertyMachinerySourceIds(env.h.db, ['V'], NO_REGISTRY_RECOGNITION_PARAMS)]).toEqual([])
-      expect([...await propertyMachinerySourceIds(
+      expect((await propertyMachineryOwners(env.h.db, ['V'], NO_REGISTRY_RECOGNITION_PARAMS)).size).toBe(0)
+      expect(await propertyMachineryOwners(
         env.h.db, ['V'], ['[]', JSON.stringify([SEED]), FLIP_WS],
-      )]).toEqual(['V'])
+      )).toEqual(new Map([['V', 'O']]))
     })
 
     it('leaves a source alone under a ROOT marked row, and classifies the same shape one level down', async () => {
@@ -449,9 +442,9 @@ describe('backlinksDataExtension query', () => {
         id: 'under-owner', parentId: 'F', references: [{id: 'Target', alias: 'T'}],
       })
 
-      expect([...await propertyMachinerySourceIds(
+      expect(await propertyMachineryOwners(
         env.h.db, ['under-root', 'under-owner'], NO_REGISTRY_RECOGNITION_PARAMS,
-      )]).toEqual(['under-owner'])
+      )).toEqual(new Map([['under-owner', 'O']]))
     })
 
     it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {
@@ -471,7 +464,7 @@ describe('backlinksDataExtension query', () => {
       await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
       await createIn({id: 'under-cycle', parentId: 'cx'})
 
-      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], NO_REGISTRY_RECOGNITION_PARAMS)
+      const machinery = await propertyMachineryOwners(env.h.db, ['under-cycle'], NO_REGISTRY_RECOGNITION_PARAMS)
       expect(machinery.size).toBe(0)
     })
 
@@ -497,7 +490,8 @@ describe('backlinksDataExtension query', () => {
         await createIn({id: 'D', content: 'status'})
         await typeAsDefinition('D', FLIP_WS)
         await createIn({id: 'O'})
-        // The field row's own reference is kept (depth 0); its value row's is not.
+        // The field row keeps its own reference (depth 0); its value row's
+        // counts as the owner's.
         await createIn({
           id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D',
           references: [{id: 'T', alias: 'T'}],
@@ -513,7 +507,7 @@ describe('backlinksDataExtension query', () => {
       }).load())
 
       expect(unfiltered).toEqual(viaCompiler)
-      expect([...unfiltered].sort()).toEqual(machinery ? ['F', 'Q1', 'Q2', 'Q3'] : ['Q1', 'Q2', 'Q3'])
+      expect([...unfiltered].sort()).toEqual(machinery ? ['F', 'O', 'Q1', 'Q2', 'Q3'] : ['Q1', 'Q2', 'Q3'])
     })
 
     it('leaves an ordinary source alone when there is no machinery at all', async () => {

@@ -20,7 +20,8 @@ const fakeDb = (counts: Record<string, number>, failReads: number[] = []) => {
   }
 }
 
-const ALL_EDGES = {sql: '1', params: []}
+const EVERY_OWNER = {sql: '1', params: []}
+const ALL_EDGES = {sql: '1', params: [], owner: EVERY_OWNER}
 
 const countOf = (batcher: BacklinkSourceBatcher, target: string) =>
   batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES).then(r => r.value)
@@ -37,7 +38,7 @@ describe('BacklinkSourceBatcher', () => {
   it('answers requests for different edges from separate statements', async () => {
     const db = fakeDb({a: 1})
     const batcher = new BacklinkSourceBatcher(db)
-    const fieldEdges = {sql: 'br.source_field = ?', params: ['annotation:target']}
+    const fieldEdges = {sql: 'br.source_field = ?', params: ['annotation:target'], owner: EVERY_OWNER}
     await Promise.all([
       batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES),
       batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, fieldEdges),
