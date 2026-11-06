@@ -48,6 +48,9 @@ type RpcWorkspaceRow = {
   // deployed before the column exist return rows without it; absence
   // parses as 'cell' (dormant).
   properties_migration?: string | null
+  // Deliberately not carried into the domain Workspace: only the synced row answers
+  // this, read through `useDocumentScripts`. See `primeLocalWorkspace`.
+  had_other_members?: boolean
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({

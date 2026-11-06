@@ -3,7 +3,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(9);
+SELECT plan(10);
 
 CREATE TEMP TABLE ids AS
 SELECT extensions.gen_random_uuid()::text AS owner, extensions.gen_random_uuid()::text AS member;
@@ -33,6 +33,22 @@ SELECT is(
   false,
   'and only for that workspace'
 );
+
+-- Repointing the owner's own membership row at someone else counts too.
+UPDATE public.workspace_members SET user_id = (SELECT member FROM ids)
+ WHERE workspace_id = (SELECT solo FROM created);
+SELECT is(
+  (SELECT had_other_members FROM public.workspaces WHERE id = (SELECT solo FROM created)),
+  true,
+  'repointing a membership at someone else sets it'
+);
+UPDATE public.workspace_members SET user_id = (SELECT owner FROM ids)
+ WHERE workspace_id = (SELECT solo FROM created);
+DROP TRIGGER workspaces_prevent_had_other_members_reset ON public.workspaces;
+UPDATE public.workspaces SET had_other_members = false WHERE id = (SELECT solo FROM created);
+CREATE TRIGGER workspaces_prevent_had_other_members_reset
+    BEFORE UPDATE OF had_other_members ON public.workspaces
+    FOR EACH ROW EXECUTE FUNCTION public.workspaces_prevent_had_other_members_reset();
 
 SELECT set_config('request.jwt.claim.sub', (SELECT member FROM ids), true);
 SELECT public.remove_workspace_member((SELECT shared FROM created), (SELECT member FROM ids));
