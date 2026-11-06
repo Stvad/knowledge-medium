@@ -549,7 +549,7 @@ describe('core.setOrderKey', () => {
 describe('core.indent', () => {
   it('moves the block under its preceding sibling at the end', async () => {
     await seedABC()
-    await env.repo.mutate.indent({id: 'B'})
+    expect(await env.repo.mutate.indent({id: 'B'})).toBe(true)
     expect(env.read('B')!.parentId).toBe('A')
     expect(await env.childIds('root')).toEqual(['A', 'C'])
     expect(await env.childIds('A')).toEqual(['B'])
@@ -567,7 +567,7 @@ describe('core.indent', () => {
 
   it('is a no-op when block has no preceding sibling', async () => {
     await seedABC()
-    await env.repo.mutate.indent({id: 'A'})  // first child of root
+    expect(await env.repo.mutate.indent({id: 'A'})).toBe(false)  // first child of root
     expect(env.read('A')!.parentId).toBe('root')
   })
 
@@ -577,7 +577,7 @@ describe('core.indent', () => {
       tx => tx.create({id: 'r', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    await env.repo.mutate.indent({id: 'r'})
+    expect(await env.repo.mutate.indent({id: 'r'})).toBe(false)
     expect(env.read('r')!.parentId).toBeNull()
   })
 })

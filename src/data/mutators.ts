@@ -562,25 +562,27 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
 
 // ──── indent ────
 
-export const indent = defineMutator<{id: string}, void>({
+export const indent = defineMutator<{id: string}, boolean>({
   name: 'core.indent',
   argsSchema: z.object({id: z.string()}),
+  resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `indent ${id}`,
   apply: async (tx, {id}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) {
       // No parent — can't indent the root. Legacy was a no-op here.
-      return
+      return false
     }
     const siblings = await visibleChildrenOf(tx, self.parentId)
     const ix = siblings.findIndex(s => s.id === id)
-    if (ix <= 0) return  // no previous sibling — no-op
+    if (ix <= 0) return false  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
     await revealChildren(tx, newParent.id)
+    return true
   },
 })
 

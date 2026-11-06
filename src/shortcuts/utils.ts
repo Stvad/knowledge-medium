@@ -129,16 +129,13 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
 }
 
 /**
- * Creates a multi-select version of an action that applies the original action to each selected block.
- * Uses makeModeAction under the hood with a specialized handler override.
+ * Creates a multi-select version of an action that applies the original action
+ * to each selected block, in selection order. Uses makeModeAction under the
+ * hood with a specialized handler override. Not for indent / outdent / move:
+ * those move the selection as a group (`applyOutlineGestureToGroupInTx`).
  */
-export interface ApplyToAllOptions {
-  applyInReverseOrder?: boolean
-}
-
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single
@@ -147,8 +144,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
-    const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
+    const {selectedBlocks: blocks, uiStateBlock, scopeRootId} = multiSelectDeps
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
     // todo Wrap all per-block actions into a single repo.tx so undo
