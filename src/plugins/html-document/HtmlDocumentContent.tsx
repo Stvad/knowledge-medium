@@ -1,5 +1,7 @@
 import {useMemo} from 'react'
+import {deleteCharBackward, deleteCharForward, insertNewlineAndIndent} from '@codemirror/commands'
 import {html} from '@codemirror/lang-html'
+import {keymap} from '@codemirror/view'
 import {BlockEditor} from '@/components/BlockEditor.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.tsx'
 import {EXTENSION_TYPE} from '@/data/blockTypes'
@@ -14,6 +16,7 @@ import {useContent} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig, keepOutlineEditKeysInEditor} from '@/utils/codemirror.js'
 import {HTML_DOCUMENT_TYPE} from './blockType.ts'
+import {confirmRunScripts} from './confirmRunScripts.tsx'
 import {HtmlFrame} from './HtmlFrame.tsx'
 import {useDocumentScripts} from './useDocumentScripts.ts'
 
@@ -24,15 +27,16 @@ const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
  *  from, and it is the click target for editing, since clicks inside the frame
  *  never reach the block. "Edit source" is not a button: a plain click on it falls
  *  through to the block's own click-to-edit. */
-const HtmlDocumentView = ({block}: BlockRendererProps) => {
+export const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
   const scripts = useDocumentScripts(block, source)
+  const {allow} = scripts
   return (
     <div className="w-full overflow-hidden rounded-md border border-border">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground select-none">
         <span>{scripts.allow ? 'HTML document (sandboxed, scripts off)' : 'HTML document (sandboxed)'}</span>
         <span className="flex items-center gap-2">
-          {scripts.allow && <button type="button" className={STRIP_ACTION} onClick={scripts.allow}>Run scripts</button>}
+          {allow && <button type="button" className={STRIP_ACTION} onClick={() => void confirmRunScripts().then(confirmed => { if (confirmed) allow() })}>Run scripts</button>}
           {scripts.stop && <button type="button" className={STRIP_ACTION} onClick={scripts.stop}>Stop scripts</button>}
           {!block.repo.isReadOnly && <span>Edit source</span>}
         </span>
@@ -42,19 +46,24 @@ const HtmlDocumentView = ({block}: BlockRendererProps) => {
   )
 }
 
-/** The markdown editor leaves its keys to the app; source needs CodeMirror's own
- *  for Enter and the rest to edit the text. */
-const SOURCE_BASIC_SETUP = {...BLOCK_EDITOR_BASIC_SETUP, defaultKeymap: true}
+/** Only what edits the text. The rest of CodeMirror's default keymap stays off, as in
+ *  the markdown editor, so a chord means what it does in any other block and arrows
+ *  leave the block at its edges. */
+const SOURCE_KEYS = keymap.of([
+  {key: 'Enter', run: insertNewlineAndIndent, shift: insertNewlineAndIndent},
+  {key: 'Backspace', run: deleteCharBackward, shift: deleteCharBackward},
+  {key: 'Delete', run: deleteCharForward},
+])
 
 export const HtmlSourceEditor = ({block}: BlockRendererProps) => {
   // Auto-closing doubles every closing tag typed by hand. Source stays as written.
-  const extensions = useMemo(() => createSourceEditorConfig(html({autoCloseTags: false})), [])
+  const extensions = useMemo(() => [...createSourceEditorConfig(html({autoCloseTags: false})), SOURCE_KEYS], [])
   return (
     <BlockEditor
       block={block}
       extensions={extensions}
       className="w-full rounded-md border border-border"
-      basicSetup={SOURCE_BASIC_SETUP}
+      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
       onKeyDown={keepOutlineEditKeysInEditor}
     />
   )

@@ -27,6 +27,8 @@
  * source that reached it would run with nothing above it to stop a navigation.
  */
 
+import {bytesToHex} from '@/sync/crypto/hex.js'
+
 export const FRAME_SANDBOX = 'allow-scripts'
 
 /** `run` lets the source's scripts run. `hold` lets only {@link HEIGHT_REPORTER}
@@ -34,11 +36,15 @@ export const FRAME_SANDBOX = 'allow-scripts'
  *  no inline script, event handler, `javascript:` link or child frame's script. */
 export type FrameScripts = 'run' | 'hold'
 
-/** Forms and popups are the sandbox's to refuse, not this policy's. */
-export const framePolicy = (scripts: FrameScripts): string => [
+/** With a `reporterNonce`, only the script carrying it runs; with `null`, all inline
+ *  script does. By nonce rather than the reporter's hash: a hash also allows an
+ *  external script whose `integrity` names it, and that hash is public, so a held
+ *  document could send requests. Forms and popups are the sandbox's to refuse, not
+ *  this policy's. */
+export const framePolicy = (reporterNonce: string | null): string => [
   // Also the `frame-src` the outer frame exists to apply.
   "default-src 'none'",
-  scripts === 'run' ? "script-src 'unsafe-inline'" : `script-src '${HEIGHT_REPORTER_HASH}'`,
+  reporterNonce === null ? "script-src 'unsafe-inline'" : `script-src 'nonce-${reporterNonce}'`,
   "style-src 'unsafe-inline'",
   'img-src data: blob:',
   'font-src data:',
@@ -71,9 +77,9 @@ export const HEIGHT_REPORTER = `(function () {
   addEventListener('load', report)
 })()`
 
-/** {@link HEIGHT_REPORTER}'s CSP hash. A constant because the policy is built
- *  synchronously; a unit test fails if the two drift. */
-export const HEIGHT_REPORTER_HASH = 'sha256-nykZiRQdhwEYtgW9jgKOEzQCQuJjS3MmTt/Gxku/oN0='
+/** Fresh per build, so markup written ahead of time can't carry it. Only in held
+ *  documents: a running one could read it and hand it to its author. */
+const freshNonce = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
 
 /** The one barrier between the source and the outer document. In a double-quoted
  *  attribute only `"` ends the value and only `&` is decoded. */
@@ -83,23 +89,25 @@ const escapeAttribute = (value: string): string =>
 /** The head is left open: a source that is a whole document then parses as if
  *  it had been written here, keeping its own `<title>`, `<html>` attributes and
  *  `<body>`, and a fragment closes the head by itself. */
-const innerDocument = (source: string, themeCss: string): string =>
+const innerDocument = (source: string, themeCss: string, reporterNonce: string | null): string =>
   '<!doctype html><html><head><meta charset="utf-8">' +
   `<style>${themeCss}</style>` +
-  `<script>${HEIGHT_REPORTER}</script>` +
+  `<script${reporterNonce === null ? '' : ` nonce="${reporterNonce}"`}>${HEIGHT_REPORTER}</script>` +
   source
 
 /** A srcdoc document takes its base URL from its embedder, and at the top of that
  *  chain is the app's URL, which holds the workspace and the open blocks. Hence the
  *  `<base>`, and in the outer document because the source could remove its own. It
  *  also gives `#anchor` links the document they mean, rather than the app's URL. */
-export const buildFrameDocument = (source: string, themeCss: string, scripts: FrameScripts): string =>
-  '<!doctype html><html><head><meta charset="utf-8"><base href="about:srcdoc">' +
-  `<meta http-equiv="Content-Security-Policy" content="${framePolicy(scripts)}">` +
+export const buildFrameDocument = (source: string, themeCss: string, scripts: FrameScripts): string => {
+  const reporterNonce = scripts === 'hold' ? freshNonce() : null
+  return '<!doctype html><html><head><meta charset="utf-8"><base href="about:srcdoc">' +
+  `<meta http-equiv="Content-Security-Policy" content="${framePolicy(reporterNonce)}">` +
   `<style>${themeCss}html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style>` +
   '</head><body>' +
-  `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocument(source, themeCss))}"></iframe>` +
+  `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocument(source, themeCss, reporterNonce))}"></iframe>` +
   '</body></html>'
+}
 
 /** Total over anything a frame can post. */
 export const readReportedHeight = (data: unknown): number | null => {

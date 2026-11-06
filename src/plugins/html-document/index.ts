@@ -4,6 +4,7 @@
 
 import {blockContentRendererFacet, blockLayoutFacet} from '@/extensions/blockInteraction.js'
 import {actionsFacet} from '@/extensions/core.js'
+import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
 import {htmlDocumentActions} from './actions.ts'
@@ -20,6 +21,7 @@ export const htmlDocumentPlugin: AppExtension = systemToggle({
   description: 'Tag a block "HTML document" to render its content as a page with scripts and styles, in a sandbox with no access to the app.',
 }).of([
   htmlDocumentDataExtension,
+  dialogAppMountExtension, // asking before a document's scripts run
   // Over the outliner's editing dispatcher and the references plugin's layout,
   // both of which this replaces for these blocks.
   blockContentRendererFacet.of(htmlDocumentContentContribution, {source: SOURCE, precedence: 10}),

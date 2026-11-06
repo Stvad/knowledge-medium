@@ -40,6 +40,9 @@ export const HtmlFrame = ({source, scripts}: {source: string; scripts: FrameScri
 
   return (
     <iframe
+      // A new frame per version: changing the srcdoc of a live one adds an entry to
+      // the page's history, so Back could return to a version since stopped.
+      key={srcDoc}
       ref={frameRef}
       // Ahead of `srcDoc`: the sandbox must be in place when navigation starts.
       sandbox={FRAME_SANDBOX}

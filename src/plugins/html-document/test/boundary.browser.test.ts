@@ -7,10 +7,11 @@
  * nothing, so the control is half of each assertion.
  */
 
+import {createHash} from 'node:crypto'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Browser} from 'playwright'
 import exampleSource from '../example.html?raw'
-import {HEIGHT_MESSAGE_TYPE, MAX_FRAME_HEIGHT} from '../frameDocument.ts'
+import {HEIGHT_MESSAGE_TYPE, HEIGHT_REPORTER, MAX_FRAME_HEIGHT} from '../frameDocument.ts'
 import {
   launchEngine,
   openHost,
@@ -26,6 +27,7 @@ type Shape = 'sandboxed' | 'control'
 /** A navigation or request the document has already started, given this long,
  *  has either landed or was refused. The control frames land inside it. */
 const SETTLE_MS = 500
+const REPORTER_HASH = `sha256-${createHash('sha256').update(HEIGHT_REPORTER).digest('base64')}`
 
 /** Probes an engine's control frame cannot run at all, so they prove nothing
  *  there. Each is a browser feature missing or inert in that engine's build. */
@@ -272,13 +274,23 @@ describe.each(selectedEngines())('%s', engine => {
       'a dynamic import': script(`import('${decoy('a dynamic import')}.js')${swallow}`),
       'rel=preload': `<link rel="preload" as="image" href="${decoy('rel=preload')}">`,
       'rel=modulepreload': `<link rel="modulepreload" href="${decoy('rel=modulepreload')}.js">`,
+      // A hash in the policy would allow each of these, and the reporter's is public.
+      'a script naming the reporter': `<script src="${decoy('a script naming the reporter')}.js" integrity="${REPORTER_HASH}"></script>`,
+      'a module naming the reporter': `<script type="module" src="${decoy('a module naming the reporter')}.js" integrity="${REPORTER_HASH}"></script>`,
+      'a preload naming the reporter': `<link rel="preload" as="script" href="${decoy('a preload naming the reporter')}.js" integrity="${REPORTER_HASH}">`,
+      'a modulepreload naming the reporter': `<link rel="modulepreload" href="${decoy('a modulepreload naming the reporter')}.js" integrity="${REPORTER_HASH}">`,
     })
 
-    const hitsFor = async (shape: Shape) => {
+    const hitsFor = async (shape: Shape | 'held') => {
       servers.reset()
       const host = await openHost(browser, servers.hostUrl)
-      await mount(host, shape, Object.values(requests()).join('\n') + script(ARMED))
-      await untilReported(host, 'armed')
+      const probes = Object.values(requests()).join('\n')
+      if (shape === 'held') {
+        await mountHeld(host, probes)
+      } else {
+        await mount(host, shape, probes + script(ARMED))
+        await untilReported(host, 'armed')
+      }
       await settle(host)
       await host.close()
       return servers.decoyHits().map(path => decodeURIComponent(path).replace('/hit/', '').replace(/\.(js|css)$/, ''))
@@ -286,14 +298,20 @@ describe.each(selectedEngines())('%s', engine => {
 
     let control: string[]
     let sandboxed: string[]
+    let held: string[]
     beforeAll(async () => {
       control = await hitsFor('control')
       sandboxed = await hitsFor('sandboxed')
+      held = await hitsFor('held')
     })
 
     it('reached the decoy from the control frame through every probe', () => {
       const missing = Object.keys(requests()).filter(probe => !control.includes(probe))
       expect(missing).toEqual([])
+    })
+
+    it('reached nothing from a held document', () => {
+      expect(held).toEqual([])
     })
 
     it('reached nothing from the sandbox', () => {
@@ -605,7 +623,6 @@ describe.each(selectedEngines())('%s', engine => {
     })
   })
 
-  // A document anyone else could have written starts like this.
   describe('with scripts held', () => {
     let host: HostPage
     beforeEach(async () => {
@@ -683,6 +700,17 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await ranSoFar()).toEqual([])
     })
 
+    it('adds nothing to the page\'s history when it starts or stops', async () => {
+      const entries = () => host.page.evaluate(() => history.length)
+      const source = `<p>text</p>${script(ARMED)}`
+      await mountHeld(host, source)
+      const before = await entries()
+      await mountRunning(host, source)
+      await mountHeld(host, source)
+      await settle(host)
+      expect(await entries()).toBe(before)
+    })
+
     it('still sends a prerender GET on the engines named above, with nothing computed in it', async () => {
       await mountHeld(host, `<link rel="prerender" href="${decoy('prerender')}?fixed">`)
       await settle(host)
@@ -718,6 +746,15 @@ describe.each(selectedEngines())('%s', engine => {
     it('reaches a host of its choosing over WebRTC', async () => {
       expect(await stunPacketsFrom(host => mount(host, 'control', stunProbe() + script(ARMED)).then(() => untilReported(host, 'armed')))).toBeGreaterThan(0)
       expect(await stunPacketsFrom(host => mountRunning(host, stunProbe()))).toBeGreaterThan(0)
+    })
+
+    // Measured on Chromium only. No script is involved, so holding doesn't stop it,
+    // but what it takes has no way out of a held document.
+    it.runIf(engine === 'chromium')('takes the keyboard while held, through a fragment link in a refresh', async () => {
+      const thief = `<meta http-equiv="refresh" content="1"><iframe srcdoc="<input id=f><meta http-equiv=refresh content='0;url=#f'>"></iframe>`
+      const taken = await typeIntoApp(host => mountHeld(host, thief))
+      expect(taken.inApp).not.toBe('abcde')
+      expect(taken.stolen).toBe('')
     })
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {

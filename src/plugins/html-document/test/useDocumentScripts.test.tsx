@@ -48,6 +48,17 @@ describe('useDocumentScripts', () => {
     await waitFor(() => expect(reopened.result.current.mode).toBe('run'))
   })
 
+  it('stops when another tab does', async () => {
+    const {result} = open()
+    await waitFor(() => expect(result.current.mode).toBe('hold'))
+    act(() => result.current.allow?.())
+    await waitFor(() => expect(result.current.mode).toBe('run'))
+
+    localStorage.clear()
+    act(() => { window.dispatchEvent(new StorageEvent('storage')) })
+    await waitFor(() => expect(result.current.mode).toBe('hold'))
+  })
+
   it('offers nothing to run in a static document', async () => {
     const {result} = open('<p>static</p>')
     await waitFor(() => expect(result.current.mode).toBe('hold'))

@@ -1,12 +1,10 @@
 // @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
-import {createHash} from 'node:crypto'
 import {
   buildFrameDocument,
   framePolicy,
   FRAME_SANDBOX,
   HEIGHT_REPORTER,
-  HEIGHT_REPORTER_HASH,
   HEIGHT_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   MIN_FRAME_HEIGHT,
@@ -25,7 +23,7 @@ describe('buildFrameDocument', () => {
   it('puts the policy on the outer document, ahead of the frame that holds the source', () => {
     const outer = parse(buildFrameDocument('<p>hello</p>', '', 'run'))
     const policy = outer.querySelector('meta[http-equiv="Content-Security-Policy"]')
-    expect(policy?.getAttribute('content')).toBe(framePolicy('run'))
+    expect(policy?.getAttribute('content')).toBe(framePolicy(null))
     expect(outer.head.contains(policy)).toBe(true)
   })
 
@@ -64,16 +62,28 @@ describe('buildFrameDocument', () => {
   })
 })
 
-describe('framePolicy', () => {
-  it('lets author scripts run only when asked to', () => {
-    expect(framePolicy('run')).toContain("script-src 'unsafe-inline'")
-    expect(framePolicy('hold')).not.toContain("script-src 'unsafe-inline'")
-    expect(framePolicy('hold')).toContain(`script-src '${HEIGHT_REPORTER_HASH}'`)
+describe('a held document', () => {
+  const nonceIn = (outerHtml: string) => /'nonce-([0-9a-f]+)'/.exec(outerHtml)?.[1]
+
+  it('lets its reporter run by a nonce no other build shares', () => {
+    const outer = buildFrameDocument('<p>x</p>', '', 'hold')
+    const nonce = nonceIn(outer)
+    expect(nonce).toHaveLength(32)
+    expect(parse(outer).querySelector('iframe')?.getAttribute('srcdoc')).toContain(`<script nonce="${nonce}">`)
+    expect(nonceIn(buildFrameDocument('<p>x</p>', '', 'hold'))).not.toBe(nonce)
   })
 
-  it('holds the hash of the reporter as it ships', () => {
-    const digest = createHash('sha256').update(HEIGHT_REPORTER).digest('base64')
-    expect(HEIGHT_REPORTER_HASH).toBe(`sha256-${digest}`)
+  it('gives a running document no nonce to read', () => {
+    const outer = buildFrameDocument('<p>x</p>', '', 'run')
+    expect(outer).not.toContain('nonce')
+  })
+})
+
+describe('framePolicy', () => {
+  it('lets author scripts run only when asked to', () => {
+    expect(framePolicy(null)).toContain("script-src 'unsafe-inline'")
+    expect(framePolicy('abc')).not.toContain("script-src 'unsafe-inline'")
+    expect(framePolicy('abc')).toContain("script-src 'nonce-abc'")
   })
 })
 

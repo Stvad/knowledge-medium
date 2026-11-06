@@ -224,15 +224,21 @@ export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptComplet
  *  neighbour. */
 const OUTLINE_EDIT_KEYS: ReadonlySet<string> = new Set(['Enter', 'Tab', 'Backspace', 'Delete'])
 
-/** `onKeyDown` for a `BlockEditor` holding source, where those keys edit the text
- *  and must not reach the window-level block shortcuts. Pressed with Alt, Ctrl or
- *  Cmd they are left to the app.
+/** `onKeyDown` for a `BlockEditor` holding source, where a key the editor acted on,
+ *  or one of those above, must not also reach the window-level block shortcuts. A
+ *  chord the editor left alone is the app's, and so is Escape: leaving the editor is
+ *  never the editor's to refuse.
  *
  *  Bubble phase on purpose: CodeMirror has run its keymap or deferred it by now, so
  *  its keymap keeps deciding what the key does, and only the way on to window is
  *  cut. Taking the key in the capture phase would mean re-implementing that keymap:
  *  accepting a completion, the next snippet field, a key typed in the search panel. */
 export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
+  if (event.key === 'Escape') return
+  if (event.defaultPrevented) {
+    event.stopPropagation()
+    return
+  }
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
 }

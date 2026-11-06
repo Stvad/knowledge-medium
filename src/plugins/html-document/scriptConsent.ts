@@ -7,7 +7,16 @@ const keyFor = (blockId: string): string => `km.html-document.scripts-allowed.${
 
 const listeners = new CallbackSet('html-document script consent')
 
-export const subscribeToConsent = (listener: () => void): (() => void) => listeners.add(listener)
+/** The storage event is another tab's Run or Stop; Stop has to reach a document
+ *  running there too. */
+export const subscribeToConsent = (listener: () => void): (() => void) => {
+  const unsubscribe = listeners.add(listener)
+  window.addEventListener('storage', listener)
+  return () => {
+    unsubscribe()
+    window.removeEventListener('storage', listener)
+  }
+}
 
 /** Blocked storage reads as no consent, which holds the document. */
 export const readConsent = (blockId: string): string | null => {
