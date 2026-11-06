@@ -1,1 +1,1 @@
-export{KG as HTML_DOCUMENT_TYPE,qG as htmlDocumentTypeSeed}from"../../../chunks/app-NySvq4I5.js";
+export{KG as HTML_DOCUMENT_TYPE,qG as htmlDocumentTypeSeed}from"../../../chunks/app-nuSnWwrb.js";

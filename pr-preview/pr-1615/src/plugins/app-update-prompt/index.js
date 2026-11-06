@@ -1,1 +1,1 @@
-export{ZM as appUpdatePromptExtension}from"../../../chunks/app-NySvq4I5.js";
+export{ZM as appUpdatePromptExtension}from"../../../chunks/app-nuSnWwrb.js";

@@ -1,1 +1,1 @@
-export{pn as readFrameThemeCss,mn as useFrameThemeCss}from"../../../chunks/app-NySvq4I5.js";
+export{pn as readFrameThemeCss,mn as useFrameThemeCss}from"../../../chunks/app-nuSnWwrb.js";
