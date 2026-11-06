@@ -1,1 +1,1 @@
-export{Sl as blockTagsConfigUi}from"../../../chunks/app-DcNpC0SC.js";
+export{Sl as blockTagsConfigUi}from"../../../chunks/app-5JGV_Nkc.js";

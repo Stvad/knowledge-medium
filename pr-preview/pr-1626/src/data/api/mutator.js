@@ -1,1 +1,1 @@
-export{Dot as defineMutator}from"../../../chunks/app-DcNpC0SC.js";
+export{Mot as defineMutator}from"../../../chunks/app-5JGV_Nkc.js";
