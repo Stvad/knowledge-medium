@@ -31,8 +31,10 @@ const SETTLE_MS = 500
  *  there. Each is a browser feature missing or inert in that engine's build. */
 const CONTROL_CANNOT: Record<Engine, readonly string[]> = {
   chromium: [],
-  webkit: [],
-  firefox: [],
+  // No origin private file system in a throwaway browser context.
+  webkit: ['the origin private file system'],
+  // Hyperlink auditing is off by default.
+  firefox: ['ping'],
 }
 
 /** `history.back()` in a frame moves the top window's history on these engines.
@@ -40,14 +42,14 @@ const CONTROL_CANNOT: Record<Engine, readonly string[]> = {
 const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
   chromium: false,
   webkit: true,
-  firefox: false,
+  firefox: true,
 }
 
 /** STUN packets leave for a host the document names, on these engines. */
 const WEBRTC_REACHES_THE_NETWORK: Record<Engine, boolean> = {
   chromium: true,
   webkit: true,
-  firefox: true,
+  firefox: false,
 }
 
 let servers: BoundaryServers
@@ -464,7 +466,11 @@ describe.each(selectedEngines())('%s', engine => {
       await host.page.evaluate(() => {
         document.documentElement.style.setProperty('--primary', '1 2% 3%')
       })
-      const reader = script(`top.postMessage({primary: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim()}, '*')`)
+      // After a frame of rendering: a frame being reloaded may have no styles yet
+      // when its first script runs.
+      const reader = script(`addEventListener('load', () => requestAnimationFrame(() => {
+        top.postMessage({primary: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim()}, '*')
+      }))`)
       await mount(host, 'sandboxed', reader)
       await untilReported(host, {primary: '1 2% 3%'})
 
@@ -492,23 +498,25 @@ describe.each(selectedEngines())('%s', engine => {
   // pinned where they were measured, so a browser closing one shows up here.
   describe('what a document can still do', () => {
     it('reaches a host of its choosing over WebRTC only where the threat model says', async () => {
-      servers.reset()
-      const host = await openHost(browser, servers.hostUrl)
-      await mount(host, 'sandboxed', script(`
-        const peer = new RTCPeerConnection({iceServers: [{urls: 'stun:${servers.stunAddress}'}]})
+      const peer = script(`
+        const peer = new RTCPeerConnection({iceServers: [{urls: ${JSON.stringify(servers.stunUrls)}}]})
         peer.createDataChannel('x')
         peer.createOffer().then(offer => peer.setLocalDescription(offer))
         window.keepAlive = peer
         ${ARMED}
-      `))
-      await untilReported(host, 'armed')
-      if (WEBRTC_REACHES_THE_NETWORK[engine]) {
-        await vi.waitFor(() => expect(servers.stunPackets()).toBeGreaterThan(0), {timeout: 5_000})
-      } else {
-        await settle(host)
-        expect(servers.stunPackets()).toBe(0)
+      `)
+      const packetsFrom = async (shape: Shape) => {
+        servers.reset()
+        const host = await openHost(browser, servers.hostUrl)
+        await mount(host, shape, peer)
+        await untilReported(host, 'armed')
+        await vi.waitFor(() => expect(servers.stunPackets()).toBeGreaterThan(0), {timeout: 3_000}).catch(() => {})
+        await host.close()
+        return servers.stunPackets()
       }
-      await host.close()
+
+      expect(await packetsFrom('control')).toBeGreaterThan(0)
+      expect(await packetsFrom('sandboxed') > 0).toBe(WEBRTC_REACHES_THE_NETWORK[engine])
     })
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {

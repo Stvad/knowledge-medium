@@ -5,6 +5,7 @@
 import dgram from 'node:dgram'
 import http from 'node:http'
 import type {AddressInfo} from 'node:net'
+import {networkInterfaces} from 'node:os'
 import {resolve} from 'node:path'
 import react from '@vitejs/plugin-react'
 import {chromium, firefox, webkit, type Browser, type BrowserContext, type Page} from 'playwright'
@@ -41,6 +42,12 @@ const bundleHost = async (): Promise<string> => {
   return entry.code
 }
 
+/** Every IPv4 address of this machine. One STUN server on loopback alone would
+ *  read an engine that refuses loopback ICE as the sandbox stopping it, and a
+ *  machine's firewall can refuse the other addresses. */
+const ipv4Addresses = (): string[] =>
+  Object.values(networkInterfaces()).flat().filter(address => address?.family === 'IPv4').map(address => address?.address ?? '')
+
 const listen = (server: http.Server): Promise<string> =>
   new Promise(done => server.listen(0, '127.0.0.1', () =>
     done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
@@ -48,7 +55,7 @@ const listen = (server: http.Server): Promise<string> =>
 export interface BoundaryServers {
   hostUrl: string
   decoyUrl: string
-  stunAddress: string
+  stunUrls: string[]
   /** Paths the decoy has been asked for, including refused WebSocket upgrades. */
   decoyHits: () => string[]
   stunPackets: () => number
@@ -85,13 +92,13 @@ export const startServers = async (): Promise<BoundaryServers> => {
   stun.on('message', () => {
     packets += 1
   })
-  await new Promise<void>(done => stun.bind(0, '127.0.0.1', done))
+  await new Promise<void>(done => stun.bind(0, '0.0.0.0', done))
 
   const [hostUrl, decoyUrl] = await Promise.all([listen(host), listen(decoy)])
   return {
     hostUrl,
     decoyUrl,
-    stunAddress: `127.0.0.1:${stun.address().port}`,
+    stunUrls: ipv4Addresses().map(address => `stun:${address}:${stun.address().port}`),
     decoyHits: () => [...hits],
     stunPackets: () => packets,
     reset: () => {
