@@ -1,37 +1,49 @@
 // @vitest-environment happy-dom
 import {beforeEach, describe, expect, it} from 'vitest'
-import {decideScripts, hasScripts} from '../documentScripts.ts'
+import {decideScripts, hasScripts, isOnlyEverViewer} from '../documentScripts.ts'
 import {grantConsent, readConsent, revokeConsent, subscribeToConsent} from '../scriptConsent.ts'
 
-const ME = 'me'
+describe('isOnlyEverViewer', () => {
+  it('trusts the server saying nobody else has ever been a member', () => {
+    expect(isOnlyEverViewer(0, true)).toBe(true)
+  })
+
+  it('holds once anyone else has been a member, whether or not they are still', () => {
+    expect(isOnlyEverViewer(1, true)).toBe(false)
+    expect(isOnlyEverViewer(1, false)).toBe(false)
+  })
+
+  it.each([[null], [undefined]])('reads %s from a synced workspace as may have had', value => {
+    expect(isOnlyEverViewer(value, true)).toBe(false)
+  })
+
+  it.each([[null], [undefined]])('reads %s in a local-only workspace as nobody else', value => {
+    expect(isOnlyEverViewer(value, false)).toBe(true)
+  })
+})
 
 describe('decideScripts', () => {
   const decide = (over: Partial<Parameters<typeof decideScripts>[0]>) =>
-    decideScripts({memberIds: [ME], me: ME, consentedHash: null, sourceHash: 'hash-a', ...over})
+    decideScripts({onlyEverViewer: false, consentedHash: null, sourceHash: 'hash-a', ...over})
 
-  it('runs a document when the viewer is the workspace\'s only member', () => {
-    expect(decide({})).toBe('run')
+  it('runs a document only the viewer could have written', () => {
+    expect(decide({onlyEverViewer: true})).toBe('run')
   })
 
   it('holds a document anyone else could have written', () => {
-    expect(decide({memberIds: [ME, 'other']})).toBe('hold')
+    expect(decide({})).toBe('hold')
   })
 
-  it('holds when the viewer\'s own membership has not arrived, whoever else is there', () => {
-    expect(decide({memberIds: []})).toBe('hold')
-    expect(decide({memberIds: ['other']})).toBe('hold')
-  })
-
-  it('runs the version of a shared document the viewer allowed on this device', () => {
-    expect(decide({memberIds: [ME, 'other'], consentedHash: 'hash-a'})).toBe('run')
+  it('runs the version the viewer allowed on this device', () => {
+    expect(decide({consentedHash: 'hash-a'})).toBe('run')
   })
 
   it('holds again once the source changes', () => {
-    expect(decide({memberIds: [ME, 'other'], consentedHash: 'hash-a', sourceHash: 'hash-b'})).toBe('hold')
+    expect(decide({consentedHash: 'hash-a', sourceHash: 'hash-b'})).toBe('hold')
   })
 
   it('holds when the source could not be hashed, even against a matching absence', () => {
-    expect(decide({memberIds: [ME, 'other'], consentedHash: null, sourceHash: null})).toBe('hold')
+    expect(decide({consentedHash: null, sourceHash: null})).toBe('hold')
   })
 })
 

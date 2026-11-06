@@ -1,9 +1,10 @@
 import {useEffect, useState, useSyncExternalStore} from 'react'
 import {useQuery} from '@powersync/react'
 import type {Block} from '@/data/block'
+import {isRemoteSyncActive} from '@/data/repoProvider'
 import {useWorkspaceId} from '@/hooks/block.js'
 import {computeContentHash} from '@/sync/crypto/contentHash'
-import {decideScripts, hasScripts, isSoleMember} from './documentScripts.ts'
+import {decideScripts, hasScripts, isOnlyEverViewer} from './documentScripts.ts'
 import type {FrameScripts} from './frameDocument.ts'
 import {grantConsent, readConsent, revokeConsent, subscribeToConsent} from './scriptConsent.ts'
 
@@ -15,7 +16,7 @@ export interface DocumentScripts {
   stop?: () => void
 }
 
-const SELECT_MEMBER_IDS_SQL = 'SELECT user_id FROM workspace_members WHERE workspace_id = ?'
+const SELECT_HAD_OTHER_MEMBERS_SQL = 'SELECT had_other_members FROM workspaces WHERE id = ?'
 
 /** `null` when it can't be hashed, which holds the document; `undefined` while
  *  this source's hash is still on its way. */
@@ -39,17 +40,16 @@ const useSourceHash = (source: string): string | null | undefined => {
  *  document from a workspace other people can write to. */
 export const useDocumentScripts = (block: Block, source: string): DocumentScripts => {
   const workspaceId = useWorkspaceId(block, '')
-  const {data: members, isLoading} = useQuery<{user_id: string}>(SELECT_MEMBER_IDS_SQL, [workspaceId])
+  const {data: rows, isLoading} = useQuery<{had_other_members: number | null}>(SELECT_HAD_OTHER_MEMBERS_SQL, [workspaceId])
   const sourceHash = useSourceHash(source)
   const consentedHash = useSyncExternalStore(subscribeToConsent, () => readConsent(block.id))
 
   if (workspaceId === '' || isLoading) return {mode: undefined}
-  const memberIds = members.map(member => member.user_id)
-  const me = block.repo.user.id
-  if (isSoleMember(memberIds, me)) return {mode: 'run'}
+  const onlyEverViewer = isOnlyEverViewer(rows[0]?.had_other_members, isRemoteSyncActive())
+  if (onlyEverViewer) return {mode: 'run'}
   if (sourceHash === undefined) return {mode: undefined}
 
-  const mode = decideScripts({memberIds, me, consentedHash, sourceHash})
+  const mode = decideScripts({onlyEverViewer, consentedHash, sourceHash})
   if (mode === 'run') return {mode, stop: () => revokeConsent(block.id)}
   return sourceHash !== null && hasScripts(source)
     ? {mode, allow: () => grantConsent(block.id, sourceHash)}

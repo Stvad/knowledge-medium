@@ -4,17 +4,20 @@
 
 import type {FrameScripts} from './frameDocument.ts'
 
-/** Fails closed: no rows yet means the membership hasn't arrived, not "alone". */
-export const isSoleMember = (memberIds: readonly string[], me: string): boolean =>
-  memberIds.length > 0 && memberIds.every(id => id === me)
+/** Could only the viewer have written anything in this workspace? Asks whether
+ *  anyone else has EVER been a member: current membership proves nothing, since a
+ *  member can write a document and then leave, and `blocks.updated_by` is claimed
+ *  by the client. Unknown means no. Only a local-only workspace, which no one else
+ *  can reach, has no server to say. */
+export const isOnlyEverViewer = (hadOtherMembers: number | null | undefined, remoteSync: boolean): boolean =>
+  hadOtherMembers === 0 || (hadOtherMembers == null && !remoteSync)
 
-export const decideScripts = ({memberIds, me, consentedHash, sourceHash}: {
-  memberIds: readonly string[]
-  me: string
+export const decideScripts = ({onlyEverViewer, consentedHash, sourceHash}: {
+  onlyEverViewer: boolean
   consentedHash: string | null
   sourceHash: string | null
 }): FrameScripts => {
-  if (isSoleMember(memberIds, me)) return 'run'
+  if (onlyEverViewer) return 'run'
   return sourceHash !== null && consentedHash === sourceHash ? 'run' : 'hold'
 }
 
