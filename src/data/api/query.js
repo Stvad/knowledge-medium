@@ -1,1 +1,1 @@
-export{hot as defineQuery}from"../../../chunks/app-CCRpeoxA.js";
+export{hot as defineQuery}from"../../../chunks/app-bCXEiTck.js";

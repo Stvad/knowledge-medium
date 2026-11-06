@@ -1,1 +1,1 @@
-export{GX as attachmentCleanerIOContribution,KX as attachmentsDataExtension}from"../../../chunks/app-CCRpeoxA.js";
+export{GX as attachmentCleanerIOContribution,KX as attachmentsDataExtension}from"../../../chunks/app-bCXEiTck.js";

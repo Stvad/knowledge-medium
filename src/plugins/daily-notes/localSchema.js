@@ -1,1 +1,1 @@
-export{sq as dailyNotesLocalSchema}from"../../../chunks/app-CCRpeoxA.js";
+export{sq as dailyNotesLocalSchema}from"../../../chunks/app-bCXEiTck.js";
