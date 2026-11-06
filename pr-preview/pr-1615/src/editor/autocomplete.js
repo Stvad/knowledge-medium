@@ -1,1 +1,1 @@
-export{UM as editorAutocompleteExtension}from"../../chunks/app-DSFu7F2R.js";
+export{UM as editorAutocompleteExtension}from"../../chunks/app-CYpg-eKR.js";

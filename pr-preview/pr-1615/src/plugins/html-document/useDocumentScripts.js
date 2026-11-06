@@ -1,1 +1,1 @@
-export{dn as useDocumentScripts}from"../../../chunks/app-DSFu7F2R.js";
+export{dn as useDocumentScripts}from"../../../chunks/app-CYpg-eKR.js";

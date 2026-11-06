@@ -1,1 +1,1 @@
-export{Zt as typeChipsDecoratorContribution}from"../../../chunks/app-DSFu7F2R.js";
+export{Zt as typeChipsDecoratorContribution}from"../../../chunks/app-CYpg-eKR.js";

@@ -1,1 +1,1 @@
-export{G4 as KERNEL_PROCESSORS}from"../../../chunks/app-DSFu7F2R.js";
+export{G4 as KERNEL_PROCESSORS}from"../../../chunks/app-CYpg-eKR.js";

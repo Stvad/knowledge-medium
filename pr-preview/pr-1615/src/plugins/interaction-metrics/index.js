@@ -1,1 +1,1 @@
-export{Yi as interactionMetricsPlugin}from"../../../chunks/app-DSFu7F2R.js";
+export{Yi as interactionMetricsPlugin}from"../../../chunks/app-CYpg-eKR.js";

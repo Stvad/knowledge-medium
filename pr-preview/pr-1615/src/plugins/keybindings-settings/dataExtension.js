@@ -1,1 +1,1 @@
-export{Cr as keybindingsSettingsDataExtension}from"../../../chunks/app-DSFu7F2R.js";
+export{Cr as keybindingsSettingsDataExtension}from"../../../chunks/app-CYpg-eKR.js";

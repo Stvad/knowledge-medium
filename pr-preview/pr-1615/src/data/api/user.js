@@ -1,1 +1,1 @@
-export{Vot as SYSTEM_AUTHOR_PREFIX,Hot as isSystemAuthor,Uot as systemAuthor}from"../../../chunks/app-DSFu7F2R.js";
+export{Vot as SYSTEM_AUTHOR_PREFIX,Hot as isSystemAuthor,Uot as systemAuthor}from"../../../chunks/app-CYpg-eKR.js";
