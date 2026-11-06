@@ -66,23 +66,35 @@ export const locateReadSelection = (ends: SelectionEnds | null): ReadSelectionLo
 
 const SPAN_ENTRY = /^(\d+)-(\d+)$/
 
-/** The raw offset of `offset` in `text`, read from its element's recorded
- *  spans: the element must have recorded them under `key` (this row's block
- *  and scope, rendering exactly `content`), hold exactly as many text nodes as
- *  it recorded, and this one must be its slice of `content`. */
+export interface RecordedText {
+  text: Text
+  /** Where it starts in the content; null where it is not exactly its slice. */
+  from: number | null
+}
+
+/** The DOM text nodes of `holder`, each with where it starts in `content`,
+ *  read from its recorded spans: the element must have recorded them under
+ *  `key` (this row's block and scope, rendering exactly `content`) and hold
+ *  exactly as many text nodes as it recorded. Null otherwise. */
+export const recordedTexts = (holder: Element, key: string, content: string): RecordedText[] | null => {
+  const [recordedKey, ...entries] = holder.getAttribute(SOURCE_SPANS_ATTRIBUTE)?.split(' ') ?? []
+  if (recordedKey !== key) return null
+  const texts = [...holder.childNodes].filter((node): node is Text => node.nodeType === Node.TEXT_NODE)
+  if (texts.length !== entries.length) return null
+  return texts.map((text, i) => {
+    const span = SPAN_ENTRY.exec(entries[i])
+    const from = span ? Number(span[1]) : null
+    // The entry is mdast's text; the renderer can still extend it in the same
+    // node (a footnote's last text gets a space), and the page can change it.
+    return {text, from: from !== null && content.slice(from, Number(span![2])) === text.data ? from : null}
+  })
+}
+
+/** The raw offset of `offset` in `text`, through its element's recorded spans. */
 const offsetInText = (text: Text, offset: number, key: string, content: string): number | null => {
   const holder = text.parentElement
-  const [recordedKey, ...entries] = holder?.getAttribute(SOURCE_SPANS_ATTRIBUTE)?.split(' ') ?? []
-  if (recordedKey !== key) return null
-  const texts = [...holder!.childNodes].filter(node => node.nodeType === Node.TEXT_NODE)
-  if (texts.length !== entries.length) return null
-  const span = SPAN_ENTRY.exec(entries[texts.indexOf(text)])
-  if (!span) return null
-  const from = Number(span[1])
-  // The entry is mdast's text; the renderer can still extend it in the same
-  // node (a footnote's last text gets a space), and the page can change it.
-  if (content.slice(from, Number(span[2])) !== text.data) return null
-  return from + offset
+  const from = holder && recordedTexts(holder, key, content)?.find(recorded => recorded.text === text)?.from
+  return from === null || from === undefined ? null : from + offset
 }
 
 /** A point between two nodes maps through the text on either side of it. */

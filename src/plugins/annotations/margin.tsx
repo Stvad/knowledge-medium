@@ -11,6 +11,9 @@
  * render scope), reads their positions and moves the cards within one animation
  * frame of a scroll, a resize or a re-render.
  *
+ * A card sits beside its target row's top, or, for a quote, beside the line
+ * the quote starts on (`quoteTop`).
+ *
  * Where there is no room for the column, it draws nothing and says so
  * (`setMarginShowing`), and the comment pill falls back to expanding threads
  * inline.
@@ -31,6 +34,8 @@ import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {fitColumn, placeCards} from './placement.ts'
+import {quoteTop} from './quotePosition.ts'
+import type {RangeAnchor} from './anchor.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
 import {ThreadCard, useThreadSummaries} from './ui.tsx'
 import {
@@ -71,6 +76,9 @@ interface CardEntry {
   blockId: string
   /** Position among its block's cards (whole-block first, then by quote). */
   order: number
+  /** A quote's anchor, placing the card beside the quote; absent for a
+   *  whole-block card. */
+  quote?: RangeAnchor
 }
 
 interface MarginRegistry {
@@ -98,6 +106,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   const scheduleRef = useRef<() => void>(() => {})
   const scrollportRef = useRef<HTMLElement | null>(null)
   const cardObserver = useRef<ResizeObserver | null>(null)
+  const repo = useRepo()
 
   const [registry] = useState<MarginRegistry>(() => ({
     panelId,
@@ -183,12 +192,18 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         return
       }
       const columnTop = column.getBoundingClientRect().top
+      const anchorTop = (entry: CardEntry, row: Element): number => {
+        const rowTop = row.getBoundingClientRect().top
+        const quoted = entry.quote &&
+          quoteTop(row, entry.blockId, scope, entry.quote, () => repo.block(entry.blockId).peek()?.content)
+        return (typeof quoted === 'number' ? Math.max(rowTop, quoted) : rowTop) - columnTop
+      }
       const rowIndex = new Map(order.map((id, i) => [id, i]))
       const placed = [...cards.current.entries()]
         .filter(([, entry]) => rowIndex.has(entry.blockId))
         .sort(([, a], [, b]) => rowIndex.get(a.blockId)! - rowIndex.get(b.blockId)! || a.order - b.order)
       const boxes = placed.map(([, entry]) => ({
-        anchor: rowEls.get(entry.blockId)!.getBoundingClientRect().top - columnTop,
+        anchor: anchorTop(entry, rowEls.get(entry.blockId)!),
         height: entry.el.offsetHeight,
       }))
       const active = peekActiveThread(panelId)
@@ -237,7 +252,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       setTextShift(0)
       scheduleRef.current = () => {}
     }
-  }, [panelId, scope, topLevelBlockId])
+  }, [panelId, scope, topLevelBlockId, repo])
 
   const showing = frame !== null
   useEffect(() => {
@@ -245,7 +260,6 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     return () => setMarginShowing(panelId, false)
   }, [panelId, showing])
 
-  const repo = useRepo()
   const workspaceId = useWorkspaceId(repo.block(topLevelBlockId), repo.activeWorkspaceId ?? '')
   const scopeThreads = useHandle(
     repo.query[THREADS_IN_SCOPE_QUERY]({workspaceId, scopeId: topLevelBlockId}),
@@ -326,7 +340,13 @@ const MarginRow = ({blockId}: {blockId: string}) => {
   const threads = useThreadSummaries(repo.block(blockId))
   const showClosed = useShowClosed(registry.panelId)
   return threads.map((thread, order) => (thread.open || showClosed) && (
-    <CardSlot key={thread.id} slotKey={thread.id} blockId={blockId} order={order}>
+    <CardSlot
+      key={thread.id}
+      slotKey={thread.id}
+      blockId={blockId}
+      order={order}
+      quote={thread.anchor.kind === 'range' ? thread.anchor : undefined}
+    >
       <div className={thread.open ? undefined : 'opacity-70'}>
         <ThreadCard thread={thread} surface="margin"/>
       </div>
@@ -345,11 +365,22 @@ const isKeyboardFocus = (event: FocusEvent): boolean => {
   }
 }
 
-const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId: string; order: number; children: ReactNode}) => {
+interface CardSlotProps {
+  slotKey: string
+  blockId: string
+  order: number
+  quote?: RangeAnchor
+  children: ReactNode
+}
+
+const CardSlot = ({slotKey, blockId, order, quote, children}: CardSlotProps) => {
   const registry = useContext(MarginRegistryContext)!
   const ref = useRef<HTMLDivElement>(null)
   const active = useActiveThread(registry.panelId) === slotKey
-  useLayoutEffect(() => registry.register(slotKey, {el: ref.current!, blockId, order}), [registry, slotKey, blockId, order])
+  useLayoutEffect(
+    () => registry.register(slotKey, {el: ref.current!, blockId, order, quote}),
+    [registry, slotKey, blockId, order, quote],
+  )
   return (
     <div
       ref={ref}
