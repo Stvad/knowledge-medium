@@ -1,1 +1,1 @@
-export{nd as applyHeading,rd as collectContentRefUids,id as rewriteRoamContent,ad as rewriteRoamHashtags}from"../../../chunks/app-Rp0grNt5.js";
+export{td as applyHeading,nd as collectContentRefUids,rd as rewriteRoamContent,id as rewriteRoamHashtags}from"../../../chunks/app-DmtDmhe2.js";

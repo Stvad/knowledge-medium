@@ -1,1 +1,1 @@
-export{fM as exampleExtensions,pM as insertExampleExtensionsUnder}from"../../chunks/app-Rp0grNt5.js";
+export{dM as exampleExtensions,fM as insertExampleExtensionsUnder}from"../../chunks/app-DmtDmhe2.js";
