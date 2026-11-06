@@ -111,6 +111,9 @@ export const readReportedHeight = (data: unknown): number | null => {
 
 /** The window the source runs in, which is the only one whose height reports
  *  count. A cross-origin frame's `frames` is readable, so this needs no relay
- *  script in the outer document. */
-export const documentWindowOf = (outerFrame: HTMLIFrameElement): Window | undefined =>
-  outerFrame.contentWindow?.frames[0]
+ *  script in the outer document. Reading past a cross-origin window's last child
+ *  throws, and the outer has no child until it has parsed. */
+export const documentWindowOf = (outerFrame: HTMLIFrameElement): Window | undefined => {
+  const outer = outerFrame.contentWindow
+  return outer && outer.length > 0 ? outer.frames[0] : undefined
+}

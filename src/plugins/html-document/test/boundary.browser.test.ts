@@ -489,6 +489,17 @@ describe.each(selectedEngines())('%s', engine => {
       await untilHeight(200)
     })
 
+    it('takes other messages in its stride before the document\'s window exists', async () => {
+      const errors: string[] = []
+      host.page.on('pageerror', error => errors.push(error.message))
+      await host.page.evaluate(() => {
+        setInterval(() => window.postMessage('from someone else', '*'), 0)
+      })
+      await mount(host, 'sandboxed', blockOf(300))
+      await untilHeight(300)
+      expect(errors).toEqual([])
+    })
+
     // Spread over tasks: React already batches a burst inside one task.
     it('applies far fewer heights than a flood of messages sends', async () => {
       await mount(host, 'sandboxed', blockOf(300))
