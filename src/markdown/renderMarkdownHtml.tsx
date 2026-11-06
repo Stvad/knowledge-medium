@@ -96,6 +96,8 @@ export const renderMarkdownHtml = (
     ? {
       ...config.components,
       img: StaticMarkdownImage,
+      // The app's scroller and its classes mean nothing outside the app.
+      table: 'table' as const,
     }
     : config.components
   const markdown = (

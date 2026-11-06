@@ -337,13 +337,11 @@
     list-style-type: none;
   }
 
+  /* `overflow-y` is spelled out because `overflow-x: auto` alone computes it to
+     `auto`, which would make this the scrollport of a block embedded in a cell. */
   .markdown-table-scroll {
-    max-width: 100%;
     overflow-x: auto;
-  }
-
-  .markdown-table {
-    border-collapse: collapse;
+    overflow-y: hidden;
   }
 
   /* `em` so the cells scale with the surrounding text, like the list gutter. */

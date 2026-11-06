@@ -58,15 +58,15 @@ const MarkdownAnchor: AnchorComponent = ({href, children, rel, node: _node, ...p
  *  remark-gfm marks a task list on the same element. */
 const MARKDOWN_LIST_CLASS = 'markdown-list'
 
-const withListClass = (className: string | undefined) =>
-  [className, MARKDOWN_LIST_CLASS].filter(Boolean).join(' ')
+const withMark = (className: string | undefined, mark: string) =>
+  [className, mark].filter(Boolean).join(' ')
 
 const MarkdownUnorderedList: NonNullable<Components['ul']> = (
   {node: _node, className, children, ...props},
 ) => {
   void _node
 
-  return createElement('ul', {...props, className: withListClass(className)}, children)
+  return createElement('ul', {...props, className: withMark(className, MARKDOWN_LIST_CLASS)}, children)
 }
 
 const MarkdownOrderedList: NonNullable<Components['ol']> = (
@@ -74,7 +74,7 @@ const MarkdownOrderedList: NonNullable<Components['ol']> = (
 ) => {
   void _node
 
-  return createElement('ol', {...props, className: withListClass(className)}, children)
+  return createElement('ol', {...props, className: withMark(className, MARKDOWN_LIST_CLASS)}, children)
 }
 
 /** The table's scroller, and the mark its styling keys on — stamped here for
@@ -90,7 +90,7 @@ const MarkdownTable: NonNullable<Components['table']> = (
     {className: 'markdown-table-scroll'},
     createElement(
       'table',
-      {...props, className: [className, 'markdown-table'].filter(Boolean).join(' ')},
+      {...props, className: withMark(className, 'markdown-table')},
       children,
     ),
   )
