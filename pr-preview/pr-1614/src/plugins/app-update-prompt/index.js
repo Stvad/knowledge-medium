@@ -1,1 +1,1 @@
-export{FM as appUpdatePromptExtension}from"../../../chunks/app-DzAl4A4G.js";
+export{FM as appUpdatePromptExtension}from"../../../chunks/app-DY-S8rSh.js";
