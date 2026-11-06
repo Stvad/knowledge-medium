@@ -33,7 +33,7 @@ import {PANEL_RIGHT_CLEARANCE} from '@/utils/panelClearance.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
-import {fitColumn, placeCards} from './placement.ts'
+import {byPlacement, fitColumn, placeCards} from './placement.ts'
 import {quoteTop} from './quotePosition.ts'
 import type {RangeAnchor} from './anchor.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
@@ -79,6 +79,8 @@ interface CardEntry {
   /** A quote's anchor, placing the card beside the quote; absent for a
    *  whole-block card. */
   quote?: RangeAnchor
+  /** See {@link MarginCard}. */
+  trailing?: boolean
 }
 
 interface MarginRegistry {
@@ -194,21 +196,27 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const columnTop = column.getBoundingClientRect().top
       const anchorTop = (entry: CardEntry, row: Element): number => {
         const rowTop = row.getBoundingClientRect().top
-        const quoted = entry.quote &&
-          quoteTop(row, entry.blockId, scope, entry.quote, () => repo.block(entry.blockId).peek()?.content)
-        return (typeof quoted === 'number' ? Math.max(rowTop, quoted) : rowTop) - columnTop
+        const quoted = entry.quote
+          ? quoteTop(row, entry.blockId, scope, entry.quote, repo.block(entry.blockId).peek()?.content)
+          : null
+        return Math.max(rowTop, quoted ?? rowTop) - columnTop
       }
       const rowIndex = new Map(order.map((id, i) => [id, i]))
       const placed = [...cards.current.entries()]
         .filter(([, entry]) => rowIndex.has(entry.blockId))
-        .sort(([, a], [, b]) => rowIndex.get(a.blockId)! - rowIndex.get(b.blockId)! || a.order - b.order)
-      const boxes = placed.map(([, entry]) => ({
-        anchor: anchorTop(entry, rowEls.get(entry.blockId)!),
-        height: entry.el.offsetHeight,
-      }))
+        .map(([key, entry]) => ({
+          key,
+          entry,
+          row: rowIndex.get(entry.blockId)!,
+          anchor: anchorTop(entry, rowEls.get(entry.blockId)!),
+          trailing: entry.trailing ?? false,
+          order: entry.order,
+        }))
+        .sort(byPlacement)
+      const boxes = placed.map(card => ({anchor: card.anchor, height: card.entry.el.offsetHeight}))
       const active = peekActiveThread(panelId)
-      const tops = placeCards(boxes, placed.findIndex(([key]) => key === active), CARD_GAP_PX, nextFrame.height)
-      for (const [i, [, entry]] of placed.entries()) {
+      const tops = placeCards(boxes, placed.findIndex(card => card.key === active), CARD_GAP_PX, nextFrame.height)
+      for (const [i, {entry}] of placed.entries()) {
         entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
         entry.el.style.visibility = 'visible'
         entry.el.style.opacity = ''
@@ -235,9 +243,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     cardObserver.current = resize
     for (const entry of cards.current.values()) resize.observe(entry.el)
     // Rows mounting or unmounting, which can leave the outline's height as it
-    // was (a placeholder swapped for its row).
+    // was (a placeholder swapped for its row), and text changing in place,
+    // which can move a quote to another line at the same height.
     const mutations = new MutationObserver(schedule)
-    mutations.observe(scrollport, {childList: true, subtree: true})
+    mutations.observe(scrollport, {childList: true, characterData: true, subtree: true})
     scrollport.addEventListener('scroll', schedule, {passive: true})
     const unsubscribe = onUiStoreChange(schedule)
     schedule()
@@ -370,16 +379,17 @@ interface CardSlotProps {
   blockId: string
   order: number
   quote?: RangeAnchor
+  trailing?: boolean
   children: ReactNode
 }
 
-const CardSlot = ({slotKey, blockId, order, quote, children}: CardSlotProps) => {
+const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlotProps) => {
   const registry = useContext(MarginRegistryContext)!
   const ref = useRef<HTMLDivElement>(null)
   const active = useActiveThread(registry.panelId) === slotKey
   useLayoutEffect(
-    () => registry.register(slotKey, {el: ref.current!, blockId, order, quote}),
-    [registry, slotKey, blockId, order, quote],
+    () => registry.register(slotKey, {el: ref.current!, blockId, order, quote, trailing}),
+    [registry, slotKey, blockId, order, quote, trailing],
   )
   return (
     <div
@@ -405,7 +415,7 @@ const CardSlot = ({slotKey, blockId, order, quote, children}: CardSlotProps) => 
 const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) => {
   const block = useRepo().block(blockId)
   return (
-    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={Number.MAX_SAFE_INTEGER}>
+    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={0} trailing>
       <button
         type="button"
         onClick={() => { if (block.peekProperty(isCollapsedProp)) void block.set(isCollapsedProp, false) }}

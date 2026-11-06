@@ -83,10 +83,10 @@ export const recordedTexts = (holder: Element, key: string, content: string): Re
   if (texts.length !== entries.length) return null
   return texts.map((text, i) => {
     const span = SPAN_ENTRY.exec(entries[i])
-    const from = span ? Number(span[1]) : null
     // The entry is mdast's text; the renderer can still extend it in the same
     // node (a footnote's last text gets a space), and the page can change it.
-    return {text, from: from !== null && content.slice(from, Number(span![2])) === text.data ? from : null}
+    const exact = span !== null && content.slice(Number(span[1]), Number(span[2])) === text.data
+    return {text, from: exact ? Number(span[1]) : null}
   })
 }
 
@@ -94,7 +94,7 @@ export const recordedTexts = (holder: Element, key: string, content: string): Re
 const offsetInText = (text: Text, offset: number, key: string, content: string): number | null => {
   const holder = text.parentElement
   const from = holder && recordedTexts(holder, key, content)?.find(recorded => recorded.text === text)?.from
-  return from === null || from === undefined ? null : from + offset
+  return typeof from === 'number' ? from + offset : null
 }
 
 /** A point between two nodes maps through the text on either side of it. */
