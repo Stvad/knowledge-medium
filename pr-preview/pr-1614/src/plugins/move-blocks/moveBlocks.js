@@ -1,1 +1,1 @@
-export{uy as moveBlocksTo}from"../../../chunks/app-BizfM1YE.js";
+export{uy as moveBlocksTo}from"../../../chunks/app-DzAl4A4G.js";

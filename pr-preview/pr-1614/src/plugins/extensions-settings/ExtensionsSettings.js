@@ -1,1 +1,1 @@
-export{fr as ExtensionsSettings}from"../../../chunks/app-BizfM1YE.js";
+export{fr as ExtensionsSettings}from"../../../chunks/app-DzAl4A4G.js";

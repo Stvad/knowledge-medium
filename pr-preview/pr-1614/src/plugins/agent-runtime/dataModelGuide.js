@@ -1,1 +1,1 @@
-export{Ng as DATA_MODEL_GUIDE,Pg as dataModelGuide}from"../../../chunks/app-BizfM1YE.js";
+export{Ng as DATA_MODEL_GUIDE,Pg as dataModelGuide}from"../../../chunks/app-DzAl4A4G.js";
