@@ -101,9 +101,9 @@ const page = (id: string, alias: string) => write(async tx => {
   await tx.setProperty(id, aliasesProp, [alias])
 })
 
-const fieldIdOf = (schema: AnyPropertySchema): string => {
-  const resolved = repo.propertySchemaResolverFor(WS).resolve(schema)
-  if (resolved.status !== 'resolved') throw new Error(`no definition for ${schema.name}`)
+const fieldIdOf = (name: string): string => {
+  const resolved = repo.propertySchemaResolverFor(WS).resolve(name)
+  if (resolved.status !== 'resolved') throw new Error(`no definition for ${name}`)
   return resolved.schema.fieldId
 }
 
@@ -111,7 +111,7 @@ const onlyValueRow = async (owner: string, schema: AnyPropertySchema): Promise<B
   const rows = await sharedDb.db.getAll<{id: string}>(
     `SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
       WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.reference_target_id = ? AND v.deleted = 0`,
-    [owner, fieldIdOf(schema)],
+    [owner, fieldIdOf(schema.name)],
   )
   expect(rows).toHaveLength(1)
   return (await repo.load(rows[0].id))!
