@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import {fireEvent, screen, waitFor, within} from '@testing-library/react'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import {SOURCE_BLOCK, setupBlockUi} from '@/components/renderer/test/sourceEditorFixture.tsx'
+import {SOURCE_BLOCK, setupBlockUi} from '@/test/blockUiFixture.tsx'
 import {actionContextsFacet} from '@/extensions/core.js'
 import {DialogHost} from '@/extensions/dialogAppMount.js'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts.js'

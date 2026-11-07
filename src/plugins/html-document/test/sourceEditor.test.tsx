@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import {describe, expect, it, vi} from 'vitest'
-import {docOf as doc, press, setupBlockUi} from '@/components/renderer/test/sourceEditorFixture.tsx'
+import {doc, press, setupBlockUi} from '@/test/blockUiFixture.tsx'
 import {HtmlSourceEditor} from '../HtmlDocumentContent.tsx'
 
 const SOURCE = '<p>hi</p>'

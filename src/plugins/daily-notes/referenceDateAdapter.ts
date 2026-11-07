@@ -5,7 +5,6 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
-import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block'
 import { hasSourceContent } from '@/data/blockTypes'
 import {
@@ -88,26 +87,3 @@ export const referenceDateAdapter: BlockDateAdapter = {
     return true
   },
 }
-
-export const createEditorReferenceDateAdapter = (editorView: EditorView): BlockDateAdapter => ({
-  id: `${REFERENCE_DATE_ADAPTER_ID}.editor`,
-  canHandle: () => singleDateReferenceMatch(editorView.state.doc.toString()) !== null,
-  getCurrentIso: async () =>
-    singleDateReferenceMatch(editorView.state.doc.toString())?.iso ?? null,
-  setIso: async (block: Block, iso: string) => {
-    if (block.repo.isReadOnly) return false
-    const sourceContent = editorView.state.doc.toString()
-    const nextContent = replaceSingleDateReferenceContent(sourceContent, iso)
-    if (nextContent === null || nextContent === sourceContent) return false
-
-    editorView.dispatch({
-      changes: {
-        from: 0,
-        to: editorView.state.doc.length,
-        insert: nextContent,
-      },
-    })
-    await block.setContent(nextContent)
-    return true
-  },
-})

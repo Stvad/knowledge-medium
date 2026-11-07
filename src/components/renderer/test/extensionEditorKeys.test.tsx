@@ -2,7 +2,7 @@
 import { completionStatus, snippet, startCompletion } from '@codemirror/autocomplete'
 import { describe, expect, it, vi } from 'vitest'
 import { ExtensionEditor } from '@/components/renderer/CodeMirrorExtensionBlockRenderer.tsx'
-import { docOf as doc, press, setupBlockUi } from './sourceEditorFixture.tsx'
+import { doc, press, setupBlockUi } from '@/test/blockUiFixture.tsx'
 
 const SOURCE = 'const alpha = 1\nalp'
 

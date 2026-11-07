@@ -82,10 +82,10 @@ export const setupBlockUi = (source: string, extensions: AppExtension = []) => {
     return view
   }
 
-  return {mount, openEditorAt, reachedWindow: () => reachedWindow}
+  return {mount, openEditorAt, reachedWindow: () => reachedWindow, panel: () => repo.block(PANEL)}
 }
 
 export const press = (view: EditorView, key: string, init: KeyboardEventInit = {}) =>
   view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true, ...init}))
 
-export const docOf = (view: EditorView) => view.state.doc.toString()
+export const doc = (view: EditorView) => view.state.doc.toString()
