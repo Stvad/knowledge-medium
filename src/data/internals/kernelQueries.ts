@@ -30,7 +30,7 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
+import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
@@ -2037,9 +2037,9 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
   resolve: async ({workspaceId}, ctx) => {
     if (!workspaceId) return []
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, 'extension'],
+      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, EXTENSION_TYPE],
     )
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    return ctx.hydrateBlocks(asBlockRows(rows)).filter(declaresExtensionType)
   },
 })
 

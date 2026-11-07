@@ -38,6 +38,17 @@ const createBlock = async (id: string, content: string, properties: Record<strin
 }
 
 describe('askAgent', () => {
+  it('writes nothing to source', async () => {
+    const block = await createBlock('source', '<p>source</p>', {types: ['html-document']})
+    const before = await editStamp('source')
+
+    await new Promise(resolve => setTimeout(resolve, 2)) // stamps are ms-resolution
+    await askAgent(block)
+
+    expect(await editStamp('source')).toBe(before)
+    expect((await block.load())!.content).toBe('<p>source</p>')
+  })
+
   it('bumps the edit stamp even when the mention already exists and no props need clearing', async () => {
     const block = await createBlock('pre-baseline', 'do the thing [[claude]]')
     const before = await editStamp('pre-baseline')

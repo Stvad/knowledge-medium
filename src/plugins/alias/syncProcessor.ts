@@ -43,6 +43,7 @@
  *   obscure case it fixes.
  */
 
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   defineSameTxProcessor,
   type AnySameTxProcessor,
@@ -100,6 +101,9 @@ const dedupe = (values: readonly string[]): string[] => {
 export const planSync = (row: ChangedRow): SyncPlan | null => {
   if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
+  // Its content is a document, not a title: mirroring one into the other would
+  // rename the page to its source, and renaming the page would overwrite it.
+  if (hasSourceContent(row.after)) return null
 
   const before = row.before
   const after = row.after

@@ -47,7 +47,7 @@
 
 import type { SameTxReadDb } from '@/data/api'
 import { parseReferences } from './referenceParser.ts'
-import { isExtensionSource } from './referencesProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 
 /** One enumerated referrer: the id plus the content every caller needs
  *  anyway (to classify the row and to splice its spans). */
@@ -57,17 +57,17 @@ export interface ReferrerRow {
 }
 
 /** A candidate row before filtering: `ReferrerRow` plus the raw
- *  `properties_json` the extension-source check needs. Not part of the
+ *  `properties_json` the source-content check needs. Not part of the
  *  returned shape — callers get plain `ReferrerRow`s. */
 interface CandidateRow extends ReferrerRow {
   propertiesJson: string | null
 }
 
-/** `blocks.properties_json` → the bag `isExtensionSource` reads. Tolerant
+/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
  *  by design: this is a candidate FILTER, and a row whose JSON is
- *  unparseable is not an extension source (its `types` can't say so), so
- *  it falls through to the ordinary content path — the same answer the
- *  processor's own raw-array read gives for a wrong-shaped value. */
+ *  unparseable is not source content (its `types` can't say so), so
+ *  it falls through to the ordinary content path — the same answer
+ *  `hasSourceContent` gives for a wrong-shaped value. */
 const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
   if (json === null) return {}
   try {
@@ -79,6 +79,10 @@ const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
     return {}
   }
 }
+
+/** {@link hasSourceContent} for a raw row. */
+export const rowHasSourceContent = (propertiesJson: string | null): boolean =>
+  hasSourceContent({properties: parsePropertiesJson(propertiesJson)})
 
 /** Candidate rows whose CONTENT contains a literal substring, read from
  *  the trigger-maintained trigram index.
@@ -194,19 +198,12 @@ export const wikilinkSourcesByContent = async (
     [workspaceId, containsNul(needle) ? needle : ftsPhrase(needle)],
   )
   return candidates
-    // An installed extension's SOURCE lives in `blocks.content`, and
-    // `references.parseReferences` deliberately does NOT run the wikilink
-    // grammar over it: code supplies `[[` openers for free (a regex class
-    // starting with a literal `[`, a nested array literal), and one real
-    // extension minted three phantom pages before that gate landed.
-    //
-    // Which means extension blocks have no edge — so the edge-keyed leg
-    // could never reach them, and this leg reads content directly and
-    // WOULD. Rewriting a span inside stored source is not a missed
-    // rewrite, it is a corrupted extension that no longer loads. The
-    // exclusion is imported from the processor that owns it rather than
-    // restated, so the two cannot drift.
-    .filter(row => !isExtensionSource({properties: parsePropertiesJson(row.propertiesJson)}))
+    // `references.parseReferences` does not run the wikilink grammar over
+    // source code in `blocks.content`, so those blocks have no edge: the
+    // edge-keyed leg could never reach them, and this leg reads content
+    // directly and WOULD. Rewriting a span inside stored source is not a missed
+    // rewrite, it is corrupted source.
+    .filter(row => !rowHasSourceContent(row.propertiesJson))
     .filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
     .map(({sourceId, content}) => ({sourceId, content}))
 }

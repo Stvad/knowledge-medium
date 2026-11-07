@@ -5,6 +5,7 @@
  *
  *   pnpm mutate --file <path> (--delete <literal> | --edit <shell command>)
  *               --test <vitest file> [-t <name pattern>] [--no-baseline] [--timeout <s>]
+ *               [--config <vitest config>]
  *
  * --edit runs its command with $MUTATE_FILE set to the file's absolute path.
  *
@@ -41,7 +42,7 @@ import { pidAlive } from './pid-alive.mjs'
 
 const USAGE =
   'usage: pnpm mutate --file <path> (--delete <literal> | --edit <shell command>) ' +
-  '--test <vitest file> [-t <name pattern>] [--no-baseline] [--timeout <seconds>]'
+  '--test <vitest file> [-t <name pattern>] [--no-baseline] [--timeout <seconds>] [--config <vitest config>]'
 const DIFF_LINES = 12
 const DEFAULT_TIMEOUT_S = 300
 const PROBE = "throw new Error('pnpm mutate: reachability probe')\n"
@@ -58,6 +59,7 @@ export const parseMutateArgs = (argv, cwd) => {
       testNamePattern: { type: 'string', short: 't' },
       'no-baseline': { type: 'boolean' },
       timeout: { type: 'string' },
+      config: { type: 'string' },
     },
   })
   if (!values.file) throw new Error('--file is required')
@@ -75,6 +77,7 @@ export const parseMutateArgs = (argv, cwd) => {
     test: resolve(cwd, values.test),
     mutation: hasDelete ? { kind: 'delete', text: values.delete } : { kind: 'edit', command: values.edit },
     testName: values.testNamePattern,
+    vitestConfig: values.config === undefined ? undefined : resolve(cwd, values.config),
     baseline: !values['no-baseline'],
     timeoutMs: timeoutS * 1000,
   }
@@ -218,6 +221,7 @@ const runVitest = async (cfg, paths) => {
   rmSync(paths.report, { force: true })
   const args = [vitestBin(), 'run', cfg.test, '--reporter=json', `--outputFile=${paths.report}`]
   if (cfg.testName !== undefined) args.push('--testNamePattern', cfg.testName)
+  if (cfg.vitestConfig !== undefined) args.push('--config', cfg.vitestConfig)
   const { code, stderr, timedOut } = await run(process.execPath, args, { cwd: process.cwd() }, cfg.timeoutMs)
   const raw = readOrNull(paths.report)
   rmSync(paths.report, { force: true })

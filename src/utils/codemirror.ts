@@ -237,8 +237,9 @@ export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
 }
 
-/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
- *  for bracket closing. Keys, history and completion come from the app. */
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but for
+ *  bracket closing, and for the fold and lint keymaps it doesn't name. Keys and history
+ *  come from the app; autocompletion brings its own keymap whatever this says. */
 export const BLOCK_EDITOR_BASIC_SETUP = {
   closeBrackets: true,
   lineNumbers: false,
@@ -342,10 +343,15 @@ export const createMinimalMarkdownConfig = (
   return extensions
 }
 
-export const createTypeScriptConfig = (): Extension[] => [
-  javascript({jsx: true, typescript: true}),
+export const createTypeScriptConfig = (): Extension[] =>
+  createSourceEditorConfig(javascript({jsx: true, typescript: true}))
+
+/** An editor for source in `language` rather than a block's markdown. */
+export const createSourceEditorConfig = (language: Extension): Extension[] => [
+  language,
   EditorView.theme({
     '&': {background: 'transparent', color: 'inherit'},
+    '&.cm-focused': {outline: 'none'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
     // Wrapping (below) means no horizontal scroll, so the scroller can be a

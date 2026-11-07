@@ -8,6 +8,7 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
+import { hasSourceContent, holdsSource } from '@/data/blockTypes'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -73,7 +74,8 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   // silently unable to queue exactly those blocks.
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
-    if (!fresh) return
+    // The ask travels as a mention in the content, which source can't carry.
+    if (!fresh || hasSourceContent(fresh)) return
     // Content and props are now two writes in the one tx (setProperties can't
     // carry content). tx.update short-circuits an unchanged-content patch, and
     // the always-a-real-write guarantee rides the setProperties asked-at bump
@@ -120,6 +122,7 @@ const editModeAsk: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   description: 'Ask Agent about this block (Edit Mode)',
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async ({block, editorView}) => {
+    if (holdsSource(block)) return
     // The editor doc, not the persisted block, is the source of truth
     // here — the DB trails it by the BlockEditor's commit debounce, so
     // basing the write on `fresh.content` could drop just-typed text.

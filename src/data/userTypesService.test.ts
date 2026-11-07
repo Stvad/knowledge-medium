@@ -17,8 +17,9 @@ import {
   aliasesProp,
   propertyNameProp,
   seedKeyProp,
+  typesProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { materializePropertySeeds, propertyDefinitionBlockId, typeDefinitionBlockId } from '@/data/definitionSeeds'
 import { definitionSeedsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -109,6 +110,26 @@ const createBlockTypeBlock = async (
   if (args.label) await waitForTypeRegistration(repo, id, args.label)
   return id
 }
+
+describe('a user type that is also source', () => {
+  it('keeps its name when the source is edited', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Book'})
+    const {repo} = env
+    const rename = (content: string) => repo.tx(tx => tx.update(id, {content}), {scope: ChangeScope.BlockDefault})
+    const label = async () => (await repo.load(id))?.properties[blockTypeLabelProp.name]
+
+    await rename('Novel')
+    expect(await label()).toBe('Novel')
+
+    const types = (await repo.load(id))?.properties[typesProp.name] as string[]
+    await repo.tx(tx => tx.setProperty(id, typesProp, [...types, HTML_DOCUMENT_TYPE]), {scope: ChangeScope.BlockDefault})
+    await rename('<div>hello</div>')
+
+    expect(await label()).toBe('Novel')
+    expect((await repo.load(id))?.properties[aliasesProp.name]).toEqual(['Novel'])
+  })
+})
 
 describe('UserTypesService subscription', () => {
   it('publishes a TypeContribution when a block-type block is created', async () => {

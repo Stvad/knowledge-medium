@@ -7,9 +7,8 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
-import { readClipboardContent } from '@/paste/clipboard.js'
+import { readClipboardContent, shellPasteRequest } from '@/paste/clipboard.js'
 import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
-import type { PasteRequest } from '@/paste/decision.js'
 
 /**
  * Block-shell paste, as a shell decorator rather than a hardcoded handler on the
@@ -51,13 +50,11 @@ export function BlockPasteShellDecorator({
         return
       }
 
-      // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
-      // the chord intent is always 'split'. Resolve the decision, capturing any
-      // pasted media first (its reference text is spliced in, landing per the text
-      // policy — NOT a forced child). `null` ⇒ nothing to paste.
-      const request: PasteRequest = { ...content, intent: 'split', surface: 'shell' }
+      // Block-shell paste (block focused, NOT in edit mode) has no text caret. Resolve
+      // the decision, capturing any pasted media first (its reference text is spliced
+      // in, landing per the text policy — NOT a forced child). `null` ⇒ nothing to paste.
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
+      const resolved = await resolvePasteWithMediaCapture(runtime, shellPasteRequest(content, block), { repo, workspaceId })
       if (!resolved) return
       const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId })
       if (pasted[0]) {
