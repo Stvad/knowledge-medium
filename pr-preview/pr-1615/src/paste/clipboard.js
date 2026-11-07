@@ -1,1 +1,1 @@
-export{pL as readClipboardContent}from"../../chunks/app-CrKjaotJ.js";
+export{wL as readClipboardContent,TL as shellPasteRequest}from"../../chunks/app-CvnG3J8U.js";

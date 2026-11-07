@@ -1,1 +1,1 @@
-export{DI as ExtensionRenderBoundary}from"../../chunks/app-CrKjaotJ.js";
+export{DI as ExtensionRenderBoundary}from"../../chunks/app-CvnG3J8U.js";
