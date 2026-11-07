@@ -1,1 +1,1 @@
-export{WQ as oweAnalyzeInstalledTables,M2 as runAnalyzeIfStale,GQ as runAnalyzeInstalledTables,N2 as runAnalyzeNow,P2 as runAnalyzeTables}from"../../chunks/app-DVtf4h_k.js";
+export{WQ as oweAnalyzeInstalledTables,M2 as runAnalyzeIfStale,GQ as runAnalyzeInstalledTables,N2 as runAnalyzeNow,P2 as runAnalyzeTables}from"../../chunks/app-CrKjaotJ.js";

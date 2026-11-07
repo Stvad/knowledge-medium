@@ -1,1 +1,1 @@
-export{CA as CommandPalette}from"../../../chunks/app-DVtf4h_k.js";
+export{CA as CommandPalette}from"../../../chunks/app-CrKjaotJ.js";

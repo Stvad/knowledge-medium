@@ -1,1 +1,1 @@
-export{wX as pluginPrefsExtension,TX as pluginUIStateExtension}from"../../chunks/app-DVtf4h_k.js";
+export{wX as pluginPrefsExtension,TX as pluginUIStateExtension}from"../../chunks/app-CrKjaotJ.js";

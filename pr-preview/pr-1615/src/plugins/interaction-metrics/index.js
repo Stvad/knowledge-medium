@@ -1,1 +1,1 @@
-export{Ji as interactionMetricsPlugin}from"../../../chunks/app-DVtf4h_k.js";
+export{Ji as interactionMetricsPlugin}from"../../../chunks/app-CrKjaotJ.js";

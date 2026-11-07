@@ -1,1 +1,1 @@
-export{t4 as Block,n4 as requireLoadedBlock}from"../../chunks/app-DVtf4h_k.js";
+export{t4 as Block,n4 as requireLoadedBlock}from"../../chunks/app-CrKjaotJ.js";

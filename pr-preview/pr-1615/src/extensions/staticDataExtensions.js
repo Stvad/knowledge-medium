@@ -1,1 +1,1 @@
-export{KW as staticDataExtensions}from"../../chunks/app-DVtf4h_k.js";
+export{KW as staticDataExtensions}from"../../chunks/app-CrKjaotJ.js";

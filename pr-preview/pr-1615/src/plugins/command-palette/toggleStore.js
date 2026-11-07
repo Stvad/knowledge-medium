@@ -1,1 +1,1 @@
-export{XA as commandPaletteToggle}from"../../../chunks/app-DVtf4h_k.js";
+export{XA as commandPaletteToggle}from"../../../chunks/app-CrKjaotJ.js";
