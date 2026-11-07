@@ -52,20 +52,20 @@ export function BlockPasteShellDecorator({
         return
       }
 
-      // An empty source block is where this was meant to go, whole: parsing it as an
-      // outline would leave a line in the block and the rest shredded around it.
-      const target = block.peek()
-      if (target && hasSourceContent(target) && target.content === '' && content.text !== '') {
-        await block.setContent(content.text)
-        return
-      }
-
       // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
       // the chord intent is always 'split'. Resolve the decision, capturing any
       // pasted media first (its reference text is spliced in, landing per the text
       // policy — NOT a forced child). `null` ⇒ nothing to paste.
-      const request: PasteRequest = { ...content, intent: 'split', surface: 'shell' }
-      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      //
+      // An empty source block takes the clipboard's text whole: parsed as an outline
+      // it would keep one line and shred the rest around it, and a captured file's
+      // `((id))` would only be text in it. Non-empty source pastes around itself.
+      const target = block.peek()
+      const wholeIntoEmptySource = target != null && hasSourceContent(target) && target.content === ''
+      const request: PasteRequest = wholeIntoEmptySource
+        ? { ...content, files: [], intent: 'single-block', surface: 'shell' }
+        : { ...content, intent: 'split', surface: 'shell' }
+      const workspaceId = target?.workspaceId ?? repo.activeWorkspaceId ?? ''
       const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
       if (!resolved) return
       const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId })

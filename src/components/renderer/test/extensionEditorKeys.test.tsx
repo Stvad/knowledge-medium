@@ -8,7 +8,7 @@ const SOURCE = 'const alpha = 1\nalp'
 
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1', name: 'Alice'})}))
 
-describe('the extension source editor keeps the keys it acts on', () => {
+describe('the extension source editor keeps the outline-edit keys', () => {
   const {openEditorAt, reachedWindow} = setupBlockUi(SOURCE)
   const open = (caret: number) => openEditorAt(ExtensionEditor, caret)
 
@@ -66,34 +66,15 @@ describe('the extension source editor keeps the keys it acts on', () => {
     expect(reachedWindow()).toEqual([])
   })
 
-  it('a chord the editor acts on does not also fire the app shortcut', async () => {
-    const view = await open(0)
-    press(view, 'k', {ctrlKey: true, shiftKey: true})
-    expect(doc(view)).toBe('alp')
-    expect(reachedWindow()).toEqual([])
-  })
-
-  it('an arrow moves the caret without also moving to another block', async () => {
-    const view = await open(1)
-    press(view, 'ArrowLeft')
-    expect(view.state.selection.main.head).toBe(0)
-    expect(reachedWindow()).toEqual([])
-  })
-
   it.each<[string, KeyboardEventInit]>([
     ['Enter', {metaKey: true}],
+    ['Enter', {ctrlKey: true}],
     ['Enter', {altKey: true}],
     ['Escape', {}],
+    ['ArrowUp', {}],
   ])('%s %j still reaches the app shortcuts', async (key, init) => {
     const view = await open(5)
     press(view, key, init)
     expect(reachedWindow()).toEqual([key])
-  })
-
-  it('Escape reaches the app even when the editor acts on it too', async () => {
-    const view = await open(0)
-    view.dispatch({selection: {anchor: 0, head: 5}})
-    press(view, 'Escape')
-    expect(reachedWindow()).toEqual(['Escape'])
   })
 })

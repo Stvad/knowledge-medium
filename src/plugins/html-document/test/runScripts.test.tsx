@@ -10,8 +10,10 @@ import {readConsent} from '../scriptConsent.ts'
 
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1', name: 'Alice'})}))
 
+const SOURCE = '<p>hi</p><script>x()</script>'
+
 describe('Run scripts on the strip', () => {
-  const {mount} = setupBlockUi('<p>hi</p><script>x()</script>', defaultActionContextConfigs.map(context => actionContextsFacet.of(context)))
+  const {mount} = setupBlockUi(SOURCE, defaultActionContextConfigs.map(context => actionContextsFacet.of(context)))
   beforeEach(() => localStorage.clear())
 
   const openDialogFromStrip = async () => {
@@ -23,6 +25,7 @@ describe('Run scripts on the strip', () => {
   it('allows nothing until the dialog is confirmed, and ignores a click that follows straight on', async () => {
     const dialog = await openDialogFromStrip()
     expect(readConsent(SOURCE_BLOCK)).toBe('')
+    expect(document.querySelector('.ring-primary')).not.toBeNull()
 
     const confirm = within(dialog).getByRole<HTMLButtonElement>('button', {name: 'Run scripts'})
     fireEvent.click(confirm)
@@ -40,5 +43,6 @@ describe('Run scripts on the strip', () => {
     fireEvent.click(within(dialog).getByRole('button', {name: 'Cancel'}))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(readConsent(SOURCE_BLOCK)).toBe('')
+    expect(document.querySelector('.ring-primary')).toBeNull()
   })
 })

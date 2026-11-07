@@ -1,4 +1,4 @@
-import {useMemo} from 'react'
+import {useMemo, useRef, useState} from 'react'
 import {deleteCharBackward, deleteCharForward, insertNewlineAndIndent} from '@codemirror/commands'
 import {html} from '@codemirror/lang-html'
 import {keymap} from '@codemirror/view'
@@ -15,6 +15,7 @@ import {defineVariant} from '@/facets/variantFacet.js'
 import {useContent} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig, keepOutlineEditKeysInEditor} from '@/utils/codemirror.js'
+import {cn} from '@/lib/utils.js'
 import {confirmRunScripts} from './confirmRunScripts.tsx'
 import {HtmlFrame} from './HtmlFrame.tsx'
 import {useDocumentScripts} from './useDocumentScripts.ts'
@@ -28,19 +29,28 @@ const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
  *  through to the block's own click-to-edit. */
 export const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
-  const scripts = useDocumentScripts(block.id, source)
-  const {allow} = scripts
+  const {mode, allow, stop} = useDocumentScripts(block.id, source)
+  const [asking, setAsking] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  const askThenRun = async (run: () => void) => {
+    setAsking(true)
+    // To the top, so the dialog in the middle of the screen doesn't cover the ring.
+    box.current?.scrollIntoView({block: 'start'})
+    const confirmed = await confirmRunScripts()
+    setAsking(false)
+    if (confirmed) run()
+  }
   return (
-    <div className="w-full overflow-hidden rounded-md border border-border">
+    <div ref={box} className={cn('w-full scroll-mt-16 overflow-hidden rounded-md border border-border', asking && 'ring-4 ring-primary')}>
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground select-none">
-        <span>{scripts.allow ? 'HTML document (sandboxed, scripts off)' : 'HTML document (sandboxed)'}</span>
+        <span>{allow ? 'HTML document (sandboxed, scripts off)' : 'HTML document (sandboxed)'}</span>
         <span className="flex items-center gap-2">
-          {allow && <button type="button" className={STRIP_ACTION} onClick={() => void confirmRunScripts().then(confirmed => { if (confirmed) allow() })}>Run scripts</button>}
-          {scripts.stop && <button type="button" className={STRIP_ACTION} onClick={scripts.stop}>Stop scripts</button>}
+          {allow && <button type="button" className={STRIP_ACTION} onClick={() => void askThenRun(allow)}>Run scripts</button>}
+          {stop && <button type="button" className={STRIP_ACTION} onClick={stop}>Stop scripts</button>}
           {!block.repo.isReadOnly && <span>Edit source</span>}
         </span>
       </div>
-      <HtmlFrame source={source} scripts={scripts.mode}/>
+      <HtmlFrame source={source} scripts={mode}/>
     </div>
   )
 }

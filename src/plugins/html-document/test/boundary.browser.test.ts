@@ -711,6 +711,34 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await entries()).toBe(before)
     })
 
+    // Holds on Chromium with or without the frame's key. It's for the engines whose
+    // joint history behaves differently.
+    it('does not run again when Back returns past a stop', async () => {
+      const entries = () => host.page.evaluate(() => history.length)
+      // After load: a fragment navigation during load replaces the entry.
+      const source = `<p>text</p>${script(`
+        top.postMessage({ran: 'an inline script'}, '*')
+        addEventListener('load', () => setTimeout(() => { location.hash = '#moved'; top.postMessage('moved', '*') }, 50))
+      `)}`
+      const before = await entries()
+      await mountRunning(host, source)
+      await untilReported(host, 'moved')
+      await mountHeld(host, source)
+      await settle(host)
+      const added = await entries() - before
+      expect(added).toBeGreaterThan(0)
+
+      await host.page.evaluate(() => {
+        window.reports.length = 0
+      })
+      for (let step = 0; step < added; step += 1) {
+        await host.page.evaluate(() => history.back())
+        await host.page.waitForTimeout(150)
+      }
+      await settle(host)
+      expect(await ranSoFar()).toEqual([])
+    })
+
     it('still sends a prerender GET on the engines named above, with nothing computed in it', async () => {
       await mountHeld(host, `<link rel="prerender" href="${decoy('prerender')}?fixed">`)
       await settle(host)
@@ -748,13 +776,23 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await stunPacketsFrom(host => mountRunning(host, stunProbe()))).toBeGreaterThan(0)
     })
 
-    // Measured on Chromium only. No script is involved, so holding doesn't stop it,
+    // Measured on Chromium only. No script is involved, so holding doesn't stop these,
     // but what it takes has no way out of a held document.
+    const FRAGMENT_THIEF = `<meta http-equiv="refresh" content="1"><iframe srcdoc="<input id=f><meta http-equiv=refresh content='0;url=#f'>"></iframe>`
+
     it.runIf(engine === 'chromium')('takes the keyboard while held, through a fragment link in a refresh', async () => {
-      const thief = `<meta http-equiv="refresh" content="1"><iframe srcdoc="<input id=f><meta http-equiv=refresh content='0;url=#f'>"></iframe>`
-      const taken = await typeIntoApp(host => mountHeld(host, thief))
+      const taken = await typeIntoApp(host => mountHeld(host, FRAGMENT_THIEF))
       expect(taken.inApp).not.toBe('abcde')
       expect(taken.stolen).toBe('')
+    })
+
+    it.runIf(engine === 'chromium')('adds to the page\'s history while held, the same way', async () => {
+      const host = await openHost(browser, servers.hostUrl)
+      await mountHeld(host, FRAGMENT_THIEF)
+      const entries = () => host.page.evaluate(() => history.length)
+      const before = await entries()
+      await expect.poll(entries, {timeout: 10_000}).toBeGreaterThan(before)
+      await host.close()
     })
 
     it.runIf(engine === 'chromium')('can overwrite the clipboard after a click inside it', async () => {

@@ -3,7 +3,7 @@ import {sha256Hex} from '@/sync/crypto/sha256Hex.js'
 import type {FrameScripts} from './frameDocument.ts'
 import {grantConsent, readConsent, revokeConsent, subscribeToConsent} from './scriptConsent.ts'
 
-export interface DocumentScripts {
+interface DocumentScripts {
   mode: FrameScripts
   allow?: () => void
   stop?: () => void

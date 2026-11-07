@@ -42,6 +42,13 @@ describe('the HTML source editor', () => {
     expect(reachedWindow()).toEqual([])
   })
 
+  it('Shift+Backspace deletes a character too', async () => {
+    const view = await open(1)
+    press(view, 'Backspace', {shiftKey: true})
+    expect(doc(view)).toBe('p>hi</p>')
+    expect(reachedWindow()).toEqual([])
+  })
+
   it.each<[string, KeyboardEventInit]>([
     ['Enter', {metaKey: true}],
     ['Enter', {ctrlKey: true}],

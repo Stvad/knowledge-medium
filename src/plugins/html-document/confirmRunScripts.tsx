@@ -21,9 +21,9 @@ const ConfirmRunScriptsDialog = ({resolve, cancel}: DialogContextProps<true>) =>
   }, [])
   return (
     <Dialog open onOpenChange={next => { if (!next) cancel() }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent hideOverlay className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Run this document's scripts?</DialogTitle>
+          <DialogTitle>Run the highlighted document's scripts?</DialogTitle>
         </DialogHeader>
         <DialogDescription>
           They can't read your notes, but until you stop them they can capture what you type and reach the network.
@@ -40,6 +40,10 @@ const ConfirmRunScriptsDialog = ({resolve, cancel}: DialogContextProps<true>) =>
 
 /** The strip's button alone isn't consent. A document above this one can resize
  *  or scroll the page with no script running, so it can slide that button under a
- *  click meant for something it drew. Page layout can't move a dialog. */
+ *  click meant for something it drew. Page layout can't move a dialog.
+ *
+ *  Layout can still decide WHICH document's Run a click lands on, if one pulses as you
+ *  aim, so the caller rings the document this is for. Not an excerpt of its source:
+ *  that would put a document's own words in the prompt, and it can copy another's. */
 export const confirmRunScripts = async (): Promise<boolean> =>
   await openDialog(ConfirmRunScriptsDialog, {}) === true

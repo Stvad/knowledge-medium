@@ -224,27 +224,22 @@ export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptComplet
  *  neighbour. */
 const OUTLINE_EDIT_KEYS: ReadonlySet<string> = new Set(['Enter', 'Tab', 'Backspace', 'Delete'])
 
-/** `onKeyDown` for a `BlockEditor` holding source, where a key the editor acted on,
- *  or one of those above, must not also reach the window-level block shortcuts. A
- *  chord the editor left alone is the app's, and so is Escape: leaving the editor is
- *  never the editor's to refuse.
+/** `onKeyDown` for a `BlockEditor` holding source, where those keys edit the text
+ *  and must not reach the window-level block shortcuts. Pressed with Alt, Ctrl or
+ *  Cmd they are left to the app.
  *
  *  Bubble phase on purpose: CodeMirror has run its keymap or deferred it by now, so
  *  its keymap keeps deciding what the key does, and only the way on to window is
  *  cut. Taking the key in the capture phase would mean re-implementing that keymap:
  *  accepting a completion, the next snippet field, a key typed in the search panel. */
 export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
-  if (event.key === 'Escape') return
-  if (event.defaultPrevented) {
-    event.stopPropagation()
-    return
-  }
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
 }
 
-/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
- *  for bracket closing. Keys, history and completion come from the app. */
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but for
+ *  bracket closing, and for the fold and lint keymaps it doesn't name. Keys and history
+ *  come from the app; autocompletion brings its own keymap whatever this says. */
 export const BLOCK_EDITOR_BASIC_SETUP = {
   closeBrackets: true,
   lineNumbers: false,
