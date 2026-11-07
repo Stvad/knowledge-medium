@@ -1,4 +1,5 @@
 import { ChangeScope, type BlockData, type Tx } from '@/data/api'
+import { hasSourceContent } from '@/data/blockTypes'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
@@ -18,6 +19,7 @@ import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
+import type { ClipboardContent } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -737,6 +739,18 @@ export async function resolvePasteWithMediaCapture(
   return { decision, text: decision.text ?? text }
 }
 
+/** The request for a paste with no text caret, which is otherwise always a split.
+ *
+ *  An empty source block takes the clipboard's text whole: parsed as an outline it
+ *  would keep one line and shred the rest around it, and a captured file's `((id))`
+ *  would only be text in it. Source with content pastes around itself. */
+export const shellPasteRequest = (content: ClipboardContent, target: Block): PasteRequest => {
+  const row = target.peek()
+  return row != null && hasSourceContent(row) && row.content === ''
+    ? {...content, files: [], intent: 'single-block', surface: 'shell'}
+    : {...content, intent: 'split', surface: 'shell'}
+}
+
 /** Read the clipboard and paste it around `pasteTarget`. This is the
  *  funnel for shortcut / programmatic paste (vim normal-mode, multi-select
  *  actions) — there's no `ClipboardEvent` and no text caret.
@@ -766,7 +780,7 @@ export async function pasteFromClipboard(
 
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
-  const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
+  const decision = pasteDecisionVerb.runSync(runtime, shellPasteRequest({text}, pasteTarget))
   // This path is text-only (navigator.clipboard.readText carries no files), so a
   // `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)

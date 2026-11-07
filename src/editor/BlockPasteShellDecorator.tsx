@@ -5,12 +5,10 @@ import {
   type BlockShellDecoratorProps,
   type BlockShellState,
 } from '@/extensions/blockInteraction.js'
-import { hasSourceContent } from '@/data/blockTypes'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
 import { readClipboardContent } from '@/paste/clipboard.js'
-import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
-import type { PasteRequest } from '@/paste/decision.js'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture, shellPasteRequest } from '@/paste/operations.js'
 
 /**
  * Block-shell paste, as a shell decorator rather than a hardcoded handler on the
@@ -52,21 +50,11 @@ export function BlockPasteShellDecorator({
         return
       }
 
-      // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
-      // the chord intent is always 'split'. Resolve the decision, capturing any
-      // pasted media first (its reference text is spliced in, landing per the text
-      // policy — NOT a forced child). `null` ⇒ nothing to paste.
-      //
-      // An empty source block takes the clipboard's text whole: parsed as an outline
-      // it would keep one line and shred the rest around it, and a captured file's
-      // `((id))` would only be text in it. Non-empty source pastes around itself.
-      const target = block.peek()
-      const wholeIntoEmptySource = target != null && hasSourceContent(target) && target.content === ''
-      const request: PasteRequest = wholeIntoEmptySource
-        ? { ...content, files: [], intent: 'single-block', surface: 'shell' }
-        : { ...content, intent: 'split', surface: 'shell' }
-      const workspaceId = target?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
+      // Block-shell paste (block focused, NOT in edit mode) has no text caret. Resolve
+      // the decision, capturing any pasted media first (its reference text is spliced
+      // in, landing per the text policy — NOT a forced child). `null` ⇒ nothing to paste.
+      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      const resolved = await resolvePasteWithMediaCapture(runtime, shellPasteRequest(content, block), { repo, workspaceId })
       if (!resolved) return
       const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId })
       if (pasted[0]) {
