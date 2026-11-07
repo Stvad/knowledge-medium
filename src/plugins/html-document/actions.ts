@@ -17,6 +17,7 @@ const insertExampleHtmlDocument: BlockAction = {
         parentId: block.id,
         content: exampleSource,
         types: [HTML_DOCUMENT_TYPE],
+        revealParent: true,
       }),
       {scope: ChangeScope.BlockDefault, description: 'insert example HTML document'},
     )

@@ -64,6 +64,14 @@ const HISTORY_ESCAPES_THE_SANDBOX: Record<Engine, boolean> = {
   firefox: true,
 }
 
+/** A frame's fragment navigation, after load. Where it doesn't, there is nothing for
+ *  Back to return to. */
+const FRAGMENT_ADDS_TO_HISTORY: Record<Engine, boolean> = {
+  chromium: true,
+  webkit: true,
+  firefox: false,
+}
+
 let servers: BoundaryServers
 beforeAll(async () => {
   servers = await startServers()
@@ -726,7 +734,7 @@ describe.each(selectedEngines())('%s', engine => {
       await mountHeld(host, source)
       await settle(host)
       const added = await entries() - before
-      expect(added).toBeGreaterThan(0)
+      expect(added > 0).toBe(FRAGMENT_ADDS_TO_HISTORY[engine])
 
       await host.page.evaluate(() => {
         window.reports.length = 0

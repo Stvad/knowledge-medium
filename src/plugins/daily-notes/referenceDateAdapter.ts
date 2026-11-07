@@ -80,7 +80,8 @@ export const referenceDateAdapter: BlockDateAdapter = {
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
     const data = block.peek() ?? await block.load()
-    if (!data) return false
+    // Again here: a picker stays open while a type change syncs in.
+    if (!data || hasSourceContent(data)) return false
     const nextContent = replaceSingleDateReferenceContent(data.content, iso)
     if (nextContent === null || nextContent === data.content) return false
     await block.setContent(nextContent)

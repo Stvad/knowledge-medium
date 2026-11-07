@@ -141,6 +141,18 @@ describe('referenceDateAdapter', () => {
     expect(referenceDateAdapter.canHandle(block)).toBe(false)
   })
 
+  it('setIso refuses a block that became source after the adapter was picked', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'doc', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '<p>[[2026-04-29]]</p>', properties: {types: ['html-document']},
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('doc')
+    await block.load()
+    expect(await referenceDateAdapter.setIso(block, '2026-05-01')).toBe(false)
+    expect(block.peek()?.content).toBe('<p>[[2026-04-29]]</p>')
+  })
+
   it('canHandle accepts blocks with exactly one date reference', async () => {
     const repo = makeRepo()
     await repo.tx(async tx => {
