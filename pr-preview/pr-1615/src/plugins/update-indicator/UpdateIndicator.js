@@ -1,1 +1,1 @@
-export{P_ as UpdateIndicator}from"../../../chunks/app-CoVT5Q59.js";
+export{P_ as UpdateIndicator}from"../../../chunks/app-DVtf4h_k.js";

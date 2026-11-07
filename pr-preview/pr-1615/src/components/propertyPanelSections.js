@@ -1,1 +1,1 @@
-export{Hz as buildPropertyPanelSections}from"../../chunks/app-CoVT5Q59.js";
+export{Vz as buildPropertyPanelSections}from"../../chunks/app-DVtf4h_k.js";

@@ -1,1 +1,1 @@
-export{Aw as getBreadcrumbContentPreview}from"../../../chunks/app-CoVT5Q59.js";
+export{Aw as getBreadcrumbContentPreview}from"../../../chunks/app-DVtf4h_k.js";
