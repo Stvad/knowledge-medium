@@ -7,8 +7,8 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
-import { readClipboardContent } from '@/paste/clipboard.js'
-import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture, shellPasteRequest } from '@/paste/operations.js'
+import { readClipboardContent, shellPasteRequest } from '@/paste/clipboard.js'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
 
 /**
  * Block-shell paste, as a shell decorator rather than a hardcoded handler on the

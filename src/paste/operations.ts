@@ -1,5 +1,4 @@
 import { ChangeScope, type BlockData, type Tx } from '@/data/api'
-import { hasSourceContent } from '@/data/blockTypes'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
@@ -19,7 +18,7 @@ import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
-import type { ClipboardContent } from './clipboard.js'
+import { shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -737,18 +736,6 @@ export async function resolvePasteWithMediaCapture(
   const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, html, files: [] })
   if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
   return { decision, text: decision.text ?? text }
-}
-
-/** The request for a paste with no text caret, which is otherwise always a split.
- *
- *  An empty source block takes the clipboard's text whole: parsed as an outline it
- *  would keep one line and shred the rest around it, and a captured file's `((id))`
- *  would only be text in it. Source with content pastes around itself. */
-export const shellPasteRequest = (content: ClipboardContent, target: Block): PasteRequest => {
-  const row = target.peek()
-  return row != null && hasSourceContent(row) && row.content === ''
-    ? {...content, files: [], intent: 'single-block', surface: 'shell'}
-    : {...content, intent: 'split', surface: 'shell'}
 }
 
 /** Read the clipboard and paste it around `pasteTarget`. This is the

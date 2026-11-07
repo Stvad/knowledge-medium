@@ -1,3 +1,5 @@
+import type { Block } from '@/data/block'
+import { hasSourceContent } from '@/data/blockTypes'
 import type { PasteRequest } from './decision.ts'
 
 export type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
@@ -15,4 +17,16 @@ export const readClipboardContent = (
   const html = data.getData('text/html') || undefined
   if (!text && !html && files.length === 0) return null
   return {text, html, files}
+}
+
+/** The request for a paste with no text caret, which is otherwise always a split.
+ *
+ *  An empty source block takes the clipboard's text whole: parsed as an outline it
+ *  would keep one line and shred the rest around it, and a captured file's `((id))`
+ *  would only be text in it. Source with content pastes around itself. */
+export const shellPasteRequest = (content: ClipboardContent, target: Block): PasteRequest => {
+  const row = target.peek()
+  return row != null && hasSourceContent(row) && row.content === ''
+    ? {...content, files: [], intent: 'single-block', surface: 'shell'}
+    : {...content, intent: 'split', surface: 'shell'}
 }
