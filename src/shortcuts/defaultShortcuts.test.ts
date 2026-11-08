@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
+import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import {
   ChangeScope,
@@ -37,6 +38,7 @@ import {
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
+import { createMinimalMarkdownConfig, createTypeScriptConfig } from '@/utils/codemirror'
 import {
   insertPanelRow,
   panelBlockId,
@@ -223,6 +225,44 @@ beforeEach(async () => {
 })
 
 describe('default CodeMirror shortcuts', () => {
+  it.each([
+    {name: 'uses the selection as the label and puts the caret in the URL', anchor: 11, head: 6, expected: 'hello [world]()!', caret: 14},
+    {name: 'puts the caret in the label when there is no selection', anchor: 6, head: 6, expected: 'hello []()world!', caret: 7},
+  ])('Create link $name', async ({anchor, head, expected, caret}) => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'hello world!',
+      selection: {anchor, head},
+      extensions: createMinimalMarkdownConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe(expected)
+      expect(view.state.selection.main).toMatchObject({anchor: caret, head: caret})
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('declines to insert Markdown into the TypeScript editor', async () => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'const answer = 42',
+      extensions: createTypeScriptConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      const result = await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe('const answer = 42')
+      expect(result).toBe(false)
+    } finally {
+      view.destroy()
+    }
+  })
+
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
     const moveBlockUpAction = findEditModeAction(env.repo, 'move_block_up_cm')
     const moveBlockDownAction = findEditModeAction(env.repo, 'move_block_down_cm')
