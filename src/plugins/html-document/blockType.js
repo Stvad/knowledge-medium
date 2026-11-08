@@ -1,0 +1,1 @@
+export{sK as htmlDocumentTypeSeed}from"../../../chunks/app-eRStj6wn.js";

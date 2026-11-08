@@ -1,1 +1,1 @@
-export{fn as builtinCountProfiles,pn as characterCountProfilesFacet,mn as profileFrom,hn as profileLabel,gn as rawCharacterCountProfile,_n as textCountProfile,vn as wordsCountProfile}from"../../../chunks/app-9T6xea02.js";
+export{In as builtinCountProfiles,Ln as characterCountProfilesFacet,Rn as profileFrom,zn as profileLabel,Bn as rawCharacterCountProfile,Vn as textCountProfile,Hn as wordsCountProfile}from"../../../chunks/app-eRStj6wn.js";

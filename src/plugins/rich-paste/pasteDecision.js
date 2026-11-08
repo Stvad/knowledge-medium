@@ -1,1 +1,1 @@
-export{Py as richPasteDecisionContribution}from"../../../chunks/app-9T6xea02.js";
+export{ib as richPasteDecisionContribution}from"../../../chunks/app-eRStj6wn.js";
