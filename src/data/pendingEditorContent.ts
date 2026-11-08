@@ -14,6 +14,12 @@
  *  boundary. A writer that skips this still saves, through the editor's unmount
  *  flush, just after its focus write.
  *
+ *  Accepted: when the pending text equals what this editor last stored (typed,
+ *  then deleted back), a flush overwrites a write from elsewhere still in flight,
+ *  as blur and unmount flushes already do; `row_events` keeps the earlier
+ *  value. Skipping a flush that matches the last committed text instead would
+ *  drop a revert typed over an in-flight commit of this editor's own.
+ *
  *  `flushEditorContent` (`@/editor/contentFlush`) is the per-view flush for
  *  commit points inside an editor, which keep focus where it is. */
 
