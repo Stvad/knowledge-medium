@@ -21,6 +21,7 @@
 
 import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type WheelEvent} from 'react'
 import {MessageSquare} from 'lucide-react'
+import {EditorView, repositionTooltips} from '@codemirror/view'
 import type {Block} from '@/data/block'
 import {activePanelIdProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {useLayoutSessionBlock} from '@/data/globalState.js'
@@ -217,7 +218,16 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const active = peekActiveThread(panelId)
       const tops = placeCards(boxes, placed.findIndex(card => card.key === active), CARD_GAP_PX, nextFrame.height)
       for (const [i, {entry}] of placed.entries()) {
-        entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
+        const transform = `translateY(${Math.round(tops[i])}px)`
+        if (entry.el.style.transform !== transform) {
+          entry.el.style.transform = transform
+          // The outline scrollport moves cards indirectly. Their portaled
+          // tooltips need to remeasure when the editor moves with the card.
+          for (const editor of entry.el.querySelectorAll<HTMLElement>('.cm-editor')) {
+            const view = EditorView.findFromDOM(editor)
+            if (view) repositionTooltips(view)
+          }
+        }
         entry.el.style.visibility = 'visible'
         entry.el.style.opacity = ''
       }
@@ -299,7 +309,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           style={{left: frame.left, top: frame.top, width: frame.width, height: frame.height}}
         >
           <MarginRegistryContext value={registry}>
-            <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
+            <NestedBlockContextProvider overrides={{
+              layoutBoundary: false,
+              renderScopeId: scope,
+              scopeRootId: topLevelBlockId,
+              editorTooltipParent: document.body,
+            }}>
               {scopeThreads.length > 0 && <ShowClosedToggle panelId={panelId}/>}
               {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
               {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
