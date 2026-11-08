@@ -1,0 +1,1 @@
+export{VL as useShortcutSurfaceActivations}from"../../chunks/app-B2LVM3rY.js";

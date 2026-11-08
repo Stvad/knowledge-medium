@@ -1,0 +1,1 @@
+export{Ul as appendTagToBlocks,Wl as appendTagToContent}from"../../../chunks/app-B2LVM3rY.js";

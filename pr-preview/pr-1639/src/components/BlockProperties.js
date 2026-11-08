@@ -1,0 +1,1 @@
+export{Sz as BlockProperties}from"../../chunks/app-B2LVM3rY.js";

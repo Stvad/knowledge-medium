@@ -1,0 +1,1 @@
+export{Cd as quotedInFooterContribution}from"../../../chunks/app-B2LVM3rY.js";

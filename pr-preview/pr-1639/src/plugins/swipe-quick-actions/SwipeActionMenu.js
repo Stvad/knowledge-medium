@@ -1,0 +1,1 @@
+export{oj as SwipeActionMenu}from"../../../chunks/app-B2LVM3rY.js";

@@ -1,0 +1,1 @@
+export{Hr as perfMonitorPlugin}from"../../../chunks/app-B2LVM3rY.js";

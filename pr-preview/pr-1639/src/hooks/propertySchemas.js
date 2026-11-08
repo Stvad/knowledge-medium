@@ -1,0 +1,1 @@
+export{KU as usePropertySchemas}from"../../chunks/app-B2LVM3rY.js";

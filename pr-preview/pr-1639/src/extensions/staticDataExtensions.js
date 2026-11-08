@@ -1,0 +1,1 @@
+export{YW as staticDataExtensions}from"../../chunks/app-B2LVM3rY.js";

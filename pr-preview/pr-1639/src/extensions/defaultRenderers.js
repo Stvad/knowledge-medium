@@ -1,0 +1,1 @@
+export{FP as defaultRegistry,IP as defaultRendererContributions,LP as defaultRenderersExtension}from"../../chunks/app-B2LVM3rY.js";

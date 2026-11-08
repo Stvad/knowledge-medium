@@ -1,0 +1,1 @@
+export{DW as SuspenseFallback}from"../../../chunks/app-B2LVM3rY.js";

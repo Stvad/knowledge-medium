@@ -1,0 +1,1 @@
+export{kP as LazyBlockComponent}from"../../chunks/app-B2LVM3rY.js";

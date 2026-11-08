@@ -1,0 +1,1 @@
+export{oK as htmlDocumentDataExtension}from"../../../chunks/app-B2LVM3rY.js";

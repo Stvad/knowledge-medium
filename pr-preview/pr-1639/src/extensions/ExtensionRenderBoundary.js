@@ -1,0 +1,1 @@
+export{DI as ExtensionRenderBoundary}from"../../chunks/app-B2LVM3rY.js";
