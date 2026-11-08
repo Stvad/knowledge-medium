@@ -1,3 +1,20 @@
+export interface MarginCard {
+  /** Its row's index in outline order. */
+  row: number
+  /** Where the card wants its top. */
+  anchor: number
+  /** Kept after its row's other cards whatever its anchor: it stands for
+   *  threads in the rows below. */
+  trailing: boolean
+  /** Position among its block's cards, breaking ties. */
+  order: number
+}
+
+/** The order `placeCards` takes cards in: by row, then by where each sits in
+ *  it, not by the stored quote position, which moving text leaves behind. */
+export const byPlacement = (a: MarginCard, b: MarginCard): number =>
+  a.row - b.row || Number(a.trailing) - Number(b.trailing) || a.anchor - b.anchor || a.order - b.order
+
 export interface CardBox {
   /** Where the card wants its top: its target row's top. */
   anchor: number
