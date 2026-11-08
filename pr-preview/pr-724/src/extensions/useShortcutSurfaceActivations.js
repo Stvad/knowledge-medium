@@ -1,1 +1,1 @@
-export{KI as useShortcutSurfaceActivations}from"../../chunks/app-DEFsyFxb.js";
+export{BL as useShortcutSurfaceActivations}from"../../chunks/app-60RzSjoD.js";
