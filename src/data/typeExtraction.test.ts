@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -256,14 +256,23 @@ describe('createTypeBlock', () => {
     })).rejects.toMatchObject({name: 'AbortError'})
   })
 
-  it('TypeRegistrationTimeout has the expected shape', () => {
-    const err = new TypeRegistrationTimeout('type-id', 'Task', 1500)
-    expect(err).toBeInstanceOf(Error)
-    expect(err.name).toBe('TypeRegistrationTimeout')
-    expect(err.typeBlockId).toBe('type-id')
+  it('rejects with TypeRegistrationTimeout when the committed type never registers', async () => {
+    // A registry that never publishes the new id — the shape a block the
+    // projection rejects leaves behind.
+    env = await setup()
+    vi.spyOn(env.repo, 'types', 'get').mockReturnValue(new Map())
+    const err: unknown = await createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+      registrationTimeoutMs: 20,
+    }).catch((e: unknown) => e)
+    if (!(err instanceof TypeRegistrationTimeout)) throw new Error(`expected a timeout, got ${String(err)}`)
     expect(err.typeLabel).toBe('Task')
-    expect(err.timeoutMs).toBe(1500)
-    expect(err.message).toContain('did not appear in the runtime registry within 1500ms')
+    expect(err.timeoutMs).toBe(20)
+    // Timing out reports the gap; it does not roll back the committed block.
+    const committed = await env.repo.load(err.typeBlockId)
+    expect(committed?.parentId).toBe(typesPageBlockId(WS))
   })
 
   it('parents under args.workspaceId\'s Types page, not the active workspace', async () => {
@@ -598,6 +607,22 @@ describe('block-type typeify processor', () => {
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // The whole-block reader keeps a name ending in an unmatched `]`, so a type
+  // under one keeps answering to it, through an edit and through a rename.
+  it('keeps and moves the claim of a type named with a trailing unmatched `]`', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Foo]')
+    const resolves = async (alias: string) =>
+      (await env.repo.query.aliasLookup({workspaceId: WS, alias}).load())?.id
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Foo] '}), {scope: ChangeScope.BlockDefault})
+    expect((await env.repo.load(id))!.properties[aliasesProp.name]).toEqual(['Foo]'])
+    expect(await resolves('Foo]')).toBe(id)
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Bar]'}), {scope: ChangeScope.BlockDefault})
+    expect(await resolves('Bar]')).toBe(id)
   })
 
   // Same rule as the tag path, one tx later — a name that can't be written

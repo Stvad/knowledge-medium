@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {fitColumn, placeCards} from './placement'
+import {byPlacement, fitColumn, placeCards, type MarginCard} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -62,5 +62,24 @@ describe('fitColumn', () => {
 
   it('gives whole pixels, so the text never lands between them', () => {
     expect(fitColumn({left: 100.5, right: 300.5}, bounds)).toEqual({width: 400, shift: 100})
+  })
+})
+
+describe('byPlacement', () => {
+  const card = (name: string, row: number, anchor: number, order: number, trailing = false) =>
+    ({name, row, anchor, order, trailing})
+  const sorted = (...cards: Array<MarginCard & {name: string}>) => cards.sort(byPlacement).map(c => c.name)
+
+  it('orders a row by where each card sits, not its stored order', () => {
+    expect(sorted(card('a', 0, 200, 0), card('b', 0, 20, 1))).toEqual(['b', 'a'])
+  })
+
+  it('keeps rows in outline order, and a trailing card last in its row', () => {
+    expect(sorted(card('next row', 1, 0, 0), card('stub', 0, 0, 0, true), card('quote', 0, 300, 1)))
+      .toEqual(['quote', 'stub', 'next row'])
+  })
+
+  it('breaks a tie in place by stored order', () => {
+    expect(sorted(card('b', 0, 10, 1), card('a', 0, 10, 0))).toEqual(['a', 'b'])
   })
 })

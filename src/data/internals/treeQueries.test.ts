@@ -15,12 +15,15 @@
  *     duplicate explosion.
  *   - Depth guard: a non-cyclic deep chain past 100 levels truncates.
  *   - Soft-deleted blocks excluded from results.
- *   - Ancestors leaf-to-root order; subtree skip-self.
+ *   - Ancestors leaf-to-root order.
  *   - isDescendantOf: positive + negative + identity + missing-id.
+ *
+ * `treeQueries.fuzz.test.ts` diffs the same statements against a JS walk on
+ * random graphs; these pin the named shapes and the depth cap it cannot reach.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
@@ -59,10 +62,14 @@ const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
 
 const seed = (db: TestDb['db'], rows: Seed[]) => Promise.all(rows.map(r => insertOne(db, r)))
 
+/** One DB for the file; each describe starts from a reset, and the tests
+ *  inside one use disjoint ids. */
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+
 describe('SUBTREE_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns the root + descendants in depth-first sibling order', async () => {
     await seed(h.db, [
@@ -134,9 +141,7 @@ describe('SUBTREE_SQL', () => {
 })
 
 describe('manyAncestorsSql', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   /** What `ancestorWalk` does with the result: depth 0 is the seed,
    *  the rest is the chain. */
@@ -225,10 +230,30 @@ describe('manyAncestorsSql', () => {
   })
 })
 
+describe('the depth < 100 cap on a non-cyclic chain', () => {
+  beforeAll(async () => {
+    await resetTestDb(h.db)
+    await seed(h.db, Array.from({length: 105}, (_, i) => ({
+      id: `deep-${i}`,
+      parent_id: i === 0 ? null : `deep-${i - 1}`,
+    })))
+  })
+
+  it('SUBTREE_SQL stops descending at depth 100', async () => {
+    const rows = await h.db.getAll<{id: string; depth: number}>(SUBTREE_SQL, ['deep-0'])
+    expect(rows).toHaveLength(101)
+    expect(rows.at(-1)).toMatchObject({id: 'deep-100', depth: 100})
+  })
+
+  it('manyAncestorsSql stops climbing at depth 100', async () => {
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['deep-104'])
+    expect(rows).toHaveLength(101)
+    expect(rows.at(-1)).toMatchObject({id: 'deep-4', depth: 100})
+  })
+})
+
 describe('IS_DESCENDANT_OF_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns hit=1 when potentialAncestor is in the chain', async () => {
     await seed(h.db, [
@@ -278,9 +303,7 @@ describe('IS_DESCENDANT_OF_SQL', () => {
 })
 
 describe('CHILDREN_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns direct children only, ordered by (order_key, id)', async () => {
     await seed(h.db, [
@@ -314,12 +337,11 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
   // consulted. These tests pin the two flat inversions on exactly the old
   // fixtures: an UNMARKED stamped look-alike is never machinery, and a
   // MARKED row filters regardless of what its ancestor chain looks like.
-  let h: TestDb
   const WS = 'ws-vis-cycle'
   const DEF = 'def-cycle'
 
   beforeAll(async () => {
-    h = await createTestDb()
+    await resetTestDb(h.db)
     // Shared, static fixture for every test in this describe (workspace flip
     // + the one property-schema definition) — inserted once since `h` isn't
     // reset between the `it`s here; each test uses its own disjoint
@@ -335,7 +357,6 @@ describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', 
       [DEF, WS],
     )
   })
-  afterAll(async () => { await h.cleanup() })
 
   const insertBlock = (row: {
     id: string

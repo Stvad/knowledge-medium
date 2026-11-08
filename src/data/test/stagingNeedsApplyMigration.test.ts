@@ -62,12 +62,14 @@ const seedLocalFrom = (d: BlockData) =>
      VALUES (${BLOCK_STORAGE_COLUMNS.map(() => '?').join(', ')})`,
     blockToSyncedRowParams(d))
 
+const SEED_LOCAL_SQL =
+  `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+     created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+   VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', ?)`
+const seedLocalParams = (id: string, updatedAt: number, deleted = false) =>
+  [id, WS, updatedAt, updatedAt, deleted ? 1 : 0]
 const seedLocal = (id: string, updatedAt: number, deleted = false) =>
-  sharedDb.db.execute(
-    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
-       created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
-     VALUES (?, ?, NULL, 'a0', 'v', '{}', 1, ?, ?, 'u', 'u', ?)`,
-    [id, WS, updatedAt, updatedAt, deleted ? 1 : 0])
+  sharedDb.db.execute(SEED_LOCAL_SQL, seedLocalParams(id, updatedAt, deleted))
 
 const unapplied = async (): Promise<string[]> =>
   (await sharedDb.db.getAll<{id: string}>(
@@ -202,24 +204,19 @@ describe('ensureStagingNeedsApplyColumn', () => {
     expect(await unapplied()).toEqual(['arrived-later'])
   })
 
-  // 1200 serial round-trips through the write lock: ~250ms on an idle checkout,
-  // but measured past 5000ms on a loaded one, so the default is not a safe budget
-  // for it even outside a full gate run. Explicit because a timeout HERE also
-  // breaks the tests after it: vitest does not cancel the abandoned body, whose
-  // writes keep landing in the shared DB past the next `resetTestDb`. Making the
-  // rewind tolerate an already-dropped column does NOT fix that — tried, and the
-  // schema error just becomes a row-leak assertion. Not timing out is the fix.
+  // The seed is one statement by design (`SEED_STAGING_NEEDS_APPLY_SQL`); this
+  // pins that a backlog well past any plausible chunk size is seeded whole, so a
+  // chunked rewrite that stops after its first batch fails here.
   it('seeds a backlog larger than one chunk', async () => {
-    // Bounded statements, so the loop — not the WHERE — is what finishes it.
-    for (let i = 0; i < 600; i++) {
-      await deliver(row({id: `b${i}`, updatedAt: 5}))
-      await seedLocal(`b${i}`, 5)
-    }
+    const ids = Array.from({length: 600}, (_, i) => `b${i}`)
+    await sharedDb.db.executeBatch(BLOCKS_SYNCED_RAW_TABLE.put.sql,
+      ids.map(id => blockToSyncedRowParams(row({id, updatedAt: 5}))))
+    await sharedDb.db.executeBatch(SEED_LOCAL_SQL, ids.map(id => seedLocalParams(id, 5)))
 
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual([])
-  }, 30_000)
+  })
 
   it('is a no-op on a table that already has the column and the marker', async () => {
     await sharedDb.db.execute(

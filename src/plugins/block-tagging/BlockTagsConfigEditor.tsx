@@ -4,7 +4,7 @@ import { isReadOnlyBlock, type PropertyEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { isValidTagName, normalizeBlockTagsConfig, tagNameIssue } from './config.ts'
-import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
+import { TagNameIssueHint } from './TagNameIssueHint.tsx'
 
 export const BlockTagsConfigEditor = ({
   value,
@@ -79,16 +79,7 @@ export const BlockTagsConfigEditor = ({
               <Plus className="h-4 w-4" />
             </Button>
           </div>
-          {draftIssue === 'delimiters' && (
-            <p className="text-xs text-destructive">
-              Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
-            </p>
-          )}
-          {draftIssue === 'too-long' && (
-            <p className="text-xs text-destructive">
-              Tag names must be under {MAX_ALIAS_LENGTH} characters.
-            </p>
-          )}
+          <TagNameIssueHint issue={draftIssue} />
         </>
       )}
     </div>

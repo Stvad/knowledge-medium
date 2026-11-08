@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser'
+import { childrenOf } from './outline'
 
 /** Find the unique block whose content matches `content`. Throws on
  *  missing or duplicate matches. */
@@ -8,15 +9,6 @@ const findByContent = (blocks: ParsedBlock[], content: string): ParsedBlock => {
   if (matches.length === 0) throw new Error(`No block with content "${content}"`)
   if (matches.length > 1) throw new Error(`Multiple blocks with content "${content}"`)
   return matches[0]
-}
-
-/** Children of `parent` derived from `parentId` pointers, ordered by
- *  `orderKey`. The new ParsedBlock shape has no childIds — this is the
- *  source of truth. */
-const childrenOf = (blocks: ParsedBlock[], parent: ParsedBlock): ParsedBlock[] => {
-  return blocks
-    .filter(b => b.parentId === parent.id)
-    .sort((a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
 }
 
 const isRoot = (block: ParsedBlock): boolean => block.parentId === undefined
@@ -88,7 +80,7 @@ Parent
     expect(c.parentId).toBe(a.id)
     expect(d.parentId).toBe(c.id)
     // siblings preserve markdown order via orderKey
-    expect(childrenOf(blocks, a).map(x => x.content)).toEqual(['b', 'c'])
+    expect(childrenOf(blocks, a.id).map(x => x.content)).toEqual(['b', 'c'])
   })
 
   it('skips empty lines (non-content) and continues sibling sequence', () => {
@@ -117,7 +109,7 @@ Root
     expect(item1.parentId).toBe(root.id)
     expect(item2.parentId).toBe(root.id)
     expect(nested.parentId).toBe(item1.id)
-    expect(childrenOf(blocks, root).map(x => x.content)).toEqual(['First item', 'Second item'])
+    expect(childrenOf(blocks, root.id).map(x => x.content)).toEqual(['First item', 'Second item'])
   })
 
   it('preserves numbered-list markers in content', () => {
@@ -277,7 +269,7 @@ Root
       const project = findByContent(blocks, 'Project')
       expect(isRoot(project)).toBe(true)
       expect(isRoot(findByContent(blocks, 'Notes'))).toBe(true)
-      expect(childrenOf(blocks, project).map(b => b.content)).toEqual(['Task 1', 'Task 2'])
+      expect(childrenOf(blocks, project.id).map(b => b.content)).toEqual(['Task 1', 'Task 2'])
     })
 
     it('nests each further tab one level deeper', () => {

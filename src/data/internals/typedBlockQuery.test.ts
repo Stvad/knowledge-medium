@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { waitFor } from '@/test/waitFor'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
@@ -783,10 +784,10 @@ describe('repo.subscribeBlocks', () => {
       fired.push(ids(rows))
     })
 
-    await vi.waitFor(() => expect(fired).toEqual([[]]))
+    await waitFor(() => expect(fired).toEqual([[]]))
     await create({id: 'todo', types: ['todo']})
 
-    await vi.waitFor(() => expect(fired).toEqual([[], ['todo']]))
+    await waitFor(() => expect(fired).toEqual([[], ['todo']]))
     off()
   })
 
@@ -807,12 +808,12 @@ describe('repo.subscribeBlocks', () => {
       {workspaceId: WS, where: {[reviewerProp.name]: {target: {status: null}}}},
       rows => fired.push(ids(rows)),
     )
-    await vi.waitFor(() => expect(fired).toEqual([[]]))
+    await waitFor(() => expect(fired).toEqual([[]]))
 
     await env.repo.tx(tx => tx.create({
       id: 'target', workspaceId: WS, parentId: null, orderKey: 'b',
     }), {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
+    await waitFor(() => expect(fired).toEqual([[], ['source']]))
     off()
   })
 
@@ -835,7 +836,7 @@ describe('repo.subscribeBlocks', () => {
       {workspaceId: WS, where: {[reviewerProp.name]: {target: {status: 'done'}}}},
       rows => fired.push(ids(rows)),
     )
-    await vi.waitFor(() => expect(fired).toEqual([[]]))
+    await waitFor(() => expect(fired).toEqual([[]]))
 
     // Update the *target* row's status. The subscription's filter
     // doesn't reference the target id directly — only an inner
@@ -843,7 +844,7 @@ describe('repo.subscribeBlocks', () => {
     // `collectWhereDeps` adds for traversals.
     await env.repo.tx(tx => tx.setProperty('target', statusProp, 'done'),
       {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
+    await waitFor(() => expect(fired).toEqual([[], ['source']]))
     off()
   })
 
@@ -852,7 +853,7 @@ describe('repo.subscribeBlocks', () => {
     const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {
       fired.push(ids(rows))
     })
-    await vi.waitFor(() => expect(fired).toEqual([[]]))
+    await waitFor(() => expect(fired).toEqual([[]]))
 
     env.repo.startSyncObserver({throttleMs: 0})
     // A brand-new typed block arrives via the sync path: staged into
@@ -865,7 +866,7 @@ describe('repo.subscribeBlocks', () => {
     }))
 
     await env.repo.flushSyncObserver()
-    await vi.waitFor(() => expect(fired).toEqual([[], ['remote-todo']]))
+    await waitFor(() => expect(fired).toEqual([[], ['remote-todo']]))
     off()
   })
 })

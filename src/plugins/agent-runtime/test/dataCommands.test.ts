@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // Exercises the bridge's data commands (`backlinks`, `grouped-backlinks`,
 // `data-model`, `page`, `daily-note`, `search`) end-to-end against a real
@@ -17,13 +17,13 @@ import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { type Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { executeCommand } from '../commands'
+import { createTestAgentContext } from './createTestAgentContext'
 import type { AgentRuntimeContext } from '../protocol'
 import { DATA_MODEL_TOPICS, knownCommandRegistry } from '@knowledge-medium/agent-cli/protocol'
 
@@ -64,13 +64,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
-  repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync(
-    [kernelDataExtension, backlinksDataExtension, groupedBacklinksDataExtension],
-    {repo, workspaceId: WS, safeMode: false},
-  )
-  repo.setFacetRuntime(runtime)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, [kernelDataExtension, backlinksDataExtension, groupedBacklinksDataExtension])
 })
 
 const create = async (args: {

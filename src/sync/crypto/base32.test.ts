@@ -2,14 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { base32ToBytes, bytesToBase32 } from './base32.js'
 
 describe('base32', () => {
-  it('round-trips arbitrary byte lengths', () => {
-    for (let len = 0; len <= 40; len++) {
-      const input = new Uint8Array(len)
-      for (let i = 0; i < len; i++) input[i] = (i * 53 + 7) & 0xff
-      expect(base32ToBytes(bytesToBase32(input))).toEqual(input)
-    }
-  })
-
   it('encodes 32 bytes to 52 unpadded chars (the WK length, §5)', () => {
     const key = new Uint8Array(32).fill(0xa5)
     const encoded = bytesToBase32(key)

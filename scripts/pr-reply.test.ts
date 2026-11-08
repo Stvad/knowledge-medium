@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SIGNATURE, signedBody } from './pr-reply.mjs'
 
 describe('signedBody', () => {
@@ -90,7 +90,7 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       })
     const runWith = (extra: NodeJS.ProcessEnv, ...args: string[]) =>
       spawnSync('node', [script, ...args], { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8' })
-    return { dir, run, runViaPnpm, runWith, ghCalls: () => readFileSync(log, 'utf8'), sent: () => JSON.parse(readFileSync(join(dir, 'stdin.json'), 'utf8')) }
+    return { dir, env, run, runViaPnpm, runWith, ghCalls: () => readFileSync(log, 'utf8'), sent: () => JSON.parse(readFileSync(join(dir, 'stdin.json'), 'utf8')) }
   }
 
   it('posts the file verbatim plus the signature and prints the reply URL', () => {
@@ -193,18 +193,22 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
 
   // The URL is what the read-back needs; a kill during the lookups that
   // follow must not take it with them.
-  it('has written the reply URL before the lookups start', () => {
-    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: 'see #77' })
-    const { dir } = setup({ ghAnswer: answer, lookupSleep: 10 })
+  it('has written the reply URL before the lookups start', async () => {
+    const url = 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42'
+    const answer = JSON.stringify({ id: 42, html_url: url, body: 'see #77' })
+    const { dir, env, ghCalls } = setup({ ghAnswer: answer, lookupSleep: 10 })
     writeFileSync(join(dir, 'body.md'), 'see #77')
-    const r = spawnSync('node', [script, '652', '41', 'body.md'], {
-      cwd: dir,
-      env: { ...process.env, PATH: `${join(dir, 'shim')}:${process.env.PATH}`, GH_TOKEN: '', GH_HOST: '127.0.0.1', INIT_CWD: '' },
-      encoding: 'utf8',
-      timeout: 2_500,
-    })
-    expect(r.signal).toBe('SIGTERM')
-    expect(r.stdout).toContain('https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42')
+    const child = spawn('node', [script, '652', '41', 'body.md'], { cwd: dir, env, stdio: ['ignore', 'pipe', 'ignore'] })
+    let stdout = ''
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
+    try {
+      // The lookup is parked on the shim's sleep, so nothing after it has run yet.
+      await vi.waitFor(() => expect(ghCalls()).toContain('/issues/77'), { timeout: 15_000 })
+      await vi.waitFor(() => expect(stdout).toContain(url))
+      expect(child.exitCode).toBe(null)
+    } finally {
+      child.kill()
+    }
   })
 
   // What GitHub stored is the ground truth, not the file as it was read.

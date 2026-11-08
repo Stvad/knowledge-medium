@@ -11,12 +11,7 @@ const ctxWithTypes = (types: string[]): BlockResolveContext =>
 const innerStub = (): BlockRenderer => () => null
 
 describe('characterCountDecoratorContribution', () => {
-  it('contributes a decorator for all blocks', () => {
-    const decorate = characterCountDecoratorContribution(ctxWithTypes([]))
-    expect(typeof decorate).toBe('function')
-  })
-
-  it('returns a stable wrapped renderer per inner renderer, distinct across inners', () => {
+  it('contributes a decorator for every block, stable per inner renderer and distinct across inners', () => {
     const decorate = characterCountDecoratorContribution(ctxWithTypes([]))
     if (typeof decorate !== 'function') throw new Error('expected a decorator')
     const innerA = innerStub()

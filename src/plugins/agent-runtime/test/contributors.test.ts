@@ -4,12 +4,12 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {ChangeScope} from '@/data/api'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {createAgentRuntimeContext, executeCommand} from '../commands'
+import {executeCommand} from '../commands'
+import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
 import type {ContributorProfile} from '@/plugins/contributors/profiles'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
 import {userPageBlockId} from '@/data/stateBlocks'
-import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {computeAliasSeatId, ensureAliasTarget} from '@/data/targets'
 import {PLAINTEXT_ALIAS_SEATS} from '@/data/test/plaintextAliasSeats'
 import {actionsFacet} from '@/extensions/core'
@@ -24,10 +24,7 @@ afterAll(async () => { await db.cleanup() })
 beforeEach(async () => {
   await resetTestDb(db.db)
   const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, staticDataExtensions)
 })
 const run = (command: Record<string, unknown>) => executeCommand({commandId: 'test', ...command} as never, context)
 
@@ -103,11 +100,9 @@ describe('agent contributor selection', () => {
         id: 'action-created', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Captured repo write',
       }), {scope: ChangeScope.BlockDefault})
     })
-    const runtime = resolveFacetRuntimeSync([staticDataExtensions, actionsFacet.of({
+    context = createTestAgentContext(capturedRepo, WS, [staticDataExtensions, actionsFacet.of({
       id: 'test.captured-repo', description: 'Captured repository action', context: 'global', handler,
-    })], {repo: capturedRepo, workspaceId: WS, safeMode: false})
-    capturedRepo.setFacetRuntime(runtime)
-    context = createAgentRuntimeContext({repo: capturedRepo, runtime, safeMode: false})
+    })])
 
     for (const type of ['run-action', 'action']) {
       await expect(run({type, id: 'test.captured-repo', contributorId})).rejects.toThrow(/run-action.*Contributors/)
@@ -118,7 +113,7 @@ describe('agent contributor selection', () => {
 
   it('keeps action dispatch available when Contributors is disabled', async () => {
     const capturedRepo = context.repo
-    const runtime = resolveFacetRuntimeSync([
+    context = createTestAgentContext(capturedRepo, WS, [
       staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
       actionsFacet.of({
         id: 'test.captured-repo', description: 'Captured repository action', context: 'global',
@@ -128,9 +123,7 @@ describe('agent contributor selection', () => {
           }), {scope: ChangeScope.BlockDefault})
         },
       }),
-    ], {repo: capturedRepo, workspaceId: WS, safeMode: false})
-    capturedRepo.setFacetRuntime(runtime)
-    context = createAgentRuntimeContext({repo: capturedRepo, runtime, safeMode: false})
+    ])
 
     await run({type: 'run-action', id: 'test.captured-repo'})
 
@@ -143,12 +136,9 @@ describe('agent contributor selection', () => {
     {id: 'test.validation', dependencies: {}, actionContext: 'edit-mode-cm', error: /cannot provide editor/},
   ])('preserves action validation for $id in $actionContext with $dependencies', async ({id, dependencies, actionContext, error}) => {
     const handler = vi.fn()
-    const repo = context.repo
-    const runtime = resolveFacetRuntimeSync([staticDataExtensions, actionsFacet.of({
+    context = createTestAgentContext(context.repo, WS, [staticDataExtensions, actionsFacet.of({
       id: 'test.validation', description: 'Validate before refusal', context: actionContext, handler,
-    })], {repo, workspaceId: WS, safeMode: false})
-    repo.setFacetRuntime(runtime)
-    context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+    })])
 
     await expect(run({type: 'run-action', id, dependencies})).rejects.toThrow(error)
     expect(handler).not.toHaveBeenCalled()

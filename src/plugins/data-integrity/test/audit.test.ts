@@ -27,6 +27,7 @@ import {
   resetConsistencyAuditStore,
 } from '../store'
 import {
+  BLOCK_STORAGE_COLUMNS,
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
@@ -98,8 +99,16 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
                '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
     )
 
+    // A synced twin keeps the row from reading as stranded, which would send
+    // the runner through the divergence recheck delay.
+    const storageColumns = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
+    await sharedDb.db.execute(
+      `INSERT INTO blocks_synced (${storageColumns}) SELECT ${storageColumns} FROM blocks WHERE id = 'shape-1'`,
+    )
+
     const result = await runConsistencyAuditNow(env.repo, 'ws-5')
 
+    expect(result.checks.local_server_divergence.rechecked).toBe(false)
     const mirror = result.checks.references_index_mirror
     expect(mirror.status).toBe('anomaly')
     expect(mirror.malformedRefsShape).toBe(1)

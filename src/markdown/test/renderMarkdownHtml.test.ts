@@ -91,6 +91,20 @@ describe('renderMarkdownHtml', () => {
     expect(html).toContain('data-panel="panel-1"')
   })
 
+  it('keeps the app\'s table scroller out of the external profile', () => {
+    expect(renderMarkdownHtml('| a |\n|:--|\n| 1 |', {mode: 'external'}))
+      .toBe('<table><thead><tr><th style="text-align:left">a</th></tr></thead>'
+        + '<tbody><tr><td style="text-align:left">1</td></tr></tbody></table>')
+  })
+
+  it('keeps the app\'s list marks out of the external profile', () => {
+    const html = renderMarkdownHtml('1. one\n\n- two\n\n- [ ] task', {mode: 'external'})
+
+    expect(html).not.toContain('markdown-list')
+    expect(html).toContain('<ol>')
+    expect(html).toContain('<ul class="contains-task-list">')
+  })
+
   it('can force the minimal external profile even when runtime is supplied', () => {
     const runtime = resolveFacetRuntimeSync(
       markdownExtensionsFacet.of(() => ({

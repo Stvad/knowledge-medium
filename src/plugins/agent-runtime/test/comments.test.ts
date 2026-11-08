@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {COMMENT_THREAD_TYPE, type CommentsView} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'
@@ -8,12 +8,12 @@ import {userPageBlockId} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {annotationsDataExtension} from '@/plugins/annotations/dataExtension'
 import {THREAD_TYPE} from '@/plugins/annotations/schema'
 import {setThreadStatus} from '@/plugins/annotations/threads'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
-import {createAgentRuntimeContext, executeCommand} from '../commands'
+import {executeCommand} from '../commands'
+import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
 
 const WS = 'ws'
@@ -28,13 +28,11 @@ let agentId: string
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
-const contextFor = (extensions = staticDataExtensions) => {
-  const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
-  const runtime = resolveFacetRuntimeSync(extensions, {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  return createAgentRuntimeContext({repo, runtime, safeMode: false})
-}
+const contextFor = (extensions = staticDataExtensions) => createTestAgentContext(
+  createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}}).repo,
+  WS,
+  extensions,
+)
 
 beforeEach(async () => {
   await resetTestDb(db.db)
