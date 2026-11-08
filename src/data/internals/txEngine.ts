@@ -108,12 +108,15 @@ import {
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 import {
+  changedPropertyNames,
   materializePropertyChildrenForExistingRow,
   reconcileFieldValueChildren,
   undecodableCellValueError,
   upsertFieldRow,
+  type RevivalHistory,
 } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { storedPropertyValue } from '@/data/rowProperty'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -264,6 +267,8 @@ export interface TxImplContext {
   writableWorkspace: {readonly workspaceId: string | null} | null
   /** Settled processors write projections, not new cell-side intent. */
   propertyWritesAreSettled: () => boolean
+  /** The write history the revival processor reads; see `revivedInThisTx`. */
+  revivalHistory: RevivalHistory
   /** Content → the `references` it already implies, snapshotted at tx start
    *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
    *  Absent means no contributor, so nothing is prefilled and every row is
@@ -481,22 +486,20 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    const previous = before?.properties ?? {}
-    const names = [...new Set([...Object.keys(previous), ...Object.keys(after.properties)])]
-      .filter(name => !jsonValuesEqual(previous[name], after.properties[name]))
+    const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
     if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
     const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
     for (const name of names) {
       const resolution = resolver.resolve(name)
+      const encoded = storedPropertyValue(after.properties, name)
       if (resolution.status !== 'resolved') {
         // Orphan cleanup cannot leave children owned by an existing definition.
-        if (resolution.reason === 'definition-unavailable' && after.properties[name] === undefined) continue
+        if (resolution.reason === 'definition-unavailable' && encoded === undefined) continue
         throw new PropertySchemaIdentityError(name, resolution.reason)
       }
       const schema = resolution.schema
-      const encoded = after.properties[name]
       if (encoded !== undefined) {
         const rejection = propertyCellValueRejection(schema, encoded)
         if (rejection) throw undecodableCellValueError(name, after.id, schema, rejection)
@@ -506,6 +509,15 @@ export class TxImpl implements Tx {
     return schemas
   }
 
+  /** A row this tx brought back from a tombstone. Its eager child writes take
+   *  the revival's history, so they reuse the tombstoned field and value rows
+   *  instead of minting replacements the deferred revival would then defer to.
+   *  Written now, not left to that pass: the row may die again before it runs.
+   *  A row still deleted takes the plain write, which refuses a live child. */
+  private revivedInThisTx(row: BlockData): boolean {
+    return !row.deleted && this.ctx.revivalHistory.tombstonedDuringTx(row.id)
+  }
+
   private async writePropertyBagChildren(
     row: BlockData,
     schemas: PropertyBagWrites,
@@ -513,6 +525,7 @@ export class TxImpl implements Tx {
     if (schemas === null || schemas.size === 0) return
     await materializePropertyChildrenForExistingRow(
       this.propertyChildTx, row, {resolveNameSchema: name => schemas.get(name)}, [...schemas.keys()],
+      this.revivedInThisTx(row) ? {revive: this.ctx.revivalHistory} : {},
     )
   }
 
@@ -1095,7 +1108,7 @@ export class TxImpl implements Tx {
     const target = await this.propertyWriteTarget(before, schema)
     const resolvedSchema = target.schema
     this.assertPropertyWriteScope(resolvedSchema)
-    const stored = before.properties[resolvedSchema.name]
+    const stored = storedPropertyValue(before.properties, resolvedSchema.name)
     const value = typeof valueOrUpdater === 'function'
       ? (valueOrUpdater as (current: T | undefined) => T)(
         stored === undefined ? undefined : resolvedSchema.codec.decode(stored),
@@ -1174,7 +1187,7 @@ export class TxImpl implements Tx {
     const target = await this.propertyWriteTarget(before, schema)
     const resolvedSchema = target.schema
     this.assertPropertyWriteScope(resolvedSchema)
-    if (before.properties[resolvedSchema.name] === undefined) {
+    if (storedPropertyValue(before.properties, resolvedSchema.name) === undefined) {
       this.recordPropertyUnsets(id, [resolvedSchema.name])
       return
     }
@@ -1806,6 +1819,17 @@ export class TxImpl implements Tx {
     schema: AnyPropertySchema & {readonly fieldId: string},
     encoded: unknown,
   ): Promise<void> {
+    if (this.revivedInThisTx(parent)) {
+      await materializePropertyChildrenForExistingRow(
+        this.propertyChildTx,
+        {...parent, properties: {...parent.properties, [schema.name]: encoded}},
+        // The written name only: other names in the rows this revives are
+        // untouched by the write, and the deferred revival owns those.
+        {resolveNameSchema: name => name === schema.name ? schema : undefined},
+        [schema.name], {revive: this.ctx.revivalHistory},
+      )
+      return
+    }
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
       SELECT_PROPERTY_FIELD_CHILD_SQL,
       [parent.workspaceId, parent.id, schema.fieldId],

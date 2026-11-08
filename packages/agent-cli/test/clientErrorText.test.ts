@@ -28,6 +28,7 @@ describe('bridge client error text', () => {
   it('neutralizes a failed command', async () => {
     failWith({status: 'failed', result: {ok: false, error: {message: hostile}}})
     const error = await client().runCommand({type: 'ping'}).catch((e: unknown) => e as Error) as Error
+    expect(error.message).toMatch(/block x/)
     expect(error.message).not.toMatch(/[\n\u202E]/)
   })
 })

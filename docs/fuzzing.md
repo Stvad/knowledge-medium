@@ -895,11 +895,12 @@ needs the same.
    `WorkspaceRegistryUnavailableError` from a released Repo).
 7. Choose the string `unit` deliberately — the default and the usual
    correction are both narrower than "any string". `fc.string()` is
-   `unit: 'grapheme-ascii'` (printable ASCII); `{unit: 'binary'}` is the
-   full code-point range but never a LONE surrogate. For ill-formed
-   UTF-16, draw from `utf16UnitArb` in `@/test/arbitraries/utf16`
-   (single code units), alongside `'binary'` when astral coverage
-   matters too. A suite may legitimately want well-formed input only —
+   `unit: 'grapheme-ascii'` (printable ASCII); `{unit: codePointUnitArb}`
+   (from `@/test/arbitraries/utf16`) is the full code-point range but never
+   a LONE surrogate — the same values, seed for seed, as fast-check's
+   `{unit: 'binary'}`, which lint bans in tests for its ~0.85s per-file
+   build cost. For ill-formed UTF-16, draw from `utf16UnitArb` (single code
+   units), alongside `codePointUnitArb` when astral coverage matters too. A suite may legitimately want well-formed input only —
    `aead`/`cryptoCodecs` exclude lone surrogates because `TextEncoder`
    folds them to U+FFFD, which would fail their oracles for a reason
    unrelated to the property — but say so, rather than leaving a claim

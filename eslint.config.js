@@ -128,6 +128,14 @@ const clipboardWriteRestriction = {
   message: 'Write the clipboard through `writeTextToClipboard` (@/utils/copy), which disarms a pending cut once the write resolves.',
 }
 
+// Test files only: fast-check builds a reverse map of every code point the
+// first time a file constructs the `'binary'` unit; `codePointUnitArb`
+// generates and shrinks the same values seed for seed without it.
+const fcBinaryUnitRestriction = {
+  selector: "CallExpression[callee.object.name='fc'][callee.property.name='string'] Property[key.name='unit'][value.value='binary']",
+  message: "Use `fc.string({unit: codePointUnitArb})` (@/test/arbitraries/utf16): same values and shrinking per seed, without the reverse map `'binary'` builds per test file (cost: docs/fuzzing.md).",
+}
+
 const uiDeleteSubtreeRestriction = {
   selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
@@ -481,7 +489,7 @@ export default tseslint.config(
       '**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
     ],
     rules: {
-      'no-restricted-syntax': 'off',
+      'no-restricted-syntax': ['error', fcBinaryUnitRestriction],
       'callback-set/prefer-callback-set': 'off',
       'synced-write/no-raw-synced-table-writes': 'off',
       'boundary/no-core-to-plugin-imports': 'off',

@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentTokenStore, type AgentToken } from '../tokens.ts'
 import { ClientLocalSettings } from '@/utils/ClientLocalSettings.js'

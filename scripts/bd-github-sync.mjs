@@ -58,6 +58,8 @@
  *    A withheld bead is REPORTED, with the fields that also differ on GitHub:
  *    the bead's next push sends the local value over them, and nothing here
  *    can say which side was edited last.
+ * 6. bd's sync leaves its writes out of any Dolt commit, so `bd dolt push`
+ *    cannot carry them. Every sync is followed by a commit (syncIssues).
  * Accepted:
  *  - An issue closed or edited on GitHub DURING the sync window can be
  *    re-opened or overwritten by the in-flight push, which compares content
@@ -1818,12 +1820,19 @@ export const planPullSet = (beads, issueByNumber, excludedIds) => {
 // Linux), so a large set is split across invocations instead of failing the
 // spawn before bd starts. Returns the concatenated bd output.
 const ISSUES_PER_CALL = 200
-const syncIssues = (direction, ids, env, extraArgs = []) => {
+const syncIssues = (direction, ids, env, { dryRun = false } = {}) => {
   // An empty list must never reach bd as a bare `--pull-only` — that would be a bulk pull.
   if (!ids.length) return ''
   let out = ''
-  for (let i = 0; i < ids.length; i += ISSUES_PER_CALL)
-    out += run('bd', ['github', 'sync', direction, '--issues', ids.slice(i, i + ISSUES_PER_CALL).join(','), ...extraArgs], { env }) + '\n'
+  try {
+    for (let i = 0; i < ids.length; i += ISSUES_PER_CALL)
+      out += run('bd', ['github', 'sync', direction, '--issues', ids.slice(i, i + ISSUES_PER_CALL).join(','), ...(dryRun ? ['--dry-run'] : [])], { env }) + '\n'
+  } finally {
+    // bd's sync writes refs and pulled rows without a Dolt commit, and `bd dolt
+    // push` sends only commits. A clone of the remote would see a linked bead
+    // as unlinked and mint it again. A failed sync may have written too.
+    if (!dryRun) run('bd', ['dolt', 'commit', '-m', `bd-github-sync: ${direction.slice(2)}`], { env })
+  }
   return out
 }
 
@@ -2344,7 +2353,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // is newer locally by now, and planPullSet leaves it out.
     // Pull-only: a push leg would bypass planPrePullPush's selection.
     const pullSet = await planFresh(beads => planPullSet(beads, issueByNumber, pullExcluded))
-    const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
+    const syncOut = syncIssues('--pull-only', pullSet, env, { dryRun })
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))

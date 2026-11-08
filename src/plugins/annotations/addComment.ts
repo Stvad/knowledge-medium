@@ -57,6 +57,21 @@ const widenReplacement = (anchor: RangeAnchor, start: number, quote: string, rep
   return anchor.quote.slice(0, before) + replacement + anchor.quote.slice(before + quote.length)
 }
 
+/** The anchor a comment on `quote` stores, and its replacement as stored. */
+const anchorQuote = (content: string, quote: string, occurrence?: number, replacement?: string) => {
+  const start = locateQuote(content, quote, occurrence)
+  const anchor = captureAnchor(content, start, start + quote.length)!
+  return {anchor, replacement: replacement === undefined ? undefined : widenReplacement(anchor, start, quote, replacement)}
+}
+
+/** `content` as accepting a suggestion of `replacement` for `quote` would
+ *  leave it: the stored replacement spliced over the stored quote. */
+export const suggestedContent = (content: string, quote: string, replacement: string, occurrence?: number): string => {
+  const {anchor, replacement: stored} = anchorQuote(content, quote, occurrence, replacement)
+  const from = anchor.quoteStart!
+  return content.slice(0, from) + stored + content.slice(from + anchor.quote.length)
+}
+
 export interface AddCommentArgs {
   targetId: string
   /** Text of the target to anchor to; absent comments on the whole block. */
@@ -84,12 +99,5 @@ export const addComment = async (
   const target = await repo.load(targetId)
   if (!target) throw missingTarget(targetId)
   if (quote === undefined) return createThread(repo, {targetId, anchor: null, comment, replacement}, options)
-  const start = locateQuote(target.content, quote, occurrence)
-  const anchor = captureAnchor(target.content, start, start + quote.length)!
-  return createThread(repo, {
-    targetId,
-    anchor,
-    comment,
-    replacement: replacement === undefined ? undefined : widenReplacement(anchor, start, quote, replacement),
-  }, options)
+  return createThread(repo, {targetId, comment, ...anchorQuote(target.content, quote, occurrence, replacement)}, options)
 }

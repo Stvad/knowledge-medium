@@ -27,6 +27,7 @@ import {
   resetConsistencyAuditStore,
 } from '../store'
 import {
+  BLOCK_STORAGE_COLUMNS,
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
@@ -98,8 +99,16 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
                '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
     )
 
+    // A synced twin keeps the row from reading as stranded, which would send
+    // the runner through the divergence recheck delay.
+    const storageColumns = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
+    await sharedDb.db.execute(
+      `INSERT INTO blocks_synced (${storageColumns}) SELECT ${storageColumns} FROM blocks WHERE id = 'shape-1'`,
+    )
+
     const result = await runConsistencyAuditNow(env.repo, 'ws-5')
 
+    expect(result.checks.local_server_divergence.rechecked).toBe(false)
     const mirror = result.checks.references_index_mirror
     expect(mirror.status).toBe('anomaly')
     expect(mirror.malformedRefsShape).toBe(1)
@@ -667,6 +676,15 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
     const check = r.checks.content_link_recompute
     expect(check.status).toBe('anomaly')
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  // These types never get content refs, by design, so a mark in their source
+  // is not a stripped link.
+  it.each(['extension', 'html-document'])('content_link_recompute does not flag the source code in a %s block', async type => {
+    await ins({ id: 'src', content: 'const a = x[[0]]', properties: { types: [type] }, references: [] })
+    await ins({ id: 'prose', content: '[[Foo]]', references: [] })
+    const check = (await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })).checks.content_link_recompute
     expect(check.strippedBlocks).toBe(1)
   })
 

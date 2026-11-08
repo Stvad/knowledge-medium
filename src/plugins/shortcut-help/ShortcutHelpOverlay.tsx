@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlertTriangle, Pencil, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Pencil, RotateCcw, X } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -11,16 +11,17 @@ import { Button } from '@/components/ui/button.js'
 import { Kbd } from '@/components/ui/kbd'
 import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepalive.js'
 import { useRepo } from '@/context/repo.js'
-import { getActionsBeforeKeybindingOverrides } from '@/shortcuts/effectiveActions.js'
+import { getActiveActionById, getActionsBeforeKeybindingOverrides } from '@/shortcuts/effectiveActions.js'
 import type { KeybindingConflict } from '@/shortcuts/keybindingConflicts.js'
 import {
   KEYBINDING_OVERRIDE_USER_SOURCE,
   keybindingOverridesFacet,
 } from '@/shortcuts/keybindingOverrides.js'
-import { runActionById } from '@/shortcuts/runAction.js'
+import { runActionById, runActionByIdSafely } from '@/shortcuts/runAction.js'
 import { useActionDiscovery } from '@/shortcuts/useActionDiscovery.js'
 import type { ActionConfig, ActionContextType } from '@/shortcuts/types.js'
 import { openKeybindingsSettingsAction } from '@/plugins/keybindings-settings/actions.ts'
+import { INSERT_TUTORIAL_ACTION_ID } from '@/plugins/onboarding/action.ts'
 import {
   formatLinkClickGesture,
   linkClickActions,
@@ -367,6 +368,7 @@ export function ShortcutHelpOverlay() {
   // the model below rebuilds with it.
   const {runtime, active, actions, contextConfigsByType} = useActionDiscovery()
   const repo = useRepo()
+  const tutorialAction = getActiveActionById(actions, {active, contextConfigsByType}, INSERT_TUTORIAL_ACTION_ID)
 
   // Same edit-mode keepalive dance as the command palette: without it,
   // opening from edit mode would exit edit mode and deactivate
@@ -517,6 +519,11 @@ export function ShortcutHelpOverlay() {
     void runActionById(openKeybindingsSettingsAction.id, new CustomEvent('shortcut-help-settings'))
   }, [])
 
+  const openTutorial = () => {
+    shortcutHelpToggle.close()
+    void runActionByIdSafely(INSERT_TUTORIAL_ACTION_ID, new CustomEvent('shortcut-help-tutorial'))
+  }
+
   const bindings = model?.bindings ?? NO_BINDINGS
   const capture = useMemo<CaptureMode | null>(
     () => (capturing ? {onChord: commitRebind, onCancel: cancelRebind} : null),
@@ -561,8 +568,15 @@ export function ShortcutHelpOverlay() {
   return (
     <Dialog open={open} onOpenChange={shortcutHelpToggle.set}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Shortcuts &amp; gestures</DialogTitle>
+        <DialogHeader className="pr-6">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <DialogTitle>Shortcuts &amp; gestures</DialogTitle>
+            {tutorialAction && (
+              <Button type="button" variant="link" size="sm" className="h-auto shrink-0 p-0" onClick={openTutorial}>
+                Open tutorial <ArrowRight className="h-3.5 w-3.5" aria-hidden="true"/>
+              </Button>
+            )}
+          </div>
           <DialogDescription>{status}</DialogDescription>
         </DialogHeader>
         {state.matches && (

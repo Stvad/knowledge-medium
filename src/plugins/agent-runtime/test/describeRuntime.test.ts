@@ -361,14 +361,10 @@ describe('describeRuntime', () => {
     // pointer was tried and reverted as measured net-negative (see the
     // `brief` jsdoc in authoringCatalog.ts).
     //
-    // 41k -> 46k, measured 44,194. This is a real raise and worth stating
-    // why: the two rewritten examples referenced `bookIdProp`,
-    // `progressProp`, `libraryType`, `highlightType` and `noteProp` without
-    // ever declaring them — which is exactly why they could not compile.
-    // Declaring them is ~3KB that the string version got to omit by being
-    // broken. Comments were trimmed twice to claw back what was claw-backable;
-    // what is left is the warnings that proved load-bearing.
-    expect(JSON.stringify(description).length).toBeLessThan(46_000)
+    // The bound guards those dumps, with room for the rest: `apiSurface` grows
+    // with every catalogued facet and type, and the storage examples must declare
+    // what they use so they compile.
+    expect(JSON.stringify(description).length).toBeLessThan(47_000)
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {

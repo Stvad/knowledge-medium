@@ -22,6 +22,7 @@ import {
   type SpanReplacement,
 } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
   inlineDeletedBlockRefsProcessor,
@@ -210,10 +211,10 @@ const retargetSource = async (
   event: CoreBlockMergedEvent,
   aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): Promise<void> => {
+): Promise<RetargetedBag | null> => {
   const tx = ctx.tx
   const current = await tx.get(sourceId)
-  if (current === null || current.deleted) return
+  if (current === null || current.deleted) return null
 
   // Property-derived refs (sourceField set) project from the property
   // VALUE (`projectPropertyReferences`), so a retargeted ref entry whose
@@ -234,7 +235,7 @@ const retargetSource = async (
   // does unconditionally. Gating the cell here but not the child made the
   // two disagree (the child's `((from))` retargeted, PROJECT then rebuilt
   // the cell the guard had "protected"); dropping the gate makes cell and
-  // child converge. The value lands via the raw `properties` patch below in
+  // child converge. The value lands via a raw `properties` write in
   // THIS tx's scope (BlockDefault), which makes the retarget
   // undoable-with-the-merge — the correct semantics: undoing the merge
   // restores the pointer. A plain `set` picks the field's default
@@ -276,12 +277,14 @@ const retargetSource = async (
     }
   }
 
-  const nextContent = retargetReferenceContent(
-    current.content,
-    event.fromId,
-    event.intoId,
-    aliasReplacements,
-  )
+  const nextContent = hasSourceContent(current)
+    ? current.content
+    : retargetReferenceContent(
+      current.content,
+      event.fromId,
+      event.intoId,
+      aliasReplacements,
+    )
   // Aliases this merge MEANT to rewrite whose span is still standing in
   // the rewritten content. Two ways in, one treatment:
   //   - the replacement could not be rendered at all (`null`), so the span
@@ -329,17 +332,18 @@ const retargetSource = async (
       patch.isFieldForm = derived.isFieldForm
     }
   }
-  // This write (including the properties bag) runs under the merge tx's
-  // BlockDefault scope, so if a canonical seed bag ever gains a ref/
-  // refList-typed field, merging a block referenced BY a seed definition
-  // would abort at the commit-time seed guard (assertNoSeedDefinitionWrites).
-  // Unreachable today: canonical bags carry no ref-typed fields.
-  if (propertiesChanged) patch.properties = nextProperties
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
-  if (Object.keys(patch).length === 0) return
-  await tx.update(current.id, patch, {skipMetadata: true})
+  if (Object.keys(patch).length > 0) await tx.update(current.id, patch, {skipMetadata: true})
+  return propertiesChanged ? {id: current.id, properties: nextProperties} : null
+}
+
+/** A source's rewritten properties bag, written only once every source's
+ *  content is (see `retargetMergedBlockReferences`). */
+interface RetargetedBag {
+  readonly id: string
+  readonly properties: Record<string, unknown>
 }
 
 const retargetMergedBlockReferences = async (
@@ -361,8 +365,21 @@ const retargetMergedBlockReferences = async (
   sourceIds.add(event.intoId)
 
   const aliasReplacements = resolveAliasReplacements(event.aliasRewrites, event.intoId)
+  const bags: RetargetedBag[] = []
   for (const id of sourceIds) {
-    await retargetSource(ctx, id, event, aliasReplacements, ctx.propertySchemas)
+    const bag = await retargetSource(ctx, id, event, aliasReplacements, ctx.propertySchemas)
+    if (bag !== null) bags.push(bag)
+  }
+  // Bags after ALL content, whatever order the sources came in. A child-backed
+  // owner's list members are matched by value when its bag is written, so a
+  // member row still reading `((from))` would be reaped as removed, nested
+  // content and all. These writes run under the merge tx's BlockDefault scope:
+  // if a canonical seed bag ever gains a ref/refList-typed field, merging a
+  // block referenced BY a seed definition would abort at the commit-time seed
+  // guard (assertNoSeedDefinitionWrites). Unreachable today: canonical bags
+  // carry no ref-typed fields.
+  for (const {id, properties} of bags) {
+    await ctx.tx.update(id, {properties}, {skipMetadata: true})
   }
 }
 

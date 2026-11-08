@@ -1,19 +1,16 @@
 // @vitest-environment happy-dom
 /**
- * Pins BlockEditor's same-task focus (the comment on its focus effect has the
- * rule). Frames are held for the whole test, and a task armed in the swap
- * commit must not have run by the time the new editor takes focus: that is the
- * order a key typed during an editor swap sees — the swap, then queued input,
- * then later tasks and the next frame.
+ * Pins editor focus through block swaps and the Help opener. Frames are held
+ * so tests drive the deferred blur decision after each focus transfer.
  */
 import { Suspense, useLayoutEffect } from 'react'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
-import { focusBlock } from '@/data/properties'
+import { focusBlock, isEditingProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
@@ -22,6 +19,8 @@ import { BlockContextProvider } from '@/context/block'
 import { RepoContext, useRepo } from '@/context/repo'
 import { useInEditMode } from '@/data/globalState'
 import { BlockEditor } from '@/components/BlockEditor'
+import { ShortcutHelpHeaderItem } from '@/plugins/shortcut-help/HeaderItem.tsx'
+import { shortcutHelpToggle } from '@/plugins/shortcut-help/toggleStore.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -67,7 +66,7 @@ const focusedEditorDom = () => document.activeElement?.closest('.cm-editor') ?? 
 const editBlock = (repo: Repo, blockId: string) =>
   focusBlock(repo.block(PANEL), blockId, {edit: true, renderScopeId: outlineRenderScopeId(blockId)})
 
-describe('BlockEditor focus when edit mode moves to another block', () => {
+describe('BlockEditor focus handoffs', () => {
   let sharedDb: TestDb
   let repo: Repo
 
@@ -94,28 +93,32 @@ describe('BlockEditor focus when edit mode moves to another block', () => {
 
   afterEach(() => {
     cleanup()
+    shortcutHelpToggle.close()
     vi.restoreAllMocks()
   })
 
+  const renderEditors = () => render(
+    <RepoContext value={repo}>
+      <AppRuntimeContextProvider value={resolveFacetRuntimeSync([])}>
+        <ActiveContextsProvider>
+          <ShortcutHelpHeaderItem/>
+          <Suspense fallback={null}>
+            {['block-a', 'block-b'].map(blockId => (
+              <BlockContextProvider
+                key={blockId}
+                initialValue={{panelId: PANEL, renderScopeId: outlineRenderScopeId(blockId)}}
+              >
+                <EditorWhileEditing blockId={blockId}/>
+              </BlockContextProvider>
+            ))}
+          </Suspense>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>
+    </RepoContext>,
+  )
+
   it('the newly mounted editor owns focus before any later task or frame runs', async () => {
-    render(
-      <RepoContext value={repo}>
-        <AppRuntimeContextProvider value={resolveFacetRuntimeSync([])}>
-          <ActiveContextsProvider>
-            <Suspense fallback={null}>
-              {['block-a', 'block-b'].map(blockId => (
-                <BlockContextProvider
-                  key={blockId}
-                  initialValue={{panelId: PANEL, renderScopeId: outlineRenderScopeId(blockId)}}
-                >
-                  <EditorWhileEditing blockId={blockId}/>
-                </BlockContextProvider>
-              ))}
-            </Suspense>
-          </ActiveContextsProvider>
-        </AppRuntimeContextProvider>
-      </RepoContext>,
-    )
+    renderEditors()
     await vi.waitFor(() => expect(editorDomOf('block-a')).not.toBeNull())
     // Precondition, with A's frames run too: the harness can focus an editor,
     // so the failures below are about WHEN the new editor focuses.
@@ -140,5 +143,26 @@ describe('BlockEditor focus when edit mode moves to another block', () => {
       .toBe(editorDomOf('block-b'))
     expect(laterTaskRanBeforeFocus, 'the new editor focused in a later task, after queued keys were dispatched')
       .toBe(false)
+  })
+
+  it('keeps edit mode through a mouse press before Help opens', async () => {
+    renderEditors()
+    await vi.waitFor(() => expect(editorDomOf('block-a')).not.toBeNull())
+    await runHeldFrames()
+    expect(focusedEditorDom()).toBe(editorDomOf('block-a'))
+
+    const help = screen.getByRole('button', {name: 'Help'})
+    // happy-dom does not perform mousedown's native focus transfer.
+    if (fireEvent.mouseDown(help, {button: 0})) act(() => help.focus())
+    await runHeldFrames()
+    await act(() => repo.tx(async () => {}, {
+      scope: ChangeScope.BlockDefault, description: 'fence deferred editor blur',
+    }))
+
+    expect(repo.block(PANEL).peekProperty(isEditingProp)).toBe(true)
+    expect(focusedEditorDom()).toBe(editorDomOf('block-a'))
+    fireEvent.mouseUp(help)
+    fireEvent.click(help)
+    expect(shortcutHelpToggle.isOpen()).toBe(true)
   })
 })

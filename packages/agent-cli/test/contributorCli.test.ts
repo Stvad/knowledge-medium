@@ -58,6 +58,18 @@ const startStubBridge = async (): Promise<StubBridge> => {
           }
           contributors.push(contributor)
           results.set(id, contributor)
+        } else if (command.type === 'add-media') {
+          results.set(id, {id: 'media-1', workspaceId: String(command.workspaceId), deduped: false, reference: '((media-1))'})
+        } else if (command.type === 'read-media') {
+          results.set(id, {
+            id: 'media-1',
+            hash: 'sha256:abc',
+            mime: 'application/pdf',
+            size: 3,
+            filename: 'a.pdf',
+            imageMime: null,
+            base64: Buffer.from([1, 2, 255]).toString('base64'),
+          })
         } else if (command.type === 'list-contributors') {
           results.set(id, {contributors: contributors.filter(item => item.workspaceId === command.workspaceId)})
         } else {
@@ -127,6 +139,50 @@ const runCli = (args: string[], contributorEnv = '') => execFileAsync(process.ex
 // alone, but up to ~38s with three gates on the machine, far past the usual
 // 3-6x. Sized at ~3x that.
 describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
+  it('read-media writes the decoded bytes to --out and prints the metadata without them', async () => {
+    const out = path.join(tempDir, 'media.bin')
+    const {stdout} = await runCli(['read-media', 'media-1', '--out', out, '--workspace', 'ws-1'])
+
+    expect(bridge.commands).toMatchObject([{type: 'read-media', ref: 'media-1', workspaceId: 'ws-1'}])
+    expect([...await fs.readFile(out)]).toEqual([1, 2, 255])
+    const printed = JSON.parse(stdout) as Record<string, unknown>
+    expect(printed).toMatchObject({id: 'media-1', mime: 'application/pdf', size: 3, path: out})
+    expect(printed).not.toHaveProperty('base64')
+  })
+
+  it('add-media sends any file, named for the file', async () => {
+    const file = path.join(tempDir, 'notes.txt')
+    await fs.writeFile(file, Buffer.from([1, 2, 255]))
+    const {stdout} = await runCli(['--contributor', 'none', 'add-media', file, '--mime', 'text/plain', '--workspace', 'ws-1'])
+
+    const sent = bridge.commands.find(command => command.type === 'add-media')
+    expect(sent).toMatchObject({base64: Buffer.from([1, 2, 255]).toString('base64'), filename: 'notes.txt', mime: 'text/plain', workspaceId: 'ws-1'})
+    expect(stdout).toContain('((media-1))')
+  })
+
+  it('add-media refuses a --filename the parser has turned into a number', async () => {
+    const file = path.join(tempDir, 'notes.txt')
+    await fs.writeFile(file, 'x')
+    await expect(runCli(['--contributor', 'none', 'add-media', file, '--filename', '007'])).rejects.toMatchObject({
+      stderr: expect.stringContaining('--filename got the number 7'),
+    })
+    expect(bridge.commands.filter(command => command.type === 'add-media')).toEqual([])
+  })
+
+  it('read-media refuses before overwriting anything when --out is not a usable path', async () => {
+    await expect(runCli(['read-media', 'media-1', '--out', '2024'])).rejects.toMatchObject({
+      stderr: expect.stringContaining('--out got the number 2024'),
+    })
+    expect(bridge.commands).toEqual([])
+  })
+
+  it('read-media without --out refuses before reaching the bridge', async () => {
+    await expect(runCli(['read-media', 'media-1'])).rejects.toMatchObject({
+      stderr: expect.stringContaining('read-media requires --out <path>'),
+    })
+    expect(bridge.commands).toEqual([])
+  })
+
   it.each(['', '   '])('rejects contributor flag value %j before command dispatch', async value => {
     await expect(runCli(['--contributor', value, '--help']))
       .rejects.toMatchObject({stderr: expect.stringContaining('Usage: kmagent')})

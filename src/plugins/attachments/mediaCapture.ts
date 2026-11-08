@@ -109,6 +109,8 @@ export interface MediaCaptureDeps {
    *  periodic sweep also drains, so a missed arm only delays, never drops. */
   readonly drain: (userId: string) => void
   readonly maxBytes?: number
+  /** Describes the capture's tx in the change history. Default: `capture media`. */
+  readonly txDescription?: string
   /** Optional MIME allow-list; default allows everything (the bucket does). */
   readonly isAllowedMime?: (mime: string) => boolean
 }
@@ -203,7 +205,7 @@ export const captureMedia = async (
         },
       })
       inserted = minted.inserted
-    }, { scope: ChangeScope.BlockDefault, description: 'capture media' })
+    }, { scope: ChangeScope.BlockDefault, description: deps.txDescription ?? 'capture media' })
   })
 
   // (5) AFTER commit: the record is safe to drain, and the block exists.

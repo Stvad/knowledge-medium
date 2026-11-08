@@ -30,6 +30,7 @@ import {
 import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/walker.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -341,6 +342,29 @@ describe('spatial navigation selection actions', () => {
     })
   })
 
+  it('extends past a nested surface to the next row of the same scope', async () => {
+    buildPanelDom([
+      {
+        blockId: 'P',
+        renderScopeId: 'panel:outline',
+        nested: [{blockId: 'X', renderScopeId: 'panel:backlink:X'}],
+      },
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['P'], anchorBlockId: 'P'})
+
+    await pressExtendSelectionDown({
+      block: env.repo.block('P'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['P', 'B'])
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B', renderScopeId: 'panel:outline'})
+  })
+
   it('Roam-style first press selects only the focused block, not its neighbour', async () => {
     buildPanelDom([
       {blockId: 'A', renderScopeId: 'panel:outline'},
@@ -473,6 +497,40 @@ describe('spatial navigation shift-click selection', () => {
       selectedBlockIds: ['A', 'B', 'C'],
       anchorBlockId: 'A',
     })
+  })
+
+  // An expanded section renders other blocks between a row and its own children.
+  // They are not part of a range the user drew within the outline, and a selected
+  // range is what `d` deletes.
+  it('leaves nested surfaces out of a range within one scope', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {
+          blockId: 'P',
+          renderScopeId: 'panel:outline',
+          nested: [
+            {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+            {deferredBlockId: 'Y'},
+            {blockId: 'C', renderScopeId: 'panel:outline'},
+          ],
+        },
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    const selected = panel.peekProperty(selectionStateProp)?.selectedBlockIds
+    expect(selected).toContain('P')
+    expect(selected).not.toContain('X')
+    expect(selected).not.toContain('Y')
   })
 
   // A backlink entry reserves its slot without naming the scope it will mint,
@@ -879,7 +937,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -918,7 +976,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -996,7 +1054,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:B:X',
@@ -1236,7 +1294,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
         renderScopeId: 'panel:outline',
@@ -1275,7 +1333,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
         renderScopeId: 'panel:outline',
@@ -1381,7 +1439,7 @@ describe('spatial navigation vertical actions', () => {
 
     expect(modelWalk).not.toHaveBeenCalled()
     // The mounted row after the embed, not the collapsed child inside it.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'C',
         renderScopeId: 'panel:outline',
@@ -1423,7 +1481,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'C',
         renderScopeId: 'panel:outline',
@@ -1546,7 +1604,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'backlink:B',
@@ -1577,7 +1635,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -1629,7 +1687,7 @@ describe('spatial navigation vertical actions', () => {
     expect(modelWalk).not.toHaveBeenCalled()
     // NOT the backlink: it was the neighbour before 'B' mounted, and taking it
     // would jump the row that had just appeared in between.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',
@@ -1692,7 +1750,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',
@@ -1746,7 +1804,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'panel:backlink',
@@ -1774,7 +1832,7 @@ describe('spatial navigation vertical actions', () => {
     // sibling test can actually be false.)
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'below:outline',
@@ -1823,7 +1881,7 @@ describe('spatial navigation exclusion facet — real consumer path', () => {
     // not just a direct walker call. The same-panel step writes via a
     // fire-and-forget `void focusBlock(...)` (actions.ts), so poll rather
     // than assert immediately after `action.handler` resolves.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',

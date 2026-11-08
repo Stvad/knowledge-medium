@@ -1,0 +1,178 @@
+// @vitest-environment node
+/**
+ * Fuzz suite for the literal find/replace in `../search.ts`. See
+ * `src/test/fuzz.ts` for smoke/deep tier mechanics and `docs/fuzzing.md` for
+ * conventions. Pure and synchronous over strings: no DB, nothing to pin.
+ *
+ * Contract:
+ *  - `findLiteralMatches` returns ascending, non-overlapping spans that are
+ *    offsets into the ORIGINAL content: a replace splices at exactly those
+ *    spans, so a span read off any transformed copy of the text mangles it.
+ *  - Leftmost-first: every position is a candidate; an accepted match consumes
+ *    its span, a candidate failing the whole-word boundary consumes nothing.
+ *  - `replaceLiteralMatches` changes the content only inside those spans.
+ *
+ * Oracles, each independent of the regex the implementation uses:
+ *  - an ASCII-folding scanner over an alphabet whose only case pairs are ASCII
+ *    letters (the non-ASCII members have no partner in it), giving the exact
+ *    expected span list, with and without whole-word;
+ *  - a planted occurrence fenced by `\n` (which folds to nothing else) must be
+ *    reported at its planted offset whatever precedes it — including text whose
+ *    lowercase form is longer than itself;
+ *  - a whole-word match has no word character across either edge, where a
+ *    word character is a letter, mark, digit or connector in any script;
+ *  - every case-insensitive match equals the needle after a lower-upper-lower
+ *    round trip through the string case mappings (which folds `ſ` to `s` and
+ *    `ς` to `σ`, as case folding does), and every case-sensitive one is
+ *    byte-equal.
+ */
+import fc from 'fast-check'
+import { describe, expect, it } from 'vitest'
+import { findLiteralMatches, replaceLiteralMatches } from '../search.ts'
+import type { FindReplaceOptions } from '../types.ts'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+
+/** Case pairs only among the ASCII letters; every other member matches only
+ *  itself under any case folding. `İ` is the one whose lowercase is longer. */
+const ORACLE_ALPHABET = ['a', 'A', 'b', 'B', '_', '1', ' ', '.', '-', '*', '(', '\n', '\u0130', '\u00DF', '\u00E9', '\u{1F600}']
+
+/** Members with case relations that reach beyond ASCII. */
+const TRICKY_ALPHABET = [
+  ...ORACLE_ALPHABET,
+  'i', 'I', '\u0131', 's', 'S', '\u017F', 'k', 'K', '\u212A', '\u1E9E', '\u03A3', '\u03C3', '\u03C2', '\u00C9', 'e\u0301', '\uFB00',
+  // An astral case pair: a word edge must be read per code point.
+  '\u{10400}', '\u{10428}',
+]
+
+const textOf = (alphabet: string[], minLength: number, maxLength: number) =>
+  fc.array(fc.constantFrom(...alphabet), {minLength, maxLength}).map(parts => parts.join(''))
+
+const optionsArb: fc.Arbitrary<FindReplaceOptions> =
+  fc.record({matchCase: fc.boolean(), wholeWord: fc.boolean()})
+
+const isAsciiLetter = (c: string): boolean => /^[A-Za-z]$/.test(c)
+/** Letters, marks, digits and connectors in any script. */
+const isWordChar = (c: string | undefined): boolean =>
+  c !== undefined && /^[\p{L}\p{M}\p{N}\p{Pc}]$/u.test(c)
+
+/** The code point starting at / ending at a UTF-16 offset (the oracle reads
+ *  edges per code point, as a user sees letters). */
+const pointAt = (text: string, index: number): string | undefined =>
+  index < text.length ? String.fromCodePoint(text.codePointAt(index)!) : undefined
+const pointBefore = (text: string, index: number): string | undefined =>
+  index <= 0 ? undefined : [...text.slice(0, index)].at(-1)
+
+const unitsEqual = (a: string, b: string, matchCase: boolean): boolean =>
+  a === b || (!matchCase && isAsciiLetter(a) && isAsciiLetter(b) && a.toLowerCase() === b.toLowerCase())
+
+const oracleMatches = (content: string, needle: string, options: FindReplaceOptions) => {
+  const out: Array<{index: number; length: number}> = []
+  if (needle.length === 0) return out
+  let i = 0
+  while (i + needle.length <= content.length) {
+    let hit = true
+    for (let j = 0; j < needle.length && hit; j++) hit = unitsEqual(content[i + j], needle[j], options.matchCase)
+    const end = i + needle.length
+    const bounded = !options.wholeWord || (
+      (!isWordChar(content[i]) || !isWordChar(content[i - 1]))
+      && (!isWordChar(content[end - 1]) || !isWordChar(content[end]))
+    )
+    if (hit && bounded) {
+      out.push({index: i, length: needle.length})
+      i = end
+    } else {
+      i += 1
+    }
+  }
+  return out
+}
+
+const spliced = (content: string, spans: Array<{index: number; length: number}>, replace: string) => {
+  let out = ''
+  let cursor = 0
+  for (const {index, length} of spans) {
+    out += content.slice(cursor, index) + replace
+    cursor = index + length
+  }
+  return out + content.slice(cursor)
+}
+
+const caseFolded = (text: string): string => text.toLowerCase().toUpperCase().toLowerCase()
+
+describe('find/replace literal matching (fuzz)', () => {
+  it('reports exactly the spans an ASCII-folding scanner finds', () => {
+    fc.assert(
+      fc.property(
+        textOf(ORACLE_ALPHABET, 0, 30),
+        textOf(ORACLE_ALPHABET, 1, 4),
+        optionsArb,
+        (content, needle, options) => {
+          expect(findLiteralMatches(content, needle, options))
+            .toEqual(oracleMatches(content, needle, options))
+        },
+      ),
+      fuzzParams(400),
+    )
+  }, fuzzTestTimeout())
+
+  it('reports a fenced occurrence at its planted offset, whatever precedes it', () => {
+    fc.assert(
+      fc.property(
+        textOf(TRICKY_ALPHABET, 0, 20),
+        textOf(TRICKY_ALPHABET.filter(c => c !== '\n'), 1, 4),
+        textOf(TRICKY_ALPHABET, 0, 20),
+        fc.boolean(),
+        fc.string({maxLength: 3}),
+        (before, needle, after, matchCase, replace) => {
+          const options = {matchCase, wholeWord: false}
+          const content = `${before}\n${needle}\n${after}`
+          const planted = {index: before.length + 1, length: needle.length}
+
+          expect(findLiteralMatches(content, needle, options)).toContainEqual(planted)
+          const {content: next} = replaceLiteralMatches(content, needle, replace, options)
+          expect(next).toContain(`\n${replace}\n`)
+        },
+      ),
+      fuzzParams(400),
+    )
+  }, fuzzTestTimeout())
+
+  it('matches only text equal to the needle, on word boundaries when asked, and replaces only inside the matches', () => {
+    fc.assert(
+      fc.property(
+        textOf(TRICKY_ALPHABET, 0, 15),
+        textOf(TRICKY_ALPHABET, 1, 3),
+        textOf(TRICKY_ALPHABET, 0, 15),
+        optionsArb,
+        fc.string({maxLength: 3}),
+        (before, needle, after, options, replace) => {
+          // The needle is planted so every case has a candidate whose edges
+          // the whole-word check must judge.
+          const content = before + needle + after
+          const spans = findLiteralMatches(content, needle, options)
+          let cursor = 0
+          for (const {index, length} of spans) {
+            expect(index).toBeGreaterThanOrEqual(cursor)
+            expect(length).toBeGreaterThan(0)
+            const text = content.slice(index, index + length)
+            if (options.matchCase) expect(text).toBe(needle)
+            else expect(caseFolded(text)).toBe(caseFolded(needle))
+            if (options.wholeWord) {
+              const end = index + length
+              expect(!isWordChar(pointAt(content, index)) || !isWordChar(pointBefore(content, index))).toBe(true)
+              expect(!isWordChar(pointBefore(content, end)) || !isWordChar(pointAt(content, end))).toBe(true)
+            }
+            cursor = index + length
+          }
+          expect(cursor).toBeLessThanOrEqual(content.length)
+
+          expect(replaceLiteralMatches(content, needle, replace, options)).toEqual({
+            content: spliced(content, spans, replace),
+            replacementCount: spans.length,
+          })
+        },
+      ),
+      fuzzParams(400),
+    )
+  }, fuzzTestTimeout())
+})

@@ -21,6 +21,7 @@ import {
   type TokenAudience,
   type TokenScope,
   type RegisterClientMetadata,
+  BRIDGE_DEFAULT_MAX_BODY_BYTES,
 } from './protocol.js'
 
 const port = bridgePort()
@@ -44,10 +45,10 @@ const commandTtlMs = envDurationMsOverride('AGENT_RUNTIME_COMMAND_TTL_MS', 10 * 
  *  bounded, so a tab that dies mid-command cannot leak forever. */
 const inFlightCommandTtlMs = envDurationMsOverride('AGENT_RUNTIME_INFLIGHT_COMMAND_TTL_MS', 60 * 60 * 1000)
 const clientTtlMs = 60_000
-const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
+const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? BRIDGE_DEFAULT_MAX_BODY_BYTES)
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes
-  : 10 * 1024 * 1024
+  : BRIDGE_DEFAULT_MAX_BODY_BYTES
 const bridgeSecret = await resolveBridgeSecret()
 const bridgeSecretHeader = 'x-agent-runtime-secret'
 // Opt-in, off in production. When set, exposes POST /runtime/test/reset

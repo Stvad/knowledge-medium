@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {COMMENT_THREAD_TYPE, type CommentsView} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'
@@ -8,12 +8,12 @@ import {userPageBlockId} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {annotationsDataExtension} from '@/plugins/annotations/dataExtension'
 import {THREAD_TYPE} from '@/plugins/annotations/schema'
 import {setThreadStatus} from '@/plugins/annotations/threads'
 import {attributionCreatorsProp} from '@/plugins/contributors/schema'
-import {createAgentRuntimeContext, executeCommand} from '../commands'
+import {executeCommand} from '../commands'
+import {createTestAgentContext} from './createTestAgentContext'
 import type {AgentRuntimeContext} from '../protocol'
 
 const WS = 'ws'
@@ -28,13 +28,11 @@ let agentId: string
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 
-const contextFor = (extensions = staticDataExtensions) => {
-  const {repo} = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}})
-  const runtime = resolveFacetRuntimeSync(extensions, {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  return createAgentRuntimeContext({repo, runtime, safeMode: false})
-}
+const contextFor = (extensions = staticDataExtensions) => createTestAgentContext(
+  createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}}).repo,
+  WS,
+  extensions,
+)
 
 beforeEach(async () => {
   await resetTestDb(db.db)
@@ -72,6 +70,37 @@ describe('add-comment', () => {
     expect((await comments({block: BLOCK})).total).toBe(0)
   })
 
+  it('refuses a ((ref)) to an id no block has, in the comment or the replacement', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await expect(asAgent({type: 'add-comment', target: BLOCK, content: `see [this](((${missing})))`}))
+      .rejects.toThrow(new RegExp(`add-comment: .*${missing}`, 's'))
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: `((${missing}))`}))
+      .rejects.toThrow(missing)
+    expect((await comments({block: BLOCK})).total).toBe(0)
+
+    await asAgent({type: 'add-comment', target: BLOCK, content: `see ((${PAGE}))`})
+    expect((await comments({block: BLOCK})).total).toBe(1)
+  })
+
+  it('takes a dead ((ref)) the target already holds, in a suggestion that keeps it or a comment flagging it', async () => {
+    const dead = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `Meet on Thursday, see ((${dead})) for context`}), opts)
+    await asAgent({
+      type: 'add-comment', target: BLOCK, quote: `Thursday, see ((${dead}))`, replacement: `Friday, see ((${dead}))`,
+    })
+    await asAgent({type: 'add-comment', target: BLOCK, content: `The link ((${dead})) here is broken`})
+    expect((await comments({block: BLOCK})).total).toBe(2)
+  })
+
+  it('reads a suggestion as stored, its quote widened to the whole link the replacement goes into', async () => {
+    const missing = '0badc0de-0000-4000-8000-00000000dead'
+    await context.repo.tx(tx => tx.update(BLOCK, {content: `see ((${PAGE})) for context`}), opts)
+    await expect(asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: missing}))
+      .rejects.toThrow(`((${missing})) — no block has this id`)
+    const created = await asAgent({type: 'add-comment', target: BLOCK, quote: PAGE, replacement: BLOCK})
+    expect(created).toMatchObject({replacement: `((${BLOCK}))`})
+  })
+
   it('proposes an edit suggestion with a replacement, leaving the block as it is', async () => {
     const {threadId} = await asAgent({
       type: 'add-comment', target: BLOCK, quote: 'Thursday', replacement: 'Thursday 9am', content: 'Per the vendor.',
@@ -96,8 +125,8 @@ describe('add-comment', () => {
       .toMatchObject({replacement: null})
   })
 
-  it('takes a printed short id as its target', async () => {
-    const created = await asAgent({type: 'add-comment', target: `^${BLOCK.slice(0, 8)}`, content: 'On the whole block'}) as {threadId: string}
+  it('takes an id as the views print it as its target', async () => {
+    const created = await asAgent({type: 'add-comment', target: `^${BLOCK}`, content: 'On the whole block'}) as {threadId: string}
     expect((await comments({thread: created.threadId})).threads[0]?.target?.id).toBe(BLOCK)
   })
 

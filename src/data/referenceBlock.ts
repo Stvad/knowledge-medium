@@ -236,12 +236,35 @@ export const referenceBlockContentForId = (id: string): string => {
   return content
 }
 
+/** Every `]` in `s` closes an earlier `[`, and every `[` is closed — single
+ *  brackets, so a nested `[[b]]` counts as balanced. The inline reader
+ *  (`@/plugins/references/referenceParser`) decides how many of a `]]]…` run
+ *  belong to the alias by this count. */
+const hasBalancedBrackets = (s: string): boolean => {
+  let depth = 0
+  for (const ch of s) {
+    if (ch === '[') depth++
+    else if (ch === ']' && --depth < 0) return false
+  }
+  return depth === 0
+}
+
+/** The inline reader ends `[[s]]` at an unmatched trailing `]`, so a name
+ *  ending in one cannot be linked as itself; `renderWikilink` pads it. */
+export const endsInUnmatchedBracket = (s: string): boolean =>
+  s.endsWith(']') && !hasBalancedBrackets(s)
+
 /** Does `label` survive the wikilink round trip intact? A name containing
  *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a
  *  clean `[[name]]` reference. `addSchema` and the rename flow reject
  *  non-round-trippable property names as name hygiene — field rows themselves
  *  are id-addressed (`((fieldId))`, docs/properties-as-blocks-migration.html §7) and no longer embed the
- *  name. */
+ *  name.
+ *
+ *  Not refused here: a name ending in an unmatched `]`. The whole-block reader
+ *  keeps it, so existing types and properties under such a name still claim
+ *  it, though the inline reader cuts `[[a]]]` short; reconciling the readers
+ *  is a separate decision. */
 export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
   return parsed !== null && parsed.kind === 'alias' && parsed.alias === label

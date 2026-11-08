@@ -7,7 +7,7 @@ import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { CRUMB_ELLIPSIS } from '@/utils/blockCrumbs.js'
 import { loadCrumbs, recordLabels, recordSiblings } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
-import { displayIds } from './displayIds.ts'
+import { idMark } from './displayIds.ts'
 import { clampInt, crumbLine, joinDisplayLines, loadRoot, siblingLines } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
@@ -22,7 +22,6 @@ export interface SearchParams {
 
 export interface SearchDuplicate {
   id: string
-  shortId: string
   /** The last two steps of its breadcrumb; null at the top level, or when
    *  the breadcrumb was cut before any step. */
   place: string | null
@@ -30,7 +29,6 @@ export interface SearchDuplicate {
 
 export interface SearchHit {
   id: string
-  shortId: string
   breadcrumb: string[]
   snippet: string
   types: string[]
@@ -171,9 +169,8 @@ export const buildSearchView = async (
   const shown = page.map(group => group[0])
   const shownIds = shown.map(block => block.id)
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
-  const [renderer, shortIds, crumbs, siblings] = await Promise.all([
+  const [renderer, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
-    displayIds(repo, [...shownIds, ...duplicateIds]),
     loadCrumbs(repo, [...shownIds, ...duplicateIds], workspaceId),
     recordSiblings(repo, shownIds, records, workspaceId),
   ])
@@ -193,7 +190,6 @@ export const buildSearchView = async (
       const record = siblings.get(block.id)
       return {
         id: block.id,
-        shortId: shortIds.get(block.id) ?? block.id,
         breadcrumb: crumbs.get(block.id) ?? [],
         snippet: snippet(block.content, params.query),
         types: renderer.typeLabels(block),
@@ -201,7 +197,6 @@ export const buildSearchView = async (
         omittedProperties: properties.omitted,
         duplicates: duplicates.map(duplicate => ({
           id: duplicate.id,
-          shortId: shortIds.get(duplicate.id) ?? duplicate.id,
           place: placeOf(crumbs.get(duplicate.id)),
         })),
         duplicateCount: group.length - 1,
@@ -242,11 +237,11 @@ export const renderSearchView = (view: SearchView): string => {
     ].filter(Boolean).join('  ')
     const unlisted = hit.duplicateCount - hit.duplicates.length
     // `;` between them: a place (a daily note's title) can hold a comma.
-    const listed = hit.duplicates.map(duplicate => `^${duplicate.shortId}${duplicate.place === null ? '' : ` in ${duplicate.place}`}`)
+    const listed = hit.duplicates.map(duplicate => `${idMark(duplicate.id)}${duplicate.place === null ? '' : ` in ${duplicate.place}`}`)
     const duplicates = hit.duplicateCount > 0
       ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${listed.join('; ')}${unlisted > 0 ? `; …+${formatCount(unlisted)} more` : ''})`
       : ''
-    lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
+    lines.push(`${view.offset + index + 1}. ${idMark(hit.id)}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)
     lines.push(...siblingLines(hit.siblings))
   })

@@ -23,16 +23,19 @@ import {showInfo} from '@/utils/toast.js'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {LazyBlockEntry} from '@/plugins/backlinks/BlockEntry'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {addComment} from './addComment'
 import {annotationsPlugin} from './index'
-import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID} from './actions'
+import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
 import {ThreadCard} from './ui'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
 
-const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string | Promise<string>) => Promise<void>>()}))
+/** Like the browser's write, it settles with the text it was handed. */
+const writesItsText = async (text: string | Promise<string>) => { await text }
+/** The text the last write put on the clipboard. */
+const copiedText = async () => await clipboard.write.mock.lastCall![0]
 
 vi.mock('@/utils/copy.js', async importOriginal => ({
   ...await importOriginal<typeof import('@/utils/copy.js')>(),
@@ -105,7 +108,6 @@ describe('a read-mode selection, mapped to raw offsets', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
-        backlinksDataExtension,
         annotationsPlugin,
       ],
     }).repo
@@ -188,7 +190,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   }
 
   it.each(['embed', 'backlink', 'comment card'] as const)('offers and runs Copy reference in a %s selection', async surface => {
-    clipboard.write.mockReset().mockResolvedValue(undefined)
+    clipboard.write.mockReset().mockImplementation(writesItsText)
     let blockId = REFERENCED
     if (surface === 'embed') {
       await renderBlocks('embed-host')
@@ -213,11 +215,13 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     fireEvent.click(copy)
 
     await waitFor(() => expect(clipboard.write).toHaveBeenCalledOnce())
+    // Settles once the thread it names exists.
+    const copied = await copiedText()
     const [threadId] = await repo.query['core.typedBlockIds']({
       workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: blockId, sourceField: annotationTargetProp.name},
     }).load()
     expect((await repo.load(threadId))?.content).toBe('Referenced')
-    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    expect(copied).toBe(`((${threadId}))`)
 
     await renderBlocks('rich')
     fireEvent.contextMenu(selectText('Some'))
@@ -409,8 +413,30 @@ describe('a read-mode selection, mapped to raw offsets', () => {
     expect(mapReadSelection(ends('second', 'line'), contentOf)).toEqual({kind: 'inexact'})
   })
 
+  it('clears the read selection once a step lands, but not a caret the step put elsewhere', async () => {
+    await renderBlocks('rich', 'other')
+    const select = () => {
+      const {node, offset} = at('bold')
+      document.getSelection()!.setBaseAndExtent(node, offset, node, offset + 'bold'.length)
+    }
+    const target = () => readSelectionTarget(repo, document.getSelection()) as SelectionTarget
+
+    select()
+    await runOnReadTarget(target(), async () => true)
+    expect(document.getSelection()!.rangeCount).toBe(0)
+
+    // A new comment's editor takes focus, and the selection with it, as a caret.
+    select()
+    const caret = at('Another').node
+    await runOnReadTarget(target(), async () => {
+      document.getSelection()!.collapse(caret, 2)
+      return true
+    })
+    expect(document.getSelection()!.focusNode).toBe(caret)
+  })
+
   it('copies a reference to the selected text, through the read-mode gesture', async () => {
-    clipboard.write.mockReset().mockResolvedValue(undefined)
+    clipboard.write.mockReset().mockImplementation(writesItsText)
     await renderBlocks('rich')
     const {node, offset} = at('bold')
     document.getSelection()!.setBaseAndExtent(node, offset, node, offset + 'bold'.length)
@@ -422,7 +448,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: 'rich', sourceField: annotationTargetProp.name},
     }).load()
     expect((await repo.load(threadId))?.content).toBe('bold')
-    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    expect(await copiedText()).toBe(`((${threadId}))`)
     expect(document.getSelection()!.isCollapsed).toBe(true)
   })
 
@@ -448,7 +474,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       fireEvent.contextMenu(at('old').node.parentElement!)
       fireEvent.click(await screen.findByRole('menuitem', {name: 'Suggest edit'}))
       const quote = 'old** text, see [[Launch plan]] and'
-      expect(await screen.findByLabelText('Replacement')).toHaveProperty('value', quote)
+      expect(await screen.findByLabelText('Replacement')).toHaveProperty('textContent', quote)
       expect(peekComposer(viewKey(PANEL, 'rich'))?.anchor).toMatchObject({quote, quoteStart: RICH.indexOf(quote)})
     })
 

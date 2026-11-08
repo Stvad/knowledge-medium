@@ -23,7 +23,7 @@ import {
   visibleChildCounts,
 } from './context.ts'
 import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
-import { displayIds } from './displayIds.ts'
+import { idMark } from './displayIds.ts'
 import {
   clampInt,
   CUT_LEGEND,
@@ -46,7 +46,6 @@ const MAX_VIA = 5
 
 interface Target {
   id: string
-  shortId: string
   title: string
 }
 
@@ -117,11 +116,10 @@ const viaPropertiesBySource = async (
 
 const loadTarget = async (repo: Repo, ref: string, workspaceId: string): Promise<{block: BlockData, target: Target}> => {
   const {root} = await loadRoot(repo, ref, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
-  const shortIds = await displayIds(repo, [root.id])
   const title = labelForBlockData(root, root.id)
   return {
     block: root,
-    target: {id: root.id, shortId: shortIds.get(root.id) ?? root.id, title: clipLine(title, TITLE_CHARS).text},
+    target: {id: root.id, title: clipLine(title, TITLE_CHARS).text},
   }
 }
 
@@ -138,9 +136,8 @@ const backlinkRows = async (
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
   const parentIds = [...new Set(linkOnly.flatMap(source => contextParentId(source) ?? []))]
-  const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
+  const [renderer, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
     createPropertyRenderer(repo, sources, 'brief'),
-    displayIds(repo, ids),
     loadCrumbs(repo, ids, workspaceId),
     visibleChildCounts(repo, ids, workspaceId),
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
@@ -150,7 +147,7 @@ const backlinkRows = async (
   ])
   return sources.map(source => {
     const row: BacklinkRow = {
-      ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS}),
+      ...toViewRow(source, {renderer, maxChars: ROW_CHARS}),
       position: positionOf(source.id),
       parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
@@ -221,9 +218,9 @@ const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean):
   const body = `${row.content}${metaSuffix(row)}${children}`
   const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
   if (samePlace) {
-    return [`${index}. ^${row.shortId}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : []), ...siblingLines(row.siblings)]
+    return [`${index}. ${idMark(row.id)}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : []), ...siblingLines(row.siblings)]
   }
-  const lines = [`${index}. ^${row.shortId}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
+  const lines = [`${index}. ${idMark(row.id)}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
   if (row.parentContent) lines.push(`   ↳ parent: ${row.parentContent}`)
   if (firstChild) lines.push(firstChild)
   lines.push(...siblingLines(row.siblings))
@@ -244,7 +241,7 @@ const rangeNote = (offset: number, consumed: number, total: number, nextOffset: 
 
 export const renderBacklinksView = (view: BacklinksView): string => {
   const lines = [
-    `Backlinks of "${view.target.title}" ^${view.target.shortId} — ${rangeNote(view.offset, Math.max(0, (view.nextOffset ?? view.total) - view.offset), view.total, view.nextOffset)}`,
+    `Backlinks of "${view.target.title}" ${idMark(view.target.id)} — ${rangeNote(view.offset, Math.max(0, (view.nextOffset ?? view.total) - view.offset), view.total, view.nextOffset)}`,
   ]
   view.rows.forEach((row, index) => {
     lines.push(...renderBacklinkRow(row, row.position, index > 0 && samePlace(row, view.rows[index - 1])))
@@ -265,7 +262,6 @@ export interface BacklinkGroup {
   label: string
   /** The group's page/block when it is one (the `Other` fallback is not). */
   groupId: string | null
-  shortId: string | null
   fallback: boolean
   memberCount: number
   members: ViewRow[]
@@ -310,12 +306,8 @@ export const buildGroupedBacklinksView = async (
   // cannot multiply past what a single backlinks page may hydrate.
   const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
-  const groupIds = page.flatMap(group => group.blockId === null ? [] : [group.blockId])
   const members = await loadBlocks(repo, memberIds, {workspaceId: block.workspaceId})
-  const [renderer, shortIds] = await Promise.all([
-    createPropertyRenderer(repo, members, 'brief'),
-    displayIds(repo, [...memberIds, ...groupIds]),
-  ])
+  const renderer = await createPropertyRenderer(repo, members, 'brief')
   const memberById = new Map(members.map(member => [member.id, member]))
   const end = offset + page.length
 
@@ -332,14 +324,13 @@ export const buildGroupedBacklinksView = async (
       return {
         label: clipLine(group.label, TITLE_CHARS).text,
         groupId: group.blockId,
-        shortId: group.blockId === null ? null : shortIds.get(group.blockId) ?? group.blockId,
         fallback: group.fallback,
         memberCount: group.sourceIds.length,
         nextMemberOffset: nextMemberOffset < group.sourceIds.length ? nextMemberOffset : null,
         members: consumed
           .flatMap(id => {
             const member = memberById.get(id)
-            return member ? [toViewRow(member, {shortIds, renderer, maxChars: ROW_CHARS})] : []
+            return member ? [toViewRow(member, {renderer, maxChars: ROW_CHARS})] : []
           }),
       }
     }),
@@ -348,13 +339,13 @@ export const buildGroupedBacklinksView = async (
 
 export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string => {
   const lines = [
-    `Grouped backlinks of "${view.target.title}" ^${view.target.shortId} — ${plural(view.total, 'backlink')} in ${plural(view.groupCount, 'group')}; groups ${rangeNote(view.offset, view.groups.length, view.groupCount, view.nextOffset)}`,
+    `Grouped backlinks of "${view.target.title}" ${idMark(view.target.id)} — ${plural(view.total, 'backlink')} in ${plural(view.groupCount, 'group')}; groups ${rangeNote(view.offset, view.groups.length, view.groupCount, view.nextOffset)}`,
   ]
   view.groups.forEach((group, index) => {
-    const id = group.shortId ? `  ^${group.shortId}` : ''
+    const id = group.groupId === null ? '' : `  ${idMark(group.groupId)}`
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
     if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
-    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member)}  ^${member.shortId}`)
+    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member)}  ${idMark(member.id)}`)
     if (group.nextMemberOffset !== null) {
       const rest = group.memberCount - group.nextMemberOffset
       lines.push(`  +${formatCount(rest)} more — memberOffset=${group.nextMemberOffset} offset=${view.offset + index} limit=1 continues this group`)

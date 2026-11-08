@@ -131,6 +131,8 @@ const App = () => {
 
   // Re-resolve the initial layout (bumping the version busts the cache) — used
   // when a gate is resolved or a pending workspace row finally replicates.
+  // Keeps the snapshot's hash, not the URL's: after `resolveDefaultWorkspace`
+  // the URL still names the workspace just left.
   const reResolve = useCallback(() => {
     setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
   }, [])
@@ -139,12 +141,18 @@ const App = () => {
   const resolveDefaultWorkspace = useCallback(() => {
     setHashSnapshot(current => ({hash: '', version: current.version + 1}))
   }, [])
+  // Re-resolve an OPEN workspace at the URL, which projects its current layout.
+  // Not `reResolve`: same-workspace navigation never updates the snapshot, so
+  // its hash is the layout the workspace opened at.
+  const closeOpenWorkspace = useCallback(() => {
+    setHashSnapshot(current => ({hash: getCurrentHash(), version: current.version + 1}))
+  }, [])
 
   // A workspace the server converts to e2ee while it's open here closes into
   // the gate: until this device's pin is upgraded it can't sync the workspace.
-  useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', reResolve)
+  useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', closeOpenWorkspace)
   // So does one whose key this device stops holding: the browser evicted it.
-  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, reResolve)
+  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, closeOpenWorkspace)
   const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
 
   if (initial.kind === 'waiting') {

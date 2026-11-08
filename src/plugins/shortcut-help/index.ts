@@ -1,6 +1,8 @@
 import {
   actionsFacet,
   appMountsFacet,
+  headerItemsFacet,
+  type HeaderItemContribution,
   type AppMountContribution,
 } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -8,10 +10,18 @@ import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { hasEditableTarget } from '@/shortcuts/utils.js'
 import { Keyboard } from 'lucide-react'
+import { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
 import { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
 import { shortcutHelpToggle } from './toggleStore.ts'
 
 export { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
+export { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
+
+export const shortcutHelpHeaderItem: HeaderItemContribution = {
+  id: 'shortcut-help.header',
+  region: 'end',
+  component: ShortcutHelpHeaderItem,
+}
 
 export const SHORTCUT_HELP_ACTION_ID = 'shortcut_help'
 
@@ -68,4 +78,8 @@ export const shortcutHelpPlugin: AppExtension = systemToggle({
 }).of([
   appMountsFacet.of(shortcutHelpMount, {source: 'shortcut-help'}),
   actionsFacet.of(shortcutHelpAction, {source: 'shortcut-help'}),
+  headerItemsFacet.of(shortcutHelpHeaderItem, {
+    source: 'shortcut-help',
+    precedence: 35,
+  }),
 ])

@@ -15,7 +15,8 @@ import { CONTENT_HASH_PREFIX, isContentHash, verifyContentHash } from '../../cry
 import { abortableSleep } from '@/utils/abortableSleep.js'
 import { isAddressable, type ObjectPath, type UnrecoverableMedia } from '../attachmentCleaner.js'
 import type { ConversionAttachmentsIO } from '../conversionAttachments.js'
-import { sha256Hex, stoppableFolder, writeBytesPart, type BundleFolder } from './bundleParts.js'
+import { stoppableFolder, writeBytesPart, type BundleFolder } from './bundleParts.js'
+import { sha256Hex } from '../../crypto/sha256Hex.js'
 
 export const ATTACHMENTS_DIR = 'attachments'
 export const OTHER_OBJECTS_DIR = 'other-objects'

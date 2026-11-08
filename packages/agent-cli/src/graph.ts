@@ -4,7 +4,7 @@
  * business logic belongs in this package.
  */
 import type { BridgeClient } from './client.js'
-import type { CommentsView } from './protocol.js'
+import { BEING_EDITED_BLOCKS_SQL, type CommentsView } from './protocol.js'
 
 export interface HydratedRef {
   id: string
@@ -61,7 +61,6 @@ export interface MoveBlockInput extends ExactIds {
 
 export interface EditBlockResult {
   id: string
-  shortId: string
   /** The replacement with bounded context on each side, cuts marked. */
   excerpt: string
 }
@@ -279,7 +278,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
   /** Batched pending-decision views — ONE query per tick instead of a
    *  bridge round-trip per backlink source, so processed mentions stay
    *  cheap to re-scan forever. Includes the last-edit timestamp for the
-   *  quiet-period gate. */
+   *  settle and edit-hold gates. */
   const blockViews = async (ids: string[]): Promise<Map<string, BlockView>> => {
     const views = new Map<string, BlockView>()
     for (let offset = 0; offset < ids.length; offset += 500) {
@@ -301,6 +300,12 @@ export const createBridgeGraph = (client: BridgeClient) => {
       }
     }
     return views
+  }
+
+  /** Block id → when an editor holding it last wrote (ms). */
+  const beingEditedBlocks = async (): Promise<Map<string, number>> => {
+    const rows = await sqlAll(BEING_EDITED_BLOCKS_SQL) as Array<{id: string, active_at: number}>
+    return new Map(rows.map(row => [row.id, row.active_at]))
   }
 
   return {
@@ -325,6 +330,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     updateBlockContent,
     sqlAll,
     blockViews,
+    beingEditedBlocks,
   }
 }
 

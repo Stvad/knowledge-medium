@@ -100,6 +100,27 @@ describe('resolveDropTarget', () => {
       .toEqual({parentId: 'root', position: {kind: 'after', siblingId: 'a'}})
   })
 
+  it('splits a row at its own line, not at a section rendered between it and its children', () => {
+    const a = rows.get('a')!
+    const line = document.createElement('div')
+    line.setAttribute('data-block-visibility-target', 'true')
+    a.prepend(line)
+    const {left, top, width} = rects.get(a)!
+    rects.set(line, rectOf(left, top, width, ROW_HEIGHT))
+    const childTop = top + ROW_HEIGHT + 400
+    const a1 = rows.get('a1')!
+    rects.set(a1, rectOf(rects.get(a1)!.left, childTop, 460, ROW_HEIGHT))
+
+    for (const y of [lowerHalf('a'), top + 100]) {
+      expect(resolveDropTarget(a, column(2), y, context())).toMatchObject({
+        move: {parentId: 'a', position: {kind: 'first'}},
+        line: {y: childTop},
+      })
+    }
+    expect(resolveDropTarget(a, column(1), top + ROW_HEIGHT * 0.25, context())?.move)
+      .toEqual({parentId: 'root', position: {kind: 'first'}})
+  })
+
   it('measures the indent from the rendered rows', () => {
     // Just over half of this layout's indent right of a1x's column rounds
     // to a1x's child; against the 36px fallback it would round back.
