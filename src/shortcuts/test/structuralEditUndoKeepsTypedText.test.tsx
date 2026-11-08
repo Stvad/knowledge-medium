@@ -11,7 +11,7 @@ import { ChangeScope, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
-import { focusBlock } from '@/data/properties'
+import { focusBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
@@ -205,6 +205,9 @@ describe('undoing a structural edit keeps the text typed just before it', () => 
       dispatchPaste(editable, 'x\ny')
     })
     await vi.waitFor(async () => expect(await children()).toHaveLength(3))
+    const [, pasted] = await children()
+    // The handler's last step, unawaited: its flush must land before the undo.
+    await vi.waitFor(() => expect(peekFocusedBlockLocation(panel())?.blockId).toBe(pasted))
     expect(content('block-a')).toBe('first typedx')
 
     await undo()
