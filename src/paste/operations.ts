@@ -18,7 +18,7 @@ import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
-import { shellPasteRequest } from './clipboard.js'
+import { isBlankContent, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -115,8 +115,6 @@ export const planSingleBlockPaste = (
     cursor: selection.from + insert.length,
   }
 }
-
-const isBlankContent = (content: string): boolean => content.trim().length === 0
 
 const isCollapsed = (properties: Record<string, unknown>): boolean =>
   decodeRowProperty({properties}, isCollapsedProp)

@@ -19,6 +19,10 @@ export const readClipboardContent = (
   return {text, html, files}
 }
 
+/** Content that is only whitespace: the one test of an empty target, so the request
+ *  below and the paste's absorption of its target agree. */
+export const isBlankContent = (content: string): boolean => content.trim().length === 0
+
 /** The request for a paste with no text caret, which is otherwise always a split.
  *
  *  An empty source block takes the clipboard's text whole: parsed as an outline it
@@ -26,7 +30,7 @@ export const readClipboardContent = (
  *  would only be text in it. Source with content pastes around itself. */
 export const shellPasteRequest = (content: ClipboardContent, target: Block): PasteRequest => {
   const row = target.peek()
-  return row != null && hasSourceContent(row) && row.content === ''
+  return row != null && hasSourceContent(row) && isBlankContent(row.content)
     ? {...content, files: [], intent: 'single-block', surface: 'shell'}
     : {...content, intent: 'split', surface: 'shell'}
 }

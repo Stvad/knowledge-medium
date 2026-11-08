@@ -286,11 +286,12 @@ describe('pasteFromClipboard (vim p, multi-select p)', () => {
     expect(await childIds('page')).toEqual(['b', 'x', 'y', 'a'])
   })
 
-  it('puts the text whole into an empty source block', async () => {
+  // Whitespace counts as empty: Enter then Escape in an empty document leaves '\n'.
+  it.each(['', '\n', '  \n'])('puts the text whole into an empty source block (%j)', async empty => {
     const source = '<div>\n  <p>[[1,2],[3,4]]</p>\n</div>'
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     await createBlock('page', 'Page', null, 'a0')
-    await createBlock('doc', '', 'page', 'a0', {types: [HTML_DOCUMENT_TYPE]})
+    await createBlock('doc', empty, 'page', 'a0', {types: [HTML_DOCUMENT_TYPE]})
     await repo.block('doc').load()
     vi.stubGlobal('navigator', {clipboard: {readText: async () => source}})
 

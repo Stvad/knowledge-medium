@@ -141,16 +141,24 @@ describe('referenceDateAdapter', () => {
     expect(referenceDateAdapter.canHandle(block)).toBe(false)
   })
 
+  // The type arrives as a synced row would, behind the cache, while the picker is open.
   it('setIso refuses a block that became source after the adapter was picked', async () => {
     const repo = makeRepo()
     await repo.tx(tx => tx.create({
       id: 'doc', workspaceId: 'ws', parentId: null, orderKey: 'a',
-      content: '<p>[[2026-04-29]]</p>', properties: {types: ['html-document']},
+      content: '<p>[[2026-04-29]]</p>',
     }), {scope: ChangeScope.BlockDefault})
     const block = repo.block('doc')
     await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({types: ['html-document']}), 'doc'],
+    ))
+
     expect(await referenceDateAdapter.setIso(block, '2026-05-01')).toBe(false)
-    expect(block.peek()?.content).toBe('<p>[[2026-04-29]]</p>')
+    const row = await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['doc'])
+    expect(row.content).toBe('<p>[[2026-04-29]]</p>')
   })
 
   it('canHandle accepts blocks with exactly one date reference', async () => {

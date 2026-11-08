@@ -5,6 +5,7 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
+import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { hasSourceContent } from '@/data/blockTypes'
 import {
@@ -77,14 +78,19 @@ export const referenceDateAdapter: BlockDateAdapter = {
     if (!data) return null
     return singleDateReferenceMatch(data.content)?.iso ?? null
   },
+  // Reads the row it writes, in the same tx: a picker stays open while an edit or
+  // a type change syncs in.
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
-    const data = block.peek() ?? await block.load()
-    // Again here: a picker stays open while a type change syncs in.
-    if (!data || hasSourceContent(data)) return false
-    const nextContent = replaceSingleDateReferenceContent(data.content, iso)
-    if (nextContent === null || nextContent === data.content) return false
-    await block.setContent(nextContent)
-    return true
+    let written = false
+    await block.repo.tx(async tx => {
+      const row = await tx.get(block.id)
+      if (!row || hasSourceContent(row)) return
+      const nextContent = replaceSingleDateReferenceContent(row.content, iso)
+      if (nextContent === null || nextContent === row.content) return
+      await tx.update(block.id, {content: nextContent})
+      written = true
+    }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})
+    return written
   },
 }

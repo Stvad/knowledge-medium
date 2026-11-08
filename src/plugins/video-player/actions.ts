@@ -1,6 +1,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
+import { hasSourceContent } from '@/data/blockTypes'
 import { focusBlock, panelViewModeProp } from '@/data/properties.js'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
@@ -81,7 +82,7 @@ const insertIntoEditor = (editorView: EditorView, text: string): void => {
 
 const appendToBlock = async (block: Block, text: string): Promise<void> => {
   const data = block.peek() ?? await block.load()
-  if (!data) return
+  if (!data || hasSourceContent(data)) return
 
   const separator = data.content.trim().length > 0 ? ' ' : ''
   await block.setContent(`${data.content}${separator}${text.trim()}`)

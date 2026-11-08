@@ -13,7 +13,9 @@
  */
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block.js'
+import { hasSourceContent, holdsSource } from '@/data/blockTypes'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { resolveEditModeKeepalive, withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
@@ -82,24 +84,21 @@ function pickImageFiles(): Promise<File[]> {
   })
 }
 
-/** Append reference text to a block's content on its own line(s), guarding a
- *  not-resident or deleted block: `peek()` is `undefined` (not loaded) or `null`
- *  (deleted/missing), and a bare `?? ''` would overwrite real content — or write
- *  into a tombstone. (The soft-delete model means such a write can't actually
- *  "resurrect" a deleted block — `load()` filters `deleted = 0` — but bailing
- *  still avoids a pointless tombstone write and reads the right content on the
- *  live-row path.) References are one-per-line, matching the paste path's
- *  separator (src/paste/operations.ts) so a multi-image insert reads the same
- *  however it arrived. Shared by the normal-mode append and the edit-mode
+/** Append reference text to a block's content on its own line(s), one per line as
+ *  the paste path separates them. Reads the row it writes in the same tx: the picker
+ *  stays open while an edit, a delete or a type change syncs in, and a deleted or
+ *  source block is left alone. Shared by the normal-mode append and the edit-mode
  *  editor-unmounted fallback. */
 async function appendReferencesToBlock(block: Block, references: readonly string[]): Promise<void> {
-  const data = block.peek() ?? await block.load()
-  if (!data) return
-  const refsText = references.join('\n')
-  // Trim trailing whitespace so the append doesn't open a blank line (or strand
-  // a whitespace-only block before the image).
-  const base = (data.content ?? '').replace(/\s+$/, '')
-  await block.setContent(base ? `${base}\n${refsText}` : refsText)
+  await block.repo.tx(async tx => {
+    const row = await tx.get(block.id)
+    if (!row || row.deleted || hasSourceContent(row)) return
+    const refsText = references.join('\n')
+    // Trim trailing whitespace so the append doesn't open a blank line (or strand
+    // a whitespace-only block before the image).
+    const base = row.content.replace(/\s+$/, '')
+    await tx.update(block.id, {content: base ? `${base}\n${refsText}` : refsText})
+  }, {scope: ChangeScope.BlockDefault, description: 'insert image'})
 }
 
 /** Insert the captured references for an edit-mode pick. With a live editor,
@@ -159,10 +158,12 @@ async function captureFilesToReferences(block: Block, files: readonly File[]): P
 
 /** Pick image file(s) and insert their captured references at the editor's
  *  caret. MUST be reached synchronously from a user gesture (it clicks the
- *  picker before its first await) so the OS picker actually opens. */
+ *  picker before its first await) so the OS picker actually opens. Source
+ *  content takes no image, so a source block refuses before the picker. */
 export async function pickAndInsertImages(
   { editorView, block }: { editorView: EditorView; block: Block },
 ): Promise<void> {
+  if (holdsSource(block)) return
   try {
     // Keep edit mode alive across the picker: it blurs the editor, and the
     // deferred exit-on-blur would otherwise see focus on the file input (or, on
@@ -196,6 +197,7 @@ export async function pickAndInsertImages(
  *  at-caret insert's "inline in this block" semantics. MUST be reached
  *  synchronously from a user gesture so the picker opens. */
 export async function pickImagesIntoBlock(block: Block): Promise<void> {
+  if (holdsSource(block)) return
   const files = await pickImageFiles()
   if (files.length === 0) return
   const references = await captureFilesToReferences(block, files)
