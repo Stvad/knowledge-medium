@@ -1,1 +1,1 @@
-"use client";export{yR as Collapsible,bR as CollapsibleContent,xR as CollapsibleTrigger}from"../../../chunks/app-Dmdjq0Ge.js";
+"use client";export{_z as Collapsible,vz as CollapsibleContent,yz as CollapsibleTrigger}from"../../../chunks/app-C8BnKxYU.js";
