@@ -1,1 +1,0 @@
-export{UE as useMinuteClock}from"../../chunks/app-Ddv6L3lM.js";

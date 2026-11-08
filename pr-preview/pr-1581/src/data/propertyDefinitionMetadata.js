@@ -1,1 +1,0 @@
-export{M5 as parsePropertyDefinitionMetadata,N5 as propertySchemaOriginForSeedKey}from"../../chunks/app-Ddv6L3lM.js";

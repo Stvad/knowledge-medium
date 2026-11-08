@@ -1,1 +1,0 @@
-export{kM as extensionPromptDiagnosticContribution,AM as extensionPromptDiagnosticSource}from"../../../chunks/app-Ddv6L3lM.js";

@@ -1,1 +1,0 @@
-export{Ik as EXTENSIONS_PAGE_TITLE,Lk as TUTORIAL_DEFAULT_TITLE,Rk as TUTORIAL_VIM_TITLE,pS as onboardingPlugin,Fk as seedTutorial}from"../../../chunks/app-Ddv6L3lM.js";

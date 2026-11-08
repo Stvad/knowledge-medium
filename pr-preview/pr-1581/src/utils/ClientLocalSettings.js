@@ -1,1 +1,0 @@
-export{SN as ClientLocalSettings,CN as clientLocalSettings}from"../../chunks/app-Ddv6L3lM.js";

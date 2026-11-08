@@ -1,1 +1,0 @@
-export{GI as readClipboardContent}from"../../chunks/app-Ddv6L3lM.js";

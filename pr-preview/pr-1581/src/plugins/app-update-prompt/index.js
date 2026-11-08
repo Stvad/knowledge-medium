@@ -1,1 +1,0 @@
-export{VM as appUpdatePromptExtension}from"../../../chunks/app-Ddv6L3lM.js";

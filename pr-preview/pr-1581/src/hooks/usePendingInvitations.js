@@ -1,1 +1,0 @@
-export{KT as usePendingInvitations}from"../../chunks/app-Ddv6L3lM.js";

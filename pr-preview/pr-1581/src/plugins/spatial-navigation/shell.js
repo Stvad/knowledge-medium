@@ -1,1 +1,0 @@
-export{GS as spatialNavigationShellDecorator}from"../../../chunks/app-Ddv6L3lM.js";
