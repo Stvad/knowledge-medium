@@ -1,0 +1,1 @@
+export{gst as CHANGE_SCOPE_POLICIES,_st as ChangeScope,vst as isChangeScope,yst as policyForScope,bst as scopeAllowedInReadOnly,xst as scopeIsUndoable,Sst as scopePoliciesEquivalent,Cst as scopeUploadsToServer,wst as sourceForScope}from"../../../chunks/app-BVe4OuNE.js";

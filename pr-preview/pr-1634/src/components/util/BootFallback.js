@@ -1,0 +1,1 @@
+export{$U as BootFallback}from"../../../chunks/app-BVe4OuNE.js";

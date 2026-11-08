@@ -1,0 +1,1 @@
+export{eW as SuspenseFallback}from"../../../chunks/app-BVe4OuNE.js";

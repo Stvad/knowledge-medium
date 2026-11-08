@@ -1,0 +1,1 @@
+export{sK as geoDataExtension}from"../../../chunks/app-BVe4OuNE.js";

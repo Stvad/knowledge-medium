@@ -1,0 +1,1 @@
+export{oH as isIOS,sH as isMacPlatform}from"../../chunks/app-BVe4OuNE.js";

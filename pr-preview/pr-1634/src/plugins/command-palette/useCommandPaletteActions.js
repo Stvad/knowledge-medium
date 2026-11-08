@@ -1,0 +1,1 @@
+export{tA as useCommandPaletteActions}from"../../../chunks/app-BVe4OuNE.js";

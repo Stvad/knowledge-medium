@@ -1,0 +1,1 @@
+export{Qn as keybindingsSettingsDataExtension}from"../../../chunks/app-BVe4OuNE.js";

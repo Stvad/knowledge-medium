@@ -1,0 +1,1 @@
+export{_ot as SYSTEM_AUTHOR_PREFIX,vot as isSystemAuthor,yot as systemAuthor}from"../../../chunks/app-BVe4OuNE.js";

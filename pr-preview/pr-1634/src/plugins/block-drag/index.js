@@ -1,0 +1,1 @@
+export{Jv as blockDragPlugin}from"../../../chunks/app-BVe4OuNE.js";

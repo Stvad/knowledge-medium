@@ -1,0 +1,1 @@
+export{Um as authorIdOf}from"../../../chunks/app-BVe4OuNE.js";

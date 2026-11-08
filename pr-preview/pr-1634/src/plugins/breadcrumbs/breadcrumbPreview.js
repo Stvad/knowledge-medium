@@ -1,0 +1,1 @@
+export{ow as getBreadcrumbContentPreview}from"../../../chunks/app-BVe4OuNE.js";

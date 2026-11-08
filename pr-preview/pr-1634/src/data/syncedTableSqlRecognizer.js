@@ -1,0 +1,1 @@
+export{VZ as SYNCED_TABLES,HZ as syncedWriteTarget,UZ as writeTargets}from"../../chunks/app-BVe4OuNE.js";

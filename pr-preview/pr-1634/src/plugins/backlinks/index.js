@@ -1,0 +1,1 @@
+export{C_ as backlinksPlugin}from"../../../chunks/app-BVe4OuNE.js";

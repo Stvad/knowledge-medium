@@ -1,0 +1,1 @@
+export{HE as useMinuteClock}from"../../chunks/app-BVe4OuNE.js";

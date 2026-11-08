@@ -1,0 +1,1 @@
+export{gD as useAncestorCrumbs}from"../../chunks/app-BVe4OuNE.js";

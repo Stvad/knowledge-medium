@@ -1,0 +1,1 @@
+export{Ny as richPastePlugin}from"../../../chunks/app-BVe4OuNE.js";

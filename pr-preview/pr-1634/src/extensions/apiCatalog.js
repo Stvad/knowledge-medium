@@ -1,0 +1,1 @@
+export{em as extensionApiCatalog,tm as extensionApiRuntimeExports}from"../../chunks/app-BVe4OuNE.js";

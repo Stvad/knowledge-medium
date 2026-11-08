@@ -1,0 +1,1 @@
+export{lw as plainOutlinerPlugin}from"../../../chunks/app-BVe4OuNE.js";

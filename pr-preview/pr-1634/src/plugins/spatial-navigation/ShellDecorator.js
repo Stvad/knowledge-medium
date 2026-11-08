@@ -1,0 +1,1 @@
+export{GS as SpatialNavigationShellDecorator}from"../../../chunks/app-BVe4OuNE.js";

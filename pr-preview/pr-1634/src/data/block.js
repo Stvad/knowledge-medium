@@ -1,0 +1,1 @@
+export{k2 as Block,A2 as requireLoadedBlock}from"../../chunks/app-BVe4OuNE.js";

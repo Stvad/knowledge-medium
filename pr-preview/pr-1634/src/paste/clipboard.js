@@ -1,0 +1,1 @@
+export{WI as readClipboardContent}from"../../chunks/app-BVe4OuNE.js";

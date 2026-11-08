@@ -1,0 +1,1 @@
+export{ks as appVersion}from"../chunks/app-BVe4OuNE.js";
