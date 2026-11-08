@@ -55,14 +55,27 @@ export const STALE_RUNNING_MS = 30 * 60_000
  *  crashing or the ambient channel session keeps dropping the event. */
 export const MAX_ATTEMPTS = 3
 
+/** An ask is a "go" for the text it was made with: the ask's own write and the
+ *  editor's commit of the same text land within this of its stamp. A later
+ *  edit means the user went on writing, so the ask stops overriding the hold. */
+export const ASK_COVERS_EDIT_MS = 1_000
+
+const askCoversLatestEdit = (source: BlockView): boolean => {
+  const askedAt = prop(source, PROPS.askedAt)
+  return typeof askedAt === 'number'
+    && (source.editedAtMs ?? Number.POSITIVE_INFINITY) <= askedAt + ASK_COVERS_EDIT_MS
+}
+
 export interface PendingArgs {
   source: BlockView
   nowMs: number
   /** Minimum time since the last user edit before claiming. */
   settleMs?: number
-  /** Is the block open in an editor on some client? */
-  beingEdited?: boolean
-  /** How long since the last edit `beingEdited` is believed. */
+  /** When the block is open in an editor on some client: that editor's
+   *  latest write to its ui-state row. null/undefined = not being edited. */
+  editingActiveAtMs?: number | null
+  /** How long a block open in an editor is held once neither its text nor
+   *  its editor has moved. */
   editHoldMs?: number
   /** Watcher's first-tick timestamp: unclaimed blocks last edited before
    *  it are pre-existing content, never tasks. null/undefined = no gate. */
@@ -79,10 +92,11 @@ export interface PendingArgs {
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
  * - skip unclaimed blocks that predate the watcher baseline — pointing a
  *   watcher at an established page must not claim (and bill) its history;
- * - hold a block open in an editor, up to the cap, unless explicitly asked;
+ * - hold a block open in an editor until the cap since the text or the editor
+ *   last moved, unless the user asked about the text as it stands;
  * - wait out the settle window so an edit's last write isn't missed.
  */
-export const decidePending = ({source, nowMs, settleMs = 0, beingEdited = false, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
+export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = null, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
   const status = taskStatus(source)
@@ -105,7 +119,8 @@ export const decidePending = ({source, nowMs, settleMs = 0, beingEdited = false,
   }
 
   const editedAgoMs = typeof source.editedAtMs === 'number' ? nowMs - source.editedAtMs : Number.POSITIVE_INFINITY
-  if (beingEdited && !prop(source, PROPS.askedAt) && editedAgoMs < editHoldMs) {
+  if (typeof editingActiveAtMs === 'number' && !askCoversLatestEdit(source)
+    && Math.min(editedAgoMs, nowMs - editingActiveAtMs) < editHoldMs) {
     return {pending: false, reason: 'being-edited'}
   }
   if (editedAgoMs < settleMs) return {pending: false, reason: 'still-typing'}

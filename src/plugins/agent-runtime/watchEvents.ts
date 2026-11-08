@@ -14,7 +14,7 @@
  * TTL refresh) while consumers keep a slow poll as backstop.
  */
 import type { PowerSyncDb } from '@/data/internals/commitPipeline'
-import { BEING_EDITED_BLOCK_IDS_SQL, type WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
+import { BEING_EDITED_BLOCKS_SQL, type WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
 
 export type WatchEventTransport = (event: Record<string, unknown>) => Promise<void>
 
@@ -44,7 +44,7 @@ const CHANGE_THROTTLE_MS = 250
 export const BACKLINKS_WATCH_SQL = `
   SELECT br.source_id AS id,
          coalesce(b.user_updated_at, b.updated_at) AS edited_at,
-         br.source_id IN (${BEING_EDITED_BLOCK_IDS_SQL}) AS being_edited
+         br.source_id IN (SELECT id FROM (${BEING_EDITED_BLOCKS_SQL})) AS being_edited
     FROM block_references br JOIN blocks b ON b.id = br.source_id
    WHERE br.target_id = ? AND b.deleted = 0
    ORDER BY br.source_id`
@@ -74,7 +74,6 @@ interface ConsumerEntry {
   specJson: string
   ttlMs: number
   lastRefreshedMs: number
-  db: PowerSyncDb
   runtimes: WatcherRuntime[]
   /** Settles when the registration finished arming (baseline + change
    *  subscriptions); rejects if it died first (baseline failure, a
@@ -194,9 +193,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   /** Expired registrations self-clean on their next signal — a dead
-   *  consumer must not keep the tab re-running queries forever.
-   *  Disposes only the SPECIFIC entry it judged expired, never by name:
-   *  a by-name dispose could kill a fresh successor registration. */
+   *  consumer must not keep the tab re-running queries forever. */
   const pruneIfExpired = (consumer: string, entry: ConsumerEntry): boolean => {
     if (now() - entry.lastRefreshedMs <= entry.ttlMs) return false
     disposeEntry(consumer, entry)
@@ -278,7 +275,6 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       specJson,
       ttlMs,
       lastRefreshedMs: now(),
-      db,
       runtimes: watchers.map(watcherRuntimeFor),
       ready,
       rejectReady: readyReject,

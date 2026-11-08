@@ -168,6 +168,9 @@ const backlinksWatcherSchema = z.strictObject({
   target: z.string().min(1),
   /** Resume the nearest ancestor thread session when present. */
   resume: z.boolean().default(true),
+  /** Removed in 0.8.0: refused with a pointer to its replacements, since
+   *  keeping the name would turn an old quiet period into the edit-hold cap. */
+  quietMs: z.never({error: 'quietMs was removed in 0.8.0: use settleMs and editHoldMs (README "Upgrade to 0.8.0")'}).optional(),
   /** Wait this long after a mention's last change, so the final debounced
    *  write of an edit lands before the daemon snapshots the block. */
   settleMs: z.number().int().nonnegative()

@@ -204,6 +204,7 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
+  hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)

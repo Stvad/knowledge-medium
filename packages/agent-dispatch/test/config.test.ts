@@ -8,7 +8,7 @@ describe('parseConfig', () => {
     expect(() => parseConfig({
       workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'claude-mentions', target: 'claude', quietMs: 5_000}],
-    })).toThrow(/quietMs/)
+    })).toThrow(/quietMs was removed in 0\.8\.0: use settleMs and editHoldMs/)
   })
 
   it('applies defaults for a minimal mention-watcher config', () => {

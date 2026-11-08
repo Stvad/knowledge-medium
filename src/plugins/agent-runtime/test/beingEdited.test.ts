@@ -1,9 +1,9 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BEING_EDITED_BLOCK_IDS_SQL } from '@knowledge-medium/agent-cli/protocol'
+import { BEING_EDITED_BLOCKS_SQL } from '@knowledge-medium/agent-cli/protocol'
 import { ChangeScope } from '@/data/api'
-import { exitEditModeForBlock, focusBlock } from '@/data/properties'
+import { editorSelection, exitEditModeForBlock, focusBlock } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -31,7 +31,7 @@ beforeEach(async () => {
 })
 
 const beingEdited = async () =>
-  (await h.db.getAll<{id: string}>(BEING_EDITED_BLOCK_IDS_SQL)).map(row => row.id).sort()
+  (await h.db.getAll<{id: string}>(BEING_EDITED_BLOCKS_SQL)).map(row => row.id).sort()
 
 describe('the being-edited read, against the real focus writers', () => {
   it('reports a block entering an editor', async () => {
@@ -60,9 +60,24 @@ describe('the being-edited read, against the real focus writers', () => {
     expect(await beingEdited()).toEqual(['mention', 'other'])
   })
 
-  it('is served by the partial index', async () => {
-    const plan = await h.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${BEING_EDITED_BLOCK_IDS_SQL}`)
-    expect(plan.map(row => row.detail).join(' | ')).toContain('idx_blocks_being_edited')
+  it('stamps each block with the latest write of its editor, which caret moves advance', async () => {
+    await focusBlock(repo.block('panel-a'), 'mention', {edit: true, renderScopeId: SCOPE})
+    const activeAt = async () =>
+      (await h.db.getAll<{id: string, active_at: number}>(BEING_EDITED_BLOCKS_SQL))[0]!.active_at
+    const [{updated_at: panelWrite}] = await h.db.getAll<{updated_at: number}>(
+      'SELECT updated_at FROM blocks WHERE id = ?', ['panel-a'])
+    expect(await activeAt()).toBe(panelWrite)
+
+    const entered = await activeAt()
+    await repo.block('panel-a').set(editorSelection, {blockId: 'mention', start: 1, end: 1})
+    expect(await activeAt()).toBeGreaterThan(entered)
+  })
+
+  it('is served by the partial index, alone and inside the watcher query', async () => {
+    for (const sql of [BEING_EDITED_BLOCKS_SQL, BACKLINKS_WATCH_SQL]) {
+      const plan = await h.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, sql === BACKLINKS_WATCH_SQL ? ['root'] : [])
+      expect(plan.map(row => row.detail).join(' | ')).toContain('idx_blocks_being_edited')
+    }
   })
 })
 

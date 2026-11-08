@@ -110,7 +110,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       const view = thread ? seed.threads?.[thread] : undefined
       return {total: view ? 1 : 0, offset: 0, nextOffset: null, threads: view ? [view] : []}
     }),
-    beingEditedBlockIds: vi.fn(async () => new Set(seed.beingEdited ?? [])),
+    beingEditedBlocks: vi.fn(async () => new Map((seed.beingEdited ?? []).map(id => [id, NOW] as const))),
     blockViews: async ids => new Map(
       ids.flatMap(id => {
         const target = blocks.get(id)
@@ -649,9 +649,9 @@ describe('mention lifecycle', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(propWrites).toEqual([])
     // Held at the scan, so it never spends a launch slot on the re-check.
-    expect(graph.beingEditedBlockIds).toHaveBeenCalledTimes(1)
+    expect(graph.beingEditedBlocks).toHaveBeenCalledTimes(1)
 
-    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>).mockResolvedValue(new Set())
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>).mockResolvedValue(new Map())
     await engine.tick()
     await engine.drain()
     expect(runTask).toHaveBeenCalledTimes(1)
@@ -662,9 +662,9 @@ describe('mention lifecycle', () => {
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] back to it', editedAtMs: NOW - 30_000}},
     })
-    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(new Set())
-      .mockResolvedValue(new Set(['b-1']))
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValue(new Map([['b-1', NOW]]))
     const runTask = vi.fn(async () => okRun())
     const engine = engineWith({graph, runTask})
 
@@ -682,8 +682,8 @@ describe('mention lifecycle', () => {
     // Not being edited at the scan, then back in the editor, then out again
     // the moment the text has been read.
     let editing = false
-    ;(graph.beingEditedBlockIds as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      const result = new Set(editing ? ['b-1'] : [])
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      const result = new Map(editing ? [['b-1', NOW] as const] : [])
       editing = true
       return result
     })
@@ -700,6 +700,29 @@ describe('mention lifecycle', () => {
     await engine.drain()
     expect(runTask).not.toHaveBeenCalled()
     expect(propWrites).toEqual([])
+  })
+
+  it('a read that fails before the claim gives its launch slot back', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] do it', editedAtMs: NOW - 30_000}},
+    })
+    const readBlock = graph.getBlock
+    let failures = 1
+    graph.getBlock = async id => {
+      if (failures-- > 0) throw new Error('bridge timed out')
+      return readBlock(id)
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: mentionConfig({runsPerHour: 1})})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
   })
 
   it('replies with a failure note and marks error on a failed run', async () => {

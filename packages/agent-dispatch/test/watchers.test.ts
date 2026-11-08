@@ -79,7 +79,8 @@ describe('decidePending', () => {
   })
 
   describe('a block open in an editor', () => {
-    const hold = {settleMs: 1_000, editHoldMs: 120_000, nowMs: NOW, beingEdited: true}
+    // The editor's last write to its ui-state row: focus moves, caret moves.
+    const hold = {settleMs: 1_000, editHoldMs: 120_000, nowMs: NOW, editingActiveAtMs: NOW - 5_000}
 
     it('holds past the settle window while the user pauses to think', () => {
       expect(decidePending({...hold, source: block({editedAtMs: NOW - 60_000})}))
@@ -87,21 +88,42 @@ describe('decidePending', () => {
     })
 
     it('fires as soon as the block leaves the editor', () => {
-      expect(decidePending({...hold, beingEdited: false, source: block({editedAtMs: NOW - 1_500})}).pending).toBe(true)
+      expect(decidePending({...hold, editingActiveAtMs: null, source: block({editedAtMs: NOW - 1_500})}).pending).toBe(true)
     })
 
-    it('gives up holding at the cap, since a device can leave the flag set forever', () => {
-      expect(decidePending({...hold, source: block({editedAtMs: NOW - 120_000})}).pending).toBe(true)
+    it('holds an old mention the user has just gone back into', () => {
+      expect(decidePending({...hold, source: block({editedAtMs: NOW - 600_000})}).reason).toBe('being-edited')
     })
 
-    it('never holds a mention whose edit time is unknown', () => {
-      expect(decidePending({...hold, source: block()}).pending).toBe(true)
+    it('gives up once neither the text nor the editor has moved for the cap', () => {
+      const idle = {...hold, editingActiveAtMs: NOW - 120_000}
+      expect(decidePending({...idle, source: block({editedAtMs: NOW - 130_000})}).pending).toBe(true)
+      // A device that vanished mid-edit leaves its flag set forever.
+      expect(decidePending({...idle, editingActiveAtMs: NOW - 30 * 86_400_000, source: block({editedAtMs: NOW - 130_000})}).pending)
+        .toBe(true)
     })
 
-    it('an explicit ask overrides the hold, but not the settle window', () => {
+    it('holds while the text moves, even if the editor has not written lately', () => {
+      expect(decidePending({...hold, editingActiveAtMs: NOW - 200_000, source: block({editedAtMs: NOW - 1_500})}).reason)
+        .toBe('being-edited')
+    })
+
+    it('holds a mention of unknown edit time only while the editor is active', () => {
+      expect(decidePending({...hold, source: block()}).reason).toBe('being-edited')
+      expect(decidePending({...hold, editingActiveAtMs: null, source: block()}).pending).toBe(true)
+    })
+
+    it('an ask overrides the hold for the text it was made with, but not the settle window', () => {
       const asked = {[PROPS.askedAt]: NOW - 60_000}
       expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 60_000})}).pending).toBe(true)
-      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 500})}).reason).toBe('still-typing')
+      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 59_500})}).pending).toBe(true)
+      expect(decidePending({...hold, source: block({properties: {[PROPS.askedAt]: NOW - 500}, editedAtMs: NOW - 500})}).reason)
+        .toBe('still-typing')
+    })
+
+    it('an ask stops overriding the hold once the user writes on', () => {
+      const asked = {[PROPS.askedAt]: NOW - 600_000}
+      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 60_000})}).reason).toBe('being-edited')
     })
 
     it('holds nothing that is not a pending mention', () => {

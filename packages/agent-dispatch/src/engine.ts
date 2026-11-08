@@ -241,21 +241,33 @@ export const createEngine = (deps: EngineDeps) => {
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
+  /** The pre-claim re-check; null when the mention is no longer pending. */
+  const readPendingMention = async (watcher: BacklinksWatcher, sourceId: string, baselineMs: number) => {
+    // Edit state first: a block read after "not being edited" can't be older
+    // than the edit that ended, and the prompt is built from this read.
+    const editingActiveAtMs = (await graph.beingEditedBlocks()).get(sourceId)
+    const block = await graph.getBlock(sourceId)
+    if (!block) return null
+    const decision = decidePending({
+      source: block, nowMs: now(), settleMs: watcher.settleMs, editingActiveAtMs, editHoldMs: watcher.editHoldMs, baselineMs,
+    })
+    if (!decision.pending) return null
+    return {block, decision, ancestorBlocks: await graph.ancestors(sourceId)}
+  }
+
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
   ) => {
     const {runner} = watcher
-    // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
-    // Edit state first: a block read after "not being edited" can't be older
-    // than the edit that ended, and the prompt is built from this read.
-    const beingEdited = (await graph.beingEditedBlockIds()).has(sourceId)
-    const block = await graph.getBlock(sourceId)
-    if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({
-      source: block, nowMs: now(), settleMs: watcher.settleMs, beingEdited, editHoldMs: watcher.editHoldMs, baselineMs,
-    })
-    if (!decision.pending) return refundLaunch(launchStamp)
-    const ancestorBlocks = await graph.ancestors(sourceId)
+    // Pre-claim exits spawned nothing, so each one, a failed read included,
+    // gives the launch slot back.
+    const pending = await readPendingMention(watcher, sourceId, baselineMs)
+      .catch(error => {
+        refundLaunch(launchStamp)
+        throw error
+      })
+    if (!pending) return refundLaunch(launchStamp)
+    const {block, decision, ancestorBlocks} = pending
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -595,7 +607,7 @@ export const createEngine = (deps: EngineDeps) => {
     // decision re-runs with a fresh read inside processMention before
     // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
-    const beingEdited = await graph.beingEditedBlockIds()
+    const editing = await graph.beingEditedBlocks()
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
       // Clear a agent:cancel the daemon can't act on. sweepCancellations
@@ -627,7 +639,7 @@ export const createEngine = (deps: EngineDeps) => {
         source: view,
         nowMs: now(),
         settleMs: watcher.settleMs,
-        beingEdited: beingEdited.has(source.id),
+        editingActiveAtMs: editing.get(source.id),
         editHoldMs: watcher.editHoldMs,
         baselineMs,
       })

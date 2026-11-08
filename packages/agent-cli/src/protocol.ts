@@ -900,17 +900,21 @@ export const isReadOnlySql = (sql: string): boolean => {
 
 // ----- watch-events (push detection) ----------------------------------
 
-/** Ids of the blocks open in an editor on ANY client: edit state lives on
- *  each panel's ui-state row, which syncs, so this also sees other devices.
- *  A flag outlives a device that vanished mid-edit, so a reader must bound how
- *  long it believes one. Must keep the predicate of `idx_blocks_being_edited`
- *  literally, or SQLite stops using that index. */
-export const BEING_EDITED_BLOCK_IDS_SQL = `
-  SELECT json_extract(properties_json, '$.focusedBlockLocation.blockId') AS id
+/** The blocks open in an editor on ANY client: edit state lives on each
+ *  panel's ui-state row, which syncs, so this also sees other devices. Beside
+ *  each id, `active_at` is that row's latest write; focus and caret moves keep
+ *  it fresh while someone works in the editor. A flag outlives a device that
+ *  vanished mid-edit, so a reader must bound how long it believes one.
+ *  Must keep the predicate of `idx_blocks_being_edited` literally, or SQLite
+ *  stops using that index. */
+export const BEING_EDITED_BLOCKS_SQL = `
+  SELECT json_extract(properties_json, '$.focusedBlockLocation.blockId') AS id,
+         max(updated_at) AS active_at
     FROM blocks
    WHERE deleted = 0
      AND json_extract(properties_json, '$.isEditing') = 1
-     AND json_extract(properties_json, '$.focusedBlockLocation.blockId') IS NOT NULL`
+     AND json_extract(properties_json, '$.focusedBlockLocation.blockId') IS NOT NULL
+   GROUP BY 1`
 
 /** Schema bounds, exported so consumers building registrations (e.g.
  *  the agent-dispatch daemon's config) can validate against the SAME
@@ -961,8 +965,7 @@ export const watchEventsCommandSchema = z.looseObject({
   type: z.literal('watch-events'),
   consumer: z.string().min(1),
   watchers: z.array(watchEventsWatcherSchema).max(64)
-    // Names key the consumer's exemption pools — duplicates would merge
-    // two watchers' settle semantics under one name.
+    // Each event names its watcher, so duplicate names make it ambiguous.
     .refine(
       watchers => new Set(watchers.map(watcher => watcher.name)).size === watchers.length,
       {message: 'watcher names must be unique within a registration'},

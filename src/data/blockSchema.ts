@@ -267,7 +267,7 @@ export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
 `
 
 /** Blocks open in an editor on any client (the readers carry this predicate
- *  literally; see `BEING_EDITED_BLOCK_IDS_SQL`). Holds a handful of ui-state
+ *  literally; see `BEING_EDITED_BLOCKS_SQL`). Holds a handful of ui-state
  *  rows, so a read re-run on every table change stays cheap on a large graph. */
 export const CREATE_BLOCKS_BEING_EDITED_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_being_edited
