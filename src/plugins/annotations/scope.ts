@@ -73,8 +73,8 @@ export const threadIdsInScope = async (repo: Repo, scopeId: string): Promise<str
   return rows.map(row => row.id)
 }
 
-/** The quiet period the comments recipe waits for, the mention watcher's
- *  default `quietMs`, so both ways of waking an agent wait alike. */
+/** The quiet period the comments recipe waits for. A watcher's raw SQL has no
+ *  view of the mention watcher's edit hold, so this is time alone. */
 export const COMMENTS_RECIPE_QUIET_MS = 15_000
 
 /** The `query` watcher recipe for monitoring a scope: comment ids, at any

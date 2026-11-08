@@ -28,7 +28,7 @@ import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
-import { clearPushRegistration, createExemptionPool, startPushLoop } from './push.js'
+import { clearPushRegistration, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
 import { reportBillingPosture } from './billing.js'
@@ -256,12 +256,7 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
-  // Exemptions are keyed by the EMITTING watcher — only that watcher's
-  // tick may skip its still-typing gate for these blocks. The pool is
-  // bounded and freshness-checked at drain (see createExemptionPool).
-  const exemptionPool = createExemptionPool()
-  const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
-    if (exemptions) exemptionPool.add(exemptions)
+  const requestTick = () => {
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -281,9 +276,7 @@ const main = async () => {
 
   while (!stopping) {
     tickRequested = false
-    // Drain the exemptions INTO this tick — ids arriving mid-tick stay
-    // pending and re-tick immediately via tickRequested.
-    await engine.tick({quietExemptByWatcher: exemptionPool.drain()})
+    await engine.tick()
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }
