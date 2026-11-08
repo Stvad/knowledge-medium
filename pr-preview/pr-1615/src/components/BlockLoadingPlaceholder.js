@@ -1,1 +1,1 @@
-export{MP as BlockLoadingPlaceholder}from"../../chunks/app-CuxtpMVG.js";
+export{MP as BlockLoadingPlaceholder}from"../../chunks/app-dTfcRNIl.js";

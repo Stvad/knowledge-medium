@@ -1,1 +1,1 @@
-export{FP as defaultRegistry,IP as defaultRendererContributions,LP as defaultRenderersExtension}from"../../chunks/app-CuxtpMVG.js";
+export{FP as defaultRegistry,IP as defaultRendererContributions,LP as defaultRenderersExtension}from"../../chunks/app-dTfcRNIl.js";

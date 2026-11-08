@@ -1,1 +1,1 @@
-export{XP as PropertySchemaBlockRenderer,ZP as PropertySchemaContentRenderer}from"../../../chunks/app-CuxtpMVG.js";
+export{XP as PropertySchemaBlockRenderer,ZP as PropertySchemaContentRenderer}from"../../../chunks/app-dTfcRNIl.js";
