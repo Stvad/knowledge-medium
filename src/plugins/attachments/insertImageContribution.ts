@@ -9,6 +9,7 @@
  * just the wiring.
  */
 import { ImagePlus } from 'lucide-react'
+import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
 import {
   ActionContextTypes,
@@ -24,6 +25,10 @@ import {
 } from '@/editor/insertImage.js'
 import type { MobileKeyboardToolbarItem } from '@/plugins/mobile-keyboard-toolbar/facet.js'
 
+/** Source takes no image. The refusal itself is the shared helpers'; this keeps a
+ *  no-op out of the palette. */
+const notSource = ({block}: {block: Block}) => !holdsSource(block)
+
 /** Insert at the caret while editing. No default chord (no idiom for "open a
  *  native picker"); reached via the toolbar button and the command palette. The
  *  handler clicks the picker synchronously so the dispatching gesture still
@@ -33,8 +38,7 @@ export const insertImageAction: ActionConfig<typeof ActionContextTypes.EDIT_MODE
   description: 'Insert image',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: ImagePlus,
-  // The refusal itself is the handler's; this keeps a no-op out of the palette.
-  isVisible: ({block}) => !block || !holdsSource(block),
+  isVisible: notSource,
   handler: async ({block, editorView}: CodeMirrorEditModeDependencies) => {
     if (!block || !editorView) return
     await pickAndInsertImages({editorView, block})
@@ -52,7 +56,7 @@ export const insertImageNormalModeAction: ActionConfig<typeof ActionContextTypes
   description: 'Insert image',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ImagePlus,
-  isVisible: ({block}) => !block || !holdsSource(block),
+  isVisible: notSource,
   handler: async ({block}: BlockShortcutDependencies) => {
     if (!block) return
     await pickImagesIntoBlock(block)

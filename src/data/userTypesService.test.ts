@@ -20,6 +20,7 @@ import {
   typesProp,
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_SOURCE_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
 import { materializePropertySeeds, propertyDefinitionBlockId, typeDefinitionBlockId } from '@/data/definitionSeeds'
 import { definitionSeedsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -111,46 +112,51 @@ const createBlockTypeBlock = async (
   return id
 }
 
-describe('a user type that is also source', () => {
-  it('keeps its name when the source is edited', async () => {
+describe('a block that would be both a type and source', () => {
+  it('refuses a type becoming source, and keeps the type', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Book'})
     const {repo} = env
-    const rename = (content: string) => repo.tx(tx => tx.update(id, {content}), {scope: ChangeScope.BlockDefault})
-    const label = async () => (await repo.load(id))?.properties[blockTypeLabelProp.name]
-
-    await rename('Novel')
-    expect(await label()).toBe('Novel')
-
     const types = (await repo.load(id))?.properties[typesProp.name] as string[]
-    await repo.tx(tx => tx.setProperty(id, typesProp, [...types, HTML_DOCUMENT_TYPE]), {scope: ChangeScope.BlockDefault})
-    await rename('<div>hello</div>')
 
-    expect(await label()).toBe('Novel')
-    expect((await repo.load(id))?.properties[aliasesProp.name]).toEqual(['Novel'])
+    await expect(repo.tx(
+      tx => tx.setProperty(id, typesProp, [...types, HTML_DOCUMENT_TYPE]),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+    expect((await repo.load(id))?.properties[typesProp.name]).toEqual(types)
   })
-})
 
-describe('a source block that becomes a type', () => {
-  it.each([
-    ['takes no name from its source', undefined, undefined],
-    ['is named by its label, and keeps its source', 'Book', ['Book']],
-  ])('%s', async (_name, label, aliases) => {
+  it('refuses source becoming a type, and keeps the source', async () => {
     env = await setup()
     const {repo} = env
     const source = '<div>\n  <p>x</p>\n</div>\n'
     const id = await repo.mutate.createChild({parentId: repo.typesPageId!, content: source})
-    await repo.tx(async tx => {
-      await tx.setProperty(id, typesProp, [HTML_DOCUMENT_TYPE])
-      if (label) await tx.setProperty(id, blockTypeLabelProp, label)
-    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty(id, typesProp, [HTML_DOCUMENT_TYPE]), {scope: ChangeScope.BlockDefault})
 
-    await repo.tx(tx => repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}), {scope: ChangeScope.BlockDefault})
-
+    await expect(repo.tx(
+      tx => repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
     const row = await repo.load(id)
     expect(row?.content).toBe(source)
-    expect(row?.properties[blockTypeLabelProp.name]).toBe(label)
-    expect(row?.properties[aliasesProp.name]).toEqual(aliases)
+    expect(row?.properties[typesProp.name]).toEqual([HTML_DOCUMENT_TYPE])
+  })
+
+  // Written raw, as a client that predates the rule could have left it.
+  it('leaves one that is both already alone when its source is edited', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Book'})
+    const {repo, h} = env
+    const properties = (await repo.load(id))!.properties
+    await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [
+      JSON.stringify({...properties, types: [...properties[typesProp.name] as string[], HTML_DOCUMENT_TYPE]}),
+      id,
+    ]))
+
+    await repo.tx(tx => tx.update(id, {content: '<div>hello</div>'}), {scope: ChangeScope.BlockDefault})
+    const row = await repo.load(id)
+    expect(row?.content).toBe('<div>hello</div>')
+    expect(row?.properties[blockTypeLabelProp.name]).toBe('Book')
   })
 })
 

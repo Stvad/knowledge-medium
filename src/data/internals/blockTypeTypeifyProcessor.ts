@@ -84,6 +84,16 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
 /** Needs no `rejectionToastFacet` contribution — the generic route falls
  *  back to the raw message, which says what to fix. */
 export const BLOCK_TYPE_NAME_CONFLICT = 'blockType.nameConflict'
+/** Needs no toast contribution either, for the same reason. */
+export const BLOCK_TYPE_SOURCE_CONFLICT = 'blockType.sourceConflict'
+
+/** A type's content is its name, mirrored into its label and its alias; source's
+ *  content is the source. No block can hold both, so none may become both.
+ *  Declined: a type named by its label alone, which every writer of a type's name
+ *  (this processor, the type editor's label field, alias sync) would have to know. */
+const isTypeAndSource = (row: BlockData | null): boolean =>
+  row !== null && hasSourceContent(row) &&
+  safeDecodeRowProperty(row, typesProp).includes(BLOCK_TYPE_TYPE)
 
 const readLabel = (row: BlockData): string =>
   safeDecodeRowProperty(row, blockTypeLabelProp).trim()
@@ -156,10 +166,7 @@ const completeNewType = async (
   ctx: SameTxCtx,
 ): Promise<void> => {
   const currentLabel = readLabel(after)
-  // Source isn't a name: such a type is named by its label alone, and its content
-  // stays as written.
-  const source = hasSourceContent(after)
-  const trimmedContent = source ? '' : after.content.trim()
+  const trimmedContent = after.content.trim()
   const name = currentLabel || trimmedContent
 
   if (name !== '') assertWritableTypeName(name)
@@ -196,7 +203,7 @@ const completeNewType = async (
   // leaves only blank or whitespace-padded content — and it makes `content`
   // always a name the checks above already validated, so nothing downstream
   // has to re-validate it.
-  if (!source && name !== '' && after.content !== name) {
+  if (name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
   if (name !== '') await moveTypeClaim(after, name, ctx)
@@ -388,12 +395,21 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const seedKey = seededDefinitionKey(after)
       if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 
+      // One that is both already, written by a client that predates the rule, is
+      // left alone: source isn't a name, so editing it renames nothing.
+      if (hasSourceContent(after)) {
+        if (isTypeAndSource(row.before)) continue
+        throw new ProcessorRejection(
+          `Can't make this block both a type and source (an HTML document or an extension): ` +
+          `a type's text is its name, and source's text is the source.`,
+          BLOCK_TYPE_SOURCE_CONFLICT,
+          {blockId: row.id},
+        )
+      }
       if (addedTypes(row).includes(BLOCK_TYPE_TYPE)) {
         await completeNewType(row, after, ctx)
         continue
       }
-      // Source isn't a name, so editing it renames nothing.
-      if (hasSourceContent(after)) continue
       await followRenamedContent(row, after, ctx)
     }
   },

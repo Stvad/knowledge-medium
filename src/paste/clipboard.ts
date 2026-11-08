@@ -1,7 +1,6 @@
 import type { Block } from '@/data/block'
 import { hasSourceContent, holdsSource } from '@/data/blockTypes'
 import type { PasteCaret, PasteRequest } from './decision.ts'
-import type { PasteChordIntent } from './operations.ts'
 
 export type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
 
@@ -39,13 +38,13 @@ export const shellPasteRequest = (content: ClipboardContent, target: Block): Pas
     : {...content, intent: 'split', surface: 'shell'}
 }
 
-/** The request for a paste at a text caret: the chord's intent, except that source
- *  takes it as source in whichever editor it is open, the markdown one included when
- *  its plugin is off. */
+/** The request for a paste at the markdown editor's caret: the chord's intent,
+ *  except that source, open there when its own editor's plugin is off, takes it as
+ *  source. */
 export const editorPasteRequest = (
   content: ClipboardContent,
   target: Block,
-  intent: PasteChordIntent,
+  intent: PasteRequest['intent'],
   caret: PasteCaret,
 ): PasteRequest => holdsSource(target)
   ? {...asSourcePaste(content), surface: 'editor', caret}

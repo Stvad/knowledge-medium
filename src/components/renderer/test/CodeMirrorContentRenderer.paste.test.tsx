@@ -199,18 +199,24 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
   })
 
   // With the html-document plugin off, a document is edited here as text.
-  it('takes a paste into source whole, with no files and no cut', async () => {
+  it('takes a paste into source whole, with no files', async () => {
     await repo.tx(tx => tx.update('block-1', {properties: {types: ['html-document']}}),
       {scope: ChangeScope.BlockDefault, description: 'type the block as source'})
     await repo.block('block-1').load()
     const {content} = renderEditor()
 
-    act(() => { dispatchPaste(content, 'one\ntwo') })
+    act(() => {
+      const event = new Event('paste', {bubbles: true, cancelable: true})
+      Object.defineProperty(event, 'clipboardData', {value: {
+        getData: (type: string) => type === 'text/plain' ? 'one\ntwo' : '',
+        files: [new File(['x'], 'shot.png', {type: 'image/png'})],
+      }})
+      content.dispatchEvent(event)
+    })
 
     await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
     expect(vi.mocked(resolvePasteWithMediaCapture).mock.calls[0][1])
       .toMatchObject({intent: 'single-block', files: [], surface: 'editor'})
-    expect(pasteArmedCut).not.toHaveBeenCalled()
   })
 
   it('skips the armed cut on the plain-text chord (Cmd+Shift+V)', async () => {

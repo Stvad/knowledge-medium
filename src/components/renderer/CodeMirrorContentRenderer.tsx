@@ -91,8 +91,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       : undefined
     const request = editorPasteRequest(content, block, intent, caret)
 
-    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
-    if (request.intent === 'split') {
+    // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
+    // its target's content; ⌘⇧V still asks for its plain text.
+    if (intent === 'split') {
       // The stored row lags the view by the content debounce. The move reads
       // the stored row (a blank target is replaced), so persist the live text
       // first: the flush takes the write lock ahead of the move's tx.
