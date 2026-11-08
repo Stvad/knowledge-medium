@@ -1,4 +1,4 @@
-import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { Check, KeyboardOff, Link, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -42,12 +42,15 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { language } from '@codemirror/language'
+import { markdownLanguage } from '@codemirror/lang-markdown'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
   getCaretRect,
   cursorIsAtEnd,
   cursorIsAtStart,
+  wrapRangeWithPair,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
@@ -91,6 +94,9 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+
+const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
+  editorView.state.facet(language)?.name === markdownLanguage.name
 
 /** Drop `remove` characters from one end of the editor's text and put `insert` there. */
 interface EditorEndEdit {
@@ -703,6 +709,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   }
   // CodeMirror-specific edit mode actions
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
+    {
+      id: 'edit.cm.create_link',
+      description: 'Create link',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      icon: Link,
+      isVisible: isMarkdownEditor,
+      handler: deps => {
+        if (!isMarkdownEditor(deps)) return false
+        const {editorView} = deps
+        const {state} = editorView
+        editorView.dispatch(state.changeByRange(range => {
+          const wrapped = wrapRangeWithPair(state, range, '[', ']()')
+          return range.empty ? wrapped : {
+            changes: wrapped.changes,
+            range: EditorSelection.cursor(wrapped.range.to + ']('.length),
+          }
+        }))
+        editorView.focus()
+      },
+      defaultBinding: {
+        keys: '$mod+Shift+l',
+        eventOptions: {preventDefault: true},
+      },
+    },
     {
       id: 'exit_edit_mode_cm',
       description: 'Exit edit mode',
