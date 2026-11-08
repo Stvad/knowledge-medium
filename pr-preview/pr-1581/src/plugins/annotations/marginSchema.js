@@ -1,1 +1,1 @@
-export{EJ as annotationMarginOpenProp}from"../../../chunks/app-C3eYk_fb.js";
+export{LJ as annotationMarginOpenProp}from"../../../chunks/app-Ddv6L3lM.js";

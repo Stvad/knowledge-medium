@@ -1,1 +1,1 @@
-export{I_ as LazyBlockEntry}from"../../../chunks/app-C3eYk_fb.js";
+export{U_ as LazyBlockEntry}from"../../../chunks/app-Ddv6L3lM.js";

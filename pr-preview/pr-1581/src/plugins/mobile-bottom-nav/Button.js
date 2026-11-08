@@ -1,1 +1,1 @@
-export{GC as MobileBottomNavButton}from"../../../chunks/app-C3eYk_fb.js";
+export{QC as MobileBottomNavButton}from"../../../chunks/app-Ddv6L3lM.js";

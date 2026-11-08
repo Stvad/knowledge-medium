@@ -1,1 +1,1 @@
-export{Vk as shortcutHelpToggle}from"../../../chunks/app-C3eYk_fb.js";
+export{Jk as shortcutHelpToggle}from"../../../chunks/app-Ddv6L3lM.js";

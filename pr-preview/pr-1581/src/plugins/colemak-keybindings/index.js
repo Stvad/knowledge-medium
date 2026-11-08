@@ -1,1 +1,1 @@
-export{CS as COLEMAK_KEYBINDINGS_PLUGIN_ID,wS as colemakKeybindingsPlugin,TS as colemakMovementKeybindingOverrides}from"../../../chunks/app-C3eYk_fb.js";
+export{AS as COLEMAK_KEYBINDINGS_PLUGIN_ID,jS as colemakKeybindingsPlugin,MS as colemakMovementKeybindingOverrides}from"../../../chunks/app-Ddv6L3lM.js";

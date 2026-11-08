@@ -1,1 +1,1 @@
-export{hN as ClientLocalSettings,gN as clientLocalSettings}from"../../chunks/app-C3eYk_fb.js";
+export{SN as ClientLocalSettings,CN as clientLocalSettings}from"../../chunks/app-Ddv6L3lM.js";

@@ -1,1 +1,1 @@
-export{IO as dailyNotesDeletionGuard}from"../../../chunks/app-C3eYk_fb.js";
+export{UO as dailyNotesDeletionGuard}from"../../../chunks/app-Ddv6L3lM.js";

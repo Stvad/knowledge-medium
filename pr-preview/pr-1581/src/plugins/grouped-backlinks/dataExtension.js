@@ -1,1 +1,1 @@
-export{CG as groupedBacklinksDataExtension}from"../../../chunks/app-C3eYk_fb.js";
+export{NG as groupedBacklinksDataExtension}from"../../../chunks/app-Ddv6L3lM.js";
