@@ -1,1 +1,1 @@
-export{xP as DialogHost,SP as dialogAppMountExtension}from"../../chunks/app-DnlJQV6r.js";
+export{GP as DialogHost,KP as dialogAppMountExtension}from"../../chunks/app-BPXsBhrs.js";

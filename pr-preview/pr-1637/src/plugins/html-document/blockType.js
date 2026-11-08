@@ -1,0 +1,1 @@
+export{oK as htmlDocumentTypeSeed}from"../../../chunks/app-BPXsBhrs.js";
