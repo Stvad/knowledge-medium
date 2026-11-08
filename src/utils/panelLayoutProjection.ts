@@ -3,6 +3,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData, Tx, Unsubscribe } from '@/data/api'
 import { ChangeScope } from '@/data/api'
 import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
@@ -923,6 +924,7 @@ export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
 ): Promise<void> => {
+  flushPendingEditorContent()
   await repo.tx(async tx => {
     const row = await tx.get(panelId)
     if (!row) return
@@ -1193,6 +1195,7 @@ export const reconcilePanelRows = async (
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
+  flushPendingEditorContent()
   const changed = await runTx()
 
   // History effects only after the tx committed: ANY in-tx throw
