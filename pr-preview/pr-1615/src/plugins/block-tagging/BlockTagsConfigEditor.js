@@ -1,1 +1,1 @@
-export{ql as BlockTagsConfigEditor}from"../../../chunks/app-76Vco9HK.js";
+export{ql as BlockTagsConfigEditor}from"../../../chunks/app-CuxtpMVG.js";

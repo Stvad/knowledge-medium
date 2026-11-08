@@ -1,1 +1,1 @@
-export{Fn as characterCountDecoratorContribution}from"../../../chunks/app-76Vco9HK.js";
+export{Fn as characterCountDecoratorContribution}from"../../../chunks/app-CuxtpMVG.js";

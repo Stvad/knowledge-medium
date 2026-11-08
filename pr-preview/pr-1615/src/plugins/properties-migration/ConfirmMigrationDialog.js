@@ -1,1 +1,1 @@
-export{Ya as ConfirmMigrationDialog}from"../../../chunks/app-76Vco9HK.js";
+export{Ya as ConfirmMigrationDialog}from"../../../chunks/app-CuxtpMVG.js";

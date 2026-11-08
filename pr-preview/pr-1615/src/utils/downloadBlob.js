@@ -1,1 +1,1 @@
-export{GI as downloadBlob}from"../../chunks/app-76Vco9HK.js";
+export{GI as downloadBlob}from"../../chunks/app-CuxtpMVG.js";
