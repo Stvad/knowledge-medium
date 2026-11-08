@@ -41,6 +41,9 @@
  * repair pass would otherwise omit. The property-panel picker also never
  * reaches completion: it filters `block-type` out of its options.)
  *
+ * A type is never source, since source's text isn't a name: a change that makes
+ * a block both, in either order, is refused (`blockType.sourceConflict`).
+ *
  * A name another block holds is refused — by `assertAliasClaimable` before the
  * write on the rename path, and by the `block_aliases_workspace_alias_unique`
  * storage trigger everywhere else. Both roll the whole tx back.
@@ -381,7 +384,7 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
   apply: async (event, ctx) => {
     for (const row of event.changedRows) {
       const after = row.after
-      if (!after || after.deleted) continue
+      if (!after) continue
       // Tolerant, because this now runs on every CONTENT edit in the
       // workspace: a sync-applied or pre-upgrade row can hold a `types` cell
       // the codec refuses, and a strict read would throw there — costing an
@@ -395,17 +398,20 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       const seedKey = seededDefinitionKey(after)
       if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 
-      // One that is both already, written by a client that predates the rule, is
-      // left alone: source isn't a name, so editing it renames nothing.
+      // Deleted rows too: a merge into a deleted type would otherwise leave one
+      // that is both for a restore to bring back. One that is both already,
+      // written by a client that predates the rule, is left alone: source isn't
+      // a name, so editing it renames nothing.
       if (hasSourceContent(after)) {
         if (isTypeAndSource(row.before)) continue
         throw new ProcessorRejection(
-          `Can't make this block both a type and source (an HTML document or an extension): ` +
+          `A block can't be both a type and source (an HTML document or an extension): ` +
           `a type's text is its name, and source's text is the source.`,
           BLOCK_TYPE_SOURCE_CONFLICT,
           {blockId: row.id},
         )
       }
+      if (after.deleted) continue
       if (addedTypes(row).includes(BLOCK_TYPE_TYPE)) {
         await completeNewType(row, after, ctx)
         continue
