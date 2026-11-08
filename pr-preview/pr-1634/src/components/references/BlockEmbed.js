@@ -1,1 +1,0 @@
-export{yj as BlockEmbed}from"../../../chunks/app-BVe4OuNE.js";

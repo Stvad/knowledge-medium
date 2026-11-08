@@ -1,1 +1,0 @@
-export{RJ as annotationMarginOpenProp}from"../../../chunks/app-BVe4OuNE.js";

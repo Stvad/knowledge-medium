@@ -1,1 +1,0 @@
-export{CM as editorAutocompleteExtension}from"../../chunks/app-BVe4OuNE.js";

@@ -1,1 +1,0 @@
-export{trt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BVe4OuNE.js";

@@ -1,1 +1,0 @@
-export{uY as CHAR_COUNTER_TYPE,hY as RAW_CHARACTER_COUNT_PROFILE_ID,gY as WORDS_COUNT_PROFILE_ID,pY as WORD_COUNTER_TYPE,xn as charCountDisplay,_Y as charLimitProp,vY as charProfileProp,yY as charScopeProp,pn as characterCountProfilesFacet,cn as characterCounterPlugin,_n as textCountProfile}from"../../../chunks/app-BVe4OuNE.js";

@@ -1,1 +1,0 @@
-export{M2 as kernelDataExtension}from"../../chunks/app-BVe4OuNE.js";

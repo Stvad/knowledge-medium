@@ -1,1 +1,0 @@
-export{WS as spatialNavigationShellDecorator}from"../../../chunks/app-BVe4OuNE.js";

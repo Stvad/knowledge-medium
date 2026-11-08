@@ -1,1 +1,0 @@
-export{QC as mobileBottomNavItemsFacet}from"../../../chunks/app-BVe4OuNE.js";

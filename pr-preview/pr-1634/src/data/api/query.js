@@ -1,1 +1,0 @@
-export{Cot as defineQuery}from"../../../chunks/app-BVe4OuNE.js";

@@ -1,1 +1,0 @@
-export{BM as appUpdatePromptExtension}from"../../../chunks/app-BVe4OuNE.js";

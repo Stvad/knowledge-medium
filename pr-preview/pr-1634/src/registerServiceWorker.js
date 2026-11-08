@@ -1,1 +1,0 @@
-export{YM as checkForAppUpdate,XM as registerServiceWorker}from"../chunks/app-BVe4OuNE.js";

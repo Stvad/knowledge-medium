@@ -1,1 +1,0 @@
-export{GT as usePendingInvitations}from"../../chunks/app-BVe4OuNE.js";

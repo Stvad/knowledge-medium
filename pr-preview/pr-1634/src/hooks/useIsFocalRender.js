@@ -1,1 +1,0 @@
-export{IR as isFocalRender,LR as useIsFocalRender}from"../../chunks/app-BVe4OuNE.js";

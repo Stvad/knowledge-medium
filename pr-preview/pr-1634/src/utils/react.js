@@ -1,1 +1,0 @@
-export{XF as useIsMobile,ZF as usePointerCoarse}from"../../chunks/app-BVe4OuNE.js";

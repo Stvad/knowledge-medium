@@ -1,1 +1,0 @@
-export{SW as staticDataExtensions}from"../../chunks/app-BVe4OuNE.js";

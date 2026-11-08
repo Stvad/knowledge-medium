@@ -1,1 +1,0 @@
-export{WE as openRecentsPage}from"../../../chunks/app-BVe4OuNE.js";

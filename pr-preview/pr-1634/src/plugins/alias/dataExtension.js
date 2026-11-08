@@ -1,1 +1,0 @@
-export{UX as aliasDataExtension}from"../../../chunks/app-BVe4OuNE.js";

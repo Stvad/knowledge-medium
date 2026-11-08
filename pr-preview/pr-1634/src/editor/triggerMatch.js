@@ -1,1 +1,0 @@
-export{FK as matchCharTrigger}from"../../chunks/app-BVe4OuNE.js";
