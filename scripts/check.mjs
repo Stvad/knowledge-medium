@@ -316,7 +316,7 @@ export const loadVerdict = (failed, rerun) => {
   const named = extractFailingFiles(rerun.output)
   const failedAlone = rerun.code === 0 ? [] : named.length && !unaccounted(rerun.output, named) ? named : failed
   const passedAlone = failed.filter(file => !failedAlone.includes(file))
-  if (failedAlone.length === 0) return `failed only under load, passed alone: ${passedAlone.join(', ')}`
+  if (failedAlone.length === 0) return `failed only in the full run (load, or state another file left in a shared worker), passed alone: ${passedAlone.join(', ')}`
   const rest = passedAlone.length ? `; passed alone: ${passedAlone.join(', ')}` : ''
   return `fails alone too: ${failedAlone.join(', ')}${rest}`
 }
@@ -324,9 +324,10 @@ export const loadVerdict = (failed, rerun) => {
 const outputText = result => result.output.map(chunk => chunk.text).join('')
 
 // Every file is re-run, not only timed-out ones: a starved `vi.waitFor` fails
-// with its last assertion error, not a timeout. One file at a time, so a
-// verdict is about that file alone and not the load of the others. On stdout,
-// beside the last line, for a reader piping through `tail`.
+// with its last assertion error, not a timeout. One file at a time and each in
+// its own worker, so a verdict is about that file alone and not the load or the
+// leftovers of the others. On stdout, beside the last line, for a reader piping
+// through `tail`.
 const diagnoseTestFailure = async result => {
   const output = outputText(result)
   const failed = extractFailingFiles(output)
@@ -337,7 +338,7 @@ const diagnoseTestFailure = async result => {
     console.log(`[check] no verdict: ${noVerdict}`)
     return
   }
-  const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, '--no-file-parallelism', ...failed]})
+  const rerun = await runTask({name: 'test (failing files, alone)', args: [...testTask.args, '--isolate', '--no-file-parallelism', ...failed]})
   if (rerun.canceled) return
   // Other gates may still be running, so the verdict says what load it ran under.
   const load = `re-run at load average ${loadavg()[0].toFixed(1)} on ${availableParallelism()} cores`

@@ -41,6 +41,17 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.8.0
+
+0.8.0 requires `@knowledge-medium/agent-cli` 0.13.0. A mention now waits until it leaves the editor, on any device, instead of waiting for a quiet period. The `quietMs` watcher option is gone, and a config that still sets it is a config error: the daemon logs `config error: … quietMs was removed in 0.8.0 …` to `~/Library/Logs/km-agent-dispatch.log` and exits without restarting.
+
+1. Remove `quietMs` from every watcher in `~/.config/knowledge-medium/agent-dispatch.json`. The two new options have defaults, so you can leave them out:
+   - `settleMs` (default 250): how long after a mention's last change it waits, so the last write lands.
+   - `editHoldMs` (default 120000): how long a mention still open in an editor is held once neither its text nor the editor has moved.
+2. Upgrade both packages: `npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli`.
+3. Reload the app tab too. With an older tab the daemon still holds correctly, but only notices a mention leaving the editor on the next sweep.
+4. Restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
 ## Upgrade to 0.4.0
 
 0.4.0 requires `@knowledge-medium/agent-cli` 0.9.0. Upgrade both packages, restart the bridge as described in the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section, then restart the daemon. A `delivery: "channel"` watcher's ambient session loads the dispatch channel MCP when it starts, so restart that session too.
@@ -286,7 +297,10 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 ## How a mention task runs
 
 0. A watcher's **first tick establishes a baseline without firing**: pre-existing backlinks to `target` are history, not a backlog — pointing a watcher at an established page (hundreds of old mentions) must not claim and bill them. Only blocks **edited after** the baseline become tasks; editing an old mention deliberately re-surfaces it. Baselines persist in the state file — delete the watcher's `backlinkBaselines` entry there to re-baseline.
-1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). A block that references the target only through attribution (`attribution:creators` / `attribution:editors`, which credit a contributor page) is not a mention, so the target page can double as the runs' contributor without every block a run writes summoning it again. Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
+1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). A block that references the target only through attribution (`attribution:creators` / `attribution:editors`, which credit a contributor page) is not a mention, so the target page can double as the runs' contributor without every block a run writes summoning it again. A mention waits until it is ready, so the daemon doesn't claim (and bill) a request you are still writing:
+   - **It leaves the editor.** Edit state lives on each panel's ui-state row, which syncs, so this works for a request written on another device as well as in the daemon's own tab. The mention fires `settleMs` (default 250 ms) after it leaves the editor, the time for the edit's last write to land. Pausing to think, or switching to another app, doesn't count as leaving; moving to another block does, including pressing Enter.
+   - **Or neither its text nor its editor has moved for `editHoldMs`** (default 2 min) while it is still open. Typing and moving the caret count; switching to another app or locking the device does not, so a request left open that way fires after the cap. A closed tab or dead device leaves its flag set forever, so the flag can only hold a mention this long; the next sweep then claims it.
+   - **Or you use Ask Agent**, which fires from inside the editor without waiting for you to leave. It covers the text as you asked about it: keep writing afterwards and the mention waits again.
 2. Claim: `agent:status=running` + `agent:watcher` + `agent:executor` + `agent:attempts` + `agent:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher; `{{target}}` is the watcher's page alias), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped). A mention that is a comment in a thread also gets the thread: the annotated block's text and page path, the quote, and the comments from the thread's first one down to the mention, with their authors (`{{thread}}`; a custom `prompt` without it gets the thread appended). Reading it needs an app with the `comments` verb; without one the mention is answered without it.
 4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`.
@@ -323,7 +337,7 @@ Set `"splitReply": false` on a watcher to keep the reply as a single block. Note
 
 ## Push detection (watch-events)
 
-By default (`"push": true`) the daemon registers its watchers **inside the tab** via the bridge `watch-events` command: the tab re-runs each watcher's read-only query when its tables change, waits for the result set to be stable (`settleMs` = the watcher's `quietMs` for mentions), and pushes a `watcher-settled` event over the bridge events channel (`/runtime/events`). The daemon long-polls those events and ticks immediately — detection latency becomes "quiet period ends", instead of "next poll + quiet period".
+By default (`"push": true`) the daemon registers its watchers **inside the tab** via the bridge `watch-events` command: the tab re-runs each watcher's read-only query when its tables change, waits for the result set to be stable (`settleMs`), and pushes a `watcher-settled` event over the bridge events channel (`/runtime/events`). A mention's query result includes whether it is open in an editor, so leaving the editor wakes the daemon too. The daemon long-polls those events and ticks immediately, so detection latency is the settle window, not the next poll.
 
 Events are accelerators, not truth: every tick still re-derives everything from graph state, so missed/duplicate/spurious events cost at most one cheap tick. The poll loop stays on as the correctness backstop — with push active, raise `pollIntervalMs` to a slow sweep (30 000 is plenty); without push (old tab bundle, `"push": false`), keep it low because it IS the detection latency.
 
@@ -350,6 +364,8 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
 ```
 
 Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). Deliberately excluded: `eval`, `sql execute`, extension lifecycle. The standalone `agent-cli` `km-mcp` server does not apply dispatch watcher-target guards; use `packages/agent-dispatch/dist/mcp.js` when the session is acting as part of an agent-dispatch watcher loop.
+
+Started this way, the server also offers `read_media`, and `add_media`, which uploads any local file the model names: keep it off your client's auto-approve list. Dispatch runs never get `add_media`. They do get `read_media`, whose images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that.
 
 ## Security posture
 

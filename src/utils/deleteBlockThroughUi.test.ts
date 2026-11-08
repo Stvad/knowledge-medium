@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
-import { resolveEditModeKeepalive } from '@/components/editModeKeepalive'
+import { __resetEditModeKeepaliveForTests, resolveEditModeKeepalive } from '@/components/editModeKeepalive'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { keysBetween } from '@/data/orderKey'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog'
@@ -15,6 +16,7 @@ import {
 } from '@/utils/deleteBlockThroughUi'
 import { __resetDialogsForTests, getDialogQueue, subscribeDialogs } from '@/utils/dialogs'
 import * as viewTransition from '@/utils/viewTransition'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-1'
 
@@ -38,14 +40,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** `count` children of `parentId`, ids `<prefix>-0…`. */
+/** `count` children of a CHILDLESS `parentId`, ids `<prefix>-0…`, in one tx. */
 const seedChildren = async (parentId: string, count: number, prefix: string): Promise<string[]> => {
-  const ids: string[] = []
-  for (let i = 0; i < count; i++) {
-    const id = `${prefix}-${i}`
-    await repo.mutate.createChild({parentId, id, content: id})
-    ids.push(id)
-  }
+  const ids = Array.from({length: count}, (_, i) => `${prefix}-${i}`)
+  const orderKeys = keysBetween(null, null, count)
+  await repo.tx(async tx => {
+    for (const [i, id] of ids.entries()) {
+      await tx.create({id, workspaceId: WS, parentId, orderKey: orderKeys[i], content: id})
+    }
+  }, {scope: ChangeScope.BlockDefault})
   return ids
 }
 
@@ -72,7 +75,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()?.Component).toBe(ConfirmBulkDeleteDialog))
+    await waitFor(() => expect(pendingDialog()?.Component).toBe(ConfirmBulkDeleteDialog))
     // The whole point: nothing is tombstoned while the question is on screen.
     expect(await isBlockDeleted(repo, ids[0])).toBe(false)
 
@@ -90,7 +93,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(null)
 
     expect(await deleting).toBe(false)
@@ -103,7 +106,7 @@ describe('bulk-delete confirmation', () => {
     await seedChildren('page', BULK_DELETE_CONFIRM_THRESHOLD - 1, 'child')
 
     const deleting = deleteBlockThroughUi(repo.block('page'))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(pendingDialog()?.props).toEqual({
       targetCount: 1,
       totalCount: BULK_DELETE_CONFIRM_THRESHOLD,
@@ -139,7 +142,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {animate: true})
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(seen).toEqual([])
     answerDialog(true)
 
@@ -183,7 +186,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     // setFacetRuntime REPLACES the registries, so the kernel data contribution
     // has to be re-included or `core.subtree` stops resolving.
     repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -210,7 +213,7 @@ describe('bulk-delete confirmation', () => {
     const deleting = deleteBlocksThroughUi(
       [repo.block('parent'), ...kids.map(id => repo.block(id))],
     )
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(true)
     await deleting
 
@@ -245,7 +248,7 @@ describe('bulk-delete confirmation', () => {
     expect((visible as {id: string}[]).map(row => row.id)).not.toContain('comment-0')
 
     const deleting = deleteBlockThroughUi(repo.block('root'))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(null)
     await deleting
   })
@@ -254,16 +257,14 @@ describe('bulk-delete confirmation', () => {
     // Reached from Backspace on an emptied block, the dialog takes DOM focus off
     // a live CodeMirror editor, which the blur handler reads as "editing ended".
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
-    // The latch is process-global and each hold lingers 400ms past its dialog
+    // The latch is process-global and each hold lingers past its dialog
     // closing, so every earlier test here leaves one behind. Drain first or
     // this reads someone else's hold and stays green with the keepalive gone.
-    await vi.waitFor(
-      () => expect(resolveEditModeKeepalive()).toBe('exit'),
-      {timeout: 2000},
-    )
+    __resetEditModeKeepaliveForTests()
+    expect(resolveEditModeKeepalive()).toBe('exit')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     // 'yield', not 'refocus': snapping focus back to the editor would take it
     // off the dialog the user still has to answer.
     expect(resolveEditModeKeepalive()).toBe('yield')
@@ -285,7 +286,7 @@ describe('bulk-delete confirmation', () => {
           seen.push(`deleted:${await isBlockDeleted(repo, ids[0])}`)
         },
       })
-      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      await waitFor(() => expect(pendingDialog()).toBeDefined())
       expect(seen, 'not before the user has answered').toEqual([])
       answerDialog(true)
       await deleting
@@ -299,7 +300,7 @@ describe('bulk-delete confirmation', () => {
       const beforeWrite = vi.fn()
 
       const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {beforeWrite})
-      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      await waitFor(() => expect(pendingDialog()).toBeDefined())
       answerDialog(null)
 
       expect(await deleting).toBe(false)
@@ -350,7 +351,7 @@ describe('bulk-delete confirmation', () => {
     const repeated = Array.from({length: 25}, () => repo.block('page'))
 
     const deleting = deleteBlocksThroughUi(repeated)
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(pendingDialog()?.props.targetCount).toBe(1)
     answerDialog(true)
 

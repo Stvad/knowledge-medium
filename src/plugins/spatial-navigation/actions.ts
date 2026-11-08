@@ -44,7 +44,9 @@ import {
   panelById,
   panelOf,
   panelInstances,
+  nextRowInScope,
   panelRowsInOrder,
+  type PanelRow,
   reservedRowBetween,
   resolveCurrentAnchor,
   rowSlotIn,
@@ -83,6 +85,17 @@ const currentInstance = (
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfacesFor(uiStateBlock))
 }
 
+/** A range within one scope spans that scope's rows only. A nested surface
+ *  between them (an embed, an expanded comment or reference) shows other blocks,
+ *  which a range drawn over the outline must not put in the way of `d`. Across
+ *  scopes, position is all that relates the two ends. */
+const blockIdsInRange = (rows: readonly PanelRow[], anchor: PanelRow, target: PanelRow): string[] => {
+  const spanned = anchor.renderScopeId === target.renderScopeId
+    ? rows.filter(row => row.renderScopeId === anchor.renderScopeId)
+    : rows
+  return blockIdsInOrderedSelectionRange(spanned, spanned.indexOf(anchor), spanned.indexOf(target))
+}
+
 /** `rangeOrigin` stands in for the focused row as the cursor the range starts
  *  from — see `BlockPointerDependencies.rangeOrigin`. */
 export const extendSelectionToSpatialTarget = async (
@@ -117,7 +130,7 @@ export const extendSelectionToSpatialTarget = async (
     uiStateBlock,
     anchorBlockId,
     targetLocation,
-    selectedBlockIds: blockIdsInOrderedSelectionRange(rows, anchorIndex, targetIndex),
+    selectedBlockIds: blockIdsInRange(rows, rows[anchorIndex], rows[targetIndex]),
     clearEditing: true,
     description: 'spatial-navigation extend selection',
   })
@@ -152,7 +165,8 @@ const extendSelectionVertical = async (
     return true
   }
 
-  const next = verticalNeighbor(current, direction, excludedSurfaces)
+  const next = nextRowInScope(current, direction, excludedSurfaces)
+    ?? verticalNeighbor(current, direction, excludedSurfaces)
   // NOT the same call as `moveVertical`'s boundary, though it looks like it.
   // Declining here doesn't extend the selection by one row: the structural
   // base re-derives the WHOLE range from the model, which sweeps in every

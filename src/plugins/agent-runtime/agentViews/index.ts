@@ -11,7 +11,7 @@ import {
 import { buildSearchView, renderSearchView } from './search.ts'
 import { viewWorkspace } from './shared.ts'
 
-export { BlockRefError, resolveBlockRef, shortIds, type ResolveBlockRefOptions } from './resolveRef.ts'
+export { BlockRefError, resolveBlockRef, type ResolveBlockRefOptions } from './resolveRef.ts'
 
 type ViewCommand = Extract<KnownAgentCommand, {type: `view-${string}`}>
 

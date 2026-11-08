@@ -1,3 +1,4 @@
+import { escapeRegExp } from 'lodash-es'
 import type { ContentSearchMatch, FindReplaceOptions } from './types.ts'
 
 export const DEFAULT_FIND_REPLACE_OPTIONS: FindReplaceOptions = {
@@ -10,22 +11,51 @@ interface LiteralMatch {
   length: number
 }
 
-const isWordChar = (char: string | undefined): boolean =>
-  char !== undefined && /[A-Za-z0-9_]/.test(char)
+/** A word character in any script. Closed under the case-insensitive
+ *  matcher's folding (folding never turns a letter into a non-letter), so a
+ *  match's edges classify the same as the needle's. */
+const WORD_CLASS = String.raw`[\p{L}\p{M}\p{N}\p{Pc}]`
+const WORD_CHAR = new RegExp(`^${WORD_CLASS}$`, 'u')
 
-const passesWholeWordBoundary = (
-  content: string,
-  needle: string,
-  index: number,
-): boolean => {
-  const first = needle[0]
-  const last = needle[needle.length - 1]
-  const before = content[index - 1]
-  const after = content[index + needle.length]
-  return (!isWordChar(first) || !isWordChar(before))
-    && (!isWordChar(last) || !isWordChar(after))
+const isWordCodePoint = (codePoint: number | undefined): boolean =>
+  codePoint !== undefined && WORD_CHAR.test(String.fromCodePoint(codePoint))
+
+const caseFlags = (matchCase: boolean): string => matchCase ? 'u' : 'iu'
+
+/** A code point outside this class has no case-insensitive partner under
+ *  `caseFlags(false)`: the regex matches it only against itself. */
+const HAS_CASE_PARTNER_CANDIDATE = /[\p{CWCF}\p{CWCM}]/u
+
+let caseFoldingCodePointList: readonly string[] | undefined
+
+/** Every code point in `HAS_CASE_PARTNER_CANDIDATE`, computed once on demand. */
+export const caseFoldingCodePoints = (): readonly string[] => {
+  if (caseFoldingCodePointList === undefined) {
+    const found: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue
+      const char = String.fromCodePoint(codePoint)
+      if (HAS_CASE_PARTNER_CANDIDATE.test(char)) found.push(char)
+    }
+    caseFoldingCodePointList = found
+  }
+  return caseFoldingCodePointList
 }
 
+/** Every code point a case-insensitive `findLiteralMatches` treats as equal
+ *  to the single code point `char`, `char` itself included. */
+export const caseInsensitiveVariants = (char: string): string[] => {
+  if (!HAS_CASE_PARTNER_CANDIDATE.test(char)) return [char]
+  const pattern = new RegExp(`^${escapeRegExp(char)}$`, caseFlags(false))
+  return caseFoldingCodePoints().filter(candidate => pattern.test(candidate))
+}
+
+/** Matches are offsets into `content` itself. Case-insensitivity is the
+ *  regex's per-code-point folding, never a lowercased copy of the content:
+ *  lowercasing can change a string's length (`İ` becomes two code units), and
+ *  offsets taken from the copy would splice a replacement into the wrong place.
+ *  Whole-word is a lookaround on each needle edge that is a word character, so
+ *  a rejected candidate never hides an overlapping later one. */
 export const findLiteralMatches = (
   content: string,
   needle: string,
@@ -33,21 +63,15 @@ export const findLiteralMatches = (
 ): LiteralMatch[] => {
   if (needle.length === 0) return []
 
-  const haystack = options.matchCase ? content : content.toLocaleLowerCase()
-  const target = options.matchCase ? needle : needle.toLocaleLowerCase()
-  const matches: LiteralMatch[] = []
-  let start = 0
+  const lastCodePoint = [...needle].at(-1)?.codePointAt(0)
+  const guardStart = options.wholeWord && isWordCodePoint(needle.codePointAt(0))
+  const guardEnd = options.wholeWord && isWordCodePoint(lastCodePoint)
+  const source = (guardStart ? `(?<!${WORD_CLASS})` : '')
+    + escapeRegExp(needle)
+    + (guardEnd ? `(?!${WORD_CLASS})` : '')
+  const pattern = new RegExp(source, `g${caseFlags(options.matchCase)}`)
 
-  for (;;) {
-    const index = haystack.indexOf(target, start)
-    if (index < 0) break
-    if (!options.wholeWord || passesWholeWordBoundary(content, needle, index)) {
-      matches.push({index, length: needle.length})
-    }
-    start = index + needle.length
-  }
-
-  return matches
+  return [...content.matchAll(pattern)].map(found => ({index: found.index, length: found[0].length}))
 }
 
 export const replaceLiteralMatches = (

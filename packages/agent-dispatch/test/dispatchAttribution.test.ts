@@ -11,8 +11,7 @@ import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
-import {resolveFacetRuntimeSync} from '@/facets/facet'
-import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
+import {createTestAgentContext} from '@/plugins/agent-runtime/test/createTestAgentContext'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
 import {parseConfig, PROPS} from '../src/config'
@@ -39,10 +38,7 @@ const inProcessClient = () => createInProcessBridgeClient(context)
 beforeEach(async () => {
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: {id: 'vlad', name: 'Vlad'}}).repo
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {repo, workspaceId: WS, safeMode: false})
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  context = createTestAgentContext(repo, WS, staticDataExtensions)
   // The person's note, written in the tab: a human-only write records no
   // attribution.
   await repo.tx(async tx => {
@@ -72,7 +68,7 @@ const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult
   return createEngine({
     config: parseConfig({
       workspaceId: WS,
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
     }),
     graph: createGraph(client),
     replies: createReplyWriter(client),

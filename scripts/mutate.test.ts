@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, 
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { tempDirs } from './hook-test-support'
+import { permissionBitsIgnored, tempDirs } from './hook-test-support'
 import { changedLines, deleteOnce, parseMutateArgs, statePaths, verdictOf } from './mutate.mjs'
 
 describe('parseMutateArgs', () => {
@@ -24,6 +24,11 @@ describe('parseMutateArgs', () => {
   it('takes a test-name filter, the baseline opt-out and a timeout', () => {
     const cfg = parseMutateArgs([...base, '--edit', 'true', '-t', 'rejects', '--no-baseline', '--timeout', '2'], '/r')
     expect(cfg).toMatchObject({ mutation: { kind: 'edit' }, testName: 'rejects', baseline: false, timeoutMs: 2000 })
+  })
+
+  it('resolves --config against the repo root', () => {
+    expect(parseMutateArgs([...base, '--edit', 'true', '--config', 'vitest.browser.config.ts'], '/r').vitestConfig)
+      .toBe('/r/vitest.browser.config.ts')
   })
 
   it('requires exactly one mutation, both paths, and a positive timeout', () => {
@@ -302,7 +307,8 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(mod(dir)).toBe(MOD)
   })
 
-  it('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
+  // Root writes a mode-444 file, so the restore fails only where mode bits bind.
+  it.skipIf(permissionBitsIgnored())('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
     const dir = fixture()
     try {
       const r = mutate(dir, ['--edit', 'printf x >> "$MUTATE_FILE" && chmod 444 "$MUTATE_FILE"', '--no-baseline'])

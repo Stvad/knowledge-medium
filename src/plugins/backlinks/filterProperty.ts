@@ -65,15 +65,19 @@ const parseBacklinksFilter = (value: unknown): BacklinksFilter => {
   }
 }
 
+const canonicalBacklinksFilter = (value: unknown): StoredBacklinksFilter =>
+  normalizeBacklinksFilter(parseBacklinksFilter(value))
+
 /** Filter codec name was bumped from 'backlinks:filter' to
  *  'backlinks:predicates' when the storage shape moved from
  *  `{includeIds, removeIds}` to `{include, exclude}` of BlockPredicate.
  *  Old values stored under the previous name (and its property name)
- *  are intentionally discarded. */
+ *  are intentionally discarded. Both directions canonicalize, so what is
+ *  written is exactly what a read gives back. */
 export const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
   type: 'backlinks:predicates',
-  encode: value => normalizeBacklinksFilter(value),
-  decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),
+  encode: canonicalBacklinksFilter,
+  decode: canonicalBacklinksFilter,
 }
 
 export const backlinksFilterPresetCore = definePresetCore<StoredBacklinksFilter>({

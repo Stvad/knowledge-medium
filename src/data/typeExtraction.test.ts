@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -14,8 +14,8 @@ import {
   getBlockTypes,
   typesProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { BLOCK_TYPE_NAME_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
+import { BLOCK_TYPE_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_NAME_CONFLICT, BLOCK_TYPE_SOURCE_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
 import {
   GrammarShapedLabelError,
   LossyLabelError,
@@ -256,14 +256,23 @@ describe('createTypeBlock', () => {
     })).rejects.toMatchObject({name: 'AbortError'})
   })
 
-  it('TypeRegistrationTimeout has the expected shape', () => {
-    const err = new TypeRegistrationTimeout('type-id', 'Task', 1500)
-    expect(err).toBeInstanceOf(Error)
-    expect(err.name).toBe('TypeRegistrationTimeout')
-    expect(err.typeBlockId).toBe('type-id')
+  it('rejects with TypeRegistrationTimeout when the committed type never registers', async () => {
+    // A registry that never publishes the new id — the shape a block the
+    // projection rejects leaves behind.
+    env = await setup()
+    vi.spyOn(env.repo, 'types', 'get').mockReturnValue(new Map())
+    const err: unknown = await createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+      registrationTimeoutMs: 20,
+    }).catch((e: unknown) => e)
+    if (!(err instanceof TypeRegistrationTimeout)) throw new Error(`expected a timeout, got ${String(err)}`)
     expect(err.typeLabel).toBe('Task')
-    expect(err.timeoutMs).toBe(1500)
-    expect(err.message).toContain('did not appear in the runtime registry within 1500ms')
+    expect(err.timeoutMs).toBe(20)
+    // Timing out reports the gap; it does not roll back the committed block.
+    const committed = await env.repo.load(err.typeBlockId)
+    expect(committed?.parentId).toBe(typesPageBlockId(WS))
   })
 
   it('parents under args.workspaceId\'s Types page, not the active workspace', async () => {
@@ -598,6 +607,22 @@ describe('block-type typeify processor', () => {
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
     expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load())?.id).toBe(id)
+  })
+
+  // The whole-block reader keeps a name ending in an unmatched `]`, so a type
+  // under one keeps answering to it, through an edit and through a rename.
+  it('keeps and moves the claim of a type named with a trailing unmatched `]`', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Foo]')
+    const resolves = async (alias: string) =>
+      (await env.repo.query.aliasLookup({workspaceId: WS, alias}).load())?.id
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Foo] '}), {scope: ChangeScope.BlockDefault})
+    expect((await env.repo.load(id))!.properties[aliasesProp.name]).toEqual(['Foo]'])
+    expect(await resolves('Foo]')).toBe(id)
+
+    await env.repo.tx(tx => tx.update(id, {content: 'Bar]'}), {scope: ChangeScope.BlockDefault})
+    expect(await resolves('Bar]')).toBe(id)
   })
 
   // Same rule as the tag path, one tx later — a name that can't be written
@@ -1227,6 +1252,74 @@ describe('block-type typeify processor', () => {
     await claimAlias(env, 'Book')
 
     await expect(tagBlockType(env, 'Book')).rejects.toMatchObject({code: 'alias.collision'})
+  })
+
+  describe('a block that would be both a type and source', () => {
+    it('refuses a type becoming source, and keeps the type', async () => {
+      env = await setup()
+      const id = await tagBlockType(env, 'Book')
+      const types = getBlockTypes((await env.repo.load(id))!)
+
+      await expect(env.repo.tx(
+        tx => tx.setProperty(id, typesProp, [...types, HTML_DOCUMENT_TYPE]),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      expect(getBlockTypes((await env.repo.load(id))!)).toEqual(types)
+    })
+
+    it('refuses source becoming a type, and keeps the source', async () => {
+      env = await setup()
+      const source = '<div>\n  <p>x</p>\n</div>\n'
+      const id = await createBlock(env, source, {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+
+      await expect(env.repo.tx(
+        tx => env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      const row = await env.repo.load(id)
+      expect(row!.content).toBe(source)
+      expect(getBlockTypes(row!)).toEqual([HTML_DOCUMENT_TYPE])
+    })
+
+    it('refuses a merge that would union a type and source, in either direction', async () => {
+      env = await setup()
+      const type = await tagBlockType(env, 'Book')
+      const doc = await createBlock(env, '<p>x</p>', {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+
+      for (const [intoId, fromId] of [[type, doc], [doc, type]]) {
+        await expect(env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'}))
+          .rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      }
+      expect(getBlockTypes((await env.repo.load(doc))!)).toEqual([HTML_DOCUMENT_TYPE])
+      expect((await env.repo.load(type))!.deleted).toBe(false)
+    })
+
+    it('refuses a merge into a deleted type, which a restore would bring back as both', async () => {
+      env = await setup()
+      const type = await tagBlockType(env, 'Book')
+      const doc = await createBlock(env, '<p>x</p>', {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+      await env.repo.block(type).delete()
+
+      await expect(env.repo.mutate.merge({intoId: type, fromId: doc, contentStrategy: 'concat'}))
+        .rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      const row = await env.repo.load(doc)
+      expect(row!.content).toBe('<p>x</p>')
+      expect(getBlockTypes(row!)).toEqual([HTML_DOCUMENT_TYPE])
+    })
+
+    // Written raw, as a client that predates the rule could have left it.
+    it('leaves one that is both already alone when its source is edited', async () => {
+      env = await setup()
+      const id = await tagBlockType(env, 'Book')
+      const properties = await rawPropertiesOf(env, id)
+      await rawProperties(env, id, {...properties, [typesProp.name]: [...properties[typesProp.name] as string[], HTML_DOCUMENT_TYPE]})
+
+      await env.repo.tx(tx => tx.update(id, {content: '<div>hello</div>'}), {scope: ChangeScope.BlockDefault})
+      const row = await env.repo.load(id)
+      expect(row!.content).toBe('<div>hello</div>')
+      expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+      expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    })
   })
 
   describe('with the alias plugin off', () => {

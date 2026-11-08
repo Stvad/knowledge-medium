@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -12,28 +12,7 @@ import {
   hasAnyBlockDateAdapter,
   type BlockDateAdapter,
 } from '../blockDateAdapter.ts'
-import {
-  createEditorReferenceDateAdapter,
-  referenceDateAdapter,
-} from '../referenceDateAdapter.ts'
-
-const fakeEditorView = (content: string) => {
-  let text = content
-  return {
-    dispatch: vi.fn((spec: {changes?: {from: number; to: number; insert: string}}) => {
-      if (!spec.changes) return
-      text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
-    }),
-    state: {
-      get doc() {
-        return {
-          length: text.length,
-          toString: () => text,
-        }
-      },
-    },
-  }
-}
+import { referenceDateAdapter } from '../referenceDateAdapter.ts'
 
 const stubAdapter = (id: string, predicate: (content: string) => boolean): BlockDateAdapter => ({
   id,
@@ -151,6 +130,52 @@ describe('blockDateAdapter dispatch', () => {
 })
 
 describe('referenceDateAdapter', () => {
+  it('canHandle refuses source, with a date reference in it or not', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'doc', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '<p>[[2026-04-29]]</p>', properties: {types: ['html-document']},
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('doc')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(false)
+  })
+
+  // The type arrives as a synced row would, behind the cache, while the picker is open.
+  it('setIso refuses a block that became source after the adapter was picked', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'doc', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '<p>[[2026-04-29]]</p>',
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('doc')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({types: ['html-document']}), 'doc'],
+    ))
+
+    expect(await referenceDateAdapter.setIso(block, '2026-05-01')).toBe(false)
+    const row = await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['doc'])
+    expect(row.content).toBe('<p>[[2026-04-29]]</p>')
+  })
+
+  it('setIso refuses a block deleted after the adapter was picked', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'gone', workspaceId: 'ws', parentId: null, orderKey: 'a', content: 'due [[2026-04-29]]',
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('gone')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+    await block.delete()
+
+    expect(await referenceDateAdapter.setIso(block, '2026-05-01')).toBe(false)
+    const row = await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['gone'])
+    expect(row.content).toBe('due [[2026-04-29]]')
+  })
+
   it('canHandle accepts blocks with exactly one date reference', async () => {
     const repo = makeRepo()
     await repo.tx(async tx => {
@@ -188,25 +213,5 @@ describe('referenceDateAdapter', () => {
 
     expect(await referenceDateAdapter.setIso(long, '2026-06-01')).toBe(true)
     expect(long.peek()?.content).toBe('meet [[June 1st, 2026]]')
-  })
-
-  it('can target the live CodeMirror document before persisted content catches up', async () => {
-    const repo = makeRepo()
-    await repo.tx(tx => tx.create({
-      id: 'edited', workspaceId: 'ws', parentId: null, orderKey: 'a',
-      content: 'stale [[2026-05-01]]',
-    }), {scope: ChangeScope.BlockDefault})
-
-    const block = repo.block('edited')
-    await block.load()
-    const editorView = fakeEditorView('live [[2026-05-01]]')
-    const adapter = createEditorReferenceDateAdapter(editorView as never)
-
-    expect(adapter.canHandle(block)).toBe(true)
-    expect(await adapter.getCurrentIso(block)).toBe('2026-05-01')
-    expect(await adapter.setIso(block, '2026-05-08')).toBe(true)
-
-    expect(editorView.state.doc.toString()).toBe('live [[2026-05-08]]')
-    expect(block.peek()?.content).toBe('live [[2026-05-08]]')
   })
 })

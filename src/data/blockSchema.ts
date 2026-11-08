@@ -266,6 +266,15 @@ export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
   WHERE deleted = 0 AND content != ''
 `
 
+/** Blocks open in an editor on any client (the readers carry this predicate
+ *  literally; see `BEING_EDITED_BLOCKS_SQL`). Holds a handful of ui-state
+ *  rows, so a read re-run on every table change stays cheap on a large graph. */
+export const CREATE_BLOCKS_BEING_EDITED_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_being_edited
+  ON blocks (id)
+  WHERE deleted = 0 AND json_extract(properties_json, '$.isEditing') = 1
+`
+
 /** Partial index over the local derived column: field-row recognition and
  *  "rows referencing target X" scans (rename retitle, projection walks) hit
  *  `(workspace_id, reference_target_id, parent_id)`; the `IS NOT NULL`

@@ -1,4 +1,3 @@
-// @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import type {BlockResolveContext} from '@/extensions/blockInteraction.js'
 import {CONTRIBUTOR_CARD_MODE_KEY, contributorBadgesDecoratorContribution} from '../ContributorBadges'

@@ -196,6 +196,7 @@ describe('statefulFuzzGuard per-test barrier', () => {
       stopSyncObserver: () => {},
       setActiveWorkspaceId: () => { released = true },
       awaitDeferredWork: async () => {},
+      cancelDelayedProcessors: () => {},
     } as unknown as Repo)
     // Not awaited: fast-check's time budget abandons the case the same way.
     void guard.run(null, async () => {

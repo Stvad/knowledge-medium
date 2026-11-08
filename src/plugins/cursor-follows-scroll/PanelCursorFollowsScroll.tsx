@@ -30,6 +30,11 @@ const SCROLL_SETTLE_MS = 150
 const SETTLE_RETRY_MS = 250
 const SETTLE_RETRIES = 4
 
+/** A wide table or a code block panning in place moves no row up or down, so
+ *  it says nothing about where the viewport is. */
+const pansOnlySideways = (scroller: Element): boolean =>
+  scroller.scrollWidth > scroller.clientWidth && scroller.scrollHeight <= scroller.clientHeight
+
 
 /**
  * Emacs's rule, per panel: scrolling the cursor out of the window moves the
@@ -161,6 +166,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       // viewport that never moved.
       const target = event.target
       if (target instanceof Node && !target.contains(panelEl) && !panelEl.contains(target)) return
+      if (target instanceof Element && pansOnlySideways(target)) return
       sample()
       if (!seenOnScreen) return
       if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
@@ -265,6 +271,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       : undefined
     editedLocation.current = isEditing ? (current ?? null) : null
     if (!wasEditing || isEditing) return
+    // Defence in depth, not pinned: no test reaches this through the component.
     if (!sameFocusedBlockLocation(wasEditing, current)) return
     settleRef.current?.()
   }, [isEditing, focusedBlockId, renderScopeId])

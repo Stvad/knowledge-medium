@@ -3,7 +3,7 @@ import type { BlockData } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { loadBlocks, loadCrumbs, visibleChildCounts, visibleChildrenLevel } from './context.ts'
-import { displayIds } from './displayIds.ts'
+import { idMark } from './displayIds.ts'
 import { createPropertyRenderer, type PropertyDetail } from './properties.ts'
 import {
   clampInt,
@@ -169,17 +169,14 @@ export const buildOutlineView = async (
   const rootChildCount = rootChildrenRead.length > 0 ? Math.max(counted, offset + rootChildrenRead.length) : counted
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
-  const [renderer, shortIds] = await Promise.all([
-    createPropertyRenderer(repo, blocks, detail),
-    displayIds(repo, blocks.map(block => block.id)),
-  ])
+  const renderer = await createPropertyRenderer(repo, blocks, detail)
 
   const viewRoot = {
-    ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS}),
+    ...toViewRow(root, {renderer, maxChars: ROOT_CHARS}),
     breadcrumb: crumbs.get(root.id) ?? [],
     childCount: rootChildCount,
   }
-  const viewRows = new Map([...nodes].map(([id, node]) => [id, toViewRow(node.block, {shortIds, renderer, maxChars: LINE_CHARS})]))
+  const viewRows = new Map([...nodes].map(([id, node]) => [id, toViewRow(node.block, {renderer, maxChars: LINE_CHARS})]))
   const rowFields = (node: Node, hiddenChildren: number) => ({
     ...viewRows.get(node.block.id)!,
     depth: node.depth,
@@ -212,7 +209,7 @@ export const buildOutlineView = async (
 }
 
 const headerLines = ({root, offset}: Pick<OutlineView, 'root' | 'offset'>): string[] => [
-  `${root.content}  ^${root.shortId}${metaSuffix(root)}  · ${plural(root.childCount, 'child', 'children')}`,
+  `${root.content}  ${idMark(root.id)}${metaSuffix(root)}  · ${plural(root.childCount, 'child', 'children')}`,
   ...(root.breadcrumb.length > 0 ? [`in: ${crumbLine(root.breadcrumb)}`] : []),
   ...(offset > 0 ? [`(children from #${formatCount(offset + 1)})`] : []),
 ]
@@ -222,7 +219,7 @@ const hiddenSuffix = (row: Pick<OutlineRow, 'hiddenChildren' | 'collapsed'>): st
   : ''
 
 const rowLine = (row: Omit<OutlineRow, 'parentId'>): string =>
-  `${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row)}  ^${row.shortId}${hiddenSuffix(row)}`
+  `${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row)}  ${idMark(row.id)}${hiddenSuffix(row)}`
 
 export const renderOutlineView = (view: OutlineView): string => {
   const {root, rows} = view
@@ -241,7 +238,7 @@ export const renderOutlineView = (view: OutlineView): string => {
   }
   if (view.budgetDropped > 0) {
     lines.push(`… ${plural(view.budgetDropped, 'more selected block')} not shown, past the ${formatCount(OUTPUT_CHARS)}-character output budget`
-      + ` — narrow with properties=none, a lower limit or depth, or search with under=^${root.shortId}`)
+      + ` — narrow with properties=none, a lower limit or depth, or search with under=${idMark(root.id)}`)
   }
   if (sawHidden) lines.push('(+N children) = not expanded here; raise depth, or read that block by its id.')
   if (sawCut) lines.push(CUT_LEGEND)

@@ -3,7 +3,13 @@
  * Provides type-safe access to localStorage with fallback values
  */
 export class ClientLocalSettings {
-  constructor(private readonly storage = localStorage) {}
+  constructor(private readonly storageOverride?: Storage) {}
+
+  /** Resolved per call, so importing this module never touches `localStorage`. */
+  private get storage(): Storage {
+    return this.storageOverride ?? localStorage;
+  }
+
   /**
    * Get a value from localStorage
    * @param key The key to retrieve

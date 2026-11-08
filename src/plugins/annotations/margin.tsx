@@ -4,10 +4,15 @@
  *
  * A panel mount, so it composes with whatever layout renders the panel, and it
  * uses the width a wide panel leaves empty beside the text instead of
- * squeezing it. The cost is that it lives outside the scrollport: it finds the
- * panel's rows in the DOM (mounted rows and lazy placeholders alike, of the
- * panel's own render scope), reads their positions and moves the cards within
- * one animation frame of a scroll, a resize or a re-render.
+ * squeezing it, moving the text left, unchanged in width, when the right side
+ * alone is short of the widest column (`fitColumn`, `PANEL_RIGHT_CLEARANCE`).
+ * The cost is that it lives outside the scrollport: it finds the panel's rows
+ * in the DOM (mounted rows and lazy placeholders alike, of the panel's own
+ * render scope), reads their positions and moves the cards within one animation
+ * frame of a scroll, a resize or a re-render.
+ *
+ * A card sits beside its target row's top, or, for a quote, beside the line
+ * the quote starts on (`quoteTop`).
  *
  * Where there is no room for the column, it draws nothing and says so
  * (`setMarginShowing`), and the comment pill falls back to expanding threads
@@ -24,10 +29,13 @@ import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.j
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {runActionByIdSafely} from '@/shortcuts/runAction.js'
+import {PANEL_RIGHT_CLEARANCE} from '@/utils/panelClearance.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {TOGGLE_MARGIN_ACTION_ID} from './actions.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
-import {placeCards} from './placement.ts'
+import {byPlacement, fitColumn, placeCards} from './placement.ts'
+import {quoteTop} from './quotePosition.ts'
+import type {RangeAnchor} from './anchor.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
 import {ThreadCard, useThreadSummaries} from './ui.tsx'
 import {
@@ -41,10 +49,11 @@ import {
   useShowClosed,
 } from './uiStore.ts'
 
-/** The column's width bounds, and the space kept between it and the text. A
- *  panel with less room than the minimum shows no margin. */
-const MIN_COLUMN_PX = 240
-const MAX_COLUMN_PX = 340
+/** The column's width bounds, and the space kept on each side of it and left
+ *  of the moved text. A panel with less room than the minimum shows no margin.
+ *  The maximum keeps deeply nested replies readable without the column
+ *  outweighing the text. */
+const COLUMN_BOUNDS = {min: 240, max: 520}
 const EDGE_PX = 16
 const CARD_GAP_PX = 8
 
@@ -53,6 +62,8 @@ interface ColumnFrame {
   top: number
   width: number
   height: number
+  /** How far the text is moved left to make the width. */
+  textShift: number
 }
 
 const sameFrame = (a: ColumnFrame | null, b: ColumnFrame | null): boolean =>
@@ -65,6 +76,11 @@ interface CardEntry {
   blockId: string
   /** Position among its block's cards (whole-block first, then by quote). */
   order: number
+  /** A quote's anchor, placing the card beside the quote; absent for a
+   *  whole-block card. */
+  quote?: RangeAnchor
+  /** See {@link MarginCard}. */
+  trailing?: boolean
 }
 
 interface MarginRegistry {
@@ -92,6 +108,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   const scheduleRef = useRef<() => void>(() => {})
   const scrollportRef = useRef<HTMLElement | null>(null)
   const cardObserver = useRef<ResizeObserver | null>(null)
+  const repo = useRepo()
 
   const [registry] = useState<MarginRegistry>(() => ({
     panelId,
@@ -131,15 +148,24 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
      *  is re-found each pass, since the row can remount. */
     let observedTopRow: Element | null = null
 
-    const measure = (top: Element | null, portRect: DOMRect): ColumnFrame | null => {
+    /** Padding the pane by twice the shift moves the centred text left by the
+     *  shift and keeps its width. */
+    const setTextShift = (px: number) => {
+      if (px > 0) panelEl.style.setProperty(PANEL_RIGHT_CLEARANCE, `${2 * px}px`)
+      else panelEl.style.removeProperty(PANEL_RIGHT_CLEARANCE)
+    }
+
+    const measure = (top: Element, portRect: DOMRect): ColumnFrame | null => {
       const panelRect = panelEl.getBoundingClientRect()
-      const textRight = top ? top.getBoundingClientRect().right : portRect.right
-      const width = Math.min(MAX_COLUMN_PX, Math.floor(portRect.right - textRight - 2 * EDGE_PX))
-      return width < MIN_COLUMN_PX ? null : {
-        left: Math.round(textRight - panelRect.left + EDGE_PX),
+      // From the widths alone, so the answer doesn't depend on the current shift.
+      const side = (portRect.width - top.getBoundingClientRect().width) / 2
+      const fit = fitColumn({left: side - EDGE_PX, right: side - 2 * EDGE_PX}, COLUMN_BOUNDS)
+      return fit && {
+        left: Math.round(portRect.right - side - fit.shift - panelRect.left + EDGE_PX),
         top: Math.round(portRect.top - panelRect.top),
-        width,
+        width: fit.width,
         height: Math.round(portRect.height),
+        textShift: fit.shift,
       }
     }
 
@@ -152,8 +178,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         observedTopRow = topRow
       }
       const portRect = scrollport.getBoundingClientRect()
-      const nextFrame = measure(topRow, portRect)
+      const nextFrame = topRow && measure(topRow, portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
+      setTextShift(nextFrame?.textShift ?? 0)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll<HTMLElement>(selector)) {
         const id = scopeRowBlockId(el)
@@ -162,24 +189,37 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const order = [...rowEls.keys()]
       setRows(current => current.length === order.length && current.every((id, i) => id === order[i]) ? current : order)
       const column = columnRef.current
-      if (!column || !nextFrame) {
+      if (!column || !topRow || !nextFrame) {
         setExtraBottom(0)
         return
       }
       const columnTop = column.getBoundingClientRect().top
+      const anchorTop = (entry: CardEntry, row: Element): number => {
+        const rowTop = row.getBoundingClientRect().top
+        const quoted = entry.quote
+          ? quoteTop(row, entry.blockId, scope, entry.quote, repo.block(entry.blockId).peek()?.content)
+          : null
+        return Math.max(rowTop, quoted ?? rowTop) - columnTop
+      }
       const rowIndex = new Map(order.map((id, i) => [id, i]))
       const placed = [...cards.current.entries()]
         .filter(([, entry]) => rowIndex.has(entry.blockId))
-        .sort(([, a], [, b]) => rowIndex.get(a.blockId)! - rowIndex.get(b.blockId)! || a.order - b.order)
-      const boxes = placed.map(([, entry]) => ({
-        anchor: rowEls.get(entry.blockId)!.getBoundingClientRect().top - columnTop,
-        height: entry.el.offsetHeight,
-      }))
+        .map(([key, entry]) => ({
+          key,
+          entry,
+          row: rowIndex.get(entry.blockId)!,
+          anchor: anchorTop(entry, rowEls.get(entry.blockId)!),
+          trailing: entry.trailing ?? false,
+          order: entry.order,
+        }))
+        .sort(byPlacement)
+      const boxes = placed.map(card => ({anchor: card.anchor, height: card.entry.el.offsetHeight}))
       const active = peekActiveThread(panelId)
-      const tops = placeCards(boxes, placed.findIndex(([key]) => key === active), CARD_GAP_PX, nextFrame.height)
-      for (const [i, [, entry]] of placed.entries()) {
+      const tops = placeCards(boxes, placed.findIndex(card => card.key === active), CARD_GAP_PX, nextFrame.height)
+      for (const [i, {entry}] of placed.entries()) {
         entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
         entry.el.style.visibility = 'visible'
+        entry.el.style.opacity = ''
       }
       for (const [, entry] of cards.current) {
         if (!rowIndex.has(entry.blockId)) entry.el.style.visibility = 'hidden'
@@ -189,9 +229,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       // From the outline itself, not `scrollHeight`: on a page shorter than
       // the viewport that is the viewport's height, so the padding would
       // converge on its size a frame at a time.
-      const contentEnd = topRow
-        ? topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
-        : scrollport.scrollHeight - extraBottom
+      const contentEnd = topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
       setExtraBottom(Math.max(0, Math.ceil(cardsEnd - contentEnd)))
     }
     const schedule = () => {
@@ -205,9 +243,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     cardObserver.current = resize
     for (const entry of cards.current.values()) resize.observe(entry.el)
     // Rows mounting or unmounting, which can leave the outline's height as it
-    // was (a placeholder swapped for its row).
+    // was (a placeholder swapped for its row), and text changing in place,
+    // which can move a quote to another line at the same height.
     const mutations = new MutationObserver(schedule)
-    mutations.observe(scrollport, {childList: true, subtree: true})
+    mutations.observe(scrollport, {childList: true, characterData: true, subtree: true})
     scrollport.addEventListener('scroll', schedule, {passive: true})
     const unsubscribe = onUiStoreChange(schedule)
     schedule()
@@ -219,9 +258,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       scrollport.removeEventListener('scroll', schedule)
       unsubscribe()
       setExtraBottom(0)
+      setTextShift(0)
       scheduleRef.current = () => {}
     }
-  }, [panelId, scope, topLevelBlockId])
+  }, [panelId, scope, topLevelBlockId, repo])
 
   const showing = frame !== null
   useEffect(() => {
@@ -229,7 +269,6 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     return () => setMarginShowing(panelId, false)
   }, [panelId, showing])
 
-  const repo = useRepo()
   const workspaceId = useWorkspaceId(repo.block(topLevelBlockId), repo.activeWorkspaceId ?? '')
   const scopeThreads = useHandle(
     repo.query[THREADS_IN_SCOPE_QUERY]({workspaceId, scopeId: topLevelBlockId}),
@@ -310,7 +349,13 @@ const MarginRow = ({blockId}: {blockId: string}) => {
   const threads = useThreadSummaries(repo.block(blockId))
   const showClosed = useShowClosed(registry.panelId)
   return threads.map((thread, order) => (thread.open || showClosed) && (
-    <CardSlot key={thread.id} slotKey={thread.id} blockId={blockId} order={order}>
+    <CardSlot
+      key={thread.id}
+      slotKey={thread.id}
+      blockId={blockId}
+      order={order}
+      quote={thread.anchor.kind === 'range' ? thread.anchor : undefined}
+    >
       <div className={thread.open ? undefined : 'opacity-70'}>
         <ThreadCard thread={thread} surface="margin"/>
       </div>
@@ -329,19 +374,33 @@ const isKeyboardFocus = (event: FocusEvent): boolean => {
   }
 }
 
-const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId: string; order: number; children: ReactNode}) => {
+interface CardSlotProps {
+  slotKey: string
+  blockId: string
+  order: number
+  quote?: RangeAnchor
+  trailing?: boolean
+  children: ReactNode
+}
+
+const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlotProps) => {
   const registry = useContext(MarginRegistryContext)!
   const ref = useRef<HTMLDivElement>(null)
   const active = useActiveThread(registry.panelId) === slotKey
-  useLayoutEffect(() => registry.register(slotKey, {el: ref.current!, blockId, order}), [registry, slotKey, blockId, order])
+  useLayoutEffect(
+    () => registry.register(slotKey, {el: ref.current!, blockId, order, quote, trailing}),
+    [registry, slotKey, blockId, order, quote, trailing],
+  )
   return (
     <div
       ref={ref}
       data-margin-card={slotKey}
       onClick={() => activateThread(registry.panelId, slotKey)}
       onFocus={event => { if (isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
-      // Placed by the layout pass; hidden until it has.
-      style={{visibility: 'hidden'}}
+      // Placed by the layout pass; transparent until it has, not hidden: an
+      // editor mounting in a new card (a comment just started) takes focus
+      // as it mounts, which a hidden element refuses.
+      style={{opacity: 0}}
       className={`pointer-events-auto absolute inset-x-0 top-0 rounded-md transition-shadow ${
         active ? 'shadow-md ring-1 ring-ring' : 'shadow-sm'
       }`}
@@ -356,7 +415,7 @@ const CardSlot = ({slotKey, blockId, order, children}: {slotKey: string; blockId
 const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) => {
   const block = useRepo().block(blockId)
   return (
-    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={Number.MAX_SAFE_INTEGER}>
+    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={0} trailing>
       <button
         type="button"
         onClick={() => { if (block.peekProperty(isCollapsedProp)) void block.set(isCollapsedProp, false) }}

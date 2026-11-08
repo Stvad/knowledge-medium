@@ -350,7 +350,9 @@ describe('PanelRenderer', () => {
     const body = await screen.findByTestId('panel-top-level-block')
     expect(body.parentElement?.className).toContain('mx-auto')
     expect(body.parentElement?.className).toContain('max-w-3xl')
-    expect(document.querySelector('[data-panel-scrollport]')?.className).toBe('overflow-visible')
+    const scrollport = document.querySelector('[data-panel-scrollport]')
+    expect(scrollport?.className).toContain('overflow-visible')
+    expect(scrollport?.className).not.toContain('overflow-y-auto')
   })
 
   it('keeps a centered content frame in an ordinary panel column', async () => {

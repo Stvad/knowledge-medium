@@ -3,12 +3,12 @@ import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecOf } from '@/data/api/codecs.js'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
-import { boundDisplayId, displayIds } from './displayIds.ts'
+import { boundDisplayId, idMark } from './displayIds.ts'
 import { boundLabels, charBoundary, clipLine, ellipsize, firstAliasSql, formatCount, oneLine, textHeadSql } from './text.ts'
 
 export interface PropertyLine {
   name: string
-  /** One-line display form: refs as `[[Title]] ^shortid`, dates as ISO, lists
+  /** One-line display form: refs as `[[Title]] ^id`, dates as ISO, lists
    *  joined, structured values summarized. */
   value: string
   /** A ref property's target ids, exactly as stored, for the refs it titles
@@ -42,13 +42,15 @@ const MAX_TYPES = 10
 const MAX_REFS = 20
 /** A ref's label shows only with at least this much room beside its id. */
 const MIN_REF_LABEL = 12
+/** A canonical id as a view marks it: `^` and 36 characters. */
+const ID_MARK_CHARS = 37
 const SUMMARY_KEYS = 3
 
 /** A list value is decoded from a head this long — more than any line can
  *  show — with its real length kept for the "+N more" count. Only for a
  *  codec that declares its array member-wise (`memberCodecOf`), or none: an
  *  atomic array encoding may need its tail, so that one is decoded whole. */
-const MAX_DECODED_ITEMS = 100
+export const MAX_DECODED_ITEMS = 100
 
 export type Decoded =
   | {kind: 'refs', ids: string[], total: number}
@@ -104,6 +106,10 @@ const isListItem = (value: unknown): boolean => isScalar(value) || value instanc
 
 /** What a cut-off list ends with: the count of the items not shown. */
 const moreSuffix = (left: number): string => `, …+${left} more`
+
+/** A brief ref list's room: one ref with a minimal `[[label]]` beside its id,
+ *  then the count of the rest — the id cannot give way the way a label can. */
+const BRIEF_REF_CHARS = '[[]] '.length + MIN_REF_LABEL + ID_MARK_CHARS + moreSuffix(999).length
 
 /** Structured values (an SRS snapshot history, an importer's payload) are
  *  summarized, never dumped — they are what made raw outlines unreadable. A
@@ -183,7 +189,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  it can show — visible ones, plain names first, at most
  *  {@link MAX_PROPERTIES} — and decodes only those through the registry, then
  *  loads the titles of their referenced blocks in one query, so a ref renders
- *  as `[[Title]]` or quoted content, then its `^shortid`. A huge bag costs its names, not its decoding (a cost
+ *  as `[[Title]]` or quoted content, then its `^id`. A huge bag costs its names, not its decoding (a cost
  *  bound: decoding everything would render the same). Visibility
  *  is the property panel's rule (`isPropertyPanelHiddenProperty`), so an
  *  agent sees what the user sees. */
@@ -259,10 +265,9 @@ export const createPropertyRenderer = async (
       titles.set(row.id, {workspaceId: row.workspace_id, alias: alias || null, content: oneLine(row.content ?? '')})
     }
   }
-  const refShortIds = titles.size > 0 ? await displayIds(repo, titles.keys()) : new Map<string, string>()
 
   // A ref reads as its page's [[alias]] or its block's quoted content, then
-  // the ^shortid that resolves to it. The id is what addresses the target —
+  // its id. The id is what addresses the target —
   // content names nothing, and an alias two pages claim names the older one —
   // so the label gives way to it, never the reverse. References resolve within
   // a workspace, so another workspace's block stays a dangling ((id)) here, as
@@ -270,13 +275,13 @@ export const createPropertyRenderer = async (
   const refText = (id: string, workspaceId: string, budget: number): string => {
     const title = titles.get(id)
     if (title?.workspaceId !== workspaceId) return `((${boundDisplayId(id)}))`
-    const shortId = refShortIds.get(id) ?? boundDisplayId(id)
+    const mark = idMark(id)
     const label = title.alias ?? title.content
-    if (!label) return `^${shortId}`
+    if (!label) return mark
     const [open, close] = title.alias !== null ? ['[[', ']]'] : ['"', '"']
-    const room = budget - shortId.length - 2 - open.length - close.length
-    if (room < MIN_REF_LABEL) return `^${shortId}`
-    return `${open}${ellipsize(label, room)}${close} ^${shortId}`
+    const room = budget - mark.length - 1 - open.length - close.length
+    if (room < MIN_REF_LABEL) return mark
+    return `${open}${ellipsize(label, room)}${close} ${mark}`
   }
 
   const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
@@ -304,9 +309,11 @@ export const createPropertyRenderer = async (
   return {
     view(block) {
       const prepared = preparedByBlock.get(block.id) ?? {shown: [], omitted: 0, hidden: []}
-      const maxChars = detail === 'brief' ? BRIEF_VALUE_CHARS : FULL_VALUE_CHARS
       const visible: PropertyLine[] = []
       for (const {name, decoded} of prepared.shown) {
+        const maxChars = detail === 'full' ? FULL_VALUE_CHARS
+          : decoded.kind === 'refs' ? BRIEF_REF_CHARS
+            : BRIEF_VALUE_CHARS
         const value = display(decoded, block, name, maxChars)
         if (value === '') continue
         visible.push({

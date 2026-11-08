@@ -4860,6 +4860,13 @@ export class Repo {
     await this.processorRunner.awaitIdle()
   }
 
+  /** Drop every `delayMs` post-commit job whose timer has not fired, so it
+   *  never runs. For a harness discarding this Repo and its db
+   *  (`releaseTestRepos`); the dropped work is skipped, not deferred. */
+  cancelDelayedProcessors(): void {
+    this.processorRunner.cancelArmed()
+  }
+
   /** Wait until every reprojection whose deferral timer has already
    *  fired has finished writing. Like `awaitProcessors()`, this does
    *  NOT advance timers — a reprojection only enters the pending set
@@ -4900,7 +4907,8 @@ export class Repo {
    *  NOT a fixed point across families, and NOT a cancel. Like its members it
    *  does not advance timers: work whose deferral timer has not fired is not
    *  pending yet, so an armed `delayMs` processor or idle callback survives
-   *  this (#892 — cancelling one needs a handle neither framework keeps). Nor
+   *  this. `cancelDelayedProcessors` drops the former; an armed idle callback
+   *  has no handle to cancel through (#892). Nor
    *  does it wait out a job PARKED on a signal only the outside world can send
    *  (`PendingIdleJobs.drain`) — the seed pass parks on the `workspace_members`
    *  row, which in a fixture never arrives, so awaiting it would be a hang. */

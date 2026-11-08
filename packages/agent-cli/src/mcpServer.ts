@@ -2,26 +2,35 @@
  * km MCP server — live Knowledge Medium graph tools over the kmagent
  * bridge, for any MCP client.
  *
- * Deliberately narrower than the bridge: read tools (generated from
+ * Deliberately narrower than the bridge: read tools (most generated from
  * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
+ * `add_media` is the one tool that reaches past the graph, and an entry
+ * point has to ask for it (`localMediaFiles`).
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
+import { readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
   createContributorCommandSchema,
   listContributorsCommandSchema,
+  addMediaCommandSchema,
+  MEDIA_BRIDGE_MAX_BYTES,
   moveBlockPositionSchema,
+  neutralizeDisplayText,
+  readMediaCommandSchema,
+  readMediaResultSchema,
   TODO_WRITE_HELP,
   toDisplayJson,
   WRITE_TARGET_HELP,
@@ -45,22 +54,27 @@ const agentCliPackageVersion = (() => {
  *  `serverOptions.instructions` is appended after it. */
 export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
 
-Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take a full id or a printed ^shortid, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
+Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as its id, a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take an id, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
 
-The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them (if that name shows no Assets type, it is another page: select from block_types where type = 'media'), and backlinks shows where one is used.
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten.
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
 
 Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
+/** The image formats model APIs take inline; any other image goes out as a file. */
+const MODEL_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+/** `media:mime` is synced and member-writable. */
+const MIME_SHAPE = /^[\w.+-]+\/[\w.+-]+$/
+
 /** What a write tool is about to do, as the write guard sees it. Block-id
  *  fields (`id`, move_block's `parentId` and `position.siblingId`) carry the
- *  FULL id the write will act on — a `^short` / `((id))` / prefix the caller
- *  typed is resolved first — so a guard looking rows up by id checks the same
+ *  FULL id the write will act on — a `^id` / `((id))` the caller typed is
+ *  resolved first — so a guard looking rows up by id checks the same
  *  block. Targets (`parentId` of create_block, `target`) stay as typed. */
 export type GraphMcpWriteOperation =
   | {type: 'create_block', parentId: string, content: string, properties?: Record<string, unknown>}
@@ -72,6 +86,7 @@ export type GraphMcpWriteOperation =
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
+  | {type: 'add_media', path: string, filename: string, mime?: string, workspaceId?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
@@ -90,6 +105,10 @@ export interface GraphMcpServerOptions {
   contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
+  /** Offer `add_media`, which reads a local path the model names. Off unless the
+   *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
+   *  must not turn a note into a read of this machine's files. */
+  localMediaFiles?: boolean
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
@@ -143,6 +162,67 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       description: tool.description,
       inputSchema: tool.shape,
     }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
+  }
+
+  server.registerTool('read_media' satisfies KmMcpToolName, {
+    description: 'The bytes of a media block (type media, shown in notes as ((id))), hash-verified. An image comes '
+    + 'back inline for you to look at; any other file as a binary resource, which your client may save for you to open. '
+    + `Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ref: readMediaCommandSchema.shape.ref,
+      workspaceId: readMediaCommandSchema.shape.workspaceId,
+    },
+  }, async ({ref, workspaceId}) => {
+    const media = readMediaResultSchema.parse(await client.runCommand({
+      type: 'read-media',
+      ref,
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+    const summary = neutralizeDisplayText(
+      `Media ^${media.id}: ${media.filename ?? '(no filename)'}, ${media.mime}, ${media.size} bytes, ${media.hash}`,
+    )
+    return {
+      content: [
+        {type: 'text' as const, text: summary},
+        media.imageMime !== null && MODEL_IMAGE_MIMES.has(media.imageMime)
+          ? {type: 'image' as const, data: media.base64, mimeType: media.imageMime}
+          : {
+              type: 'resource' as const,
+              resource: {
+                uri: `km://media/${encodeURIComponent(media.id)}`,
+                mimeType: MIME_SHAPE.test(media.mime) ? media.mime : 'application/octet-stream',
+                blob: media.base64,
+              },
+            },
+      ],
+    }
+  })
+
+  if (options.localMediaFiles === true) {
+    server.registerTool('add_media' satisfies KmMcpToolName, {
+      description: 'Store a local file as a media block under the workspace\'s Assets page; the same bytes added '
+      + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
+      + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+      inputSchema: {
+        path: z.string().describe('Absolute path of the file'),
+        filename: addMediaCommandSchema.shape.filename,
+        mime: addMediaCommandSchema.shape.mime,
+        workspaceId: addMediaCommandSchema.shape.workspaceId,
+      },
+      // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
+      annotations: {destructiveHint: true, openWorldHint: true},
+    }, async ({path: filePath, filename, mime, workspaceId}) => {
+      if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
+      const name = filename ?? path.basename(filePath)
+      await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
+      return json(await client.runCommand({
+        type: 'add-media',
+        base64: await readMediaFileBase64(filePath),
+        filename: name,
+        ...(mime !== undefined ? {mime} : {}),
+        ...(workspaceId !== undefined ? {workspaceId} : {}),
+      }))
+    })
   }
 
   server.registerTool('list_contributors' satisfies KmMcpToolName, {
@@ -245,7 +325,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   server.registerTool('append_markdown' satisfies KmMcpToolName, {
     description: 'Insert markdown under a target in ONE transaction, split into blocks as the app\'s paste does '
     + '(bullets and headings nest; a code block or table stays one block; shape "block" keeps it all one block). '
-    + 'Returns the new blocks as a ^short-id outline. Default position: after the target\'s last child; a '
+    + 'Returns the new blocks as an outline with their ids. Default position: after the target\'s last child; a '
     + `before/after siblingId must be a child of the target, which is then never created. ${WRITE_TARGET_HELP}`,
     inputSchema: {
       target: z.string(),

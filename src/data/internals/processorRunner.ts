@@ -108,6 +108,9 @@ export class ProcessorRunner {
    *  assertions. Each promise removes itself from the set on
    *  settlement (success or failure). */
   private readonly pending: Set<Promise<void>> = new Set()
+  /** Delayed jobs whose timer has not fired yet: not in `pending`, and
+   *  stoppable only through these handles. */
+  private readonly armed: Set<ReturnType<typeof setTimeout>> = new Set()
 
   constructor(db: PowerSyncDb) {
     this.db = db
@@ -132,6 +135,14 @@ export class ProcessorRunner {
       // when this batch settles, and the loop catches them.
       await Promise.allSettled([...this.pending])
     }
+  }
+
+  /** Drop every delayed job whose timer has not fired: it never runs. For an
+   *  owner discarding the db these jobs would run against; a job that has
+   *  already started is `pending`, which `awaitIdle` drains instead. */
+  cancelArmed(): void {
+    for (const timer of this.armed) clearTimeout(timer)
+    this.armed.clear()
   }
 
   /** Dispatch all matching processors for one committed tx. Called by
@@ -198,9 +209,11 @@ export class ProcessorRunner {
         // too. Until the timer fires there's nothing pending, which
         // matches the spec: §16.4 calls out that delayMs is real
         // wall-clock time and not part of the synchronous commit step.
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          this.armed.delete(timer)
           this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
         }, job.delayMs)
+        this.armed.add(timer)
       } else {
         this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
       }

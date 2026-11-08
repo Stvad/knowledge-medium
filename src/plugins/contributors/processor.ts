@@ -3,6 +3,8 @@ import {isFieldValueChild, isPropertyFieldInstance} from '@/data/propertyChildre
 import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
+import {MEDIA_TYPE} from '@/plugins/attachments/mediaBlock'
+import {projectPropertyReferences} from '@/plugins/references/referenceProjection'
 import {assertContributor, ensureHumanContributor} from './profiles'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindOf} from './schema'
 
@@ -20,8 +22,9 @@ const authoredFields = ['content', 'properties', 'deleted', 'parentId', 'orderKe
 
 const meaningfulChange = ({before, after}: ChangedRow): boolean => {
   if (!after) return false
-  // Alias resolution creates visible pages with the speculative-mint stamp.
-  if (after.updatedAt === 0 && !hasBlockType(after, PAGE_TYPE)) return false
+  // The speculative-mint stamp marks a row the system made on the side, except for
+  // the visible pages alias resolution creates and the media a capture asked for.
+  if (after.updatedAt === 0 && !hasBlockType(after, PAGE_TYPE) && !hasBlockType(after, MEDIA_TYPE)) return false
   if (!before || authoredFields.some(field => field !== 'properties' && before[field] !== after[field])) return true
   const keys = new Set([...Object.keys(before.properties), ...Object.keys(after.properties)])
   return [...keys].some(name => !attributionNames.has(name)
@@ -53,6 +56,22 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
     }
   }
   return false
+}
+
+export const CHOOSE_CONTRIBUTOR_MESSAGE = 'Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.'
+
+/** A pristine row's property references, written beside its attribution rather than
+ *  left to the post-commit parse. The server keeps a pristine row's first upload, so
+ *  they must travel in it: as a later write they would stamp the row off pristine, and
+ *  on a second device replace the first device's references with ones the kept value
+ *  does not hold. Add-only, like the parse. Accepted: in a children-backed workspace a
+ *  yielding device's field rows survive under the kept cell, as the rest of a mint's do. */
+const carryPropertyReferences = async (ctx: SameTxCtx, id: string): Promise<void> => {
+  const row = await ctx.tx.get(id)
+  if (row?.updatedAt !== 0) return
+  await ctx.tx.update(id, {
+    references: [...row.references, ...projectPropertyReferences(row, ctx.propertySchemas)],
+  }, {skipMetadata: true})
 }
 
 export const contributorAttributionProcessor = defineSameTxProcessor({
@@ -98,7 +117,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const external = context?.contributorSource === 'agent'
     if (external) {
       if (context.contributorId === undefined) {
-        throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
+        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
       }
       if (selectedId !== undefined) await assertContributor(ctx.tx, selectedId, event.workspaceId, {allowHuman: false})
       for (const [id, {corrections}] of targets) {
@@ -130,6 +149,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       const prop = created ? attributionCreatorsProp : attributionEditorsProp
       if (targets.get(id)!.corrections.has(prop)) continue
       await ctx.tx.setProperty(id, prop, current => [...new Set([...(current ?? []), contributorId])], {skipMetadata: true})
+      await carryPropertyReferences(ctx, id)
     }
   },
 })

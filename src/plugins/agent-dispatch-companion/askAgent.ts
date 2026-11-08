@@ -2,17 +2,17 @@
  * Ask Agent — the explicit trigger. One gesture: make sure the block
  * carries the [[claude]] mention, clear any previous terminal
  * agent:* state (so a done/error block re-queues; the session id is
- * kept so the new run resumes the thread), mark the optimistic chip,
- * and fire the edit-settled signal so push detection skips the settle
- * window entirely — the daemon reacts in bridge-round-trip time.
+ * kept so the new run resumes the thread), stamp agent:asked-at, which
+ * tells the daemon not to wait for the block to leave its editor, and
+ * mark the optimistic chip.
  */
 import type { Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
+import { holdsSource, takesTextEdit } from '@/data/blockTypes'
 import {
   ActionContextTypes,
   type ActionConfig,
 } from '@/shortcuts/types.js'
-import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { AGENT_PROPS } from './chipState.ts'
 import {
   agentActivityProp,
@@ -73,7 +73,8 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   // silently unable to queue exactly those blocks.
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
-    if (!fresh) return
+    // The ask travels as a mention in the content, which source can't carry.
+    if (!takesTextEdit(fresh)) return
     // Content and props are now two writes in the one tx (setProperties can't
     // carry content). tx.update short-circuits an unchanged-content patch, and
     // the always-a-real-write guarantee rides the setProperties asked-at bump
@@ -101,9 +102,6 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   if (!wrote) return
 
   markAskedAgent(block.id)
-  // Explicit ask = the user is done by construction: skip the settle
-  // window (the signal's delayed recheck catches this write's commit).
-  notifyBlockEditSettled(block.id)
 }
 
 const normalModeAsk: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
@@ -120,6 +118,7 @@ const editModeAsk: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   description: 'Ask Agent about this block (Edit Mode)',
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async ({block, editorView}) => {
+    if (holdsSource(block)) return
     // The editor doc, not the persisted block, is the source of truth
     // here — the DB trails it by the BlockEditor's commit debounce, so
     // basing the write on `fresh.content` could drop just-typed text.

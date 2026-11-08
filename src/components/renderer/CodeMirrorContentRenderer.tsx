@@ -2,7 +2,7 @@ import { BlockRendererProps } from '@/types.js'
 import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
@@ -14,9 +14,8 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
-import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -90,8 +89,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
+    const request = editorPasteRequest(content, block, intent, caret)
 
-    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
+    // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
+    // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
       // The stored row lags the view by the content debounce. The move reads
       // the stored row (a blank target is replaced), so persist the live text
@@ -115,7 +116,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const request: PasteRequest = {...content, intent, surface: 'editor', caret}
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
     // embed text is spliced into the paste below, so the attachment lands at the caret
     // per the text policy (NOT a forced child block). The capture verb is the
@@ -172,21 +172,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       block={block}
       extensions={extensions}
       className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}
-      basicSetup={{
-        closeBrackets: true,
-        lineNumbers: false,
-        foldGutter: false,
-        dropCursor: false,
-        allowMultipleSelections: false,
-        indentOnInput: false,
-        highlightSelectionMatches: false,
-        searchKeymap: false,
-        defaultKeymap: false,
-        history: false,
-        historyKeymap: false,
-        highlightActiveLine: false,
-        completionKeymap: false,
-      }}
+      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
       indentWithTab={false}
       onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}

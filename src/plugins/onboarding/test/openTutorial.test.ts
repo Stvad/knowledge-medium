@@ -85,7 +85,7 @@ describe('openTutorialInActiveWorkspace', () => {
     mocks.existing = {id: 'tutorial-1'}
 
     expect(await openTutorialInActiveWorkspace(repo)).toBe(false)
-    expect(mocks.showError).toHaveBeenCalledWith('Insert tutorial failed: could not open the tutorial')
+    expect(mocks.showError).toHaveBeenCalledWith('Open tutorial failed: could not open the tutorial')
     expect(mocks.progress.done).not.toHaveBeenCalled()
 
     mocks.showError.mockClear()
@@ -95,7 +95,7 @@ describe('openTutorialInActiveWorkspace', () => {
     // The seed branch has a progress toast open; it resolves as the failure
     // rather than leaving a second toast beside it.
     expect(mocks.progress.fail)
-      .toHaveBeenCalledWith('Insert tutorial failed: could not open the tutorial')
+      .toHaveBeenCalledWith('Open tutorial failed: could not open the tutorial')
     expect(mocks.showError).not.toHaveBeenCalled()
     expect(mocks.progress.done).not.toHaveBeenCalled()
   })
@@ -105,7 +105,7 @@ describe('openTutorialInActiveWorkspace', () => {
     mocks.seed.mockRejectedValue(new Error('disk full'))
 
     expect(await openTutorialInActiveWorkspace(repo)).toBe(false)
-    expect(mocks.progress.fail).toHaveBeenCalledWith('Insert tutorial failed: disk full')
+    expect(mocks.progress.fail).toHaveBeenCalledWith('Open tutorial failed: disk full')
     expect(mocks.showError).not.toHaveBeenCalled()
     logged.mockRestore()
   })
@@ -114,7 +114,7 @@ describe('openTutorialInActiveWorkspace', () => {
     mocks.activeWorkspaceId = null
 
     expect(await openTutorialInActiveWorkspace(repo)).toBe(false)
-    expect(mocks.showError).toHaveBeenCalledWith('Insert tutorial failed: no active workspace')
+    expect(mocks.showError).toHaveBeenCalledWith('Open tutorial failed: no active workspace')
     expect(mocks.showProgress).not.toHaveBeenCalled()
   })
 })

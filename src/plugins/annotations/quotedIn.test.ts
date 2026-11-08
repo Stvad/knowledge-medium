@@ -5,7 +5,6 @@ import {typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {BACKLINKS_COUNT_FOR_BLOCK_QUERY} from '@/plugins/backlinks/inline-counts/countQuery.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
@@ -47,7 +46,8 @@ beforeEach(async () => {
   // `((id))` parses as a reference only when `id` is UUID-shaped.
   repo = createTestRepo({
     db: db.db, user: {id: 'alex', name: 'Alex'}, newId: () => crypto.randomUUID(),
-    extensions: [referencesDataExtension, backlinksDataExtension, annotationsPlugin],
+    // No Backlinks plugin: Comments brings the quoter query itself.
+    extensions: [referencesDataExtension, annotationsPlugin],
   }).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
@@ -161,6 +161,29 @@ describe('deleting a quoted thread’s last comment from its card', () => {
 
     expect((await repo.load(threadId))?.deleted).toBe(false)
     expect(dialogs.opened).toHaveLength(1)
+  })
+
+  it('asks again about the thread the comment moved to meanwhile', async () => {
+    await quote()
+    const from = B_TEXT.indexOf('vendor')
+    const other = (await createThread(repo, {targetId: 'B', anchor: captureAnchor(B_TEXT, from, from + 'vendor'.length)})).threadId
+    await repo.tx(tx => tx.create({
+      id: 'Y', workspaceId: WS, parentId: 'page', orderKey: 'b-Y', content: `The ((${other})) is late.`,
+    }), opts)
+    await repo.awaitProcessors()
+    const comment = await lastComment()
+    dialogs.answer = true
+    dialogs.meanwhile = async () => {
+      await repo.tx(tx => tx.move(comment.id, {parentId: other, orderKey: 'a0'}), opts)
+      // The user declines deleting the thread it is in now.
+      dialogs.meanwhile = async () => { dialogs.answer = undefined }
+    }
+
+    expect(await deleteCommentFromCard(comment)).toBe('refused')
+
+    expect(dialogs.opened).toHaveLength(2)
+    expect((await repo.load(other))?.deleted).toBe(false)
+    expect((await repo.load('Y'))?.content).toBe(`The ((${other})) is late.`)
   })
 
   it('does not ask about a thread nothing quotes', async () => {

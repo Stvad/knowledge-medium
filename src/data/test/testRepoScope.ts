@@ -27,10 +27,13 @@
  *  - A file's own `afterEach` runs BEFORE this release, so a file that already
  *    disposes its Repo keeps working; the second release is a no-op.
  *
- * WHAT IT DOES NOT REACH: work whose deferral timer has not fired yet. A drain
- * awaits what is pending, and neither job framework keeps the timer handle a
- * cancel would need, so an armed `delayMs` processor outlives this (#892). The
- * unpin above blunts it: a pass gated on the active workspace refuses when it
+ * ARMED TIMERS. A drain awaits only work whose deferral timer has fired. An
+ * armed `delayMs` processor is cancelled instead: left armed, it fires during a
+ * later file against a db that file's `afterAll` closed, and logs from inside
+ * whatever test runs then — or, landing in vitest's end-of-file RPC window, fails
+ * the run with an `EnvironmentTeardownError`. An armed idle callback still
+ * outlives this, since `PendingIdleJobs` keeps no handle to cancel (#892); the
+ * unpin blunts it, as a pass gated on the active workspace refuses when it
  * eventually fires.
  *
  * WEAK REFS, and the sweep. A fuzz property builds one Repo per iteration
@@ -119,4 +122,6 @@ export const releaseTestRepos = async (live: readonly Repo[]): Promise<void> => 
     repo.setActiveWorkspaceId(null)
   }
   await Promise.all(live.map(repo => repo.awaitDeferredWork()))
+  // After the drain, whose own txs can arm more delayed jobs.
+  for (const repo of live) repo.cancelDelayedProcessors()
 }
