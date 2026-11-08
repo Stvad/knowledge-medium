@@ -5,7 +5,7 @@ import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { editorSelection, focusBlock } from '@/data/properties.js'
+import { focusBlock } from '@/data/properties.js'
 import {
   pasteArmedCut,
   pasteChordIntent,
@@ -159,11 +159,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     })
     if (!result) return
 
-    await uiStateBlock.set(editorSelection, {
-      blockId: result.focusBlock.id,
-      start: result.focusOffset,
+    await focusBlock(uiStateBlock, result.focusBlock.id, {
+      edit: true,
+      renderScopeId,
+      selection: {start: result.focusOffset},
     })
-    void focusBlock(uiStateBlock, result.focusBlock.id, {edit: true, renderScopeId})
   }
 
   return (

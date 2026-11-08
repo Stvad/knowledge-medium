@@ -16,7 +16,6 @@ import { useTypes } from '@/hooks/typeRegistry.js'
 import { propertyEditorOverridesFacet } from '../data/facets.ts'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
-  editorSelection,
   requestEditorFocus,
   focusBlock,
 } from '@/data/properties.js'
@@ -150,10 +149,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     target: Block,
     selection: { start?: number; line?: 'first' | 'last'; x?: number },
   ) => {
-    await uiStateBlock.set(editorSelection, {
-      blockId: target.id,
-      ...selection,
-    })
     // Keep focus in the current render scope. In a nested surface
     // (backlink/embed) the navigation target (next visible block, etc.)
     // is resolved within that surface's scope, so focusing without the
@@ -161,6 +156,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     // would appear not to move.
     await focusBlock(uiStateBlock, target.id, {
       edit: true,
+      selection,
       ...(typeof renderScopeId === 'string' ? {renderScopeId} : {}),
     })
     requestEditorFocus(uiStateBlock)
