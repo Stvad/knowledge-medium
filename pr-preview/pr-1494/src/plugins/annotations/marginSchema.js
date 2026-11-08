@@ -1,0 +1,1 @@
+export{BJ as annotationMarginOpenProp}from"../../../chunks/app-DgXUPDTo.js";

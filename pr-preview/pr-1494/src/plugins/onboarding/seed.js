@@ -1,1 +1,1 @@
-export{Fb as seedTutorial}from"../../../chunks/app-CTLbkBhX.js";
+export{Pk as seedTutorial}from"../../../chunks/app-DgXUPDTo.js";

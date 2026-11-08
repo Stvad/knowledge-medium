@@ -1,1 +1,1 @@
-export{WI as PropertyRow}from"../../../chunks/app-CTLbkBhX.js";
+export{nz as PropertyRow}from"../../../chunks/app-DgXUPDTo.js";
