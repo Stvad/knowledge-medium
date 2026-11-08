@@ -1360,7 +1360,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
   })
 
-  describe('next to an extension block', () => {
+  describe.each(['extension', 'html-document'])('next to a %s block', type => {
     const seed = async (firstType?: string, secondType?: string) => {
       await env.repo.tx(async tx => {
         await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -1382,9 +1382,22 @@ describe('default CodeMirror shortcuts', () => {
       expect(env.repo.block('second').peek()?.content).toBe('second')
     }
 
+    it('Enter mid-source does not split it', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'first')
+      await findEditModeAction(env.repo, 'split_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView: codeMirrorEditorView('first', 2),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(await childIds('root')).toEqual(['first', 'second'])
+    })
+
     it.each([
-      ['prose, with source above', 'extension', undefined],
-      ['source, with prose above', undefined, 'extension'],
+      ['prose, with source above', type, undefined],
+      ['source, with prose above', undefined, type],
     ] as const)('Backspace at the start of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'second')
@@ -1398,8 +1411,8 @@ describe('default CodeMirror shortcuts', () => {
     })
 
     it.each([
-      ['prose, with source below', undefined, 'extension'],
-      ['source, with prose below', 'extension', undefined],
+      ['prose, with source below', undefined, type],
+      ['source, with prose below', type, undefined],
     ] as const)('Delete at the end of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'first')

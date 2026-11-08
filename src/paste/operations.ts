@@ -18,6 +18,7 @@ import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
+import { isBlankContent, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -114,8 +115,6 @@ export const planSingleBlockPaste = (
     cursor: selection.from + insert.length,
   }
 }
-
-const isBlankContent = (content: string): boolean => content.trim().length === 0
 
 const isCollapsed = (properties: Record<string, unknown>): boolean =>
   decodeRowProperty({properties}, isCollapsedProp)
@@ -766,7 +765,7 @@ export async function pasteFromClipboard(
 
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
-  const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
+  const decision = pasteDecisionVerb.runSync(runtime, shellPasteRequest({text}, pasteTarget))
   // This path is text-only (navigator.clipboard.readText carries no files), so a
   // `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)

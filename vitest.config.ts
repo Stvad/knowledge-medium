@@ -4,6 +4,7 @@ import { resolve } from 'path'
 import { listIsolatedTestFiles } from './scripts/vitest-isolation.ts'
 
 export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+export const BROWSER_TESTS = 'src/**/*.browser.test.ts'
 
 const TEST_FILES = '**/*.{test,spec}.{ts,tsx}'
 const isolatedTestFiles = listIsolatedTestFiles(TEST_FILES, import.meta.dirname)
@@ -69,10 +70,12 @@ export default defineConfig({
     // can't redden an unrelated run.
     // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
     // starts one and runs those through vitest.supabase.config.ts.
+    // `*.browser.test.ts` needs browser binaries: vitest.browser.config.ts.
     exclude: [
       '**/node_modules/**', '**/dist/**', '**/.git/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
       SUPABASE_STACK_TESTS,
+      BROWSER_TESTS,
     ],
     coverage: {
       reporter: ['text', 'json', 'html'],
