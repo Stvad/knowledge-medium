@@ -1,1 +1,1 @@
-export{Ar as extensionsDataExtension}from"../../../chunks/app-dTfcRNIl.js";
+export{Ar as extensionsDataExtension}from"../../../chunks/app-DPe_lVkJ.js";

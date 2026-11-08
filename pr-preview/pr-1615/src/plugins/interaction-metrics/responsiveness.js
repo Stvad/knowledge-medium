@@ -1,1 +1,1 @@
-export{Qi as ResponsivenessTotals,$i as SLOW_MS,ea as observeResponsiveness}from"../../../chunks/app-dTfcRNIl.js";
+export{Qi as ResponsivenessTotals,$i as SLOW_MS,ea as observeResponsiveness}from"../../../chunks/app-DPe_lVkJ.js";

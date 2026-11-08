@@ -1,1 +1,1 @@
-export{act as normalizeReferences}from"../../../chunks/app-dTfcRNIl.js";
+export{sct as normalizeReferences}from"../../../chunks/app-DPe_lVkJ.js";

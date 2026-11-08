@@ -1,1 +1,1 @@
-export{oK as htmlDocumentDataExtension}from"../../../chunks/app-dTfcRNIl.js";
+export{oK as htmlDocumentDataExtension}from"../../../chunks/app-DPe_lVkJ.js";

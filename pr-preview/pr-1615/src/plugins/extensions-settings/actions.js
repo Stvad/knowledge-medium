@@ -1,1 +1,1 @@
-export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-dTfcRNIl.js";
+export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-DPe_lVkJ.js";
