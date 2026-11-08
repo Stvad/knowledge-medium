@@ -679,6 +679,15 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     expect(check.strippedBlocks).toBe(1)
   })
 
+  // These types never get content refs, by design, so a mark in their source
+  // is not a stripped link.
+  it.each(['extension', 'html-document'])('content_link_recompute does not flag the source code in a %s block', async type => {
+    await ins({ id: 'src', content: 'const a = x[[0]]', properties: { types: [type] }, references: [] })
+    await ins({ id: 'prose', content: '[[Foo]]', references: [] })
+    const check = (await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })).checks.content_link_recompute
+    expect(check.strippedBlocks).toBe(1)
+  })
+
   // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
   // about the shape — both throw on the filter, aborting the check to
   // `error` and hiding every row it had left.

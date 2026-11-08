@@ -1,0 +1,40 @@
+<!doctype html>
+<title>Sourdough hydration</title>
+<style>
+  body { margin: 12px 14px; line-height: 1.5; }
+  h3 { margin: 0 0 8px; font-size: 1rem; }
+  label { display: flex; align-items: center; gap: 8px; margin-block: 6px; }
+  label span { width: 5.5em; color: hsl(var(--muted-foreground)); }
+  input[type="range"] { flex: 1; min-width: 0; accent-color: hsl(var(--primary)); }
+  output { font-variant-numeric: tabular-nums; }
+  .track { height: 10px; margin-top: 12px; border-radius: 999px; background: hsl(var(--muted)); overflow: hidden; }
+  .fill { height: 100%; background: hsl(var(--primary)); transition: width 120ms ease-out; }
+  p { margin: 8px 0 0; }
+</style>
+
+<h3>Sourdough hydration</h3>
+<label><span>Flour</span><input id="flour" type="range" min="200" max="1000" step="10" value="500"><output for="flour"></output></label>
+<label><span>Water</span><input id="water" type="range" min="100" max="900" step="5" value="350"><output for="water"></output></label>
+<div class="track"><div class="fill" id="fill"></div></div>
+<p id="verdict"></p>
+
+<script>
+  const flour = document.getElementById('flour')
+  const water = document.getElementById('water')
+  const describe = hydration =>
+    hydration < 65 ? 'A stiff dough: easy to shape, with a tight crumb.'
+      : hydration < 78 ? 'A classic loaf: some stretch, open crumb.'
+        : 'A wet dough: bake it in a tin unless you like a challenge.'
+
+  const update = () => {
+    const hydration = Math.round(water.value / flour.value * 100)
+    document.querySelector('output[for="flour"]').textContent = `${flour.value} g`
+    document.querySelector('output[for="water"]').textContent = `${water.value} g`
+    document.getElementById('fill').style.width = `${Math.min(hydration, 100)}%`
+    document.getElementById('verdict').textContent = `${hydration}% hydration. ${describe(hydration)}`
+  }
+
+  flour.addEventListener('input', update)
+  water.addEventListener('input', update)
+  update()
+</script>

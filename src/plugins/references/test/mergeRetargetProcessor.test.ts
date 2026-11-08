@@ -8,6 +8,7 @@ import {
   normalizeReferences,
   type BlockData,
 } from '@/data/api'
+import { merge } from '@/data/mutators'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
@@ -105,6 +106,35 @@ describe('references.retargetMergedBlockReferences', () => {
       {id: intoId, alias: 'Source page'},
       {id: intoId, alias: intoId},
     ]))
+  })
+
+  // Tagging only clears a block's edges at the next parse, so the edge query can
+  // still reach it; the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never rewrites a block newly typed %s', async type => {
+    const intoId = '11111111-1111-4111-8111-111111111111'
+    const fromId = '22222222-2222-4222-8222-222222222222'
+    const refId = '33333333-3333-4333-8333-333333333333'
+    const source = `const label = "[[Source page]] ((${fromId}))"`
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: intoId, workspaceId: WS, parentId: 'p', orderKey: 'a0', content: 'Target page', properties: aliasProperty(['Target page'])})
+      await tx.create({id: fromId, workspaceId: WS, parentId: 'p', orderKey: 'a1', content: 'Source page', properties: aliasProperty(['Source page'])})
+      await tx.create({
+        id: refId, workspaceId: WS, parentId: 'p', orderKey: 'a2',
+        content: source,
+        references: [{id: fromId, alias: 'Source page'}, {id: fromId, alias: fromId}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.tx(async tx => {
+      await tx.update(refId, {properties: {types: [type]}})
+      await tx.run(merge, {intoId, fromId, contentStrategy: 'keepTarget'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(fromId)!.deleted).toBe(true)
+    expect(env.read(refId)!.content).toBe(source)
   })
 
   // Regression: `core.deriveReferenceTarget` runs earlier

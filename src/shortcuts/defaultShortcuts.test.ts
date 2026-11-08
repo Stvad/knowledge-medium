@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
+import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import {
   ChangeScope,
@@ -37,6 +38,7 @@ import {
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
+import { createMinimalMarkdownConfig, createTypeScriptConfig } from '@/utils/codemirror'
 import {
   insertPanelRow,
   panelBlockId,
@@ -223,6 +225,44 @@ beforeEach(async () => {
 })
 
 describe('default CodeMirror shortcuts', () => {
+  it.each([
+    {name: 'uses the selection as the label and puts the caret in the URL', anchor: 11, head: 6, expected: 'hello [world]()!', caret: 14},
+    {name: 'puts the caret in the label when there is no selection', anchor: 6, head: 6, expected: 'hello []()world!', caret: 7},
+  ])('Create link $name', async ({anchor, head, expected, caret}) => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'hello world!',
+      selection: {anchor, head},
+      extensions: createMinimalMarkdownConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe(expected)
+      expect(view.state.selection.main).toMatchObject({anchor: caret, head: caret})
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('declines to insert Markdown into the TypeScript editor', async () => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'const answer = 42',
+      extensions: createTypeScriptConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      const result = await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe('const answer = 42')
+      expect(result).toBe(false)
+    } finally {
+      view.destroy()
+    }
+  })
+
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
     const moveBlockUpAction = findEditModeAction(env.repo, 'move_block_up_cm')
     const moveBlockDownAction = findEditModeAction(env.repo, 'move_block_down_cm')
@@ -1320,7 +1360,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
   })
 
-  describe('next to an extension block', () => {
+  describe.each(['extension', 'html-document'])('next to a %s block', type => {
     const seed = async (firstType?: string, secondType?: string) => {
       await env.repo.tx(async tx => {
         await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -1342,9 +1382,22 @@ describe('default CodeMirror shortcuts', () => {
       expect(env.repo.block('second').peek()?.content).toBe('second')
     }
 
+    it('Enter mid-source does not split it', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'first')
+      await findEditModeAction(env.repo, 'split_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView: codeMirrorEditorView('first', 2),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(await childIds('root')).toEqual(['first', 'second'])
+    })
+
     it.each([
-      ['prose, with source above', 'extension', undefined],
-      ['source, with prose above', undefined, 'extension'],
+      ['prose, with source above', type, undefined],
+      ['source, with prose above', undefined, type],
     ] as const)('Backspace at the start of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'second')
@@ -1358,8 +1411,8 @@ describe('default CodeMirror shortcuts', () => {
     })
 
     it.each([
-      ['prose, with source below', undefined, 'extension'],
-      ['source, with prose below', 'extension', undefined],
+      ['prose, with source below', undefined, type],
+      ['source, with prose below', type, undefined],
     ] as const)('Delete at the end of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'first')

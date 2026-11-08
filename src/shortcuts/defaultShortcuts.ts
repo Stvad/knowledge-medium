@@ -1,4 +1,4 @@
-import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { Check, KeyboardOff, Link, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -14,7 +14,7 @@ import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
-import { hasSourceContent } from '@/data/blockTypes'
+import { holdsSource } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -44,12 +44,15 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { language } from '@codemirror/language'
+import { markdownLanguage } from '@codemirror/lang-markdown'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
   getCaretRect,
   cursorIsAtEnd,
   cursorIsAtStart,
+  wrapRangeWithPair,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
@@ -93,6 +96,9 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+
+const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
+  editorView.state.facet(language)?.name === markdownLanguage.name
 
 /** Drop `remove` characters from one end of the editor's text and put `insert` there. */
 interface EditorEndEdit {
@@ -176,13 +182,6 @@ const splitAtCursor = async (
     keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
     () => block.repo.mutate.split({id: block.id, before, after, placement}))
   return keepsBefore ? newId : block.id
-}
-
-/** Source code isn't text to join: one side would absorb the other's source and
- *  its type. Refusing costs nothing, since the blocks stay side by side. */
-const holdsSource = (block: Block): boolean => {
-  const data = block.peek()
-  return data != null && hasSourceContent(data)
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -709,6 +708,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // CodeMirror-specific edit mode actions
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
     {
+      id: 'edit.cm.create_link',
+      description: 'Create link',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      icon: Link,
+      isVisible: isMarkdownEditor,
+      handler: deps => {
+        if (!isMarkdownEditor(deps)) return false
+        const {editorView} = deps
+        const {state} = editorView
+        editorView.dispatch(state.changeByRange(range => {
+          const wrapped = wrapRangeWithPair(state, range, '[', ']()')
+          return range.empty ? wrapped : {
+            changes: wrapped.changes,
+            range: EditorSelection.cursor(wrapped.range.to + ']('.length),
+          }
+        }))
+        editorView.focus()
+      },
+      defaultBinding: {
+        keys: '$mod+Shift+l',
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
       id: 'exit_edit_mode_cm',
       description: 'Exit edit mode',
       context: ActionContextTypes.EDIT_MODE_CM,
@@ -777,6 +800,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
+          if (holdsSource(block)) return
           const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
           await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
           await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})

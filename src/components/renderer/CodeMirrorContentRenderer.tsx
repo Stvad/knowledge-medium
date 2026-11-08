@@ -14,9 +14,8 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
-import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -90,6 +89,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
+    const request = editorPasteRequest(content, block, intent, caret)
 
     // The stored row lags the view by the content debounce. Both writes below
     // need it current: the cut move reads it (a blank target is replaced), and
@@ -98,7 +98,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // either tx.
     flushEditorContent(editorView)
 
-    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
+    // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
+    // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
       const cutPaste = await pasteArmedCut(content.text, block, repo, {
         scopeRootId: blockContext.scopeRootId,
@@ -118,7 +119,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const request: PasteRequest = {...content, intent, surface: 'editor', caret}
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
     // embed text is spliced into the paste below, so the attachment lands at the caret
     // per the text policy (NOT a forced child block). The capture verb is the

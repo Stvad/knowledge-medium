@@ -17,19 +17,9 @@ import {
 } from '@/data/properties'
 
 export const EXTENSION_TYPE = 'extension'
-const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE]
-
-/** Is this row's `content` source code rather than markdown? Then it is not text
- *  to join with a neighbour.
- *
- *  A raw-array read rather than `hasBlockType`, which decodes through the
- *  `string-list` codec and throws on a malformed `types` value: a wrong-shaped
- *  value reading as "not source" is the right answer here. */
-export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
-  const types = row.properties[typesProp.name]
-  return Array.isArray(types) && SOURCE_CONTENT_TYPES.some(type => types.includes(type))
-}
-
+/** Owned by the html-document plugin, named here because {@link hasSourceContent}
+ *  has to hold with that plugin off. */
+export const HTML_DOCUMENT_TYPE = 'html-document'
 export const PAGE_TYPE = 'page'
 export const PANEL_TYPE = 'panel'
 export const PANEL_STACK_TYPE = 'panel-stack'
@@ -68,6 +58,55 @@ export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
  *  letting `block_types`-indexed lookups enumerate users and attribution
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
+
+/** A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types` value. A
+ *  local write can store one (the kernel's same-tx processors let it through), and
+ *  a throw here lands after the user's write committed, freezing references for
+ *  every row in the event. A wrong-shaped value reading as having no types is the
+ *  right answer: the block gets parsed like ordinary content. */
+const declaredTypes = (row: Pick<BlockData, 'properties'>): readonly unknown[] => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) ? types : []
+}
+
+/** Does the row's own `types` say extension? `block_types` is not enough to run
+ *  one: SQLite's `json_each` and `JSON.parse` disagree on a duplicated key, so a
+ *  crafted row can be listed as an extension while every reader of its properties
+ *  sees another type, and shows a reviewer something other than its source. */
+export const declaresExtensionType = (row: Pick<BlockData, 'properties'>): boolean =>
+  declaredTypes(row).includes(EXTENSION_TYPE)
+
+const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
+
+/** Is this row's `content` source code rather than markdown? Then it is not text:
+ *  the content grammars don't parse it, nothing rewrites spans in it, it isn't a
+ *  name, and it doesn't join with a neighbour.
+ *
+ *  Every writer asks this of the row it is about to write, not of how it found
+ *  the row. A block's edges outlive the type arriving (they clear at the next
+ *  parse, and a block typed before this rule keeps them until its next write), so
+ *  finding one through `block_references` proves nothing.
+ *
+ *  A plain list rather than a facet: it is a fact about the stored row and has to
+ *  hold with the owning plugin off, or the next write mints pages from the source. */
+export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
+  const types = declaredTypes(row)
+  return SOURCE_CONTENT_TYPES.some(type => types.includes(type))
+}
+
+/** {@link hasSourceContent} for a handle. One not loaded yet reads as not source, so
+ *  a gesture that may hold such a block loads it first. */
+export const holdsSource = (block: {peek: () => BlockData | null | undefined}): boolean => {
+  const data = block.peek()
+  return data != null && hasSourceContent(data)
+}
+
+/** Whether a write that treats content as text may change this row, as read in the
+ *  writing tx: it exists, it isn't deleted (`tx.get` returns tombstones), and it
+ *  isn't source. */
+export const takesTextEdit = (row: BlockData | null | undefined): row is BlockData =>
+  row != null && !row.deleted && !hasSourceContent(row)
 
 /** Types whose blocks are the app's own bookkeeping rather than anything
  *  the user authored — the rows the activity surface
