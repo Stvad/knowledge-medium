@@ -1,1 +1,1 @@
-export{Py as attachmentsPlugin}from"../../../chunks/app-7pB9FUSC.js";
+export{Ky as attachmentsPlugin}from"../../../chunks/app-DRQ7Aizm.js";

@@ -1,1 +1,1 @@
-export{Oi as ResponsivenessTotals,ki as SLOW_MS,Ai as observeResponsiveness}from"../../../chunks/app-7pB9FUSC.js";
+export{Oi as ResponsivenessTotals,ki as SLOW_MS,Ai as observeResponsiveness}from"../../../chunks/app-DRQ7Aizm.js";

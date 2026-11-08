@@ -1,2 +1,2 @@
-import{Crt as e}from"../../chunks/app-7pB9FUSC.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
+import{Hrt as e}from"../../chunks/app-DRQ7Aizm.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
 //# sourceMappingURL=pluginIds.js.map

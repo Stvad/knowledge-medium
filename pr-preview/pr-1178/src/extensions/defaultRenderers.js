@@ -1,1 +1,1 @@
-export{sP as defaultRegistry,cP as defaultRendererContributions,lP as defaultRenderersExtension}from"../../chunks/app-7pB9FUSC.js";
+export{xP as defaultRegistry,SP as defaultRendererContributions,CP as defaultRenderersExtension}from"../../chunks/app-DRQ7Aizm.js";
