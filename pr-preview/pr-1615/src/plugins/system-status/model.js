@@ -1,1 +1,1 @@
-export{Qs as getSyncIndicatorView}from"../../../chunks/app-DPe_lVkJ.js";
+export{Qs as getSyncIndicatorView}from"../../../chunks/app-B-lScjdd.js";

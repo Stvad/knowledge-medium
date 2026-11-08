@@ -1,1 +1,1 @@
-export{vN as checkForAppUpdate,yN as registerServiceWorker}from"../chunks/app-DPe_lVkJ.js";
+export{vN as checkForAppUpdate,yN as registerServiceWorker}from"../chunks/app-B-lScjdd.js";

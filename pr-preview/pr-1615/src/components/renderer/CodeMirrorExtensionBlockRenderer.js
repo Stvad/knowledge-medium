@@ -1,1 +1,1 @@
-export{bF as CodeMirrorExtensionBlockRenderer,xF as ExtensionEditor}from"../../../chunks/app-DPe_lVkJ.js";
+export{bF as CodeMirrorExtensionBlockRenderer,xF as ExtensionEditor}from"../../../chunks/app-B-lScjdd.js";

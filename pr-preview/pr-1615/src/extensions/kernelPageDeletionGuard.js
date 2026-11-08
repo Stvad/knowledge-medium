@@ -1,1 +1,1 @@
-export{SN as kernelPageDeletionGuard}from"../../chunks/app-DPe_lVkJ.js";
+export{SN as kernelPageDeletionGuard}from"../../chunks/app-B-lScjdd.js";

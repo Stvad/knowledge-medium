@@ -1,1 +1,1 @@
-export{o4 as kernelDataExtension}from"../../chunks/app-DPe_lVkJ.js";
+export{o4 as kernelDataExtension}from"../../chunks/app-B-lScjdd.js";
