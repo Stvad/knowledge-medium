@@ -1,1 +1,0 @@
-export{sK as geoDataExtension}from"../../../chunks/app-C6SaFokq.js";

@@ -1,1 +1,0 @@
-export{FM as approveExtensionHere}from"../../chunks/app-C6SaFokq.js";

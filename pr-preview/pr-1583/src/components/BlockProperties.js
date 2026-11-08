@@ -1,1 +1,0 @@
-export{YR as BlockProperties}from"../../chunks/app-C6SaFokq.js";

@@ -1,1 +1,0 @@
-export{ZM as appUpdate,QM as useAppUpdateAvailable}from"../chunks/app-C6SaFokq.js";

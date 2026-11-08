@@ -1,1 +1,0 @@
-export{PR as defineVariant,FR as defineVariantFacet}from"../../chunks/app-C6SaFokq.js";

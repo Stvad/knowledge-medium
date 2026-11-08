@@ -1,1 +1,0 @@
-export{WE as openRecentsPage}from"../../../chunks/app-C6SaFokq.js";
