@@ -1,0 +1,1 @@
+export{wv as Wikilink}from"../../../../../chunks/app-Db968Mqe.js";

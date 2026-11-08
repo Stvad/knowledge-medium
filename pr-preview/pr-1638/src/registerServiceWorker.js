@@ -1,0 +1,1 @@
+export{YM as checkForAppUpdate,XM as registerServiceWorker}from"../chunks/app-Db968Mqe.js";

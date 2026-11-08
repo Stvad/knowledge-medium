@@ -1,0 +1,1 @@
+export{CM as editorAutocompleteExtension}from"../../chunks/app-Db968Mqe.js";

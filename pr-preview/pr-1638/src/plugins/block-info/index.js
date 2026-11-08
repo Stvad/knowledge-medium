@@ -1,0 +1,1 @@
+export{s_ as blockInfoPlugin}from"../../../chunks/app-Db968Mqe.js";

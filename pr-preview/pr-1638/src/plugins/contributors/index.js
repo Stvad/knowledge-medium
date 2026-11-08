@@ -1,0 +1,1 @@
+export{up as contributorsPlugin}from"../../../chunks/app-Db968Mqe.js";

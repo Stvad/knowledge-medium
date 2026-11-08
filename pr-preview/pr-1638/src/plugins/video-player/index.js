@@ -1,0 +1,1 @@
+export{Ix as videoPlayerPlugin}from"../../../chunks/app-Db968Mqe.js";

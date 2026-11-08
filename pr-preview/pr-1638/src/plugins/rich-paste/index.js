@@ -1,0 +1,1 @@
+export{Ny as richPastePlugin}from"../../../chunks/app-Db968Mqe.js";

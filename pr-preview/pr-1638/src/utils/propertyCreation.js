@@ -1,0 +1,1 @@
+export{HI as canConvertEmptyChildBlockToProperty,UI as convertEmptyChildBlockToProperty}from"../../chunks/app-Db968Mqe.js";

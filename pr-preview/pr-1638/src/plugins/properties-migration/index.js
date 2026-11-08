@@ -1,0 +1,1 @@
+export{wa as migratePropertiesToBlocksAction,ba as propertiesMigrationPlugin}from"../../../chunks/app-Db968Mqe.js";

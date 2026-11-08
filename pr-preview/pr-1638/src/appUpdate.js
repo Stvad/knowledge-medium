@@ -1,0 +1,1 @@
+export{ZM as appUpdate,QM as useAppUpdateAvailable}from"../chunks/app-Db968Mqe.js";

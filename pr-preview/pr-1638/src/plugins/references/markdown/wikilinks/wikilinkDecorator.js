@@ -1,0 +1,1 @@
+export{MO as isWikilinkDisplayParts,NO as resolveWikilinkDisplay,PO as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-Db968Mqe.js";

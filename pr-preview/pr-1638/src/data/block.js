@@ -1,0 +1,1 @@
+export{k2 as Block,A2 as requireLoadedBlock}from"../../chunks/app-Db968Mqe.js";

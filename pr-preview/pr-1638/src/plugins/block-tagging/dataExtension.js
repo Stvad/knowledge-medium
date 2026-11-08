@@ -1,0 +1,1 @@
+export{Tl as blockTaggingDataExtension}from"../../../chunks/app-Db968Mqe.js";

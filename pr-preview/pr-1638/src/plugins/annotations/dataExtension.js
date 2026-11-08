@@ -1,0 +1,1 @@
+export{Nq as annotationsDataExtension}from"../../../chunks/app-Db968Mqe.js";

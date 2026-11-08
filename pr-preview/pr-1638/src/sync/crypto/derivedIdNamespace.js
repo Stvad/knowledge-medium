@@ -1,0 +1,1 @@
+export{ert as deriveWorkspaceIdNamespace}from"../../../chunks/app-Db968Mqe.js";

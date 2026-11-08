@@ -1,0 +1,1 @@
+export{yot as SYSTEM_AUTHOR_PREFIX,bot as isSystemAuthor,xot as systemAuthor}from"../../../chunks/app-Db968Mqe.js";

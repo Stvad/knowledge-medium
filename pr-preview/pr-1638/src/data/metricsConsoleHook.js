@@ -1,0 +1,1 @@
+export{Kj as ensureMetricsConsoleHook}from"../../chunks/app-Db968Mqe.js";

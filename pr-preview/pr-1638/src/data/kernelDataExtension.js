@@ -1,0 +1,1 @@
+export{M2 as kernelDataExtension}from"../../chunks/app-Db968Mqe.js";

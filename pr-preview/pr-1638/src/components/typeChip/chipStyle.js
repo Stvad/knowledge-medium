@@ -1,0 +1,1 @@
+export{kj as chipStyle}from"../../../chunks/app-Db968Mqe.js";

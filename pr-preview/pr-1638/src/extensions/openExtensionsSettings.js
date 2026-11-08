@@ -1,0 +1,1 @@
+export{AP as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,jP as openExtensionsSettings}from"../../chunks/app-Db968Mqe.js";

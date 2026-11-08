@@ -1,0 +1,1 @@
+export{Sl as blockTagsConfigUi}from"../../../chunks/app-Db968Mqe.js";

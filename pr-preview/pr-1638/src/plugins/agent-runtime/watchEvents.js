@@ -1,0 +1,1 @@
+export{Eh as createWatchEventsRegistry,Dh as watchEventsRegistry}from"../../../chunks/app-Db968Mqe.js";

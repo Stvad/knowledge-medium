@@ -1,0 +1,1 @@
+export{yG as preferredSpanReplacement}from"../../../chunks/app-Db968Mqe.js";

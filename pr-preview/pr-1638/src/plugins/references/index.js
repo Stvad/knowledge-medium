@@ -1,0 +1,1 @@
+export{bv as referencesPlugin}from"../../../chunks/app-Db968Mqe.js";

@@ -1,0 +1,1 @@
+export{yj as BlockEmbed}from"../../../chunks/app-Db968Mqe.js";

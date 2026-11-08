@@ -1,0 +1,1 @@
+export{iI as ExtensionRenderBoundary}from"../../chunks/app-Db968Mqe.js";

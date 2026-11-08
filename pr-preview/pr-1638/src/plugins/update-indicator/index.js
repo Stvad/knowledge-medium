@@ -1,0 +1,1 @@
+export{l_ as updateIndicatorPlugin}from"../../../chunks/app-Db968Mqe.js";

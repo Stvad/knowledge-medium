@@ -1,0 +1,1 @@
+export{RJ as annotationMarginOpenProp}from"../../../chunks/app-Db968Mqe.js";

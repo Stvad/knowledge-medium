@@ -1,0 +1,1 @@
+export{cN as gestureBindingDescriptor,lN as matchesGestureEvent}from"../../chunks/app-Db968Mqe.js";

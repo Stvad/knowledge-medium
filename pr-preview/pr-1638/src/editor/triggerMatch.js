@@ -1,0 +1,1 @@
+export{FK as matchCharTrigger}from"../../chunks/app-Db968Mqe.js";

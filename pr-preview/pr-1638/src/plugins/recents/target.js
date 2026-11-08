@@ -1,0 +1,1 @@
+export{WE as openRecentsPage}from"../../../chunks/app-Db968Mqe.js";

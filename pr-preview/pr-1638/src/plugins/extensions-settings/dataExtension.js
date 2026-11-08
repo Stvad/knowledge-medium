@@ -1,0 +1,1 @@
+export{or as extensionsDataExtension}from"../../../chunks/app-Db968Mqe.js";

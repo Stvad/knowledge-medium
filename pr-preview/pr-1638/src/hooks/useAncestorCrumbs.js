@@ -1,0 +1,1 @@
+export{gD as useAncestorCrumbs}from"../../chunks/app-Db968Mqe.js";
