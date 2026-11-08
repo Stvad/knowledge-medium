@@ -1,0 +1,1 @@
+export{CM as editorAutocompleteExtension}from"../../chunks/app-DnlJQV6r.js";

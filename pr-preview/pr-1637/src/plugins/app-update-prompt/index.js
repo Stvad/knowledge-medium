@@ -1,0 +1,1 @@
+export{BM as appUpdatePromptExtension}from"../../../chunks/app-DnlJQV6r.js";

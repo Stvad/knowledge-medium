@@ -1,0 +1,1 @@
+export{UX as aliasDataExtension}from"../../../chunks/app-DnlJQV6r.js";

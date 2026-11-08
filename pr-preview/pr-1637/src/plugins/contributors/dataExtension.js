@@ -1,0 +1,1 @@
+export{UJ as contributorsDataExtension}from"../../../chunks/app-DnlJQV6r.js";

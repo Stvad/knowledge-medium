@@ -1,0 +1,1 @@
+export{bc as srsReviewDataExtension}from"../../../chunks/app-DnlJQV6r.js";

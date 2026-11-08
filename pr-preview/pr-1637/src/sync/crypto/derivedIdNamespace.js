@@ -1,0 +1,1 @@
+export{ert as deriveWorkspaceIdNamespace}from"../../../chunks/app-DnlJQV6r.js";
