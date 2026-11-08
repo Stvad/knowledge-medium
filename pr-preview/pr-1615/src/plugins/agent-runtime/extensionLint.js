@@ -1,1 +1,0 @@
-export{Xm as lintExtensionSource}from"../../../chunks/app-B-lScjdd.js";

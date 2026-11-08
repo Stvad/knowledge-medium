@@ -1,1 +1,0 @@
-export{FK as geoDataExtension}from"../../../chunks/app-B-lScjdd.js";

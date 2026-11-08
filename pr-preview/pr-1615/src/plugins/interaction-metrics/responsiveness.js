@@ -1,1 +1,0 @@
-export{Qi as ResponsivenessTotals,$i as SLOW_MS,ea as observeResponsiveness}from"../../../chunks/app-B-lScjdd.js";

@@ -1,1 +1,0 @@
-export{WN as ClientLocalSettings,GN as clientLocalSettings}from"../../chunks/app-B-lScjdd.js";

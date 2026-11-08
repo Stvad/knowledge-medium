@@ -1,1 +1,0 @@
-export{Cd as quotedInFooterContribution}from"../../../chunks/app-B-lScjdd.js";

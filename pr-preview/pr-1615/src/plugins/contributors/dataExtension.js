@@ -1,1 +1,0 @@
-export{_Y as contributorsDataExtension}from"../../../chunks/app-B-lScjdd.js";

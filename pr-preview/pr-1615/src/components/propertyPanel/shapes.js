@@ -1,1 +1,0 @@
-export{XU as propertyShapeLabel}from"../../../chunks/app-B-lScjdd.js";

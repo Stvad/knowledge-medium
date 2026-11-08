@@ -1,1 +1,0 @@
-export{Sw as mobileBottomNavItemsFacet}from"../../../chunks/app-B-lScjdd.js";

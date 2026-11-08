@@ -1,1 +1,0 @@
-export{Kl as blockTagsConfigUi}from"../../../chunks/app-B-lScjdd.js";

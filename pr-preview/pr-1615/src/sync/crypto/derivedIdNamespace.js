@@ -1,1 +1,0 @@
-export{krt as deriveWorkspaceIdNamespace}from"../../../chunks/app-B-lScjdd.js";

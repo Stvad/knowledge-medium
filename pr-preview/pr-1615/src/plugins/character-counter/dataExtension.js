@@ -1,1 +1,0 @@
-export{LY as characterCounterDataExtension}from"../../../chunks/app-B-lScjdd.js";

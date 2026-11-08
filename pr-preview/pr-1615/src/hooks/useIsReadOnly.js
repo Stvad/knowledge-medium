@@ -1,1 +1,0 @@
-export{Oy as useIsReadOnly}from"../../chunks/app-B-lScjdd.js";

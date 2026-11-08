@@ -1,1 +1,0 @@
-export{Wa as propertiesMigrationPlugin}from"../../../chunks/app-B-lScjdd.js";

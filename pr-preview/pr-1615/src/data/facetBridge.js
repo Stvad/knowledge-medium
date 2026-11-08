@@ -1,1 +1,0 @@
-export{v1 as FacetBridge}from"../../chunks/app-B-lScjdd.js";

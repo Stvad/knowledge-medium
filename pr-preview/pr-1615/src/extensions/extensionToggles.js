@@ -1,1 +1,0 @@
-export{eP as extensionDisplayName,tP as extensionName,nP as userExtensionShellToggle,rP as userExtensionToggle}from"../../chunks/app-B-lScjdd.js";

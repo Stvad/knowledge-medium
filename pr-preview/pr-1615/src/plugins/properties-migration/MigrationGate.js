@@ -1,1 +1,0 @@
-export{Ga as MigrationGate}from"../../../chunks/app-B-lScjdd.js";

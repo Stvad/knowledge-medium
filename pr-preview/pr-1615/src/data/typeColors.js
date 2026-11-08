@@ -1,1 +1,0 @@
-export{$j as DEFAULT_TYPE_COLORS,eM as defaultTypeColor,tM as pickLeastUsedTypeColor}from"../../chunks/app-B-lScjdd.js";

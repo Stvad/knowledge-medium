@@ -1,1 +1,0 @@
-export{KG as preferredSpanReplacement}from"../../../chunks/app-B-lScjdd.js";

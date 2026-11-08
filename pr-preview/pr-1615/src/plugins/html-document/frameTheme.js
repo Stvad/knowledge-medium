@@ -1,1 +1,0 @@
-export{bn as useFrameThemeCss}from"../../../chunks/app-B-lScjdd.js";

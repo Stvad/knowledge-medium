@@ -1,1 +1,0 @@
-export{KU as usePropertySchemas}from"../../chunks/app-B-lScjdd.js";

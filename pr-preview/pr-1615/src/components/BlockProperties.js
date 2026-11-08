@@ -1,1 +1,0 @@
-export{Sz as BlockProperties}from"../../chunks/app-B-lScjdd.js";

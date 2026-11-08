@@ -1,1 +1,0 @@
-export{WP as DialogHost,GP as dialogAppMountExtension}from"../../chunks/app-B-lScjdd.js";

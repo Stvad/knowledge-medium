@@ -1,1 +1,0 @@
-export{fY as annotationMarginOpenProp}from"../../../chunks/app-B-lScjdd.js";

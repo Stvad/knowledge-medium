@@ -1,1 +1,0 @@
-export{sb as attachmentsPlugin}from"../../../chunks/app-B-lScjdd.js";

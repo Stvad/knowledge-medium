@@ -1,1 +1,0 @@
-export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-B-lScjdd.js";

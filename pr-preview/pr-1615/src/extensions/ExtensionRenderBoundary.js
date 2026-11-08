@@ -1,1 +1,0 @@
-export{DI as ExtensionRenderBoundary}from"../../chunks/app-B-lScjdd.js";

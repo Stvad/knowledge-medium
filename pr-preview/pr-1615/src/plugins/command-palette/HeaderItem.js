@@ -1,1 +1,0 @@
-export{YA as CommandPaletteHeaderItem}from"../../../chunks/app-B-lScjdd.js";

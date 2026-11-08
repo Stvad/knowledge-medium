@@ -1,1 +1,0 @@
-export{YW as staticDataExtensions}from"../../chunks/app-B-lScjdd.js";
