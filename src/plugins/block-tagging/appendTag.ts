@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { hasSourceContent } from '@/data/blockTypes'
+import { takesTextEdit } from '@/data/blockTypes'
 import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.js'
 import { isValidTagName } from './config.ts'
 
@@ -60,7 +60,7 @@ export const appendTagToBlocks = async (
     for (const block of blocks) {
       const row = await tx.get(block.id)
       // A link written into source tags nothing and changes the source.
-      if (!row || hasSourceContent(row)) continue
+      if (!takesTextEdit(row)) continue
       if (hasTagReference(row.content, trimmedName)) {
         alreadyTagged += 1
         continue

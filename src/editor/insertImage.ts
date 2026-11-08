@@ -15,7 +15,7 @@ import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block.js'
-import { hasSourceContent, holdsSource } from '@/data/blockTypes'
+import { holdsSource, takesTextEdit } from '@/data/blockTypes'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { resolveEditModeKeepalive, withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
@@ -92,7 +92,7 @@ function pickImageFiles(): Promise<File[]> {
 async function appendReferencesToBlock(block: Block, references: readonly string[]): Promise<void> {
   await block.repo.tx(async tx => {
     const row = await tx.get(block.id)
-    if (!row || row.deleted || hasSourceContent(row)) return
+    if (!takesTextEdit(row)) return
     const refsText = references.join('\n')
     // Trim trailing whitespace so the append doesn't open a blank line (or strand
     // a whitespace-only block before the image).

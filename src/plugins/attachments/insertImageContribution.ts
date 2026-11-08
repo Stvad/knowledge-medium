@@ -9,6 +9,7 @@
  * just the wiring.
  */
 import { ImagePlus } from 'lucide-react'
+import { holdsSource } from '@/data/blockTypes'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -32,6 +33,8 @@ export const insertImageAction: ActionConfig<typeof ActionContextTypes.EDIT_MODE
   description: 'Insert image',
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: ImagePlus,
+  // The refusal itself is the handler's; this keeps a no-op out of the palette.
+  isVisible: ({block}) => !block || !holdsSource(block),
   handler: async ({block, editorView}: CodeMirrorEditModeDependencies) => {
     if (!block || !editorView) return
     await pickAndInsertImages({editorView, block})
@@ -49,6 +52,7 @@ export const insertImageNormalModeAction: ActionConfig<typeof ActionContextTypes
   description: 'Insert image',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ImagePlus,
+  isVisible: ({block}) => !block || !holdsSource(block),
   handler: async ({block}: BlockShortcutDependencies) => {
     if (!block) return
     await pickImagesIntoBlock(block)

@@ -101,7 +101,7 @@ import {
   type ReferrerRow,
 } from './parseFence.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
-import { hasSourceContent } from '@/data/blockTypes'
+import { takesTextEdit } from '@/data/blockTypes'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
@@ -568,7 +568,7 @@ export const splitBySurvivingSpan = (
 
 const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   const current = await tx.get(plan.sourceId)
-  if (current === null || current.deleted || hasSourceContent(current)) return
+  if (!takesTextEdit(current)) return
   // ONE pass over the original spans, not one pass per alias. Sequential
   // passes re-parse the previous pass's output, so with `α → β` and
   // `β → γ` in a single commit an original `[[α]]` becomes `[[β]]` and is

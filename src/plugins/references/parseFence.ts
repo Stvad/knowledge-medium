@@ -166,8 +166,8 @@ export const wikilinkSourcesByContent = async (
     containsNul(needle) ? SELECT_SCAN_CANDIDATES_SQL : SELECT_FTS_CANDIDATES_SQL,
     [workspaceId, containsNul(needle) ? needle : ftsPhrase(needle)],
   )
-  // Source blocks come back too; the rename's write refuses them, as it does
-  // those the edge leg finds.
+  // Blocks holding source come back too; the rename's write refuses them, as it
+  // does those the edge leg finds.
   return candidates.filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
 }
 

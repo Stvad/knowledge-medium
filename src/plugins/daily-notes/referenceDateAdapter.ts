@@ -7,7 +7,7 @@
  */
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { hasSourceContent } from '@/data/blockTypes'
+import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 import {
   parseOutermostReferences,
   type ParsedReference,
@@ -78,14 +78,14 @@ export const referenceDateAdapter: BlockDateAdapter = {
     if (!data) return null
     return singleDateReferenceMatch(data.content)?.iso ?? null
   },
-  // Reads the row it writes, in the same tx: a picker stays open while an edit or
-  // a type change syncs in.
+  // Reads the row it writes, in the same tx: a picker stays open while an edit, a
+  // delete or a type change syncs in.
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
     let written = false
     await block.repo.tx(async tx => {
       const row = await tx.get(block.id)
-      if (!row || hasSourceContent(row)) return
+      if (!takesTextEdit(row)) return
       const nextContent = replaceSingleDateReferenceContent(row.content, iso)
       if (nextContent === null || nextContent === row.content) return
       await tx.update(block.id, {content: nextContent})

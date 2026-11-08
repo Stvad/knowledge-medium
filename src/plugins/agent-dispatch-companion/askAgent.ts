@@ -8,7 +8,7 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope, propertyValue } from '@/data/api'
-import { hasSourceContent, holdsSource } from '@/data/blockTypes'
+import { holdsSource, takesTextEdit } from '@/data/blockTypes'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -75,7 +75,7 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
     // The ask travels as a mention in the content, which source can't carry.
-    if (!fresh || hasSourceContent(fresh)) return
+    if (!takesTextEdit(fresh)) return
     // Content and props are now two writes in the one tx (setProperties can't
     // carry content). tx.update short-circuits an unchanged-content patch, and
     // the always-a-real-write guarantee rides the setProperties asked-at bump

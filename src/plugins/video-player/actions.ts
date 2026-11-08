@@ -114,6 +114,7 @@ const insertVideoTimestamp: ActionConfig = {
     if (currentTime === undefined) return
 
     const timestamp = `${formatVideoTimestamp(currentTime)} `
+    // Into source too: it lands at the caret the viewer placed, as typing it would.
     if (deps.editorView) {
       insertIntoEditor(deps.editorView, timestamp)
       return

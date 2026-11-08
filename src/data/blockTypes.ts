@@ -102,6 +102,12 @@ export const holdsSource = (block: {peek: () => BlockData | null | undefined}): 
   return data != null && hasSourceContent(data)
 }
 
+/** Whether a write that treats content as text may change this row, as read in the
+ *  writing tx: it exists, it isn't deleted (`tx.get` returns tombstones), and it
+ *  isn't source. */
+export const takesTextEdit = (row: BlockData | null | undefined): row is BlockData =>
+  row != null && !row.deleted && !hasSourceContent(row)
+
 /** Types whose blocks are the app's own bookkeeping rather than anything
  *  the user authored — the rows the activity surface
  *  (`core.recentActivity`) must not report as an edit.

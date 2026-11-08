@@ -161,6 +161,21 @@ describe('referenceDateAdapter', () => {
     expect(row.content).toBe('<p>[[2026-04-29]]</p>')
   })
 
+  it('setIso refuses a block deleted after the adapter was picked', async () => {
+    const repo = makeRepo()
+    await repo.tx(tx => tx.create({
+      id: 'gone', workspaceId: 'ws', parentId: null, orderKey: 'a', content: 'due [[2026-04-29]]',
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('gone')
+    await block.load()
+    expect(referenceDateAdapter.canHandle(block)).toBe(true)
+    await block.delete()
+
+    expect(await referenceDateAdapter.setIso(block, '2026-05-01')).toBe(false)
+    const row = await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['gone'])
+    expect(row.content).toBe('due [[2026-04-29]]')
+  })
+
   it('canHandle accepts blocks with exactly one date reference', async () => {
     const repo = makeRepo()
     await repo.tx(async tx => {

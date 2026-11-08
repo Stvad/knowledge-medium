@@ -131,6 +131,29 @@ describe('a user type that is also source', () => {
   })
 })
 
+describe('a source block that becomes a type', () => {
+  it.each([
+    ['takes no name from its source', undefined, undefined],
+    ['is named by its label, and keeps its source', 'Book', ['Book']],
+  ])('%s', async (_name, label, aliases) => {
+    env = await setup()
+    const {repo} = env
+    const source = '<div>\n  <p>x</p>\n</div>\n'
+    const id = await repo.mutate.createChild({parentId: repo.typesPageId!, content: source})
+    await repo.tx(async tx => {
+      await tx.setProperty(id, typesProp, [HTML_DOCUMENT_TYPE])
+      if (label) await tx.setProperty(id, blockTypeLabelProp, label)
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}), {scope: ChangeScope.BlockDefault})
+
+    const row = await repo.load(id)
+    expect(row?.content).toBe(source)
+    expect(row?.properties[blockTypeLabelProp.name]).toBe(label)
+    expect(row?.properties[aliasesProp.name]).toEqual(aliases)
+  })
+})
+
 describe('UserTypesService subscription', () => {
   it('publishes a TypeContribution when a block-type block is created', async () => {
     env = await setup()

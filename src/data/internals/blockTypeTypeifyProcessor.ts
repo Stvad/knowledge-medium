@@ -156,7 +156,10 @@ const completeNewType = async (
   ctx: SameTxCtx,
 ): Promise<void> => {
   const currentLabel = readLabel(after)
-  const trimmedContent = after.content.trim()
+  // Source isn't a name: such a type is named by its label alone, and its content
+  // stays as written.
+  const source = hasSourceContent(after)
+  const trimmedContent = source ? '' : after.content.trim()
   const name = currentLabel || trimmedContent
 
   if (name !== '') assertWritableTypeName(name)
@@ -193,7 +196,7 @@ const completeNewType = async (
   // leaves only blank or whitespace-padded content — and it makes `content`
   // always a name the checks above already validated, so nothing downstream
   // has to re-validate it.
-  if (name !== '' && after.content !== name) {
+  if (!source && name !== '' && after.content !== name) {
     await ctx.tx.update(row.id, {content: name})
   }
   if (name !== '') await moveTypeClaim(after, name, ctx)

@@ -1,6 +1,7 @@
 import type { Block } from '@/data/block'
-import { hasSourceContent } from '@/data/blockTypes'
-import type { PasteRequest } from './decision.ts'
+import { hasSourceContent, holdsSource } from '@/data/blockTypes'
+import type { PasteCaret, PasteRequest } from './decision.ts'
+import type { PasteChordIntent } from './operations.ts'
 
 export type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
 
@@ -23,14 +24,29 @@ export const readClipboardContent = (
  *  below and the paste's absorption of its target agree. */
 export const isBlankContent = (content: string): boolean => content.trim().length === 0
 
+/** What source takes from a paste: the text, whole. Parsed as an outline it would
+ *  keep one line and shred the rest around it, and a captured file's `((id))` would
+ *  only be text in it. */
+const asSourcePaste = (content: ClipboardContent) =>
+  ({...content, files: [], intent: 'single-block'}) as const
+
 /** The request for a paste with no text caret, which is otherwise always a split.
- *
- *  An empty source block takes the clipboard's text whole: parsed as an outline it
- *  would keep one line and shred the rest around it, and a captured file's `((id))`
- *  would only be text in it. Source with content pastes around itself. */
+ *  An empty source block takes it as source; source with content pastes around itself. */
 export const shellPasteRequest = (content: ClipboardContent, target: Block): PasteRequest => {
   const row = target.peek()
   return row != null && hasSourceContent(row) && isBlankContent(row.content)
-    ? {...content, files: [], intent: 'single-block', surface: 'shell'}
+    ? {...asSourcePaste(content), surface: 'shell'}
     : {...content, intent: 'split', surface: 'shell'}
 }
+
+/** The request for a paste at a text caret: the chord's intent, except that source
+ *  takes it as source in whichever editor it is open, the markdown one included when
+ *  its plugin is off. */
+export const editorPasteRequest = (
+  content: ClipboardContent,
+  target: Block,
+  intent: PasteChordIntent,
+  caret: PasteCaret,
+): PasteRequest => holdsSource(target)
+  ? {...asSourcePaste(content), surface: 'editor', caret}
+  : {...content, intent, surface: 'editor', caret}

@@ -46,7 +46,7 @@ import {
 } from '@/data/internals/referenceTargetProcessor'
 import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
 import { inlineBlockRefs } from './referenceParser.ts'
-import { hasSourceContent } from '@/data/blockTypes'
+import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
   'references.inlineDeletedBlockReferences'
@@ -122,7 +122,7 @@ const inlineSource = async (
   // event could have been deleted by a later write in the same fn — re-read
   // and skip, there's nothing to inline into a block that's going away.
   const current = await tx.get(sourceId)
-  if (current === null || current.deleted) return
+  if (!takesTextEdit(current)) return
   // Property machinery keeps its dangling ref rather than being inlined —
   // restorable, and still carrying the property. Both levels qualify, for the
   // same identity-preserving reason: a VALUE row's `((deletedId))` is the
@@ -131,7 +131,6 @@ const inlineSource = async (
   // DEFINITION — every field row keyed to it is an ordinary referrer).
   if (await isPropertyValueRow(tx, current)) return
   if (await isPropertyFieldRow(tx, current)) return
-  if (hasSourceContent(current)) return
 
   const nextContent = inlineBlockRefs(current.content, deletedId, inlineContent)
   const nextReferences = normalizeReferences(
