@@ -17,6 +17,7 @@ import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { typeSeedsFacet } from '@/data/facets'
@@ -78,7 +79,6 @@ let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { env = await setup() })
 
 const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
@@ -94,12 +94,20 @@ const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<st
   return null
 }
 
-// Each test seeds the whole tutorial outline into a real repo — hundreds of
-// blocks through the tx layer, ~1-1.6s of genuine work per test on an idle
-// machine, so the 5s default has ~3x headroom and loses it under contention.
+// A seed writes the whole tutorial outline into a real repo — hundreds of
+// blocks through the tx layer, ~0.5s of genuine work on an idle machine.
+// These cases only READ what one seed wrote, so they share it.
 describe('seedTutorial', {timeout: 30_000}, () => {
+  let tutorialId: string
+  beforeAll(async () => {
+    env = await setup()
+    tutorialId = await seedTutorial(env.repo, WS)
+  }, 30_000)
+  // Built before any per-test repo scope opens, so the global release never
+  // reaches it.
+  afterAll(async () => { await releaseTestRepos([env.repo]) })
+
   it('returns the default Tutorial root id (the landing target)', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
     expect(typeof tutorialId).toBe('string')
     expect(tutorialId).toMatch(/^[0-9a-f-]{36}$/)
 
@@ -114,7 +122,6 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('also creates a parent-less Tutorial (vim) page with the canonical alias', async () => {
-    await seedTutorial(env.repo, WS)
     const vimId = await findPageByAlias(env.h, env.repo, TUTORIAL_VIM_TITLE)
     expect(vimId).not.toBeNull()
     const page = env.repo.block(vimId!)
@@ -126,7 +133,6 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('seeds the typed feature demos with their real plugin types', async () => {
-    await seedTutorial(env.repo, WS)
     const ids = await listAllBlockIds(env.h)
     for (const id of ids) await env.repo.load(id)
     const blocks = ids.map(id => env.repo.block(id))
@@ -149,7 +155,6 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('seeds advanced sections collapsed and keeps essentials expanded', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, { descendants: true })
 
     const childIds = await env.repo.block(tutorialId).childIds.load()
@@ -165,7 +170,6 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('seeds the outline as a tree of children under each Tutorial page', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, { descendants: true })
 
     const tutorial = env.repo.block(tutorialId)
@@ -178,8 +182,6 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('seeds a shared parent-less `extensions` page with the example extension blocks underneath', async () => {
-    await seedTutorial(env.repo, WS)
-
     const extensionsId = await findPageByAlias(env.h, env.repo, EXTENSIONS_PAGE_TITLE)
     expect(extensionsId).not.toBeNull()
     await env.repo.load(extensionsId!, { descendants: true })
@@ -205,31 +207,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     }
   })
 
-  it.each(['cell', 'children'] as const)('seeds extension demos before their definitions are enabled in %s mode', async mode => {
-    await env.h.db.execute(
-      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
-        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', ?)`,
-      [WS, mode],
-    )
-    env.repo.setActiveWorkspaceId(WS)
-    expect(env.repo.propertySchemaResolverFor(WS).resolve('user:hello').status)
-      .toBe('identity-unavailable')
-    const tutorialId = await seedTutorial(env.repo, WS)
-    await env.repo.load(tutorialId, { descendants: true })
-
-    const allIds = await listAllBlockIds(env.h)
-    for (const id of allIds) await env.repo.load(id)
-    const blocks = allIds.map(id => env.repo.block(id))
-    for (const [extension, property] of [['hello-renderer', 'user:hello'], ['split-layout', 'user:layout']]) {
-      const demo = blocks.find(b => b.peek()?.content.startsWith(`Try it: enable \`${extension}\``))
-      expect(demo?.peek()?.content).toContain(property)
-      expect(demo?.peek()?.content).toContain('then add')
-      expect(blocks.every(b => b.peek()?.properties[property] === undefined)).toBe(true)
-    }
-  })
-
   it('all inserts share a single tx — exactly one command_events row', async () => {
-    await seedTutorial(env.repo, WS)
     const rows = await env.h.db.getAll<{ count: number }>(
       'SELECT COUNT(*) AS count FROM command_events',
     )
@@ -251,6 +229,33 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     )
     for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
       expect(typeIds.has(typeId)).toBe(true)
+    }
+  })
+})
+
+describe('seedTutorial into a workspace with a properties-migration mode', {timeout: 30_000}, () => {
+  beforeEach(async () => { env = await setup() })
+
+  it.each(['cell', 'children'] as const)('seeds extension demos before their definitions are enabled in %s mode', async mode => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', ?)`,
+      [WS, mode],
+    )
+    env.repo.setActiveWorkspaceId(WS)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve('user:hello').status)
+      .toBe('identity-unavailable')
+    const tutorialId = await seedTutorial(env.repo, WS)
+    await env.repo.load(tutorialId, { descendants: true })
+
+    const allIds = await listAllBlockIds(env.h)
+    for (const id of allIds) await env.repo.load(id)
+    const blocks = allIds.map(id => env.repo.block(id))
+    for (const [extension, property] of [['hello-renderer', 'user:hello'], ['split-layout', 'user:layout']]) {
+      const demo = blocks.find(b => b.peek()?.content.startsWith(`Try it: enable \`${extension}\``))
+      expect(demo?.peek()?.content).toContain(property)
+      expect(demo?.peek()?.content).toContain('then add')
+      expect(blocks.every(b => b.peek()?.properties[property] === undefined)).toBe(true)
     }
   })
 })

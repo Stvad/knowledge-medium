@@ -7,7 +7,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
 import { selectableTagNames, tagNameIssue } from '../config.ts'
-import { MAX_ALIAS_LENGTH, parseReferences, renderWikilink } from '@/plugins/references/referenceParser'
+import { MAX_ALIAS_LENGTH, parseReferences } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
   it('appends [[name]] with a separating space when content is non-empty', () => {
@@ -91,32 +91,17 @@ describe('appendTagToContent', () => {
     expect(tagNameIssue('foo[[bar')).toBe('delimiters')
     expect(tagNameIssue('foo]]bar')).toBe('delimiters')
     expect(tagNameIssue('a'.repeat(MAX_ALIAS_LENGTH + 1))).toBe('too-long')
-    // The trailing-`]` case is 'too-long', not 'delimiters' — a single
-    // bracket is allowed, it is the rendered padding that overflows.
-    expect(tagNameIssue(`${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`)).toBe('too-long')
+    expect(tagNameIssue('foo]')).toBe('unmatched-bracket')
+    expect(tagNameIssue('[foo]')).toBeNull()
   })
 
-  // The rendered span, not the input, is what the cap applies to.
-  // `renderWikilink` pads a trailing `]` with a space to keep the closing
-  // delimiter balanced, so this name is AT the cap but emits an alias one
-  // character over it — a length check on the input alone would let it
-  // through and write markup that parses to nothing while
-  // `appendTagToBlocks` reported the block as tagged.
-  it('rejects an at-cap name whose trailing `]` pushes the rendered alias over', () => {
-    const atCapWithBracket = `${'a'.repeat(MAX_ALIAS_LENGTH - 1)}]`
-    // The input is AT the cap — an input-length check would wave it
-    // through. The renderer pads the trailing `]` to keep the closing
-    // delimiter balanced, which pushes the emitted alias one over, so it
-    // refuses instead of emitting markup that parses to nothing.
-    expect(atCapWithBracket.length).toBe(MAX_ALIAS_LENGTH)
-    expect(renderWikilink(atCapWithBracket)).toBeNull()
-    expect(appendTagToContent('hello', atCapWithBracket)).toBe('hello')
+  // A padded link names `foo] `, so re-tagging could never see the tag.
+  it('refuses a name ending in an unmatched `]`, and re-tags a balanced one as a no-op', () => {
+    expect(appendTagToContent('hello', 'foo]')).toBe('hello')
 
-    // One char shorter renders within the cap and is still accepted, so
-    // this pins the boundary rather than "trailing brackets are banned".
-    const justUnder = `${'a'.repeat(MAX_ALIAS_LENGTH - 2)}]`
-    const tagged = appendTagToContent('hello', justUnder)
-    expect(parseReferences(tagged)).toHaveLength(1)
+    const once = appendTagToContent('hello', '[foo]')
+    expect(parseReferences(once).map(ref => ref.alias)).toEqual(['[foo]'])
+    expect(appendTagToContent(once, '[foo]')).toBe(once)
   })
 })
 

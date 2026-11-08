@@ -29,6 +29,10 @@ import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRo
 import { watchEventsRegistry } from './watchEvents.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { getAssetResolver } from '@/plugins/attachments/assetResolver.js'
+import { CHOOSE_CONTRIBUTOR_MESSAGE } from '@/plugins/contributors/processor.js'
+import { addMedia } from './addMedia.ts'
+import { readMedia } from './readMedia.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { buildCommentsView, runAddComment } from './commentsCommands.ts'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
@@ -2266,8 +2270,9 @@ export const createAgentRuntimeContext = ({
     refreshAppRuntime,
     React,
     ReactDOM,
-    window,
-    document,
+    // Read on access, so building a context needs no DOM until a command uses one.
+    get window() { return window },
+    get document() { return document },
   }
 
   return context
@@ -2367,6 +2372,31 @@ const executeAttributedCommand = async (
     case 'view-grouped-backlinks':
     case 'view-search':
       return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
+
+    case 'read-media':
+      return readMedia(
+        context.repo,
+        viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId)),
+        requireString(command.ref, 'ref'),
+        getAssetResolver(),
+      )
+
+    case 'add-media': {
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      if (context.runtime.read(blockRenderersFacet).media === undefined) {
+        throw new Error('Enable the Attachments plugin to add media.')
+      }
+      // Refused here, not left to the attribution check inside the capture's tx: by
+      // then the bytes are stored, and nothing reclaims them.
+      if (contributorsEnabled(context) && command.contributorId === undefined) {
+        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+      }
+      return addMedia(context.repo, workspaceId, {
+        base64: requireString(command.base64, 'base64'),
+        filename: command.filename,
+        mime: command.mime,
+      })
+    }
 
     case 'comments':
       requireComments(context)

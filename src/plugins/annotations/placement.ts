@@ -1,3 +1,20 @@
+export interface MarginCard {
+  /** Its row's index in outline order. */
+  row: number
+  /** Where the card wants its top. */
+  anchor: number
+  /** Kept after its row's other cards whatever its anchor: it stands for
+   *  threads in the rows below. */
+  trailing: boolean
+  /** Position among its block's cards, breaking ties. */
+  order: number
+}
+
+/** The order `placeCards` takes cards in: by row, then by where each sits in
+ *  it, not by the stored quote position, which moving text leaves behind. */
+export const byPlacement = (a: MarginCard, b: MarginCard): number =>
+  a.row - b.row || Number(a.trailing) - Number(b.trailing) || a.anchor - b.anchor || a.order - b.order
+
 export interface CardBox {
   /** Where the card wants its top: its target row's top. */
   anchor: number
@@ -27,4 +44,23 @@ export const placeCards = (cards: readonly CardBox[], focused: number, gap: numb
     tops[i] = Math.min(tops[i], tops[i + 1] - cards[i].height - gap)
   }
   return tops
+}
+
+export interface ColumnFit {
+  width: number
+  /** How far left of its centred place the text moves to make the width. */
+  shift: number
+}
+
+/** The widest column that fits beside the text, given the room on each side of
+ *  it while centred, or null when not even `min` does. The text moves only as
+ *  far as the widest column still needs, so a pane with room to spare leaves it
+ *  centred. */
+export const fitColumn = (
+  room: {left: number; right: number},
+  {min, max}: {min: number; max: number},
+): ColumnFit | null => {
+  const shift = Math.max(0, Math.floor(Math.min(max - room.right, room.left)))
+  const width = Math.min(max, Math.floor(room.right + shift))
+  return width < min ? null : {width, shift}
 }

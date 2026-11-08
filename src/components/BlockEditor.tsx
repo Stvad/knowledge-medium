@@ -242,8 +242,9 @@ export const BlockEditor = ({
   }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
-  // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
-  // mounted — for any consumer (markdown editor, extension editor, future).
+  // context (Escape, Tab, etc.) fire whenever this editor is mounted — for any
+  // consumer (markdown editor, extension editor, future). A consumer holding
+  // source opts out of the outline-edit keys: keepOutlineEditKeysInEditor.
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 

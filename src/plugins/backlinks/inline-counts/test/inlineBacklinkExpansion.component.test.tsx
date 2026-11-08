@@ -20,6 +20,7 @@ import {waitForRenderOrder} from '@/test/domOrder'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
+import {breadcrumbsPlugin} from '@/plugins/breadcrumbs'
 import {backlinksPlugin} from '@/plugins/backlinks'
 import {backlinksViewPlugin} from '@/plugins/backlinks-view'
 import {topLevelBlockIdProp} from '@/data/properties'
@@ -84,6 +85,7 @@ describe('where a block\'s backlinks render', () => {
         defaultRenderersExtension,
         plainOutlinerPlugin,
         referencesPlugin,
+        breadcrumbsPlugin,
         backlinksPlugin,
         backlinksViewPlugin,
       ],

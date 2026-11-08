@@ -9,6 +9,10 @@ import { getModePin } from '@/sync/keys/modePin.js'
  * (docs/workspace-e2ee-conversion.md §6.2). `onClose` re-resolves the layout,
  * which then shows the gate. Checks once on mount too, since the row may have
  * changed between the layout resolving and this effect subscribing.
+ *
+ * Closes at most once per effect run: the mount check and a change check can
+ * both read e2ee, and so can every later `workspaces` change until the
+ * re-resolution makes this effect inactive.
  */
 export const useCloseOnServerE2ee = (
   db: Repo['db'],
@@ -20,11 +24,14 @@ export const useCloseOnServerE2ee = (
   useEffect(() => {
     if (!active) return
     let disposed = false
+    let closed = false
     const check = async () => {
       if (getModePin(userId, workspaceId) === 'e2ee') return
       try {
         const mode = await readWorkspaceEncryptionMode(db, workspaceId)
-        if (!disposed && mode === 'e2ee') onClose()
+        if (disposed || closed || mode !== 'e2ee') return
+        closed = true
+        onClose()
       } catch (err) {
         // The database closing under an account switch, say; the next change re-checks.
         console.warn('[gate] workspace mode read failed', err)

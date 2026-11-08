@@ -28,10 +28,10 @@
  * whitespace, unicode homoglyphs, or empty/absent values — must quarantine an
  * unpinned workspace, never silently pass it as plaintext-safe and never
  * silently unlock; and only the exact string may make a pin stricter than it is. Hence the generator
- * below is weighted toward `fc.string({unit: 'binary'})` (arbitrary
+ * below is weighted toward `fc.string({unit: codePointUnitArb})` (arbitrary
  * unicode, including the empty string and long strings) rather than just
  * the two literals the existing example-based tests
- * (`workspaceAccess.test.ts`) already cover. `unit: 'binary'` is explicit
+ * (`workspaceAccess.test.ts`) already cover. The unit is explicit
  * because fast-check 4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'`
  * (printable ASCII only) — an unqualified call here would silently drop
  * the "unicode homoglyphs" case this docblock claims to cover.
@@ -54,6 +54,7 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import type { ModePin } from './modePin'
 import { decideWorkspaceEntry, resolveWorkspaceAccess, type WorkspaceModeRow } from './workspaceAccess'
 
@@ -66,13 +67,13 @@ const pinArb: fc.Arbitrary<ModePin | null> = fc.constantFrom<ModePin | null>(nul
  *  actually sends ('e2ee' / 'none'), but mostly arbitrary strings —
  *  unicode, empty, long — since the strict `=== 'e2ee'` comparison is the
  *  property under test and an adversarial/corrupted server value is exactly
- *  the case the fail-closed gate exists for. `unit: 'binary'` (full Unicode
+ *  the case the fail-closed gate exists for. `codePointUnitArb` (full Unicode
  *  code-point range, excluding lone surrogates) rather than the default
  *  `'grapheme-ascii'`, so this actually reaches non-ASCII near-misses of
  *  `'e2ee'` (e.g. homoglyphs), not just printable ASCII. */
 const serverEncryptionModeArb: fc.Arbitrary<string> = fc.oneof(
   { weight: 2, arbitrary: fc.constantFrom('e2ee', 'none') },
-  { weight: 1, arbitrary: fc.string({ maxLength: 500, unit: 'binary' }) },
+  { weight: 1, arbitrary: fc.string({ maxLength: 500, unit: codePointUnitArb }) },
   // Near-misses on the exact literal, to press on strict equality specifically.
   { weight: 1, arbitrary: fc.constantFrom('E2EE', 'e2ee ', ' e2ee', 'e2ee\x00', 'E2ee', '') },
 )

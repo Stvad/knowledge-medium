@@ -92,6 +92,27 @@ describe('applyKeybindingOverrides', () => {
     expect(out[1]!.defaultBinding).toEqual({keys: '$mod+k'})
   })
 
+  it('off-Mac, strips a Control default claimed by a $mod override (one physical chord there)', () => {
+    // Settings capture records Ctrl+W as `$mod+w` off-Mac; the default
+    // spelled `Control+w` fires on that same press.
+    vi.stubGlobal('navigator', {platform: 'Win32', userAgent: ''})
+    try {
+      const actions = [
+        action('victim', ActionContextTypes.GLOBAL, 'Control+w'),
+        action('claimer', ActionContextTypes.GLOBAL),
+      ]
+      const out = applyKeybindingOverrides(actions, [userOverride({
+        actionId: 'claimer',
+        binding: {keys: '$mod+w'},
+      })])
+
+      expect(out[0]!.defaultBinding).toBeUndefined()
+      expect(out[1]!.defaultBinding).toEqual({keys: '$mod+w'})
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('keeps the un-claimed chords of a multi-chord default', () => {
     const actions = [
       action('victim', ActionContextTypes.NORMAL_MODE, ['cmd+k', 'cmd+j']),

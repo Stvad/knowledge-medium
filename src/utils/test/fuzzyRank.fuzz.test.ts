@@ -48,7 +48,7 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { utf16UnitArb } from '@/test/arbitraries/utf16'
+import { codePointUnitArb, utf16UnitArb } from '@/test/arbitraries/utf16'
 import {
   buildFilterPrefixes,
   rankCandidates,
@@ -63,10 +63,10 @@ const NOW = 1_700_000_000_000
 // ──── P1: totality ────
 
 /** Arbitrary UTF-16 content, mirroring the soup style in
- *  routing.fuzz.test.ts: whole code points (astral included) from `'binary'`,
+ *  routing.fuzz.test.ts: whole code points (astral included) from `codePointUnitArb`,
  *  and ill-formed sequences carrying lone surrogates from `utf16UnitArb`. */
 const wildStringArb = (maxLength: number) =>
-  fc.oneof(fc.string({unit: 'binary', maxLength}), fc.string({unit: utf16UnitArb, maxLength}))
+  fc.oneof(fc.string({unit: codePointUnitArb, maxLength}), fc.string({unit: utf16UnitArb, maxLength}))
 
 describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandidates never throw', () => {
   it('on arbitrary unicode/empty/long labels and queries', () => {
@@ -98,19 +98,9 @@ describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandid
       }),
       fuzzParams(300),
     )
-    // Explicit budget: this property asserts only that nothing THROWS on
-    // adversarial unicode, so wall-clock is not what it is testing — and it
-    // timed out against vitest's 5s default on an unmodified ranker, i.e. a
-    // timeout here is not a regression signal.
-    //
-    // It is ~0.5s run alone (mostly fast-check/JIT warm-up, being the first
-    // `fc.assert` in the file's process — the steady-state property body is
-    // single-digit ms), but 2.9-4.4s inside a loaded full suite. That
-    // multiplier is well above the ~6x the suite sees at p99.9 because this
-    // property is pure CPU with no awaits: it never yields, so it takes the
-    // full brunt of one-worker-per-core contention instead of interleaving
-    // with it. 4.4s against a 5s default is a coin flip, which is what this
-    // was losing.
+    // Explicit budget: this property asserts only that nothing THROWS, so
+    // wall-clock is not what it tests, and being pure CPU with no awaits it
+    // takes the full brunt of a loaded worker instead of interleaving with it.
     //
     // Derived (`fuzzTestTimeout()`), never a hard-coded number: a per-test
     // timeout OVERRIDES the `--testTimeout` that `pnpm fuzz` passes, so a

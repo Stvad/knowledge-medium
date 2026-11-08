@@ -312,13 +312,13 @@ const ExpandButton = ({block}: { block: Block }) => {
 
   // - mobile: always visible (touch UIs have no hover affordance)
   // - desktop with children: hidden until the parent block-group is hovered
-  // - desktop leaf: invisible placeholder so layout doesn't reflow on
-  //   children appearing/disappearing
+  // - desktop leaf: inert, invisible placeholder so layout doesn't reflow on
+  //   children appearing/disappearing, and a miss can't collapse a row unseen
   const visibilityClass = isMobile
     ? 'opacity-100'
     : hasChildren
       ? 'opacity-0 group-hover/block:opacity-100'
-      : 'opacity-0'
+      : 'pointer-events-none opacity-0'
 
   // On touch devices the synthesized `click` arrives after a small
   // delay and after `pointerup`/`touchend`; if anything between those

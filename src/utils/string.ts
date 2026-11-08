@@ -56,7 +56,6 @@ export const truncateMiddle = (value: string, max: number): string => {
   // matter here, so an astral character near either one would break.
   const chars = [...value]
   if (chars.length <= max) return value
-  if (max <= 1) return '…'
   const keep = max - 1
   const head = Math.ceil(keep / 2)
   return `${chars.slice(0, head).join('')}…${chars.slice(chars.length - (keep - head)).join('')}`
