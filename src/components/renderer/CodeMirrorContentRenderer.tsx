@@ -91,12 +91,15 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       ? blockContext.renderScopeId
       : undefined
 
+    // The stored row lags the view by the content debounce. Both writes below
+    // need it current: the cut move reads it (a blank target is replaced), and
+    // undoing a multi-line paste restores it. Every chord, since the decision
+    // verb may split a ⌘⇧V paste; the flush takes the write lock ahead of
+    // either tx.
+    flushEditorContent(editorView)
+
     // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
-      // The stored row lags the view by the content debounce. The move reads
-      // the stored row (a blank target is replaced), so persist the live text
-      // first: the flush takes the write lock ahead of the move's tx.
-      flushEditorContent(editorView)
       const cutPaste = await pasteArmedCut(content.text, block, repo, {
         scopeRootId: blockContext.scopeRootId,
       })
