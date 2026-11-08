@@ -108,9 +108,9 @@ export const BlockEditor = ({
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
 
-  // Content only: flushed before the focus write, a pending selection would
-  // pass pushSelection's guard and overwrite the selection the navigation just
-  // wrote for its target block.
+  // Content only: whoever reads "not being edited" needs the text stored, not
+  // the selection, and flushing the selection too would queue one more
+  // transaction ahead of the focus write.
   const flushContent = useCallback(() => { pushChange.flush() }, [pushChange])
   useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
 
