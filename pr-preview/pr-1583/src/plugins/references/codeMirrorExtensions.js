@@ -1,1 +1,1 @@
-export{xv as aliasCompletions,Sv as referencesCodeMirrorExtensions}from"../../../chunks/app-srHSmRAQ.js";
+export{Av as aliasCompletions,jv as referencesCodeMirrorExtensions}from"../../../chunks/app-C6SaFokq.js";

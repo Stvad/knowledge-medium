@@ -1,1 +1,1 @@
-export{At as bootstrapWorkspace}from"../../chunks/app-srHSmRAQ.js";
+export{At as bootstrapWorkspace}from"../../chunks/app-C6SaFokq.js";
