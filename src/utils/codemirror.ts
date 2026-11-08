@@ -237,9 +237,10 @@ export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
 }
 
-/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but for
- *  bracket closing, and for the fold and lint keymaps it doesn't name. Keys and history
- *  come from the app; autocompletion brings its own keymap whatever this says. */
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it. What it
+ *  doesn't name stays on. Of its keymaps only bracket closing's, fold's and lint's do;
+ *  keys and history come from the app, and autocompletion brings its own keymap
+ *  whatever this says. */
 export const BLOCK_EDITOR_BASIC_SETUP = {
   closeBrackets: true,
   lineNumbers: false,

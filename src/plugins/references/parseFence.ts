@@ -47,7 +47,6 @@
 
 import type { SameTxReadDb } from '@/data/api'
 import { parseReferences } from './referenceParser.ts'
-import { hasSourceContent } from '@/data/blockTypes'
 
 /** One enumerated referrer: the id plus the content every caller needs
  *  anyway (to classify the row and to splice its spans). */
@@ -55,34 +54,6 @@ export interface ReferrerRow {
   sourceId: string
   content: string
 }
-
-/** A candidate row before filtering: `ReferrerRow` plus the raw
- *  `properties_json` the source-content check needs. Not part of the
- *  returned shape — callers get plain `ReferrerRow`s. */
-interface CandidateRow extends ReferrerRow {
-  propertiesJson: string | null
-}
-
-/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
- *  by design: this is a candidate FILTER, and a row whose JSON is
- *  unparseable is not source content (its `types` can't say so), so
- *  it falls through to the ordinary content path — the same answer
- *  `hasSourceContent` gives for a wrong-shaped value. */
-const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
-  if (json === null) return {}
-  try {
-    const parsed: unknown = JSON.parse(json)
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
-}
-
-/** {@link hasSourceContent} for a raw row. */
-export const rowHasSourceContent = (propertiesJson: string | null): boolean =>
-  hasSourceContent({properties: parsePropertiesJson(propertiesJson)})
 
 /** Candidate rows whose CONTENT contains a literal substring, read from
  *  the trigger-maintained trigram index.
@@ -92,8 +63,7 @@ export const rowHasSourceContent = (propertiesJson: string | null): boolean =>
  *  row the index doesn't actually cover. Ordered like the edge-keyed
  *  enumerations it supplements, so a merged result stays deterministic. */
 const SELECT_FTS_CANDIDATES_SQL = `
-  SELECT blocks_fts.block_id AS sourceId, b.content AS content,
-         b.properties_json AS propertiesJson
+  SELECT blocks_fts.block_id AS sourceId, b.content AS content
   FROM blocks_fts
   JOIN blocks b
     ON b.id = blocks_fts.block_id
@@ -110,8 +80,7 @@ const SELECT_FTS_CANDIDATES_SQL = `
  *  interchangeable from the caller's side; only the cost differs (this one
  *  scans the workspace). */
 const SELECT_SCAN_CANDIDATES_SQL = `
-  SELECT b.id AS sourceId, b.content AS content,
-         b.properties_json AS propertiesJson
+  SELECT b.id AS sourceId, b.content AS content
   FROM blocks b
   WHERE b.workspace_id = ?
     AND instr(b.content, ?) > 0
@@ -193,19 +162,13 @@ export const wikilinkSourcesByContent = async (
   // the stored TEXT rather than a query string and matches an embedded NUL
   // correctly — verified against the engine, not assumed, since plenty of
   // SQL string functions do truncate there.
-  const candidates = await db.getAll<CandidateRow>(
+  const candidates = await db.getAll<ReferrerRow>(
     containsNul(needle) ? SELECT_SCAN_CANDIDATES_SQL : SELECT_FTS_CANDIDATES_SQL,
     [workspaceId, containsNul(needle) ? needle : ftsPhrase(needle)],
   )
-  return candidates
-    // `references.parseReferences` does not run the wikilink grammar over
-    // source code in `blocks.content`, so those blocks have no edge: the
-    // edge-keyed leg could never reach them, and this leg reads content
-    // directly and WOULD. Rewriting a span inside stored source is not a missed
-    // rewrite, it is corrupted source.
-    .filter(row => !rowHasSourceContent(row.propertiesJson))
-    .filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
-    .map(({sourceId, content}) => ({sourceId, content}))
+  // Source blocks come back too; the rename's write refuses them, as it does
+  // those the edge leg finds.
+  return candidates.filter(row => parseReferences(row.content).some(mark => mark.alias === alias))
 }
 
 /** Union the legs, first occurrence of an id winning.

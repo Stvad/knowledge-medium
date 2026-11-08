@@ -32,7 +32,27 @@ import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
 import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
-import { rowHasSourceContent } from '@/plugins/references/parseFence.js'
+import { hasSourceContent } from '@/data/blockTypes'
+
+/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
+ *  by design: a row whose JSON is unparseable is not source content (its
+ *  `types` can't say so) — the same answer `hasSourceContent` gives for a
+ *  wrong-shaped value. */
+const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
+  if (json === null) return {}
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+/** {@link hasSourceContent} for a raw row. */
+const rowHasSourceContent = (propertiesJson: string | null): boolean =>
+  hasSourceContent({properties: parsePropertiesJson(propertiesJson)})
 
 /** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
 export interface AuditDb {

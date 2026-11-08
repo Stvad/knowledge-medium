@@ -1,5 +1,6 @@
 import { InMemoryWorkspaceKeyStore } from '../../keys/keyStore.js'
-import { sha256Hex, writeBytesPart, type BundleFolder, type PartDigest } from '../bundle/bundleParts.js'
+import { writeBytesPart, type BundleFolder, type PartDigest } from '../bundle/bundleParts.js'
+import { sha256Hex } from '../../crypto/sha256Hex.js'
 import type { BundleRecord } from '../bundle/bundleRecord.js'
 import { InMemoryBundleRecordStore } from '../bundle/bundleRecord.js'
 import { BUNDLE_PARTS } from '../bundle/manifest.js'

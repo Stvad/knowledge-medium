@@ -213,5 +213,3 @@ export const bundleFolderIn = async (picked: BundleFolder, name: string, signal?
     return picked
   }
 }
-
-export {sha256Hex}

@@ -109,6 +109,12 @@ const documentFrame = (host: HostPage) => {
 const frameHeight = (host: HostPage) =>
   host.page.locator('#mount iframe').evaluate(frame => frame.getBoundingClientRect().height)
 
+const historyLength = (host: HostPage) => host.page.evaluate(() => history.length)
+
+const clearReports = (host: HostPage) => host.page.evaluate(() => {
+  window.reports.length = 0
+})
+
 /** Two frames of the page's rendering: heights apply on the next one. */
 const nextRender = (host: HostPage) =>
   host.page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
@@ -700,45 +706,39 @@ describe.each(selectedEngines())('%s', engine => {
       await mount(host, 'sandboxed', source)
       await untilReported(host, {ran: 'an inline script'})
 
-      await host.page.evaluate(() => {
-        window.reports.length = 0
-      })
+      await clearReports(host)
       await mountHeld(host, source)
       await settle(host)
       expect(await ranSoFar()).toEqual([])
     })
 
     it('adds nothing to the page\'s history when it starts or stops', async () => {
-      const entries = () => host.page.evaluate(() => history.length)
       const source = `<p>text</p>${script(ARMED)}`
       await mountHeld(host, source)
-      const before = await entries()
+      const before = await historyLength(host)
       await mountRunning(host, source)
       await mountHeld(host, source)
       await settle(host)
-      expect(await entries()).toBe(before)
+      expect(await historyLength(host)).toBe(before)
     })
 
     // Holds on Chromium with or without the frame's key. It's for the engines whose
     // joint history behaves differently.
     it('does not run again when Back returns past a stop', async () => {
-      const entries = () => host.page.evaluate(() => history.length)
       // After load: a fragment navigation during load replaces the entry.
       const source = `<p>text</p>${script(`
         top.postMessage({ran: 'an inline script'}, '*')
         addEventListener('load', () => setTimeout(() => { location.hash = '#moved'; top.postMessage('moved', '*') }, 50))
       `)}`
-      const before = await entries()
+      const before = await historyLength(host)
       await mountRunning(host, source)
       await untilReported(host, 'moved')
       await mountHeld(host, source)
       await settle(host)
-      const added = await entries() - before
+      const added = await historyLength(host) - before
       expect(added > 0).toBe(FRAGMENT_ADDS_TO_HISTORY[engine])
 
-      await host.page.evaluate(() => {
-        window.reports.length = 0
-      })
+      await clearReports(host)
       for (let step = 0; step < added; step += 1) {
         await host.page.evaluate(() => history.back())
         await host.page.waitForTimeout(150)
@@ -797,9 +797,8 @@ describe.each(selectedEngines())('%s', engine => {
     it.runIf(engine === 'chromium')('adds to the page\'s history while held, the same way', async () => {
       const host = await openHost(browser, servers.hostUrl)
       await mountHeld(host, FRAGMENT_THIEF)
-      const entries = () => host.page.evaluate(() => history.length)
-      const before = await entries()
-      await expect.poll(entries, {timeout: 10_000}).toBeGreaterThan(before)
+      const before = await historyLength(host)
+      await expect.poll(() => historyLength(host), {timeout: 10_000}).toBeGreaterThan(before)
       await host.close()
     })
 
