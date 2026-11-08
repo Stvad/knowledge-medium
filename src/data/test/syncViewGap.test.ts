@@ -380,16 +380,14 @@ describe('Repo.workspaceViewGap', () => {
     )).behind).toBe(ids.length)
   })
 
-  // 1,005 serialized deliveries, 268ms solo. The "~6x the gate adds" reasoning
-  // this carried was measured wrong on the same shape one file away
-  // (`stagingNeedsApplyMigration`: 23x), and this test then timed out 4/4 at the
-  // 5,000ms default under a loaded gate. Budgeted, with the measurement.
+  // One batched delivery rather than 1,005 serialized ones: under a loaded gate
+  // the serialized shape stretched past the default timeout.
   it('caps the count it reports rather than the rows it examines', async () => {
     const repo = makeRepo()
-    for (let i = 0; i < WORKSPACE_UNAPPLIED_COUNT_CAP + 5; i++) {
-      await deliver(syncedRow({id: `staged-${i}`, updatedAt: 5}))
-    }
+    await sharedDb.db.executeBatch(BLOCKS_SYNCED_RAW_TABLE.put.sql,
+      Array.from({length: WORKSPACE_UNAPPLIED_COUNT_CAP + 5}, (_, i) =>
+        blockToSyncedRowParams(syncedRow({id: `staged-${i}`, updatedAt: 5}))))
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
     expect((await repo.workspaceViewGap(WS))?.reason).toMatch(/at least 1,000/)
-  }, 30_000)
+  })
 })

@@ -29,6 +29,7 @@ describe('markdown extensions', () => {
     ], {
       block,
       blockContext: {videoPlayerBlockId: 'video-1'},
+      input: {},
       data: emptyData,
     })
 
@@ -50,6 +51,7 @@ describe('markdown extensions', () => {
     ], {
       block,
       blockContext: {},
+      input: {},
       data: emptyData,
     })
 

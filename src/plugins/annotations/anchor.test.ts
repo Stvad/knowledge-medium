@@ -159,6 +159,15 @@ describe('resolveAnchor', () => {
     expect(resolveAnchor('abc', {quote: '', quoteStart: 9, prefix: 'zz', suffix: ''})).toEqual({state: 'stale'})
   })
 
+  it('is never exact at a start that is not a position in the text', () => {
+    // Hand-made: `startsWith` reads -1 as 0 while the window slices from the
+    // end, so a crafted prefix could otherwise match.
+    const content = 'Thursday is fine'
+    const crafted: RangeAnchor = {quote: 'Thursday', quoteStart: -1, prefix: 'Thursday is fin', suffix: 'y is fine'}
+    expect(resolveAnchor(content, crafted).state).not.toBe('exact')
+    expect(resolveAnchor(content, {quote: 'Thursday', quoteStart: 0.5, prefix: '', suffix: ' is fine'}).state).not.toBe('exact')
+  })
+
   it('without a start hint is never exact, and ties go to the first occurrence', () => {
     const anchor: RangeAnchor = {quote: 'ab', quoteStart: undefined, prefix: '1234', suffix: '5678'}
     expect(resolveAnchor('1234ab5678 1234ab5678', anchor)).toEqual({state: 'moved', from: 4, to: 6})

@@ -63,6 +63,7 @@ export type {
 } from '@/extensions/core.js'
 
 export type {
+  BlockBelowContentContribution,
   BlockBulletClassContext,
   BlockBulletClassContribution,
   BlockBulletHoverContribution,
@@ -86,6 +87,10 @@ export type {
   ShortcutActivationContribution,
   ShortcutSurfaceContext,
 } from '@/extensions/blockInteraction.js'
+
+export type {
+  MarkdownSource,
+} from '@/markdown/context.js'
 
 export type {
   OutlineNode,
@@ -141,6 +146,8 @@ export type {
   TypeContribution,
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
+
+export type { SystemPage } from '@/data/facets.js'
 
 export type {
   DerivedChildOutcome,

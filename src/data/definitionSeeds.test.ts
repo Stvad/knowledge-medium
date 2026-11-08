@@ -39,6 +39,7 @@ import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {waitFor} from '@/test/waitFor'
 import type {Repo} from '@/data/repo'
 import type {PendingIdleJobs} from '@/data/internals/idleMarkerJobs'
 
@@ -587,7 +588,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
    *  this poll expiring — carrying the last assertion error — rather than as
    *  an opaque test timeout. */
   const waitForMaterialization = (check: () => Promise<void>): Promise<void> =>
-    vi.waitFor(check, {timeout: 15_000, interval: 50})
+    waitFor(check, {timeout: 15_000})
 
   type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
 
@@ -720,7 +721,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       })
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
     await repo.awaitSeedMaterialization()
     // Exactly one dirty re-run (2 total): the mid-flight change is honored and the
     // loop terminates once no further change is pending — no unbounded re-running.
@@ -732,7 +733,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     await repo.whenPropertyDefinitionsReady(WS)
     // A dynamic type seed (a `seedType` contribution that appears post-bootstrap).
     repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
     })
 
@@ -770,7 +771,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
     })
 
@@ -796,7 +797,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // Gate on the test seeds' own keys, not a total count: post-C4a the registry
     // also carries the kernel type seeds (`system:kernel-data/type/*`), so an
     // absolute `seedsByKey.size` would double-count them.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/a')).toBe(seedA)
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
     })
@@ -845,7 +846,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // The two same-key contributions collapse to one (keep-first); assert that
     // survivor directly rather than a total `seedsByKey.size`, which post-C4a also
     // counts the kernel type seeds (`system:kernel-data/type/*`).
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.get(DUP_KEY)).toBe(first)
       expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(true)
     })
@@ -862,7 +863,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // reschedule — no explicit schedule here, this rides the applyTypesAndSchemas
     // auto-reschedule under test.
     repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first])
-    await vi.waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
+    await waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
     await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
@@ -886,7 +887,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     const seedB = seedType({seedKey: K1, revision: 1, id: 'y', label: 'B'})
     const seedC = seedType({seedKey: K2, revision: 1, id: 'x', label: 'C'})
     repo.setRuntimeContributions(typeSeedsFacet, 'triple', [seedA, seedB, seedC])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.contestedSeedKeys.has(K1)).toBe(true)
       // id 'x' resolves to A's key (k1), the winner — but that key is contested.
       expect(repo.typeDefinitions?.seedKeyById.get('x')).toBe(K1)
@@ -925,7 +926,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
 
     // The embedded property was harvested into the property registry (so its schema
     // resolves for anything typed with it)...
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.propertyDefinitions?.seedsByKey.has('system:demo/property/color')).toBe(true)
     })
     // ...and it materializes a backing block by the same path as any property seed, so
@@ -1555,7 +1556,7 @@ describe('type definition materialization', () => {
     // The declared-seed contribution publishes into `repo.types` immediately
     // (independent of the block), so wait on the block-bound side of the
     // registry to prove the materialized row was actually projected.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.userTypes.getTypeBlockId(typeSeed.id)).toBeDefined()
     }, {timeout: 3000})
 

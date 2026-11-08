@@ -193,6 +193,7 @@ async function run() {
 
   console.log("\n— BUCKET: its upload limit readable by any signed-in user —")
   const bucketLimit = async (client: SupabaseClient) => (await client.storage.getBucket(BUCKET)).data?.file_size_limit
+  // A null limit fails on purpose, not accepted as the project-wide one: the migration and config.toml both set it.
   check("stranger (signed in, non-member) reads the bucket's upload limit", typeof (await bucketLimit(stranger.client)) === 'number')
   check('anon bucket read DENIED', (await bucketLimit(createClient(url!, anon!, noPersist))) === undefined)
 

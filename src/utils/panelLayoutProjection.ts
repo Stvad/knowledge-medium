@@ -3,6 +3,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData, Tx, Unsubscribe } from '@/data/api'
 import { ChangeScope } from '@/data/api'
 import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
@@ -31,6 +32,7 @@ import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
+import { peekRowProperty } from '@/data/rowProperty'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -49,17 +51,11 @@ interface ReconciliationPlan {
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
 
-export const panelBlockId = (row: BlockData): string | undefined => {
-  const stored = row.properties[topLevelBlockIdProp.name]
-  if (stored === undefined) return undefined
-  return topLevelBlockIdProp.codec.decode(stored)
-}
+export const panelBlockId = (row: BlockData): string | undefined =>
+  peekRowProperty(row, topLevelBlockIdProp)
 
-const panelViewMode = (row: BlockData): string | undefined => {
-  const stored = row.properties[panelViewModeProp.name]
-  if (stored === undefined) return undefined
-  return normalizeViewMode(panelViewModeProp.codec.decode(stored))
-}
+const panelViewMode = (row: BlockData): string | undefined =>
+  normalizeViewMode(peekRowProperty(row, panelViewModeProp))
 
 
 /**
@@ -106,11 +102,8 @@ export const visiblePanelRows = (
  *  in ONE tx, but two subscriptions can deliver them in either order, and any
  *  logic comparing them (which pane is maximized, which pane is active) then
  *  runs against a half-applied commit. */
-export const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
-  const stored = row?.properties[activePanelIdProp.name]
-  if (stored === undefined) return undefined
-  return activePanelIdProp.codec.decode(stored)
-}
+export const sessionActivePanelId = (row: BlockData | undefined): string | undefined =>
+  row && peekRowProperty(row, activePanelIdProp)
 
 /** The session points at a panel row that is not in its subtree. */
 const hasDanglingActivePanel = (session: BlockData, rows: readonly BlockData[]): boolean => {
@@ -931,6 +924,7 @@ export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
 ): Promise<void> => {
+  flushPendingEditorContent()
   await repo.tx(async tx => {
     const row = await tx.get(panelId)
     if (!row) return
@@ -1201,6 +1195,7 @@ export const reconcilePanelRows = async (
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
+  flushPendingEditorContent()
   const changed = await runTx()
 
   // History effects only after the tx committed: ANY in-tx throw

@@ -10,13 +10,14 @@ Read this before editing `scripts/bd-*.mjs` or the publish hooks, touching the D
 - A bare `bd github sync` needs `GITHUB_TOKEN=$(gh auth token)`; the wrapper (`pnpm bd:sync`, `scripts/bd-github-sync.mjs`) fetches the token itself.
 - Judge sync state from a REAL run's output, never `--dry-run`. Dry-run over-reports: it lists every timestamp-dirty pair, and a real push then skips the content-identical ones. Even a converged full sync takes several seconds (an issue listing and one tracker read), which is why the pre-PR hook doesn't run one.
 
-### The five traps the wrapper guards
+### The six traps the wrapper guards
 
 1. It adopts GitHub-side closes into beads BEFORE pushing. Otherwise an open bead clobbers a GitHub-side close, including a merged "Fixes #N", and RE-OPENS the issue.
 2. It gives a bead the pull CREATES from a GitHub-filed issue the priority its `P0–P4` / `priority::*` labels spell. The pull assigns P2 to anything without a `priority::*` machine label, which silently rots `bd ready` ordering. A linked bead is never flattened: the pull is not handed one whose priority it would default.
 3. It pushes out the close of a bead that was closed before its first sync. The initial push mints the issue OPEN regardless of bead status.
 4. It never hands the pull a bead whose local row is newer. The push carries it, run BEFORE the pull, and a push that did not land holds back that bead's comment mirror. A bare sync's pull applies a strictly OLDER GitHub copy over newer local edits, claims and closes, despite the documented prefer-newer default (#647, measured live: a close made locally and left unpushed reappears open after the next full sync).
 5. It DEFUSES the pull's re-apply where that would lose something. bd overwrites any bead whose issue GitHub touched past the local row (a comment, a label edit, the wrapper's own step-4 close). The mapped copy then drops the assignee (bd's push never sets a GitHub one), restamps closed_at (no bd verb puts it back), and re-derives the type from labels, where a bare `enhancement` outranks a scoped `type::chore` (#955).
+6. It COMMITS after each `bd github sync`. bd's sync writes refs and pulled rows to the Dolt working set only, `bd dolt push` sends only commits and still prints `Push complete`, and `bd vc status` does not show the difference (#1606). A bare `bd github sync` still needs `bd dolt commit` before the push.
 
 ### Pull by identifier
 

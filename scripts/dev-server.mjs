@@ -100,8 +100,9 @@ export const listListeners = (exec = run) => {
 
 export const canBind = (port, host) => new Promise(resolve => {
   const server = createServer()
-  // EADDRNOTAVAIL: this machine has no such address, so nothing holds the port on it.
-  server.once('error', error => resolve(error.code === 'EADDRNOTAVAIL'))
+  // EADDRNOTAVAIL / EAFNOSUPPORT: this machine has no such address or address family (an IPv6-less
+  // container), so nothing holds the port on it.
+  server.once('error', error => resolve(error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT'))
   server.listen({ port, host, exclusive: true }, () => server.close(() => resolve(true)))
 })
 

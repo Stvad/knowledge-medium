@@ -11,7 +11,7 @@ const NOW = 1_800_000_000_000
 
 interface FakeGraphSeed {
   pageId?: string
-  backlinks?: Array<{id: string, deepLink?: string}>
+  backlinks?: Array<{id: string, deepLink?: string, sourceFields?: string[]}>
   blocks?: Record<string, Partial<BlockData>>
   /** What `comments({thread})` answers, by root id. */
   threads?: Record<string, CommentThreadView>
@@ -36,8 +36,8 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const graph: Graph & ReplyWriter = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
-      (seed.backlinks ?? []).map(({id, deepLink}) => ({
-        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
+      (seed.backlinks ?? []).map(({id, deepLink, sourceFields}) => ({
+        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: sourceFields ?? [''],
       }))),
     getBlock: async id => blocks.get(id) ?? null,
     ancestors: async id => {
@@ -171,7 +171,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
 describe('mention inside a comment thread', () => {
   const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
   const comment = (id: string, by: ReturnType<typeof author>, content: string, replies: CommentThreadView['comments'] = []) => ({
-    id, shortId: id, content, cut: 0, author: by, createdAt: 1, replies,
+    id, content, cut: 0, author: by, createdAt: 1, replies,
   })
   const alex = author('Alex', 'human')
   const claude = author('Claude', 'agent')
@@ -187,8 +187,8 @@ describe('mention inside a comment thread', () => {
     },
     threads: {
       root: {
-        id: 'root', shortId: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
-        target: {id: 'target', shortId: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
+        id: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
+        target: {id: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
         comments: [
           comment('c1', alex, 'Is Thursday confirmed?', [
             comment('c2', claude, 'Yes, 9am.', [comment('c3', alex, '[[claude]] can you check the venue too?')]),
@@ -221,6 +221,20 @@ describe('mention inside a comment thread', () => {
       '    - [c3] Alex (human): [[claude]] can you check the venue too?',
     ].join('\n'))
     expect(prompt).not.toContain('unrelated sibling')
+    // The seed's view has no replacement, as an app older than suggestions sends.
+    expect(prompt).not.toContain('edit suggestion')
+  })
+
+  it('says what an edit suggestion proposes', async () => {
+    const seed = threadSeed()
+    seed.threads!.root = {...seed.threads!.root, replacement: 'Friday'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('The thread quotes: "Thursday"\nIt is an edit suggestion to replace that text with: "Friday"')
   })
 
   it('answers the mention without the thread when the thread cannot be read', async () => {
@@ -579,6 +593,27 @@ describe('mention lifecycle', () => {
 
     expect(runTask).toHaveBeenCalledTimes(1)
     expect(reconciles).toHaveLength(1)
+  })
+
+  it('does not treat a block that only credits the target page as its author as a mention', async () => {
+    // The target page doubling as the run's contributor: everything the run
+    // writes outside its reply then references the target through attribution.
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [
+        {id: 'authored', sourceFields: ['attribution:creators', 'attribution:editors']},
+        {id: 'linked', sourceFields: ['', 'attribution:editors']},
+      ],
+      blocks: {'authored': {content: 'a block the run wrote'}, 'linked': {content: '[[claude]] and this'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(propWrites.map(write => write.id)).not.toContain('authored')
+    expect(propWrites.map(write => write.id)).toContain('linked')
   })
 
   it('waits for the quiet period before claiming a just-edited mention', async () => {
@@ -1093,6 +1128,27 @@ describe('mention lifecycle', () => {
     expect(tools).toContain('WebSearch')
     expect(tools).toContain('WebFetch')
     expect(tools).toContain('Bash(git:*)')
+  })
+
+  it("passes a claude watcher's effort to its run", async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] think it through'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'claude', effort: 'high'}}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask.mock.calls[0][0]).toMatchObject({effort: 'high'})
   })
 
   it('defaultAllowedTools: [] keeps runs graph-only (web-tools opt-out)', async () => {

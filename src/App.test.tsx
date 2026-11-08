@@ -113,7 +113,8 @@ import App from './App'
 import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { setModePin } from '@/sync/keys/modePin.js'
-import { buildAppHash } from '@/utils/routing'
+import { buildAppHash, buildLayout } from '@/utils/routing'
+import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 
 describe('App / LayoutRootContext provision', () => {
   let sharedDb: TestDb
@@ -185,6 +186,35 @@ describe('App / LayoutRootContext provision', () => {
 
     await vi.waitFor(() => expect(screen.queryByTestId('app-block-component')).toBeNull())
     expect(await screen.findByRole('heading', {name: /vault/i})).toBeInTheDocument()
+  })
+
+  it('re-resolves a workspace the server converts at the page the user navigated to', async () => {
+    window.localStorage.clear()
+    setModePin('user-1', 'ws-1', 'plaintext')
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode)
+       VALUES ('ws-1', 'Vault', 'user-1', 1, 1, 'none')`,
+    )
+    window.location.hash = buildLayout('ws-1', ['page-a'])
+    await act(async () => {
+      render(
+        <Suspense fallback={<div>loading</div>}>
+          <App/>
+        </Suspense>,
+      )
+    })
+    await screen.findByTestId('app-block-component')
+    // Same-workspace navigation rewrites the URL without re-resolving the layout.
+    window.history.replaceState(null, '', buildLayout('ws-1', ['page-b']))
+
+    // The stand-in entry check stays `ready`, so the close's re-resolution
+    // bootstraps again and shows which layout App asked for.
+    await act(async () => {
+      await sharedDb.db.execute(`UPDATE workspaces SET encryption_mode = 'e2ee' WHERE id = 'ws-1'`)
+    })
+
+    await vi.waitFor(() => expect(vi.mocked(bootstrapWorkspace)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(bootstrapWorkspace).mock.lastCall?.[0].requestedHash).toBe(buildLayout('ws-1', ['page-b']))
   })
 
   it('leaves a gated workspace for the default one, not the workspace the URL names', async () => {

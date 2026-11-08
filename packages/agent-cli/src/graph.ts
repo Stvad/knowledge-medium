@@ -61,7 +61,6 @@ export interface MoveBlockInput extends ExactIds {
 
 export interface EditBlockResult {
   id: string
-  shortId: string
   /** The replacement with bounded context on each side, cuts marked. */
   excerpt: string
 }
@@ -208,6 +207,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     quote?: string
     occurrence?: number
     content?: string
+    replacement?: string
   } & ExactIds): Promise<unknown> => client.runCommand({type: 'add-comment', ...input})
 
   const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>

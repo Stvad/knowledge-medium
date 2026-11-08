@@ -5,10 +5,16 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { TYPES_PAGE_TYPE } from '@/data/blockTypes'
-import { getOrCreateKernelPage, kernelPageBlockId } from './kernelPage'
+import { getOrCreateKernelPage, kernelPageBlockId, type KernelPageSpec } from './kernelPage'
 
 const TYPES_PAGE_NS = 'fd2c1ba0-7c4e-49f7-8a6b-4d56b3e3a5c7'
 const TYPES_ALIAS = 'Types'
+
+export const typesPageSpec: KernelPageSpec = {
+  namespace: TYPES_PAGE_NS,
+  alias: TYPES_ALIAS,
+  markerType: TYPES_PAGE_TYPE,
+}
 
 export const typesPageBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, TYPES_PAGE_NS)
@@ -16,8 +22,4 @@ export const typesPageBlockId = (workspaceId: string): string =>
 export const getOrCreateTypesPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   // A container of definitions, so its create never joins an undo step (see
   // `getOrCreateKernelPage`).
-  getOrCreateKernelPage(repo, workspaceId, {
-    namespace: TYPES_PAGE_NS,
-    alias: TYPES_ALIAS,
-    markerType: TYPES_PAGE_TYPE,
-  }, {skipUndo: true})
+  getOrCreateKernelPage(repo, workspaceId, typesPageSpec, {skipUndo: true})

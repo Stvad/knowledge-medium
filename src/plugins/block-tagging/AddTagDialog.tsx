@@ -17,7 +17,7 @@ import {
   selectableTagNames,
   tagNameIssue,
 } from './config.ts'
-import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
+import { TagNameIssueHint } from './TagNameIssueHint.tsx'
 
 export interface AddTagDialogResult {
   tagName: string
@@ -48,8 +48,6 @@ export const AddTagDialog = ({
   const trimmedQuery = query.trim()
   const exactQueryMatch = trimmedQuery.length > 0
     && tags.some(tag => tag.toLowerCase() === trimmedQuery.toLowerCase())
-  // `null` when valid; 'empty' can't surface here (guarded by the length
-  // check) so the two rendered branches below cover every visible case.
   const queryIssue = trimmedQuery.length > 0 ? tagNameIssue(trimmedQuery) : null
   const canCreateCustom = trimmedQuery.length > 0 && !exactQueryMatch && queryIssue === null
 
@@ -95,16 +93,7 @@ export const AddTagDialog = ({
               defaults under the user-prefs &quot;Block tags&quot; entry.
             </p>
           )}
-          {queryIssue === 'delimiters' && (
-            <p className="text-xs text-destructive">
-              Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
-            </p>
-          )}
-          {queryIssue === 'too-long' && (
-            <p className="text-xs text-destructive">
-              Tag names must be under {MAX_ALIAS_LENGTH} characters.
-            </p>
-          )}
+          <TagNameIssueHint issue={queryIssue} />
           {filteredTags.length > 0 && (
             <ul className="flex flex-col gap-1">
               {filteredTags.map(tag => (

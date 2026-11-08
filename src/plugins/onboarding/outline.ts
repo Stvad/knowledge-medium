@@ -320,7 +320,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         ],
       },
       {
-        content: "**Character counter** — type `char-counter` shows a live character count under the block, with an optional per-block limit. The limit is visual only — it never blocks typing.",
+        content: "**Character counter** — type `char-counter` shows a live character count under the block, with an optional per-block limit. The limit is visual only — it never blocks typing. Type `word-counter` counts words in the block and everything nested under it instead.",
         children: [
           {
             content: 'Draft a tweet here — edit me and watch the count below track length against the 280 limit (it warns past it, never blocks).',

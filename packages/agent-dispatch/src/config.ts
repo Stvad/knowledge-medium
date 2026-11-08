@@ -62,9 +62,14 @@ const runnerBase = {
   timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
 }
 
+const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
+
 const claudeRunnerSchema = z.strictObject({
   executor: z.literal('claude'),
   ...runnerBase,
+  /** `claude --effort`. Unset, a run takes the effort its model has in the
+   *  user's Claude Code settings. */
+  effort: claudeEffortSchema.optional(),
   /** EXTRA --allowedTools entries beyond the km MCP graph tools.
    *  Empty by default: mention tasks get graph access only, no Bash. */
   allowedTools: z.array(z.string()).default([]),
@@ -129,6 +134,7 @@ const runnerSchema = z.preprocess(
 })
 
 export type Runner = z.infer<typeof runnerSchema>
+export type ClaudeEffort = z.infer<typeof claudeEffortSchema>
 export type CodexSandbox = z.infer<typeof codexSandboxSchema>
 export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
 export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>

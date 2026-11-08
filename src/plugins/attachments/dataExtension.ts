@@ -1,5 +1,7 @@
 import { attachmentCleanerIOVerb } from '@/data/attachmentCleanerIOVerb.js'
+import { systemPagesFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { assetsPageSpec } from './mediaBlock.js'
 
 export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
   // Loaded when asked for: the data runtime's extensions are imported by the
@@ -10,4 +12,7 @@ export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
 
 /** In the data runtime as well as the plugin's: the conversion flow runs from
  *  the workspace gate, where no app runtime has been installed yet. */
-export const attachmentsDataExtension: AppExtension = [attachmentCleanerIOContribution]
+export const attachmentsDataExtension: AppExtension = [
+  systemPagesFacet.of({spec: assetsPageSpec, eager: false}, {source: 'attachments'}),
+  attachmentCleanerIOContribution,
+]

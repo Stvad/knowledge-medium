@@ -171,40 +171,35 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockResolveContext) => BlockContentSurfaceProps
 
-// Slot for sections rendered above a block's body — navigation chrome
-// such as top-level breadcrumbs lives here. Mirrors
-// `blockChildrenFooterFacet` exactly: each contribution returns a
-// renderer (or null/undefined/false to opt out for this block); the
-// layout renders all returned components in contribution order.
-export type BlockHeaderContribution =
+// A section slot's contribution returns a renderer, or null/undefined/false to
+// opt out for this block; the resolver gives what's left in contribution order.
+type BlockSectionContribution =
   (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
-export type BlockHeaderResolver =
+export type BlockSectionsResolver =
   (context: BlockResolveContext) => readonly BlockRenderer[]
+
+// Slot for sections rendered above a block's body — navigation chrome
+// such as top-level breadcrumbs lives here.
+export type BlockHeaderContribution = BlockSectionContribution
+
+// Slot for sections rendered directly under a block's own content and
+// properties, ahead of its children — what a block expands to show about
+// itself (its comments, its references) stays next to it however long the
+// subtree is. What follows the subtree goes in `blockChildrenFooterFacet`.
+export type BlockBelowContentContribution = BlockSectionContribution
 
 // Slot for sections rendered after a block's children — Roam-style "Linked
-// References" lives here. Each contribution returns a renderer (or null/
-// undefined/false to opt out for this block); the DefaultBlockRenderer
-// renders all returned components in contribution order.
-export type BlockChildrenFooterContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
-
-export type BlockChildrenFooterResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+// References" lives here.
+export type BlockChildrenFooterContribution = BlockSectionContribution
 
 // Slot for sections rendered inside a block's bullet hover-card — block
-// metadata (created/edited/by, counts, id) lives here. Mirrors
-// `blockHeaderFacet`: each contribution returns a renderer (or null/
-// undefined/false to opt out for this block); `BlockBullet` shows a
-// floating card populated with all returned components in contribution
-// order when the bullet is hovered. When NO contribution returns a
+// metadata (created/edited/by, counts, id) lives here. `BlockBullet` shows a
+// floating card populated with all returned components when the bullet is
+// hovered. When NO contribution returns a
 // renderer, the bullet attaches no hover listeners and renders no card —
 // the feature is pure opt-in and costs nothing on a stock build.
-export type BlockBulletHoverContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
-
-export type BlockBulletHoverResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+export type BlockBulletHoverContribution = BlockSectionContribution
 
 // Block layout — owns the entire shape of a block as rendered (the
 // outer wrapper, controls placement, collapse behavior, and where the
@@ -239,6 +234,20 @@ export type BlockBulletHoverResolver =
  *  a layout that styles its own wrapper still declares the boundary, and any
  *  handler resolving ownership can ask one question of both halves. */
 export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
+
+/** Every row one render scope draws, in document order: the shells of mounted
+ *  rows, and the placeholders `LazyViewportMount` labels with the scope for
+ *  rows not mounted yet. A wrapper that mints its own scope (a backlink entry,
+ *  an embed) labels its rows with that scope, so they never match another. */
+export const scopeRowSelector = (renderScopeId: string): string => {
+  const scope = CSS.escape(renderScopeId)
+  return `[${BLOCK_SHELL_ATTRIBUTE}][data-block-id][data-render-scope-id="${scope}"], ` +
+    `[data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`
+}
+
+/** The block a {@link scopeRowSelector} row stands for, mounted or not. */
+export const scopeRowBlockId = (row: HTMLElement): string | undefined =>
+  row.dataset.blockId ?? row.dataset.lazyBlockId
 
 /** Marks a block's bullet — the handle plugins attach row-level pointer
  *  gestures to (block drag-and-drop) by delegating from the document, so the
@@ -338,6 +347,8 @@ export interface BlockLayoutSlots {
   RawContent: ComponentType
   /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
+  /** Sections contributed via `blockBelowContentFacet`, between the block's own content and its children. Outside any collapsible: collapsing hides children, not these. */
+  BelowContent: ComponentType
   /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */
   Children: ComponentType
   /** After-children sections contributed via `blockChildrenFooterFacet`. */
@@ -369,18 +380,13 @@ export type BlockLayoutResolver =
 
 /**
  * The `combine` shared by every "each plugin offers zero or more <things>
- * for this block" facet below — header, children-footer, bullet-hover,
- * context-menu items, shell decorators. Runs each contribution against
+ * for this block" facet below. Runs each contribution against
  * the context and keeps what it returns, in registration order; a
  * contribution opts out for this block by returning null/undefined/false.
  *
  * A contribution may return one value or a list of them. Distinguishing
- * the two by `Array.isArray` is safe for all five: their payloads are
+ * the two by `Array.isArray` is safe for all of them: their payloads are
  * components, decorators and plain item objects, never arrays themselves.
- *
- * Named rather than inlined five times because the loop is where these
- * facets drifted before — same reason `mergeBlockContentSurfaceProps` and
- * `resolveShortcutActivations` below are their own functions.
  */
 const collectPerContext = <Context, Value>(
   contributions: readonly ((context: Context) => Value | readonly Value[] | null | undefined | false)[],
@@ -397,7 +403,7 @@ const collectPerContext = <Context, Value>(
 
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
-  BlockHeaderResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-header',
   combine: collectPerContext,
@@ -405,9 +411,19 @@ export const blockHeaderFacet = defineFacet<
   validate: isFunction<BlockHeaderContribution>,
 })
 
+export const blockBelowContentFacet = defineFacet<
+  BlockBelowContentContribution,
+  BlockSectionsResolver
+>({
+  id: 'core.block-below-content',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockBelowContentContribution>,
+})
+
 export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterContribution,
-  BlockChildrenFooterResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-children-footer',
   combine: collectPerContext,
@@ -417,7 +433,7 @@ export const blockChildrenFooterFacet = defineFacet<
 
 export const blockBulletHoverFacet = defineFacet<
   BlockBulletHoverContribution,
-  BlockBulletHoverResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-bullet-hover',
   combine: collectPerContext,
@@ -712,7 +728,7 @@ const interactiveContentSelector = [
   '[data-block-interaction="ignore"]',
 ].join(',')
 
-const elementOf = (target: EventTarget | null): Element | null => {
+export const elementOf = (target: EventTarget | null): Element | null => {
   if (typeof Node === 'undefined' || !(target instanceof Node)) return null
   return target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
 }
@@ -743,7 +759,7 @@ export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
  * layout's class: a layout is free to style its own wrapper, and one that does
  * must still be recognisable as a block.
  */
-const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
+export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
 
 /**
  * Is this event's target on OUR surface, rather than on a nested block's?

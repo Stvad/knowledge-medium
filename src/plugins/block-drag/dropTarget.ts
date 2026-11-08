@@ -5,8 +5,14 @@
  * `moveBlocksTo`, whose transaction re-checks everything (cycle, missing
  * parent, workspace) when the drop lands.
  */
-import { BLOCK_BULLET_ATTRIBUTE, BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
+import {
+  BLOCK_BULLET_ATTRIBUTE,
+  BLOCK_SHELL_ATTRIBUTE,
+  scopeRowBlockId,
+  scopeRowSelector,
+} from '@/extensions/blockInteraction.js'
 import { isPanelRenderScopeId } from '@/utils/renderScope.js'
+import { visibilityTargetFor } from '@/plugins/spatial-navigation/walker.js'
 import type { MoveTarget } from '@/data/mutators.js'
 import { findSlot, projectDrop, type DropRow, type SlotRows } from './projection.ts'
 
@@ -84,13 +90,16 @@ export const resolveDropTarget = (
   const lineX = reference.x + (projection.depth - reference.depth) * indent
   return {
     move: {parentId: projection.parentId, position: projection.position},
-    line: {x: lineX, y: surface.ownBottom(slot.above), width: Math.max(0, surface.right - lineX)},
+    line: {x: lineX, y: surface.insertionY(slot.above), width: Math.max(0, surface.right - lineX)},
     renderScopeId,
     panelId: panel?.dataset.panelId ?? null,
   }
 }
 
 interface SurfaceRows extends SlotRows {
+  /** Where a block dropped after this row's line lands: its first rendered
+   *  child's top, or its full height when it shows none. */
+  insertionY(index: number): number
   rowId(index: number): string | undefined
   /** The first row is the surface root: it contains every other row. */
   readonly rendersRoot: boolean
@@ -108,11 +117,8 @@ const surfaceRows = (
 ): SurfaceRows => {
   // Deferred rows of this scope too, in document order: the projection
   // must know where a gap borders one.
-  const scope = CSS.escape(renderScopeId)
-  const rows = Array.from(container.querySelectorAll<HTMLElement>(
-    `${scopedRowSelector(renderScopeId)}, [data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`,
-  ))
-  const blockIdOf = (i: number): string => rows[i].dataset.blockId ?? rows[i].dataset.lazyBlockId!
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(scopeRowSelector(renderScopeId)))
+  const blockIdOf = (i: number): string => scopeRowBlockId(rows[i])!
   const rects = new Map<number, DOMRect>()
   const rect = (i: number): DOMRect => {
     let cached = rects.get(i)
@@ -126,13 +132,17 @@ const surfaceRows = (
     if (!cached) chains.set(i, cached = ancestorIdsOf(rows[i], renderScopeId))
     return cached
   }
-  const ownBottom = (i: number): number =>
+  const insertionY = (i: number): number =>
     i + 1 < rows.length && rows[i].contains(rows[i + 1]) ? rect(i + 1).top : rect(i).bottom
 
   return {
     count: rows.length,
     top: i => rect(i).top,
-    ownBottom,
+    ownBottom: i => {
+      const line = visibilityTargetFor(rows[i])
+      return line === rows[i] ? insertionY(i) : line.getBoundingClientRect().bottom
+    },
+    insertionY,
     bottom: i => rect(i).bottom,
     // DOM containment: the row is a dragged block, or rendered inside one.
     isExcluded: i => context.draggedIds.has(blockIdOf(i))

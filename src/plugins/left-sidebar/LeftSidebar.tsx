@@ -4,8 +4,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import type { Block } from '@/data/block.js'
-import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties.js'
+import { getAliases } from '@/data/properties.js'
 import { useUserBlock } from '@/data/globalState.js'
 import { useChildren, useHandle } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
@@ -27,15 +26,6 @@ import {
 } from './facet.ts'
 import { getOrCreateShortcutsBlock } from './shortcuts.ts'
 
-const decodeAliases = (data: BlockData): readonly string[] => {
-  const raw = data.properties[aliasesProp.name]
-  if (raw === undefined) return []
-  try {
-    return aliasesProp.codec.decode(raw)
-  } catch {
-    return []
-  }
-}
 
 const blockLabel = (
   data: {aliases: readonly string[]; content: string} | undefined,
@@ -165,7 +155,7 @@ function ShortcutTargetItem({
   const targetData = useHandle(repo.block(targetId), {
     selector: data => data
       ? {
-        aliases: decodeAliases(data),
+        aliases: getAliases(data),
         content: data.content,
       }
       : undefined,
@@ -200,7 +190,7 @@ function ShortcutItem({
   const data = useHandle(block, {
     selector: doc => doc
       ? {
-        aliases: decodeAliases(doc),
+        aliases: getAliases(doc),
         content: doc.content,
         references: doc.references,
       }

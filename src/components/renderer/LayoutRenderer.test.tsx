@@ -44,7 +44,6 @@ vi.mock('@/components/BlockComponent.tsx', () => ({
       <div
         data-testid={`block-${blockId}`}
         data-stacked={String(Boolean(context.stackedPanel))}
-        data-wide-scroll-surface={String(Boolean(context.wideScrollSurface))}
       />
     )
   },
@@ -100,17 +99,16 @@ describe('LayoutRenderer', () => {
       </BlockContextProvider>,
     )
 
-  it('marks a single top-level panel as a wide scroll surface', async () => {
+  it('renders an outer column without constraining its width', async () => {
     const panelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
 
     renderLayout()
 
     const renderedPanel = await screen.findByTestId(`block-${panelId}`)
-    expect(renderedPanel).toHaveAttribute('data-wide-scroll-surface', 'true')
     expect(renderedPanel.parentElement?.className).not.toContain('max-w-3xl')
   })
 
-  it('keeps normal column constraints when multiple top-level panels are present', async () => {
+  it('leaves multiple top-level column widths unconstrained', async () => {
     const firstPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
     const secondPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-b')
 
@@ -118,23 +116,20 @@ describe('LayoutRenderer', () => {
 
     const firstPanel = await screen.findByTestId(`block-${firstPanelId}`)
     const secondPanel = await screen.findByTestId(`block-${secondPanelId}`)
-    expect(firstPanel).toHaveAttribute('data-wide-scroll-surface', 'false')
-    expect(secondPanel).toHaveAttribute('data-wide-scroll-surface', 'false')
-    expect(firstPanel.parentElement?.className).toContain('max-w-3xl')
-    expect(secondPanel.parentElement?.className).toContain('max-w-3xl')
+    expect(firstPanel.parentElement?.className).not.toContain('max-w-3xl')
+    expect(secondPanel.parentElement?.className).not.toContain('max-w-3xl')
   })
 
-  it('uses the wide scroll surface for the active mobile panel', async () => {
+  it('renders only the active panel on mobile without changing its outer width', async () => {
     isMobileRef.current = true
-    await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
+    const firstPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
     const secondPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-b')
 
     renderLayout()
 
-    expect(await screen.findByTestId(`block-${secondPanelId}`)).toHaveAttribute(
-      'data-wide-scroll-surface',
-      'true',
-    )
+    const panel = await screen.findByTestId(`block-${secondPanelId}`)
+    expect(panel.parentElement?.className).toContain('w-full')
+    expect(screen.queryByTestId(`block-${firstPanelId}`)).toBeNull()
   })
 
   describe('maximize', () => {
@@ -146,14 +141,14 @@ describe('LayoutRenderer', () => {
     const setMaximized = (panelId: string, value: boolean) =>
       env.repo.block(panelId).set(panelMaximizedProp, value)
 
-    it('renders a maximized panel alone, as a wide scroll surface', async () => {
+    it('renders a maximized panel alone while keeping its outer column unconstrained', async () => {
       const {first, second} = await twoPanels()
       await setMaximized(second, true)
 
       renderLayout()
 
       const rendered = await screen.findByTestId(`block-${second}`)
-      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
+      expect(rendered.parentElement?.className).not.toContain('max-w-3xl')
       expect(screen.queryByTestId(`block-${first}`)).toBeNull()
     })
 
@@ -187,15 +182,7 @@ describe('LayoutRenderer', () => {
       expect(screen.getByTestId(`block-${stackedFirst}`)).toBe(before)
     })
 
-    // A maximized pane should render the same wherever it lives.
-    //
-    // `data-stacked` is asserted alongside the wide flag because it is what
-    // makes the wide flag REAL: `PanelRenderer` computes
-    // `wideScrollSurface && !stackedPanel`, so a solo pane still marked stacked
-    // silently drops back to narrow chrome with no scrollport of its own.
-    // Asserting the wide flag alone passed while exactly that was happening —
-    // this mock echoes the raw context and cannot see the recomputation.
-    it('hands a maximized stacked pane the top-level pane treatment', async () => {
+    it('hands a maximized stacked pane top-level scroll ownership', async () => {
       const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
       const stacked = await insertSidebarStackedPanel(
         env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
@@ -204,7 +191,6 @@ describe('LayoutRenderer', () => {
       renderLayout()
 
       const rendered = await screen.findByTestId(`block-${stacked}`)
-      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'true')
       expect(rendered).toHaveAttribute('data-stacked', 'false')
       expect(screen.queryByTestId(`block-${top}`)).toBeNull()
     })
@@ -228,9 +214,9 @@ describe('LayoutRenderer', () => {
       expect(columns[0].className).not.toContain('contents')
     })
 
-    // Ordinary stacks are untouched by the solo path: still a scrolling column
-    // of stacked children, none of them claiming the wide surface.
-    it('leaves an un-maximized stack rendering as a normal column', async () => {
+    // Ordinary stacks remain scrollable as one outer column; their children
+    // retain stackedPanel so each child leaves scrolling to that parent.
+    it('leaves an un-maximized stack rendering as stacked children', async () => {
       const top = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
       const stacked = await insertSidebarStackedPanel(
         env.repo, layoutSessionBlock(), 'page-b', {sourcePanelId: top})
@@ -239,7 +225,6 @@ describe('LayoutRenderer', () => {
 
       const rendered = await screen.findByTestId(`block-${stacked}`)
       expect(rendered).toHaveAttribute('data-stacked', 'true')
-      expect(rendered).toHaveAttribute('data-wide-scroll-surface', 'false')
     })
 
     it('restores the exact arrangement when the flag is cleared', async () => {

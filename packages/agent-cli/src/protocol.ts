@@ -290,7 +290,7 @@ const formatField = {
 }
 
 /** Parse markdown with the app paste parser and insert it under a target, in
- *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
+ *  one transaction. `target` is a block id, a `[[Page]]` or a date
  *  expression (a missing page or daily note is created). `position` places the
  *  inserted run among the target's children (default last). */
 export const appendMarkdownCommandSchema = z.looseObject({
@@ -319,10 +319,12 @@ export const editBlockCommandSchema = z.looseObject({
 
 /** Start a comment thread on a block: on `quote` (text of the block, the
  *  `occurrence`th appearance when it appears more than once), or on the
- *  whole block. No `content` makes a highlight, a thread with no comments. */
+ *  whole block. No `content` makes a highlight, a thread with no comments; a
+ *  `replacement` makes an edit suggestion, which a person accepts or rejects
+ *  in the app. */
 export const addCommentCommandSchema = z.looseObject({
   type: z.literal('add-comment'),
-  target: z.string().describe('The block to comment on: a full id or a printed ^shortid'),
+  target: z.string().describe('The block to comment on: its id'),
   quote: z.string().optional().describe(
     'Text of the block to anchor to, verbatim as get_block returns its content (outline views collapse '
     + 'whitespace); omit to comment on the whole block. A quote that cuts a [[link]] or ((ref)) is widened '
@@ -333,6 +335,11 @@ export const addCommentCommandSchema = z.looseObject({
     + 'The result\'s quoteStart and excerpt show which one was anchored',
   ),
   content: z.string().optional().describe('The first comment; omit for a highlight with no comments'),
+  replacement: z.string().optional().describe(
+    'Makes the thread an edit suggestion: the new text for the quote (for just the quoted part when the quote is '
+    + 'widened to a whole link). Needs a quote; must be non-empty and change it. A person accepts or rejects it in the '
+    + 'app; nothing changes the block until then. The result\'s replacement confirms it (null means a plain comment)',
+  ),
   ...exactIdsField,
   ...contributorField,
   ...commandIdField,
@@ -360,8 +367,8 @@ export const recentChangesCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
- *  prefix) — what a write verb would act on. A ref matching nothing comes back
+/** The id an id-typed field resolves to (`^id`, `((id))`, a bare id) — what
+ *  a write verb would act on. A ref matching nothing comes back
  *  as the id its syntax names (`^x` / `((x))` → `x`), else as given. Lets a
  *  caller check the same block the write will touch. */
 export const resolveBlockIdCommandSchema = z.looseObject({
@@ -374,7 +381,7 @@ export const resolveBlockIdCommandSchema = z.looseObject({
 /** One block's recorded changes, newest first — local and sync-applied. */
 export const blockHistoryCommandSchema = z.looseObject({
   type: z.literal('block-history'),
-  id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
+  id: z.string().describe('The block: its id'),
   limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
   ...contributorField,
   ...commandIdField,
@@ -632,7 +639,7 @@ export const AGENT_VIEW_DEFAULTS = {
 } as const
 
 const viewRefField = z.string().describe(
-  'The block: a full id, a unique id prefix as printed (^3f2a9c1d), a page name '
+  'The block: its id, a page name '
   + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
 )
 
@@ -670,6 +677,57 @@ export const viewBlockCommandSchema = z.looseObject({
   ...contributorField,
   ...commandIdField,
 })
+
+export const BRIDGE_DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+/** The largest media `read-media` or `add-media` carries. Base64 of this plus the
+ *  envelope must fit {@link BRIDGE_DEFAULT_MAX_BODY_BYTES}. Raising
+ *  both is not enough: `read_media` needs its own cap, since an MCP client can drop the
+ *  whole connection on a much larger result rather than fail the one call. */
+export const MEDIA_BRIDGE_MAX_BYTES = 7 * 1024 * 1024
+
+export const readMediaCommandSchema = z.looseObject({
+  type: z.literal('read-media'),
+  ref: viewRefField,
+  workspaceId: viewFields.workspaceId,
+  ...contributorField,
+  ...commandIdField,
+})
+
+export const readMediaResultSchema = z.object({
+  id: z.string(),
+  hash: z.string(),
+  /** The block's `media:mime`, as stored. */
+  mime: z.string(),
+  /** Length of the bytes served, not the block's `media:size`. */
+  size: z.number(),
+  filename: z.string().nullable(),
+  /** The image format the bytes themselves are, or null when they are not a recognised one. */
+  imageMime: z.string().nullable(),
+  base64: z.string(),
+})
+export type ReadMediaResult = z.infer<typeof readMediaResultSchema>
+
+export const addMediaCommandSchema = z.looseObject({
+  type: z.literal('add-media'),
+  base64: z.string(),
+  filename: z.string().optional().describe('The block\'s content; the file\'s own name by default'),
+  mime: z.string().optional().describe(
+    'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream',
+  ),
+  workspaceId: z.string().optional().describe('Asserts the workspace open in the app tab; a write goes nowhere else'),
+  ...contributorField,
+  ...commandIdField,
+})
+
+export interface AddMediaResult {
+  id: string
+  workspaceId: string
+  /** These bytes were already a media block in this workspace, and this is that block. */
+  deduped: boolean
+  /** What to write in a block's content to show it there. */
+  reference: string
+}
 
 export const viewOutlineCommandSchema = z.looseObject({
   type: z.literal('view-outline'),
@@ -741,7 +799,7 @@ export const commentsCommandSchema = z.looseObject({
   ),
   block: z.string().optional().describe('Threads on this one block (same forms as a block ref)'),
   thread: z.string().optional().describe("One thread, by its root's id, whatever its status"),
-  includeClosed: z.boolean().optional().describe('Include resolved threads (default: open only)'),
+  includeClosed: z.boolean().optional().describe('Include closed threads (default: open only)'),
   limit: viewLimitField('threads', AGENT_VIEW_DEFAULTS.commentsLimit),
   offset: viewOffsetField('threads'),
   workspaceId: viewFields.workspaceId,
@@ -766,7 +824,6 @@ export interface CommentAuthor {
 
 export interface CommentNode {
   id: string
-  shortId: string
   content: string
   /** Characters cut from `content`; get_block reads the rest. */
   cut: number
@@ -777,15 +834,16 @@ export interface CommentNode {
 
 export interface CommentThreadView {
   id: string
-  shortId: string
-  /** `open` or `resolved`, or the stored value when this build can't read it. */
+  /** `open` or `resolved`, `accepted` or `rejected` for an edit suggestion,
+   *  or the stored value when this build can't read it. */
   status: string
   anchor: CommentAnchorState
   /** The quoted text; null for a thread on the whole block. */
   quote: string | null
+  /** An edit suggestion's text for the quote; null for any other thread. */
+  replacement: string | null
   target: {
     id: string
-    shortId: string
     deleted: boolean
     /** Root→parent labels, as a breadcrumb reads. */
     path: string[]
@@ -964,6 +1022,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
   commentsCommandSchema,
+  readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1025,6 +1085,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
   commentsCommandSchema,
+  readMediaCommandSchema,
+  addMediaCommandSchema,
   addCommentCommandSchema,
   watchEventsCommandSchema,
 ])
@@ -1060,9 +1122,9 @@ export interface KnownCommandMeta {
 /** How the write verbs name where to write: quoted by the CLI verbs and the
  *  km MCP tools alike, so both surfaces say the same thing. */
 export const WRITE_TARGET_HELP =
-  'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
+  'A target is a block id; a [[Page name]], created if missing as typing '
   + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
-  + 'daily note, created if missing. Bare text is tried as an id prefix, an existing page, then a date — so '
+  + 'daily note, created if missing. Bare text is tried as an id, an existing page, then a date — so '
   + 'name a page as [[name]].'
 
 /** A todo composes the built-in `todo` type. */
@@ -1139,8 +1201,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent update-block <json>',
     description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
       + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
-      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line). id may be a '
-      + 'unique id prefix.',
+      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line).',
     readOnly: false,
   },
   'move-block': {
@@ -1169,7 +1230,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
     description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
       + 'content at write time; prints the change in context. Refused when <old> is empty or found more than once '
-      + '(add surrounding text), and when it is not found, showing the current content. <id> may be a unique id prefix.',
+      + '(add surrounding text), and when it is not found, showing the current content.',
     readOnly: false,
   },
   'create-page': {
@@ -1187,13 +1248,13 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
-    description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
-      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole, so do not write it back.',
+    description: 'One block\'s recorded changes, newest first. Local and synced, with content before/after (cut past '
+      + '2,000 chars), to review a change. A content ending in a cut marker is not whole, so do not write it back.',
     readOnly: true,
   },
   'resolve-block-id': {
-    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
-    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
+    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"((3f2a9c1b-0000-4000-8000-000000000001))"}\'',
+    description: 'The block id an id-typed write field resolves to (^id, ((id)), a bare id) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
     readOnly: true,
   },
   'install-extension': {
@@ -1273,7 +1334,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'daily-note': {
     usage: 'kmagent daily-note <date> [--workspace <id>]',
-    description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+    description: 'Resolve a date to its daily-note block. Takes today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday"; the id is deterministic, and it reports whether the block exists yet.',
     // Pure read: computes the deterministic daily-note id and loads it,
     // reporting existence. It does NOT create the note.
     readOnly: true,
@@ -1281,6 +1342,19 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'search': {
     usage: 'kmagent raw \'{"type":"search","query":"<query>","limit":<n>,"workspaceId":"<id>"}\'',
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
+    readOnly: true,
+  },
+  'add-media': {
+    usage: 'kmagent add-media <path> [--filename <name>] [--mime <type>] [--workspace <id>]',
+    description: 'Store a local file as a media block. It goes under the workspace\'s Assets page, and the same bytes '
+      + 'added twice are one block. Write the returned ((id)) in a block\'s content to show it there. Refused past '
+      + `${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    readOnly: false,
+  },
+  'read-media': {
+    usage: 'kmagent read-media <ref> --out <path> [--workspace <id>]',
+    description: 'A media block\'s bytes, hash-verified. Media blocks have type `media`, and notes show them as ((id)). Writes '
+      + `the bytes to --out and prints the mime, size and filename. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     readOnly: true,
   },
   // The views read what the raw commands above read, so they classify the same.
@@ -1291,7 +1365,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'view-outline': {
     usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
-    description: `A block and its descendants as a markdown outline: \`- content  key:: value  ^shortid\`, one line per block. Bounded: expands \`depth\` levels and at most \`limit\` blocks below the root, shallower levels first, and stops early, saying how to narrow, at ${AGENT_VIEW_DEFAULTS.outlineChars} characters; unexpanded children show as \`(+N children)\`, long content as \`…[+N chars]\`, and a cut-off list of the root's children ends with the offset to continue from.`,
+    description: `A block and its descendants as a markdown outline: \`- content  key:: value  ^id\`, one line per block. Bounded: expands \`depth\` levels and at most \`limit\` blocks below the root, shallower levels first, and stops early, saying how to narrow, at ${AGENT_VIEW_DEFAULTS.outlineChars} characters; unexpanded children show as \`(+N children)\`, long content as \`…[+N chars]\`, and a cut-off list of the root's children ends with the offset to continue from.`,
     readOnly: true,
   },
   'view-backlinks': {
@@ -1321,11 +1395,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'add-comment': {
-    usage: "kmagent add-comment '<json>'   ({target, quote?, occurrence?, content?})",
+    usage: "kmagent add-comment '<json>'   ({target, quote?, occurrence?, content?, replacement?})",
     description: 'Start a comment thread on a block. It anchors to quoted text of the block, or to the whole block, '
       + 'and returns the thread\'s root id (write ((id)) to quote that range elsewhere). The quote is found in the block\'s current text, and '
       + 'refused when absent, or when it appears more than once without occurrence. A quote that cuts a [[link]] or '
-      + '((ref)) is widened to the whole of it. No content makes a highlight. Refuses property field and value rows.',
+      + '((ref)) is widened to the whole of it. No content makes a highlight. Refuses property field and value rows. '
+      + 'A replacement makes an edit suggestion; a person accepts or rejects it in the app.',
     readOnly: false,
   },
   'watch-events': {

@@ -1,8 +1,12 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { listIsolatedTestFiles } from './scripts/vitest-isolation.ts'
 
 export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+
+const TEST_FILES = '**/*.{test,spec}.{ts,tsx}'
+const isolatedTestFiles = listIsolatedTestFiles(TEST_FILES, import.meta.dirname)
 
 export default defineConfig({
   plugins: [react()],
@@ -21,8 +25,15 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['**/*.{test,spec}.{ts,tsx}'],
     maxWorkers: '100%',
+    // Sharing a worker between test files skips re-evaluating their common
+    // modules. `scripts/vitest-isolation.ts` decides which files cannot share.
+    // `shared` takes whatever that leaves, so a misfiled test can run slower or
+    // less isolated but can never drop out of the suite.
+    projects: [
+      {extends: true, test: {name: 'isolated', include: isolatedTestFiles}},
+      {extends: true, test: {name: 'shared', isolate: false, include: [TEST_FILES], exclude: isolatedTestFiles}},
+    ],
     // Node ≥25 ships its own Web Storage: `localStorage`/`sessionStorage`
     // become own keys of globalThis (returning undefined unless node runs with
     // `--localstorage-file`). The jsdom environment skips window keys that
@@ -59,7 +70,7 @@ export default defineConfig({
     // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
     // starts one and runs those through vitest.supabase.config.ts.
     exclude: [
-      '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
+      '**/node_modules/**', '**/dist/**', '**/.git/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
       SUPABASE_STACK_TESTS,
     ],

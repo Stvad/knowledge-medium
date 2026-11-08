@@ -71,6 +71,10 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   return null
 }
 
+/** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
+ *  `max-w-3xl` frame. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-var(--container-3xl))))]'
+
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
@@ -85,7 +89,6 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const canMaximizePanel = Boolean(blockContext.canMaximizePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
-  const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
     ? blockContext.layoutSessionBlockId
     : undefined
@@ -345,49 +348,31 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      {/* Same always-mounted treatment as the content frame below, for the
-          same reason — a conditional wrapper here remounts the buttons on the
-          crossing, dropping keyboard focus if it happens to be on one. */}
       <div
-        className={wideScrollSurface
-          ? 'pointer-events-none absolute inset-x-0 top-1 z-10'
-          : 'pointer-events-none absolute top-1 right-0.5 z-10 flex gap-0.5'}
+        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
       >
         <div
-          className={wideScrollSurface
-            ? 'pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5'
-            : 'contents'}
+          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
         >
           {actionButtons}
         </div>
       </div>
       <div
         ref={scrollRef}
-        // Stable handle for the pane's scrollport. Runtime callers find it by
+        // Stable handle for the pane's scrollport. Callers inside it find it by
         // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
-        // which is robust to wrappers; this is for tests, so they don't pin the
-        // chain depth and break when one is added.
+        // which is robust to wrappers; this handle is for tests, and for panel
+        // mounts, which sit beside the scrollport rather than inside it.
         data-panel-scrollport=""
         // Bottom clearance: below md the bottom nav's; from md up, whatever
         // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
         // (`@/utils/panelClearance`), named literally here for Tailwind.
-        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}
+        className={`${FRAME_RIGHT_CLEARANCE_CLASS} ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
         onPointerDownCapture={activatePanel}
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}
       >
-        {/* The content frame is ALWAYS mounted and swaps its class, rather
-            than wrapping conditionally. `wideScrollSurface` flips whenever the
-            layout crosses between one pane and several, and a conditional
-            wrapper changes the element type at this position — so React
-            unmounted and rebuilt the entire panel body on every first split
-            and every collapse back. That threw away scroll position, editor
-            state, and anything mid-playback, and on a big view (an agenda with
-            thousands of rows) it is visible as a full reload. `contents`
-            generates no box, so the non-wide layout is unchanged — but note it
-            is still a real node for selector matching, so a `>` or
-            `:nth-child()` rule anchored above the body must account for it. */}
-        <div className={wideScrollSurface ? 'mx-auto w-full max-w-3xl' : 'contents'}>
+        <div className="mx-auto w-full max-w-3xl">
           {panelBody}
         </div>
       </div>

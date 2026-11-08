@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import {afterEach, describe, expect, it} from 'vitest'
-import {keepFocusAnItemMoved} from '../DefaultBlockRenderer'
+import {keepFocusAnItemMoved} from '@/components/ui/context-menu'
 
 const closeEventOn = (menu: HTMLElement) => {
   const event = new Event('focusScope.autoFocusOnUnmount', {cancelable: true})

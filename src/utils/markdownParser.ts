@@ -106,7 +106,10 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
     }
     const indent = getIndentationLevel(line)
 
-    const token = lineToken(trimmed, indent)
+    let token = lineToken(trimmed, indent)
+    // CommonMark: an empty item cannot interrupt a paragraph, so right under
+    // a paragraph line a bare marker stays text.
+    if (isEmptyItem(token) && tokens.at(-1)?.kind === 'paragraph') token = {kind: 'paragraph', indent, content: trimmed}
     const atomicEnd = token.kind === 'paragraph'
       ? fencedCodeEnd(lines, idx) ?? tableEnd(lines, idx) ?? quoteEnd(lines, idx)
       : undefined
@@ -123,14 +126,22 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
   return tokens
 }
 
+/** Only a bare marker lexes to an empty item: `trimmed` has no trailing
+ *  whitespace for the bullet capture to stop at, and a numbered item keeps
+ *  its number. */
+const isEmptyItem = (token: OutlineToken): boolean => token.kind === 'list-item' && token.content === ''
+
 const lineToken = (trimmed: string, indent: number): OutlineToken => {
   // CommonMark's ATX heading: 1-6 '#'s, then a space or the end of the line
   // (`#tag` and `#######` are text). Keep the '#'s: the level renders from
   // the content.
   const heading = /^(#{1,6})(?:[ \t]|$)/.exec(trimmed)
   if (heading) return {kind: 'heading', level: heading[1].length, indent, content: trimmed}
-  const bullet = /^[-*+]\s+(.*)/.exec(trimmed)
-  if (bullet) return {kind: 'list-item', indent, content: bullet[1]}
+  // A bare marker is an empty item, which is how a copy writes an empty
+  // block. `s`: lines are split on `\n` only, so `.` must not stop at
+  // U+2028 / U+2029, which JS counts as line terminators, inside the content.
+  const bullet = /^[-*+](?:\s+(.*)|$)/s.exec(trimmed)
+  if (bullet) return {kind: 'list-item', indent, content: bullet[1] ?? ''}
   // Keep the number, e.g. "1. item".
   if (/^\d+\.\s+/.test(trimmed)) return {kind: 'list-item', indent, content: trimmed}
   return {kind: 'paragraph', indent, content: trimmed}

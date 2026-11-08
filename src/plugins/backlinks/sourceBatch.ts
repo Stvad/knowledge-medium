@@ -6,15 +6,11 @@
  * property machinery are always excluded. This is the one place that decides
  * what a backlink source is; the filtered route (`sources.ts`) narrows it.
  *
- * Every visible block resolves its inline badge in the same tick. Issued one
- * by one, those reads queue behind each other on a pool of one or two
- * connections, and the page's own child reads queue behind them. So the badge
- * count and the unfiltered `backlinks.forBlock` list both come from here: two
- * projections of one statement, which is also what keeps "3" on the badge
- * equal to the 3 rows the list shows on expand.
+ * The badge count and the unfiltered `backlinks.forBlock` list both come from
+ * here: two projections of one statement, which keeps "3" on the badge equal
+ * to the 3 rows the list shows on expand.
  *
- * Purely a transport, like `ancestorBatch.ts`: nothing resolved is held
- * between flushes. Caching is the handle store's job.
+ * The transport — coalescing, chunking, failure scope — is `readBatch.ts`.
  */
 
 import type { QueryCtx, QueryReadDb } from '@/data/api'
@@ -25,8 +21,8 @@ import {
   typedBlocksReferenceKey,
 } from '@/data/invalidation'
 import { dependOnRecognitionParams, registryRecognitionParams } from '@/data/internals/kernelQueries'
+import { ReadBatcher, readBatcherPerDb } from '@/data/internals/readBatch'
 import { MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
-import { contentionFor } from '@/data/internals/timingMetrics'
 import type { RecognitionParams } from '@/data/internals/treeQueries'
 import { edgePredicate, type BacklinkEdges, type EdgePredicate } from './edgeExclusions.ts'
 import { machineryInteriorCtes, workspaceHasPropertyMachinery } from './machinery.ts'
@@ -79,45 +75,54 @@ interface Resolved<P extends Projection> {
   machinery: boolean
 }
 
-interface Pending {
-  promise: Promise<Resolved<Projection>>
-  resolve: (answer: Resolved<Projection>) => void
-  reject: (error: unknown) => void
-  callers: number
-}
-
 /** Requests one statement can answer: same workspace, projection, edges and
  *  recognition snapshot (`registryRecognitionParams` is cached per snapshot,
  *  so identity is the comparison). */
-interface Group {
+interface Key {
   workspaceId: string
   projection: Projection
   recognitionParams: RecognitionParams
   edges: EdgePredicate
   edgesKey: string
-  targets: Map<string, Pending>
 }
 
 const edgesKeyOf = (edges: EdgePredicate): string => JSON.stringify([edges.sql, edges.params])
 
-const pending = (): Pending => {
-  let resolve!: Pending['resolve']
-  let reject!: Pending['reject']
-  const promise = new Promise<Resolved<Projection>>((res, rej) => { resolve = res; reject = rej })
-  return {promise, resolve, reject, callers: 1}
-}
+const sameStatement = (a: Key, b: Key): boolean =>
+  a.workspaceId === b.workspaceId && a.projection === b.projection &&
+  a.recognitionParams === b.recognitionParams && a.edgesKey === b.edgesKey
 
 export class BacklinkSourceBatcher {
-  private groups: Group[] = []
-  private scheduled = false
-  private readonly pool: ReturnType<typeof contentionFor>
+  private readonly batch: ReadBatcher<Key, Resolved<Projection>>
 
   /** `maxTargets`: one bind per target, under the shared ceiling. */
-  constructor(
-    private readonly db: QueryReadDb,
-    private readonly maxTargets: number = MAX_IDS_PER_IN_CLAUSE,
-  ) {
-    this.pool = contentionFor(db)
+  constructor(db: QueryReadDb, maxTargets: number = MAX_IDS_PER_IN_CLAUSE) {
+    this.batch = new ReadBatcher(db, {
+      sameGroup: sameStatement,
+      maxIdsPerStatement: maxTargets,
+      read: async ({workspaceId, projection, recognitionParams, edges}, targets) => {
+        // Per statement, not per group: once per group would need a per-group
+        // hook on `ReadBatcher` for this caller alone. Past the ceiling that
+        // costs one cheap probe per extra chunk (a yes is cached), and a failed
+        // probe fails only its own chunk.
+        const machinery = await workspaceHasPropertyMachinery(db, workspaceId)
+        const rows = await db.getAll<{target_id: string; id?: string; count?: number}>(
+          backlinkSourcesSql(targets.length, projection, machinery, edges),
+          [workspaceId, ...targets, ...edges.params, ...(machinery ? recognitionParams : [])],
+        )
+        const answers = new Map<string, string[] | number>()
+        for (const row of rows) {
+          if (projection === 'count') answers.set(row.target_id, row.count!)
+          else {
+            const ids = answers.get(row.target_id) as string[] | undefined
+            if (ids) ids.push(row.id!)
+            else answers.set(row.target_id, [row.id!])
+          }
+        }
+        const none = projection === 'count' ? 0 : Object.freeze([]) as readonly string[]
+        return id => ({value: answers.get(id) ?? none, machinery})
+      },
+    })
   }
 
   request<P extends Projection>(
@@ -127,88 +132,13 @@ export class BacklinkSourceBatcher {
     recognitionParams: RecognitionParams,
     edges: EdgePredicate,
   ): Promise<Resolved<P>> {
-    const edgesKey = edgesKeyOf(edges)
-    let group = this.groups.find(g =>
-      g.workspaceId === workspaceId && g.projection === projection &&
-      g.recognitionParams === recognitionParams && g.edgesKey === edgesKey)
-    if (!group) {
-      group = {workspaceId, projection, recognitionParams, edges, edgesKey, targets: new Map()}
-      this.groups.push(group)
-    }
-    const existing = group.targets.get(targetId)
-    if (existing) {
-      existing.callers++
-      return existing.promise as Promise<Resolved<P>>
-    }
-    const entry = pending()
-    group.targets.set(targetId, entry)
-    if (!this.scheduled) {
-      this.scheduled = true
-      queueMicrotask(() => { void this.flush() })
-    }
-    return entry.promise as Promise<Resolved<P>>
-  }
-
-  private async flush(): Promise<void> {
-    // Taken before the first await, so a request arriving while a statement is
-    // in flight opens the NEXT batch rather than joining one already read.
-    const groups = this.groups
-    this.groups = []
-    this.scheduled = false
-    await Promise.all(groups.map(group => this.flushGroup(group)))
-  }
-
-  private async flushGroup(group: Group): Promise<void> {
-    const targets = [...group.targets.keys()]
-    let machinery: boolean
-    try {
-      machinery = await workspaceHasPropertyMachinery(this.db, group.workspaceId)
-    } catch (error) {
-      for (const entry of group.targets.values()) entry.reject(error)
-      return
-    }
-    for (let start = 0; start < targets.length; start += this.maxTargets) {
-      const chunk = targets.slice(start, start + this.maxTargets)
-      let callers = 0
-      for (const id of chunk) callers += group.targets.get(id)!.callers
-      if (callers > 1) this.pool?.noteSharedWork()
-      try {
-        const rows = await this.db.getAll<{target_id: string; id?: string; count?: number}>(
-          backlinkSourcesSql(chunk.length, group.projection, machinery, group.edges),
-          [group.workspaceId, ...chunk, ...group.edges.params, ...(machinery ? group.recognitionParams : [])],
-        )
-        const answers = new Map<string, string[] | number>()
-        for (const row of rows) {
-          if (group.projection === 'count') answers.set(row.target_id, row.count!)
-          else {
-            const ids = answers.get(row.target_id) as string[] | undefined
-            if (ids) ids.push(row.id!)
-            else answers.set(row.target_id, [row.id!])
-          }
-        }
-        const none = group.projection === 'count' ? 0 : Object.freeze([]) as readonly string[]
-        for (const id of chunk) {
-          group.targets.get(id)!.resolve({value: answers.get(id) ?? none, machinery})
-        }
-      } catch (error) {
-        // Scoped to the chunk: a later chunk is its own statement.
-        for (const id of chunk) group.targets.get(id)!.reject(error)
-      }
-    }
+    return this.batch.request(targetId, {
+      workspaceId, projection, recognitionParams, edges, edgesKey: edgesKeyOf(edges),
+    }) as Promise<Resolved<P>>
   }
 }
 
-/** One batcher per read surface, which is one per `Repo` (see `ancestorBatch.ts`). */
-const batchers = new WeakMap<QueryReadDb, BacklinkSourceBatcher>()
-
-const batcherFor = (db: QueryReadDb): BacklinkSourceBatcher => {
-  let batcher = batchers.get(db)
-  if (!batcher) {
-    batcher = new BacklinkSourceBatcher(db)
-    batchers.set(db, batcher)
-  }
-  return batcher
-}
+const batcherFor = readBatcherPerDb(db => new BacklinkSourceBatcher(db))
 
 /** Resolve one target through the batch and declare what its answer depends
  *  on: the target's reference channel, as `core.typedBlockIds` does for

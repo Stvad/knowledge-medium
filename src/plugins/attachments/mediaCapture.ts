@@ -55,9 +55,8 @@ import { orNullWhenKeyUnavailable } from '@/sync/keys/openWorkspaceKeys.js'
 import { materializabilityToMode, type GetMaterializability } from '@/sync/transform.js'
 import type { ByteStore } from './byteStore.js'
 import {
-  ASSETS_ALIAS,
+  assetsPageSpec,
   ASSETS_NS,
-  ASSETS_TYPE,
   MEDIA_TYPE,
   mediaFilenameProp,
   mediaHashProp,
@@ -110,6 +109,8 @@ export interface MediaCaptureDeps {
    *  periodic sweep also drains, so a missed arm only delays, never drops. */
   readonly drain: (userId: string) => void
   readonly maxBytes?: number
+  /** Describes the capture's tx in the change history. Default: `capture media`. */
+  readonly txDescription?: string
   /** Optional MIME allow-list; default allows everything (the bucket does). */
   readonly isAllowedMime?: (mime: string) => boolean
 }
@@ -181,11 +182,7 @@ export const captureMedia = async (
   // at the caret per the text policy.
   let inserted = false
   await deps.repo.undoGroup(async (repo) => {
-    await getOrCreateKernelPage(repo, workspaceId, {
-      namespace: ASSETS_NS,
-      alias: ASSETS_ALIAS,
-      markerType: ASSETS_TYPE,
-    }, {skipUndo: true})
+    await getOrCreateKernelPage(repo, workspaceId, assetsPageSpec, {skipUndo: true})
     const containerId = kernelPageBlockId(workspaceId, ASSETS_NS)
     const typeSnapshot = repo.snapshotTypeRegistries()
 
@@ -208,7 +205,7 @@ export const captureMedia = async (
         },
       })
       inserted = minted.inserted
-    }, { scope: ChangeScope.BlockDefault, description: 'capture media' })
+    }, { scope: ChangeScope.BlockDefault, description: deps.txDescription ?? 'capture media' })
   })
 
   // (5) AFTER commit: the record is safe to drain, and the block exists.

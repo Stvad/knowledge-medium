@@ -183,6 +183,21 @@ describe('getSyncIndicatorView', () => {
       expect(view.title).not.toContain('1 changes')
     })
 
+    it('says another tab is syncing, not offline, while another client holds the sync stream', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected: false,
+        hasSynced: true,
+        syncingInOtherTab: true,
+        rejectedChanges: 2,
+      })
+
+      expect(view.state).toBe('other-tab')
+      expect(view.icon).not.toBe('offline')
+      expect(view.title).toMatch(/another open tab/i)
+      expect(view.title).toContain('2 changes')
+    })
+
     it("mentions rejections in the title for the offline state", () => {
       // Even when offline, the rejection backlog is worth surfacing so
       // the user knows to come back to it when reconnected.

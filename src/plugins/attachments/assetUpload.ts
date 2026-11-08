@@ -3,8 +3,8 @@
  * pure capture / drain / reconcile pieces with the real app deps and runs the
  * background lane SINGLE-OWNER across tabs.
  *
- *   - capture  — {@link captureMediaFromFiles}: the renderer's paste entry (the
- *     File-list plumbing is drop-ready, but only paste is wired today).
+ *   - capture  — {@link captureMediaFromFiles}: the renderer's paste entry and the
+ *     agent bridge's add-media verb (the File-list plumbing is drop-ready).
  *   - drain    — {@link armUploadDrain}: fire-and-forget after a capture.
  *   - reconcile — {@link runUploadReconcile}: at app start, AFTER PowerSync settles.
  *
@@ -210,6 +210,7 @@ export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
   files: readonly File[],
+  options: Pick<MediaCaptureDeps, 'txDescription'> = {},
 ): Promise<MediaCaptureResult[]> => {
   // Snapshot the lane context at the paste boundary: the user, and that user's §6
   // resolver. Capture touches no remote session (it only stages + writes the block
@@ -217,7 +218,7 @@ export const captureMediaFromFiles = async (
   // switch can't split it across accounts.
   const userId = repo.user.id
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
-  const deps = captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) })
+  const deps = {...captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) }), ...options}
   const results: MediaCaptureResult[] = []
   for (const file of files) {
     if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
@@ -242,7 +243,7 @@ export const captureMediaFromFiles = async (
  *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
  *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
  *  it worked. */
-const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
+export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
   'no-user': 'Sign in to attach media.',
   empty: 'That file is empty — nothing to attach.',
   'too-large': 'That file is too large to attach.',

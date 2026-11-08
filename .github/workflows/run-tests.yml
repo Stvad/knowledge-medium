@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6.1.0
@@ -50,7 +50,7 @@ jobs:
       # for incremental reuse. tsc's content-hash invalidation keeps the
       # tsbuildinfo reuse sound.
       - name: Cache tsc + eslint build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             node_modules/.tmp

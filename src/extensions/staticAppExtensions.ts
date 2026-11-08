@@ -3,6 +3,8 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
 import { armedCutAppMountExtension } from '@/extensions/armedCutAppMount.js'
+import { blockDeletionGuardsFacet } from '@/extensions/core.js'
+import { kernelPageDeletionGuard } from '@/extensions/kernelPageDeletionGuard.js'
 import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
 import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
@@ -88,6 +90,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
   kernelDataExtension,
+  blockDeletionGuardsFacet.of(kernelPageDeletionGuard, {source: 'kernel'}),
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,

@@ -21,13 +21,14 @@ beforeEach(async () => {
   repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
   disarmCut()
   clipboardText = null
-  // `ClipboardItem` holds Blobs; keep the text so the test can paste it back.
+  // `ClipboardItem` holds Blobs, or promises of them; keep the text so the
+  // test can paste it back.
   vi.stubGlobal('ClipboardItem', class {
-    constructor(readonly items: Record<string, Blob>) {}
+    constructor(readonly items: Record<string, Blob | Promise<Blob>>) {}
   })
   vi.stubGlobal('navigator', {clipboard: {
-    write: vi.fn(async ([item]: [{items: Record<string, Blob>}]) => {
-      clipboardText = await item.items['text/plain'].text()
+    write: vi.fn(async ([item]: [{items: Record<string, Blob | Promise<Blob>>}]) => {
+      clipboardText = await (await item.items['text/plain']).text()
     }),
   }})
   await repo.tx(async tx => {
@@ -113,6 +114,24 @@ describe('writeTextToClipboard (every other clipboard writer in the app)', () =>
     await armCut('((a))', {workspaceId: WS, rootIds: ['a']})
 
     await expect(writeTextToClipboard('((a))')).rejects.toThrow('NotAllowedError')
+    expect(getArmedCut()?.rootIds).toEqual(['a'])
+  })
+
+  it('starts the write at the call, for text that is not known yet', async () => {
+    let resolve!: (text: string) => void
+    const written = writeTextToClipboard(new Promise<string>(r => { resolve = r }))
+    expect(navigator.clipboard.write).toHaveBeenCalledTimes(1)
+
+    resolve('((a))')
+    await written
+    expect(clipboardText).toBe('((a))')
+  })
+
+  it('leaves the clipboard and the cut as they were when the text never comes', async () => {
+    await armCut('((a))', {workspaceId: WS, rootIds: ['a']})
+
+    await expect(writeTextToClipboard(Promise.reject(new Error('no thread')))).rejects.toThrow()
+    expect(clipboardText).toBeNull()
     expect(getArmedCut()?.rootIds).toEqual(['a'])
   })
 })

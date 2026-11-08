@@ -62,12 +62,12 @@ describe('contributor badge profile liveness', () => {
   it('keeps deleted profile provenance, resolves it on a cold mount, and updates after restore/rename', async () => {
     await seedNoteAndAgent('agent')
     const firstMount = renderNote()
-    await waitFor(() => expect(badge().textContent).toBe('By Atlas · Researcher'))
+    await waitFor(() => expect(badge().textContent).toBe('Atlas'))
 
     await act(async () => {
       await repo.tx(tx => tx.delete(AGENT), {scope: ChangeScope.BlockDefault, context: {contributorId: null}})
     })
-    expect(badge().textContent).toBe('By Atlas · Researcher')
+    expect(badge().textContent).toBe('Atlas')
 
     firstMount.unmount()
     const mountedRepo = repo
@@ -79,18 +79,18 @@ describe('contributor badge profile liveness', () => {
     repo.setActiveWorkspaceId(WS)
     expect(repo.cache.getSnapshot(AGENT)).toBeUndefined()
     renderNote()
-    await waitFor(() => expect(badge().textContent).toBe('By Atlas · Researcher'))
+    await waitFor(() => expect(badge().textContent).toBe('Atlas'))
 
     await act(async () => {
       await repo.tx(tx => tx.restore(AGENT, {content: 'Orion'}), {scope: ChangeScope.BlockDefault, context: {contributorId: null}})
     })
-    await waitFor(() => expect(badge().textContent).toBe('By Orion · Researcher'))
+    await waitFor(() => expect(badge().textContent).toBe('Orion'))
   })
 
   it('keeps a human-only profile quiet when its kind changes from agent to human', async () => {
     await seedNoteAndAgent('agent')
     renderNote()
-    await waitFor(() => expect(badge().textContent).toBe('By Atlas · Researcher'))
+    await waitFor(() => expect(badge().textContent).toBe('Atlas'))
 
     await act(async () => {
       await repo.tx(tx => tx.setProperty(AGENT, contributorKindProp, 'human'), {

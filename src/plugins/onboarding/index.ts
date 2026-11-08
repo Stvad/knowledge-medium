@@ -21,7 +21,7 @@ import { tutorialBannerHeader } from './TutorialBanner.tsx'
 // which is populated from `staticDataExtensions`, where those plugins' data
 // extensions are registered. That's the dependency; it isn't re-declared here.
 //
-// A `{repo}` factory (not a bare extension) because the "Insert tutorial"
+// A `{repo}` factory (not a bare extension) because the "Open tutorial"
 // action needs the live Repo to seed into the active workspace — the same
 // shape roam-import uses.
 export const onboardingPlugin = ({ repo }: { repo: Repo }): AppExtension =>
@@ -29,7 +29,7 @@ export const onboardingPlugin = ({ repo }: { repo: Repo }): AppExtension =>
     id: 'system:onboarding',
     name: 'Onboarding',
     description:
-      'Seeds the starter Tutorial pages and a [[Tutorial]] bullet into a brand-new workspace, and adds an "Insert tutorial" command for any workspace.',
+      'Seeds the starter Tutorial pages and a [[Tutorial]] bullet into a brand-new workspace, and adds an "Open tutorial" command for any workspace.',
   }).of([
     // Higher precedence than daily-notes (default) so it seeds before the
     // daily-notes resolver lands; returns null to defer the landing target.

@@ -1,9 +1,11 @@
 /**
- * Edit-mode highlights: each open thread's quote, marked in the block's editor.
+ * Edit-mode highlights: each open thread's quote, marked in the block's editor,
+ * an edit suggestion's in a style of its own.
  *
  * Resolved against the editor's live doc on every change, not the stored row,
  * which lags the editor by its debounce; the offsets are exact because the
- * quote is raw content. Read mode draws no highlights yet.
+ * quote is raw content. Read mode marks the same ranges in the rendered
+ * markdown (`readHighlights.ts`).
  */
 
 import {StateEffect, StateField, type Extension} from '@codemirror/state'
@@ -11,30 +13,62 @@ import {Decoration, EditorView, ViewPlugin, type DecorationSet} from '@codemirro
 import type {Handle} from '@/data/api'
 import type {CodeMirrorExtensionContribution} from '@/editor/codeMirrorExtensions.js'
 import {resolveAnchor} from './anchor.ts'
-import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type ThreadSummary} from './summaries.ts'
+import {drawsHighlight, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
 
 export const HIGHLIGHT_CLASS = 'km-annotation-highlight'
 export const MOVED_HIGHLIGHT_CLASS = 'km-annotation-highlight-moved'
+export const SUGGESTION_HIGHLIGHT_CLASS = 'km-annotation-highlight-suggestion'
 
-export interface HighlightRange {
-  from: number
-  to: number
+const COMMENT_UTILITIES = 'bg-yellow-400/30 text-inherit border-b-2 border-yellow-600/75 dark:bg-yellow-400/20'
+const SUGGESTION_UTILITIES = 'bg-sky-400/25 text-inherit border-b-2 border-sky-600/75 dark:bg-sky-400/20'
+
+export interface HighlightStyle {
+  /** The anchor resolved moved, not exact. */
   moved: boolean
+  /** An edit suggestion's quote: the text it would replace. */
+  suggestion: boolean
 }
 
-/** Where `threads` highlight `doc`: exact and moved anchors, stale ones not. */
-export const highlightRanges = (doc: string, threads: readonly ThreadSummary[]): HighlightRange[] =>
-  threads.filter(drawsHighlight).flatMap(thread => {
-    if (thread.anchor.kind !== 'range') return []
-    const resolved = resolveAnchor(doc, thread.anchor)
-    return resolved.state === 'stale' ? [] : [{from: resolved.from, to: resolved.to, moved: resolved.state === 'moved'}]
-  })
+/** A highlight's look, in the editor and in read mode alike. Utilities rather
+ *  than an editor theme: the app's dark variant follows `data-theme-mode`, which
+ *  an editor theme's `&dark` never sees. */
+export const highlightClasses = ({moved, suggestion}: HighlightStyle): string => [
+  HIGHLIGHT_CLASS,
+  ...(suggestion ? [SUGGESTION_HIGHLIGHT_CLASS, SUGGESTION_UTILITIES] : [COMMENT_UTILITIES]),
+  ...(moved ? [MOVED_HIGHLIGHT_CLASS, 'border-dashed'] : []),
+].join(' ')
 
-const exactMark = Decoration.mark({class: HIGHLIGHT_CLASS})
-const movedMark = Decoration.mark({class: `${HIGHLIGHT_CLASS} ${MOVED_HIGHLIGHT_CLASS}`})
+/** The style of text several highlights cover: a suggestion's if any is
+ *  one, since a suggestion would change it, and then exact if any of the
+ *  winning style is, since the text there is certainly quoted. */
+export const coveringStyle = (covering: readonly HighlightStyle[]): HighlightStyle => {
+  const suggestions = covering.filter(style => style.suggestion)
+  const winners = suggestions.length > 0 ? suggestions : covering
+  return {moved: winners.every(style => style.moved), suggestion: suggestions.length > 0}
+}
 
+export interface HighlightRange extends HighlightStyle {
+  from: number
+  to: number
+}
+
+/** Where `thread` highlights `doc`, its anchor exact or moved; null where it
+ *  draws nothing, a stale anchor included. */
+export const highlightRange = (doc: string, thread: HighlightThread): HighlightRange | null => {
+  if (!drawsHighlight(thread) || thread.anchor.kind !== 'range') return null
+  const resolved = resolveAnchor(doc, thread.anchor)
+  return resolved.state === 'stale'
+    ? null
+    : {from: resolved.from, to: resolved.to, moved: resolved.state === 'moved', suggestion: thread.suggestion}
+}
+
+export const highlightRanges = (doc: string, threads: readonly HighlightThread[]): HighlightRange[] =>
+  threads.flatMap(thread => highlightRange(doc, thread) ?? [])
+
+/** CodeMirror nests overlapping marks itself, so each range keeps its own
+ *  style; `coveringStyle` is read mode's. */
 const decorationsFor = (doc: string, threads: readonly ThreadSummary[]): DecorationSet =>
-  Decoration.set(highlightRanges(doc, threads).map(r => (r.moved ? movedMark : exactMark).range(r.from, r.to)), true)
+  Decoration.set(highlightRanges(doc, threads).map(r => Decoration.mark({class: highlightClasses(r)}).range(r.from, r.to)), true)
 
 const setThreads = StateEffect.define<readonly ThreadSummary[]>()
 
@@ -56,15 +90,6 @@ export const highlightField = StateField.define<HighlightState>({
   provide: field => EditorView.decorations.from(field, state => state.decorations),
 })
 
-const highlightTheme = EditorView.baseTheme({
-  [`.${HIGHLIGHT_CLASS}`]: {
-    backgroundColor: 'rgba(250, 204, 21, 0.3)',
-    borderBottom: '2px solid rgba(202, 138, 4, 0.75)',
-  },
-  [`&dark .${HIGHLIGHT_CLASS}`]: {backgroundColor: 'rgba(250, 204, 21, 0.2)'},
-  [`.${MOVED_HIGHLIGHT_CLASS}`]: {borderBottomStyle: 'dashed'},
-})
-
 /** Feeds the handle's summaries into the field. A dispatch can't run while
  *  the view is being built, so the first one waits a microtask. */
 const threadsFeed = (handle: Handle<ThreadSummary[]>) => ViewPlugin.define(view => {
@@ -78,9 +103,10 @@ const threadsFeed = (handle: Handle<ThreadSummary[]>) => ViewPlugin.define(view 
 })
 
 export const threadHighlights = (handle: Handle<ThreadSummary[]>): Extension[] =>
-  [highlightField, highlightTheme, threadsFeed(handle)]
+  [highlightField, threadsFeed(handle)]
 
 export const threadHighlightsContribution: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId
   if (!workspaceId) return []
   return threadHighlights(repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}))

@@ -124,6 +124,11 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('`#not-a-tag` and ```js\n#still-not\n``` and [[tag]]')
   })
 
+  it('keeps code spans protected after an earlier #[[page]] rewrite shortens the text', () => {
+    const {content} = rewriteRoamContent('#[[a b]] #[[c d]] #[[e f]] `#a`', new Map())
+    expect(content).toBe('[[a b]] [[c d]] [[e f]] `#a`')
+  })
+
   it('does not rewrite URL fragments in markdown link destinations', () => {
     const {content} = rewriteRoamContent(
       '[comments](https://vlad.roam.garden/post?#comments) #tag',
@@ -157,13 +162,15 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('see [[April 28th, 2026]]')
   })
 
-  it('does not rewrite block refs inside code spans or code fences', () => {
+  // `codeOnly` is in no uid map: code is not a reference, so it is not an
+  // unresolved one either.
+  it('does not rewrite, or report as unresolved, block refs inside code spans or code fences', () => {
     const {content, unresolvedBlockUids} = rewriteRoamContent(
-      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and ((vgkFNA64b))',
+      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and `((codeOnly))` and ((vgkFNA64b))',
       uidMap,
     )
     expect(content).toBe(
-      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and ((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
+      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and `((codeOnly))` and ((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
     )
     expect(unresolvedBlockUids).toEqual([])
   })

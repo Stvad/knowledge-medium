@@ -9,7 +9,7 @@
  * the property panel is visible on arrival. Without this, the user
  * lands on a settings block whose content is empty (everything lives
  * in properties) and would have to toggle the panel manually.
- * Scoped UiState so the choice is per-device and doesn't sync.
+ * Scoped UiState so the choice is separate from document undo history.
  */
 
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'

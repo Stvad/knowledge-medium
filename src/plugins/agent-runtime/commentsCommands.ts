@@ -18,18 +18,18 @@ import type { BlockData } from '@/data/api'
 import { hasBlockType } from '@/data/properties'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import type { Repo } from '@/data/repo'
-import { addComment } from '@/plugins/annotations/addComment.js'
+import { addComment, suggestedContent } from '@/plugins/annotations/addComment.js'
 import { resolveAnchor } from '@/plugins/annotations/anchor.js'
 import { THREAD_IDS_FOR_BLOCK_QUERY } from '@/plugins/annotations/queries.js'
 import {
-  annotationStatusProp, THREAD_TYPE, threadAnchorOf, threadIsOpen, threadStatusOf, threadTargetIdOf,
+  annotationStatusProp, THREAD_TYPE, threadAnchorOf, threadIsOpen, threadStatusOf, threadSuggestionOf, threadTargetIdOf,
 } from '@/plugins/annotations/schema.js'
 import { threadIdsInScope } from '@/plugins/annotations/scope.js'
 import { authorIdOf } from '@/plugins/contributors/author.js'
 import { attributionCreatorsProp, contributorKindOf, type ContributorKind } from '@/plugins/contributors/schema.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { loadBlocks, loadCrumbs } from './agentViews/context.ts'
-import { shortIds } from './agentViews/resolveRef.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 import { clampInt, loadRoot } from './agentViews/shared.ts'
 import { clip, clipLine, oneLine } from './agentViews/text.ts'
 
@@ -37,7 +37,8 @@ const MAX_THREAD_LIMIT = 100
 /** Comments shown per thread, in reading order; `subtree` on the root reads
  *  the rest. */
 const MAX_COMMENTS_PER_THREAD = 50
-/** A quote past this is cut in the view; get_block on the root reads it. */
+/** A quote or replacement past this is cut in the view; the root's row
+ *  (sql_query) holds both whole. */
 const QUOTE_MAX_CHARS = 1_000
 /** Characters of target text kept on each side of a resolved quote. */
 const EXCERPT_CONTEXT_CHARS = 80
@@ -166,15 +167,15 @@ export const buildCommentsView = async (
   const commentRows = new Map(await Promise.all(page.map(async root => [root.id, await commentRowsOf(repo, root.id)] as const)))
   const allComments = [...commentRows.values()].flatMap(rows => rows.slice(0, MAX_COMMENTS_PER_THREAD))
   const targetIds = page.flatMap(root => threadTargetIdOf(root) ?? [])
-  const [targets, authors, crumbs, short] = await Promise.all([
+  const [targets, authors, crumbs] = await Promise.all([
     loadTargets(repo, targetIds),
     authorsOf(repo, allComments),
     loadCrumbs(repo, targetIds, workspaceId),
-    shortIds(repo, [...page.map(root => root.id), ...targetIds, ...allComments.map(row => row.id)]),
   ])
 
   const threadView = (root: BlockData): CommentThreadView => {
     const anchor = threadAnchorOf(root)
+    const suggestion = threadSuggestionOf(root)
     const targetId = threadTargetIdOf(root)
     const target = targetId ? targets.get(targetId) : undefined
     const resolution = anchor.kind === 'range' && target ? resolveAnchor(target.content, anchor) : null
@@ -188,7 +189,6 @@ export const buildCommentsView = async (
       const {text: content, cut} = clip(row.content, AGENT_VIEW_DEFAULTS.blockMaxChars)
       const node: CommentNode = {
         id: row.id,
-        shortId: short.get(row.id) ?? row.id,
         content,
         cut,
         author: authors.get(row.id)!,
@@ -203,13 +203,12 @@ export const buildCommentsView = async (
 
     return {
       id: root.id,
-      shortId: short.get(root.id) ?? root.id,
       status: statusOf(root),
       anchor: anchor.kind === 'block' ? 'block' : resolution?.state ?? 'stale',
       quote: anchor.kind === 'block' ? null : clip(anchor.quote, QUOTE_MAX_CHARS).text,
+      replacement: suggestion ? clip(suggestion.replacement, QUOTE_MAX_CHARS).text : null,
       target: targetId ? {
         id: targetId,
-        shortId: short.get(targetId) ?? targetId,
         deleted: target?.deleted === 1,
         path: crumbs.get(targetId) ?? [],
         excerpt: target ? excerptOf(target.content, range) : '',
@@ -239,6 +238,7 @@ export interface AddCommentParams {
   quote?: string
   occurrence?: number
   content?: string
+  replacement?: string
 }
 
 export interface AddedComment {
@@ -250,13 +250,26 @@ export interface AddedComment {
    *  so the caller can check it anchored the appearance it meant. */
   quoteStart: number | null
   excerpt: string | null
+  /** What a suggestion stores, so the caller can confirm one was made: null
+   *  for a plain comment, and widened with the quote. */
+  replacement: string | null
 }
 
 export const runAddComment = async (
   repo: Repo,
-  {targetId, quote, occurrence, content}: AddCommentParams,
+  {targetId, quote, occurrence, content, replacement}: AddCommentParams,
 ): Promise<AddedComment> => {
-  const created = await addComment(repo, {targetId, quote, occurrence, comment: content}, {
+  // Read against the target's content: a comment flagging a link the target
+  // holds adds none. A suggestion is read as the content accepting it would
+  // leave, since its quote widens to whole links and its replacement with it.
+  const annotated = await repo.load(targetId)
+  if (annotated) {
+    const suggested = quote === undefined || replacement === undefined
+      ? replacement
+      : suggestedContent(annotated.content, quote, replacement, occurrence)
+    await refuseDanglingBlockRefs(repo, 'add-comment', [content, suggested], async () => annotated.content)
+  }
+  const created = await addComment(repo, {targetId, quote, occurrence, comment: content, replacement}, {
     description: agentTxOptions('add-comment').description,
   })
   const [root, target] = await loadBlocks(repo, [created.threadId, targetId])
@@ -269,5 +282,6 @@ export const runAddComment = async (
     excerpt: anchor?.kind === 'range' && quoteStart !== null && target
       ? excerptOf(target.content, {from: quoteStart, to: quoteStart + anchor.quote.length})
       : null,
+    replacement: root ? threadSuggestionOf(root)?.replacement ?? null : null,
   }
 }

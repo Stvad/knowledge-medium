@@ -67,10 +67,21 @@ const copyToClipboard = async (data: ClipboardData): Promise<void> => {
 
 /** Write `text` to the clipboard: the app's one plain-text clipboard writer,
  *  enforced by lint. Whatever it writes replaces a cut on the clipboard, so it
- *  disarms that cut once the write resolved (see {@link copyToClipboard}). */
-export const writeTextToClipboard = async (text: string): Promise<void> => {
-  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
-  await navigator.clipboard.writeText(text)
+ *  disarms that cut once the write resolved (see {@link copyToClipboard}).
+ *
+ *  Text that needs async work first comes as a promise, and the write starts
+ *  at the call: Safari refuses one that starts after the gesture's handler has
+ *  awaited. A rejected `text` rejects the write and leaves the clipboard as it
+ *  was. */
+export const writeTextToClipboard = async (text: string | Promise<string>): Promise<void> => {
+  if (typeof text === 'string') {
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.writeText(text)
+  } else {
+    const blob = text.then(value => new Blob([value], {type: 'text/plain'}))
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.write([new ClipboardItem({'text/plain': blob})])
+  }
   disarmCut()
 }
 
@@ -103,8 +114,17 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
+  // Next to other roots a bare single line is re-read as markdown on paste (a
+  // childless `b` before `- a` adopts `a`), so it is bulleted. A multi-line
+  // lone block stays bare: a fence, quote or table pastes back whole only
+  // unbulleted.
+  if (validResults.length === 1) return validResults[0]
+  const bulletsAsRoot = (r: ClipboardData): boolean =>
+    r.blocks.length === 1 && !r.blocks[0].content.includes('\n')
   return {
-    markdown: validResults.map(r => r.markdown).join('\n'),
+    markdown: validResults
+      .map(r => bulletsAsRoot(r) ? createIndentedContent(r.blocks[0].content, 0) : r.markdown)
+      .join('\n'),
     blocks: validResults.flatMap(r => r.blocks),
   }
 }

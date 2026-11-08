@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 /**
  * The palette entry for the one-time properties migration. What matters here
  * is the gesture's guard and what the user is told afterwards — the pass

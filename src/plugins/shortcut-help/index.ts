@@ -1,6 +1,8 @@
 import {
   actionsFacet,
   appMountsFacet,
+  headerItemsFacet,
+  type HeaderItemContribution,
   type AppMountContribution,
 } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -8,10 +10,18 @@ import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { hasEditableTarget } from '@/shortcuts/utils.js'
 import { Keyboard } from 'lucide-react'
+import { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
 import { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
 import { shortcutHelpToggle } from './toggleStore.ts'
 
 export { ShortcutHelpOverlay } from './ShortcutHelpOverlay.tsx'
+export { ShortcutHelpHeaderItem } from './HeaderItem.tsx'
+
+export const shortcutHelpHeaderItem: HeaderItemContribution = {
+  id: 'shortcut-help.header',
+  region: 'end',
+  component: ShortcutHelpHeaderItem,
+}
 
 export const SHORTCUT_HELP_ACTION_ID = 'shortcut_help'
 
@@ -42,7 +52,7 @@ export const shortcutHelpMount: AppMountContribution = {
  *  text — it opens the overlay from edit mode too. */
 export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: SHORTCUT_HELP_ACTION_ID,
-  description: 'Show keyboard shortcuts',
+  description: 'Show shortcuts & gestures',
   context: ActionContextTypes.GLOBAL,
   icon: Keyboard,
   handler: (_deps, trigger) => {
@@ -64,8 +74,12 @@ export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> 
 export const shortcutHelpPlugin: AppExtension = systemToggle({
   id: 'system:shortcut-help',
   name: 'Shortcut help',
-  description: "'?' overlay listing the currently-active keyboard shortcuts by context; press any chord while it's open to inspect what it would run.",
+  description: "'?' overlay listing the currently-active shortcuts and link click gestures; press any chord while it's open to inspect what it would run.",
 }).of([
   appMountsFacet.of(shortcutHelpMount, {source: 'shortcut-help'}),
   actionsFacet.of(shortcutHelpAction, {source: 'shortcut-help'}),
+  headerItemsFacet.of(shortcutHelpHeaderItem, {
+    source: 'shortcut-help',
+    precedence: 35,
+  }),
 ])

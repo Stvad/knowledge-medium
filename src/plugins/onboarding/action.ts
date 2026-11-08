@@ -1,5 +1,5 @@
 /**
- * "Insert tutorial" command-palette action.
+ * "Open tutorial" command-palette action.
  *
  * The Tutorial is auto-seeded only on the user's first, freshly-created
  * workspace (see `landing.ts` — gated on `freshlyCreated`). Any later
@@ -65,7 +65,7 @@ export const insertTutorialIntoWorkspace = async (
 export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean> => {
   const workspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!workspaceId) {
-    showError('Insert tutorial failed: no active workspace')
+    showError('Open tutorial failed: no active workspace')
     return false
   }
 
@@ -97,14 +97,14 @@ export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean
     // tutorial did not open, and reporting success (or nothing) for it is the
     // lie this function exists to stop telling.
     const navigated = await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
-    if (navigated === null) return reportFailure('Insert tutorial failed: could not open the tutorial')
+    if (navigated === null) return reportFailure('Open tutorial failed: could not open the tutorial')
 
     banner?.done()
     return true
   } catch (err) {
-    console.error('[onboarding] insert tutorial failed:', err)
+    console.error('[onboarding] open tutorial failed:', err)
     return reportFailure(
-      `Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Open tutorial failed: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
 }
@@ -115,7 +115,7 @@ export const insertTutorialAction = ({
   repo: Repo
 }): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({
   id: INSERT_TUTORIAL_ACTION_ID,
-  description: 'Insert tutorial',
+  description: 'Open tutorial',
   context: ActionContextTypes.GLOBAL,
   icon: GraduationCap,
   // Swallows the result deliberately: the palette has nothing to roll back,

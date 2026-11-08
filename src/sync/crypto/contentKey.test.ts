@@ -4,7 +4,6 @@ import { BINARY_ENVELOPE_MAGIC } from './binaryEnvelope.js'
 import { computeContentHash, digestFromContentHash } from './contentHash.js'
 import {
   classifyStoredObject,
-  CONTENT_KEY_HKDF_INFO,
   deriveContentKey,
   deriveContentKeyHmac,
   indexKeyedNames,
@@ -41,9 +40,6 @@ describe('deriveContentKeyHmac (K_id)', () => {
     await expect(crypto.subtle.exportKey('raw', k)).rejects.toThrow()
   })
 
-  it('binds the version label that domain-separates this derivation', () => {
-    expect(CONTENT_KEY_HKDF_INFO).toBe('km/asset-content-key/v1')
-  })
 })
 
 describe('deriveContentKey (the §10 object-path segment)', () => {

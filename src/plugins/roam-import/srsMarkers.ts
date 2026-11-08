@@ -1,3 +1,4 @@
+import { escapeRegExp } from 'lodash-es'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import {
   srsArchivedProp,
@@ -19,9 +20,6 @@ export interface PreparedSrsSchedule {
   reviewCount: number
   archived?: boolean
 }
-
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const roamInlinePropertyValue = (text: string, name: string): string | undefined => {
   const pattern = new RegExp(`\\[\\[\\[\\[${escapeRegExp(name)}\\]\\]::?([^\\]]+)\\]\\]`)

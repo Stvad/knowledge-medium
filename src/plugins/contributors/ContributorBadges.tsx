@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
-import type {BlockData} from '@/data/api'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
 import {useHandle} from '@/hooks/block.js'
 import {useMinuteClock} from '@/hooks/useMinuteClock.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
@@ -12,6 +12,7 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
+import {FilePlus2, PencilLine} from 'lucide-react'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {
   attributionCreatorsProp,
@@ -25,15 +26,10 @@ import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from './queries.js'
 type Attribution = {creators: readonly string[]; editors: readonly string[]; workspaceId: string}
 type Profile = {id: string; name: string; kind: ContributorKind; role?: string}
 
-const readProperty = <T,>(data: BlockData, schema: {name: string; codec: {decode: (value: unknown) => T}; defaultValue: T}): T => {
-  const value = data.properties[schema.name]
-  return value === undefined ? schema.defaultValue : schema.codec.decode(value)
-}
-
 const useAttribution = (block: Block): Attribution | undefined => useHandle(block, {
   selector: data => data ? {
-    creators: readProperty(data, attributionCreatorsProp),
-    editors: readProperty(data, attributionEditorsProp),
+    creators: decodeRowProperty(data, attributionCreatorsProp),
+    editors: decodeRowProperty(data, attributionEditorsProp),
     workspaceId: data.workspaceId,
   } : undefined,
 })
@@ -66,9 +62,8 @@ const useContributorProfiles = (block: Block): {attribution: Attribution | undef
     profileRows.forEach(row => {
       const id = row.id
       let kind: ContributorKind = 'agent'
-      let role: string | undefined
       try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
-      try { role = readProperty(row, contributorRoleProp) } catch { /* A role is optional display metadata. */ }
+      const role = safeDecodeRowProperty(row, contributorRoleProp)
       byId.set(id, {
         id,
         name: row.content.trim().split('\n')[0] || `${kind} contributor`,
@@ -93,15 +88,16 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   if (!attribution || !visible) return <Inner block={block}/>
 
   const creatorIds = new Set(creatorProfiles.map(profile => profile.id))
-  const nonHumanCreators = [...new Map(creatorProfiles.filter(p => p.kind !== 'human').map(p => [p.id, p])).values()]
-  const nonHumanEditors = [...new Map(editorProfiles.filter(p => p.kind !== 'human' && !creatorIds.has(p.id)).map(p => [p.id, p])).values()]
+  const nonHumanCreators = creatorProfiles.filter(p => p.kind !== 'human')
+  const nonHumanEditors = editorProfiles.filter(p => p.kind !== 'human' && !creatorIds.has(p.id))
   const summarize = (label: string, entries: Profile[]): string => {
     if (entries.length === 0) return ''
-    const first = entries[0]
-    const person = `${first.name}${first.role ? ` · ${first.role}` : ''}`
-    return `${label} ${person}${entries.length > 1 ? ` +${entries.length - 1}` : ''}`
+    return `${label} ${entries.map(profile => profile.name).join(', ')}`
   }
   const summary = [summarize('By', nonHumanCreators), summarize('Edited by', nonHumanEditors)].filter(Boolean).join(' · ')
+  const primary = nonHumanCreators[0] ?? nonHumanEditors[0]
+  const otherCount = nonHumanCreators.length + nonHumanEditors.length - 1
+  const PrimaryIcon = nonHumanCreators.length > 0 ? FilePlus2 : PencilLine
 
   return (
     <div className="flex w-full items-start gap-1">
@@ -111,10 +107,13 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
           <button
             type="button"
             aria-label={`Authorship details: ${summary}`}
+            title={summary}
             onClick={event => event.stopPropagation()}
-            className="mt-0.5 inline-flex h-4 max-w-56 shrink-0 select-none items-center rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="mt-0.5 inline-flex h-4 max-w-28 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <span className="truncate">{summary}</span>
+            <PrimaryIcon aria-hidden="true" className="h-3 w-3 shrink-0"/>
+            <span className="min-w-0 truncate">{primary.name}</span>
+            {otherCount > 0 && <span className="shrink-0">+{otherCount}</span>}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="max-h-80 w-72 overflow-y-auto">

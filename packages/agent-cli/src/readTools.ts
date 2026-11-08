@@ -23,7 +23,7 @@ import {
   viewOutlineCommandSchema,
   viewSearchCommandSchema,
 } from './protocol.js'
-import {refuseNumberified, refuseRepeated, workspaceAssertion} from './cliOptions.js'
+import {refuseNumberified, refuseRepeated, stringOption, workspaceAssertion} from './cliOptions.js'
 
 type InputShape = Record<string, z.ZodType>
 export type ToolInput = Record<string, unknown>
@@ -261,10 +261,7 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
     }
     case 'string': {
       if (spec.field === 'workspaceId') return workspaceAssertion(value).workspaceId
-      refuseRepeated(flag, value)
-      if (value === 0) return ''
-      refuseNumberified(flag, value)
-      return String(value)
+      return stringOption(flag, value)
     }
     case 'string-array': {
       // Each occurrence is one value, never split on commas (repeat the flag

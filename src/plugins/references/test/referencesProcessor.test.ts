@@ -396,14 +396,25 @@ describe('parseReferences — extension source is not scanned for content refs',
     expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
   })
 
-  // Direct unit test, because this is unpinnable through the public
-  // path: the kernel's same-tx `core.blockTypeTypeify` decodes `types`
-  // on every changed row and throws first, so a malformed value never
-  // reaches the read phase via `repo.tx`. See `isExtensionSource`'s
-  // declaration — the point is that it must stay TOTAL, and a future
-  // "simplify it to hasBlockType" would reintroduce a throw in a
-  // post-commit read phase, where the user's write has already landed.
+  // `isExtensionSource` must stay TOTAL: a local write can store a malformed
+  // `types` cell, and a future "simplify it to hasBlockType" would throw in
+  // a post-commit read phase, where the user's write has already landed.
   describe('isExtensionSource is total', () => {
+    it.each([
+      ['a scalar', 'extension'],
+      ['an array with a non-string element', ['page', 42]],
+    ])('still derives references for a block written with %s as its types', async (_label, types) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'I link to [[foo]]'})
+        await tx.update('src', {properties: {[typesProp.name]: types}})
+      }, {scope: ChangeScope.BlockDefault})
+      await flush()
+
+      const src = await env.read('src')
+      expect(JSON.parse(src!.properties_json)[typesProp.name]).toEqual(types)
+      expect(JSON.parse(src!.references_json)).toEqual([{id: aliasId('foo'), alias: 'foo'}])
+    })
+
     it.each([
       ['a scalar', 'extension'],
       ['an array with a non-string element', ['page', 42]],

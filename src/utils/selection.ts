@@ -11,6 +11,7 @@ import {
 } from '@/data/properties'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { precedesInTree } from '@/data/treeOrder.js'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -385,6 +386,7 @@ export async function commitSelectionRange(
   if (selectedBlockIds.length === 0) return false
 
   const validatedIds = await validateSelectionHierarchy([...selectedBlockIds], uiStateBlock.repo)
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     await tx.setProperty(uiStateBlock.id, selectionStateProp, {
       selectedBlockIds: validatedIds,

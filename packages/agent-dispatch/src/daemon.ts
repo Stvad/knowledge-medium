@@ -53,7 +53,10 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets
- *  blocked from write-back by the dispatch-owned MCP write guard. */
+ *  blocked from write-back by the dispatch-owned MCP write guard.
+ *  `alwaysLoad` puts its tools in the first prompt instead of behind
+ *  claude's tool search: every run uses them, so deferring them only
+ *  costs each run a lookup turn. */
 const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null): Promise<string> => {
   const serverDef = buildMcpServerDef(config, contributorId)
   const mcpConfig = {
@@ -62,6 +65,7 @@ const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null
         command: serverDef.command,
         args: serverDef.args,
         env: serverDef.env,
+        alwaysLoad: true,
       },
     },
   }

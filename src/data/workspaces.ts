@@ -287,7 +287,7 @@ export const flipRejectionProvesNoWrite = (err: unknown): boolean =>
  *
  * A direct UPDATE, like `renameWorkspace`: RLS admits writers and the
  * properties_migration trigger is what narrows this to the OWNER, to the
- * 'cell' -> 'children' step, and away from e2ee workspaces.
+ * 'cell' -> 'children' step.
  *
  * `.select().single()` is not decoration. An UPDATE that RLS filters to zero
  * rows SUCCEEDS, so without reading the row back a refusal we are not a writer
@@ -787,7 +787,7 @@ export const ensureLocalPersonalWorkspace = async (
     // Local-only personal workspace is always plaintext.
     encryptionMode: 'none',
     wkCanary: null,
-    propertiesMigration: 'cell',
+    propertiesMigration: 'children',
   }
   const member: WorkspaceMembership = {
     id: memberId,

@@ -406,6 +406,12 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
       .resolves.toBeUndefined()
   })
 
+  it('blocks add_comment when a suggestion\'s replacement references a blocked target, which accepting writes', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'add_comment', target: 'b', quote: 'Thursday', replacement: 'ask [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+  })
+
   it('lets update_block write a block that references a blocked target — a task is completed that way', async () => {
     const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ask [[claude]] to tidy up'}])
     const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
@@ -460,6 +466,14 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
       .resolves.toBeUndefined()
     await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'})).resolves.toBeUndefined()
+  })
+})
+
+describe('add_media under the blocked-wikilink guard', () => {
+  it('refuses a filename linking a blocked target, since it becomes the block\'s content', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom() as BridgeGraph, ['claude'])
+    await expect(guard.beforeWrite({type: 'add_media', path: '/tmp/x', filename: '[[claude]] x.png'})).rejects.toThrow()
+    await expect(guard.beforeWrite({type: 'add_media', path: '/tmp/x', filename: 'x.png'})).resolves.toBeUndefined()
   })
 })
 

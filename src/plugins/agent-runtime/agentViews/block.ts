@@ -3,7 +3,7 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { BACKLINKS_COUNT_FOR_BLOCK_QUERY } from '@/plugins/backlinks/inline-counts/countQuery.js'
 import { loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
-import { boundDisplayId, displayIds } from './displayIds.ts'
+import { boundDisplayId, idMark } from './displayIds.ts'
 import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { charBoundary, formatCount } from './text.ts'
 
@@ -15,7 +15,6 @@ export interface BlockViewParams {
 
 export interface BlockView {
   id: string
-  shortId: string
   workspaceId: string
   parentId: string | null
   breadcrumb: string[]
@@ -58,9 +57,8 @@ export const buildBlockView = async (
   const boundary = charBoundary(block.content, Math.min(block.content.length, contentOffset + maxChars))
   const end = boundary > contentOffset ? boundary : Math.min(block.content.length, contentOffset + 2)
 
-  const [renderer, shortIds, crumbs, childCounts, backlinkCount] = await Promise.all([
+  const [renderer, crumbs, childCounts, backlinkCount] = await Promise.all([
     createPropertyRenderer(repo, [block], 'full'),
-    displayIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id], workspaceId),
     // The count of the backlinks view's own set, which owns that equality;
@@ -72,7 +70,6 @@ export const buildBlockView = async (
 
   return {
     id: block.id,
-    shortId: shortIds.get(block.id) ?? block.id,
     workspaceId: block.workspaceId,
     parentId: block.parentId,
     breadcrumb: crumbs.get(block.id) ?? [],
@@ -98,7 +95,7 @@ export const renderBlockView = (view: BlockView): string => {
     plural(view.backlinkCount, 'backlink'),
     view.editedAt ? `edited ${view.editedAt.slice(0, 10)}` : null,
   ].filter(Boolean)
-  lines.push(`^${view.shortId}  (${boundDisplayId(view.id)})  ${facts.join(' · ')}`)
+  lines.push(`${idMark(view.id)}  ${facts.join(' · ')}`)
   lines.push(`in: ${crumbLine(view.breadcrumb)}`)
   lines.push('')
   if (view.contentOffset > 0) lines.push(`…[${formatCount(view.contentOffset)} chars before]`)

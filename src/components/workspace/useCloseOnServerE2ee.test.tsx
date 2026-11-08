@@ -51,6 +51,29 @@ describe('useCloseOnServerE2ee — an open workspace closes when the server conv
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
+  it('closes once, however many later changes still read e2ee', async () => {
+    setModePin(USER, WS, 'plaintext')
+    const onClose = render()
+    await flip()
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+
+    // A later `workspaces` change that a fresh watcher on another plaintext
+    // workspace sees as its own conversion.
+    setModePin(USER, 'ws-2', 'plaintext')
+    await shared.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode)
+       VALUES ('ws-2', 'ws', ?, 1, 1, 'none')`,
+      [USER],
+    )
+    const witness = vi.fn()
+    renderHook(() => useCloseOnServerE2ee(shared.db, USER, 'ws-2', true, witness))
+    await shared.db.execute(
+      `UPDATE workspaces SET encryption_mode = 'e2ee', update_time = 2 WHERE id IN (?, 'ws-2')`, [WS],
+    )
+    await vi.waitFor(() => expect(witness).toHaveBeenCalled())
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves an e2ee-pinned workspace open', async () => {
     setModePin(USER, WS, 'e2ee')
     const onClose = render()

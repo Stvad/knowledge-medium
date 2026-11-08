@@ -12,8 +12,10 @@
  * cosmetic. (Capture — Phase 5 — populates them; this phase only defines + renders.)
  */
 
+import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { TypeSeedDeclaration } from '@/data/api'
+import type { KernelPageSpec } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 
 export const MEDIA_TYPE = 'media'
@@ -33,15 +35,8 @@ export const mediaHashProp = seedProperty({
 /** A media block's content hash from its stored properties, or null when it
  *  has none yet. Total: a legacy or hand-edited row can hold a value the codec
  *  throws on, and one such row must not abort a walk over the workspace. */
-export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null => {
-  const encoded = properties[mediaHashProp.name]
-  if (encoded === undefined) return null
-  try {
-    return mediaHashProp.codec.decode(encoded) || null
-  } catch {
-    return null
-  }
-}
+export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null =>
+  safeDecodeRowProperty({properties}, mediaHashProp) || null
 
 /** The content hash of a stored `properties_json` that is a media block's, or
  *  null for any other row. Total: an unparsable or non-object value is no media
@@ -131,18 +126,20 @@ export const isPdfMime = (mime: string | undefined): boolean =>
 /** The fallback MIME for a file with no declared type. */
 export const GENERIC_MIME = 'application/octet-stream'
 
+const matchesAt = (b: Uint8Array, offset: number, signature: readonly number[]): boolean =>
+  signature.every((byte, i) => b[offset + i] === byte)
+const ascii = (text: string): number[] => Array.from(text, char => char.charCodeAt(0))
+
 /** Sniff a common raster image MIME from the leading magic bytes. Returns `null`
- *  for anything unrecognized (incl. a too-short buffer). */
+ *  for anything unrecognized (incl. a too-short buffer). Each check is long enough
+ *  that text which merely starts alike does not pass it, since a match overrides a declared type: a
+ *  note starting "BM" or "GIF8" is not an image. */
 export const sniffImageMime = (b: Uint8Array): string | null => {
-  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png'
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
-  if (b.length >= 4 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif'
-  if (
-    b.length >= 12 &&
-    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && // "RIFF"
-    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 // "WEBP"
-  ) return 'image/webp'
-  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp' // "BM"
+  if (matchesAt(b, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'
+  if (matchesAt(b, 0, [0xff, 0xd8, 0xff])) return 'image/jpeg'
+  if (matchesAt(b, 0, ascii('GIF87a')) || matchesAt(b, 0, ascii('GIF89a'))) return 'image/gif'
+  if (matchesAt(b, 0, ascii('RIFF')) && matchesAt(b, 8, ascii('WEBP'))) return 'image/webp'
+  if (matchesAt(b, 0, ascii('BM')) && matchesAt(b, 6, [0, 0, 0, 0])) return 'image/bmp' // its reserved field
   return null
 }
 
@@ -150,8 +147,7 @@ export const sniffImageMime = (b: Uint8Array): string | null => {
  *  arrives with an empty or `octet-stream` `File.type`, which would store a generic MIME
  *  and never reach the inline PDF viewer ({@link isPdfMime}); sniffing the bytes keeps such
  *  typeless captures previewable. */
-export const isPdfBytes = (b: Uint8Array): boolean =>
-  b.length >= 5 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2d
+export const isPdfBytes = (b: Uint8Array): boolean => matchesAt(b, 0, ascii('%PDF-'))
 
 /** The MIME to STORE for a captured file. `File.type` is unreliable — a pasted or
  *  dropped file often arrives with an empty, generic (`octet-stream`), or even wrong
@@ -160,9 +156,7 @@ export const isPdfBytes = (b: Uint8Array): boolean =>
  *  if they're a recognizable image ({@link sniffImageMime}) or PDF ({@link isPdfBytes}),
  *  store that (the stored MIME is then a function of the bytes, like the content key — a
  *  typeless/mislabeled image or PDF still renders inline, and no re-paste can disagree with
- *  the dedup'd row). Otherwise trust a specific declared type, else fall back to generic. A
- *  false-positive sniff is harmless — the renderer's hash-verified viewer falls to the
- *  placeholder / broken preview on a decode failure. */
+ *  the dedup'd row). Otherwise trust a specific declared type, else fall back to generic. */
 export const resolveCaptureMime = (declared: string | undefined, bytes: Uint8Array): string => {
   const sniffed = sniffImageMime(bytes)
   if (sniffed) return sniffed
@@ -186,6 +180,12 @@ export const ASSETS_TYPE = 'assets'
  *  `uuidv5(workspaceId, ASSETS_NS)` (see {@link kernelPageBlockId}). */
 export const ASSETS_NS = 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'
 export const ASSETS_ALIAS = 'Assets'
+
+export const assetsPageSpec: KernelPageSpec = {
+  namespace: ASSETS_NS,
+  alias: ASSETS_ALIAS,
+  markerType: ASSETS_TYPE,
+}
 
 export const ASSETS_TYPE_CONTRIBUTION: TypeSeedDeclaration = seedType({
   seedKey: 'system:attachments/type/assets',

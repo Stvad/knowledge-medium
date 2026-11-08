@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeBytes, verifyObjectBytes } from './byteTransform.js'
+import { encodeBytes, encodedSize, fitsObjectLimit, verifyObjectBytes } from './byteTransform.js'
 import { BINARY_ENVELOPE_OVERHEAD_BYTES, hasBinaryEnvelopeMagic } from './crypto/binaryEnvelope.js'
 import { computeContentHash } from './crypto/contentHash.js'
 import { importWorkspaceKey } from './crypto/workspaceKey.js'
@@ -25,6 +25,7 @@ describe('byte transform (encodeBytes / verifyObjectBytes)', () => {
       const encoded = await encodeBytes(bytes, 'none', noKey, ref)
       expect(encoded).toBe(bytes) // identity: the same reference, no copy
       expect(hasBinaryEnvelopeMagic(encoded)).toBe(false) // not framed/encrypted
+      expect(encoded.length).toBe(encodedSize(bytes.length, 'none'))
       const verified = await verifyObjectBytes(encoded, 'none', noKey, ref)
       expect(verified.ok && Uint8Array.from(verified.plaintext)).toEqual(bytes)
     })
@@ -39,8 +40,18 @@ describe('byte transform (encodeBytes / verifyObjectBytes)', () => {
       expect(hasBinaryEnvelopeMagic(sealed)).toBe(true)
       expect(Uint8Array.from(sealed)).not.toEqual(bytes) // actually encrypted
       expect(sealed.length).toBe(bytes.length + BINARY_ENVELOPE_OVERHEAD_BYTES)
+      // The preflight's size prediction is what the encoder writes.
+      expect(sealed.length).toBe(encodedSize(bytes.length, 'e2ee'))
       const verified = await verifyObjectBytes(sealed, 'e2ee', getCek, ref)
       expect(verified.ok && Uint8Array.from(verified.plaintext)).toEqual(bytes)
+    })
+
+    it('fits a plaintext at the limit raw, and sealed only once the envelope fits too', () => {
+      const limit = 1000
+      expect(fitsObjectLimit(limit, 'none', limit)).toBe(true)
+      expect(fitsObjectLimit(limit + 1, 'none', limit)).toBe(false)
+      expect(fitsObjectLimit(limit - BINARY_ENVELOPE_OVERHEAD_BYTES, 'e2ee', limit)).toBe(true)
+      expect(fitsObjectLimit(limit - BINARY_ENVELOPE_OVERHEAD_BYTES + 1, 'e2ee', limit)).toBe(false)
     })
 
     it('round-trips a 1 MiB buffer (multi-block GCM at realistic media size)', async () => {
