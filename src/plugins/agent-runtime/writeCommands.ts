@@ -10,8 +10,8 @@ import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { AGENT_VIEW_DEFAULTS, charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
-import { displayIds } from './agentViews/displayIds.ts'
-import { shortIds } from './agentViews/resolveRef.ts'
+import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
+import { idMark } from './agentViews/displayIds.ts'
 import { CUT_LEGEND, EMPTY_CONTENT, joinDisplayLines, plural } from './agentViews/shared.ts'
 import { clipLine } from './agentViews/text.ts'
 import {
@@ -42,10 +42,9 @@ interface AppendMarkdownInput {
   exactIds?: boolean
 }
 
-/** A block as an append reports it: one display line, cut at the read views'
- *  line budget, and its id as they print it. */
+/** A block's content as an append reports it: one display line, cut at the
+ *  read views' line budget. */
 interface AppendedLine {
-  shortId: string
   content: string
   /** Characters cut from `content` (0 when it fit). */
   cut: number
@@ -68,23 +67,23 @@ interface AppendMarkdownView {
   blocks: AppendedBlock[]
 }
 
-const appendedLine = (content: string, shortId: string): AppendedLine => {
+const appendedLine = (content: string): AppendedLine => {
   const clipped = clipLine(content, AGENT_VIEW_DEFAULTS.lineChars)
-  return {shortId, content: clipped.text === '' ? EMPTY_CONTENT : clipped.text, cut: clipped.cut}
+  return {content: clipped.text === '' ? EMPTY_CONTENT : clipped.text, cut: clipped.cut}
 }
 
-/** `Appended N blocks under <target>  ^short (kind[, created]):`, then the new
+/** `Appended N blocks under <target>  ^id (kind[, created]):`, then the new
  *  blocks as an outline in the read views' line form. */
 export const renderAppendView = (view: AppendMarkdownView): string => {
   const {target, appended, blocks} = view
   const facts = target.created ? `${target.kind}, created` : target.kind
   const lines = [
-    `Appended ${plural(appended, 'block')} under ${target.content}  ^${target.shortId} (${facts}):`,
-    ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ^${block.shortId}`),
+    `Appended ${plural(appended, 'block')} under ${target.content}  ${idMark(target.id)} (${facts}):`,
+    ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ${idMark(block.id)}`),
   ]
   if ([target, ...blocks].some(line => line.cut > 0)) lines.push(CUT_LEGEND)
   const rest = appended - blocks.length
-  if (rest > 0) lines.push(`… ${plural(rest, 'more block')} not shown — read them with subtree ^${target.shortId}`)
+  if (rest > 0) lines.push(`… ${plural(rest, 'more block')} not shown — read them with subtree ${idMark(target.id)}`)
   return joinDisplayLines(lines)
 }
 
@@ -95,6 +94,7 @@ export const appendMarkdown = async (
   const verb = 'append-markdown'
   // Before resolving the target: resolution can CREATE a page.
   if (input.markdown.trim() === '') throw new Error(`${verb}: markdown is empty — nothing to append.`)
+  await refuseDanglingBlockRefs(outerRepo, verb, [input.markdown])
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
@@ -145,11 +145,10 @@ export const appendMarkdown = async (
     }, agentTxOptions(verb))
 
     const listed = blocks.slice(0, AGENT_VIEW_DEFAULTS.outlineLimit)
-    const ids = await displayIds(repo, [target.id, ...listed.map(block => block.id)])
     return {
-      target: {...target, ...appendedLine(targetContent, ids.get(target.id)!)},
+      target: {...target, ...appendedLine(targetContent)},
       appended: blocks.length,
-      blocks: listed.map(({content, ...block}) => ({...block, ...appendedLine(content, ids.get(block.id)!)})),
+      blocks: listed.map(({content, ...block}) => ({...block, ...appendedLine(content)})),
     }
   })
 }
@@ -184,7 +183,6 @@ export const contentEcho = (content: string): string => {
 
 interface EditBlockResult {
   id: string
-  shortId: string
   /** The replacement with up to {@link EDIT_CONTEXT_CHARS} of context on each
    *  side, cuts marked: the confirmation, without echoing a long block whole. */
   excerpt: string
@@ -199,34 +197,46 @@ const editExcerpt = (content: string, at: number, length: number): string => {
     + `${end < content.length ? cutMarker(content.length - end) : ''}`
 }
 
+/** `content` with the one occurrence of `edit.old` replaced, and where. */
+const applyEdit = (verb: string, id: string, content: string, edit: EditBlockInput) => {
+  const at = content.indexOf(edit.old)
+  if (at < 0) {
+    throw new Error(
+      `${verb}: old text not found in block ${id}. Its current content is: ${contentEcho(content)}`,
+    )
+  }
+  const count = occurrences(content, edit.old)
+  if (count > 1) {
+    throw new Error(
+      `${verb}: old text matches ${count} times in block ${id} — include more surrounding text so it matches once.`,
+    )
+  }
+  // Spliced, not String.replace: a `$&` in the replacement stays literal.
+  return {content: content.slice(0, at) + edit.new + content.slice(at + edit.old.length), at}
+}
+
 export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<EditBlockResult> => {
   const verb = 'edit-block'
   if (input.old === '') {
     throw new Error(`${verb}: old must not be empty — use update-block to replace the whole content.`)
   }
   const id = await blockIdField(repo, input.id, verb, input.exactIds)
+  // The edited content, not `new` alone: a mark can take its parens or its id
+  // from the text around the replacement.
+  const current = await repo.load(id)
+  if (current) {
+    const edited = applyEdit(verb, id, current.content, input).content
+    await refuseDanglingBlockRefs(repo, verb, [edited], async () => current.content)
+  }
   let excerpt = ''
   await repo.tx(async tx => {
     const block = await tx.get(id)
     if (!block || block.deleted) throw new Error(`${verb}: block ${id} not found.`)
-    const at = block.content.indexOf(input.old)
-    if (at < 0) {
-      throw new Error(
-        `${verb}: old text not found in block ${id}. Its current content is: ${contentEcho(block.content)}`,
-      )
-    }
-    const count = occurrences(block.content, input.old)
-    if (count > 1) {
-      throw new Error(
-        `${verb}: old text matches ${count} times in block ${id} — include more surrounding text so it matches once.`,
-      )
-    }
-    // Spliced, not String.replace: a `$&` in the replacement stays literal.
-    const content = block.content.slice(0, at) + input.new + block.content.slice(at + input.old.length)
+    const {content, at} = applyEdit(verb, id, block.content, input)
     await tx.update(id, {content})
     excerpt = editExcerpt(content, at, input.new.length)
   }, agentTxOptions(verb))
-  return {id, shortId: (await shortIds(repo, [id])).get(id)!, excerpt}
+  return {id, excerpt}
 }
 
 interface CreatePageInput {
@@ -257,6 +267,5 @@ export const createPage = async (
     resolved = await resolveDailyNoteTarget(repo, date.iso, verb)
   }
   const content = (await repo.load(resolved.id))?.content ?? ''
-  const ids = await displayIds(repo, [resolved.id])
-  return {...resolved, ...appendedLine(content, ids.get(resolved.id)!)}
+  return {...resolved, ...appendedLine(content)}
 }

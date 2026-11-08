@@ -42,6 +42,7 @@ import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { lineFragmentArb } from '@/test/arbitraries/markdownSoup'
 import { parseMarkdownToBlocks, parsedBlocksFromOutline, type OutlineNode, type ParsedBlock } from '../markdownParser'
+import { outlineOf } from './outline'
 
 // ──── Property 1: never throws + valid forest on adversarial soup ────
 //
@@ -258,17 +259,11 @@ describe('parsedBlocksFromOutline: preserves the tree', () => {
     ),
   }))
 
-  const rebuild = (blocks: ParsedBlock[], parentId: string | undefined): OutlineNode[] =>
-    blocks
-      .filter(block => block.parentId === parentId)
-      .sort((a, b) => (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
-      .map(block => ({content: block.content, children: rebuild(blocks, block.id)}))
-
   it('rebuilding from parentId + orderKey yields the input tree', () => {
     fc.assert(
       fc.property(treeArb, tree => {
         const blocks = parsedBlocksFromOutline(tree)
-        expect(rebuild(blocks, undefined)).toEqual(tree)
+        expect(outlineOf(blocks)).toEqual(tree)
       }),
       fuzzParams(120),
     )

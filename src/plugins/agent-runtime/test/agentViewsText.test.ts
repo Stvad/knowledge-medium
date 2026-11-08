@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { codecs } from '@/data/api/codecs'
 import { hasLoneSurrogate } from '@/utils/string'
 import { snippet } from '../agentViews/text'
 import { decodeProperty, isBlank } from '../agentViews/properties'
@@ -47,6 +48,23 @@ describe('decodeProperty', () => {
     const decoded = decodeProperty(undefined, raw) as {value: unknown[], total: number}
     expect(decoded.value).toHaveLength(100)
     expect(decoded.total).toBe(151)
+  })
+
+  it('decodes only a head of a member-wise list through its member codec, keeping its length', () => {
+    const decode = vi.fn(codecs.string.decode)
+    const schema = {codec: codecs.list({...codecs.string, decode})} as unknown as AnyPropertySchema
+    const long = Array.from({length: 5_000}, (_, i) => `item-${i}`)
+    const decoded = decodeProperty(schema, long) as {value: unknown[], total: number}
+    expect(decode).toHaveBeenCalledTimes(100)
+    expect(decoded.value).toHaveLength(100)
+    expect(decoded.total).toBe(5_000)
+  })
+
+  it('reads ids only from a head of a refList, counting the rest', () => {
+    const long = Array.from({length: 5_000}, (_, i) => `id-${i}`)
+    const decoded = decodeProperty({codec: codecs.refList()} as unknown as AnyPropertySchema, long)
+    expect(decoded).toMatchObject({kind: 'refs', total: 5_000})
+    expect((decoded as {ids: string[]}).ids).toHaveLength(100)
   })
 })
 

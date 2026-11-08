@@ -10,7 +10,6 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { contributorsDataExtension } from '@/plugins/contributors/dataExtension'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __setCompileImplForTest,
   __setTranspileImplForTest,
@@ -36,6 +35,7 @@ import {
 } from '@/extensions/dynamicExtensionSeeds'
 import { ActionContextTypes, type BlockShortcutDependencies, type MultiSelectModeDependencies } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand as executeRuntimeCommand } from '../commands'
+import { createTestAgentContext } from './createTestAgentContext'
 
 const executeCommand: typeof executeRuntimeCommand = (command, context) =>
   executeRuntimeCommand({contributorId: null, ...command}, context)
@@ -62,14 +62,7 @@ const setup = async (): Promise<Harness> => {
     user: USER,
   })
   const repo = baseRepo.withTxContext({contributorId: null})
-  const runtime = resolveFacetRuntimeSync([staticDataExtensions, extensionsDataExtension], {
-    repo,
-    workspaceId: WS,
-    safeMode: false,
-  })
-  repo.setFacetRuntime(runtime)
-  repo.setActiveWorkspaceId(WS)
-  const context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+  const context = createTestAgentContext(repo, WS, [staticDataExtensions, extensionsDataExtension])
   return {h, repo, context}
 }
 
@@ -1979,15 +1972,11 @@ describe('mutating bridge commands rely on the transaction workspace guard', () 
       },
     }
 
-    const withProbeAction = (): AgentRuntimeContext => {
-      const runtime = resolveFacetRuntimeSync(
-        [staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
-          extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
-        {repo: env.repo, workspaceId: WS, safeMode: false},
-      )
-      env.repo.setFacetRuntime(runtime)
-      return createAgentRuntimeContext({repo: env.repo, runtime, safeMode: false})
-    }
+    const withProbeAction = (): AgentRuntimeContext => createTestAgentContext(env.repo, WS, [
+      staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
+      extensionsDataExtension,
+      actionsFacet.of(probeAction, {source: 'test'}),
+    ])
 
     beforeEach(() => {
       ran = false

@@ -91,7 +91,7 @@ export const scopeAssertion = (scope: unknown): {scope?: string} => {
 
 /** cac numberifies every digits-only option value before this code sees it,
  *  so `00123` arrives as 123 and its text is gone: turning it back into a
- *  string would name something else (another id prefix, another type). */
+ *  string would name something else (another id, another type). */
 export const refuseNumberified = (flag: string, value: unknown): void => {
   if (typeof value !== 'number') return
   throw new Error(
@@ -105,6 +105,15 @@ export const refuseNumberified = (flag: string, value: unknown): void => {
 export const refuseRepeated = (flag: string, value: unknown): void => {
   if (!Array.isArray(value)) return
   throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
+}
+
+/** A text option as typed, or a refusal for a value CAC has changed. An empty
+ *  value reaches here as 0. */
+export const stringOption = (flag: string, value: unknown): string => {
+  refuseRepeated(flag, value)
+  if (value === 0) return ''
+  refuseNumberified(flag, value)
+  return String(value)
 }
 
 /** `append-markdown`'s --first / --after <id> / --before <id> as its

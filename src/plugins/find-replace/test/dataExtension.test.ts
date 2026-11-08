@@ -17,12 +17,14 @@ import {
   FIND_REPLACE_SEARCH_CONTENT_QUERY,
   findReplaceDataExtension,
 } from '../dataExtension.ts'
+import { buildContentSearchMatch } from '../search.ts'
 import type {
   ApplyContentReplaceResult,
   ContentSearchResult,
 } from '../types.ts'
 
 const WS = 'ws-1'
+const insensitive = {matchCase: false, wholeWord: false}
 const OTHER_WS = 'ws-2'
 
 interface Harness {
@@ -186,6 +188,32 @@ describe('findReplaceDataExtension', () => {
         {id: 'b', count: 2},
         {id: 'a', count: 3},
       ])
+  })
+
+  it('offers every block the case-insensitive matcher matches, whatever the query script', async () => {
+    const contents: Record<string, string> = {
+      'acute-lower': 'élan',
+      'acute-upper': 'ÉCLAIR',
+      cyrillic: 'Привет, МИР',
+      sharp: 'STRAẞE',
+      sigma: 'ΟΔΟΣ οδος',
+      kelvin: '300 \u212A',
+      'long-s': 'mi\u017Fs',
+      brackets: 'É]x [é*?] é[b]',
+      cherokee: '\uAB70',
+      cjk: '日本語',
+    }
+    for (const [id, content] of Object.entries(contents)) await create({id, content})
+    const expected = (query: string) => Object.entries(contents)
+      .filter(([id, content]) => buildContentSearchMatch(id, content, query, insensitive) !== null)
+      .map(([id]) => id)
+      .sort()
+
+    for (const query of ['É', 'é', 'привет', 'мир', 'ß', 'ς', 'k', 'miss', 'é]', '[É*?]', 'É[B]', '\u13A0', '日本']) {
+      const found = (await search({query})).matches.map(match => match.blockId).sort()
+      expect(expected(query), `oracle finds something for ${query}`).not.toEqual([])
+      expect(found, query).toEqual(expected(query))
+    }
   })
 
   it('reports when search results are capped', async () => {

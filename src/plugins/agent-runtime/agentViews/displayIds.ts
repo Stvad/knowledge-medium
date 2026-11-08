@@ -1,5 +1,3 @@
-import type { Repo } from '@/data/repo'
-import { shortIds } from './resolveRef.ts'
 import { ellipsize } from './text.ts'
 
 const MAX_DISPLAY_ID = 64
@@ -9,9 +7,6 @@ const MAX_DISPLAY_ID = 64
  *  back — accepted, `format: 'json'` carries it exactly. */
 export const boundDisplayId = (id: string): string => ellipsize(id, MAX_DISPLAY_ID)
 
-/** {@link shortIds}, bounded for display: the one source of every id a
- *  text view prints. */
-export const displayIds = async (repo: Repo, ids: Iterable<string>): Promise<Map<string, string>> => {
-  const short = await shortIds(repo, ids)
-  return new Map([...short].map(([id, display]) => [id, boundDisplayId(display)]))
-}
+/** A block's id as a text view marks it: the whole id, the one every id
+ *  field and every `((id))` in content takes. */
+export const idMark = (id: string): string => `^${boundDisplayId(id)}`

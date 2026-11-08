@@ -137,13 +137,13 @@ describe('appendPositionOption', () => {
     return seen
   }
 
-  it('refuses a digits-only anchor CAC turned into a number, rather than a different id prefix', () => {
+  it('refuses a digits-only anchor CAC turned into a number, rather than a different id', () => {
     const options = parseAppend(['--after', '01234567'])
     expect(options.after).toBe(1234567)
     let message = ''
     try { appendPositionOption(options) } catch (error) { message = (error as Error).message }
     expect(message).toMatch(/--after got the number 1234567/)
-    // The hint must not offer the numberified value back as an id prefix.
+    // The hint must not offer the numberified value back as an id.
     expect(message).not.toMatch(/\^1234567/)
   })
 

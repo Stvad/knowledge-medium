@@ -19,6 +19,7 @@ import {
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,
+  caseInsensitiveVariants,
   replaceLiteralMatches,
 } from './search.ts'
 import type {
@@ -83,16 +84,51 @@ interface ContentCandidateRow {
   content: string
 }
 
-const SELECT_CONTENT_CANDIDATES_SQL = `
+interface CandidateFilter {
+  sql: string
+  arg: string
+}
+
+/** The only non-ASCII code points the case-insensitive search folds onto an
+ *  ASCII letter (U+017F onto `s`, U+212A onto `k`); SQLite's `LOWER` folds
+ *  ASCII alone, so they are mapped before it. */
+const ASCII_FOLDED_CONTENT_SQL =
+  `LOWER(replace(replace(content, char(383), 's'), char(8490), 'k'))`
+
+const GLOB_SPECIAL_CHARS = new Set(['*', '?', '[', ']'])
+
+/** Holds for every content where a case-insensitive `findLiteralMatches`
+ *  finds `needle`: each needle code point becomes the class of its variants.
+ *  A class of several variants holds only letters, never a bracket-syntax
+ *  character. */
+const caseInsensitiveGlob = (needle: string): string => {
+  let pattern = '*'
+  for (const char of needle) {
+    const variants = caseInsensitiveVariants(char)
+    pattern += variants.length === 1 && !GLOB_SPECIAL_CHARS.has(char)
+      ? char
+      : `[${variants.join('')}]`
+  }
+  return `${pattern}*`
+}
+
+const isAscii = (text: string): boolean => /^\p{ASCII}*$/u.test(text)
+
+/** The SQL prefilter never excludes a block `buildContentSearchMatch` would
+ *  match; it may admit some it does not. */
+const candidateFilter = (needle: string, matchCase: boolean): CandidateFilter => {
+  if (matchCase) return {sql: 'instr(content, ?) > 0', arg: needle}
+  if (isAscii(needle)) return {sql: `instr(${ASCII_FOLDED_CONTENT_SQL}, LOWER(?)) > 0`, arg: needle}
+  return {sql: 'content GLOB ?', arg: caseInsensitiveGlob(needle)}
+}
+
+const selectContentCandidatesSql = (filterSql: string): string => `
   SELECT id, content
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-    AND (
-      (? != 0 AND instr(content, ?) > 0)
-      OR (? = 0 AND instr(LOWER(content), LOWER(?)) > 0)
-    )
+    AND ${filterSql}
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
@@ -123,10 +159,10 @@ export const searchContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
 
-    const matchCase = normalizedOptions.matchCase ? 1 : 0
+    const filter = candidateFilter(trimmed, normalizedOptions.matchCase)
     const rows = await ctx.db.getAll<ContentCandidateRow>(
-      SELECT_CONTENT_CANDIDATES_SQL,
-      [workspaceId, matchCase, trimmed, matchCase, trimmed, candidateLimit + 1],
+      selectContentCandidatesSql(filter.sql),
+      [workspaceId, filter.arg, candidateLimit + 1],
     )
     const candidateRows = rows.slice(0, candidateLimit)
     const matches = candidateRows

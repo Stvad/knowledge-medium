@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { restoreInvocations } from './backup-before-restore.mjs'
 import { NOTE_BUDGET } from './hook-context.mjs'
-import { contextOf as context, git, tempDirs } from './hook-test-support'
+import { contextOf as context, git, permissionBitsIgnored, tempDirs } from './hook-test-support'
 
 const specs = (cmd: string) => restoreInvocations(cmd).map(r => r.pathspecs)
 
@@ -250,15 +250,11 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   it('reports a failure to write the backup instead of crashing', () => {
     const locked = makeRepo('restore-backup-locked-')
     writeFileSync(join(locked, 'a.txt'), 'edit\n')
-    const lockedGitDir = git(locked, ['rev-parse', '--absolute-git-dir'])
-    chmodSync(lockedGitDir, 0o555)
-    try {
-      const r = hook('git checkout -- a.txt', locked)
-      expect(r.status).toBe(0)
-      expect(context(r.stdout)).toContain('backup-before-restore: failed before copying everything')
-    } finally {
-      chmodSync(lockedGitDir, 0o755)
-    }
+    // A file where the backup directory goes: no mkdir under it succeeds, even as root.
+    writeFileSync(join(git(locked, ['rev-parse', '--absolute-git-dir']), 'restore-backups'), '')
+    const r = hook('git checkout -- a.txt', locked)
+    expect(r.status).toBe(0)
+    expect(context(r.stdout)).toContain('backup-before-restore: failed before copying everything')
   })
 
   // Working-tree shapes other than an edited regular file.
@@ -276,6 +272,8 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   mkdirSync(join(edge, 'dir-now')) // tracked file replaced by a directory
   writeFileSync(join(edge, 'locked.txt'), 'edited\n')
   chmodSync(join(edge, 'locked.txt'), 0o000)
+  // Root reads a mode-000 file, so locked.txt is unreadable only where mode bits bind.
+  const asRoot = permissionBitsIgnored()
 
   it('copies a retargeted symlink as a link', () => {
     const dir = backupDir(context(hook('git checkout -- link', edge).stdout))
@@ -286,7 +284,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(hook('git checkout -- gone.txt', edge).stdout).toBe('')
   })
 
-  it('reports what it could not copy, with the reason, and still writes the manifest', () => {
+  it.skipIf(asRoot)('reports what it could not copy, with the reason, and still writes the manifest', () => {
     const ctx = context(hook('git checkout -- dir-now locked.txt', edge).stdout)
     expect(ctx).toContain('copied 0 files')
     expect(ctx).toContain('not copied: dir-now (not a regular file)')
@@ -295,7 +293,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(readFileSync(`${backupDir(ctx)}.manifest.txt`, 'utf8')).toContain('not copied (EACCES)\tlocked.txt')
   })
 
-  it('copies the other named files when one of them is unreadable', () => {
+  it.skipIf(asRoot)('copies the other named files when one of them is unreadable', () => {
     writeFileSync(join(edge, 'a.txt'), 'edge edit\n')
     const ctx = context(hook('git checkout -- a.txt locked.txt', edge).stdout)
     expect(ctx).toContain('copied 1 file')

@@ -1,12 +1,12 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import {
-  blockChildrenFooterFacet,
+  blockBelowContentFacet,
   blockContentDecoratorsFacet,
 } from '@/extensions/blockInteraction.js'
 import {
   inlineBacklinkCountDecoratorContribution,
-  inlineBacklinkExpansionFooterContribution,
+  inlineBacklinkExpansionContribution,
 } from './InlineBacklinkCount.tsx'
 
 const SOURCE = 'backlinks-inline-counts'
@@ -24,5 +24,5 @@ export const inlineBacklinkCountsExtension: AppExtension = systemToggle({
     'Show a reference-count badge on every block (not just the focused one); click it to expand that block’s linked references inline.',
 }).of([
   blockContentDecoratorsFacet.of(inlineBacklinkCountDecoratorContribution, { source: SOURCE }),
-  blockChildrenFooterFacet.of(inlineBacklinkExpansionFooterContribution, { source: SOURCE }),
+  blockBelowContentFacet.of(inlineBacklinkExpansionContribution, { source: SOURCE }),
 ])

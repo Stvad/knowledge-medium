@@ -1,11 +1,15 @@
 # Module-singleton reset audit (test-isolation sweep)
 
 Follow-up to the test-flakiness work in #112 (last open item: "module-singleton
-reset audit — verify-only; no observed failure"). Vitest runs with `isolate: true`
-(`maxWorkers: '100%'`), so each test **file** gets a fresh module graph. The only
-state-leak vector module singletons can introduce is therefore **within-file,
+reset audit — verify-only; no observed failure"). Vitest ran with `isolate: true`
+when this was written, so each test **file** got a fresh module graph. The only
+state-leak vector module singletons could introduce was therefore **within-file,
 cross-test** contamination: a module-scope mutable value that code-under-test
 writes and that is not reset between tests in the same file.
+
+> **Status:** that premise now holds only for the files `scripts/vitest-isolation.ts`
+> isolates. The rest share a worker, so a singleton in them can also leak between
+> files, a vector this audit did not cover.
 
 ## Conclusion
 

@@ -29,9 +29,9 @@ describe('renderMentionPrompt', () => {
     }
   })
 
-  it('teaches both default templates the block-link form that resolves, not a ^shortid', () => {
+  it('teaches both default templates the block-link form', () => {
     for (const template of [undefined, DEFAULT_MENTION_CHANNEL_PROMPT]) {
-      expect(renderMentionPrompt(template, context)).toContain('[a few words](((full block id)))')
+      expect(renderMentionPrompt(template, context)).toContain('[a few words](((block id)))')
     }
   })
 

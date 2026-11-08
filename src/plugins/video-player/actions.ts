@@ -151,7 +151,7 @@ const toggleVideoNotesView: ActionConfig = {
     await enterVideoNotesView(deps.videoBlock, panelBlock)
   },
   defaultBinding: {
-    keys: '$mod+Shift+n',
+    keys: 'Alt+Shift+n',
     eventOptions: {
       preventDefault: true,
     },

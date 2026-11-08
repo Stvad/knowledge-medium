@@ -7,9 +7,9 @@
  *    - a `blockContentDecorators` contribution overlays a small count pill
  *      on the block's content line. The pill shows only when the block has
  *      ≥1 backlink; clicking it toggles the expansion.
- *    - a `blockChildrenFooter` contribution renders the same backlinks-view
+ *    - a `blockBelowContent` contribution renders the same backlinks-view
  *      section the focal block uses (`BacklinksViewSection`, so the block's
- *      Flat/Grouped choice is honoured) *after the block's children* when
+ *      Flat/Grouped choice is honoured) *ahead of the block's children* when
  *      this block is expanded.
  *
  *  The count reuses the `backlinks.forBlock` handle (ids only, no
@@ -20,7 +20,7 @@ import { useWorkspaceId } from '@/hooks/block.js'
 import {
   cachedContentDecorator,
   type BlockContentDecoratorContribution,
-  type BlockChildrenFooterContribution,
+  type BlockBelowContentContribution,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
@@ -69,7 +69,7 @@ const decorate = cachedContentDecorator(InlineBacklinkCountBadge, 'WithInlineBac
 export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
   inlineBacklinksApplies(ctx) ? decorate : null
 
-// ──── Expanded references (children footer) ────
+// ──── Expanded references ────
 
 // Mounts (and subscribes to the shared count handle) only once expanded, so
 // non-expanded blocks pay nothing here beyond the cheap expansion-store read.
@@ -94,7 +94,7 @@ const ExpandedBacklinks = ({
 }
 ExpandedBacklinks.displayName = 'ExpandedBacklinks'
 
-export const inlineBacklinkExpansionFooterContribution: BlockChildrenFooterContribution = (ctx) => {
+export const inlineBacklinkExpansionContribution: BlockBelowContentContribution = (ctx) => {
   if (!inlineBacklinksApplies(ctx)) return null
   const Section: BlockRenderer = ({ block }) => {
     const expanded = useBacklinkExpansion(block.id)

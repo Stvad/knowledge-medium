@@ -10,7 +10,6 @@ import {notifyBlockEditSettled} from '@/editor/editSettleSignal'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {deleteBlockThroughUi} from '@/utils/deleteBlockThroughUi'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
-import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {captureAnchor} from './anchor'
 import {annotationsPlugin} from './index'
@@ -38,7 +37,7 @@ afterAll(async () => { await db.cleanup() })
 
 beforeEach(async () => {
   await resetTestDb(db.db)
-  repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, backlinksDataExtension, annotationsPlugin]}).repo
+  repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, annotationsPlugin]}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: 'panel', workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})

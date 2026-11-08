@@ -26,7 +26,9 @@ import {
   peekFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
+  aliasesProp,
 } from '@/data/properties'
+import { aliasSameTxProcessors } from '@/plugins/alias/syncProcessor'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
 import {
   CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
@@ -1318,6 +1320,61 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
   })
 
+  describe('next to an extension block', () => {
+    const seed = async (firstType?: string, secondType?: string) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'second', content: 'second'})
+      await env.repo.tx(async tx => {
+        if (firstType) await tx.update('first', {properties: {types: [firstType]}})
+        if (secondType) await tx.update('second', {properties: {types: [secondType]}})
+      }, {scope: ChangeScope.BlockDefault})
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(topLevelBlockIdProp, 'root')
+      return uiStateBlock
+    }
+
+    const expectBothIntact = () => {
+      expect(env.repo.block('first').peek()?.content).toBe('first')
+      expect(env.repo.block('second').peek()?.content).toBe('second')
+    }
+
+    it.each([
+      ['prose, with source above', 'extension', undefined],
+      ['source, with prose above', undefined, 'extension'],
+    ] as const)('Backspace at the start of %s does not join them', async (_name, firstType, secondType) => {
+      const uiStateBlock = await seed(firstType, secondType)
+      await focusBlock(uiStateBlock, 'second')
+      await findEditModeAction(env.repo, 'delete_empty_block_cm').handler({
+        block: env.repo.block('second'),
+        editorView: codeMirrorEditorView('second', 0),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+    })
+
+    it.each([
+      ['prose, with source below', undefined, 'extension'],
+      ['source, with prose below', 'extension', undefined],
+    ] as const)('Delete at the end of %s does not join them', async (_name, firstType, secondType) => {
+      const uiStateBlock = await seed(firstType, secondType)
+      await focusBlock(uiStateBlock, 'first')
+      const editorView = codeMirrorEditorView('first', 'first'.length)
+      await findEditModeAction(env.repo, 'merge_next_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView,
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(editorView.state.doc.toString()).toBe('first')
+    })
+  })
+
   it("merges an only child into its parent when pressing delete at the parent's end", async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -1742,6 +1799,87 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.selection.main.head).toBe('left '.length)
     expect(env.repo.block('current').peek()?.content).toBe('left right')
     expect(await childIds('root')).toEqual(['current'])
+  })
+
+  // The editor stays editable while a split's or merge's write runs, so a
+  // write that an alias collision refuses must keep what was typed meanwhile:
+  // the editor's next flush saves whatever it is left showing. Each gesture
+  // renames an aliased block to the name `taken` holds.
+  it.each([
+    {
+      shape: 'a scope-root split, typed into', actionId: 'split_block_cm', blockId: 'page', taken: 'Alpha',
+      text: 'Alpha Beta', caret: 'Alpha'.length, rearmed: 'Alpha', typedAt: 'Alpha'.length, typed: '!',
+      restored: 'Alpha! Beta', restoredCaret: 'Alpha!'.length,
+    },
+    {
+      shape: 'a mid-text split, typed into', actionId: 'split_block_cm', blockId: 'current', taken: 'Beta',
+      text: 'Alpha Beta', caret: 'Alpha '.length, rearmed: 'Beta', typedAt: 0, typed: '!',
+      restored: 'Alpha !Beta', restoredCaret: 'Alpha !'.length,
+    },
+    {
+      shape: 'a Delete merge, typed into at the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha'.length, typed: '!',
+      restored: 'Alpha!', restoredCaret: 'Alpha!'.length,
+    },
+    // Text typed into what the merge pulled in stays whole, in both blocks.
+    {
+      shape: 'a Delete merge, typed into past the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha B'.length, typed: '!',
+      restored: 'Alpha B!eta', restoredCaret: 'Alpha B!'.length,
+    },
+    {
+      shape: 'a Delete merge, caret moved past the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha B'.length, typed: '',
+      restored: 'Alpha', restoredCaret: 'Alpha'.length,
+    },
+  ])('keeps what the user did while $shape runs, when an alias collision refuses it', async ({
+    actionId, blockId, taken, text, caret, rearmed, typedAt, typed, restored, restoredCaret,
+  }) => {
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-alias-sync', [...aliasSameTxProcessors])
+    const aliased = async (id: string, title: string, parentId: string | null, orderKey: string) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId, orderKey, content: title})
+        await tx.setProperty(id, aliasesProp, [title])
+      }, {scope: ChangeScope.BlockDefault})
+    }
+    await aliased('taken', taken, null, 'z1')
+    await aliased('page', blockId === 'page' ? text : 'Page', null, 'a0')
+    if (blockId === 'current') await aliased('current', text, 'page', 'a0')
+    await env.repo.mutate.createChild({parentId: 'page', id: 'next', content: ' Beta'})
+    await env.repo.tx(tx => tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'}), {scope: ChangeScope.BlockDefault})
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, blockId)
+
+    // Hold the gesture's write until the user has typed into the editor it
+    // re-armed.
+    let releaseWrite!: () => void
+    const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve })
+    const runTx = env.repo.tx.bind(env.repo)
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementationOnce(async (...args: Parameters<Repo['tx']>) => {
+      await writeReleased
+      return runTx(...args)
+    })
+
+    const editorView = new EditorView({doc: text, selection: {anchor: caret}})
+    const gesture = findEditModeAction(env.repo, actionId).handler({
+      block: env.repo.block(blockId),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'page',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    const refused = expect(gesture).rejects.toMatchObject({code: 'alias.collision'})
+    await vi.waitFor(() => expect(txSpy).toHaveBeenCalled())
+    expect(editorView.state.doc.toString()).toBe(rearmed)
+    editorView.dispatch({changes: {from: typedAt, insert: typed}, selection: {anchor: typedAt + typed.length}})
+    releaseWrite()
+    await refused
+
+    expect(editorView.state.doc.toString()).toBe(restored)
+    expect(editorView.state.selection.main.head).toBe(restoredCaret)
+    expect(env.repo.block(blockId).peek()?.content).toBe(text)
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    editorView.destroy()
   })
 
   it('makes Tab a no-op on a scope-root block', async () => {

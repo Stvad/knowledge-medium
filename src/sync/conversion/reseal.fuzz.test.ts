@@ -4,13 +4,14 @@
  * sealed is left byte for byte as it was. See `src/test/fuzz.ts` for the
  * smoke/deep tiers.
  *
- * Plaintext is drawn from well-formed Unicode only (`unit: 'binary'`): the
+ * Plaintext is drawn from well-formed Unicode only (`codePointUnitArb`): the
  * server's TEXT columns cannot hold a lone surrogate, and `seal` would replace
  * one with U+FFFD for reasons unrelated to the re-seal (aead.fuzz.test.ts).
  */
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import { resealWorkspace } from './reseal.js'
 import type { ContentColumns } from './conversionServer.js'
 import { contentColumnsOf } from './sealing.js'
@@ -18,9 +19,9 @@ import { flipUnder, keyOf, openRow, sealFor, WS } from './test/conversionFixture
 import { FakeConversionServer } from './test/fakeConversionServer.js'
 
 const rowArb = fc.record({
-  content: fc.string({unit: 'binary'}),
-  properties_json: fc.string({unit: 'binary'}),
-  references_json: fc.string({unit: 'binary'}),
+  content: fc.string({unit: codePointUnitArb}),
+  properties_json: fc.string({unit: codePointUnitArb}),
+  references_json: fc.string({unit: codePointUnitArb}),
   deleted: fc.boolean(),
   alreadySealed: fc.boolean(),
 })

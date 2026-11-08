@@ -86,7 +86,10 @@ describe('WorkspaceKeyGate — confirm plaintext feedback', () => {
     expect(screen.getByRole('button', {name: /^unlock$/i})).toBeDisabled()
 
     // A second click while the drain is in flight must not enqueue another one.
-    fireEvent.click(button)
+    // onResolved runs after an awaited drain, so let that tail run before counting.
+    await act(async () => {
+      fireEvent.click(button)
+    })
     expect(onResolved).toHaveBeenCalledTimes(1)
   })
 

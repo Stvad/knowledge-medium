@@ -22,6 +22,7 @@ import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 import { liveEditorRegistration } from '@/editor/liveEditors.js'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -113,6 +114,12 @@ export const BlockEditor = ({
   // is detached but the deletion never persisted, and a
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
+
+  // Content only: flushed before the focus write, a pending selection would
+  // pass pushSelection's guard and overwrite the selection the navigation just
+  // wrote for its target block.
+  const flushContent = useCallback(() => { pushChange.flush() }, [pushChange])
+  useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
 
   // Leaving this block's editor (unmount / block switch) is the "done
   // editing" signal — consumers like watch-events short-circuit their
@@ -236,8 +243,9 @@ export const BlockEditor = ({
   }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
-  // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
-  // mounted — for any consumer (markdown editor, extension editor, future).
+  // context (Escape, Tab, etc.) fire whenever this editor is mounted — for any
+  // consumer (markdown editor, extension editor, future). A consumer holding
+  // source opts out of the outline-edit keys: keepOutlineEditKeysInEditor.
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 

@@ -18,12 +18,13 @@ export type CommentDeletion = 'blanked' | 'deleted' | 'deleted-thread' | 'refuse
  * only: deleting in the outline still removes the subtree, and undo restores
  * it. The reply check runs inside the blanking tx; a reply that syncs in after
  * it and before the UI delete goes with the delete, which undo restores. */
-export const deleteCommentFromCard = (comment: Block): Promise<CommentDeletion> => deleteFromCard(comment, false)
+export const deleteCommentFromCard = (comment: Block): Promise<CommentDeletion> => deleteFromCard(comment, null)
 
 /** After the user confirms deleting a quoted thread, everything is decided
  *  again: a reply or comment that synced in while the dialog was open changes
- *  what the delete may take. */
-const deleteFromCard = async (comment: Block, confirmed: boolean): Promise<CommentDeletion> => {
+ *  what the delete may take, and the comment may be in another thread by then,
+ *  which the user has not confirmed. */
+const deleteFromCard = async (comment: Block, confirmedThreadId: string | null): Promise<CommentDeletion> => {
   const repo = comment.repo
   const blanked = await repo.tx(async tx => {
     if ((await visibleChildrenOf(tx, comment.id)).length === 0) return false
@@ -36,7 +37,9 @@ const deleteFromCard = async (comment: Block, confirmed: boolean): Promise<Comme
   const parent = comment.parent
   if (parent && await parent.load() && parent.hasType(THREAD_TYPE)) {
     if ((await parent.children.load()).length === 1) {
-      if (!confirmed) return await confirmThreadDeletion(parent) ? deleteFromCard(comment, true) : 'refused'
+      if (confirmedThreadId !== parent.id) {
+        return await confirmThreadDeletion(parent) ? deleteFromCard(comment, parent.id) : 'refused'
+      }
       return await deleteBlockThroughUi(parent) ? 'deleted-thread' : 'refused'
     }
   }

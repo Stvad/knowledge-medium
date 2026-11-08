@@ -8,6 +8,7 @@ import {systemToggle} from '@/facets/togglable.js'
 import {actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {
+  blockBelowContentFacet,
   blockChildrenFooterFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
@@ -16,6 +17,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
+import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
 import {
@@ -37,7 +39,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
-  commentsFooterContribution,
+  commentsBelowContentContribution,
   threadRootContentContribution,
 } from './ui.tsx'
 
@@ -50,6 +52,9 @@ export const annotationsPlugin: AppExtension = systemToggle({
 }).of([
   annotationsDataExtension,
   dialogAppMountExtension, // asking before deleting a quoted thread
+  // A thread's quoters are its backlinks ("Quoted in", that deletion
+  // question), whether or not the Backlinks plugin is on.
+  backlinksDataExtension,
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   threadNavigationContribution,
@@ -59,7 +64,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(nestedReadSelectionMenuContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
-  blockChildrenFooterFacet.of(commentsFooterContribution, {source: SOURCE}),
+  blockBelowContentFacet.of(commentsBelowContentContribution, {source: SOURCE}),
   blockChildrenFooterFacet.of(quotedInFooterContribution, {source: SOURCE}),
   blockContentRendererFacet.of(threadRootContentContribution, {source: SOURCE}),
   // Over the references plugin's reference layout, which it replaces for roots.

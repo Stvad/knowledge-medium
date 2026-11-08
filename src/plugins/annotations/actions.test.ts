@@ -7,6 +7,7 @@ import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {editorContentFlushFacet} from '@/editor/contentFlush.js'
+import {ActionContextTypes} from '@/shortcuts/types.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope.js'
 import {focusedBlockLocationProp, isEditingBlock, isEditingProp} from '@/data/properties.js'
@@ -24,10 +25,10 @@ import {resolveAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {THREAD_IDS_FOR_BLOCK_QUERY} from './queries'
 import {threadAnchorOf} from './schema'
-import {createThread} from './threads'
-import {cardRenderScopeId, peekPendingReanchor, releasePendingReanchor, startReanchor} from './uiStore'
+import {createThread, missingTarget} from './threads'
+import {cardRenderScopeId, peekPendingReanchor, releasePendingReanchor, setMarginShowing, startReanchor} from './uiStore'
 
-const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string) => Promise<void>>()}))
+const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string | Promise<string>) => Promise<void>>()}))
 const toasts = vi.hoisted(() => ({info: vi.fn(), error: vi.fn()}))
 
 vi.mock('@/utils/copy.js', async importOriginal => ({
@@ -96,6 +97,33 @@ const select = (editor: EditorView, quote: string) => {
 }
 
 const threadsOnB = () => repo.query[THREAD_IDS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'B'}).load()
+
+describe.each([ActionContextTypes.NORMAL_MODE, ActionContextTypes.EDIT_MODE_CM])('block comment toggle availability in %s', context => {
+  const action = () => annotationActions.find(action => action.id === 'annotations.toggleBlockComments' && action.context === context)!
+  const deps = (renderScopeId: string) => ({block: repo.block('B'), uiStateBlock: repo.block('p'), renderScopeId})
+
+  afterEach(() => setMarginShowing('p', false))
+
+  it('offers and dispatches the toggle on the outline', () => {
+    expect(action().isVisible!(deps(PANEL))).toBe(true)
+    expect(action().canDispatch!(deps(PANEL))).toBe(true)
+  })
+
+  it('does not offer or dispatch the toggle on a nested surface with no inline comments', () => {
+    const nested = deps(backlinkRenderScopeId(PANEL, 'x'))
+    expect(action().isVisible!(nested)).toBe(false)
+    expect(action().canDispatch!(nested)).toBe(false)
+  })
+
+  it('does not offer or dispatch an inline toggle while that panel draws its comments in the margin', () => {
+    setMarginShowing('p', true)
+    expect(action().isVisible!(deps(PANEL))).toBe(false)
+    expect(action().canDispatch!(deps(PANEL))).toBe(false)
+    const otherPanel = deps(panelRenderScopeId('other-panel', 'page'))
+    expect(action().isVisible!(otherPanel)).toBe(true)
+    expect(action().canDispatch!(otherPanel)).toBe(true)
+  })
+})
 
 describe('commenting on an editor selection', () => {
   it.each([['Comment', commentOnTarget], ['Highlight', highlightTarget]] as const)(
@@ -199,13 +227,16 @@ describe('commenting on an editor selection', () => {
 
 describe('copying a reference to a selection', () => {
   beforeEach(() => {
-    clipboard.write.mockReset().mockResolvedValue(undefined)
+    // Like the browser's write, it settles with the text it was handed.
+    clipboard.write.mockReset().mockImplementation(async text => { await text })
     toasts.info.mockReset()
     toasts.error.mockReset()
   })
 
   const target = (from: number, to: number) => ({block: repo.block('B'), renderScopeId: undefined, range: {content: TEXT, from, to}})
   const thursday = TEXT.indexOf('Thursday')
+  /** The text the last write put on the clipboard. */
+  const copiedText = async () => await clipboard.write.mock.lastCall![0]
 
   it('quotes what the editor shows, in a backlink entry too, where commenting does not run', async () => {
     const editor = editorOnB()
@@ -217,7 +248,7 @@ describe('copying a reference to a selection', () => {
     await copy.handler(deps as never, new CustomEvent('test'))
 
     const [threadId] = await threadsOnB()
-    expect(clipboard.write).toHaveBeenCalledWith(`((${threadId}))`)
+    expect(await copiedText()).toBe(`((${threadId}))`)
     const anchor = threadAnchorOf((await repo.load(threadId))!)
     if (anchor.kind !== 'range') throw new Error('expected a range anchor')
     expect(anchor).toMatchObject({quote: 'Thursday', quoteStart: 31})
@@ -240,6 +271,22 @@ describe('copying a reference to a selection', () => {
     expect(threadId).toBeDefined()
 
     expect(await copyReferenceToTarget(target(thursday, thursday + 'Thursday'.length))).toBe(true)
-    expect(clipboard.write).toHaveBeenLastCalledWith(`((${threadId}))`)
+    expect(await copiedText()).toBe(`((${threadId}))`)
+  })
+
+  it('shows why a highlight can\u2019t be made, and not that the clipboard refused', async () => {
+    const onMissing = {...target(thursday, thursday + 'Thursday'.length), block: repo.block('missing')}
+
+    expect(await copyReferenceToTarget(onMissing)).toBe(false)
+    expect(toasts.error.mock.calls).toEqual([[missingTarget('missing').message]])
+  })
+
+  it('starts the clipboard write in the gesture, before the highlight it names exists', async () => {
+    const copied = copyReferenceToTarget(target(thursday, thursday + 'Thursday'.length))
+    expect(clipboard.write).toHaveBeenCalledTimes(1)
+
+    expect(await copied).toBe(true)
+    const [threadId] = await threadsOnB()
+    expect(await copiedText()).toBe(`((${threadId}))`)
   })
 })

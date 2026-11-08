@@ -14,6 +14,7 @@ import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
+import { hasSourceContent } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -92,30 +93,55 @@ import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
 
+/** Drop `remove` characters from one end of the editor's text and put `insert` there. */
+interface EditorEndEdit {
+  end: 'start' | 'end'
+  remove: number
+  insert: string
+}
+
 /**
- * Run `write` with the editor showing `text` (caret at `cursor`), the text its
- * block holds once `write` lands. The editor is re-armed BEFORE `write` runs,
- * so its debounced pushChange can't later flush the old text over what
- * `write` stored. A `write` that fails puts the old text and caret back, or
- * that flush would save the re-armed text over a block `write` never changed.
+ * Apply `edit`, the caret staying beside the text it leaves alone; a caret
+ * inside the removed text moves to its edge (at the start, no caller puts one
+ * there). Returns the edit that undoes it.
+ */
+const applyEndEdit = (editorView: EditorView, edit: EditorEndEdit): EditorEndEdit => {
+  const {doc, selection} = editorView.state
+  const from = edit.end === 'start' ? 0 : doc.length - edit.remove
+  const to = from + edit.remove
+  const head = selection.main.head
+  const removed = doc.sliceString(from, to)
+  editorView.dispatch({
+    changes: {from, to, insert: edit.insert},
+    selection: EditorSelection.cursor(edit.end === 'start'
+      ? Math.max(head, to) - to + edit.insert.length
+      : Math.min(head, from)),
+  })
+  return {end: edit.end, remove: edit.insert.length, insert: removed}
+}
+
+/**
+ * Run `write` with the editor showing the text its block holds once `write`
+ * lands: its text with `edit` applied. The editor is re-armed BEFORE `write`
+ * runs, so its debounced pushChange can't later flush the old text over what
+ * `write` stored. It stays editable while `write` runs, so a `write` that
+ * fails undoes `edit` alone and keeps what was typed meanwhile; that flush
+ * saves whatever the editor is left showing.
  */
 const writeWithEditorRearmed = async <T>(
   editorView: EditorView,
-  text: string,
-  cursor: number,
+  edit: EditorEndEdit,
   write: () => Promise<T>,
 ): Promise<T> => {
-  const rearm = (next: string, caret: number) => editorView.dispatch({
-    changes: {from: 0, to: editorView.state.doc.length, insert: next},
-    selection: EditorSelection.cursor(caret),
-  })
-  const previous = editorView.state.doc.toString()
-  const previousCursor = editorView.state.selection.main.head
-  rearm(text, cursor)
+  const undo = applyEndEdit(editorView, edit)
   try {
     return await write()
   } catch (error) {
-    rearm(previous, previousCursor)
+    // Text typed into what `edit` inserted can't be told apart from it, so all
+    // of it stays: duplicated in both blocks rather than cut short.
+    const {doc} = editorView.state
+    const inserted = undo.end === 'start' ? doc.sliceString(0, undo.remove) : doc.sliceString(doc.length - undo.remove)
+    if (inserted === edit.insert) applyEndEdit(editorView, undo)
     throw error
   }
 }
@@ -142,9 +168,17 @@ const splitAtCursor = async (
   const after = editorView.state.doc.sliceString(cursorPos)
   const keepsBefore = placement === 'firstChild'
   const newId = await writeWithEditorRearmed(
-    editorView, keepsBefore ? before : after, keepsBefore ? before.length : 0,
+    editorView,
+    keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
     () => block.repo.mutate.split({id: block.id, before, after, placement}))
   return keepsBefore ? newId : block.id
+}
+
+/** Source code isn't text to join: one side would absorb the other's source and
+ *  its type. Refusing costs nothing, since the blocks stay side by side. */
+const holdsSource = (block: Block): boolean => {
+  const data = block.peek()
+  return data != null && hasSourceContent(data)
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -999,6 +1033,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // for. When the source is the target's only child, there is no
         // independent target subtree: source children replace source's slot.
         await Promise.all([block.load(), prevVisible.load()])
+        if (holdsSource(block) || holdsSource(prevVisible)) return
         const fromChildIds = await block.childIds.load()
         const intoChildIds = await prevVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
@@ -1077,6 +1112,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // user asked for. When `next` is this block's only child there is no
         // independent target subtree: next's children take next's slot.
         await Promise.all([block.load(), nextVisible.load()])
+        if (holdsSource(block) || holdsSource(nextVisible)) return
         const intoChildIds = await block.childIds.load()
         const fromChildIds = await nextVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
@@ -1111,7 +1147,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // fold core.merge wrote to SQL.
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.
-        await writeWithEditorRearmed(editorView, liveContent + fromContent, joinOffset, () =>
+        await writeWithEditorRearmed(editorView, {end: 'end', remove: 0, insert: fromContent}, () =>
           repo.tx(async tx => {
             await tx.update(block.id, {content: liveContent})
             await tx.run(mergeMutator, {intoId: block.id, fromId})

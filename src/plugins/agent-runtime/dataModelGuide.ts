@@ -68,8 +68,8 @@ numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
   and any alias resolves to the page. \`[[Some Name]]\` in text links to
   whichever block claims that alias.
 - Commands that take a block (\`get-block\`, \`subtree\`, \`backlinks\`,
-  \`grouped-backlinks\`, \`search --under\`) accept a **block ref**: a full id, a unique id prefix as
-  printed (\`^3f2a9c1d\`), a page name (or \`[[Page name]]\`), or a date for its
+  \`grouped-backlinks\`, \`search --under\`) accept a **block ref**: an id (as printed after
+  \`^\`, or bare), a page name (or \`[[Page name]]\`), or a date for its
   daily note — so \`subtree "Project Alpha"\` and \`subtree today\` need no lookup.
 - To find a page by name use \`pnpm agent page <name>\` (exact alias hit +
   substring candidates) — don't scan \`content\`. Pages + aliases are the most
@@ -148,6 +148,12 @@ mislead) | \`'<json>'\`.
 
 The graph is more than pages. The common typed blocks (by frequency):
 
+- **media** — an image or file attachment. The block holds metadata (\`media:hash\`,
+  \`media:mime\`, \`media:size\`; its content is the filename) and the bytes live elsewhere.
+  Media sits under the \`Assets\` page and notes show it as \`((id))\`.
+  \`read-media <ref> --out <path>\` (MCP \`read_media\`) returns the bytes; \`add-media <path>\`
+  (MCP \`add_media\`, where offered) stores a file. Deleting the block turns each \`((id))\` in
+  notes into its filename, and leaves the stored bytes in place.
 - **todo** — a task. Completion lives in \`properties_json\`, not a type:
   \`status = 'done'\` (KM-native; open = \`'open'\`) or \`roam:todo-state = 'DONE'\`
   (imported Roam; open = \`'TODO'\`). Check both when triaging.
@@ -337,7 +343,7 @@ ${COMMENTS_RECIPE_SQL.trim()}
   continued with \`--content-offset\`), breadcrumb, types, decoded properties,
   child and backlink counts. \`--raw\` for the stored row.
 - \`pnpm agent subtree <ref>\` — a bounded markdown outline, one line per block:
-  \`- content  key:: value  ^shortid\`. \`--depth\` / \`--limit\` bound it
+  \`- content  key:: value  ^id\`. \`--depth\` / \`--limit\` bound it
   (shallower levels fill first); \`(+N children)\` marks what was not expanded,
   \`…[+N chars]\` what was cut, and a long child list ends with the
   \`--offset\` to continue. \`--json\` for the same view structured; \`--raw\`

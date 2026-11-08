@@ -32,6 +32,7 @@ import { mintWorkspaceKey, type MintedWorkspaceKey } from '@/sync/keys/mintWorks
 import { setModePin } from '@/sync/keys/modePin'
 import { requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys'
 import { createSyncResolver } from '@/sync/keys/resolver'
+import { buildLayout } from '@/utils/routing'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const USER = 'user-key-loss'
@@ -159,6 +160,21 @@ describe('an open encrypted workspace whose key record disappears', () => {
     const edit = resumed.sent.find(op => op.id === 'src')
     if (edit?.kind !== 'create') throw new Error(`the edit did not upload as a create: ${JSON.stringify(edit)}`)
     expect(hasEnvelopePrefix(String(edit.payload.content))).toBe(true)
+  })
+
+  it('unlocks at the page the user navigated to, not the one the workspace opened at', async () => {
+    window.location.hash = buildLayout(WS, ['page-a'])
+    await openApp()
+    // Same-workspace navigation rewrites the URL without re-resolving the layout.
+    window.history.replaceState(null, '', buildLayout(WS, ['page-b']))
+    await loseKeyThenLink()
+    await screen.findByText(/"Notes" needs its key/)
+
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: minted.displayed}})
+    await act(async () => { fireEvent.click(screen.getByRole('button', {name: /^unlock$/i})) })
+    await screen.findByTestId('workspace-open')
+
+    expect(vi.mocked(bootstrapWorkspace).mock.lastCall?.[0].requestedHash).toBe(buildLayout(WS, ['page-b']))
   })
 
   it('still locks on a real loss after an unreadable store recovered by the time it was checked', async () => {

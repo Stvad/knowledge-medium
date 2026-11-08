@@ -59,7 +59,6 @@ export interface PropertyPanelModelRow {
    *  codec-type-keyed icon table inside `PropertyShapeGlyph`. */
   readonly Glyph?: ComponentType<{className?: string}>
   readonly canDelete: boolean
-  readonly canChangeShape: boolean
   readonly isHidden: boolean
   /** Row-level lock independent of repository read-only mode. */
   readonly readOnly: boolean
@@ -187,7 +186,6 @@ const resolveModelRow = (
     Editor: rowReadOnly || !display.isKnown ? undefined : display.Editor,
     Glyph: display.Glyph,
     canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
-    canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,
     readOnly: rowReadOnly,
     ...(declarationOnly
