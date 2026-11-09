@@ -1,5 +1,5 @@
 import {useLayoutEffect, useRef, useState} from 'react'
-import {resizeColumnPair} from '@/utils/layoutColumns.js'
+import {equalizeColumnPair, resizeColumns} from '@/utils/layoutColumns.js'
 
 export interface LayoutColumn {
   id: string
@@ -14,11 +14,10 @@ interface ColumnResizeHandlesProps {
    *  layout effects run. */
   container: HTMLElement
   columns: readonly LayoutColumn[]
-  /** The weights a drag in flight asks for; null once it is over. */
+  /** Every column's weight while a drag is in flight; null once it is over. */
   onDrag: (weights: ColumnWeights | null) => void
+  /** Every column's weight when a drag ends, or a double-click evens a pair. */
   onCommit: (weights: ColumnWeights) => void
-  /** Back to equal shares for the two columns beside a divider. */
-  onReset: (ids: readonly [string, string]) => void
 }
 
 /** The grid's own column minimum, `minmax(24rem, …)` in `LayoutRenderer`. */
@@ -33,16 +32,15 @@ const columnElement = (container: HTMLElement, id: string): HTMLElement | null =
 interface Drag {
   pointerId: number
   x: number
-  ids: readonly [string, string]
-  widths: readonly [number, number]
-  weights: readonly [number, number]
+  /** Every column's rendered width when the drag started. */
+  widths: readonly number[]
   latest: ColumnWeights | null
 }
 
 /** A drag strip over each divider between layout columns. Outside the
  *  columns, in the grid itself, so a column that scrolls (a stack) doesn't
  *  carry its strip away; placed from the columns' measured offsets. */
-export function ColumnResizeHandles({container, columns, onDrag, onCommit, onReset}: ColumnResizeHandlesProps) {
+export function ColumnResizeHandles({container, columns, onDrag, onCommit}: ColumnResizeHandlesProps) {
   const [dividers, setDividers] = useState<readonly number[]>([])
   const drag = useRef<Drag | null>(null)
   const ids = columns.map(column => column.id).join('\u0000')
@@ -60,6 +58,9 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit, onRes
     return () => observer.disconnect()
   }, [container, ids])
 
+  const byColumn = (weights: readonly number[]): ColumnWeights =>
+    new Map(columns.map((column, index) => [column.id, weights[index]]))
+
   const end = (commit: boolean) => {
     const current = drag.current
     drag.current = null
@@ -68,8 +69,9 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit, onRes
   }
 
   return dividers.map((x, index) => {
+    const divider = index + 1
     const left = columns[index]
-    const right = columns[index + 1]
+    const right = columns[divider]
     if (x < 0 || !left || !right) return null
     return (
       <div
@@ -80,16 +82,13 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit, onRes
         title="Drag to resize; double-click for equal widths"
         onPointerDown={event => {
           if (event.button !== 0) return
-          const leftEl = columnElement(container, left.id)
-          const rightEl = columnElement(container, right.id)
-          if (!leftEl || !rightEl) return
+          const elements = columns.map(column => columnElement(container, column.id))
+          if (elements.some(el => !el)) return
           event.preventDefault()
           drag.current = {
             pointerId: event.pointerId,
             x: event.clientX,
-            ids: [left.id, right.id],
-            widths: [leftEl.getBoundingClientRect().width, rightEl.getBoundingClientRect().width],
-            weights: [left.weight, right.weight],
+            widths: elements.map(el => el!.getBoundingClientRect().width),
             latest: null,
           }
           event.currentTarget.setPointerCapture(event.pointerId)
@@ -100,15 +99,14 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit, onRes
           const dx = event.clientX - current.x
           if (!current.latest && Math.abs(dx) < DRAG_THRESHOLD_PX) return
           const minWidth = MIN_COLUMN_REM * Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-          const [a, b] = resizeColumnPair({widths: current.widths, weights: current.weights, dx, minWidth})
-          current.latest = new Map([[current.ids[0], a], [current.ids[1], b]])
+          current.latest = byColumn(resizeColumns({widths: current.widths, divider, dx, minWidth}))
           onDrag(current.latest)
         }}
         onPointerUp={() => end(true)}
         onPointerCancel={() => end(false)}
         // After a pointerup has ended the drag; this is a capture lost without one.
         onLostPointerCapture={() => { if (drag.current) end(false) }}
-        onDoubleClick={() => onReset([left.id, right.id])}
+        onDoubleClick={() => onCommit(byColumn(equalizeColumnPair(columns.map(column => column.weight), divider)))}
         className="group absolute inset-y-0 z-20 flex cursor-col-resize touch-none justify-center"
         style={{left: x - HANDLE_WIDTH_PX / 2, width: HANDLE_WIDTH_PX}}
       >

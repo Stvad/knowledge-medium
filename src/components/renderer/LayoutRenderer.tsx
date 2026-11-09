@@ -283,7 +283,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const [dragWeights, setDragWeights] = useState<ColumnWeights | null>(null)
   const columns = slotsToRender.map(slot => ({id: slot.id, weight: dragWeights?.get(slot.id) ?? slot.weight}))
   const resizable = !isMobile && columns.length > 1
-  const writeWeights = async (weights: ReadonlyMap<string, number | undefined>) => {
+  const writeWeights = async (weights: ColumnWeights) => {
     try {
       await block.repo.tx(async tx => {
         for (const [id, weight] of weights) await tx.setProperty(id, layoutColumnWeightProp, weight)
@@ -306,7 +306,6 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         columns={columns}
         onDrag={setDragWeights}
         onCommit={weights => void writeWeights(weights)}
-        onReset={ids => void writeWeights(new Map(ids.map(id => [id, undefined])))}
       />
     )}
     {slotsToRender.map(slot => (
