@@ -54,14 +54,18 @@ export const PROPS = {
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 export type Executor = 'claude' | 'codex'
 
+/** The longest `runner.timeoutMs` a watcher may set. The stale-running
+ *  sweep window (STALE_RUNNING_MS, watchers.ts) is derived from it, so a
+ *  live slow run is never concurrently re-claimed as crashed. The
+ *  LaunchAgent's ExitTimeOut covers it by hand (launchd/*.plist). */
+export const MAX_RUN_TIMEOUT_MS = 60 * 60_000
+
 const runnerBase = {
   /** Working directory for the spawned agent process. */
   cwd: z.string().optional(),
   model: z.string().optional(),
-  /** Kill the agent run after this long. Capped WELL below the
-   *  30-minute stale-running sweep (watchers.ts) so a live slow run is
-   *  never concurrently re-claimed as crashed. */
-  timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
+  /** Kill the agent run after this long. */
+  timeoutMs: z.number().int().positive().max(MAX_RUN_TIMEOUT_MS).default(10 * 60_000),
 }
 
 const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
