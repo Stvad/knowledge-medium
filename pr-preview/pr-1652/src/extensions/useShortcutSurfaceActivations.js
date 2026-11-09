@@ -1,0 +1,1 @@
+export{fR as useShortcutSurfaceActivations}from"../../chunks/app-CPT_cdVG.js";

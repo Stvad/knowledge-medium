@@ -1,0 +1,1 @@
+export{Aw as plainOutlinerPlugin}from"../../../chunks/app-CPT_cdVG.js";

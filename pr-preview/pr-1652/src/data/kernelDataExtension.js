@@ -1,0 +1,1 @@
+export{M4 as kernelDataExtension}from"../../chunks/app-CPT_cdVG.js";

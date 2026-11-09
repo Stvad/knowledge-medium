@@ -1,0 +1,1 @@
+export{Dst as SYSTEM_AUTHOR_PREFIX,Ost as isSystemAuthor,kst as systemAuthor}from"../../../chunks/app-CPT_cdVG.js";

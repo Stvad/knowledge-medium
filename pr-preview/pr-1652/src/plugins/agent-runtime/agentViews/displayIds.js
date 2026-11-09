@@ -1,0 +1,1 @@
+export{Ag as boundDisplayId,jg as idMark}from"../../../../chunks/app-CPT_cdVG.js";

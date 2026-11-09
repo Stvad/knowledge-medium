@@ -1,0 +1,1 @@
+export{kw as BreadcrumbList}from"../../../chunks/app-CPT_cdVG.js";

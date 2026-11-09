@@ -1,0 +1,1 @@
+export{KI as useIsMobile,qI as usePointerCoarse}from"../../chunks/app-CPT_cdVG.js";

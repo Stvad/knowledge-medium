@@ -1,0 +1,1 @@
+export{kN as appUpdatePromptExtension}from"../../../chunks/app-CPT_cdVG.js";

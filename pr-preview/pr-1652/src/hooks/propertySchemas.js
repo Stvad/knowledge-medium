@@ -1,0 +1,1 @@
+export{_W as usePropertySchemas}from"../../chunks/app-CPT_cdVG.js";

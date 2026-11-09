@@ -1,0 +1,1 @@
+export{BN as appUpdate,VN as useAppUpdateAvailable}from"../chunks/app-CPT_cdVG.js";

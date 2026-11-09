@@ -1,0 +1,1 @@
+export{kt as bootstrapWorkspace}from"../../chunks/app-CPT_cdVG.js";

@@ -1,0 +1,1 @@
+export{wW as appRuntimeUpdateEvent,TW as refreshAppRuntime}from"../../chunks/app-CPT_cdVG.js";

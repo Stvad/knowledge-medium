@@ -1,0 +1,1 @@
+export{fP as resolveAppRuntime,pP as resolveAppRuntimeSync}from"../../chunks/app-CPT_cdVG.js";

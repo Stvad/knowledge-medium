@@ -1,0 +1,1 @@
+export{Kf as confirmThreadDeletion}from"../../../chunks/app-CPT_cdVG.js";

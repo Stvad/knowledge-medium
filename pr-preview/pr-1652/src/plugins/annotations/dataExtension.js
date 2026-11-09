@@ -1,0 +1,1 @@
+export{MJ as annotationsDataExtension}from"../../../chunks/app-CPT_cdVG.js";

@@ -1,0 +1,1 @@
+export{QP as BlockLoadingPlaceholder}from"../../chunks/app-CPT_cdVG.js";

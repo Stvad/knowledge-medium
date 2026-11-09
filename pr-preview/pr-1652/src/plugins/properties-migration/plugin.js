@@ -1,0 +1,1 @@
+export{eo as propertiesMigrationPlugin}from"../../../chunks/app-CPT_cdVG.js";

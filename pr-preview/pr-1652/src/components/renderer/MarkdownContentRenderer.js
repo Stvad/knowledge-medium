@@ -1,0 +1,1 @@
+export{XR as MarkdownContentRenderer}from"../../../chunks/app-CPT_cdVG.js";

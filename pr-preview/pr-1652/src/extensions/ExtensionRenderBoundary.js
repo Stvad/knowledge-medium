@@ -1,0 +1,1 @@
+export{eL as ExtensionRenderBoundary}from"../../chunks/app-CPT_cdVG.js";

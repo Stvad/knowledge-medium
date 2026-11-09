@@ -1,0 +1,1 @@
+export{ID as BlockCrumbs}from"../../chunks/app-CPT_cdVG.js";

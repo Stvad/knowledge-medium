@@ -1,0 +1,1 @@
+export{MK as htmlDocumentTypeSeed}from"../../../chunks/app-CPT_cdVG.js";

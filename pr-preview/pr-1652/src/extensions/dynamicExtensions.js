@@ -1,0 +1,1 @@
+export{mP as dynamicExtensionsExtension}from"../../chunks/app-CPT_cdVG.js";

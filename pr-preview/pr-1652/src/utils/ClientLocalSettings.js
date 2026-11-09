@@ -1,0 +1,1 @@
+export{uP as ClientLocalSettings,dP as clientLocalSettings}from"../../chunks/app-CPT_cdVG.js";

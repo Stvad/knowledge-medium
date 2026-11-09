@@ -1,0 +1,1 @@
+export{YL as defaultPasteDecision,XL as pasteDecisionVerb}from"../../chunks/app-CPT_cdVG.js";

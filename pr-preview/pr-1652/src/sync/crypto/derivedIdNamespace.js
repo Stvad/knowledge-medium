@@ -1,0 +1,1 @@
+export{nit as deriveWorkspaceIdNamespace}from"../../../chunks/app-CPT_cdVG.js";

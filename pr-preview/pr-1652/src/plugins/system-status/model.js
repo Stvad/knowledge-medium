@@ -1,0 +1,1 @@
+export{cc as getSyncIndicatorView}from"../../../chunks/app-CPT_cdVG.js";

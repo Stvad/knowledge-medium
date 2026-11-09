@@ -1,0 +1,1 @@
+export{t6 as agree,n6 as pluralize}from"../../chunks/app-CPT_cdVG.js";

@@ -1,0 +1,1 @@
+export{Ty as useIsReadOnly}from"../../chunks/app-CPT_cdVG.js";

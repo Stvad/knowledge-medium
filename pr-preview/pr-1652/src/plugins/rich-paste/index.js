@@ -1,0 +1,1 @@
+export{eb as richPastePlugin}from"../../../chunks/app-CPT_cdVG.js";

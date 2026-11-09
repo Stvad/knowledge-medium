@@ -1,0 +1,1 @@
+export{vM as chipStyle}from"../../../chunks/app-CPT_cdVG.js";
