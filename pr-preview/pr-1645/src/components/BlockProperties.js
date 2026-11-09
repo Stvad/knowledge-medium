@@ -1,1 +1,0 @@
-export{Nz as BlockProperties}from"../../chunks/app-B9piQVj9.js";

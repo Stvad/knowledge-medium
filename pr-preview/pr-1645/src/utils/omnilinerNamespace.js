@@ -1,1 +1,0 @@
-export{IQ as omnilinerNamespace}from"../../chunks/app-B9piQVj9.js";

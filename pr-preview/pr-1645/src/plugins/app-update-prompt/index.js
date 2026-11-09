@@ -1,1 +1,0 @@
-export{hN as appUpdatePromptExtension}from"../../../chunks/app-B9piQVj9.js";
