@@ -1,1 +1,1 @@
-export{kP as BlockChildren,AP as BlockComponent}from"../../chunks/app-CggG4DMX.js";
+export{kP as BlockChildren,AP as BlockComponent}from"../../chunks/app-CN70TUAF.js";

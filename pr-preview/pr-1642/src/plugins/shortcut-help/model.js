@@ -1,1 +1,1 @@
-export{Hk as actionSourcesFromRuntime,Uk as buildShortcutHelpModel,Wk as describeHandler}from"../../../chunks/app-CggG4DMX.js";
+export{Hk as actionSourcesFromRuntime,Uk as buildShortcutHelpModel,Wk as describeHandler}from"../../../chunks/app-CN70TUAF.js";

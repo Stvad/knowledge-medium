@@ -1,1 +1,1 @@
-export{XN as dynamicExtensionsExtension}from"../../chunks/app-CggG4DMX.js";
+export{XN as dynamicExtensionsExtension}from"../../chunks/app-CN70TUAF.js";

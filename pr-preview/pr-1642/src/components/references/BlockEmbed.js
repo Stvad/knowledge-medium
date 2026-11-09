@@ -1,1 +1,1 @@
-export{Wj as BlockEmbed}from"../../../chunks/app-CggG4DMX.js";
+export{Wj as BlockEmbed}from"../../../chunks/app-CN70TUAF.js";

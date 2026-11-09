@@ -1,1 +1,1 @@
-export{lj as SWIPE_QUICK_ACTIONS_GESTURE_ID,kj as SWIPE_RIGHT_BLOCK_ACTION_ID,cj as SwipeActionMenu,jj as quickActionItemsFacet,rj as swipeQuickActionsPlugin}from"../../../chunks/app-CggG4DMX.js";
+export{lj as SWIPE_QUICK_ACTIONS_GESTURE_ID,kj as SWIPE_RIGHT_BLOCK_ACTION_ID,cj as SwipeActionMenu,jj as quickActionItemsFacet,rj as swipeQuickActionsPlugin}from"../../../chunks/app-CN70TUAF.js";

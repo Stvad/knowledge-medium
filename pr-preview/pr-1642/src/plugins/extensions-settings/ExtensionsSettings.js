@@ -1,1 +1,1 @@
-export{Ir as ExtensionsSettings}from"../../../chunks/app-CggG4DMX.js";
+export{Ir as ExtensionsSettings}from"../../../chunks/app-CN70TUAF.js";

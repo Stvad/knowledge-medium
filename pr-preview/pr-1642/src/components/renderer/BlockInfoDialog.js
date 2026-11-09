@@ -1,1 +1,1 @@
-export{OI as BlockInfoDialog}from"../../../chunks/app-CggG4DMX.js";
+export{OI as BlockInfoDialog}from"../../../chunks/app-CN70TUAF.js";

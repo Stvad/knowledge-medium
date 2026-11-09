@@ -1,1 +1,1 @@
-export{KG as preferredSpanReplacement}from"../../../chunks/app-CggG4DMX.js";
+export{KG as preferredSpanReplacement}from"../../../chunks/app-CN70TUAF.js";

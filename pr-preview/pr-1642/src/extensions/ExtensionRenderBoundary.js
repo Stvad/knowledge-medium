@@ -1,1 +1,1 @@
-export{kI as ExtensionRenderBoundary}from"../../chunks/app-CggG4DMX.js";
+export{kI as ExtensionRenderBoundary}from"../../chunks/app-CN70TUAF.js";

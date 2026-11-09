@@ -1,1 +1,1 @@
-export{yd as annotationsPlugin}from"../../../chunks/app-CggG4DMX.js";
+export{yd as annotationsPlugin}from"../../../chunks/app-CN70TUAF.js";

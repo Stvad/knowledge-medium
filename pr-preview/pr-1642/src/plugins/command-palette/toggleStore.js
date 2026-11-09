@@ -1,1 +1,1 @@
-export{QA as commandPaletteToggle}from"../../../chunks/app-CggG4DMX.js";
+export{QA as commandPaletteToggle}from"../../../chunks/app-CN70TUAF.js";

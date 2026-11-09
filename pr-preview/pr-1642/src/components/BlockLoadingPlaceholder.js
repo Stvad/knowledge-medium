@@ -1,1 +1,1 @@
-export{PP as BlockLoadingPlaceholder}from"../../chunks/app-CggG4DMX.js";
+export{PP as BlockLoadingPlaceholder}from"../../chunks/app-CN70TUAF.js";
