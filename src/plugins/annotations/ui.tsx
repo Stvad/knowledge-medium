@@ -7,7 +7,8 @@
  *   block's comments). It also hands the block's threads to the read-mode
  *   highlights (`readHighlights.ts`);
  * - its inline expansion under the block, holding an edit suggestion's
- *   composer and a card per thread;
+ *   composer and a card per thread, and the switch that opens the panel's
+ *   margin;
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
@@ -16,7 +17,7 @@
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
-import {MessageSquare} from 'lucide-react'
+import {MessageSquare, PanelRight} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
@@ -27,7 +28,7 @@ import {DraftEditor} from '@/components/DraftEditor.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
-import {useHandle, useWorkspaceId} from '@/hooks/block.js'
+import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {
   cachedContentDecorator,
   enterEditModeForBlock,
@@ -48,6 +49,7 @@ import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
@@ -345,14 +347,38 @@ const ThreadsSection = ({block}: {block: Block}) => {
       {!composer && open.length === 0 && closed.length === 0 && (
         <p className="px-1 text-xs text-muted-foreground">No comments.</p>
       )}
-      {closed.length > 0 && (
-        <button type="button" onClick={() => toggleShowResolved(key)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
-          {showResolved ? 'Hide' : 'Show'} {closed.length} closed
-        </button>
-      )}
+      <div className="flex items-center gap-3 px-1">
+        {closed.length > 0 && (
+          <button type="button" onClick={() => toggleShowResolved(key)} className="text-xs text-muted-foreground hover:text-foreground">
+            {showResolved ? 'Hide' : 'Show'} {closed.length} closed
+          </button>
+        )}
+        {blockContext.panelId && <MarginSwitch panelId={blockContext.panelId}/>}
+      </div>
       {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
     </section>
   )
+}
+
+/** Opens the panel's margin; one already open here has no room to show. */
+const MarginSwitch = ({panelId}: {panelId: string}) => {
+  const panel = useRepo().block(panelId)
+  const [open] = usePropertyValue(panel, annotationMarginOpenProp)
+  const setOpen = (next: boolean) => () => void panel.set(annotationMarginOpenProp, next)
+  const buttonClass = 'inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground'
+  return open
+    ? (
+      <span className="ml-auto text-xs text-muted-foreground">
+        No room for the margin in this panel.{' '}
+        <button type="button" onClick={setOpen(false)} className={`${buttonClass} underline`}>Close it</button>
+      </span>
+    )
+    : (
+      <button type="button" onClick={setOpen(true)} className={`ml-auto ${buttonClass}`}>
+        <PanelRight className="h-3 w-3" aria-hidden/>
+        Show in margin
+      </button>
+    )
 }
 
 export const commentsBelowContentContribution: BlockBelowContentContribution = ctx => {
