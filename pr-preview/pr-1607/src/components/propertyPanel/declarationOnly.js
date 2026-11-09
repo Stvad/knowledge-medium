@@ -1,1 +1,1 @@
-export{fz as declarationOnlyDefinitionForName,pz as declarationOnlyStatusText}from"../../../chunks/app-yZkZnfQA.js";
+export{Qz as declarationOnlyDefinitionForName,$z as declarationOnlyStatusText}from"../../../chunks/app-DHsA6Twl.js";

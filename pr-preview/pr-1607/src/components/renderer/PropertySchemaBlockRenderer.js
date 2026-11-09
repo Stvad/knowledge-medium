@@ -1,1 +1,1 @@
-export{SP as PropertySchemaBlockRenderer,CP as PropertySchemaContentRenderer}from"../../../chunks/app-yZkZnfQA.js";
+export{ZP as PropertySchemaBlockRenderer,QP as PropertySchemaContentRenderer}from"../../../chunks/app-DHsA6Twl.js";

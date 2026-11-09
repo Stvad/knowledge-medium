@@ -1,1 +1,1 @@
-export{cw as blockEditingContentRenderer}from"../../../chunks/app-yZkZnfQA.js";
+export{Rw as blockEditingContentRenderer}from"../../../chunks/app-DHsA6Twl.js";
