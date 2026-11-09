@@ -566,6 +566,51 @@
   .tm-block[data-editing='true'] .block-content {
     overflow: visible;
   }
+
+  /* The block gutter (`BlockGutter.tsx`). The host writes the top cluster's
+     width and the text's line height; the defaults reset both for every
+     nested host. */
+  .km-gutter-host {
+    position: relative;
+    --km-gutter-top-w: 0px;
+    --km-gutter-line: 1lh;
+  }
+  .km-gutter-top,
+  .km-gutter-bottom {
+    position: absolute;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .km-gutter-top {
+    top: 0;
+    height: var(--km-gutter-line);
+  }
+  .km-gutter-bottom {
+    bottom: 0;
+    height: 1lh;
+  }
+  .km-gutter-host[data-gutter-top='column'] {
+    padding-right: var(--km-gutter-top-w);
+  }
+  /* No text to flow: a row above the content, unless every item showing may
+     draw over it. */
+  .km-gutter-host[data-gutter-top='none']:has(> .km-gutter-top > [data-gutter-item]:not([data-gutter-overlay]):not(:empty)) {
+    padding-top: var(--km-gutter-line);
+  }
+  .km-gutter-host:has(> .km-gutter-bottom > [data-gutter-item]:not(:empty)) {
+    padding-bottom: 1lh;
+  }
+  /* Flow: the registered text keeps its first line clear of the cluster. The
+     same float in read (markdown) and edit (CodeMirror) mode. */
+  .markdown-content[data-gutter-flow]::before,
+  [data-gutter-flow] .cm-content > .cm-line:first-child::before {
+    content: '';
+    float: right;
+    width: var(--km-gutter-top-w);
+    height: 1lh;
+  }
 }
 
 /*

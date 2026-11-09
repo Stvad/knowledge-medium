@@ -1,0 +1,162 @@
+// @vitest-environment happy-dom
+
+import { afterEach, describe, expect, it } from 'vitest'
+import { act, cleanup, render, screen } from '@testing-library/react'
+import { useEffect, useSyncExternalStore } from 'react'
+import type { Block } from '@/data/block'
+import type { BlockContextType, BlockRenderer } from '@/types'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { blockGutterItemsFacet, type BlockResolveContext } from '@/extensions/blockInteraction'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
+import { BlockGutterHost, createGutterControls, useGutterText, type GutterControls } from './BlockGutter'
+
+afterEach(cleanup)
+
+const block = {id: 'block-1'} as Block
+
+const contextFor = (blockContext: Partial<BlockContextType> = {}): BlockResolveContext => ({
+  block,
+  blockContext: blockContext as BlockContextType,
+} as BlockResolveContext)
+
+const Label = (label: string): BlockRenderer => {
+  const Item = () => <span data-testid="item">{label}</span>
+  Item.displayName = `Item(${label})`
+  return Item
+}
+
+const renderHost = (
+  extensions: AppExtension[],
+  {
+    blockContext,
+    controls = createGutterControls(),
+    content = <span>content</span>,
+  }: {blockContext?: Partial<BlockContextType>; controls?: GutterControls; content?: React.ReactNode} = {},
+) => render(
+  <AppRuntimeContextProvider value={resolveFacetRuntimeSync(extensions)}>
+    <BlockGutterHost resolveContext={contextFor(blockContext)} controls={controls}>
+      {content}
+    </BlockGutterHost>
+  </AppRuntimeContextProvider>,
+)
+
+const itemTexts = (selector: string) =>
+  [...document.querySelectorAll(`${selector} [data-testid="item"]`)].map(node => node.textContent)
+
+describe('BlockGutterHost', () => {
+  it('puts each item in its corner, in contribution order', () => {
+    renderHost([
+      blockGutterItemsFacet.of(() => ({corner: 'top-right', component: Label('second')}), {source: 'b', precedence: 10}),
+      blockGutterItemsFacet.of(() => [
+        {corner: 'top-right', component: Label('first')},
+        {corner: 'bottom-right', component: Label('count')},
+      ], {source: 'a'}),
+      blockGutterItemsFacet.of(() => null, {source: 'c'}),
+    ])
+
+    expect(itemTexts('.km-gutter-top')).toEqual(['first', 'second'])
+    expect(itemTexts('.km-gutter-bottom')).toEqual(['count'])
+  })
+
+  it('never remounts the content when an item starts showing', () => {
+    let visible = false
+    const listeners = new Set<() => void>()
+    const ToggledItem = () => {
+      const show = useSyncExternalStore(
+        listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
+        () => visible,
+      )
+      return show ? <span data-testid="item">pill</span> : null
+    }
+    let mounts = 0
+    const Content = () => {
+      useEffect(() => { mounts += 1 }, [])
+      return <span>content</span>
+    }
+
+    renderHost(
+      [blockGutterItemsFacet.of(() => ({corner: 'top-right', component: ToggledItem}), {source: 'test'})],
+      {content: <Content/>},
+    )
+    expect(screen.queryByTestId('item')).toBeNull()
+
+    act(() => {
+      visible = true
+      listeners.forEach(listener => listener())
+    })
+
+    expect(screen.getByTestId('item')).toBeTruthy()
+    expect(mounts).toBe(1)
+  })
+
+  it.each([
+    ['breadcrumb', {isBreadcrumb: true}],
+    ['reference', {isReference: true}],
+  ])('shows no gutter in a %s', (_name, blockContext) => {
+    renderHost(
+      [blockGutterItemsFacet.of(() => ({corner: 'top-right', component: Label('pill')}), {source: 'test'})],
+      {blockContext},
+    )
+
+    expect(screen.getByText('content')).toBeTruthy()
+    expect(document.querySelector('.km-gutter-host')).toBeNull()
+    expect(screen.queryByTestId('item')).toBeNull()
+  })
+
+  it('puts the layout\'s own control last, allowed to overlay', () => {
+    const controls = createGutterControls()
+    renderHost(
+      [blockGutterItemsFacet.of(() => ({corner: 'top-right', component: Label('pill')}), {source: 'test'})],
+      {controls},
+    )
+    expect(document.querySelector('[data-gutter-overlay]')).toBeNull()
+
+    act(() => controls.set(Label('expand')))
+
+    expect(itemTexts('.km-gutter-top')).toEqual(['pill', 'expand'])
+    const slots = document.querySelectorAll('.km-gutter-top > [data-gutter-item]')
+    expect(slots[0].hasAttribute('data-gutter-overlay')).toBe(false)
+    expect(slots[1].hasAttribute('data-gutter-overlay')).toBe(true)
+  })
+
+  it('keeps the content up while an item suspends or throws', () => {
+    const Suspends = () => { throw new Promise(() => {}) }
+    const Throws = () => { throw new Error('item boom') }
+
+    renderHost([
+      blockGutterItemsFacet.of(() => [
+        {corner: 'top-right', component: Suspends},
+        {corner: 'top-right', component: Throws},
+      ], {source: 'test'}),
+    ])
+
+    expect(screen.getByText('content')).toBeTruthy()
+  })
+})
+
+describe('useGutterText', () => {
+  const TextOf = ({of}: {of: Block}) => {
+    const attach = useGutterText(of)
+    return <div ref={attach} data-testid="text" data-attachable={attach ? 'yes' : 'no'}/>
+  }
+
+  it('registers the block\'s own text, which the host then lays out', () => {
+    renderHost([], {content: <TextOf of={block}/>})
+
+    expect(screen.getByTestId('text').dataset.attachable).toBe('yes')
+    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top')).toBe('column')
+  })
+
+  it('leaves another block\'s text alone', () => {
+    renderHost([], {content: <TextOf of={{id: 'other'} as Block}/>})
+
+    expect(screen.getByTestId('text').dataset.attachable).toBe('no')
+    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top')).toBe('none')
+  })
+
+  it('does nothing outside a host', () => {
+    render(<TextOf of={block}/>)
+
+    expect(screen.getByTestId('text').dataset.attachable).toBe('no')
+  })
+})
