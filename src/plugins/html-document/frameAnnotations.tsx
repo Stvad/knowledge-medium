@@ -8,34 +8,34 @@ import {showError, showInfo} from '@/utils/toast.js'
 import type {FrameMark, FrameScripts, FrameSelection} from './frameDocument.ts'
 import {HtmlFrame, type HtmlFrameHandle} from './HtmlFrame.tsx'
 
-const loadSourceMap = () => import('./sourceMap.ts')
+type SourceMap = typeof import('./sourceMap.ts')
+
+let loadedSourceMap: SourceMap | null = null
+const loadSourceMap = (): Promise<SourceMap> => import('./sourceMap.ts').then(map => (loadedSourceMap = map))
+
+/** The source map, once loaded; it loads while `wanted`. It carries an HTML
+ *  parser, so it loads only once there is something to draw or a selection to
+ *  place. Until then, and if it fails to load, the frame draws nothing, and the
+ *  threads still show their quotes. */
+const useSourceMap = (wanted: boolean): SourceMap | null => {
+  const [map, setMap] = useState(loadedSourceMap)
+  useEffect(() => {
+    if (!wanted || map) return
+    let live = true
+    loadSourceMap().then(
+      loaded => { if (live) setMap(loaded) },
+      (error: unknown) => console.error('html-document: could not load the source map', error),
+    )
+    return () => { live = false }
+  }, [wanted, map])
+  return map
+}
 
 const NO_HIGHLIGHTS: readonly SurfaceHighlight[] = Object.freeze([])
 const NO_MARKS: readonly FrameMark[] = Object.freeze([])
 
 /** Gap between the selection and the gestures beside it. */
 const GAP = 4
-
-/** The highlights as the frame draws them. The parser loads only once there is
- *  something to draw; until then, and if it fails to load, the frame draws
- *  none, and the threads still show their quotes. */
-const useFrameMarks = (source: string, highlights: readonly SurfaceHighlight[]): readonly FrameMark[] => {
-  const [drawn, setDrawn] = useState<{
-    source: string
-    highlights: readonly SurfaceHighlight[]
-    marks: readonly FrameMark[]
-  } | null>(null)
-  useEffect(() => {
-    if (highlights.length === 0) return
-    let live = true
-    loadSourceMap().then(
-      map => { if (live) setDrawn({source, highlights, marks: map.marksOf(map.textSpansOf(source), highlights)}) },
-      (error: unknown) => console.error('html-document: could not load the source map for highlights', error),
-    )
-    return () => { live = false }
-  }, [source, highlights])
-  return drawn?.source === source && drawn.highlights === highlights ? drawn.marks : NO_MARKS
-}
 
 /** Below the selection, or above it where below runs out of the frame, and
  *  inside the frame's width. Placed before paint, from its own size. */
@@ -83,26 +83,35 @@ const SelectionGestures = ({selection, gestures, running, onRun}: {
 }
 
 /** The frame, with comments on its text through the annotations surface
- *  around the block (`annotations/surface.ts`). Where there is none, the frame
- *  reports no selection and draws nothing. The selection is mapped to the
- *  source when a gesture runs, not as it changes, so the parser loads only on
- *  use. */
-export const AnnotatedFrame = ({source, scripts}: {source: string; scripts: FrameScripts}) => {
-  const surface = useAnnotationSurface()
+ *  around its block (`annotations/surface.ts`). Where there is none, the frame
+ *  reports no selection and draws nothing. */
+export const AnnotatedFrame = ({blockId, source, scripts}: {blockId: string; source: string; scripts: FrameScripts}) => {
+  const surface = useAnnotationSurface(blockId)
   const highlights = useMemo(() => surface?.highlightsIn(source) ?? NO_HIGHLIGHTS, [surface, source])
-  const marks = useFrameMarks(source, highlights)
   const [selection, setSelection] = useState<FrameSelection | null>(null)
+  const map = useSourceMap(highlights.length > 0 || selection !== null)
+  const marks = useMemo(
+    () => map && highlights.length > 0 ? map.marksOf(map.textSpansOf(source), highlights) : NO_MARKS,
+    [map, source, highlights],
+  )
   const [running, setRunning] = useState(false)
   const frame = useRef<HtmlFrameHandle>(null)
 
-  const run = async (gesture: SurfaceGesture, held: FrameSelection) => {
-    const map = await loadSourceMap()
-    const range = map.rangeOfSelection(map.textSpansOf(source), held)
-    if (typeof range === 'string') {
-      showInfo(range)
-      return
+  /** Starts the gesture inside the click once the source map has loaded, which
+   *  the selection set going: a gesture that writes the clipboard must start
+   *  the write there, as Safari refuses one started after an await. */
+  const run = (gesture: SurfaceGesture, held: FrameSelection): Promise<void> => {
+    const place = (loaded: SourceMap) => {
+      const range = loaded.rangeOfSelection(loaded.textSpansOf(source), held, scripts)
+      if (typeof range === 'string') {
+        showInfo(range)
+        return Promise.resolve()
+      }
+      return gesture.run({content: source, ...range}).then(landed => {
+        if (landed) frame.current?.clearSelection()
+      })
     }
-    if (await gesture.run({content: source, ...range})) frame.current?.clearSelection()
+    return map ? place(map) : loadSourceMap().then(place)
   }
 
   return (

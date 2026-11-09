@@ -6,14 +6,15 @@ import {marksOf, rangeOfSelection, textSpansOf, type TextSpan} from '../sourceMa
  *  text node with that text and an offset into it. */
 const selectionIn = (spans: readonly TextSpan[], start: [string, number], end: [string, number]) => {
   const point = ([text, offset]: [string, number]): FramePoint => {
-    if (!spans.some(span => span.value === text)) throw new Error(`no text node ${JSON.stringify(text)}`)
-    return {text, occurrence: 0, offset}
+    const count = spans.filter(span => span.value === text).length
+    if (count === 0) throw new Error(`no text node ${JSON.stringify(text)}`)
+    return {text, occurrence: 0, count, offset}
   }
   return {start: point(start), end: point(end)}
 }
 
 const sliceOf = (source: string, start: [string, number], end: [string, number]) => {
-  const range = rangeOfSelection(textSpansOf(source), selectionIn(textSpansOf(source), start, end))
+  const range = rangeOfSelection(textSpansOf(source), selectionIn(textSpansOf(source), start, end), 'hold')
   if (typeof range === 'string') throw new Error(range)
   return source.slice(range.from, range.to)
 }
@@ -67,7 +68,7 @@ describe('rangeOfSelection', () => {
   it('refuses an end inside what one reference expands to', () => {
     const source = '<p>x&#x1F600;y</p>'
     const spans = textSpansOf(source)
-    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['x😀y', 0], ['x😀y', 2]))).toBe('string')
+    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['x😀y', 0], ['x😀y', 2]), 'hold')).toBe('string')
     expect(sliceOf(source, ['x😀y', 0], ['x😀y', 3])).toBe('x&#x1F600;')
   })
 
@@ -75,20 +76,20 @@ describe('rangeOfSelection', () => {
     const spans = textSpansOf('<p>Hello world</p>')
     const selection = selectionIn(spans, ['Hello world', 0], ['Hello world', 5])
     const rewritten = {...selection, start: {...selection.start, text: 'Hello there'}}
-    expect(typeof rangeOfSelection(spans, rewritten)).toBe('string')
+    expect(typeof rangeOfSelection(spans, rewritten, 'hold')).toBe('string')
   })
 
   it('refuses a node the frame has and the source does not', () => {
     const spans = textSpansOf('<p>Hello</p>')
-    const start = {text: 'Hello', occurrence: 1, offset: 0}
-    expect(typeof rangeOfSelection(spans, {start, end: {...start, offset: 5}})).toBe('string')
+    const start = {text: 'Hello', occurrence: 1, count: 2, offset: 0}
+    expect(typeof rangeOfSelection(spans, {start, end: {...start, offset: 5}}, 'hold')).toBe('string')
   })
 
   it('tells repeated text apart by which occurrence it is', () => {
     const source = '<p>same</p><p>same</p>'
     const spans = textSpansOf(source)
-    const second = {text: 'same', occurrence: 1, offset: 0}
-    expect(rangeOfSelection(spans, {start: second, end: {...second, offset: 4}}))
+    const second = {text: 'same', occurrence: 1, count: 2, offset: 0}
+    expect(rangeOfSelection(spans, {start: second, end: {...second, offset: 4}}, 'hold'))
       .toEqual({from: source.lastIndexOf('same'), to: source.lastIndexOf('same') + 4})
   })
 
@@ -100,13 +101,36 @@ describe('rangeOfSelection', () => {
     const source = '<table>x<tr><td>cell</td></tr>y</table>'
     const spans = textSpansOf(source)
     expect(spans.map(span => span.value)).toEqual(['xy', 'cell'])
-    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['xy', 0], ['cell', 2]))).toBe('string')
+    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['xy', 0], ['cell', 2]), 'hold')).toBe('string')
     expect(sliceOf(source, ['cell', 0], ['cell', 4])).toBe('cell')
+  })
+
+  describe('while the document\'s scripts run', () => {
+    const SOURCE = '<p>same</p><p>same</p><p>once</p>'
+    const spans = textSpansOf(SOURCE)
+    const at = (text: string, occurrence: number, count: number) => ({
+      start: {text, occurrence, count, offset: 0},
+      end: {text, occurrence, count, offset: text.length},
+    })
+
+    it('places text that appears once in the frame and once in the source', () => {
+      expect(rangeOfSelection(spans, at('once', 0, 1), 'run'))
+        .toEqual({from: SOURCE.indexOf('once'), to: SOURCE.indexOf('once') + 4})
+    })
+
+    it('refuses text the source repeats, whichever occurrence the frame names', () => {
+      expect(rangeOfSelection(spans, at('same', 0, 2), 'run')).toMatch(/scripts run/)
+    })
+
+    it('refuses text a script repeated in the frame', () => {
+      expect(rangeOfSelection(spans, at('once', 1, 2), 'run')).toMatch(/scripts run/)
+      expect(rangeOfSelection(spans, at('once', 0, 2), 'run')).toMatch(/scripts run/)
+    })
   })
 
   it('refuses an empty selection', () => {
     const spans = textSpansOf('<p>Hello</p>')
-    expect(rangeOfSelection(spans, selectionIn(spans, ['Hello', 2], ['Hello', 2]))).toBe('Select some text first.')
+    expect(rangeOfSelection(spans, selectionIn(spans, ['Hello', 2], ['Hello', 2]), 'hold')).toBe('Select some text first.')
   })
 })
 

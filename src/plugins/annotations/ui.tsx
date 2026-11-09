@@ -217,6 +217,8 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
 const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): AnnotationSurface => {
   const {renderScopeId} = feed
   return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
     highlightsIn: content => highlightRanges(content, feed.threads),
     gestures: readSelectionGestures
       .filter(gesture => gestureRunsHere(gesture, {renderScopeId}))

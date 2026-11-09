@@ -12,7 +12,7 @@ import {topLevelBlockIdProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {BlockContextProvider} from '@/context/block'
+import {BlockContextProvider, NestedBlockContextProvider} from '@/context/block'
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer'
@@ -506,15 +506,37 @@ describe('a read-mode selection, mapped to raw offsets', () => {
   })
 
   describe('the surface a renderer that draws its own text gets', () => {
-    const seen: {surface: AnnotationSurface | null} = {surface: null}
-    const Probe: BlockRenderer = () => {
-      const surface = useAnnotationSurface()
-      useEffect(() => { seen.surface = surface })
+    const seen: {surface: AnnotationSurface | null; inside: (AnnotationSurface | null)[]} = {surface: null, inside: []}
+    /** What renders inside a block's content sees: another block, or the
+     *  same block in another render scope, as an embed or a block ref is. */
+    const Inside = ({blockId}: {blockId: string}) => {
+      const surface = useAnnotationSurface(blockId)
+      useEffect(() => { seen.inside.push(surface) })
       return null
+    }
+    const Probe: BlockRenderer = ({block}) => {
+      const surface = useAnnotationSurface(block.id)
+      useEffect(() => { seen.surface = surface })
+      return (
+        <>
+          <Inside blockId="rich"/>
+          <NestedBlockContextProvider overrides={{renderScopeId: 'embed-scope'}}><Inside blockId={block.id}/></NestedBlockContextProvider>
+        </>
+      )
     }
     const Decorated = (commentPillContribution({} as BlockResolveContext) as BlockContentDecorator)(Probe)
 
-    afterEach(() => { seen.surface = null })
+    afterEach(() => {
+      seen.surface = null
+      seen.inside = []
+    })
+
+    it('belongs to its block as rendered there, not to another block or scope inside it', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>)
+      await waitFor(() => expect(seen.surface).toMatchObject({blockId: 'other'}))
+      expect(seen.inside.length).toBeGreaterThan(0)
+      expect(seen.inside.every(surface => surface === null)).toBe(true)
+    })
 
     it('offers the read-mode gestures, and a highlight one makes comes back as a range', async () => {
       renderInOutline(<Decorated block={repo.block('other')}/>)

@@ -66,12 +66,14 @@ export const MARKS_MESSAGE_TYPE = 'km:html-document:marks'
 export const CLEAR_SELECTION_MESSAGE_TYPE = 'km:html-document:clear-selection'
 
 /** A point in the document's text: an offset into the body text node whose
- *  text is `text`, the `occurrence`th such node in document order. Named by
- *  text, not by place among all text nodes, so text a running script adds
- *  elsewhere doesn't move it, and a node a script changed names nothing. */
+ *  text is `text`, the `occurrence`th of the `count` such nodes in document
+ *  order. Named by text, not by place among all text nodes, so text a running
+ *  script adds elsewhere doesn't move it, and a node a script changed names
+ *  nothing. */
 export interface FramePoint {
   text: string
   occurrence: number
+  count: number
   offset: number
 }
 
@@ -141,8 +143,13 @@ export const FRAME_SCRIPT = `(function () {
   var pointAt = function (list, at, offset) {
     var text = list[at].data
     var occurrence = 0
-    for (var i = 0; i < at; i++) if (list[i].data === text) occurrence++
-    return {text: text, occurrence: occurrence, offset: offset}
+    var count = 0
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].data !== text) continue
+      if (i < at) occurrence++
+      count++
+    }
+    return {text: text, occurrence: occurrence, count: count, offset: offset}
   }
   var pointIn = function (list, container, offset, forward) {
     if (container.nodeType === Node.TEXT_NODE) {
@@ -292,8 +299,10 @@ const isIndex = (value: unknown): value is number => Number.isInteger(value) && 
 
 const readPoint = (value: unknown): FramePoint | null => {
   if (typeof value !== 'object' || value === null) return null
-  const {text, occurrence, offset} = value as Record<string, unknown>
-  return typeof text === 'string' && isIndex(occurrence) && isIndex(offset) ? {text, occurrence, offset} : null
+  const {text, occurrence, count, offset} = value as Record<string, unknown>
+  return typeof text === 'string' && isIndex(occurrence) && isIndex(count) && isIndex(offset)
+    ? {text, occurrence, count, offset}
+    : null
 }
 
 const readRect = (value: unknown): FrameSelection['rect'] | null => {

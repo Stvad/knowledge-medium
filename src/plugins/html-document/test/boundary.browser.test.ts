@@ -18,6 +18,7 @@ import {
   MARKS_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   SELECTION_MESSAGE_TYPE,
+  type FrameScripts,
   type FrameSelection,
 } from '../frameDocument.ts'
 import {marksOf, rangeOfSelection, textSpansOf} from '../sourceMap.ts'
@@ -706,8 +707,8 @@ describe.each(selectedEngines())('%s', engine => {
       return latest!
     }
 
-    const sourceOf = (source: string, selection: FrameSelection) => {
-      const range = rangeOfSelection(textSpansOf(source), selection)
+    const sourceOf = (source: string, selection: FrameSelection, scripts: FrameScripts = 'hold') => {
+      const range = rangeOfSelection(textSpansOf(source), selection, scripts)
       if (typeof range === 'string') throw new Error(range)
       return source.slice(range.from, range.to)
     }
@@ -717,8 +718,8 @@ describe.each(selectedEngines())('%s', engine => {
       await mountHeld(host, source)
       await select({selector: 'b', text: [1, 3]})
       const selection = await latestSelection()
-      expect(selection.start).toEqual({text: 'same', occurrence: 1, offset: 1})
-      const range = rangeOfSelection(textSpansOf(source), selection)
+      expect(selection.start).toEqual({text: 'same', occurrence: 1, count: 2, offset: 1})
+      const range = rangeOfSelection(textSpansOf(source), selection, 'hold')
       expect(range).toEqual({from: source.lastIndexOf('same') + 1, to: source.lastIndexOf('same') + 3})
     })
 
@@ -734,7 +735,18 @@ describe.each(selectedEngines())('%s', engine => {
       await mount(host, 'sandboxed', source)
       await untilReported(host, 'armed')
       await select({selector: 'p', index: 1, text: [0, 6]})
-      expect(sourceOf(source, await latestSelection())).toBe('target')
+      expect(sourceOf(source, await latestSelection(), 'run')).toBe('target')
+    })
+
+    it('refuses text in a running document that a script repeated, rather than guess which', async () => {
+      const prepend = script(`const copy = document.createElement('p'); copy.textContent = 'same'; document.body.prepend(copy)`)
+      const source = `<p id="first">same</p><p>same</p>${prepend}${script(ARMED)}`
+      await mount(host, 'sandboxed', source)
+      await untilReported(host, 'armed')
+      await select({selector: '#first', text: [0, 4]})
+      const selection = await latestSelection()
+      expect(selection.start).toMatchObject({text: 'same', occurrence: 1, count: 3})
+      expect(rangeOfSelection(textSpansOf(source), selection, 'run')).toMatch(/scripts run/)
     })
 
     it('clears the selection when asked, and reports that there is none', async () => {
@@ -750,8 +762,8 @@ describe.each(selectedEngines())('%s', engine => {
     it('takes a selection only from the document\'s own window', async () => {
       await mountHeld(host, '<p>some text</p>')
       const forged = {type: SELECTION_MESSAGE_TYPE, selection: {
-        start: {text: 'some text', occurrence: 0, offset: 0},
-        end: {text: 'some text', occurrence: 0, offset: 4},
+        start: {text: 'some text', occurrence: 0, count: 1, offset: 0},
+        end: {text: 'some text', occurrence: 0, count: 1, offset: 4},
         rect: {top: 0, left: 0, bottom: 10, right: 10},
       }}
       await host.page.evaluate(message => {

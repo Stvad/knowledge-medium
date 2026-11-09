@@ -114,7 +114,7 @@ describe('readReportedHeight', () => {
 })
 
 describe('readReportedSelection', () => {
-  const point = {text: 'some text', occurrence: 0, offset: 2}
+  const point = {text: 'some text', occurrence: 0, count: 1, offset: 2}
   const rect = {top: 1, left: 2, bottom: 3, right: 4}
   const message = (selection: unknown) => ({type: SELECTION_MESSAGE_TYPE, selection})
 
@@ -130,6 +130,7 @@ describe('readReportedSelection', () => {
     [message({start: point, end: {...point, offset: -1}, rect})],
     [message({start: point, end: {...point, occurrence: 0.5}, rect})],
     [message({start: {...point, text: 7}, end: point, rect})],
+    [message({start: {...point, count: -1}, end: point, rect})],
     [message({start: point, end: point, rect: {...rect, top: Number.NaN}})],
   ])('reads %j as no selection', data => {
     expect(readReportedSelection(data)).toBeNull()

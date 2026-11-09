@@ -53,7 +53,7 @@ export const HtmlDocumentView = ({block}: BlockRendererProps) => {
           {!block.repo.isReadOnly && <span>Edit source</span>}
         </span>
       </div>
-      <AnnotatedFrame source={source} scripts={mode}/>
+      <AnnotatedFrame blockId={block.id} source={source} scripts={mode}/>
     </div>
   )
 }

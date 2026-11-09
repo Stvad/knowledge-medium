@@ -37,8 +37,8 @@ const RECT = {top: 10, left: 10, bottom: 20, right: 40}
 
 /** `two` in the paragraph, as the frame would report it. */
 const selectTwo = (text = 'one two') => act(() => frame.props!.onSelection!({
-  start: {text, occurrence: 0, offset: 4},
-  end: {text, occurrence: 0, offset: 7},
+  start: {text, occurrence: 0, count: 1, offset: 4},
+  end: {text, occurrence: 0, count: 1, offset: 7},
   rect: RECT,
 }))
 
@@ -50,12 +50,16 @@ const highlightTwo = (content: string): SurfaceHighlight[] => {
 const NO_HIGHLIGHTS = (): SurfaceHighlight[] => []
 
 const surfaceRunning = (run: () => Promise<boolean>, highlightsIn: (content: string) => SurfaceHighlight[] = NO_HIGHLIGHTS): AnnotationSurface => ({
+  blockId: 'doc',
+  renderScopeId: undefined,
   highlightsIn,
   gestures: [{id: 'comment', label: 'Comment', icon: MessageSquarePlus, run}],
 })
 
-const renderWith = (surface: AnnotationSurface | null, source = SOURCE) =>
-  render(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={source} scripts="hold"/></AnnotationSurfaceContext>)
+const framed = (surface: AnnotationSurface | null, source = SOURCE) =>
+  <AnnotationSurfaceContext value={surface}><AnnotatedFrame blockId="doc" source={source} scripts="hold"/></AnnotationSurfaceContext>
+
+const renderWith = (surface: AnnotationSurface | null, source = SOURCE) => render(framed(surface, source))
 
 describe('AnnotatedFrame', () => {
   beforeEach(() => {
@@ -68,6 +72,20 @@ describe('AnnotatedFrame', () => {
   it('listens for no selection where nothing annotates the block', () => {
     renderWith(null)
     expect(frame.props?.onSelection).toBeUndefined()
+  })
+
+  it('takes no surface provided for another block, as an embed inside that block would', () => {
+    renderWith({...surfaceRunning(async () => true), blockId: 'outer'})
+    expect(frame.props?.onSelection).toBeUndefined()
+  })
+
+  it('starts the gesture inside the click once the source map has loaded', async () => {
+    const run = vi.fn(async () => true)
+    renderWith(surfaceRunning(run, highlightTwo))
+    await waitFor(() => expect(frame.props?.marks).toHaveLength(1))
+    selectTwo()
+    fireEvent.click(screen.getByRole('button', {name: 'Comment'}))
+    expect(run).toHaveBeenCalledOnce()
   })
 
   it('runs a gesture on the selection as a range of the source, then drops the selection', async () => {
@@ -126,7 +144,7 @@ describe('AnnotatedFrame', () => {
     const surface = surfaceRunning(async () => true, () => fixed)
     const {rerender} = renderWith(surface)
     await waitFor(() => expect(frame.props?.marks).toHaveLength(1))
-    rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={`<p>zero</p>${SOURCE}`} scripts="hold"/></AnnotationSurfaceContext>)
+    rerender(framed(surface, `<p>zero</p>${SOURCE}`))
     expect(frame.props?.marks).toEqual([])
   })
 
@@ -138,16 +156,14 @@ describe('AnnotatedFrame', () => {
     ]))
 
     const resolved = surfaceRunning(async () => true)
-    rerender(<AnnotationSurfaceContext value={resolved}><AnnotatedFrame source={SOURCE} scripts="hold"/></AnnotationSurfaceContext>)
+    rerender(framed(resolved))
     expect(frame.props?.marks).toEqual([])
 
-    rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={SOURCE} scripts="hold"/></AnnotationSurfaceContext>)
+    rerender(framed(surface))
     await waitFor(() => expect(frame.props?.marks).toHaveLength(1))
-    const edited = `<p>zero</p>${SOURCE}`
-    rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={edited} scripts="hold"/></AnnotationSurfaceContext>)
-    expect(frame.props?.marks).toEqual([])
-    await waitFor(() => expect(frame.props?.marks).toEqual([
+    rerender(framed(surface, `<p>zero</p>${SOURCE}`))
+    expect(frame.props?.marks).toEqual([
       {start: {node: 1, offset: 4}, end: {node: 1, offset: 7}, kind: 'comment'},
-    ]))
+    ])
   })
 })

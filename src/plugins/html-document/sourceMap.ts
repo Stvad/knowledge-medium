@@ -17,7 +17,14 @@
 import {parse, type DefaultTreeAdapterTypes} from 'parse5'
 import {DecodingMode, EntityDecoder, htmlDecodeTree} from 'entities/decode'
 import type {SurfaceHighlight} from '@/plugins/annotations/surface.ts'
-import {asFramed, innerDocumentHead, type FrameMark, type FramePoint, type MarkKind} from './frameDocument.ts'
+import {
+  asFramed,
+  innerDocumentHead,
+  type FrameMark,
+  type FramePoint,
+  type FrameScripts,
+  type MarkKind,
+} from './frameDocument.ts'
 
 type ParentNode = DefaultTreeAdapterTypes.ParentNode
 
@@ -109,15 +116,25 @@ export const textSpansOf = (source: string): TextSpan[] => {
   return spans
 }
 
-const UNPLACEABLE = 'Can’t tell exactly which part of the source that is. Start and end the selection in plain text.'
-
-const spanOf = (spans: readonly TextSpan[], {text, occurrence}: FramePoint): TextSpan | undefined => {
-  let seen = 0
-  return spans.find(span => span.value === text && seen++ === occurrence)
+const UNPLACEABLE: Record<FrameScripts, string> = {
+  hold: 'Can’t tell exactly which part of the source that is. Start and end the selection in plain text.',
+  run: 'Can’t tell exactly which part of the source that is while the document’s scripts run. ' +
+    'Stop them, or start and end the selection in text that appears only once in the document.',
 }
 
-const sourceOffsetOf = (spans: readonly TextSpan[], point: FramePoint): number | null => {
-  const offset = spanOf(spans, point)?.offsets[point.offset]
+/** The source text node a point is in. In a held document the frame's text
+ *  nodes are the source's, so the kth with this text is the kth here. A
+ *  running document's scripts may have added, moved or removed text, so there
+ *  a point is placed only in text found in one node on each side: then no
+ *  other passage of the source can be the one the reader selected. */
+const spanOf = (spans: readonly TextSpan[], {text, occurrence, count}: FramePoint, scripts: FrameScripts) => {
+  const matching = spans.filter(span => span.value === text)
+  if (scripts === 'hold') return matching[occurrence]
+  return count === 1 && matching.length === 1 ? matching[0] : undefined
+}
+
+const sourceOffsetOf = (spans: readonly TextSpan[], point: FramePoint, scripts: FrameScripts): number | null => {
+  const offset = spanOf(spans, point, scripts)?.offsets[point.offset]
   return offset === undefined || offset < 0 ? null : offset
 }
 
@@ -126,10 +143,11 @@ const sourceOffsetOf = (spans: readonly TextSpan[], point: FramePoint): number |
 export const rangeOfSelection = (
   spans: readonly TextSpan[],
   {start, end}: {start: FramePoint; end: FramePoint},
+  scripts: FrameScripts,
 ): {from: number; to: number} | string => {
-  const from = sourceOffsetOf(spans, start)
-  const to = sourceOffsetOf(spans, end)
-  if (from === null || to === null) return UNPLACEABLE
+  const from = sourceOffsetOf(spans, start, scripts)
+  const to = sourceOffsetOf(spans, end, scripts)
+  if (from === null || to === null) return UNPLACEABLE[scripts]
   return from < to ? {from, to} : 'Select some text first.'
 }
 
