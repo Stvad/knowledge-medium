@@ -1,1 +1,0 @@
-export{IQ as DbForensics,LQ as dbForensics}from"../../chunks/app-CT81tG6V.js";

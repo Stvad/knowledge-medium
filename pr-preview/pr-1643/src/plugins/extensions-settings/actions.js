@@ -1,1 +1,0 @@
-export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-CT81tG6V.js";

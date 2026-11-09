@@ -1,1 +1,0 @@
-export{p4 as kernelDataExtension}from"../../chunks/app-CT81tG6V.js";

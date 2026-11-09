@@ -1,1 +1,0 @@
-export{PN as dispatchPointerAction,FN as setPointerActionDispatcher}from"../../chunks/app-CT81tG6V.js";

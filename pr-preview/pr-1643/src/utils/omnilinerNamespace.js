@@ -1,1 +1,0 @@
-export{jQ as omnilinerNamespace}from"../../chunks/app-CT81tG6V.js";

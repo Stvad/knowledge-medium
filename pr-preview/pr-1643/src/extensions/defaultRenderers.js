@@ -1,1 +1,0 @@
-export{IP as defaultRegistry,LP as defaultRendererContributions,RP as defaultRenderersExtension}from"../../chunks/app-CT81tG6V.js";

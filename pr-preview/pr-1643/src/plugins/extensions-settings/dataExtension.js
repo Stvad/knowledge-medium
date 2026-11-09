@@ -1,1 +1,0 @@
-export{Ar as extensionsDataExtension}from"../../../chunks/app-CT81tG6V.js";

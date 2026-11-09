@@ -1,1 +1,0 @@
-export{FF as BlockTypeBlockRenderer,IF as BlockTypeContentRenderer,LF as writeBlockTypeLabel}from"../../../chunks/app-CT81tG6V.js";

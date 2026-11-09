@@ -1,1 +1,0 @@
-export{XM as ExtensionPromptSurface,ZM as extensionPromptsExtension}from"../../../chunks/app-CT81tG6V.js";
