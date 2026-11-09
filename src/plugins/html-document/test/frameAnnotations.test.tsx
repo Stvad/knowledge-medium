@@ -121,6 +121,15 @@ describe('AnnotatedFrame', () => {
     expect(screen.queryByRole('toolbar')).toBeNull()
   })
 
+  it('drops marks for an older source even when the surface hands back the same highlights', async () => {
+    const fixed = highlightTwo(SOURCE)
+    const surface = surfaceRunning(async () => true, () => fixed)
+    const {rerender} = renderWith(surface)
+    await waitFor(() => expect(frame.props?.marks).toHaveLength(1))
+    rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={`<p>zero</p>${SOURCE}`} scripts="hold"/></AnnotationSurfaceContext>)
+    expect(frame.props?.marks).toEqual([])
+  })
+
   it('hands the frame the surface\'s highlights, none once they are gone, and never an older source\'s', async () => {
     const surface = surfaceRunning(async () => true, highlightTwo)
     const {rerender} = renderWith(surface)
