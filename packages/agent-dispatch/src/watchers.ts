@@ -4,7 +4,7 @@
  * watchers (a source block without our status property is pending), so
  * a daemon restart re-derives the queue instead of trusting a cache.
  */
-import { PROPS, type TaskStatus } from './config.js'
+import { MAX_RUN_TIMEOUT_MS, PROPS, type TaskStatus } from './config.js'
 
 /** The slice of a block the pending-decision needs. */
 export interface BlockView {
@@ -46,9 +46,9 @@ export const taskAttempts = (block: BlockView | undefined): number => {
 
 /** `running` entries older than this are treated as crashed-mid-run and
  *  re-queued on the next sweep. The daemon is the only writer of these
- *  properties, so a long-stale `running` can only mean a dead run (run
- *  timeoutMs is capped below this in config.ts). */
-export const STALE_RUNNING_MS = 30 * 60_000
+ *  properties, so a long-stale `running` can only mean a dead run: the
+ *  window outlasts the longest allowed run plus its kill and final write. */
+export const STALE_RUNNING_MS = MAX_RUN_TIMEOUT_MS + 5 * 60_000
 
 /** A task is re-claimed at most this many times before it's parked as
  *  `error` — caps the requeue loop (and its bill) when something keeps
