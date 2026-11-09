@@ -1,0 +1,1 @@
+export{HP as LazyBlockComponent}from"../../chunks/app-BFWtuLaS.js";

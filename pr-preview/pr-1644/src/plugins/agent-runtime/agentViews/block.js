@@ -1,0 +1,1 @@
+export{Cg as buildBlockView,wg as renderBlockView}from"../../../../chunks/app-BFWtuLaS.js";

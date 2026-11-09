@@ -1,0 +1,1 @@
+export{J3 as agree,Y3 as pluralize}from"../../chunks/app-BFWtuLaS.js";

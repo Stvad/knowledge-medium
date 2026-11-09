@@ -1,0 +1,1 @@
+export{uh as BLOCK_HISTORY_CONTENT_CHARS,dh as LISTED_PROPERTY_NAMES,fh as MAX_LISTED_CHANGES,ph as blockHistory,mh as recentChanges}from"../../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{Q_ as backlinksViewPlugin}from"../../../chunks/app-BFWtuLaS.js";

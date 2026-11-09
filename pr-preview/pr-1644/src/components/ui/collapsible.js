@@ -1,0 +1,1 @@
+"use client";export{Iz as Collapsible,Lz as CollapsibleContent,Rz as CollapsibleTrigger}from"../../../chunks/app-BFWtuLaS.js";

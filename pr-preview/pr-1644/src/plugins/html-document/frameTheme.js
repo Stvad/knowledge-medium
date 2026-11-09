@@ -1,0 +1,1 @@
+export{xn as useFrameThemeCss}from"../../../chunks/app-BFWtuLaS.js";

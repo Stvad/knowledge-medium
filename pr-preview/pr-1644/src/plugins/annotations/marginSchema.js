@@ -1,0 +1,1 @@
+export{AY as annotationMarginOpenProp,jY as annotationMarginWidthProp}from"../../../chunks/app-BFWtuLaS.js";

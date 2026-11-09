@@ -1,0 +1,1 @@
+export{GP as BlockLoadingPlaceholder}from"../../chunks/app-BFWtuLaS.js";

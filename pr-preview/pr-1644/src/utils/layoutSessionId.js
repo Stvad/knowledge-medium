@@ -1,0 +1,1 @@
+export{Utt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Wtt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Gtt as __resetLayoutSessionIdForTesting,Ktt as getLayoutSessionId,qtt as isInstalledAppDisplayMode,Jtt as readOrCreateLayoutSessionId}from"../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{nX as characterCounterDataExtension}from"../../../chunks/app-BFWtuLaS.js";

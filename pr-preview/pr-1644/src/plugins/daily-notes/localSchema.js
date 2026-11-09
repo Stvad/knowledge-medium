@@ -1,0 +1,1 @@
+export{oJ as dailyNotesLocalSchema}from"../../../chunks/app-BFWtuLaS.js";

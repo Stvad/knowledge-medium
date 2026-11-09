@@ -1,0 +1,1 @@
+export{sh as lintExtensionSource}from"../../../chunks/app-BFWtuLaS.js";

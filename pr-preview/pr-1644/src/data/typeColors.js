@@ -1,0 +1,1 @@
+export{fM as DEFAULT_TYPE_COLORS,pM as defaultTypeColor,mM as pickLeastUsedTypeColor}from"../../chunks/app-BFWtuLaS.js";

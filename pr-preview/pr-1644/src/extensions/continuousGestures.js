@@ -1,0 +1,1 @@
+export{aI as GESTURE_ACTIVE,oI as GESTURE_CANCEL,sI as GESTURE_IDLE,cI as TOUCH_HOLD_MS,lI as TOUCH_SLOP_PX,uI as continuousGestureRecognizersFacet,dI as createBlockGestureController,fI as enabledTouchAction,pI as suppressNextClick,mI as unionTouchAction,hI as useContinuousGestures}from"../../chunks/app-BFWtuLaS.js";

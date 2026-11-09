@@ -1,0 +1,1 @@
+export{cX as RAW_CHARACTER_COUNT_PROFILE_ID,lX as WORDS_COUNT_PROFILE_ID,uX as charLimitProp,dX as charProfileProp,fX as charScopeProp}from"../../../chunks/app-BFWtuLaS.js";

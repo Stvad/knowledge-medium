@@ -1,0 +1,1 @@
+export{MY as COMMENTS_PAGE_ALIAS,NY as commentsPageBlockId,PY as commentsPageSpec,FY as getOrCreateCommentsPage}from"../../../chunks/app-BFWtuLaS.js";

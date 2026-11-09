@@ -1,0 +1,1 @@
+export{JP as defaultRegistry,YP as defaultRendererContributions,XP as defaultRenderersExtension}from"../../chunks/app-BFWtuLaS.js";

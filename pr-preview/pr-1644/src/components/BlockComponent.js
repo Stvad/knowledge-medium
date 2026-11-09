@@ -1,0 +1,1 @@
+export{BP as BlockChildren,VP as BlockComponent}from"../../chunks/app-BFWtuLaS.js";

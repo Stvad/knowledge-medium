@@ -1,0 +1,1 @@
+export{Bw as usePromotableBreadcrumb}from"../../../chunks/app-BFWtuLaS.js";

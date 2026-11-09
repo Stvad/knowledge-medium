@@ -1,0 +1,1 @@
+export{XF as trimIfEdited}from"../../chunks/app-BFWtuLaS.js";

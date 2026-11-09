@@ -1,0 +1,1 @@
+export{GW as SuspenseFallback}from"../../../chunks/app-BFWtuLaS.js";

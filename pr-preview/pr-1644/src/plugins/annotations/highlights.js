@@ -1,0 +1,1 @@
+export{Fp as HIGHLIGHT_CLASS,Ip as MOVED_HIGHLIGHT_CLASS,Lp as SUGGESTION_HIGHLIGHT_CLASS,Rp as coveringStyle,zp as highlightClasses,Bp as highlightField,Vp as highlightRange,Hp as highlightRanges,Up as threadHighlights,Wp as threadHighlightsContribution}from"../../../chunks/app-BFWtuLaS.js";

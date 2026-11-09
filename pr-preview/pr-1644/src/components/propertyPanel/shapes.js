@@ -1,0 +1,1 @@
+export{mW as propertyShapeLabel}from"../../../chunks/app-BFWtuLaS.js";

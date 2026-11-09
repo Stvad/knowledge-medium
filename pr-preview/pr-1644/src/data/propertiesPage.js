@@ -1,0 +1,1 @@
+export{hrt as getOrCreatePropertiesPage,grt as propertiesPageBlockId,_rt as propertiesPageSpec}from"../../chunks/app-BFWtuLaS.js";

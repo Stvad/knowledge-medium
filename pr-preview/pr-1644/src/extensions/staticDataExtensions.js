@@ -1,0 +1,1 @@
+export{pG as staticDataExtensions}from"../../chunks/app-BFWtuLaS.js";

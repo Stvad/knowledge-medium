@@ -1,0 +1,1 @@
+export{W1 as TypeTagger,G1 as applyTypeTagInTx}from"../../chunks/app-BFWtuLaS.js";

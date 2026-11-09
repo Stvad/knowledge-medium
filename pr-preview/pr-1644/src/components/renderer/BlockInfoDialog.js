@@ -1,0 +1,1 @@
+export{KI as BlockInfoDialog}from"../../../chunks/app-BFWtuLaS.js";

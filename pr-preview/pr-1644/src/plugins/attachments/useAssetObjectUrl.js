@@ -1,0 +1,1 @@
+export{Bx as useAssetObjectUrl}from"../../../chunks/app-BFWtuLaS.js";

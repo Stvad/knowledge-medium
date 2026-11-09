@@ -1,0 +1,1 @@
+export{jL as canConvertEmptyChildBlockToProperty,ML as convertEmptyChildBlockToProperty}from"../../chunks/app-BFWtuLaS.js";

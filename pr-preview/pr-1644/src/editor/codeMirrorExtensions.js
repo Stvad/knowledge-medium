@@ -1,0 +1,1 @@
+export{Gq as codeMirrorExtensionsFacet}from"../../chunks/app-BFWtuLaS.js";

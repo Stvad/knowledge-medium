@@ -1,0 +1,1 @@
+export{cj as CommandPaletteHeaderItem}from"../../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{Bz as BlockProperties}from"../../chunks/app-BFWtuLaS.js";

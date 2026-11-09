@@ -1,0 +1,1 @@
+export{WN as gestureBindingDescriptor,GN as matchesGestureEvent}from"../../chunks/app-BFWtuLaS.js";

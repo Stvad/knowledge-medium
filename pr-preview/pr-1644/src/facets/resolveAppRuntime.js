@@ -1,0 +1,1 @@
+export{aP as resolveAppRuntime,oP as resolveAppRuntimeSync}from"../../chunks/app-BFWtuLaS.js";

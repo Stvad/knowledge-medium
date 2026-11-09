@@ -1,0 +1,1 @@
+export{SN as appUpdatePromptExtension}from"../../../chunks/app-BFWtuLaS.js";

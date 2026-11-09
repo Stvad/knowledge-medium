@@ -1,0 +1,1 @@
+export{KN as dispatchPointerAction,qN as setPointerActionDispatcher}from"../../chunks/app-BFWtuLaS.js";

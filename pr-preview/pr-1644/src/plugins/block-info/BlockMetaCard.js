@@ -1,0 +1,1 @@
+export{W_ as BlockMetaCard}from"../../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{jN as checkForAppUpdate,MN as registerServiceWorker}from"../chunks/app-BFWtuLaS.js";

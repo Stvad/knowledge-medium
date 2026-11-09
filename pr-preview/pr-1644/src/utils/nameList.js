@@ -1,0 +1,1 @@
+export{X3 as NAMES_IN_A_SENTENCE,Z3 as describeNames,Q3 as firstFew}from"../../chunks/app-BFWtuLaS.js";

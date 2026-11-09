@@ -1,0 +1,1 @@
+export{GX as pluginPrefsExtension,KX as pluginUIStateExtension}from"../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{qI as ExtensionRenderBoundary}from"../../chunks/app-BFWtuLaS.js";

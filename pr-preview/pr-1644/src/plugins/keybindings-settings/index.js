@@ -1,0 +1,1 @@
+export{TA as keybindingOverridesProp,EA as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-BFWtuLaS.js";

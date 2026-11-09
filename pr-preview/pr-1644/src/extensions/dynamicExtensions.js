@@ -1,0 +1,1 @@
+export{sP as dynamicExtensionsExtension}from"../../chunks/app-BFWtuLaS.js";

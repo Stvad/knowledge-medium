@@ -1,0 +1,1 @@
+export{$K as geoDataExtension}from"../../../chunks/app-BFWtuLaS.js";

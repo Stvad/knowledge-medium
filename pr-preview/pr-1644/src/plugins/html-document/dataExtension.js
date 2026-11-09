@@ -1,0 +1,1 @@
+export{wK as htmlDocumentDataExtension}from"../../../chunks/app-BFWtuLaS.js";

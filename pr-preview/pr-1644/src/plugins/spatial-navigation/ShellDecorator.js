@@ -1,0 +1,1 @@
+export{OC as SpatialNavigationShellDecorator}from"../../../chunks/app-BFWtuLaS.js";

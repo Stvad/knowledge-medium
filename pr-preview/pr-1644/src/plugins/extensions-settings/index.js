@@ -1,0 +1,1 @@
+export{Rm as extensionsOverridesProp,zm as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BFWtuLaS.js";

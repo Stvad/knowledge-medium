@@ -1,0 +1,1 @@
+export{oy as Wikilink}from"../../../../../chunks/app-BFWtuLaS.js";

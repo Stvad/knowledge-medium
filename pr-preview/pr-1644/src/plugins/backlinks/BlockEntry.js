@@ -1,0 +1,1 @@
+export{wv as LazyBlockEntry}from"../../../chunks/app-BFWtuLaS.js";

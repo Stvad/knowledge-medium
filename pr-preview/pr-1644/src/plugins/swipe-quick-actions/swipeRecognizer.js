@@ -1,0 +1,1 @@
+export{bj as SWIPE_QUICK_ACTIONS_GESTURE_ID,xj as SWIPE_TRIGGER_PX,Sj as swipeRecognizer}from"../../../chunks/app-BFWtuLaS.js";

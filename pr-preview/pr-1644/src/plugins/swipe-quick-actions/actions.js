@@ -1,0 +1,1 @@
+export{zj as DEFAULT_QUICK_ACTION_ITEMS,Bj as SWIPE_RIGHT_BLOCK_ACTION_ID,Vj as isQuickActionItem,Hj as quickActionItemsFacet}from"../../../chunks/app-BFWtuLaS.js";

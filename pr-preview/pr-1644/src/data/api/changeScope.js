@@ -1,0 +1,1 @@
+export{yct as CHANGE_SCOPE_POLICIES,bct as ChangeScope,xct as isChangeScope,Sct as policyForScope,Cct as scopeAllowedInReadOnly,wct as scopeIsUndoable,Tct as scopePoliciesEquivalent,Ect as scopeUploadsToServer,Dct as sourceForScope}from"../../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{Vy as useIsReadOnly}from"../../chunks/app-BFWtuLaS.js";

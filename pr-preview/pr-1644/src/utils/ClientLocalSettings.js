@@ -1,0 +1,1 @@
+export{rP as ClientLocalSettings,iP as clientLocalSettings}from"../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{zM as resolveStructuralEditPolicy,BM as structuralEditPolicyForBlock}from"../../chunks/app-BFWtuLaS.js";

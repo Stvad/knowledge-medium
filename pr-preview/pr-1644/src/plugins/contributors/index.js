@@ -1,0 +1,1 @@
+export{Gp as contributorsPlugin}from"../../../chunks/app-BFWtuLaS.js";

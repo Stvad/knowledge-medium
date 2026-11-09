@@ -1,0 +1,1 @@
+export{gb as richPastePlugin}from"../../../chunks/app-BFWtuLaS.js";

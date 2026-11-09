@@ -1,0 +1,1 @@
+export{Kg as boundDisplayId,qg as idMark}from"../../../../chunks/app-BFWtuLaS.js";

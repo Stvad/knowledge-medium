@@ -1,0 +1,1 @@
+export{DC as spatialNavigationShellDecorator}from"../../../chunks/app-BFWtuLaS.js";

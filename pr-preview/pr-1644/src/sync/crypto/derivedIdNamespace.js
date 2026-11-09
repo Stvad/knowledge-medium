@@ -1,0 +1,1 @@
+export{Yrt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BFWtuLaS.js";

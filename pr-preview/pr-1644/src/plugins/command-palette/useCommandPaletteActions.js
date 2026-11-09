@@ -1,0 +1,1 @@
+export{LA as useCommandPaletteActions}from"../../../chunks/app-BFWtuLaS.js";

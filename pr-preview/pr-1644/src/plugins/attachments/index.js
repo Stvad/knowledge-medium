@@ -1,0 +1,1 @@
+export{bb as attachmentsPlugin}from"../../../chunks/app-BFWtuLaS.js";

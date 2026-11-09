@@ -1,0 +1,1 @@
+export{uM as TypeChip}from"../../../chunks/app-BFWtuLaS.js";

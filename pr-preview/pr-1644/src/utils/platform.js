@@ -1,0 +1,1 @@
+export{ZH as isIOS,QH as isMacPlatform}from"../../chunks/app-BFWtuLaS.js";

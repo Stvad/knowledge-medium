@@ -1,0 +1,1 @@
+export{Jp as agentDispatchCompanionPlugin}from"../../../chunks/app-BFWtuLaS.js";

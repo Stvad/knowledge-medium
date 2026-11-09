@@ -1,0 +1,1 @@
+export{frt as getOrCreateTypesPage,prt as typesPageBlockId,mrt as typesPageSpec}from"../../chunks/app-BFWtuLaS.js";

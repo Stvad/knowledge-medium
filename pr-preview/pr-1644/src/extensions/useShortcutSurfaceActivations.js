@@ -1,0 +1,1 @@
+export{aR as useShortcutSurfaceActivations}from"../../chunks/app-BFWtuLaS.js";

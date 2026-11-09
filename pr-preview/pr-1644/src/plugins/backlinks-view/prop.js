@@ -1,0 +1,1 @@
+export{hv as DEFAULT_BACKLINKS_VIEW_ID,gv as FLAT_BACKLINKS_VIEW_ID,_v as GROUPED_BACKLINKS_VIEW_ID,vv as backlinksViewProp,yv as defaultBacklinksViewIdForBlock}from"../../../chunks/app-BFWtuLaS.js";

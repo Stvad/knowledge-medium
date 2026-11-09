@@ -1,0 +1,1 @@
+export{fB as declarationOnlyDefinitionForName,pB as declarationOnlyStatusText}from"../../../chunks/app-BFWtuLaS.js";

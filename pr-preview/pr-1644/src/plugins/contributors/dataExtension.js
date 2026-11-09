@@ -1,0 +1,1 @@
+export{IY as contributorsDataExtension}from"../../../chunks/app-BFWtuLaS.js";

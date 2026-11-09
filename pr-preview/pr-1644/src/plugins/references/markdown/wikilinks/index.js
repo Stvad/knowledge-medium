@@ -1,0 +1,1 @@
+export{ay as wikilinkMarkdownExtension}from"../../../../../chunks/app-BFWtuLaS.js";

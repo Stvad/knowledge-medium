@@ -1,0 +1,1 @@
+export{zI as useIsMobile,BI as usePointerCoarse}from"../../chunks/app-BFWtuLaS.js";

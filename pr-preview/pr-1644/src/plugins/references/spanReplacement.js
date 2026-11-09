@@ -1,0 +1,1 @@
+export{uK as preferredSpanReplacement}from"../../../chunks/app-BFWtuLaS.js";

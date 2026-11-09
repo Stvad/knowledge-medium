@@ -1,0 +1,1 @@
+export{tM as BlockEmbed}from"../../../chunks/app-BFWtuLaS.js";

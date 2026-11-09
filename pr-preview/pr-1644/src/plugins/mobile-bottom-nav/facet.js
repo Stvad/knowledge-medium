@@ -1,0 +1,1 @@
+export{Fw as mobileBottomNavItemsFacet}from"../../../chunks/app-BFWtuLaS.js";

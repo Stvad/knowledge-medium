@@ -1,0 +1,1 @@
+export{Uh as adoptTypedBlock,Wh as createTypedChild,Cit as derivedBlockId,Gh as getOrCreateTypedChild}from"../../chunks/app-BFWtuLaS.js";

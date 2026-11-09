@@ -1,0 +1,1 @@
+export{bn as HtmlFrame}from"../../../chunks/app-BFWtuLaS.js";

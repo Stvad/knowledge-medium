@@ -1,0 +1,1 @@
+export{yS as videoPlayerPlugin}from"../../../chunks/app-BFWtuLaS.js";

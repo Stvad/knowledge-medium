@@ -1,0 +1,1 @@
+export{S4 as Block,C4 as requireLoadedBlock}from"../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{aN as editorAutocompleteExtension}from"../../chunks/app-BFWtuLaS.js";

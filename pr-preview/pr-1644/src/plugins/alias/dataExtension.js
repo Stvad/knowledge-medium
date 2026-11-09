@@ -1,0 +1,1 @@
+export{IZ as aliasDataExtension}from"../../../chunks/app-BFWtuLaS.js";

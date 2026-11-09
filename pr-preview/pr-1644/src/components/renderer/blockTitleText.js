@@ -1,0 +1,1 @@
+export{WR as BLOCK_TITLE_TEXT_CLASS,GR as useBlockTitleTextClass}from"../../../chunks/app-BFWtuLaS.js";

@@ -1,0 +1,1 @@
+export{OM as ensureMetricsConsoleHook}from"../../chunks/app-BFWtuLaS.js";

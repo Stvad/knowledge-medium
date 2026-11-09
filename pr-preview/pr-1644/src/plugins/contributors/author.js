@@ -1,0 +1,1 @@
+export{wh as authorIdOf}from"../../../chunks/app-BFWtuLaS.js";

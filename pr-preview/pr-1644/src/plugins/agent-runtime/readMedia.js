@@ -1,0 +1,1 @@
+export{tg as readMedia}from"../../../chunks/app-BFWtuLaS.js";

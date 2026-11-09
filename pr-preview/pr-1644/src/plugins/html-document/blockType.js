@@ -1,0 +1,1 @@
+export{TK as htmlDocumentTypeSeed}from"../../../chunks/app-BFWtuLaS.js";

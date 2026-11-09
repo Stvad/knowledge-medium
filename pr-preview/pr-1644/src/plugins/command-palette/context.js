@@ -1,0 +1,1 @@
+export{UA as COMMAND_PALETTE_ACTION_ID,WA as COMMAND_PALETTE_CONTEXT,GA as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,KA as commandPaletteActionContext}from"../../../chunks/app-BFWtuLaS.js";
