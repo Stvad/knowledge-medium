@@ -593,9 +593,8 @@ const capturePointer = (element: HTMLElement, pointerId: number): void => {
 }
 
 /** How long a click swallow stays armed waiting for the synthesized click. The
- *  click follows `pointerup` within a frame; this generous window only matters
- *  as a self-disarm so a gesture that produced NO click can't eat a later real
- *  one. */
+ *  click follows `pointerup` within a frame. The window bounds the lifetime
+ *  of the listeners when neither a trailing click nor another press arrives. */
 const SUPPRESS_CLICK_WINDOW_MS = 400
 
 /**
@@ -605,21 +604,24 @@ const SUPPRESS_CLICK_WINDOW_MS = 400
  * that (a down can't know it will become a committed gesture, and it would also
  * kill focus/selection). So after a committed up-gesture we explicitly eat the
  * trailing click here, or it lands on the block / an interactive descendant
- * after the gesture action already ran. Capture + `stopPropagation` keeps it from
- * descendants; `once` disarms on the first click and the timeout disarms if none
- * is synthesized (desktop, or a browser that already suppressed it).
+ * after the gesture action already ran. Capture + `stopPropagation` keeps it
+ * from descendants. A fresh pointerdown disarms the guard before that press
+ * can produce its own click.
  */
 export const suppressNextClick = (element: HTMLElement): void => {
+  const disarm = (): void => {
+    clearTimeout(timeout)
+    element.removeEventListener('click', onClick, true)
+    element.removeEventListener('pointerdown', disarm, true)
+  }
   const onClick = (event: Event): void => {
+    disarm()
     event.preventDefault()
     event.stopPropagation()
   }
-  // `once` disarms on the first click; the timeout disarms if no click is
-  // synthesized (desktop, or a browser that already suppressed it) so a later
-  // real click isn't swallowed. If the click already fired, removeEventListener
-  // is a harmless no-op.
-  element.addEventListener('click', onClick, {capture: true, once: true})
-  setTimeout(() => element.removeEventListener('click', onClick, true), SUPPRESS_CLICK_WINDOW_MS)
+  const timeout = setTimeout(disarm, SUPPRESS_CLICK_WINDOW_MS)
+  element.addEventListener('click', onClick, true)
+  element.addEventListener('pointerdown', disarm, true)
 }
 
 /**

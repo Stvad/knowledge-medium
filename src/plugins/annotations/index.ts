@@ -19,9 +19,11 @@ import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
+import {quickActionItemsFacet} from '@/plugins/swipe-quick-actions/actions.js'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
 import {
   annotationActions,
+  COMMENT_ON_BLOCK_ACTION_ID,
   COMMENT_ON_SELECTION_ACTION_ID,
   keepSelectionOnClick,
   readSelectionContext,
@@ -70,6 +72,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   // Over the references plugin's reference layout, which it replaces for roots.
   blockLayoutFacet.of(quotedRangeLayoutContribution, {source: SOURCE, precedence: 10}),
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
+  quickActionItemsFacet.of({actionId: COMMENT_ON_BLOCK_ACTION_ID, label: 'Comment'}, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
   // After every other markdown extension (default precedence), so its
   // transform marks their nodes rather than splitting their tokens.
