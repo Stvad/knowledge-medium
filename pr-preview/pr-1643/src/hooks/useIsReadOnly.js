@@ -1,0 +1,1 @@
+export{ky as useIsReadOnly}from"../../chunks/app-DvVbBjTF.js";

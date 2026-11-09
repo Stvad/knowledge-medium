@@ -1,0 +1,1 @@
+export{AP as LazyBlockComponent}from"../../chunks/app-DvVbBjTF.js";

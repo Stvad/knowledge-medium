@@ -1,0 +1,1 @@
+export{cJ as annotationsDataExtension}from"../../../chunks/app-DvVbBjTF.js";

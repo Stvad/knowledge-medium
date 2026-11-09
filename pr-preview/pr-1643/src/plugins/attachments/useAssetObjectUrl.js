@@ -1,0 +1,1 @@
+export{Ox as useAssetObjectUrl}from"../../../chunks/app-DvVbBjTF.js";

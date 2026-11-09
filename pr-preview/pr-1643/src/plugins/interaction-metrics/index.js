@@ -1,0 +1,1 @@
+export{Ji as interactionMetricsPlugin}from"../../../chunks/app-DvVbBjTF.js";

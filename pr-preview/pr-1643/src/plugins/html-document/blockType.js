@@ -1,0 +1,1 @@
+export{cK as htmlDocumentTypeSeed}from"../../../chunks/app-DvVbBjTF.js";

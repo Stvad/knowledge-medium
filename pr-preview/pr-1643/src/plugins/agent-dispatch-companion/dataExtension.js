@@ -1,0 +1,1 @@
+export{nQ as agentDispatchCompanionDataExtension}from"../../../chunks/app-DvVbBjTF.js";

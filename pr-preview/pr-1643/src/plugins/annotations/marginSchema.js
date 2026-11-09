@@ -1,0 +1,1 @@
+export{pY as annotationMarginOpenProp,mY as annotationMarginWidthProp}from"../../../chunks/app-DvVbBjTF.js";

@@ -1,0 +1,1 @@
+export{ZU as propertyShapeLabel}from"../../../chunks/app-DvVbBjTF.js";

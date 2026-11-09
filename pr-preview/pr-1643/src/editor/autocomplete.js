@@ -1,0 +1,1 @@
+export{qM as editorAutocompleteExtension}from"../../chunks/app-DvVbBjTF.js";

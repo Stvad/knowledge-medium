@@ -1,0 +1,1 @@
+export{YN as dynamicExtensionsExtension}from"../../chunks/app-DvVbBjTF.js";

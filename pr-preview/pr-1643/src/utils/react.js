@@ -1,0 +1,1 @@
+export{SI as useIsMobile,CI as usePointerCoarse}from"../../chunks/app-DvVbBjTF.js";

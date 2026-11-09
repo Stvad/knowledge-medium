@@ -1,0 +1,1 @@
+export{uN as appUpdatePromptExtension}from"../../../chunks/app-DvVbBjTF.js";

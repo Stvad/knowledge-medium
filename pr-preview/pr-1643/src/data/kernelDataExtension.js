@@ -1,0 +1,1 @@
+export{c4 as kernelDataExtension}from"../../chunks/app-DvVbBjTF.js";

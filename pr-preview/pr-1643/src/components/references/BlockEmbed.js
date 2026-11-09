@@ -1,0 +1,1 @@
+export{Uj as BlockEmbed}from"../../../chunks/app-DvVbBjTF.js";

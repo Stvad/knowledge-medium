@@ -1,0 +1,1 @@
+export{Wa as propertiesMigrationPlugin}from"../../../chunks/app-DvVbBjTF.js";

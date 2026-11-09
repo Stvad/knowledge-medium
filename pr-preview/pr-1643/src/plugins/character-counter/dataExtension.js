@@ -1,0 +1,1 @@
+export{zY as characterCounterDataExtension}from"../../../chunks/app-DvVbBjTF.js";

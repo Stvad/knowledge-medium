@@ -1,0 +1,1 @@
+export{_st as definePostCommitProcessor}from"../../../chunks/app-DvVbBjTF.js";

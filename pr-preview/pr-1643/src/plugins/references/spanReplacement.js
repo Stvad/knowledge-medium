@@ -1,0 +1,1 @@
+export{qG as preferredSpanReplacement}from"../../../chunks/app-DvVbBjTF.js";

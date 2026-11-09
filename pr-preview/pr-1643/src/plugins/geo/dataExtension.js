@@ -1,0 +1,1 @@
+export{IK as geoDataExtension}from"../../../chunks/app-DvVbBjTF.js";

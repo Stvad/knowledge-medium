@@ -1,0 +1,1 @@
+export{Mrt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DvVbBjTF.js";

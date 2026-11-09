@@ -1,0 +1,1 @@
+export{XA as CommandPaletteHeaderItem}from"../../../chunks/app-DvVbBjTF.js";

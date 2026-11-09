@@ -1,0 +1,1 @@
+export{pD as useMinuteClock}from"../../chunks/app-DvVbBjTF.js";

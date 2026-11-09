@@ -1,0 +1,1 @@
+export{AI as ExtensionRenderBoundary}from"../../chunks/app-DvVbBjTF.js";

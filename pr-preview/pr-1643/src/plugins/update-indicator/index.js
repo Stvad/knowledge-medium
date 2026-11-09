@@ -1,0 +1,1 @@
+export{N_ as updateIndicatorPlugin}from"../../../chunks/app-DvVbBjTF.js";

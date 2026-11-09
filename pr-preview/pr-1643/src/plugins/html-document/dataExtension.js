@@ -1,0 +1,1 @@
+export{sK as htmlDocumentDataExtension}from"../../../chunks/app-DvVbBjTF.js";
