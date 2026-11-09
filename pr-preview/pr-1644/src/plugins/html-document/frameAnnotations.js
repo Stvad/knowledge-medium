@@ -1,1 +1,1 @@
-export{yn as AnnotatedFrame}from"../../../chunks/app-BFWtuLaS.js";
+export{yn as AnnotatedFrame}from"../../../chunks/app-Cxa6eITg.js";

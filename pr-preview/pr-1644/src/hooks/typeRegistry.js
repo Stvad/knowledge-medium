@@ -1,1 +1,1 @@
-export{YV as useTypes}from"../../chunks/app-BFWtuLaS.js";
+export{XV as useTypes}from"../../chunks/app-Cxa6eITg.js";

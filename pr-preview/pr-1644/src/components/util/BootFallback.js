@@ -1,1 +1,1 @@
-export{WW as BootFallback}from"../../../chunks/app-BFWtuLaS.js";
+export{GW as BootFallback}from"../../../chunks/app-Cxa6eITg.js";

@@ -1,1 +1,1 @@
-export{Lm as extensionsOverridesPresetCore,Rm as extensionsOverridesProp,zm as extensionsPrefsType,Bm as overridesCodec}from"../../../chunks/app-BFWtuLaS.js";
+export{Rm as extensionsOverridesPresetCore,zm as extensionsOverridesProp,Bm as extensionsPrefsType,Vm as overridesCodec}from"../../../chunks/app-Cxa6eITg.js";

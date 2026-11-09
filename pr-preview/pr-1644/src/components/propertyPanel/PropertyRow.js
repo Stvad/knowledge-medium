@@ -1,1 +1,1 @@
-export{Kz as PropertyRow}from"../../../chunks/app-BFWtuLaS.js";
+export{qz as PropertyRow}from"../../../chunks/app-Cxa6eITg.js";

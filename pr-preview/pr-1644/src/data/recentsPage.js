@@ -1,1 +1,1 @@
-export{x3 as getOrCreateRecentsPage,S3 as recentsPageBlockId,C3 as recentsPageSpec}from"../../chunks/app-BFWtuLaS.js";
+export{S3 as getOrCreateRecentsPage,C3 as recentsPageBlockId,w3 as recentsPageSpec}from"../../chunks/app-Cxa6eITg.js";

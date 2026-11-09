@@ -1,1 +1,1 @@
-export{qf as confirmThreadDeletion}from"../../../chunks/app-BFWtuLaS.js";
+export{Gf as confirmThreadDeletion}from"../../../chunks/app-Cxa6eITg.js";

@@ -1,1 +1,1 @@
-export{JP as defaultRegistry,YP as defaultRendererContributions,XP as defaultRenderersExtension}from"../../chunks/app-BFWtuLaS.js";
+export{YP as defaultRegistry,XP as defaultRendererContributions,ZP as defaultRenderersExtension}from"../../chunks/app-Cxa6eITg.js";

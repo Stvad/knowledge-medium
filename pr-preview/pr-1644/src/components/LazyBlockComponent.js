@@ -1,1 +1,1 @@
-export{HP as LazyBlockComponent}from"../../chunks/app-BFWtuLaS.js";
+export{UP as LazyBlockComponent}from"../../chunks/app-Cxa6eITg.js";

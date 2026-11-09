@@ -1,1 +1,1 @@
-export{pH as isPropertyPanelHiddenProperty,mH as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-BFWtuLaS.js";
+export{mH as isPropertyPanelHiddenProperty,hH as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-Cxa6eITg.js";

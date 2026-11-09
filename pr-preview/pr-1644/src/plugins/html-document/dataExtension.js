@@ -1,1 +1,1 @@
-export{wK as htmlDocumentDataExtension}from"../../../chunks/app-BFWtuLaS.js";
+export{TK as htmlDocumentDataExtension}from"../../../chunks/app-Cxa6eITg.js";
