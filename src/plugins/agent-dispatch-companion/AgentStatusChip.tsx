@@ -4,15 +4,15 @@
  *  channel: props sync reactively to every device, so this needs no
  *  daemon connection — it just makes the lifecycle visible.
  *
- *  Same gutter pattern as the inline backlink count badge: with no
- *  chip, content renders untouched (no wrapper). */
+ *  A top-right gutter item: `BlockGutterHost` places it, and with no chip
+ *  the item renders null. */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ClipboardCopy, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
-import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
+import type {
+  BlockGutterItem,
+  BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
 import {
@@ -38,10 +38,11 @@ const useElapsedLabel = (sinceMs: number | null): string | null => {
   return elapsedLabel(Math.max(0, Math.round((nowMs - sinceMs) / 1_000)))
 }
 
-/** One width for every state and every tick: the pill sits in the block's row,
- *  so any change in its width re-wraps the block's text. Anything variable
- *  (the run's activity, a long executor name) goes in the title and the menu. */
-const CHIP_CLASS = 'group mt-0.5 inline-flex h-4 w-24 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1 text-xs leading-none text-muted-foreground'
+/** One width for every state and every tick: the pill sits in the block's
+ *  gutter, so any change in its width re-wraps the block's text. Anything
+ *  variable (the run's activity, a long executor name) goes in the title and
+ *  the menu. */
+const CHIP_CLASS = 'group inline-flex h-4 w-24 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1 text-xs leading-none text-muted-foreground'
 
 const ChipLabel = ({children}: {children: ReactNode}) => (
   <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>
@@ -157,13 +158,7 @@ const AgentStatusChipMenu = ({
  *  daemon's claim writing real props. */
 const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
 
-const AgentStatusChipRow = ({
-  block,
-  Inner,
-}: {
-  block: Block
-  Inner: BlockRenderer
-}) => {
+const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const propsChip = useHandle(block, {
     selector: doc => {
       const properties = doc?.properties as Record<string, unknown> | undefined
@@ -179,27 +174,16 @@ const AgentStatusChipRow = ({
   }, [propsChip, block.id])
 
   const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
-  if (!chip) return <Inner block={block} />
+  if (!chip) return null
 
-  return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      <AgentStatusChipMenu chip={chip} block={block} />
-    </div>
-  )
+  return <AgentStatusChipMenu chip={chip} block={block} />
 }
 
-const decorate = cachedContentDecorator(AgentStatusChipRow, 'WithAgentStatusChip')
+const statusChipItem: BlockGutterItem = {corner: 'top-right', component: AgentStatusChipItem}
 
-/** The chip is a block-level pill in the right gutter, so it attaches on
- *  every surface that renders the block as a full row — the outline,
- *  backlink entries, and embeds — where run status is genuinely useful
- *  (a page's backlink list is exactly where you review what the daemon
- *  just picked up, and a bare mention there otherwise shows no status).
- *  It's suppressed only where the block renders as inline text or a
- *  compact path preview — an inline `((reference))` or a breadcrumb
- *  segment — because a full-width gutter row can't lay out there. */
-export const agentStatusChipContribution: BlockContentDecoratorContribution = (ctx) =>
-  ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb ? null : decorate
+/** On every surface that renders the block as a full row — the outline,
+ *  backlink entries, and embeds — where run status is genuinely useful (a
+ *  page's backlink list is exactly where you review what the daemon just
+ *  picked up, and a bare mention there otherwise shows no status). Inline
+ *  references and breadcrumbs get no gutter at all (`BlockGutterHost`). */
+export const agentStatusChipContribution: BlockGutterItemContribution = () => statusChipItem
