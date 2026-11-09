@@ -918,6 +918,21 @@ describe.each(selectedEngines())('%s', engine => {
       for (const mark of await drawn()) expect(mark).toMatchObject({text, in: owner})
     })
 
+    it('draws no marks once the document\'s text is not the source\'s', async () => {
+      const source = '<p id="a">alpha</p><p id="b">beta</p>'
+      await mountHeld(host, source)
+      // What an edit, or the browser building other nodes, does: one more node ahead of the mark's.
+      await documentFrame(host).evaluate(() => {
+        const added = document.createElement('p')
+        added.textContent = 'gamma'
+        document.body.prepend(added)
+      })
+      await host.page.evaluate(([held, sent]) => window.mountSandboxed(held, 'hold', sent),
+        [source, marksOf(source, [quote(source, 'beta')])] as const)
+      await settle(host)
+      expect(await drawn()).toEqual([])
+    })
+
     it('draws marks only from the app, not from another frame on the page', async () => {
       const source = '<p>one two</p>'
       await mountHeld(host, source)
