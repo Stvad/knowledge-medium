@@ -1,1 +1,1 @@
-export{Bk as SEED_THREAD_DESCRIPTION,Vk as seedTutorial}from"../../../chunks/app-PtQjndca.js";
+export{Bk as seedTutorial}from"../../../chunks/app-B9piQVj9.js";

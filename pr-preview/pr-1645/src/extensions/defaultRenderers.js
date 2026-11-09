@@ -1,1 +1,1 @@
-export{HP as defaultRegistry,UP as defaultRendererContributions,WP as defaultRenderersExtension}from"../../chunks/app-PtQjndca.js";
+export{VP as defaultRegistry,HP as defaultRendererContributions,UP as defaultRenderersExtension}from"../../chunks/app-B9piQVj9.js";

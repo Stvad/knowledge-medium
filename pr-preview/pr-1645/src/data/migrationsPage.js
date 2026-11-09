@@ -1,1 +1,1 @@
-export{$tt as MIGRATIONS_PAGE_ALIAS,ent as getOrCreateMigrationsPage,tnt as migrationsPageBlockId,nnt as migrationsPageSpec}from"../../chunks/app-PtQjndca.js";
+export{Qtt as MIGRATIONS_PAGE_ALIAS,$tt as getOrCreateMigrationsPage,ent as migrationsPageBlockId,tnt as migrationsPageSpec}from"../../chunks/app-B9piQVj9.js";
