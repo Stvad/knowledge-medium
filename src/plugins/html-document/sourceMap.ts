@@ -58,7 +58,7 @@ const offsetsOf = (source: string, from: number, to: number, value: string): num
   let at = from
   while (at < to) {
     const reference = source[at] === '&' ? referenceAt(source, at) : null
-    if (reference && at + reference.length <= to) {
+    if (reference) {
       offsets.push(at, ...Array<number>(reference.text.length - 1).fill(-1))
       decoded += reference.text
       at += reference.length

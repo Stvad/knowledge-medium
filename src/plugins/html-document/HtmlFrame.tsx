@@ -54,15 +54,20 @@ export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}:
     if (target && target === ready.current) target.postMessage(message, '*')
   }, [])
 
+  /** The one way marks leave: the latest committed, and never to a running
+   *  document. */
+  const sendMarks = useCallback(() => {
+    const {marks: held} = latest.current
+    if (held) post({type: MARKS_MESSAGE_TYPE, marks: held})
+  }, [post])
+
   useImperativeHandle(ref, () => ({clearSelection: () => post({type: CLEAR_SELECTION_MESSAGE_TYPE})}), [post])
 
   useLayoutEffect(() => {
     latest.current = {marks: sent, onSelection}
   })
 
-  useEffect(() => {
-    if (sent) post({type: MARKS_MESSAGE_TYPE, marks: sent})
-  }, [post, sent])
+  useEffect(sendMarks, [sendMarks, sent])
 
   // A new document starts with no selection.
   useEffect(() => () => latest.current.onSelection?.(null), [srcDoc])
@@ -79,8 +84,7 @@ export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}:
       if (!source || event.source !== source) return
       if (isReadyMessage(event.data)) {
         ready.current = source
-        const {marks: held} = latest.current
-        if (held) source.postMessage({type: MARKS_MESSAGE_TYPE, marks: held}, '*')
+        sendMarks()
         return
       }
       const selection = readReportedSelection(event.data)
@@ -101,7 +105,7 @@ export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}:
       window.removeEventListener('message', onMessage)
       if (scheduled !== undefined) cancelAnimationFrame(scheduled)
     }
-  }, [])
+  }, [sendMarks])
 
   return (
     <iframe

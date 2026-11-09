@@ -121,13 +121,19 @@ describe('AnnotatedFrame', () => {
     expect(screen.queryByRole('toolbar')).toBeNull()
   })
 
-  it('hands the frame the surface\'s highlights, and never an older source\'s', async () => {
+  it('hands the frame the surface\'s highlights, none once they are gone, and never an older source\'s', async () => {
     const surface = surfaceRunning(async () => true, highlightTwo)
     const {rerender} = renderWith(surface)
     await waitFor(() => expect(frame.props?.marks).toEqual([
       {start: {node: 0, offset: 4}, end: {node: 0, offset: 7}, kind: 'comment'},
     ]))
 
+    const resolved = surfaceRunning(async () => true)
+    rerender(<AnnotationSurfaceContext value={resolved}><AnnotatedFrame source={SOURCE} scripts="hold"/></AnnotationSurfaceContext>)
+    expect(frame.props?.marks).toEqual([])
+
+    rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={SOURCE} scripts="hold"/></AnnotationSurfaceContext>)
+    await waitFor(() => expect(frame.props?.marks).toHaveLength(1))
     const edited = `<p>zero</p>${SOURCE}`
     rerender(<AnnotationSurfaceContext value={surface}><AnnotatedFrame source={edited} scripts="hold"/></AnnotationSurfaceContext>)
     expect(frame.props?.marks).toEqual([])
