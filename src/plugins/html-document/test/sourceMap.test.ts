@@ -118,8 +118,8 @@ describe('rangeOfSelection', () => {
         .toEqual({from: SOURCE.indexOf('once'), to: SOURCE.indexOf('once') + 4})
     })
 
-    it('refuses text the source repeats, whichever occurrence the frame names', () => {
-      expect(rangeOfSelection(spans, at('same', 0, 2), 'run')).toMatch(/scripts run/)
+    it('refuses text the source repeats, even once a script left one copy in the frame', () => {
+      expect(rangeOfSelection(spans, at('same', 0, 1), 'run')).toMatch(/scripts run/)
     })
 
     it('refuses text a script repeated in the frame', () => {
