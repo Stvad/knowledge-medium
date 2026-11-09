@@ -21,12 +21,7 @@ const useSourceMap = (wanted: boolean): SourceMap | null => {
   const [map, setMap] = useState(loadedSourceMap)
   useEffect(() => {
     if (!wanted || map) return
-    let live = true
-    loadSourceMap().then(
-      loaded => { if (live) setMap(loaded) },
-      (error: unknown) => console.error('html-document: could not load the source map', error),
-    )
-    return () => { live = false }
+    loadSourceMap().then(setMap, (error: unknown) => console.error('html-document: could not load the source map', error))
   }, [wanted, map])
   return map
 }
