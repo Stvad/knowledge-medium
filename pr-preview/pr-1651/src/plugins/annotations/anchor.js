@@ -1,0 +1,1 @@
+export{IJ as ANCHOR_CONTEXT_LENGTH,LJ as captureAnchor,RJ as recaptureAnchor,zJ as resolveAnchor,BJ as widenToReferenceSpans,VJ as widenToSpans}from"../../../chunks/app-Bs5OhObR.js";

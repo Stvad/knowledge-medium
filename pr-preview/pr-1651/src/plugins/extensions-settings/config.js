@@ -1,0 +1,1 @@
+export{zm as extensionsOverridesPresetCore,Bm as extensionsOverridesProp,Vm as extensionsPrefsType,Hm as overridesCodec}from"../../../chunks/app-Bs5OhObR.js";

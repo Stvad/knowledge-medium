@@ -1,0 +1,1 @@
+export{EA as adoptTypedBlock,DA as createTypedChild,Ait as derivedBlockId,OA as getOrCreateTypedChild}from"../../chunks/app-Bs5OhObR.js";

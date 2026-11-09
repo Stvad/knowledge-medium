@@ -1,0 +1,1 @@
+export{ib as attachmentsPlugin}from"../../../chunks/app-Bs5OhObR.js";

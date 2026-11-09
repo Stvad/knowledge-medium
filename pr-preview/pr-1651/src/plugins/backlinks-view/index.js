@@ -1,0 +1,1 @@
+export{I_ as backlinksViewPlugin}from"../../../chunks/app-Bs5OhObR.js";

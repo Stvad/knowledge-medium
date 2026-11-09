@@ -1,0 +1,1 @@
+export{IG as referencesDataExtension}from"../../../chunks/app-Bs5OhObR.js";

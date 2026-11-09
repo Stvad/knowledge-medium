@@ -1,0 +1,1 @@
+export{Vst as definePostCommitProcessor}from"../../../chunks/app-Bs5OhObR.js";
