@@ -18,8 +18,8 @@ import {
 } from './outline'
 
 /**
- * Seeds the starter Tutorial subtree on a freshly-created personal
- * workspace. Three parent-less pages are written in one tx:
+ * Seeds the starter Tutorial subtree. Three parent-less pages are written in
+ * one tx:
  *
  *   - `Tutorial` (default / non-vim variant; the landing target — vim is
  *     off by default, so this matches the shipped keymap)
@@ -34,82 +34,59 @@ import {
  * resolver prepends on first run; the vim variant is reachable from a
  * cross-link bullet at the top of the default Tutorial.
  *
- * All inserts run in a single `repo.tx` so the whole subtree appears
- * atomically AND the cross-page wiki links resolve correctly — every
- * alias row exists before `parseReferences` (the post-commit processor)
- * runs against the bullets that reference the other pages. Returns the
- * id of the default Tutorial so callers can use it as a tutorial-first
- * landing target.
+ * The pages share one tx so the subtree appears atomically AND the
+ * cross-page wiki links resolve correctly — every alias row exists before
+ * `parseReferences` (the post-commit processor) runs against the bullets
+ * that reference the other pages. Returns the id of the default Tutorial so
+ * callers can use it as a tutorial-first landing target.
  *
- * The comment-thread demos (a node's `thread`) go in after that tx, through
- * the annotations plugin's own `createThread`: a thread's anchor is checked
- * against its target as committed, and the Comments page is that plugin's to
- * create. They are decoration on a tutorial that already exists, so a failure
- * there is logged rather than thrown — the caller still lands on the page.
+ * The comment-thread demos (a node's `thread`) go in after that tx, each in
+ * its own, through the annotations plugin's `createThread`: a thread's anchor
+ * is checked against its target as committed, and the Comments page is that
+ * plugin's to create. They are decoration on a tutorial that already exists,
+ * so a failure there is logged rather than thrown — the caller still lands on
+ * the page. Deleting the tutorial leaves its threads on the Comments page,
+ * shown as on a deleted block: annotations has no target-delete cascade.
  *
- * The typed demos (todo / char-counter / srs / place / map) tag themselves
- * against `repo.snapshotTypeRegistries()` — the Repo's live registry. Those
- * plugin types are installed onto the Repo at construction via
- * `staticDataExtensions`, so they're present here even though this runs at
- * bootstrap, before the React app runtime is applied.
+ * All of it is one undo step, so undoing right after landing removes the
+ * tutorial whole rather than one demo thread at a time.
+ *
+ * The typed demos (todo / char-counter / word-counter / srs / place / map /
+ * html-document) tag themselves against `repo.snapshotTypeRegistries()` — the
+ * Repo's live registry. Those plugin types are installed onto the Repo at
+ * construction via `staticDataExtensions`, so they're present here even
+ * though this runs at bootstrap, before the React app runtime is applied.
  */
-export const seedTutorial = async (
+export const seedTutorial = (
   repo: Repo,
   workspaceId: string,
-): Promise<string> => {
-  const vimTutorialId = uuidv4()
+): Promise<string> => repo.undoGroup(async repo => {
   const defaultTutorialId = uuidv4()
-  const extensionsPageId = uuidv4()
-
-  // Three parent-less pages; their root order keys don't really matter
-  // (parent=null means no canonical sibling list) but `tx.create`
-  // requires one.
-  const [vimKey, defaultKey, extensionsKey] = keysBetween(null, null, 3)
-  const threads: SeededThread[] = []
+  const pages: SeedPage[] = [
+    { id: uuidv4(), title: TUTORIAL_VIM_TITLE, children: tutorialOutline('vim') },
+    { id: defaultTutorialId, title: TUTORIAL_DEFAULT_TITLE, children: tutorialOutline('default') },
+    { id: uuidv4(), title: EXTENSIONS_PAGE_TITLE, children: extensionsPageOutline() },
+  ]
+  // Parent-less pages: their root order keys don't really matter (parent=null
+  // means no canonical sibling list) but `tx.create` requires one.
+  const orderKeys = keysBetween(null, null, pages.length)
+  const context: SeedContext = { workspaceId, threads: [] }
 
   await repo.tx(
     async tx => {
-      await seedPage(repo, tx, {
-        id: vimTutorialId,
-        workspaceId,
-        orderKey: vimKey,
-        title: TUTORIAL_VIM_TITLE,
-        aliases: [TUTORIAL_VIM_TITLE],
-        children: tutorialOutline('vim'),
-        threads,
-      })
-      await seedPage(repo, tx, {
-        id: defaultTutorialId,
-        workspaceId,
-        orderKey: defaultKey,
-        title: TUTORIAL_DEFAULT_TITLE,
-        aliases: [TUTORIAL_DEFAULT_TITLE],
-        children: tutorialOutline('default'),
-        threads,
-      })
-      await seedPage(repo, tx, {
-        id: extensionsPageId,
-        workspaceId,
-        orderKey: extensionsKey,
-        title: EXTENSIONS_PAGE_TITLE,
-        aliases: [EXTENSIONS_PAGE_TITLE],
-        children: extensionsPageOutline(),
-        threads,
-      })
+      for (const [i, page] of pages.entries()) await seedPage(repo, tx, context, page, orderKeys[i])
     },
     { scope: ChangeScope.BlockDefault, description: 'seed tutorial' },
   )
 
   try {
-    for (const thread of threads) await seedThread(repo, thread)
+    for (const thread of context.threads) await seedThread(repo, thread)
   } catch (error) {
     console.error('[onboarding] seeding the tutorial\'s demo comments failed', error)
   }
 
   return defaultTutorialId
-}
-
-export const SEED_THREAD_DESCRIPTION = 'seed tutorial comment'
+})
 
 interface SeededThread extends TutorialThread {
   targetId: string
@@ -122,40 +99,44 @@ const seedThread = async (
 ): Promise<void> => {
   const anchor = recaptureAnchor(targetContent, targetContent.indexOf(quote), quote)
   if (!anchor) throw new Error(`tutorial thread quote is not plain text of its block: ${quote}`)
-  await createThread(repo, {targetId, anchor, comment, replacement}, {description: SEED_THREAD_DESCRIPTION})
+  await createThread(repo, {targetId, anchor, comment, replacement}, {description: 'seed tutorial comment'})
 }
 
-interface SeedPageArgs {
-  id: string
+interface SeedContext {
   workspaceId: string
-  orderKey: string
-  title: string
-  aliases: string[]
-  children: ReadonlyArray<TutorialNode>
   /** Collects the nodes' demo threads, written once the pages are committed. */
   threads: SeededThread[]
+}
+
+/** A page's title is also its only alias. */
+interface SeedPage {
+  id: string
+  title: string
+  children: ReadonlyArray<TutorialNode>
 }
 
 const seedPage = async (
   repo: Repo,
   tx: Tx,
-  args: SeedPageArgs,
+  context: SeedContext,
+  page: SeedPage,
+  orderKey: string,
 ): Promise<void> => {
   await tx.create({
-    id: args.id,
-    workspaceId: args.workspaceId,
+    id: page.id,
+    workspaceId: context.workspaceId,
     parentId: null,
-    orderKey: args.orderKey,
-    content: args.title,
+    orderKey,
+    content: page.title,
   })
-  await repo.addTypeInTx(tx, args.id, PAGE_TYPE, { [aliasesProp.name]: args.aliases })
-  await seedChildren(repo, tx, args, args.id, args.children)
+  await repo.addTypeInTx(tx, page.id, PAGE_TYPE, { [aliasesProp.name]: [page.title] })
+  await seedChildren(repo, tx, context, page.id, page.children)
 }
 
 const seedChildren = async (
   repo: Repo,
   tx: Tx,
-  page: Pick<SeedPageArgs, 'workspaceId' | 'threads'>,
+  context: SeedContext,
   parentId: string,
   nodes: ReadonlyArray<TutorialNode>,
 ): Promise<void> => {
@@ -166,7 +147,7 @@ const seedChildren = async (
     const id = node.id ?? uuidv4()
     await tx.create({
       id,
-      workspaceId: page.workspaceId,
+      workspaceId: context.workspaceId,
       parentId,
       orderKey: keys[i],
       content: node.content,
@@ -175,9 +156,9 @@ const seedChildren = async (
     if (node.type) {
       await repo.addTypeInTx(tx, id, node.type, node.typeProperties ?? {})
     }
-    if (node.thread) page.threads.push({...node.thread, targetId: id, targetContent: node.content})
+    if (node.thread) context.threads.push({...node.thread, targetId: id, targetContent: node.content})
     if (node.children && node.children.length > 0) {
-      await seedChildren(repo, tx, page, id, node.children)
+      await seedChildren(repo, tx, context, id, node.children)
     }
   }
 }

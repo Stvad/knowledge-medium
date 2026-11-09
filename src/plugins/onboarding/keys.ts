@@ -58,6 +58,9 @@ export const vimKeys = {
   toggleThreads: '`Ctrl+Shift+M` (with the block focused or while editing it)',
   // `htmlDocument.insert-example` is bound in NORMAL_MODE and EDIT_MODE_CM.
   insertHtmlExample: 'focus a block (or edit one) and run **Insert example HTML document** from the command palette',
+  // A click on the strip's "Edit source" falls through to the block's own
+  // click, which vim turns into focus-only.
+  editHtmlSource: 'double-click **Edit source** in its strip (or focus the document and press `i`)',
   askAgent: 'run **Ask Agent about this block** from the command palette with the block focused',
 }
 
@@ -80,7 +83,7 @@ export const defaultKeys: TutorialKeys = {
   jumpMany: '',
   moveBlock: 'while editing, `Cmd+Shift+↑` / `Cmd+Shift+↓` (with several blocks selected, the same chord moves the whole selection)',
   startSelect: 'While editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
-  delete: 'select it (or several — see **Select many blocks**) and press `Delete`; `Backspace` at the start of an empty block removes it, and at the start of a non-empty one merges its text into the block above',
+  delete: 'select it (or several — see **Select many blocks**) and press `Delete` or `Backspace`; `Backspace` at the start of an empty block removes it, and at the start of a non-empty one merges its text into the block above',
   // `cut_block` (one focused block) is NORMAL_MODE; without vim the cut is
   // the multi-select one.
   cut: 'select the blocks (see above) and press `Cmd+X` or `d`',
@@ -104,7 +107,8 @@ export const defaultKeys: TutorialKeys = {
   commentOnBlock: 'right-click its bullet → **Comment**, or edit it and press `Ctrl+Shift+/` with nothing selected',
   toggleThreads: '`Ctrl+Shift+M` while editing the block',
   insertHtmlExample: 'edit any block and run **Insert example HTML document** from the command palette',
-  askAgent: 'edit the block and run **Ask Agent about this block** from the command palette',
+  editHtmlSource: 'click **Edit source** in its strip',
+  askAgent: 'edit the block and run **Ask Agent about this block (Edit Mode)** from the command palette',
 }
 
 export const sharedKeys = {

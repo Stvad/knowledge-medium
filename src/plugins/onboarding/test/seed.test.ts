@@ -13,6 +13,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -30,12 +31,14 @@ import { MAP_TYPE, PLACE_TYPE } from '@/plugins/geo/blockTypes'
 import { placeLatProp } from '@/plugins/geo/properties'
 import { resolveAnchor } from '@/plugins/annotations/anchor'
 import { THREAD_TYPE, threadAnchorOf, threadReplacementOf, threadTargetIdOf } from '@/plugins/annotations/schema'
-import { SEED_THREAD_DESCRIPTION, seedTutorial } from '../seed'
+import { seedTutorial } from '../seed'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import {
   EXTENSIONS_PAGE_TITLE,
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
+  tutorialOutline,
+  type TutorialNode,
 } from '../outline'
 import { TUTORIAL_TYPE_EXTENSIONS } from './tutorialTypeExtensions'
 import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
@@ -71,6 +74,18 @@ const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
   return rows.map(r => r.id)
 }
+
+const threadRootsIn = async (h: TestDb, repo: Repo) => {
+  const ids = await listAllBlockIds(h)
+  for (const id of ids) await repo.load(id)
+  return ids.map(id => repo.block(id)).filter(b => b.hasType(THREAD_TYPE)).map(b => b.peek()!)
+}
+
+const demoComments = (nodes: readonly TutorialNode[]): string[] =>
+  nodes.flatMap(node => [
+    ...(node.thread?.comment ? [node.thread.comment] : []),
+    ...demoComments(node.children ?? []),
+  ])
 
 const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<string | null> => {
   for (const id of await listAllBlockIds(h)) {
@@ -197,16 +212,19 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   })
 
   it('writes the pages in a single tx', async () => {
-    const rows = await env.h.db.getAll<{ count: number }>(
-      "SELECT COUNT(*) AS count FROM command_events WHERE description = 'seed tutorial'",
-    )
-    expect(rows[0]?.count).toBe(1)
+    const rows = await env.h.db.getAll<{ description: string | null }>('SELECT description FROM command_events')
+    expect(rows.filter(row => row.description === 'seed tutorial')).toHaveLength(1)
+    // The pages' tx, the Comments page annotations creates for the first
+    // thread, and one tx per demo thread: a split page write adds a row.
+    expect(rows).toHaveLength(1 + 1 + 4)
+  })
+
+  it('leaves one undo step for the whole seed', () => {
+    expect(env.repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(1)
   })
 
   it('starts a demo comment thread and a demo edit suggestion in each variant, anchored exactly', async () => {
-    const ids = await listAllBlockIds(env.h)
-    for (const id of ids) await env.repo.load(id)
-    const roots = ids.map(id => env.repo.block(id)).filter(b => b.hasType(THREAD_TYPE)).map(b => b.peek()!)
+    const roots = await threadRootsIn(env.h, env.repo)
     expect(roots).toHaveLength(4)
 
     for (const root of roots) {
@@ -216,11 +234,11 @@ describe('seedTutorial', {timeout: 30_000}, () => {
       if (anchor.kind === 'range') expect(resolveAnchor(target.content, anchor).state).toBe('exact')
     }
     expect(roots.map(threadReplacementOf).filter(Boolean)).toEqual(['receive', 'receive'])
-    const threadTxs = await env.h.db.getAll<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM command_events WHERE description = ?',
-      [SEED_THREAD_DESCRIPTION],
-    )
-    expect(threadTxs[0]?.count).toBe(4)
+
+    const [comment] = demoComments(tutorialOutline('default'))
+    const firstComments = await Promise.all(roots.filter(root => !threadReplacementOf(root)).map(async root =>
+      (await env.repo.block(root.id).childIds.load()).map(id => env.repo.block(id).peek()?.content)))
+    expect(firstComments).toEqual([[comment], [comment]])
   })
 
   // The seed runs at bootstrap against the Repo's construction-time registry,
@@ -281,6 +299,7 @@ describe('seedTutorial into a workspace with a properties-migration mode', {time
     const allIds = await listAllBlockIds(env.h)
     for (const id of allIds) await env.repo.load(id)
     const blocks = allIds.map(id => env.repo.block(id))
+    expect(await threadRootsIn(env.h, env.repo)).toHaveLength(4)
     for (const [extension, property] of [['hello-renderer', 'user:hello'], ['split-layout', 'user:layout']]) {
       const demo = blocks.find(b => b.peek()?.content.startsWith(`Try it: enable \`${extension}\``))
       expect(demo?.peek()?.content).toContain(property)

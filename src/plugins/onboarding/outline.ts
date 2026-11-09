@@ -154,7 +154,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     sect('Select many blocks', [
       `${km.startSelect}.`,
       'With the mouse: `Shift`+click a block to extend the selection to it, `Cmd`+click to add or remove a single block.',
-      'Once a selection exists, the block keys act on all of it — vim or not: `Tab` / `Shift+Tab` indent, `z` folds, `t` toggles properties, `y` (or `Cmd+C`) copies, `d` (or `Cmd+X`) cuts, `Delete` deletes, `p` / `Shift+P` paste after / before, and `Cmd+Shift+↑` / `Cmd+Shift+↓` move the whole selection. Dragging any selected bullet moves them all.',
+      'Once a selection exists, the block keys act on all of it — vim or not: `Tab` / `Shift+Tab` indent, `z` folds, `t` toggles properties, `y` (or `Cmd+C`) copies, `d` (or `Cmd+X`) cuts, `Delete` (or `Backspace`) deletes, `p` / `Shift+P` paste after / before, and `Cmd+Shift+↑` / `Cmd+Shift+↓` move the whole selection. Dragging any selected bullet moves them all.',
       `Cut moves blocks rather than deleting them: ${km.cut}. The blocks stay where they are, dimmed, until you paste — then they move there. They are the same blocks, so every reference to them keeps working. Copy something else meanwhile and nothing moves; undo before your next edit takes the cut back.`,
       `Paste: ${km.paste}.`,
       'Send blocks somewhere else entirely: run **Move selected blocks to…** from the command palette while a selection is active, or right-click any bullet → **Move to…** for the single-block version. A destination picker opens; the whole move is one undo step.',
@@ -226,7 +226,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Panels sit side by side. Each has its own focused block, zoom level and edit state — opening something in a new panel means you keep what you were looking at.',
       htmlDocument(linkClicksDocument),
       `Try those on this link → [[extensions]]. Right-clicking a link offers the same choices as a menu. In quick find (${sharedKeys.quickFind}) the modifiers apply to \`Enter\`: \`Shift+Alt+Enter\` opens a new panel, \`Shift+Enter\` the sidebar stack.`,
-      `Open the focused block in the sidebar stack: ${sharedKeys.openInPanel}. Close the current panel: ${sharedKeys.closePanel}.${km.panelKeysNote}`,
+      `Open the focused block in the sidebar stack: ${sharedKeys.openInPanel}. Close the current panel: ${sharedKeys.closePanel} — or its close button, since a Linux/Windows browser tab may keep that chord for itself.${km.panelKeysNote}`,
       `Need the whole window for one panel? With more than one panel open, the maximize button in the panel's corner — or ${sharedKeys.maximizePanel}${km.panelKeysNote ? ' (the same caveat applies)' : ''} — toggles maximize. The other panels are kept and come back when you toggle again; browser Back (\`Cmd+[\`) also steps out of it.`,
       'Resize columns by dragging the divider between two of them; double-click a divider to even them out.',
       `Move between panels: ${km.panelHop}.`,
@@ -261,7 +261,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Suggest an edit: select the text, press ${sharedKeys.suggest}, type the replacement (and why, if you like), then **Suggest**. Anyone reading it can **Accept**, which edits the block in one undo step, or **Reject**.`,
       'Quote part of a block somewhere else: right-click selected rendered text → **Copy reference** (while editing: **Copy reference to selection** in the command palette), then paste. It shows as the quoted words, linked to their source, and the thread lists every place it is **Quoted in**.',
       `Read threads inline — click a block's pill, or press ${km.toggleThreads} — or in the margin: run **Toggle comments margin** from the command palette (or click **Show in margin** under a thread) to see every thread beside the text, on a wide enough panel. Drag the margin's edge to resize it.`,
-      'Threads are kept as blocks on the **Comments (km)** page, created with your first comment.',
+      'Threads are kept as blocks on the **Comments (km)** page.',
     ]),
 
     sect('Typed blocks — behaviour from a tag', [
@@ -330,8 +330,8 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       },
       'Scripts wait until you allow them — for that version of the document, on this device: edit its source and it asks again, and **Stop scripts** halts them. A document never sees your notes, but once its scripts run they can capture what you type and reach the network, which is what the prompt asks you to accept.',
       `Make one: ${km.insertHtmlExample} — it adds a bread-hydration calculator under the block. Or tag any block \`#\` → **HTML document** and write the page as its text.`,
-      'Edit a document by clicking **Edit source** in its strip; leaving the editor reloads the page with your changes.',
-      'Colour a document with the app\'s theme variables — `hsl(var(--primary))`, `hsl(var(--muted-foreground))`, `hsl(var(--border))` and the rest — and it follows the light or dark theme. Open **Edit source** on any document here to see them in use.',
+      `Edit a document: ${km.editHtmlSource}. Leaving the editor reloads the page with your changes.`,
+      'Colour a document with the app\'s theme variables — `hsl(var(--primary))`, `hsl(var(--muted-foreground))`, `hsl(var(--border))` and the rest — and it follows the light or dark theme. The source of any document here shows them in use.',
       'Keep page links in the blocks around a document: a link inside one can\'t open your blocks, and its text isn\'t read for references.',
     ]),
 

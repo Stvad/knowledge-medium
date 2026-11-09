@@ -1344,9 +1344,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
     // Not a per-block fan-out: one guarded, confirmed batch delete.
+    // Backspace too: it is the key a Mac laptop labels delete.
     {
       ...makeMultiSelect(deleteBlockAction),
       handler: deleteSelectedBlocks,
+      defaultBinding: {keys: ['Delete', 'Backspace']},
     },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
