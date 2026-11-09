@@ -35,6 +35,8 @@ import {
   type BlockBelowContentContribution,
   type BlockContentDecoratorContribution,
   type BlockContextMenuItemsContribution,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
@@ -163,7 +165,25 @@ export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean):
 const useInMargin = ({panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}): boolean =>
   useMarginShowing(panelId) && isPanelRenderScopeId(renderScopeId ?? '')
 
-const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+/** The surface an outline block's text sits in: its read-mode selection menu
+ *  and the highlights of the threads anchored in it. */
+const CommentSurface = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const highlights = useHighlightFeed(block)
+  const surface = useAnnotationSurfaceFor(block, highlights)
+  return (
+    <ReadSelectionMenu block={block}>
+      <div>
+        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+          <AnnotationSurfaceContext value={surface}>
+            <Inner block={block}/>
+          </AnnotationSurfaceContext>
+        </MarkdownInputProvider>
+      </div>
+    </ReadSelectionMenu>
+  )
+}
+
+const CommentPill: BlockRenderer = ({block}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
   const key = viewKey(blockContext.renderScopeId, block.id)
@@ -184,31 +204,17 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     activateThread(panelId!, click.threadId)
   }
   const count = pillCount(threads)
+  if (count === null && !expanded) return null
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
-  const highlights = useHighlightFeed(block)
-  const surface = useAnnotationSurfaceFor(block, highlights)
   return (
-    <div className="flex w-full items-start gap-1">
-      <ReadSelectionMenu block={block}>
-        <div className="min-w-0 flex-1">
-          <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-            <AnnotationSurfaceContext value={surface}>
-              <Inner block={block}/>
-            </AnnotationSurfaceContext>
-          </MarkdownInputProvider>
-        </div>
-      </ReadSelectionMenu>
-      {(count !== null || expanded) && (
-        <GutterPill
-          count={count}
-          expanded={expanded}
-          onClick={event => { event.stopPropagation(); onPill() }}
-          label={label}
-          icon={MessageSquare}
-          tone="amber"
-        />
-      )}
-    </div>
+    <GutterPill
+      count={count}
+      expanded={expanded}
+      onClick={event => { event.stopPropagation(); onPill() }}
+      label={label}
+      icon={MessageSquare}
+      tone="amber"
+    />
   )
 }
 
@@ -232,10 +238,15 @@ const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): Anno
   }), [block, renderScopeId, feed.threads])
 }
 
-const decoratePill = cachedContentDecorator(CommentPill, 'WithCommentPill')
+const decorateSurface = cachedContentDecorator(CommentSurface, 'WithCommentSurface')
 
-export const commentPillContribution: BlockContentDecoratorContribution = ctx =>
-  appliesToOutlineBlock(ctx) ? decoratePill : null
+export const commentSurfaceContribution: BlockContentDecoratorContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? decorateSurface : null
+
+const commentPillItem: BlockGutterItem = {corner: 'top-right', component: CommentPill}
+
+export const commentPillContribution: BlockGutterItemContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? commentPillItem : null
 
 // ──── Inline expansion ────
 
