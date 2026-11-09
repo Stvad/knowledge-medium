@@ -1,1 +1,1 @@
-export{fy as BLOCK_HOLD_GESTURE,py as BLOCK_HOLD_RECOGNIZER_ID,my as blockHoldRecognizer}from"../../../chunks/app-Cr8NI7S5.js";
+export{fy as BLOCK_HOLD_GESTURE,py as BLOCK_HOLD_RECOGNIZER_ID,my as blockHoldRecognizer}from"../../../chunks/app-dmdRujRT.js";

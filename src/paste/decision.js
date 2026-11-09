@@ -1,1 +1,1 @@
-export{YL as defaultPasteDecision,XL as pasteDecisionVerb}from"../../chunks/app-Cr8NI7S5.js";
+export{YL as defaultPasteDecision,XL as pasteDecisionVerb}from"../../chunks/app-dmdRujRT.js";

@@ -1,1 +1,1 @@
-export{wx as useAssetObjectUrl}from"../../../chunks/app-Cr8NI7S5.js";
+export{wx as useAssetObjectUrl}from"../../../chunks/app-dmdRujRT.js";
