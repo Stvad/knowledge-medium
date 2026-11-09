@@ -5,7 +5,7 @@ import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
-import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
+import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
@@ -787,7 +787,7 @@ describe('mention lifecycle', () => {
         content: '[[claude]] cursed',
         properties: {
           [PROPS.status]: 'running',
-          [PROPS.updatedAt]: NOW - 60 * 60_000,
+          [PROPS.updatedAt]: NOW - STALE_RUNNING_MS,
           [PROPS.attempts]: MAX_ATTEMPTS,
         },
       }},
@@ -813,7 +813,7 @@ describe('mention lifecycle', () => {
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Reply write is broken; the terminal status must still land so the
@@ -836,7 +836,7 @@ describe('mention lifecycle', () => {
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Between the tick snapshot and the park, the ambient session marks it done.
