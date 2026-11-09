@@ -1,1 +1,1 @@
-export{Im as extensionApiCatalog,Lm as extensionApiRuntimeExports}from"../../chunks/app-Cxa6eITg.js";
+export{Lm as extensionApiCatalog,Rm as extensionApiRuntimeExports}from"../../chunks/app-Dm4d_soo.js";

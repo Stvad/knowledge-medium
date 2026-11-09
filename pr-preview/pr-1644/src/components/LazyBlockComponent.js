@@ -1,1 +1,1 @@
-export{UP as LazyBlockComponent}from"../../chunks/app-Cxa6eITg.js";
+export{WP as LazyBlockComponent}from"../../chunks/app-Dm4d_soo.js";

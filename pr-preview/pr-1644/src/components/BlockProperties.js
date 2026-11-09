@@ -1,1 +1,1 @@
-export{Vz as BlockProperties}from"../../chunks/app-Cxa6eITg.js";
+export{Hz as BlockProperties}from"../../chunks/app-Dm4d_soo.js";
