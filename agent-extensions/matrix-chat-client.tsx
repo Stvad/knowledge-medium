@@ -1,9 +1,9 @@
 import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
-  blockContentDecoratorsFacet,
-  type BlockContentDecorator,
-  type BlockContentDecoratorContribution,
+  blockGutterItemsFacet,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import {
   diagnosticsFacet,
@@ -1313,11 +1313,7 @@ const firstHttpUrl = (value: unknown): string | null => {
 }
 
 const matrixAudioStyles = {
-  wrapper: {position: 'relative', width: '100%'},
   link: {
-    position: 'absolute',
-    top: '1px',
-    right: '1px',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1354,52 +1350,31 @@ const AudioGlyph = () => (
   </svg>
 )
 
-const MatrixAudioDecorator = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+const MatrixAudioLink: BlockRenderer = ({block}) => {
   const audioUrl = useHandle(block, {
     selector: data => firstHttpUrl(data?.properties?.[AUDIO_URL_KEY]),
   })
+  if (!audioUrl) return null
   return (
-    <div style={matrixAudioStyles.wrapper}>
-      <Inner block={block}/>
-      {audioUrl && (
-        <a
-          href={audioUrl}
-          target='_blank'
-          rel='noreferrer'
-          title='Open audio'
-          aria-label='Open audio'
-          style={matrixAudioStyles.link}
-          onClick={event => event.stopPropagation()}
-          onMouseDown={event => event.stopPropagation()}
-        >
-          <AudioGlyph/>
-        </a>
-      )}
-    </div>
+    <a
+      href={audioUrl}
+      target='_blank'
+      rel='noreferrer'
+      title='Open audio'
+      aria-label='Open audio'
+      style={matrixAudioStyles.link}
+      onClick={event => event.stopPropagation()}
+      onMouseDown={event => event.stopPropagation()}
+    >
+      <AudioGlyph/>
+    </a>
   )
 }
 
-// Cached per inner renderer so React keeps a stable component identity and
-// never unmounts the inner subtree on a parent re-render (same invariant the
-// other decorators rely on).
-const matrixAudioDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+const matrixAudioItem: BlockGutterItem = {corner: 'top-right', component: MatrixAudioLink}
 
-const decorateMatrixAudio: BlockContentDecorator = inner => {
-  const existing = matrixAudioDecoratorCache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({block}) => (
-    <MatrixAudioDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithMatrixAudio'
-  matrixAudioDecoratorCache.set(inner, Decorated)
-  return Decorated
-}
-
-const matrixAudioContentDecorator: BlockContentDecoratorContribution = ctx => {
-  if (!ctx.types.includes(MATRIX_MESSAGE_TYPE)) return null
-  if (ctx.blockContext?.isBreadcrumb) return null
-  return decorateMatrixAudio
-}
+const matrixAudioGutterItem: BlockGutterItemContribution = ctx =>
+  ctx.types.includes(MATRIX_MESSAGE_TYPE) ? matrixAudioItem : null
 
 // ---------------------------------------------------------------------------
 // wiring
@@ -1428,7 +1403,7 @@ export default [
   appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
   appEffectsFacet.of(matrixIngestEffect, {source}),
 
-  blockContentDecoratorsFacet.of(matrixAudioContentDecorator, {source}),
+  blockGutterItemsFacet.of(matrixAudioGutterItem, {source}),
 
   actionsFacet.of(openSettingsAction, {source}),
   actionsFacet.of(connectAction, {source}),
