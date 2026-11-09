@@ -1,0 +1,1 @@
+export{wx as useAssetObjectUrl}from"../../../chunks/app-BIXeeDey.js";

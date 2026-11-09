@@ -1,0 +1,1 @@
+export{ZN as gestureBindingDescriptor,QN as matchesGestureEvent}from"../../chunks/app-BIXeeDey.js";

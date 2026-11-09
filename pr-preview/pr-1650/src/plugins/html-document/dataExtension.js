@@ -1,0 +1,1 @@
+export{jK as htmlDocumentDataExtension}from"../../../chunks/app-BIXeeDey.js";

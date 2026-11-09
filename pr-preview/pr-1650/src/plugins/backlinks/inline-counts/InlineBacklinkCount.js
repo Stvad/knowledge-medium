@@ -1,0 +1,1 @@
+export{G_ as inlineBacklinkCountDecoratorContribution,K_ as inlineBacklinkExpansionContribution}from"../../../../chunks/app-BIXeeDey.js";

@@ -1,0 +1,1 @@
+export{RN as checkForAppUpdate,zN as registerServiceWorker}from"../chunks/app-BIXeeDey.js";

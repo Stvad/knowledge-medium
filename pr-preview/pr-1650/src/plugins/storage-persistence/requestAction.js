@@ -1,0 +1,1 @@
+export{Is as requestPersistenceActionContribution}from"../../../chunks/app-BIXeeDey.js";

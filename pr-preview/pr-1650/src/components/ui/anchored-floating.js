@@ -1,0 +1,1 @@
+export{hW as floatingAnchorFromRect,gW as useAnchoredFloating}from"../../../chunks/app-BIXeeDey.js";

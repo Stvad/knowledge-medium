@@ -1,0 +1,1 @@
+export{Gn as characterCountDecoratorContribution}from"../../../chunks/app-BIXeeDey.js";

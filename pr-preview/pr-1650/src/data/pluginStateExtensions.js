@@ -1,0 +1,1 @@
+export{QX as pluginPrefsExtension,$X as pluginUIStateExtension}from"../../chunks/app-BIXeeDey.js";

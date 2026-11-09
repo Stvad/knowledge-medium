@@ -1,0 +1,1 @@
+export{b4 as applySyncInvalidation}from"../../../../chunks/app-BIXeeDey.js";

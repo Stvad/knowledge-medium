@@ -1,0 +1,1 @@
+export{gd as getExtraRoamProps}from"../../../chunks/app-BIXeeDey.js";

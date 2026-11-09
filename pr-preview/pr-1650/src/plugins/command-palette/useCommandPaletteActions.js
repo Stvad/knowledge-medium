@@ -1,0 +1,1 @@
+export{WA as useCommandPaletteActions}from"../../../chunks/app-BIXeeDey.js";

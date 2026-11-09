@@ -1,0 +1,1 @@
+export{_K as preferredSpanReplacement}from"../../../chunks/app-BIXeeDey.js";

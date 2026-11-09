@@ -1,0 +1,1 @@
+export{vw as MobileBottomNavButton}from"../../../chunks/app-BIXeeDey.js";

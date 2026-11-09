@@ -1,0 +1,1 @@
+export{nit as deriveWorkspaceIdNamespace}from"../../../chunks/app-BIXeeDey.js";

@@ -1,0 +1,1 @@
+export{qp as contributorsPlugin}from"../../../chunks/app-BIXeeDey.js";

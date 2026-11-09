@@ -1,0 +1,1 @@
+export{X6 as mergeProperties}from"../../chunks/app-BIXeeDey.js";

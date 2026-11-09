@@ -1,0 +1,1 @@
+export{Ort as createSyncResolver,krt as uploadModeFor}from"../../../chunks/app-BIXeeDey.js";

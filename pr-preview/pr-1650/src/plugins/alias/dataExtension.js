@@ -1,0 +1,1 @@
+export{UZ as aliasDataExtension}from"../../../chunks/app-BIXeeDey.js";

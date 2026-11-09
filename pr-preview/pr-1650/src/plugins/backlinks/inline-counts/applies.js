@@ -1,0 +1,1 @@
+export{X_ as inlineBacklinksApplies}from"../../../../chunks/app-BIXeeDey.js";

@@ -1,0 +1,1 @@
+export{k_ as updateIndicatorPlugin}from"../../../chunks/app-BIXeeDey.js";
