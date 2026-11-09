@@ -1,1 +1,1 @@
-export{VP as rehypeTrimBlockSeparators}from"../../chunks/app-DvVbBjTF.js";
+export{VP as rehypeTrimBlockSeparators}from"../../chunks/app-BwiQkMAB.js";

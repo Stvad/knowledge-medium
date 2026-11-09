@@ -1,1 +1,1 @@
-export{ky as useIsReadOnly}from"../../chunks/app-DvVbBjTF.js";
+export{ky as useIsReadOnly}from"../../chunks/app-BwiQkMAB.js";

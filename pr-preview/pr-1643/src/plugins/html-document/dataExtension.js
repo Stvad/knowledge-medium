@@ -1,1 +1,1 @@
-export{sK as htmlDocumentDataExtension}from"../../../chunks/app-DvVbBjTF.js";
+export{cK as htmlDocumentDataExtension}from"../../../chunks/app-BwiQkMAB.js";

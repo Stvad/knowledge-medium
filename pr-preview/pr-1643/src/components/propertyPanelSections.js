@@ -1,1 +1,1 @@
-export{Gz as buildPropertyPanelSections}from"../../chunks/app-DvVbBjTF.js";
+export{Kz as buildPropertyPanelSections}from"../../chunks/app-BwiQkMAB.js";
