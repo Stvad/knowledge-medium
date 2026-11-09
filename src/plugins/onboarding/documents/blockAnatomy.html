@@ -1,0 +1,69 @@
+<!doctype html>
+<title>Anatomy of a block</title>
+<style>
+  body { margin: 12px 14px; line-height: 1.45; font-size: 14px; }
+  h3 { margin: 0 0 10px; font-size: 1rem; }
+  .outline { padding: 10px 12px; border-radius: var(--radius); background: hsl(var(--muted) / .45); }
+  .row { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; }
+  .row.child { margin-left: 26px; }
+  .chev { width: 14px; color: hsl(var(--muted-foreground)); text-align: center; flex: none; }
+  .bullet { width: 14px; height: 20px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .bullet i { display: block; width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--foreground)); }
+  .bullet.page i { width: 8px; height: 8px; background: none; border: 1.5px solid hsl(var(--foreground)); }
+  .bullet.folded i { box-shadow: 0 0 0 4px hsl(var(--muted-foreground) / .35); }
+  .text { flex: 1; min-width: 0; }
+  .link { color: hsl(var(--wikilink)); }
+  .chip { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-size: 12px; background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
+  .pills { display: flex; gap: 4px; flex: none; }
+  .pill { display: inline-flex; align-items: center; gap: 2px; height: 16px; min-width: 16px; padding: 0 4px; border-radius: 999px; font-size: 11px; justify-content: center; }
+  .pill.refs { background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
+  .pill.comments { background: light-dark(#fef3c7, rgb(120 53 15 / .4)); color: light-dark(#78350f, #fef3c7); }
+  .n { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 2px; border-radius: 50%; font-size: 10px; font-weight: 700; vertical-align: 1px; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+  ol { margin: 12px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+  li { display: flex; gap: 6px; padding: 3px 6px; border-radius: calc(var(--radius) - 2px); }
+  li:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+  li b { font-weight: 600; }
+  li .n { flex: none; margin: 2px 0 0; }
+  [data-part] { border-radius: 4px; transition: box-shadow 120ms; }
+  body:has(li[data-for="1"]:hover) [data-part="1"],
+  body:has(li[data-for="2"]:hover) [data-part="2"],
+  body:has(li[data-for="3"]:hover) [data-part="3"],
+  body:has(li[data-for="4"]:hover) [data-part="4"],
+  body:has(li[data-for="5"]:hover) [data-part="5"],
+  body:has(li[data-for="6"]:hover) [data-part="6"],
+  body:has(li[data-for="7"]:hover) [data-part="7"],
+  body:has(li[data-for="8"]:hover) [data-part="8"],
+  body:has(li[data-for="9"]:hover) [data-part="9"] { box-shadow: 0 0 0 2px hsl(var(--ring)); }
+</style>
+
+<h3>Anatomy of a block</h3>
+<div class="outline" aria-hidden="true">
+  <div class="row">
+    <span class="chev" data-part="2">▾</span>
+    <span class="bullet" data-part="1"><i></i></span>
+    <span class="text" data-part="3">Plan the trip to <span class="link" data-part="4">Lisbon</span><span class="chip" data-part="5">#project</span></span>
+    <span class="pills"><span class="pill refs" data-part="6">3</span><span class="pill comments" data-part="7">💬 1</span></span>
+  </div>
+  <div class="row child">
+    <span class="chev"></span>
+    <span class="bullet page" data-part="8"><i></i></span>
+    <span class="text">Packing list</span>
+  </div>
+  <div class="row child">
+    <span class="chev"></span>
+    <span class="bullet folded" data-part="9"><i></i></span>
+    <span class="text">Places to eat</span>
+  </div>
+</div>
+
+<ol>
+  <li data-for="1"><span class="n">1</span><span><b>Bullet.</b> Click it to zoom in, so the block fills the panel. Drag it to move the block. Right-click it for the block's menu. (On touch, hold it, then drag or let go.)</span></li>
+  <li data-for="2"><span class="n">2</span><span><b>Chevron.</b> Appears on hover when a block has children. Click to fold or unfold them.</span></li>
+  <li data-for="3"><span class="n">3</span><span><b>Text.</b> Click to edit (with vim mode on: double-click, or press <code>i</code>). Markdown works: bold, lists, tables, code.</span></li>
+  <li data-for="4"><span class="n">4</span><span><b>Link.</b> <code>&#91;&#91;Lisbon]]</code> links to the page named Lisbon, and creates it if it doesn't exist.</span></li>
+  <li data-for="5"><span class="n">5</span><span><b>Type.</b> <code>#project</code> gives the block a type. Some types add behaviour, like a checkbox.</span></li>
+  <li data-for="6"><span class="n">6</span><span><b>References.</b> How many other blocks link here. Click to list them under the block.</span></li>
+  <li data-for="7"><span class="n">7</span><span><b>Comments.</b> Open comment threads on the block. Click to read and reply.</span></li>
+  <li data-for="8"><span class="n">8</span><span><b>Ring.</b> A hollow bullet marks a page. Pages nest like any other block.</span></li>
+  <li data-for="9"><span class="n">9</span><span><b>Halo.</b> A folded block whose children are hidden.</span></li>
+</ol>
