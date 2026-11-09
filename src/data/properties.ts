@@ -139,6 +139,25 @@ export const panelMaximizedProp = seedProperty({
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
 
+/** A top-level layout column's share of the layout's width, as a grid `fr`
+ *  weight, on the column's row: the panel's, or its stack's. Absent ≡ 1, an
+ *  equal share. Not in the layout URL: the URL says what is open, and this is
+ *  how it is arranged on this device. */
+export const layoutColumnWeightProp = seedProperty({
+  seedKey: 'system:kernel-data/property/layout-column-weight',
+  revision: 1,
+  name: 'layoutColumnWeight',
+  preset: 'optional-number',
+  changeScope: ChangeScope.UiState,
+})
+
+/** Lenient, like `isPanelRowMaximized`: a malformed weight costs the column
+ *  its width, not the layout its render. */
+export const layoutColumnWeight = (row: Pick<BlockData, 'properties'>): number => {
+  const weight = safeDecodeRowProperty(row, layoutColumnWeightProp)
+  return weight !== undefined && Number.isFinite(weight) && weight > 0 ? weight : 1
+}
+
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
  *  this ONE helper — a stray empty-string write must never make two
@@ -763,6 +782,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   scrollTopProp,
   panelViewModeProp,
   panelMaximizedProp,
+  layoutColumnWeightProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,

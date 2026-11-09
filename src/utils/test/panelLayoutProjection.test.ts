@@ -32,6 +32,8 @@ import { keysBetween } from '@/data/orderKey'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  layoutColumnWeight,
+  layoutColumnWeightProp,
   panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
@@ -49,6 +51,7 @@ import {
   deletePanelRow,
   insertPanelRow,
   insertSidebarStackedPanel,
+  isPanelStackRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -1066,6 +1069,66 @@ describe('layoutSlotsFromRows normalization', () => {
     expect(result.kind).toBe('noop')
     const idsAfter = (await layoutRows()).map(row => row.id).sort()
     expect(idsAfter).toEqual(idsBefore) // the stack row silently survives
+  })
+})
+
+describe('stack rows across a reconcile', () => {
+  const stackIds = async () => (await layoutRows()).filter(isPanelStackRow).map(row => row.id)
+
+  it('keeps the row of a stack whose panels stay together when a pane changes content', async () => {
+    await applyUrl('#ws-1/a/x,b/c')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/a/x,d/c')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'x', 'd', 'c'])
+  })
+
+  it('keeps the row of a stack when a column is opened before it', async () => {
+    await applyUrl('#ws-1/a/x,b')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/n/a/x,b')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'n'},
+      {kind: 'leaf', blockId: 'a'},
+      {kind: 'stack', children: [{kind: 'leaf', blockId: 'x'}, {kind: 'leaf', blockId: 'b'}]},
+    ])
+  })
+
+  it('makes a new row for a stack whose panels were in none', async () => {
+    await applyUrl('#ws-1/a/b/c')
+
+    await applyUrl('#ws-1/a,b/c')
+
+    expect(await stackIds()).toHaveLength(1)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'b', 'c'])
+  })
+
+  it('deletes the row of a stack its panels left', async () => {
+    await applyUrl('#ws-1/x,b/c')
+
+    await applyUrl('#ws-1/x/b/c')
+
+    expect(await stackIds()).toEqual([])
+    expect(panelBlockIds(await rows())).toEqual(['x', 'b', 'c'])
+  })
+})
+
+describe('layout column weights', () => {
+  it('gives a stack wrapped around a column that column\'s width', async () => {
+    await createPanelRows(['a', 'b'])
+    const bRow = await rowFor('b')
+    await env.repo.tx(tx => tx.setProperty(bRow, layoutColumnWeightProp, 2),
+      {scope: ChangeScope.UiState, description: 'set column weight'})
+
+    await insertSidebarStackedPanel(env.repo, layoutSessionBlock(), 'n', {sourcePanelId: await rowFor('a')})
+
+    const stack = (await layoutRows()).find(isPanelStackRow)
+    expect(stack && layoutColumnWeight(stack)).toBe(2)
   })
 })
 
