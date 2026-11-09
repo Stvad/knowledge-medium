@@ -1,1 +1,1 @@
-export{lc as appVersion}from"../chunks/app-dmdRujRT.js";
+export{lc as appVersion}from"../chunks/app-T-raHsDh.js";
