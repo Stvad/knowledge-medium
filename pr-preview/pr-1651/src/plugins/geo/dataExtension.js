@@ -1,1 +1,0 @@
-export{oq as geoDataExtension}from"../../../chunks/app-Bs5OhObR.js";

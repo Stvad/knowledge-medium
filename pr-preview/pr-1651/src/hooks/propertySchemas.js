@@ -1,1 +1,0 @@
-export{_W as usePropertySchemas}from"../../chunks/app-Bs5OhObR.js";

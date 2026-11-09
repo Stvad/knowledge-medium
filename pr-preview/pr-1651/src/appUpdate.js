@@ -1,1 +1,0 @@
-export{BN as appUpdate,VN as useAppUpdateAvailable}from"../chunks/app-Bs5OhObR.js";

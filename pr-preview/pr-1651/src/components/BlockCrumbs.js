@@ -1,1 +1,0 @@
-export{ID as BlockCrumbs}from"../../chunks/app-Bs5OhObR.js";

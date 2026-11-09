@@ -1,1 +1,0 @@
-export{qp as contributorsPlugin}from"../../../chunks/app-Bs5OhObR.js";

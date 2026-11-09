@@ -1,1 +1,0 @@
-export{_M as TypeChip}from"../../../chunks/app-Bs5OhObR.js";

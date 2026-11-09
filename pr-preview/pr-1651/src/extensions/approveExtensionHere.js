@@ -1,1 +1,0 @@
-export{wN as approveExtensionHere}from"../../chunks/app-Bs5OhObR.js";

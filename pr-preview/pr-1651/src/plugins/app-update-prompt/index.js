@@ -1,1 +1,0 @@
-export{kN as appUpdatePromptExtension}from"../../../chunks/app-Bs5OhObR.js";

@@ -1,1 +1,0 @@
-export{M4 as kernelDataExtension}from"../../chunks/app-Bs5OhObR.js";

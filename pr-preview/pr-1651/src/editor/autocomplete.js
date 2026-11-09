@@ -1,1 +1,0 @@
-export{fN as editorAutocompleteExtension}from"../../chunks/app-Bs5OhObR.js";

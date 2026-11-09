@@ -1,1 +1,0 @@
-export{UZ as aliasDataExtension}from"../../../chunks/app-Bs5OhObR.js";

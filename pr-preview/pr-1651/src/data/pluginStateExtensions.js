@@ -1,1 +1,0 @@
-export{QX as pluginPrefsExtension,$X as pluginUIStateExtension}from"../../chunks/app-Bs5OhObR.js";

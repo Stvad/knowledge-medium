@@ -1,1 +1,0 @@
-export{uP as ClientLocalSettings,dP as clientLocalSettings}from"../../chunks/app-Bs5OhObR.js";
