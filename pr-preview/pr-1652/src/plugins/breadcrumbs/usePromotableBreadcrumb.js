@@ -1,1 +1,0 @@
-export{ww as usePromotableBreadcrumb}from"../../../chunks/app-CPT_cdVG.js";

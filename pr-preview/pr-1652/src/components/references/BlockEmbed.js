@@ -1,1 +1,0 @@
-export{cM as BlockEmbed}from"../../../chunks/app-CPT_cdVG.js";

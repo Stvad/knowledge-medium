@@ -1,1 +1,0 @@
-export{YP as LazyBlockComponent}from"../../chunks/app-CPT_cdVG.js";

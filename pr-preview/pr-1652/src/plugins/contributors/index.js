@@ -1,1 +1,0 @@
-export{qp as contributorsPlugin}from"../../../chunks/app-CPT_cdVG.js";

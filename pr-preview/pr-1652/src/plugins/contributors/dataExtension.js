@@ -1,1 +1,0 @@
-export{UY as contributorsDataExtension}from"../../../chunks/app-CPT_cdVG.js";

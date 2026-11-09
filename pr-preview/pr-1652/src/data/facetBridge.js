@@ -1,1 +1,0 @@
-export{W1 as FacetBridge}from"../../chunks/app-CPT_cdVG.js";

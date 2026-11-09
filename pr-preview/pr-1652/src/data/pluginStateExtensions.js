@@ -1,1 +1,0 @@
-export{QX as pluginPrefsExtension,$X as pluginUIStateExtension}from"../../chunks/app-CPT_cdVG.js";

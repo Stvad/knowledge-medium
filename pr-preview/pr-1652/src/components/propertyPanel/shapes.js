@@ -1,1 +1,0 @@
-export{xW as propertyShapeLabel}from"../../../chunks/app-CPT_cdVG.js";

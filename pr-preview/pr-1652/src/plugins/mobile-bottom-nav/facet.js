@@ -1,1 +1,0 @@
-export{yw as mobileBottomNavItemsFacet}from"../../../chunks/app-CPT_cdVG.js";

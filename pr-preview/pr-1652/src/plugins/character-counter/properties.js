@@ -1,1 +1,0 @@
-export{hX as RAW_CHARACTER_COUNT_PROFILE_ID,gX as WORDS_COUNT_PROFILE_ID,_X as charLimitProp,vX as charProfileProp,yX as charScopeProp}from"../../../chunks/app-CPT_cdVG.js";

@@ -1,1 +1,0 @@
-export{qz as BlockProperties}from"../../chunks/app-CPT_cdVG.js";

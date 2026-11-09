@@ -1,1 +1,0 @@
-export{ib as attachmentsPlugin}from"../../../chunks/app-CPT_cdVG.js";

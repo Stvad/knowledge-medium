@@ -1,1 +1,0 @@
-export{Gn as characterCountDecoratorContribution}from"../../../chunks/app-CPT_cdVG.js";

@@ -1,1 +1,0 @@
-export{vw as MobileBottomNavButton}from"../../../chunks/app-CPT_cdVG.js";

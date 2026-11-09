@@ -1,1 +1,0 @@
-export{XQ as omnilinerNamespace}from"../../chunks/app-CPT_cdVG.js";

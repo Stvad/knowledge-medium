@@ -1,1 +1,0 @@
-export{bG as staticDataExtensions}from"../../chunks/app-CPT_cdVG.js";

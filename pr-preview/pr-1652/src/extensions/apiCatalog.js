@@ -1,1 +1,0 @@
-export{Lm as extensionApiCatalog,Rm as extensionApiRuntimeExports}from"../../chunks/app-CPT_cdVG.js";
