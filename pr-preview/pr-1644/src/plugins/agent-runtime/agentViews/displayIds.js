@@ -1,1 +1,0 @@
-export{Jg as boundDisplayId,Yg as idMark}from"../../../../chunks/app-Dm4d_soo.js";

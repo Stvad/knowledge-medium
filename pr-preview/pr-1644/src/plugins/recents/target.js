@@ -1,1 +1,0 @@
-export{kD as openRecentsPage}from"../../../chunks/app-Dm4d_soo.js";

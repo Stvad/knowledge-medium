@@ -1,1 +1,0 @@
-export{Gh as adoptTypedBlock,Kh as createTypedChild,Tit as derivedBlockId,qh as getOrCreateTypedChild}from"../../chunks/app-Dm4d_soo.js";

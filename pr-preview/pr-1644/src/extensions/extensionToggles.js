@@ -1,1 +1,0 @@
-export{hP as extensionDisplayName,gP as extensionName,_P as userExtensionShellToggle,vP as userExtensionToggle}from"../../chunks/app-Dm4d_soo.js";

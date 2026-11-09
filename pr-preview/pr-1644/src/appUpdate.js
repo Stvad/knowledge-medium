@@ -1,1 +1,0 @@
-export{FN as appUpdate,IN as useAppUpdateAvailable}from"../chunks/app-Dm4d_soo.js";

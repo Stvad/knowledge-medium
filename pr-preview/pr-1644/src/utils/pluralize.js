@@ -1,1 +1,0 @@
-export{X3 as agree,Z3 as pluralize}from"../../chunks/app-Dm4d_soo.js";

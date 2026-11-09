@@ -1,1 +1,0 @@
-export{YI as ExtensionRenderBoundary}from"../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{NN as checkForAppUpdate,PN as registerServiceWorker}from"../chunks/app-Dm4d_soo.js";

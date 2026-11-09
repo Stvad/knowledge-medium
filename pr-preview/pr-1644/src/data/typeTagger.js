@@ -1,1 +1,0 @@
-export{K1 as TypeTagger,q1 as applyTypeTagInTx}from"../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{zV as blockAfterSubtreeRemoval,BV as blockIdsInOrderedSelectionRange,VV as commitSelectionRange,HV as extendSelection,UV as findBestSelectionAnchorIndex,WV as getBlocksInRange,GV as getLastVisibleDescendant,KV as getRootBlock,qV as insertInDocumentOrder,JV as nextVisibleBlock,YV as previousVisibleBlock,XV as validateSelectionHierarchy}from"../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{Hz as BlockProperties}from"../../chunks/app-Dm4d_soo.js";

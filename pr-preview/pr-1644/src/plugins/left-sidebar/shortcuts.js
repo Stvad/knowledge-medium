@@ -1,1 +1,0 @@
-export{hT as getOrCreateShortcutsBlock,gT as journalShortcutBlockId,_T as shortcutsBlockId}from"../../../chunks/app-Dm4d_soo.js";

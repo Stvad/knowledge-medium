@@ -1,1 +1,0 @@
-export{kd as annotationsPlugin}from"../../../chunks/app-Dm4d_soo.js";

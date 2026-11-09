@@ -1,1 +1,0 @@
-export{uW as floatingAnchorFromRect,dW as useAnchoredFloating}from"../../../chunks/app-Dm4d_soo.js";

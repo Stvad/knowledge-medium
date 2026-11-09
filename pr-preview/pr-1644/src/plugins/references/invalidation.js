@@ -1,1 +1,0 @@
-export{MG as REFERENCES_TARGET_INVALIDATION_CHANNEL,NG as referencesInvalidationRule}from"../../../chunks/app-Dm4d_soo.js";

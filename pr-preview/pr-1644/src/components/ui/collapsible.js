@@ -1,1 +1,0 @@
-"use client";export{Rz as Collapsible,zz as CollapsibleContent,Bz as CollapsibleTrigger}from"../../../chunks/app-Dm4d_soo.js";

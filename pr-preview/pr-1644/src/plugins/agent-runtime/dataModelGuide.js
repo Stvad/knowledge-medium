@@ -1,1 +1,0 @@
-export{S_ as DATA_MODEL_GUIDE,C_ as dataModelGuide}from"../../../chunks/app-Dm4d_soo.js";

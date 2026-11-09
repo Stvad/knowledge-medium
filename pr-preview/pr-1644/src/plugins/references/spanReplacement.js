@@ -1,1 +1,0 @@
-export{fK as preferredSpanReplacement}from"../../../chunks/app-Dm4d_soo.js";

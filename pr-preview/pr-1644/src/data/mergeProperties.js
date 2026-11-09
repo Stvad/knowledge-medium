@@ -1,1 +1,0 @@
-export{G6 as mergeProperties}from"../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{mC as COLEMAK_KEYBINDINGS_PLUGIN_ID,hC as colemakKeybindingsPlugin,gC as colemakMovementKeybindingOverrides}from"../../../chunks/app-Dm4d_soo.js";

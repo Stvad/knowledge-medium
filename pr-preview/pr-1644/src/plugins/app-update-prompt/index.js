@@ -1,1 +1,0 @@
-export{wN as appUpdatePromptExtension}from"../../../chunks/app-Dm4d_soo.js";

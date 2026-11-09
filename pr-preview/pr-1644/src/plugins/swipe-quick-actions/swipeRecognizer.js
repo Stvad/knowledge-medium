@@ -1,1 +1,0 @@
-export{Sj as SWIPE_QUICK_ACTIONS_GESTURE_ID,Cj as SWIPE_TRIGGER_PX,wj as swipeRecognizer}from"../../../chunks/app-Dm4d_soo.js";

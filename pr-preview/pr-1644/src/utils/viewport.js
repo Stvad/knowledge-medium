@@ -1,1 +1,0 @@
-export{dV as MOBILE_BREAKPOINT_QUERY,fV as POINTER_COARSE_QUERY,pV as isMobileViewport,mV as isPointerCoarse}from"../../chunks/app-Dm4d_soo.js";

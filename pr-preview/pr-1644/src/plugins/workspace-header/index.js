@@ -1,1 +1,0 @@
-export{$w as WorkspaceSwitcherSidebarSection,eT as pendingInvitationsHeaderItem,tT as workspaceHeaderPlugin,nT as workspaceSwitcherSidebarSection}from"../../../chunks/app-Dm4d_soo.js";

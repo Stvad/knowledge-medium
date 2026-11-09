@@ -1,1 +1,0 @@
-export{VM as resolveStructuralEditPolicy,HM as structuralEditPolicyForBlock}from"../../chunks/app-Dm4d_soo.js";

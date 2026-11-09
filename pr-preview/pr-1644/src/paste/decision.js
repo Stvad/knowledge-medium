@@ -1,1 +1,0 @@
-export{WL as defaultPasteDecision,GL as pasteDecisionVerb}from"../../chunks/app-Dm4d_soo.js";

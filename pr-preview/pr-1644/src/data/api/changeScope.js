@@ -1,1 +1,0 @@
-export{xct as CHANGE_SCOPE_POLICIES,Sct as ChangeScope,Cct as isChangeScope,wct as policyForScope,Tct as scopeAllowedInReadOnly,Ect as scopeIsUndoable,Dct as scopePoliciesEquivalent,Oct as scopeUploadsToServer,kct as sourceForScope}from"../../../chunks/app-Dm4d_soo.js";

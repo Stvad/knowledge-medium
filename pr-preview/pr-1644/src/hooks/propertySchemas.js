@@ -1,1 +1,0 @@
-export{fW as usePropertySchemas}from"../../chunks/app-Dm4d_soo.js";

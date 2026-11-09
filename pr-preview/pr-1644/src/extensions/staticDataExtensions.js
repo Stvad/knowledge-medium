@@ -1,1 +1,0 @@
-export{hG as staticDataExtensions}from"../../chunks/app-Dm4d_soo.js";

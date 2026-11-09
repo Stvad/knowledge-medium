@@ -1,1 +1,0 @@
-export{kq as matchCharTrigger}from"../../chunks/app-Dm4d_soo.js";

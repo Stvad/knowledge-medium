@@ -1,1 +1,0 @@
-export{qw as BreadcrumbList,Ww as BreadcrumbRenderer,Kw as Breadcrumbs,Uw as PromotableBreadcrumbList,Bw as breadcrumbRendererContribution,Vw as breadcrumbsPlugin,Gw as getBreadcrumbContentPreview,Hw as usePromotableBreadcrumb}from"../../../chunks/app-Dm4d_soo.js";

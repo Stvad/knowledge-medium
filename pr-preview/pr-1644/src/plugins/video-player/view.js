@@ -1,1 +1,0 @@
-export{US as DEFAULT_VIDEO_NOTES_PANE_RATIO,WS as VIDEO_NOTES_VIEW_MODE,GS as videoNotesPaneRatioProp}from"../../../chunks/app-Dm4d_soo.js";

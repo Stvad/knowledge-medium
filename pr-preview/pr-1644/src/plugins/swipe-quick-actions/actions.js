@@ -1,1 +1,0 @@
-export{Vj as DEFAULT_QUICK_ACTION_ITEMS,Hj as SWIPE_RIGHT_BLOCK_ACTION_ID,Uj as isQuickActionItem,Wj as quickActionItemsFacet}from"../../../chunks/app-Dm4d_soo.js";

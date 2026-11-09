@@ -1,1 +1,0 @@
-export{mB as declarationOnlyDefinitionForName,hB as declarationOnlyStatusText}from"../../../chunks/app-Dm4d_soo.js";

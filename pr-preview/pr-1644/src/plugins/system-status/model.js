@@ -1,1 +1,0 @@
-export{cc as getSyncIndicatorView}from"../../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{K_ as BlockMetaCard}from"../../../chunks/app-Dm4d_soo.js";

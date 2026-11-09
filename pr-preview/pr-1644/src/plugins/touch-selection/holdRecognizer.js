@@ -1,1 +1,0 @@
-export{Ay as BLOCK_HOLD_GESTURE,jy as BLOCK_HOLD_RECOGNIZER_ID,My as blockHoldRecognizer}from"../../../chunks/app-Dm4d_soo.js";

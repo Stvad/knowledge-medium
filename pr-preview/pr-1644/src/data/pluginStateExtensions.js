@@ -1,1 +1,0 @@
-export{qX as pluginPrefsExtension,JX as pluginUIStateExtension}from"../../chunks/app-Dm4d_soo.js";

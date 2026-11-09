@@ -1,1 +1,0 @@
-export{D4 as kernelDataExtension}from"../../chunks/app-Dm4d_soo.js";

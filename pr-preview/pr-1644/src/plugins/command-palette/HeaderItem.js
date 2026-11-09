@@ -1,1 +1,0 @@
-export{uj as CommandPaletteHeaderItem}from"../../../chunks/app-Dm4d_soo.js";

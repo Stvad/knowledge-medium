@@ -1,1 +1,0 @@
-export{xD as formatAbsoluteDateTime,SD as formatRelativeTime}from"../../chunks/app-Dm4d_soo.js";

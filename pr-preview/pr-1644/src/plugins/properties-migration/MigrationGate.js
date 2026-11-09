@@ -1,1 +1,0 @@
-export{to as MigrationGate}from"../../../chunks/app-Dm4d_soo.js";

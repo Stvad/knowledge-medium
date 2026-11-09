@@ -1,1 +1,0 @@
-export{is as dataIntegrityPlugin}from"../../../chunks/app-Dm4d_soo.js";

@@ -1,1 +1,0 @@
-export{sI as GESTURE_ACTIVE,cI as GESTURE_CANCEL,lI as GESTURE_IDLE,uI as TOUCH_HOLD_MS,dI as TOUCH_SLOP_PX,fI as continuousGestureRecognizersFacet,pI as createBlockGestureController,mI as enabledTouchAction,hI as suppressNextClick,gI as unionTouchAction,_I as useContinuousGestures}from"../../chunks/app-Dm4d_soo.js";

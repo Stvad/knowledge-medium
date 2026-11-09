@@ -1,1 +1,0 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-Dm4d_soo.js";

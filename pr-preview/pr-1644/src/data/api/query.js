@@ -1,1 +1,0 @@
-export{Ost as defineQuery}from"../../../chunks/app-Dm4d_soo.js";

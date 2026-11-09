@@ -1,1 +1,0 @@
-export{RY as contributorsDataExtension}from"../../../chunks/app-Dm4d_soo.js";

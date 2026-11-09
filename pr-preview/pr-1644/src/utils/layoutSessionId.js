@@ -1,1 +1,0 @@
-export{Gtt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Ktt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,qtt as __resetLayoutSessionIdForTesting,Jtt as getLayoutSessionId,Ytt as isInstalledAppDisplayMode,Xtt as readOrCreateLayoutSessionId}from"../../chunks/app-Dm4d_soo.js";

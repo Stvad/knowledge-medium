@@ -1,1 +1,0 @@
-export{MY as annotationMarginOpenProp,NY as annotationMarginWidthProp}from"../../../chunks/app-Dm4d_soo.js";

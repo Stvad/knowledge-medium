@@ -1,1 +1,0 @@
-export{KN as gestureBindingDescriptor,qN as matchesGestureEvent}from"../../chunks/app-Dm4d_soo.js";

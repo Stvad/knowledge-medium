@@ -1,1 +1,0 @@
-export{G_ as blockInfoPlugin}from"../../../chunks/app-Dm4d_soo.js";

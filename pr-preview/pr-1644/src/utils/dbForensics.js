@@ -1,1 +1,0 @@
-export{XQ as DbForensics,ZQ as dbForensics}from"../../chunks/app-Dm4d_soo.js";
