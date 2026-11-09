@@ -6,7 +6,7 @@
  * uses the width a wide panel leaves empty beside the text first, then moves
  * the text left, then narrows it (`fitColumn`, `PANEL_RIGHT_CLEARANCE`). Its
  * width is automatic until dragged, and the dragged width is kept on the
- * layout column's row (`annotationMarginWidthProp`). The cost is that it
+ * panel's row (`annotationMarginWidthProp`). The cost is that it
  * lives outside the scrollport: it finds the panel's rows in the DOM (mounted
  * rows and lazy placeholders alike, of the panel's own render scope), reads
  * their positions and moves the cards within one animation frame of a scroll
@@ -29,7 +29,7 @@ import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.j
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
-import {isPanelStackRow} from '@/utils/panelLayoutProjection.js'
+import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginWidthProp} from './marginSchema.ts'
 import {byPlacement, fitColumn, placeCards} from './placement.ts'
@@ -53,10 +53,6 @@ import {
  *  text unless dragged to. */
 const COLUMN_BOUNDS = {min: 240, max: 520}
 const EDGE_PX = 16
-/** The resize handle, centred in the gap left of the column. */
-const HANDLE_WIDTH_PX = 8
-/** How far a press moves before it is a drag; a click's jitter is not. */
-const DRAG_THRESHOLD_PX = 3
 const CARD_GAP_PX = 8
 
 interface ColumnFrame {
@@ -99,22 +95,12 @@ export const CommentMargin = ({block}: {block: Block}) => {
   return <MarginColumn panelBlock={block} topLevelBlockId={topLevelBlockId}/>
 }
 
-/** Where the margin's width is kept: the layout column the panel shows in,
- *  which is its stack when it has one. */
-const useWidthOwner = (panelBlock: Block): Block => {
-  const repo = useRepo()
-  const parentId = useHandle(panelBlock, {selector: data => data?.parentId ?? null})
-  const parent = repo.block(parentId ?? panelBlock.id)
-  const inStack = useHandle(parent, {selector: data => parentId !== null && data != null && isPanelStackRow(data)})
-  return inStack ? parent : panelBlock
-}
-
 const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLevelBlockId: string}) => {
   const panelId = panelBlock.id
-  const widthOwner = useWidthOwner(panelBlock)
-  const [storedWidth] = usePropertyValue(widthOwner, annotationMarginWidthProp)
+  const [storedWidth] = usePropertyValue(panelBlock, annotationMarginWidthProp)
   /** The width the layout pass asks for: the stored one, or a drag's. */
   const preferredWidth = useRef(storedWidth)
+  const dragStartWidth = useRef(0)
   const scope = panelRenderScopeId(panelId, topLevelBlockId)
   const probeRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -333,19 +319,29 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     <>
       <div ref={probeRef} hidden/>
       {frame && (
-        <WidthHandle
-          frame={frame}
-          onDrag={width => {
-            preferredWidth.current = width
-            layout.current.schedule()
+        <DividerHandle
+          label="Resize comments margin"
+          title="Drag to resize; double-click for automatic width"
+          // Centred in the gap left of the column.
+          style={{left: frame.left - (EDGE_PX + DIVIDER_HANDLE_WIDTH_PX) / 2, top: frame.top, height: frame.height}}
+          drag={{
+            onStart: () => {
+              dragStartWidth.current = frame.width
+              return true
+            },
+            // The layout pass bounds the width asked for.
+            onMove: dx => {
+              preferredWidth.current = dragStartWidth.current - dx
+              layout.current.schedule()
+            },
+            onEnd: () => {
+              const width = layout.current.flush()?.width
+              if (width === undefined || width === storedWidth) applyStoredWidth()
+              else void panelBlock.set(annotationMarginWidthProp, width)
+            },
+            onCancel: applyStoredWidth,
           }}
-          onEnd={() => {
-            const width = layout.current.flush()?.width
-            if (width === undefined || width === storedWidth) applyStoredWidth()
-            else void widthOwner.set(annotationMarginWidthProp, width)
-          }}
-          onCancel={applyStoredWidth}
-          onReset={() => void widthOwner.set(annotationMarginWidthProp, undefined)}
+          onReset={() => void panelBlock.set(annotationMarginWidthProp, undefined)}
         />
       )}
       {frame && (
@@ -492,59 +488,6 @@ const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) =
         {count} thread{count === 1 ? '' : 's'} inside
       </button>
     </CardSlot>
-  )
-}
-
-interface WidthHandleProps {
-  frame: ColumnFrame
-  /** A drag asking for `width`; the layout pass bounds it. */
-  onDrag: (width: number) => void
-  onEnd: () => void
-  /** A drag the browser took away: back to the stored width. */
-  onCancel: () => void
-  onReset: () => void
-}
-
-/** In the gap left of the column: drag to set its width, double-click to make
- *  it automatic again. */
-const WidthHandle = ({frame, onDrag, onEnd, onCancel, onReset}: WidthHandleProps) => {
-  /** `moved`: a press that never moved (a double-click's) sets nothing. */
-  const drag = useRef<{x: number; width: number; moved: boolean} | null>(null)
-  const finish = (then: () => void) => () => {
-    const moved = drag.current?.moved
-    drag.current = null
-    if (moved) then()
-  }
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize comments margin"
-      title="Drag to resize; double-click for automatic width"
-      onPointerDown={event => {
-        if (event.button !== 0) return
-        event.preventDefault()
-        drag.current = {x: event.clientX, width: frame.width, moved: false}
-        event.currentTarget.setPointerCapture(event.pointerId)
-      }}
-      onPointerMove={event => {
-        if (!drag.current) return
-        const dx = drag.current.x - event.clientX
-        if (!drag.current.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return
-        drag.current.moved = true
-        onDrag(drag.current.width + dx)
-      }}
-      onPointerUp={finish(onEnd)}
-      onPointerCancel={finish(onCancel)}
-      // After a pointerup has finished the drag; this is a capture lost
-      // without one.
-      onLostPointerCapture={finish(onCancel)}
-      onDoubleClick={onReset}
-      className="group absolute z-[6] flex cursor-col-resize touch-none justify-center"
-      style={{left: frame.left - (EDGE_PX + HANDLE_WIDTH_PX) / 2, top: frame.top, width: HANDLE_WIDTH_PX, height: frame.height}}
-    >
-      <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border group-active:bg-ring"/>
-    </div>
   )
 }
 

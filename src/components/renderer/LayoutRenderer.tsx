@@ -4,10 +4,12 @@ import { NestedBlockContextProvider } from '@/context/block.js'
 import { useIsMobile } from '@/utils/react.js'
 import { isMobileViewport } from '@/utils/viewport.js'
 import { useHandle } from '@/hooks/block.js'
-import { useEffect, useMemo } from 'react'
-import type { BlockData } from '@/data/api'
+import { useEffect, useMemo, useState } from 'react'
+import { ChangeScope, type BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
-import { activePanelIdProp, isPanelRowMaximized } from '@/data/properties.js'
+import { activePanelIdProp, isPanelRowMaximized, layoutColumnWeight, layoutColumnWeightProp } from '@/data/properties.js'
+import { columnWeightHolder } from '@/utils/layoutColumns.js'
+import { ColumnResizeHandles, MIN_COLUMN_REM, type ColumnWeights } from './ColumnResizeHandles.js'
 import {
   allPanelRowsInLayoutOrder,
   isPanelStackRow,
@@ -17,7 +19,9 @@ import {
 } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
-  | {kind: 'panel'; id: string; maximized: boolean}
+  | {kind: 'panel'; id: string; maximized: boolean
+      /** The stored column weight; see `columnWeightHolder`. */
+      weight?: number}
   | {kind: 'stack'; id: string; children: RenderSlot[]
       /** Kept only to preserve the solo pane's React parent — see
        *  `soloSlotPath`. Renders no box and defers to its single child. */
@@ -49,7 +53,7 @@ const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlo
     }
     // Stamped here, where `visit` already holds the row — the alternative is a
     // second pass building an id→row Map the walk just threw away.
-    return {kind: 'panel', id: row.id, maximized: isPanelRowMaximized(row)}
+    return {kind: 'panel', id: row.id, maximized: isPanelRowMaximized(row), weight: layoutColumnWeight(row)}
   }
 
   return (childrenByParent.get(rootId) ?? []).map(visit)
@@ -274,9 +278,52 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     void block.set(activePanelIdProp, desiredActivePanelSlot.id)
   }, [block, activePanelId, desiredActivePanelSlot])
 
+  // ── Column widths ──
+  // Each top-level column's `fr` weight, stored on one of its panel rows
+  // (`columnWeightHolder`), or a drag's until the rows carry it.
+  const [layoutEl, setLayoutEl] = useState<HTMLDivElement | null>(null)
+  const [dragWeights, setDragWeights] = useState<ColumnWeights | null>(null)
+  const columns = slotsToRender.map(slot => {
+    const holder = columnWeightHolder(slot)
+    const stored = holder?.weight ?? 1
+    return {id: slot.id, holderId: holder?.id, stored, weight: dragWeights?.get(slot.id) ?? stored}
+  })
+  const resizable = !isMobile && columns.length > 1
+  // Drop a drag's weights once the rows carry them, or once the columns they
+  // were for are not the columns shown. Adjusted while rendering, not in an
+  // effect, so no frame paints the stale widths.
+  if (dragWeights !== null && (
+    dragWeights.size !== columns.length ||
+    columns.every(column => dragWeights.get(column.id) === column.stored) ||
+    columns.some(column => !dragWeights.has(column.id))
+  )) setDragWeights(null)
+  const writeWeights = async (weights: ColumnWeights) => {
+    try {
+      await block.repo.tx(async tx => {
+        for (const column of columns) {
+          const weight = weights.get(column.id)
+          if (column.holderId && weight !== undefined && weight !== column.stored) {
+            await tx.setProperty(column.holderId, layoutColumnWeightProp, weight)
+          }
+        }
+      }, {scope: ChangeScope.UiState, description: 'resize layout columns'})
+    } catch (error) {
+      setDragWeights(null)
+      throw error
+    }
+  }
+  // Relative to their mean: weights written while other columns were open
+  // still fill the grid.
+  const meanWeight = columns.reduce((sum, column) => sum + column.weight, 0) / columns.length
+
   return <div
+    ref={setLayoutEl}
     data-layout-session-id={block.id}
-    className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full md:grid md:grid-flow-col md:grid-rows-1 md:auto-cols-[minmax(24rem,1fr)]"
+    className="layout relative flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full md:grid md:grid-flow-col md:grid-rows-1 md:auto-cols-[minmax(24rem,1fr)]"
+    // The `md:` grid's tracks; ignored by the flex layout below md.
+    style={resizable
+      ? {gridTemplateColumns: columns.map(column => `minmax(${MIN_COLUMN_REM}rem, ${column.weight / meanWeight}fr)`).join(' ')}
+      : undefined}
   >
     {slotsToRender.map(slot => (
       <SlotView
@@ -289,6 +336,18 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         trackFocus={!isMobile}
       />
     ))}
+    {/* After the columns: their `first:` styles need the first column first. */}
+    {resizable && layoutEl && (
+      <ColumnResizeHandles
+        container={layoutEl}
+        columns={columns}
+        onDrag={setDragWeights}
+        onCommit={weights => {
+          setDragWeights(weights)
+          void writeWeights(weights)
+        }}
+      />
+    )}
   </div>
 }
 

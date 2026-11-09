@@ -10,9 +10,8 @@ export const annotationMarginOpenProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 
-/** The margin's width as the user set it, in px, on the UI-state row of the
- *  layout column it shows in: the stack for a stacked panel, else the panel.
- *  Absent ≡ automatic. */
+/** The margin's width as the user set it, in px, on the panel's UI-state row,
+ *  like `annotationMarginOpenProp`. Absent ≡ automatic. */
 export const annotationMarginWidthProp = seedProperty({
   seedKey: 'system:annotations/property/margin-width',
   revision: 1,

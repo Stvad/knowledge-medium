@@ -163,6 +163,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:kernel-data/property/extension-name', 'extension:name', 'string', 'string'],
   ['system:kernel-data/property/focused-block-location', 'focusedBlockLocation', 'optional-json', 'object'],
   ['system:kernel-data/property/is-editing', 'isEditing', 'boolean', 'boolean'],
+  ['system:kernel-data/property/layout-column-weight', 'layoutColumnWeight', 'optional-number', 'number'],
   ['system:kernel-data/property/migration-claimant', 'migration:claimant', 'string', 'string'],
   ['system:kernel-data/property/migration-claimed-at', 'migration:claimed-at', 'number', 'number'],
   ['system:kernel-data/property/migration-completed-at', 'migration:completed-at', 'optional-number', 'number'],
