@@ -18,7 +18,8 @@ import {
   MARKS_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   SELECTION_MESSAGE_TYPE,
-  type FrameScripts,
+  textDigest,
+  type FrameMarks,
   type FrameSelection,
 } from '../frameDocument.ts'
 import {marksOf, rangeOfSelection, textSpansOf} from '../sourceMap.ts'
@@ -654,15 +655,20 @@ describe.each(selectedEngines())('%s', engine => {
     })
     afterEach(() => host.close())
 
+    /** Through `Document.prototype`, as the frame script reads it: markup can
+     *  stand a named element in for `document.body`. */
     const bodyTexts = () => documentFrame(host).evaluate(() => {
+      const body = Object.getOwnPropertyDescriptor(Document.prototype, 'body')!.get!.call(document) as HTMLElement
       const texts: string[] = []
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
       for (let node = walker.nextNode(); node; node = walker.nextNode()) texts.push((node as Text).data)
       return texts
     })
 
-    /** What the source map assumes of every engine: a held document's body
-     *  text nodes are the ones parse5 builds from the same source. */
+    const digestOf = (source: string) => textDigest(textSpansOf(source).map(span => span.value))
+
+    /** Where the source map can place by position: a held document's body text
+     *  nodes are the ones parse5 builds from the same source. */
     it.each([
       ['the example document', exampleSource],
       ['character references', '<p>Tom &amp; Jerry &copy 2024 &#x1F600; &zzz; a < b &nbsp;x</p>'],
@@ -675,6 +681,7 @@ describe.each(selectedEngines())('%s', engine => {
       ['a pre opening on a newline', '<pre>\nfirst\nsecond</pre>'],
       ['foreign content', '<svg><text>in svg</text></svg><math><mi>x</mi></math><p>after</p>'],
       ['a script and a style in the body', '<p>a</p><script>var b = 1</script><style>p{}</style><p>c</p>'],
+      ['a form named body', '<p>same</p><form name="body"><p>same</p></form>'],
     ])('holds the text nodes the source map parses, for %s', async (_name, source) => {
       await mountHeld(host, source)
       const parsed = textSpansOf(source).map(span => span.value)
@@ -707,20 +714,27 @@ describe.each(selectedEngines())('%s', engine => {
       return latest!
     }
 
-    const sourceOf = (source: string, selection: FrameSelection, scripts: FrameScripts = 'hold') => {
-      const range = rangeOfSelection(textSpansOf(source), selection, scripts)
+    const sourceOf = (source: string, selection: FrameSelection) => {
+      const range = rangeOfSelection(source, selection)
       if (typeof range === 'string') throw new Error(range)
       return source.slice(range.from, range.to)
     }
 
-    it('reports a selection the source map places, repeated text told apart', async () => {
+    /** The source a selection would anchor to, or null for a refusal. */
+    const anchoredIn = async (source: string) => {
+      const range = rangeOfSelection(source, await latestSelection())
+      return typeof range === 'string' ? null : source.slice(range.from, range.to)
+    }
+
+    it('reports a selection the source map places, with the digest the source map computes', async () => {
       const source = '<p>same</p><p>x <b>same</b> y</p>'
       await mountHeld(host, source)
       await select({selector: 'b', text: [1, 3]})
       const selection = await latestSelection()
       expect(selection.start).toEqual({text: 'same', occurrence: 1, count: 2, offset: 1})
-      const range = rangeOfSelection(textSpansOf(source), selection, 'hold')
-      expect(range).toEqual({from: source.lastIndexOf('same') + 1, to: source.lastIndexOf('same') + 3})
+      expect(selection.digest).toBe(digestOf(source))
+      expect(rangeOfSelection(source, selection))
+        .toEqual({from: source.lastIndexOf('same') + 1, to: source.lastIndexOf('same') + 3})
     })
 
     it('moves an end that sits between nodes into the text beside it', async () => {
@@ -730,15 +744,15 @@ describe.each(selectedEngines())('%s', engine => {
       expect(sourceOf(source, await latestSelection())).toBe('x <b>two</b> y')
     })
 
-    it('places a selection in a running document past text its script added', async () => {
+    it('places a selection past text a running script added', async () => {
       const source = `<p id="out"></p><p>target</p>${script(`document.getElementById('out').textContent = 'added'`)}${script(ARMED)}`
       await mount(host, 'sandboxed', source)
       await untilReported(host, 'armed')
       await select({selector: 'p', index: 1, text: [0, 6]})
-      expect(sourceOf(source, await latestSelection(), 'run')).toBe('target')
+      expect(sourceOf(source, await latestSelection())).toBe('target')
     })
 
-    it('refuses text in a running document that a script repeated, rather than guess which', async () => {
+    it('refuses text a running script repeated, rather than guess which copy', async () => {
       const prepend = script(`const copy = document.createElement('p'); copy.textContent = 'same'; document.body.prepend(copy)`)
       const source = `<p id="first">same</p><p>same</p>${prepend}${script(ARMED)}`
       await mount(host, 'sandboxed', source)
@@ -746,7 +760,47 @@ describe.each(selectedEngines())('%s', engine => {
       await select({selector: '#first', text: [0, 4]})
       const selection = await latestSelection()
       expect(selection.start).toMatchObject({text: 'same', occurrence: 1, count: 3})
-      expect(rangeOfSelection(textSpansOf(source), selection, 'run')).toMatch(/scripts run/)
+      expect(rangeOfSelection(source, selection)).toMatch(/not what its source parses to/)
+    })
+
+    it('refuses repeated text once an edit in a held document changed its text', async () => {
+      const source = '<p id="edited" contenteditable>same</p><p id="other">same</p>'
+      await mountHeld(host, source)
+      // What typing in the editable paragraph does to its text node.
+      await documentFrame(host).evaluate(() => { (document.getElementById('edited')!.firstChild as Text).data = 'different' })
+      await select({selector: '#other', text: [0, 4]})
+      expect(await anchoredIn(source)).toBeNull()
+    })
+
+    it.each([
+      ['markup in an option', '<select><option>One <b>bold</b> x</option></select><p id="a">bold</p><p id="b">bold</p>', '#a', 'bold'],
+      ['a declarative shadow root', '<div>a<template shadowrootmode="open"><i>s</i></template>b</div><p id="a">ab</p>', '#a', 'ab'],
+    ])('places a selection after %s exactly or not at all', async (_name, source, selector, text) => {
+      await mountHeld(host, source)
+      await select({selector, text: [0, text.length]})
+      const anchored = rangeOfSelection(source, await latestSelection())
+      const selected = source.indexOf(`${selector.slice(1)}">${text}`) + selector.length + 1
+      expect(typeof anchored === 'string' || anchored.from === selected).toBe(true)
+    })
+
+    it('anchors a paragraph triple-clicked after markup in an option to no more than it', async () => {
+      const source = '<select>\n  <option>\n    <span>Label</span>\n  </option>\n</select>\n' +
+        '<div>\n  <p>First line here</p>\n  <p>Second line here</p>\n</div>\n'
+      await mountHeld(host, source)
+      // A click that lands before the document takes input selects nothing.
+      await vi.waitFor(async () => {
+        await documentFrame(host).locator('p', {hasText: 'First'}).click({clickCount: 3, position: {x: 10, y: 5}})
+        expect(await host.page.evaluate(() => window.selections.at(-1))).toBeTruthy()
+      }, {timeout: 10_000, interval: 200})
+      expect(await anchoredIn(source) ?? 'refused').not.toContain('Second')
+    })
+
+    it('places a selection inside a form named body as itself', async () => {
+      const source = '<p>same</p><form name="body"><p id="inside">same</p></form>'
+      await mountHeld(host, source)
+      await select({selector: '#inside', text: [0, 4]})
+      expect(rangeOfSelection(source, await latestSelection()))
+        .toEqual({from: source.lastIndexOf('same'), to: source.lastIndexOf('same') + 4})
     })
 
     it('clears the selection when asked, and reports that there is none', async () => {
@@ -759,12 +813,51 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await documentFrame(host).evaluate(() => getSelection()!.rangeCount)).toBe(0)
     })
 
+    // Spread over tasks: React already batches a burst inside one task.
+    it('applies at most one selection per frame of the page\'s rendering, however many arrive', async () => {
+      await mountHeld(host, '<p>some text</p>')
+      await host.page.evaluate(() => {
+        const counter = {frames: 0}
+        ;(window as unknown as {counter: typeof counter}).counter = counter
+        const tick = () => {
+          counter.frames += 1
+          requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+      })
+      await documentFrame(host).evaluate(type => {
+        let sent = 0
+        const send = () => {
+          const selection = {
+            start: {text: 'some text', occurrence: 0, count: 1, offset: 0},
+            end: {text: 'some text', occurrence: 0, count: 1, offset: 1 + (sent % 2)},
+            rect: {top: 0, left: 0, bottom: 10, right: 10},
+            digest: '',
+          }
+          window.parent.parent.postMessage(sent < 600 ? {type, selection} : 'flood over', '*')
+          sent += 1
+          if (sent <= 600) setTimeout(send, 0)
+        }
+        send()
+      }, SELECTION_MESSAGE_TYPE)
+      await untilReported(host, 'flood over')
+      await nextRender(host)
+      const {applied, frames} = await host.page.evaluate(() => ({
+        applied: window.selections.length,
+        frames: (window as unknown as {counter: {frames: number}}).counter.frames,
+      }))
+      expect(applied).toBeGreaterThan(0)
+      expect(applied).toBeLessThanOrEqual(frames)
+      expect(applied).toBeLessThan(600)
+    })
+
     it('takes a selection only from the document\'s own window', async () => {
       await mountHeld(host, '<p>some text</p>')
       const forged = {type: SELECTION_MESSAGE_TYPE, selection: {
         start: {text: 'some text', occurrence: 0, count: 1, offset: 0},
         end: {text: 'some text', occurrence: 0, count: 1, offset: 4},
         rect: {top: 0, left: 0, bottom: 10, right: 10},
+        digest: digestOf('<p>some text</p>'),
       }}
       await host.page.evaluate(message => {
         const sibling = document.createElement('iframe')
@@ -776,31 +869,59 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await host.page.evaluate(() => window.selections)).toEqual([])
     })
 
-    const highlighted = () => documentFrame(host).evaluate(() =>
-      Object.fromEntries([...CSS.highlights].map(([name, highlight]) => [name, [...highlight].map(range => range.toString())])))
+    /** Each drawn range's text, and the id of the nearest element around it. */
+    const drawn = () => documentFrame(host).evaluate(() =>
+      [...CSS.highlights].flatMap(([name, highlight]) => [...highlight].map(range => ({
+        name,
+        text: range.toString(),
+        in: (range as Range).startContainer.parentElement?.closest('[id]')?.id ?? null,
+      }))))
 
-    const marksFor = (source: string, quote: string, style = {moved: false, suggestion: false}) => {
-      const from = source.indexOf(quote)
-      return marksOf(textSpansOf(source), [{from, to: from + quote.length, ...style}])
+    const quote = (source: string, text: string, from = 0, style = {moved: false, suggestion: false}) => {
+      const start = source.indexOf(text, from)
+      return {from: start, to: start + text.length, ...style}
+    }
+
+    const mountMarked = async (source: string, marks: FrameMarks) => {
+      await host.page.evaluate(([held, sent]) => window.mountSandboxed(held, 'hold', sent), [source, marks] as const)
+      await vi.waitFor(async () => {
+        const reports = await host.reports() as {type?: string}[]
+        expect(reports.some(report => report.type === HEIGHT_MESSAGE_TYPE)).toBe(true)
+      }, {timeout: 10_000, interval: 25})
     }
 
     it('draws the marks it is given over a held document\'s text', async () => {
       const source = '<p>one <b>two</b> three</p><p>Tom &amp; Jerry</p>'
-      const marks = [
-        ...marksFor(source, 'ne <b>two</b> thr'),
-        ...marksFor(source, '&amp; Jerry', {moved: false, suggestion: true}),
-      ]
-      await host.page.evaluate(([held, sent]) => window.mountSandboxed(held, 'hold', sent), [source, marks] as const)
-      await vi.waitFor(async () => expect(await highlighted()).toEqual({
-        'km-comment': ['ne two thr'],
-        'km-suggestion': ['& Jerry'],
-      }), {timeout: 5_000, interval: 50})
+      await mountMarked(source, marksOf(source, [
+        quote(source, 'ne <b>two</b> thr'),
+        quote(source, '&amp; Jerry', 0, {moved: false, suggestion: true}),
+      ]))
+      await vi.waitFor(async () => expect(await drawn()).toEqual([
+        {name: 'km-comment', text: 'ne two thr', in: null},
+        {name: 'km-suggestion', text: '& Jerry', in: null},
+      ]), {timeout: 5_000, interval: 50})
+    })
+
+    it('draws marks in a document named elements could have misled', async () => {
+      const source = '<img name="body"><img name="body"><p id="a">same</p><form name="body"><p id="b">same</p></form>'
+      await mountMarked(source, marksOf(source, [quote(source, 'same')]))
+      await vi.waitFor(async () => expect(await drawn()).toEqual([{name: 'km-comment', text: 'same', in: 'a'}]),
+        {timeout: 5_000, interval: 50})
+    })
+
+    it.each([
+      ['markup in an option', '<select><option>One <b>bold</b> x</option></select><p id="a">bold</p><p id="b">bold</p>', 'bold', 'b'],
+      ['a text node too long for WebKit to keep whole', `<pre>${'w'.repeat(70_000)}</pre><p id="a">alpha gamma</p><p id="b">gamma</p>`, 'gamma', 'b'],
+    ])('draws a mark after %s on its own text or not at all', async (_name, source, text, owner) => {
+      await mountMarked(source, marksOf(source, [quote(source, text, source.lastIndexOf(`id="${owner}"`))]))
+      await settle(host)
+      for (const mark of await drawn()) expect(mark).toMatchObject({text, in: owner})
     })
 
     it('draws marks only from the app, not from another frame on the page', async () => {
       const source = '<p>one two</p>'
       await mountHeld(host, source)
-      const forged = {type: MARKS_MESSAGE_TYPE, marks: marksFor(source, 'two')}
+      const forged = {type: MARKS_MESSAGE_TYPE, ...marksOf(source, [quote(source, 'two')])}
       await host.page.evaluate(message => {
         const sibling = document.createElement('iframe')
         sibling.srcdoc = `<script>parent.frames[0].frames[0].postMessage(${JSON.stringify(message)}, '*'); top.postMessage('forged', '*')</script>`
@@ -808,20 +929,20 @@ describe.each(selectedEngines())('%s', engine => {
       }, forged)
       await untilReported(host, 'forged')
       await settle(host)
-      expect(await highlighted()).toEqual({})
+      expect(await drawn()).toEqual([])
     })
 
     it('sends a running document no marks', async () => {
       const source = '<p>one two</p>'
       const recorder = script(`addEventListener('message', event => top.postMessage({got: event.data && event.data.type}, '*'))`)
       await host.page.evaluate(([running, sent]) => window.mountSandboxed(running, 'run', sent),
-        [source + recorder + script(ARMED), marksFor(source, 'two')] as const)
+        [source + recorder + script(ARMED), marksOf(source, [quote(source, 'two')])] as const)
       await untilReported(host, 'armed')
       // The same channel does reach it, so the absence below is about the marks.
       await host.page.evaluate(() => window.clearSelection())
       await untilReported(host, {got: CLEAR_SELECTION_MESSAGE_TYPE})
       expect(await host.reports()).not.toContainEqual({got: MARKS_MESSAGE_TYPE})
-      expect(await highlighted()).toEqual({})
+      expect(await drawn()).toEqual([])
     })
   })
 

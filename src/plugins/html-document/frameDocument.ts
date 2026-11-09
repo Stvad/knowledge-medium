@@ -65,11 +65,26 @@ export const SELECTION_MESSAGE_TYPE = 'km:html-document:selection'
 export const MARKS_MESSAGE_TYPE = 'km:html-document:marks'
 export const CLEAR_SELECTION_MESSAGE_TYPE = 'km:html-document:clear-selection'
 
+/** A digest of a document's text: its body's text nodes' values, in order.
+ *  Equal digests mean the frame holds exactly the text nodes the source
+ *  parses to, so a node's place among them names the same node on both
+ *  sides. Neither scripts being held nor the source alone guarantee that: an
+ *  edit in the document, or markup the browser builds into other nodes than
+ *  the parser this app uses does, changes it. {@link FRAME_SCRIPT} embeds
+ *  this function's own source, so it names nothing outside itself. */
+export const textDigest = (values: readonly string[]): string => {
+  let hash = 0x811c9dc5
+  for (const value of values) {
+    for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 0x01000193)
+    // Past any code unit, so it can't be mistaken for one.
+    hash = Math.imul(hash ^ 0x10000, 0x01000193)
+  }
+  return `${values.length}:${(hash >>> 0).toString(36)}`
+}
+
 /** A point in the document's text: an offset into the body text node whose
  *  text is `text`, the `occurrence`th of the `count` such nodes in document
- *  order. Named by text, not by place among all text nodes, so text a running
- *  script adds elsewhere doesn't move it, and a node a script changed names
- *  nothing. */
+ *  order. */
 export interface FramePoint {
   text: string
   occurrence: number
@@ -77,30 +92,40 @@ export interface FramePoint {
   offset: number
 }
 
-/** The reader's selection, its ends moved into text, and where it sits in the
- *  frame's viewport. */
+/** The reader's selection, its ends moved into text, where it sits in the
+ *  frame's viewport, and the {@link textDigest} of the frame's text as it was
+ *  selected. */
 export interface FrameSelection {
   start: FramePoint
   end: FramePoint
   rect: {top: number; left: number; bottom: number; right: number}
+  digest: string
 }
 
-export const MARK_KINDS = ['comment', 'comment-moved', 'suggestion', 'suggestion-moved'] as const
+const MARK_KINDS = ['comment', 'comment-moved', 'suggestion', 'suggestion-moved'] as const
 export type MarkKind = typeof MARK_KINDS[number]
 
 /** A stretch of the document's text to highlight, each end the `node`th text
- *  node of the body and an offset into it. Sent only to a held document, whose
- *  text nodes are the ones its source parses to. */
+ *  node of the body and an offset into it. */
 export interface FrameMark {
   start: {node: number; offset: number}
   end: {node: number; offset: number}
   kind: MarkKind
 }
 
+/** Marks and the {@link textDigest} of the text they were placed in. The
+ *  document draws them only while its own text has that digest, and draws
+ *  none otherwise; an empty list clears them. */
+export interface FrameMarks {
+  digest: string
+  marks: readonly FrameMark[]
+}
+
+export const NO_MARKS: FrameMarks = Object.freeze({digest: '', marks: Object.freeze([])})
+
 /** The highlights' look: the comments plugin's colours, which a frame can't
  *  take from the app's stylesheet. Painted through the CSS Custom Highlight
- *  API, which leaves the document's DOM alone, so the text nodes the app
- *  counts stay the ones the source parses to. */
+ *  API, which leaves the document's DOM alone. */
 const MARK_CSS = [
   ['comment', 'rgb(250 204 21 / .3)', 'rgb(202 138 4 / .75)'],
   ['suggestion', 'rgb(56 189 248 / .25)', 'rgb(2 132 199 / .75)'],
@@ -112,34 +137,49 @@ const MARK_CSS = [
 /** The app's script in the document: reports its height and the reader's
  *  selection, and draws the highlights it is sent. It runs in the inner
  *  document, so the source can replace or spoof it. That is fine: the app
- *  reads whatever arrives as untrusted ({@link readReportedHeight},
- *  {@link readReportedSelection}) and sends marks only to a held document, in
- *  which nothing else runs. A boundary point between nodes moves into text:
- *  a start forward, an end back. */
+ *  reads whatever arrives as untrusted ({@link readFrameReport}) and sends
+ *  marks only to a held document, in which nothing else runs.
+ *
+ *  It runs before any of the source is parsed, so what it reads off
+ *  `Document.prototype` there is the real thing; read later off `document`,
+ *  a named element (`<form name="body">`) could stand in for it. A boundary
+ *  point between nodes moves into text: a start forward, an end back. */
 export const FRAME_SCRIPT = `(function () {
   var app = parent.parent
   var post = function (message) { app.postMessage(message, '*') }
+  var proto = Document.prototype
+  var getter = function (name) { return Object.getOwnPropertyDescriptor(proto, name).get }
+  var bodyOf = getter('body')
+  var rootOf = getter('documentElement')
+  var getSelection = proto.getSelection
+  var createTreeWalker = proto.createTreeWalker
+  var createRange = proto.createRange
+  var body = function () { return bodyOf.call(document) }
+
   var last = -1
   var report = function () {
-    var body = document.body
+    var root = body()
     var height = Math.max(
-      document.documentElement.getBoundingClientRect().height,
-      body ? body.scrollHeight : 0
+      rootOf.call(document).getBoundingClientRect().height,
+      root ? root.scrollHeight : 0
     )
     if (height === last) return
     last = height
     post({type: ${JSON.stringify(HEIGHT_MESSAGE_TYPE)}, height: height})
   }
   var observer = new ResizeObserver(report)
-  observer.observe(document.documentElement)
+  observer.observe(rootOf.call(document))
 
   var texts = function () {
     var list = []
-    if (!document.body) return list
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    var root = body()
+    if (!root) return list
+    var walker = createTreeWalker.call(document, root, NodeFilter.SHOW_TEXT)
     for (var node = walker.nextNode(); node; node = walker.nextNode()) list.push(node)
     return list
   }
+  var digest = ${textDigest.toString()}
+  var digestOf = function (list) { return digest(list.map(function (node) { return node.data })) }
   var pointAt = function (list, at, offset) {
     var text = list[at].data
     var occurrence = 0
@@ -156,7 +196,7 @@ export const FRAME_SCRIPT = `(function () {
       var at = list.indexOf(container)
       return at < 0 ? null : pointAt(list, at, offset)
     }
-    var probe = document.createRange()
+    var probe = createRange.call(document)
     probe.setStart(container, offset)
     var i
     if (forward) {
@@ -171,7 +211,7 @@ export const FRAME_SCRIPT = `(function () {
     return null
   }
   var selected = function () {
-    var selection = document.getSelection()
+    var selection = getSelection.call(document)
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     var range = selection.getRangeAt(0)
     var list = texts()
@@ -179,7 +219,12 @@ export const FRAME_SCRIPT = `(function () {
     var end = pointIn(list, range.endContainer, range.endOffset, false)
     if (!start || !end) return null
     var box = range.getBoundingClientRect()
-    return {start: start, end: end, rect: {top: box.top, left: box.left, bottom: box.bottom, right: box.right}}
+    return {
+      start: start,
+      end: end,
+      rect: {top: box.top, left: box.left, bottom: box.bottom, right: box.right},
+      digest: digestOf(list)
+    }
   }
   var reported = 'null'
   var scheduled = false
@@ -199,9 +244,10 @@ export const FRAME_SCRIPT = `(function () {
   addEventListener('scroll', reportSelection, true)
 
   var kinds = ${JSON.stringify(MARK_KINDS)}
-  var draw = function (marks) {
+  var draw = function (sent) {
     if (typeof Highlight !== 'function' || !window.CSS || !CSS.highlights) return
     var list = texts()
+    var marks = sent.marks.length > 0 && sent.digest === digestOf(list) ? sent.marks : []
     var byKind = {}
     kinds.forEach(function (kind) { byKind[kind] = new Highlight() })
     marks.forEach(function (mark) {
@@ -210,7 +256,7 @@ export const FRAME_SCRIPT = `(function () {
       var end = highlight && mark.end && list[mark.end.node]
       if (!start || !end) return
       try {
-        var range = document.createRange()
+        var range = createRange.call(document)
         range.setStart(start, mark.start.offset)
         range.setEnd(end, mark.end.offset)
         highlight.add(range)
@@ -225,17 +271,18 @@ export const FRAME_SCRIPT = `(function () {
   addEventListener('message', function (event) {
     var data = event.data
     if (event.source !== app || !data || typeof data !== 'object') return
-    if (data.type === ${JSON.stringify(MARKS_MESSAGE_TYPE)} && Array.isArray(data.marks)) draw(data.marks)
+    if (data.type === ${JSON.stringify(MARKS_MESSAGE_TYPE)} && Array.isArray(data.marks)) draw(data)
     if (data.type === ${JSON.stringify(CLEAR_SELECTION_MESSAGE_TYPE)}) {
-      var selection = document.getSelection()
+      var selection = getSelection.call(document)
       if (selection) selection.removeAllRanges()
     }
   })
 
   addEventListener('DOMContentLoaded', function () {
-    observer.observe(document.body)
-    report()
     post({type: ${JSON.stringify(READY_MESSAGE_TYPE)}})
+    var root = body()
+    if (root) observer.observe(root)
+    report()
   })
   addEventListener('load', report)
 })()`
@@ -249,10 +296,14 @@ const freshNonce = (): string => bytesToHex(crypto.getRandomValues(new Uint8Arra
 const escapeAttribute = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
 
+const REPLACEMENT_CHARACTER = '�'
+
 /** The source as the inner document's parser reads it. Read back out of the
  *  attribute above, it is the source with each NUL turned into U+FFFD, one
- *  character for one, so an offset into either is an offset into both. */
-export const asFramed = (source: string): string => source.replaceAll('\0', '�')
+ *  code unit for one, so an offset into either is an offset into both. An
+ *  unpaired surrogate engines turn into different numbers of U+FFFD, so that
+ *  is left for the text digest to tell. */
+export const asFramed = (source: string): string => source.replaceAll('\u0000', REPLACEMENT_CHARACTER)
 
 /** What the inner document holds ahead of the source. The head is left open: a
  *  source that is a whole document then parses as if it had been written here,
@@ -265,9 +316,6 @@ export const innerDocumentHead = (themeCss: string, reporterNonce: string | null
   `<style>${themeCss}${MARK_CSS}</style>` +
   `<script${reporterNonce === null ? '' : ` nonce="${reporterNonce}"`}>${FRAME_SCRIPT}</script>`
 
-const innerDocument = (source: string, themeCss: string, reporterNonce: string | null): string =>
-  innerDocumentHead(themeCss, reporterNonce) + source
-
 /** A srcdoc document takes its base URL from its embedder, and at the top of that
  *  chain is the app's URL, which holds the workspace and the open blocks. Hence the
  *  `<base>`, and in the outer document because the source could remove its own. It
@@ -278,51 +326,66 @@ export const buildFrameDocument = (source: string, themeCss: string, scripts: Fr
   `<meta http-equiv="Content-Security-Policy" content="${framePolicy(reporterNonce)}">` +
   `<style>${themeCss}html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style>` +
   '</head><body>' +
-  `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocument(source, themeCss, reporterNonce))}"></iframe>` +
+  `<iframe sandbox="${FRAME_SANDBOX}" title="HTML document" srcdoc="${escapeAttribute(innerDocumentHead(themeCss, reporterNonce) + source)}"></iframe>` +
   '</body></html>'
 }
 
-const typeOf = (data: unknown): unknown =>
-  typeof data === 'object' && data !== null ? (data as {type?: unknown}).type : undefined
+/** What a document posts, as the app reads it. */
+export type FrameReport =
+  | {kind: 'height'; height: number}
+  | {kind: 'ready'}
+  | {kind: 'selection'; selection: FrameSelection | null}
 
-/** Total over anything a frame can post. */
-export const readReportedHeight = (data: unknown): number | null => {
-  if (typeOf(data) !== HEIGHT_MESSAGE_TYPE) return null
-  const {height} = data as {height?: unknown}
-  if (typeof height !== 'number' || !Number.isFinite(height)) return null
-  return Math.min(MAX_FRAME_HEIGHT, Math.max(MIN_FRAME_HEIGHT, Math.ceil(height)))
-}
-
-export const isReadyMessage = (data: unknown): boolean => typeOf(data) === READY_MESSAGE_TYPE
+const fieldsOf = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null ? value as Record<string, unknown> : null
 
 const isIndex = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0
+const isFinite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
 const readPoint = (value: unknown): FramePoint | null => {
-  if (typeof value !== 'object' || value === null) return null
-  const {text, occurrence, count, offset} = value as Record<string, unknown>
+  const fields = fieldsOf(value)
+  if (!fields) return null
+  const {text, occurrence, count, offset} = fields
   return typeof text === 'string' && isIndex(occurrence) && isIndex(count) && isIndex(offset)
     ? {text, occurrence, count, offset}
     : null
 }
 
 const readRect = (value: unknown): FrameSelection['rect'] | null => {
-  if (typeof value !== 'object' || value === null) return null
-  const {top, left, bottom, right} = value as Record<string, unknown>
-  const sides = [top, left, bottom, right]
-  return sides.every(side => typeof side === 'number' && Number.isFinite(side))
-    ? {top: top as number, left: left as number, bottom: bottom as number, right: right as number}
-    : null
+  const fields = fieldsOf(value)
+  if (!fields) return null
+  const {top, left, bottom, right} = fields
+  return isFinite(top) && isFinite(left) && isFinite(bottom) && isFinite(right) ? {top, left, bottom, right} : null
 }
 
-/** Total over anything a frame can post: undefined for anything but a
- *  selection report, null for a report of no selection (or a malformed one). */
-export const readReportedSelection = (data: unknown): FrameSelection | null | undefined => {
-  if (typeOf(data) !== SELECTION_MESSAGE_TYPE) return undefined
-  const {selection} = data as {selection?: unknown}
-  if (typeof selection !== 'object' || selection === null) return null
-  const {start, end, rect} = selection as Record<string, unknown>
-  const read = {start: readPoint(start), end: readPoint(end), rect: readRect(rect)}
-  return read.start && read.end && read.rect ? read as FrameSelection : null
+/** A malformed selection reads as none. */
+const readSelection = (value: unknown): FrameSelection | null => {
+  const fields = fieldsOf(value)
+  if (!fields) return null
+  const start = readPoint(fields.start)
+  const end = readPoint(fields.end)
+  const rect = readRect(fields.rect)
+  const {digest} = fields
+  return start && end && rect && typeof digest === 'string' ? {start, end, rect, digest} : null
+}
+
+/** Total over anything a frame can post; null for anything that is not a
+ *  report. A height is clamped to the frame limits, rounded up so a fractional
+ *  one doesn't clip the last line. */
+export const readFrameReport = (data: unknown): FrameReport | null => {
+  const fields = fieldsOf(data)
+  switch (fields?.type) {
+    case HEIGHT_MESSAGE_TYPE:
+      return isFinite(fields.height)
+        ? {kind: 'height', height: Math.min(MAX_FRAME_HEIGHT, Math.max(MIN_FRAME_HEIGHT, Math.ceil(fields.height)))}
+        : null
+    case READY_MESSAGE_TYPE:
+      return {kind: 'ready'}
+    case SELECTION_MESSAGE_TYPE:
+      return {kind: 'selection', selection: readSelection(fields.selection)}
+    default:
+      return null
+  }
 }
 
 /** The window the source runs in, which is the only one whose height reports

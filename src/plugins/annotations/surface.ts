@@ -16,8 +16,7 @@ import {useBlockContext} from '@/context/block.js'
 import type {ContentRange} from './actions.ts'
 import type {HighlightRange} from './highlights.ts'
 
-export type {ContentRange}
-export type SurfaceHighlight = HighlightRange
+export type {ContentRange, HighlightRange}
 
 /** What something annotations provides around a block's content belongs to:
  *  that block, rendered in that scope. */
@@ -49,7 +48,7 @@ export interface SurfaceGesture {
 
 export interface AnnotationSurface extends ProvidedFor {
   /** Where open threads highlight `content`, the text the renderer draws. */
-  highlightsIn: (content: string) => readonly SurfaceHighlight[]
+  highlightsIn: (content: string) => readonly HighlightRange[]
   gestures: readonly SurfaceGesture[]
 }
 

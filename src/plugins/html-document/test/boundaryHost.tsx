@@ -4,7 +4,7 @@
 
 import {createRef} from 'react'
 import {createRoot} from 'react-dom/client'
-import type {FrameMark, FrameScripts, FrameSelection} from '../frameDocument.ts'
+import type {FrameMarks, FrameScripts, FrameSelection} from '../frameDocument.ts'
 import {HtmlFrame, type HtmlFrameHandle} from '../HtmlFrame.tsx'
 
 declare global {
@@ -15,7 +15,7 @@ declare global {
     selections: (FrameSelection | null)[]
     kmSecret: string
     secretsReady: Promise<void>
-    mountSandboxed: (source: string, scripts?: FrameScripts, marks?: FrameMark[]) => void
+    mountSandboxed: (source: string, scripts?: FrameScripts, marks?: FrameMarks) => void
     clearSelection: () => void
     mountControl: (source: string) => void
   }

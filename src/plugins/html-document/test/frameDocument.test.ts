@@ -7,9 +7,10 @@ import {
   HEIGHT_MESSAGE_TYPE,
   MAX_FRAME_HEIGHT,
   MIN_FRAME_HEIGHT,
-  readReportedHeight,
-  readReportedSelection,
+  READY_MESSAGE_TYPE,
+  readFrameReport,
   SELECTION_MESSAGE_TYPE,
+  textDigest,
 } from '../frameDocument.ts'
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html')
@@ -88,56 +89,62 @@ describe('framePolicy', () => {
   })
 })
 
-describe('readReportedHeight', () => {
-  const message = (height: unknown) => ({type: HEIGHT_MESSAGE_TYPE, height})
+describe('readFrameReport', () => {
+  const height = (value: unknown) => ({type: HEIGHT_MESSAGE_TYPE, height: value})
+  const point = {text: 'some text', occurrence: 0, count: 1, offset: 2}
+  const rect = {top: 1, left: 2, bottom: 3, right: 4}
+  const selection = {start: point, end: point, rect, digest: '1:abc'}
+  const reported = (value: unknown) => ({type: SELECTION_MESSAGE_TYPE, selection: value})
 
   it.each([
     [undefined], [null], ['text'], [7], [{}], [[]],
     [{type: 'other', height: 100}],
-    [message('100')], [message(null)], [message(Number.NaN)], [message(Number.POSITIVE_INFINITY)],
-  ])('ignores %j', data => {
-    expect(readReportedHeight(data)).toBeNull()
+    [{selection}],
+    [height('100')], [height(null)], [height(Number.NaN)], [height(Number.POSITIVE_INFINITY)],
+  ])('reads %j as no report', data => {
+    expect(readFrameReport(data)).toBeNull()
   })
 
   it('reads a height in range', () => {
-    expect(readReportedHeight(message(321))).toBe(321)
+    expect(readFrameReport(height(321))).toEqual({kind: 'height', height: 321})
   })
 
-  it('rounds up so a fractional height does not clip the last line', () => {
-    expect(readReportedHeight(message(320.2))).toBe(321)
+  it('rounds a height up so a fractional one does not clip the last line', () => {
+    expect(readFrameReport(height(320.2))).toEqual({kind: 'height', height: 321})
   })
 
-  it('clamps to the frame limits, so a document cannot take over the page or vanish', () => {
-    expect(readReportedHeight(message(1e9))).toBe(MAX_FRAME_HEIGHT)
-    expect(readReportedHeight(message(-5))).toBe(MIN_FRAME_HEIGHT)
+  it('clamps a height to the frame limits, so a document cannot take over the page or vanish', () => {
+    expect(readFrameReport(height(1e9))).toEqual({kind: 'height', height: MAX_FRAME_HEIGHT})
+    expect(readFrameReport(height(-5))).toEqual({kind: 'height', height: MIN_FRAME_HEIGHT})
+  })
+
+  it('reads that a document is ready', () => {
+    expect(readFrameReport({type: READY_MESSAGE_TYPE})).toEqual({kind: 'ready'})
+  })
+
+  it.each([
+    [null],
+    ['text'],
+    [{...selection, rect: undefined}],
+    [{...selection, digest: undefined}],
+    [{...selection, end: {...point, offset: -1}}],
+    [{...selection, end: {...point, occurrence: 0.5}}],
+    [{...selection, start: {...point, text: 7}}],
+    [{...selection, start: {...point, count: -1}}],
+    [{...selection, rect: {...rect, top: Number.NaN}}],
+  ])('reads a selection of %j as none', value => {
+    expect(readFrameReport(reported(value))).toEqual({kind: 'selection', selection: null})
+  })
+
+  it('reads a well-formed selection, and only what it names', () => {
+    expect(readFrameReport(reported({...selection, start: {...point, extra: 1}, extra: 2})))
+      .toEqual({kind: 'selection', selection})
   })
 })
 
-describe('readReportedSelection', () => {
-  const point = {text: 'some text', occurrence: 0, count: 1, offset: 2}
-  const rect = {top: 1, left: 2, bottom: 3, right: 4}
-  const message = (selection: unknown) => ({type: SELECTION_MESSAGE_TYPE, selection})
-
-  it.each([[undefined], ['text'], [{type: HEIGHT_MESSAGE_TYPE, height: 100}], [{selection: {start: point, end: point, rect}}]])(
-    'is not a selection report: %j', data => {
-      expect(readReportedSelection(data)).toBeUndefined()
-    })
-
-  it.each([
-    [message(null)],
-    [message('text')],
-    [message({start: point, end: point})],
-    [message({start: point, end: {...point, offset: -1}, rect})],
-    [message({start: point, end: {...point, occurrence: 0.5}, rect})],
-    [message({start: {...point, text: 7}, end: point, rect})],
-    [message({start: {...point, count: -1}, end: point, rect})],
-    [message({start: point, end: point, rect: {...rect, top: Number.NaN}})],
-  ])('reads %j as no selection', data => {
-    expect(readReportedSelection(data)).toBeNull()
-  })
-
-  it('reads a well-formed report, and only what it names', () => {
-    expect(readReportedSelection(message({start: {...point, extra: 1}, end: point, rect, extra: 2})))
-      .toEqual({start: point, end: point, rect})
+describe('textDigest', () => {
+  it('tells apart text split differently into nodes, and the same text in another order', () => {
+    const digests = [['ab'], ['a', 'b'], ['b', 'a'], ['a', 'b', '']].map(textDigest)
+    expect(new Set(digests).size).toBe(digests.length)
   })
 })

@@ -1,20 +1,24 @@
 import {describe, expect, it} from 'vitest'
-import type {FramePoint} from '../frameDocument.ts'
-import {marksOf, rangeOfSelection, textSpansOf, type TextSpan} from '../sourceMap.ts'
+import {textDigest, type FramePoint} from '../frameDocument.ts'
+import {marksOf, rangeOfSelection, textSpansOf} from '../sourceMap.ts'
 
-/** The selection a frame would report from `start` to `end`, each the first
- *  text node with that text and an offset into it. */
-const selectionIn = (spans: readonly TextSpan[], start: [string, number], end: [string, number]) => {
+/** What a frame holding exactly the text `source` parses to reports. */
+const digestOf = (source: string) => textDigest(textSpansOf(source).map(span => span.value))
+
+/** The selection such a frame would report from `start` to `end`, each the
+ *  first text node with that text and an offset into it. */
+const selectionIn = (source: string, start: [string, number], end: [string, number]) => {
+  const spans = textSpansOf(source)
   const point = ([text, offset]: [string, number]): FramePoint => {
     const count = spans.filter(span => span.value === text).length
     if (count === 0) throw new Error(`no text node ${JSON.stringify(text)}`)
     return {text, occurrence: 0, count, offset}
   }
-  return {start: point(start), end: point(end)}
+  return {start: point(start), end: point(end), digest: digestOf(source)}
 }
 
 const sliceOf = (source: string, start: [string, number], end: [string, number]) => {
-  const range = rangeOfSelection(textSpansOf(source), selectionIn(textSpansOf(source), start, end), 'hold')
+  const range = rangeOfSelection(source, selectionIn(source, start, end))
   if (typeof range === 'string') throw new Error(range)
   return source.slice(range.from, range.to)
 }
@@ -34,6 +38,10 @@ describe('textSpansOf', () => {
   it('leaves a template\'s content out, as the DOM does', () => {
     expect(textSpansOf('<p>a</p><template><p>hidden</p></template><p>b</p>').map(span => span.value))
       .toEqual(['a', 'b'])
+  })
+
+  it('walks a source nested deeper than a call stack goes', () => {
+    expect(textSpansOf(`${'<div>'.repeat(6000)}deep`).at(-1)?.value).toBe('deep')
   })
 })
 
@@ -65,107 +73,95 @@ describe('rangeOfSelection', () => {
     expect(sliceOf('<p>a\r\nb\rc</p>', ['a\nb\nc', 2], ['a\nb\nc', 5])).toBe('b\rc')
   })
 
+  it('maps a NUL as the frame receives it, as U+FFFD', () => {
+    expect(sliceOf('<p>a\u0000b</p>', ['a\uFFFDb', 1], ['a\uFFFDb', 3])).toBe('\u0000b')
+  })
+
   it('refuses an end inside what one reference expands to', () => {
     const source = '<p>x&#x1F600;y</p>'
-    const spans = textSpansOf(source)
-    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['x😀y', 0], ['x😀y', 2]), 'hold')).toBe('string')
+    expect(typeof rangeOfSelection(source, selectionIn(source, ['x😀y', 0], ['x😀y', 2]))).toBe('string')
     expect(sliceOf(source, ['x😀y', 0], ['x😀y', 3])).toBe('x&#x1F600;')
-  })
-
-  it('refuses a text node whose DOM text is not what the source parses to', () => {
-    const spans = textSpansOf('<p>Hello world</p>')
-    const selection = selectionIn(spans, ['Hello world', 0], ['Hello world', 5])
-    const rewritten = {...selection, start: {...selection.start, text: 'Hello there'}}
-    expect(typeof rangeOfSelection(spans, rewritten, 'hold')).toBe('string')
-  })
-
-  it('refuses a node the frame has and the source does not', () => {
-    const spans = textSpansOf('<p>Hello</p>')
-    const start = {text: 'Hello', occurrence: 1, count: 2, offset: 0}
-    expect(typeof rangeOfSelection(spans, {start, end: {...start, offset: 5}}, 'hold')).toBe('string')
-  })
-
-  it('tells repeated text apart by which occurrence it is', () => {
-    const source = '<p>same</p><p>same</p>'
-    const spans = textSpansOf(source)
-    const second = {text: 'same', occurrence: 1, count: 2, offset: 0}
-    expect(rangeOfSelection(spans, {start: second, end: {...second, offset: 4}}, 'hold'))
-      .toEqual({from: source.lastIndexOf('same'), to: source.lastIndexOf('same') + 4})
-  })
-
-  it('maps a NUL as the frame receives it, as U+FFFD', () => {
-    expect(sliceOf('<p>a\0b</p>', ['a�b', 1], ['a�b', 3])).toBe('\0b')
   })
 
   it('refuses text the tree builder moved out of a table and merged', () => {
     const source = '<table>x<tr><td>cell</td></tr>y</table>'
-    const spans = textSpansOf(source)
-    expect(spans.map(span => span.value)).toEqual(['xy', 'cell'])
-    expect(typeof rangeOfSelection(spans, selectionIn(spans, ['xy', 0], ['cell', 2]), 'hold')).toBe('string')
+    expect(textSpansOf(source).map(span => span.value)).toEqual(['xy', 'cell'])
+    expect(typeof rangeOfSelection(source, selectionIn(source, ['xy', 0], ['cell', 2]))).toBe('string')
     expect(sliceOf(source, ['cell', 0], ['cell', 4])).toBe('cell')
   })
 
-  describe('while the document\'s scripts run', () => {
-    const SOURCE = '<p>same</p><p>same</p><p>once</p>'
-    const spans = textSpansOf(SOURCE)
-    const at = (text: string, occurrence: number, count: number) => ({
-      start: {text, occurrence, count, offset: 0},
-      end: {text, occurrence, count, offset: text.length},
-    })
-
-    it('places text that appears once in the frame and once in the source', () => {
-      expect(rangeOfSelection(spans, at('once', 0, 1), 'run'))
-        .toEqual({from: SOURCE.indexOf('once'), to: SOURCE.indexOf('once') + 4})
-    })
-
-    it('refuses text the source repeats, even once a script left one copy in the frame', () => {
-      expect(rangeOfSelection(spans, at('same', 0, 1), 'run')).toMatch(/scripts run/)
-    })
-
-    it('refuses text a script repeated in the frame', () => {
-      expect(rangeOfSelection(spans, at('once', 1, 2), 'run')).toMatch(/scripts run/)
-      expect(rangeOfSelection(spans, at('once', 0, 2), 'run')).toMatch(/scripts run/)
-    })
+  it('tells repeated text apart by which occurrence it is', () => {
+    const source = '<p>same</p><p>same</p>'
+    const second = {text: 'same', occurrence: 1, count: 2, offset: 0}
+    expect(rangeOfSelection(source, {start: second, end: {...second, offset: 4}, digest: digestOf(source)}))
+      .toEqual({from: source.lastIndexOf('same'), to: source.lastIndexOf('same') + 4})
   })
 
   it('refuses an empty selection', () => {
-    const spans = textSpansOf('<p>Hello</p>')
-    expect(rangeOfSelection(spans, selectionIn(spans, ['Hello', 2], ['Hello', 2]), 'hold')).toBe('Select some text first.')
+    expect(rangeOfSelection('<p>Hello</p>', selectionIn('<p>Hello</p>', ['Hello', 2], ['Hello', 2])))
+      .toBe('Select some text first.')
+  })
+
+  describe('in a frame whose text is not what the source parses to', () => {
+    const SOURCE = '<p>same</p><p>same</p><p>once</p>'
+    const at = (text: string, occurrence: number, count: number) => ({
+      start: {text, occurrence, count, offset: 0},
+      end: {text, occurrence, count, offset: text.length},
+      digest: 'another document',
+    })
+
+    it('places text found once in the frame and once in the source', () => {
+      expect(rangeOfSelection(SOURCE, at('once', 0, 1)))
+        .toEqual({from: SOURCE.indexOf('once'), to: SOURCE.indexOf('once') + 4})
+    })
+
+    it('refuses text the source repeats, even where the frame has one copy left', () => {
+      expect(rangeOfSelection(SOURCE, at('same', 0, 1))).toMatch(/not what its source parses to/)
+    })
+
+    it('refuses text the frame repeats', () => {
+      expect(rangeOfSelection(SOURCE, at('once', 1, 2))).toMatch(/not what its source parses to/)
+      expect(rangeOfSelection(SOURCE, at('once', 0, 2))).toMatch(/not what its source parses to/)
+    })
+
+    it('refuses text the source does not have', () => {
+      expect(rangeOfSelection(SOURCE, at('typed in', 0, 1))).toMatch(/not what its source parses to/)
+    })
   })
 })
 
 describe('marksOf', () => {
   const source = '<p>one <b>two</b> three</p><p title="three">Tom &amp; Jerry</p>'
-  const spans = textSpansOf(source)
   const at = (quote: string, from = 0) => {
     const start = source.indexOf(quote, from)
     return {from: start, to: start + quote.length, moved: false, suggestion: false}
   }
 
-  it('places each end of a range in the text node that holds it', () => {
-    expect(marksOf(spans, [at('ne <b>two</b> thr')])).toEqual([{
-      start: {node: 0, offset: 1}, end: {node: 2, offset: 4}, kind: 'comment',
-    }])
+  it('places each end of a range in the text node that holds it, with the digest of that text', () => {
+    expect(marksOf(source, [at('ne <b>two</b> thr')])).toEqual({
+      digest: digestOf(source),
+      marks: [{start: {node: 0, offset: 1}, end: {node: 2, offset: 4}, kind: 'comment'}],
+    })
   })
 
   it('names the kind from the highlight\'s style', () => {
-    const kinds = marksOf(spans, [
+    const kinds = marksOf(source, [
       {...at('two'), moved: true},
       {...at('Jerry'), suggestion: true},
       {...at('Tom'), suggestion: true, moved: true},
-    ]).map(mark => mark.kind)
+    ]).marks.map(mark => mark.kind)
     expect(kinds).toEqual(['comment-moved', 'suggestion', 'suggestion-moved'])
   })
 
   it('places an end beside a character reference in the text it decodes to', () => {
-    expect(marksOf(spans, [at('&amp; Jerry')])).toEqual([{
+    expect(marksOf(source, [at('&amp; Jerry')]).marks).toEqual([{
       start: {node: 3, offset: 4}, end: {node: 3, offset: 11}, kind: 'comment',
     }])
   })
 
   it('draws nothing for a range with an end outside text', () => {
     // A moved anchor can resolve to the same text in an attribute.
-    expect(marksOf(spans, [at('three', source.indexOf('title'))])).toEqual([])
-    expect(marksOf(spans, [at('amp')])).toEqual([])
+    expect(marksOf(source, [at('three', source.indexOf('title'))]).marks).toEqual([])
+    expect(marksOf(source, [at('amp')]).marks).toEqual([])
   })
 })

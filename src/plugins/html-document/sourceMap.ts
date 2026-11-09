@@ -1,9 +1,10 @@
 /**
  * Where the reader's selection in an `html-document` frame sits in the block's
  * source, and back. The source is parsed here as the frame parses it, after the
- * same head, so a held document's body text nodes are these, in this order: a
- * mark names its node by place ({@link FrameMark}), and a selection's end by
- * its node's text and which occurrence of that text it is ({@link FramePoint}).
+ * same head. Where the browser builds the same text nodes, a mark names its
+ * node by place ({@link FrameMark}) and a selection's end by its node's text
+ * and which occurrence of that text it is ({@link FramePoint}); the text
+ * digest on each side says whether it did.
  *
  * Exact or refused, as read-mode markdown is (`annotations/readSelection.ts`):
  * a point maps only where the frame's text is the text the source parses to,
@@ -16,13 +17,15 @@
 
 import {parse, type DefaultTreeAdapterTypes} from 'parse5'
 import {DecodingMode, EntityDecoder, htmlDecodeTree} from 'entities/decode'
-import type {SurfaceHighlight} from '@/plugins/annotations/surface.ts'
+import type {HighlightRange} from '@/plugins/annotations/surface.ts'
 import {
   asFramed,
   innerDocumentHead,
+  textDigest,
   type FrameMark,
+  type FrameMarks,
   type FramePoint,
-  type FrameScripts,
+  type FrameSelection,
   type MarkKind,
 } from './frameDocument.ts'
 
@@ -88,66 +91,76 @@ const bodyOf = (document: DefaultTreeAdapterTypes.Document): ParentNode | undefi
   return html?.childNodes.find(node => node.nodeName === 'body') as ParentNode | undefined
 }
 
-let cached: {source: string; spans: TextSpan[]} | null = null
+interface Parsed {
+  source: string
+  spans: TextSpan[]
+  digest: string
+}
 
-/** The body's text nodes, in document order, as the frame's DOM holds them. A
- *  template's content is not among them, as it isn't in the DOM's. */
-export const textSpansOf = (source: string): TextSpan[] => {
-  if (cached?.source === source) return cached.spans
+let cached: Parsed | null = null
+
+/** The body's text nodes, in document order, as a frame's DOM holds them when
+ *  the browser builds what parse5 does. A template's content is not among
+ *  them, as it isn't in the DOM's. Walked without recursion: a source can
+ *  nest deeper than the stack goes. parse5 takes time quadratic in nesting
+ *  depth, where a browser stops nesting at 512; a source built to nest
+ *  thousands deep parses slowly here, which is accepted, since it takes one
+ *  written for it. */
+const parsed = (source: string): Parsed => {
+  if (cached?.source === source) return cached
   const framed = asFramed(source)
   const document = parse(HEAD + framed, {sourceCodeLocationInfo: true})
   const spans: TextSpan[] = []
-  const visit = (parent: ParentNode) => {
-    for (const node of parent.childNodes) {
-      if (node.nodeName === '#text') {
-        const {value, sourceCodeLocation: at} = node as DefaultTreeAdapterTypes.TextNode
-        spans.push({
-          value,
-          offsets: at ? offsetsOf(framed, at.startOffset - HEAD.length, at.endOffset - HEAD.length, value) : nowhere(value),
-        })
-      } else if ('childNodes' in node) {
-        visit(node)
-      }
+  const body = bodyOf(document)
+  const pending: DefaultTreeAdapterTypes.ChildNode[] = body ? [...body.childNodes].reverse() : []
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    if (node.nodeName === '#text') {
+      const {value, sourceCodeLocation: at} = node as DefaultTreeAdapterTypes.TextNode
+      spans.push({
+        value,
+        offsets: at ? offsetsOf(framed, at.startOffset - HEAD.length, at.endOffset - HEAD.length, value) : nowhere(value),
+      })
+    } else if ('childNodes' in node) {
+      for (let i = node.childNodes.length - 1; i >= 0; i--) pending.push(node.childNodes[i])
     }
   }
-  const body = bodyOf(document)
-  if (body) visit(body)
-  cached = {source, spans}
-  return spans
+  cached = {source, spans, digest: textDigest(spans.map(span => span.value))}
+  return cached
 }
 
-const UNPLACEABLE: Record<FrameScripts, string> = {
-  hold: 'Can’t tell exactly which part of the source that is. Start and end the selection in plain text.',
-  run: 'Can’t tell exactly which part of the source that is while the document’s scripts run. ' +
-    'Stop them, or start and end the selection in text that appears only once in the document.',
-}
+export const textSpansOf = (source: string): TextSpan[] => parsed(source).spans
 
-/** The source text node a point is in. In a held document the frame's text
- *  nodes are the source's, so the kth with this text is the kth here. A
- *  running document's scripts may have added, moved or removed text, so there
- *  a point is placed only in text found in one node on each side: then no
- *  other passage of the source can be the one the reader selected. */
-const spanOf = (spans: readonly TextSpan[], {text, occurrence, count}: FramePoint, scripts: FrameScripts) => {
+const UNPLACEABLE = 'Can’t tell exactly which part of the source that is. Start and end the selection in plain text.'
+const TEXT_CHANGED = 'Can’t tell exactly which part of the source that is: the document’s text is not what its ' +
+  'source parses to (a script or an edit in it changed it, or the browser built it differently). ' +
+  'Only text that appears once in it can be placed.'
+
+/** The source text node a point is in. While the frame's text has the
+ *  source's digest, the kth node with this text is the kth here. Otherwise
+ *  nodes may have been added, moved, split, merged or edited, so a point is
+ *  placed only in text found in one node on each side: then no other passage
+ *  of the source can be the one the reader selected. */
+const spanOf = ({spans, digest}: Parsed, {text, occurrence, count}: FramePoint, frameDigest: string) => {
   const matching = spans.filter(span => span.value === text)
-  if (scripts === 'hold') return matching[occurrence]
+  if (frameDigest === digest) return matching[occurrence]
   return count === 1 && matching.length === 1 ? matching[0] : undefined
 }
 
-const sourceOffsetOf = (spans: readonly TextSpan[], point: FramePoint, scripts: FrameScripts): number | null => {
-  const offset = spanOf(spans, point, scripts)?.offsets[point.offset]
+const sourceOffsetOf = (source: Parsed, point: FramePoint, frameDigest: string): number | null => {
+  const offset = spanOf(source, point, frameDigest)?.offsets[point.offset]
   return offset === undefined || offset < 0 ? null : offset
 }
 
 /** The selection as a range of the source, or why it can't be one. The ends
  *  arrive in document order, so a start past its end selected no text. */
 export const rangeOfSelection = (
-  spans: readonly TextSpan[],
-  {start, end}: {start: FramePoint; end: FramePoint},
-  scripts: FrameScripts,
+  source: string,
+  {start, end, digest}: Pick<FrameSelection, 'start' | 'end' | 'digest'>,
 ): {from: number; to: number} | string => {
-  const from = sourceOffsetOf(spans, start, scripts)
-  const to = sourceOffsetOf(spans, end, scripts)
-  if (from === null || to === null) return UNPLACEABLE[scripts]
+  const ofSource = parsed(source)
+  const from = sourceOffsetOf(ofSource, start, digest)
+  const to = sourceOffsetOf(ofSource, end, digest)
+  if (from === null || to === null) return digest === ofSource.digest ? UNPLACEABLE : TEXT_CHANGED
   return from < to ? {from, to} : 'Select some text first.'
 }
 
@@ -159,15 +172,21 @@ const pointAt = (spans: readonly TextSpan[], offset: number): FrameMark['start']
   return null
 }
 
-const kindOf = ({moved, suggestion}: SurfaceHighlight): MarkKind =>
+const kindOf = ({moved, suggestion}: HighlightRange): MarkKind =>
   `${suggestion ? 'suggestion' : 'comment'}${moved ? '-moved' : ''}`
 
-/** Each highlight as the frame draws it. One whose end has no place in the
- *  document's text (a moved anchor that resolved inside an attribute, or
- *  inside a reference) draws nothing. */
-export const marksOf = (spans: readonly TextSpan[], highlights: readonly SurfaceHighlight[]): FrameMark[] =>
-  highlights.flatMap(highlight => {
-    const start = pointAt(spans, highlight.from)
-    const end = pointAt(spans, highlight.to)
-    return start && end ? [{start, end, kind: kindOf(highlight)}] : []
-  })
+/** Each highlight as the frame draws it, with the digest of the text it was
+ *  placed in. One whose end has no place in the document's text (a moved
+ *  anchor that resolved inside an attribute, or inside a reference) draws
+ *  nothing. */
+export const marksOf = (source: string, highlights: readonly HighlightRange[]): FrameMarks => {
+  const {spans, digest} = parsed(source)
+  return {
+    digest,
+    marks: highlights.flatMap(highlight => {
+      const start = pointAt(spans, highlight.from)
+      const end = pointAt(spans, highlight.to)
+      return start && end ? [{start, end, kind: kindOf(highlight)}] : []
+    }),
+  }
+}

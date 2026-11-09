@@ -48,7 +48,7 @@ import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
-import {composerReady, gestureRunsHere, readSelectionGestures, reportFailure, submitComposer} from './actions.ts'
+import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
@@ -220,17 +220,15 @@ const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): Anno
     blockId: block.id,
     renderScopeId,
     highlightsIn: content => highlightRanges(content, feed.threads),
-    gestures: readSelectionGestures
-      .filter(gesture => gestureRunsHere(gesture, {renderScopeId}))
-      .map(gesture => ({
-        id: gesture.actionId,
-        label: gesture.label,
-        icon: gesture.icon,
-        run: range => gesture.step({block, renderScopeId, range}).catch(error => {
-          reportFailure(error)
-          return false
-        }),
-      })),
+    gestures: readSelectionGesturesIn(renderScopeId).map(gesture => ({
+      id: gesture.actionId,
+      label: gesture.label,
+      icon: gesture.icon,
+      run: range => gesture.step({block, renderScopeId, range}).catch(error => {
+        reportFailure(error)
+        return false
+      }),
+    })),
   }), [block, renderScopeId, feed.threads])
 }
 

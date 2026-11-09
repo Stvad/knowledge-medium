@@ -4,18 +4,16 @@ import {
   CLEAR_SELECTION_MESSAGE_TYPE,
   documentWindowOf,
   FRAME_SANDBOX,
-  isReadyMessage,
   MARKS_MESSAGE_TYPE,
-  readReportedHeight,
-  readReportedSelection,
-  type FrameMark,
+  NO_MARKS,
+  readFrameReport,
+  type FrameMarks,
   type FrameScripts,
   type FrameSelection,
 } from './frameDocument.ts'
 import {useFrameThemeCss} from './frameTheme.ts'
 
 const INITIAL_FRAME_HEIGHT = 150
-const NO_MARKS: readonly FrameMark[] = Object.freeze([])
 
 export interface HtmlFrameHandle {
   clearSelection: () => void
@@ -25,7 +23,7 @@ interface HtmlFrameProps {
   source: string
   scripts: FrameScripts
   /** Drawn only while scripts are held: a running document could read them. */
-  marks?: readonly FrameMark[]
+  marks?: FrameMarks
   /** The reader's selection in the document, or null once there is none. */
   onSelection?: (selection: FrameSelection | null) => void
   ref?: Ref<HtmlFrameHandle>
@@ -33,7 +31,7 @@ interface HtmlFrameProps {
 
 /** Runs `source` in the sandbox `frameDocument.ts` describes, and speaks its
  *  protocol with the one window that may: any other frame on the page can post
- *  here too. Heights apply once per frame of the page's own rendering, so a
+ *  here too. Reports apply once per frame of the page's own rendering, so a
  *  document posting in a loop can't drive React. */
 export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}: HtmlFrameProps) => {
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -58,7 +56,7 @@ export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}:
    *  document. */
   const sendMarks = useCallback(() => {
     const {marks: held} = latest.current
-    if (held) post({type: MARKS_MESSAGE_TYPE, marks: held})
+    if (held) post({type: MARKS_MESSAGE_TYPE, digest: held.digest, marks: held.marks})
   }, [post])
 
   useImperativeHandle(ref, () => ({clearSelection: () => post({type: CLEAR_SELECTION_MESSAGE_TYPE})}), [post])
@@ -77,28 +75,29 @@ export const HtmlFrame = ({source, scripts, marks = NO_MARKS, onSelection, ref}:
   // run after it, and that report would be lost with no second one coming.
   useLayoutEffect(() => {
     let scheduled: number | undefined
-    let latestHeight = INITIAL_FRAME_HEIGHT
+    let pendingHeight: number | undefined
+    let pendingSelection: {selection: FrameSelection | null} | undefined
+    const apply = () => {
+      scheduled = undefined
+      if (pendingHeight !== undefined) setHeight(pendingHeight)
+      if (pendingSelection) latest.current.onSelection?.(pendingSelection.selection)
+      pendingHeight = undefined
+      pendingSelection = undefined
+    }
     const onMessage = (event: MessageEvent) => {
       const frame = frameRef.current
-      const source = frame && documentWindowOf(frame)
-      if (!source || event.source !== source) return
-      if (isReadyMessage(event.data)) {
-        ready.current = source
+      const from = frame && documentWindowOf(frame)
+      if (!from || event.source !== from) return
+      const report = readFrameReport(event.data)
+      if (!report) return
+      if (report.kind === 'ready') {
+        ready.current = from
         sendMarks()
         return
       }
-      const selection = readReportedSelection(event.data)
-      if (selection !== undefined) {
-        latest.current.onSelection?.(selection)
-        return
-      }
-      const reported = readReportedHeight(event.data)
-      if (reported === null) return
-      latestHeight = reported
-      scheduled ??= requestAnimationFrame(() => {
-        scheduled = undefined
-        setHeight(latestHeight)
-      })
+      if (report.kind === 'height') pendingHeight = report.height
+      else pendingSelection = {selection: report.selection}
+      scheduled ??= requestAnimationFrame(apply)
     }
     window.addEventListener('message', onMessage)
     return () => {
