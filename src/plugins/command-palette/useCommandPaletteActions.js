@@ -1,1 +1,1 @@
-export{AA as useCommandPaletteActions}from"../../../chunks/app-DudOz7Nw.js";
+export{WA as useCommandPaletteActions}from"../../../chunks/app-Bea50SKU.js";

@@ -1,1 +1,1 @@
-export{xl as srsBlockDateAdapter}from"../../../chunks/app-DudOz7Nw.js";
+export{jl as srsBlockDateAdapter}from"../../../chunks/app-Bea50SKU.js";

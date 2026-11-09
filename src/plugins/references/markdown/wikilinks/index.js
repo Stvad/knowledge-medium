@@ -1,1 +1,1 @@
-export{kv as wikilinkMarkdownExtension}from"../../../../../chunks/app-DudOz7Nw.js";
+export{Uv as wikilinkMarkdownExtension}from"../../../../../chunks/app-Bea50SKU.js";

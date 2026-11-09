@@ -1,1 +1,1 @@
-export{GN as useOverrides}from"../../chunks/app-DudOz7Nw.js";
+export{aP as useOverrides}from"../../chunks/app-Bea50SKU.js";

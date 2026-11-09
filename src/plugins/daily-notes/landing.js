@@ -1,1 +1,1 @@
-export{YO as todayDailyNoteLanding}from"../../../chunks/app-DudOz7Nw.js";
+export{lk as todayDailyNoteLanding}from"../../../chunks/app-Bea50SKU.js";

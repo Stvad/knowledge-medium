@@ -1,1 +1,1 @@
-export{IR as MarkdownContentRenderer}from"../../../chunks/app-DudOz7Nw.js";
+export{XR as MarkdownContentRenderer}from"../../../chunks/app-Bea50SKU.js";

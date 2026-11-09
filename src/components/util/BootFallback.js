@@ -1,1 +1,1 @@
-export{LW as BootFallback}from"../../../chunks/app-DudOz7Nw.js";
+export{ZW as BootFallback}from"../../../chunks/app-Bea50SKU.js";

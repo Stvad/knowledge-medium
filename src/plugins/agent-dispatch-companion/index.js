@@ -1,1 +1,1 @@
-export{Ip as agentDispatchCompanionPlugin}from"../../../chunks/app-DudOz7Nw.js";
+export{Xp as agentDispatchCompanionPlugin}from"../../../chunks/app-Bea50SKU.js";

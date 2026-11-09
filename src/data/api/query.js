@@ -1,1 +1,1 @@
-export{yst as defineQuery}from"../../../chunks/app-DudOz7Nw.js";
+export{Nst as defineQuery}from"../../../chunks/app-Bea50SKU.js";

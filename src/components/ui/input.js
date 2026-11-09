@@ -1,1 +1,1 @@
-export{S1 as Input}from"../../../chunks/app-DudOz7Nw.js";
+export{I1 as Input}from"../../../chunks/app-Bea50SKU.js";
