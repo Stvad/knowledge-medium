@@ -1,1 +1,0 @@
-export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-Dcv9ykBD.js";

@@ -1,1 +1,0 @@
-export{Art as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dcv9ykBD.js";

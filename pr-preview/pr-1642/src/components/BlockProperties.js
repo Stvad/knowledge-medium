@@ -1,1 +1,0 @@
-export{xz as BlockProperties}from"../../chunks/app-Dcv9ykBD.js";

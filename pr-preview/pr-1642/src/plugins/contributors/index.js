@@ -1,1 +1,0 @@
-export{Np as contributorsPlugin}from"../../../chunks/app-Dcv9ykBD.js";
