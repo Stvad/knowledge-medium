@@ -6,7 +6,7 @@
  * uses the width a wide panel leaves empty beside the text first, then moves
  * the text left, then narrows it (`fitColumn`, `PANEL_RIGHT_CLEARANCE`). Its
  * width is automatic until dragged, and the dragged width is kept on the
- * layout column's row (`annotationMarginWidthProp`). The cost is that it
+ * panel's row (`annotationMarginWidthProp`). The cost is that it
  * lives outside the scrollport: it finds the panel's rows in the DOM (mounted
  * rows and lazy placeholders alike, of the panel's own render scope), reads
  * their positions and moves the cards within one animation frame of a scroll
@@ -29,7 +29,6 @@ import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.j
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
-import {isPanelStackRow} from '@/utils/panelLayoutProjection.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginWidthProp} from './marginSchema.ts'
 import {byPlacement, fitColumn, placeCards} from './placement.ts'
@@ -99,20 +98,9 @@ export const CommentMargin = ({block}: {block: Block}) => {
   return <MarginColumn panelBlock={block} topLevelBlockId={topLevelBlockId}/>
 }
 
-/** Where the margin's width is kept: the layout column the panel shows in,
- *  which is its stack when it has one. */
-const useWidthOwner = (panelBlock: Block): Block => {
-  const repo = useRepo()
-  const parentId = useHandle(panelBlock, {selector: data => data?.parentId ?? null})
-  const parent = repo.block(parentId ?? panelBlock.id)
-  const inStack = useHandle(parent, {selector: data => parentId !== null && data != null && isPanelStackRow(data)})
-  return inStack ? parent : panelBlock
-}
-
 const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLevelBlockId: string}) => {
   const panelId = panelBlock.id
-  const widthOwner = useWidthOwner(panelBlock)
-  const [storedWidth] = usePropertyValue(widthOwner, annotationMarginWidthProp)
+  const [storedWidth] = usePropertyValue(panelBlock, annotationMarginWidthProp)
   /** The width the layout pass asks for: the stored one, or a drag's. */
   const preferredWidth = useRef(storedWidth)
   const scope = panelRenderScopeId(panelId, topLevelBlockId)
@@ -342,10 +330,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           onEnd={() => {
             const width = layout.current.flush()?.width
             if (width === undefined || width === storedWidth) applyStoredWidth()
-            else void widthOwner.set(annotationMarginWidthProp, width)
+            else void panelBlock.set(annotationMarginWidthProp, width)
           }}
           onCancel={applyStoredWidth}
-          onReset={() => void widthOwner.set(annotationMarginWidthProp, undefined)}
+          onReset={() => void panelBlock.set(annotationMarginWidthProp, undefined)}
         />
       )}
       {frame && (
