@@ -10,6 +10,9 @@ import {useOpenBlock} from '@/utils/navigation.js'
 import {
   cachedContentDecorator,
   type BlockContentDecoratorContribution,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
+  type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
 import {FilePlus2, PencilLine} from 'lucide-react'
@@ -76,7 +79,7 @@ const useContributorProfiles = (block: Block): {attribution: Attribution | undef
   return {attribution, profiles}
 }
 
-const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+const ContributorBadgeItem: BlockRenderer = ({block}) => {
   const {attribution, profiles} = useContributorProfiles(block)
 
   const uniqueProfiles = (ids: readonly string[]): Profile[] =>
@@ -85,7 +88,7 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   const editorProfiles = uniqueProfiles(attribution?.editors ?? [])
   const visible = [...creatorProfiles, ...editorProfiles].some(profile => profile.kind !== 'human')
   const [open, setOpen] = useState(false)
-  if (!attribution || !visible) return <Inner block={block}/>
+  if (!attribution || !visible) return null
 
   const creatorIds = new Set(creatorProfiles.map(profile => profile.id))
   const nonHumanCreators = creatorProfiles.filter(p => p.kind !== 'human')
@@ -100,35 +103,32 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   const PrimaryIcon = nonHumanCreators.length > 0 ? FilePlus2 : PencilLine
 
   return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1"><Inner block={block}/></div>
-      <DropdownMenu open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Authorship details: ${summary}`}
-            title={summary}
-            onClick={event => event.stopPropagation()}
-            className="mt-0.5 inline-flex h-4 max-w-28 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <PrimaryIcon aria-hidden="true" className="h-3 w-3 shrink-0"/>
-            <span className="min-w-0 truncate">{primary.name}</span>
-            {otherCount > 0 && <span className="shrink-0">+{otherCount}</span>}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="max-h-80 w-72 overflow-y-auto">
-          <DropdownMenuLabel>Created by</DropdownMenuLabel>
-          {creatorProfiles.length ? creatorProfiles.map(profile => (
-            <ProfileLink key={`creator:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
-          )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
-          <DropdownMenuSeparator/>
-          <DropdownMenuLabel>Edited by</DropdownMenuLabel>
-          {editorProfiles.length ? editorProfiles.map(profile => (
-            <ProfileLink key={`editor:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
-          )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Authorship details: ${summary}`}
+          title={summary}
+          onClick={event => event.stopPropagation()}
+          className="inline-flex h-4 max-w-28 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <PrimaryIcon aria-hidden="true" className="h-3 w-3 shrink-0"/>
+          <span className="min-w-0 truncate">{primary.name}</span>
+          {otherCount > 0 && <span className="shrink-0">+{otherCount}</span>}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 w-72 overflow-y-auto">
+        <DropdownMenuLabel>Created by</DropdownMenuLabel>
+        {creatorProfiles.length ? creatorProfiles.map(profile => (
+          <ProfileLink key={`creator:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
+        )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
+        <DropdownMenuSeparator/>
+        <DropdownMenuLabel>Edited by</DropdownMenuLabel>
+        {editorProfiles.length ? editorProfiles.map(profile => (
+          <ProfileLink key={`editor:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
+        )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -172,13 +172,17 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
   )
 }
 
-const decorate = cachedContentDecorator(ContributorBadgesView, 'WithContributorBadges')
 const decorateCard = cachedContentDecorator(ContributorCardView, 'WithContributorCard')
+const badgeItem: BlockGutterItem = {corner: 'top-right', component: ContributorBadgeItem}
 
-const inCardBody = ({block, blockContext}: Parameters<BlockContentDecoratorContribution>[0]): boolean => {
+const inCardBody = ({block, blockContext}: BlockResolveContext): boolean => {
   const root = blockContext?.[CONTRIBUTOR_CARD_MODE_KEY]
   return typeof root === 'string' && root === blockContext?.scopeRootId && block.id !== root
 }
 
-export const contributorBadgesDecoratorContribution: BlockContentDecoratorContribution = ctx =>
-  inCardBody(ctx) ? decorateCard : decorate
+/** In a card body the author line replaces the badge. */
+export const contributorCardDecoratorContribution: BlockContentDecoratorContribution = ctx =>
+  inCardBody(ctx) ? decorateCard : null
+
+export const contributorBadgeItemContribution: BlockGutterItemContribution = ctx =>
+  inCardBody(ctx) ? null : badgeItem
