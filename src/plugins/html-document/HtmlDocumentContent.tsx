@@ -2,6 +2,7 @@ import {useMemo, useRef, useState} from 'react'
 import {deleteCharBackward, deleteCharForward, insertNewlineAndIndent} from '@codemirror/commands'
 import {html} from '@codemirror/lang-html'
 import {keymap} from '@codemirror/view'
+import {CodeXml} from 'lucide-react'
 import {BlockEditor} from '@/components/BlockEditor.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.tsx'
 import {EXTENSION_TYPE, HTML_DOCUMENT_TYPE} from '@/data/blockTypes'
@@ -23,10 +24,10 @@ import {useDocumentScripts} from './useDocumentScripts.ts'
 const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
 
 /** The strip above the frame is the app's own, drawn where a document cannot
- *  reach: it marks what is sandboxed, it is the only place scripts can be allowed
- *  from, and it is the click target for editing, since clicks inside the frame
- *  never reach the block. "Edit source" is not a button: a plain click on it falls
- *  through to the block's own click-to-edit. */
+ *  reach: it is the only place scripts can be allowed from, and it is the click
+ *  target for editing, since clicks inside the frame never reach the block.
+ *  "Edit source" is not a button: a plain click on it falls through to the
+ *  block's own click-to-edit. */
 export const HtmlDocumentView = ({block}: BlockRendererProps) => {
   const source = useContent(block)
   const {mode, allow, stop} = useDocumentScripts(block.id, source)
@@ -43,7 +44,9 @@ export const HtmlDocumentView = ({block}: BlockRendererProps) => {
   return (
     <div ref={box} className={cn('w-full scroll-mt-16 overflow-hidden rounded-md border border-border', asking && 'ring-4 ring-primary')}>
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground select-none">
-        <span>{allow ? 'HTML document (sandboxed, scripts off)' : 'HTML document (sandboxed)'}</span>
+        <span role="img" aria-label="HTML document" title="HTML document" className="flex">
+          <CodeXml className="size-3.5"/>
+        </span>
         <span className="flex items-center gap-2">
           {allow && <button type="button" className={STRIP_ACTION} onClick={() => void askThenRun(allow)}>Run scripts</button>}
           {stop && <button type="button" className={STRIP_ACTION} onClick={stop}>Stop scripts</button>}
