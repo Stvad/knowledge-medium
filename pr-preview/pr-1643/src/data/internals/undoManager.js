@@ -1,1 +1,1 @@
-export{V1 as UndoManager}from"../../../chunks/app-BwiQkMAB.js";
+export{G1 as UndoManager}from"../../../chunks/app-CT81tG6V.js";

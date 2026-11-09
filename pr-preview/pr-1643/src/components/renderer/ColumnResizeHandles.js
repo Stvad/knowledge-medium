@@ -1,1 +1,1 @@
-export{xF as ColumnResizeHandles}from"../../../chunks/app-BwiQkMAB.js";
+export{xF as ColumnResizeHandles,SF as MIN_COLUMN_REM}from"../../../chunks/app-CT81tG6V.js";

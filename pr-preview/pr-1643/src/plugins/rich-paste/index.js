@@ -1,1 +1,1 @@
-export{ib as richPastePlugin}from"../../../chunks/app-BwiQkMAB.js";
+export{ib as richPastePlugin}from"../../../chunks/app-CT81tG6V.js";

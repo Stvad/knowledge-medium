@@ -1,1 +1,1 @@
-export{SF as equalizeColumnPair,CF as resizeColumns}from"../../chunks/app-BwiQkMAB.js";
+export{TF as columnWeightHolder,EF as equalizeColumnPair,DF as resizeColumns}from"../../chunks/app-CT81tG6V.js";
