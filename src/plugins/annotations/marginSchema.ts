@@ -9,3 +9,13 @@ export const annotationMarginOpenProp = seedProperty({
   preset: 'boolean',
   changeScope: ChangeScope.UiState,
 })
+
+/** The margin's width as the user set it, in px, on the panel's UI-state row,
+ *  like `annotationMarginOpenProp`. Absent ≡ automatic. */
+export const annotationMarginWidthProp = seedProperty({
+  seedKey: 'system:annotations/property/margin-width',
+  revision: 1,
+  name: 'annotation:marginWidth',
+  preset: 'optional-number',
+  changeScope: ChangeScope.UiState,
+})

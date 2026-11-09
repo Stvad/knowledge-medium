@@ -71,8 +71,8 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 }
 
 /** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
- *  `max-w-3xl` frame. */
-const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-var(--container-3xl))))]'
+ *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)

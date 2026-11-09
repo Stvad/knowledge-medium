@@ -32,36 +32,45 @@ describe('placeCards', () => {
 })
 
 describe('fitColumn', () => {
-  const bounds = {min: 240, max: 520}
+  const bounds = {
+    text: {min: 480, max: 768},
+    column: {min: 240, max: 520},
+    edge: 16,
+  }
+  const fit = (pane: number, preferred?: number) => fitColumn({pane, preferred, ...bounds})
 
-  it('leaves the text where it is when the right side already holds the widest column', () => {
-    expect(fitColumn({left: 900, right: 900}, bounds)).toEqual({width: 520, shift: 0})
-    expect(fitColumn({left: 520, right: 520}, bounds)).toEqual({width: 520, shift: 0})
+  it('leaves the text centred when the side beside it holds the widest column', () => {
+    expect(fit(2000)).toEqual({width: 520, clearance: 0, left: 1400})
   })
 
-  it('moves the text left by only what the widest column still needs', () => {
-    expect(fitColumn({left: 460, right: 444}, bounds)).toEqual({width: 520, shift: 76})
+  it('moves the text left, unchanged in width, by only what the column still needs', () => {
+    expect(fit(1700)).toEqual({width: 520, clearance: 172, left: 1164})
   })
 
-  it('never moves the text past the room on its left', () => {
-    expect(fitColumn({left: 100, right: 300}, bounds)).toEqual({width: 400, shift: 100})
+  it('narrows the text rather than dropping the column in a pane split in two', () => {
+    expect(fit(1000)).toEqual({width: 333, clearance: 365, left: 651})
   })
 
-  it('fits a column the right side could not hold alone', () => {
-    expect(fitColumn({left: 120, right: 120}, bounds)).toEqual({width: 240, shift: 120})
+  it('takes a set width over the automatic one, past the automatic maximum', () => {
+    expect(fit(2000, 700)).toEqual({width: 700, clearance: 232, left: 1284})
   })
 
-  it('refuses a column under the minimum, even with the text moved all the way', () => {
-    expect(fitColumn({left: 119, right: 120}, bounds)).toBeNull()
+  it('gives up set width before the text goes under its minimum', () => {
+    expect(fit(1000, 700)).toEqual({width: 488, clearance: 520, left: 496})
   })
 
-  it('treats a text frame wider than the pane as no room on either side', () => {
-    expect(fitColumn({left: -16, right: -32}, bounds)).toBeNull()
-    expect(fitColumn({left: -16, right: 300}, bounds)).toEqual({width: 300, shift: 0})
+  it('never goes under the column minimum, even when set narrower', () => {
+    expect(fit(2000, 100)).toEqual({width: 240, clearance: 0, left: 1400})
+  })
+
+  it('refuses a pane that holds the text minimum but not the column minimum beside it', () => {
+    expect(fit(752)).toEqual({width: 240, clearance: 272, left: 496})
+    expect(fit(751)).toBeNull()
+    expect(fit(751, 900)).toBeNull()
   })
 
   it('gives whole pixels, so the text never lands between them', () => {
-    expect(fitColumn({left: 100.5, right: 300.5}, bounds)).toEqual({width: 400, shift: 100})
+    expect(fit(1000.7)).toEqual({width: 333, clearance: 365, left: 651})
   })
 })
 
