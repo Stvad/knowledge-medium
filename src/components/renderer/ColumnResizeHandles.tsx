@@ -1,4 +1,5 @@
 import {useLayoutEffect, useRef, useState} from 'react'
+import {DividerHandle} from '@/components/DividerHandle.js'
 import {equalizeColumnPair, resizeColumns} from '@/utils/layoutColumns.js'
 
 export interface LayoutColumn {
@@ -7,6 +8,10 @@ export interface LayoutColumn {
 }
 
 export type ColumnWeights = ReadonlyMap<string, number>
+
+/** A layout column's minimum width, in rem; `LayoutRenderer` builds the grid's
+ *  tracks from it. */
+export const MIN_COLUMN_REM = 24
 
 interface ColumnResizeHandlesProps {
   /** The positioned grid whose direct children carry `data-layout-column-id`.
@@ -20,26 +25,20 @@ interface ColumnResizeHandlesProps {
   onCommit: (weights: ColumnWeights) => void
 }
 
-/** The grid's own column minimum, `minmax(24rem, …)` in `LayoutRenderer`. */
-const MIN_COLUMN_REM = 24
-const HANDLE_WIDTH_PX = 8
-/** How far a press moves before it is a drag; a click's jitter is not. */
-const DRAG_THRESHOLD_PX = 3
-
 const columnElement = (container: HTMLElement, id: string): HTMLElement | null =>
   container.querySelector<HTMLElement>(`:scope > [data-layout-column-id="${CSS.escape(id)}"]`)
 
 interface Drag {
-  pointerId: number
-  x: number
   /** Every column's rendered width when the drag started. */
   widths: readonly number[]
+  minWidth: number
   latest: ColumnWeights | null
 }
 
 /** A drag strip over each divider between layout columns. Outside the
  *  columns, in the grid itself, so a column that scrolls (a stack) doesn't
- *  carry its strip away; placed from the columns' measured offsets. */
+ *  carry its strip away; placed from the columns' measured offsets, on the
+ *  right column's border and padding, clear of the left column's scrollbar. */
 export function ColumnResizeHandles({container, columns, onDrag, onCommit}: ColumnResizeHandlesProps) {
   const [dividers, setDividers] = useState<readonly number[]>([])
   const drag = useRef<Drag | null>(null)
@@ -55,18 +54,15 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit}: Colu
     observer.observe(container)
     for (const el of elements) if (el) observer.observe(el)
     measure()
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      // Its widths are by index into a column set that is gone.
+      drag.current = null
+    }
   }, [container, ids])
 
   const byColumn = (weights: readonly number[]): ColumnWeights =>
     new Map(columns.map((column, index) => [column.id, weights[index]]))
-
-  const end = (commit: boolean) => {
-    const current = drag.current
-    drag.current = null
-    if (commit && current?.latest) onCommit(current.latest)
-    else onDrag(null)
-  }
 
   return dividers.map((x, index) => {
     const divider = index + 1
@@ -74,44 +70,41 @@ export function ColumnResizeHandles({container, columns, onDrag, onCommit}: Colu
     const right = columns[divider]
     if (x < 0 || !left || !right) return null
     return (
-      <div
+      <DividerHandle
         key={`${left.id}\u0000${right.id}`}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize columns"
+        label="Resize columns"
         title="Drag to resize; double-click for equal widths"
-        onPointerDown={event => {
-          if (event.button !== 0) return
-          const elements = columns.map(column => columnElement(container, column.id))
-          if (elements.some(el => !el)) return
-          event.preventDefault()
-          drag.current = {
-            pointerId: event.pointerId,
-            x: event.clientX,
-            widths: elements.map(el => el!.getBoundingClientRect().width),
-            latest: null,
-          }
-          event.currentTarget.setPointerCapture(event.pointerId)
+        style={{left: x, top: 0, bottom: 0}}
+        drag={{
+          onStart: () => {
+            const elements = columns.map(column => columnElement(container, column.id))
+            if (elements.some(el => !el)) return false
+            drag.current = {
+              widths: elements.map(el => el!.getBoundingClientRect().width),
+              minWidth: MIN_COLUMN_REM * Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+              latest: null,
+            }
+            return true
+          },
+          onMove: dx => {
+            const current = drag.current
+            if (!current) return
+            current.latest = byColumn(resizeColumns({widths: current.widths, divider, dx, minWidth: current.minWidth}))
+            onDrag(current.latest)
+          },
+          onEnd: () => {
+            const latest = drag.current?.latest
+            drag.current = null
+            if (latest) onCommit(latest)
+            else onDrag(null)
+          },
+          onCancel: () => {
+            drag.current = null
+            onDrag(null)
+          },
         }}
-        onPointerMove={event => {
-          const current = drag.current
-          if (!current || current.pointerId !== event.pointerId) return
-          const dx = event.clientX - current.x
-          if (!current.latest && Math.abs(dx) < DRAG_THRESHOLD_PX) return
-          const minWidth = MIN_COLUMN_REM * Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-          current.latest = byColumn(resizeColumns({widths: current.widths, divider, dx, minWidth}))
-          onDrag(current.latest)
-        }}
-        onPointerUp={() => end(true)}
-        onPointerCancel={() => end(false)}
-        // After a pointerup has ended the drag; this is a capture lost without one.
-        onLostPointerCapture={() => { if (drag.current) end(false) }}
-        onDoubleClick={() => onCommit(byColumn(equalizeColumnPair(columns.map(column => column.weight), divider)))}
-        className="group absolute inset-y-0 z-20 flex cursor-col-resize touch-none justify-center"
-        style={{left: x - HANDLE_WIDTH_PX / 2, width: HANDLE_WIDTH_PX}}
-      >
-        <div className="h-full w-px bg-transparent transition-colors group-hover:bg-ring group-active:bg-ring"/>
-      </div>
+        onReset={() => onCommit(byColumn(equalizeColumnPair(columns.map(column => column.weight), divider)))}
+      />
     )
   })
 }

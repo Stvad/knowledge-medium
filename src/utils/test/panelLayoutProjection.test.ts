@@ -32,8 +32,6 @@ import { keysBetween } from '@/data/orderKey'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
-  layoutColumnWeight,
-  layoutColumnWeightProp,
   panelMaximizedProp,
   panelViewModeProp,
   scrollTopProp,
@@ -1115,20 +1113,6 @@ describe('stack rows across a reconcile', () => {
 
     expect(await stackIds()).toEqual([])
     expect(panelBlockIds(await rows())).toEqual(['x', 'b', 'c'])
-  })
-})
-
-describe('layout column weights', () => {
-  it('gives a stack wrapped around a column that column\'s width', async () => {
-    await createPanelRows(['a', 'b'])
-    const bRow = await rowFor('b')
-    await env.repo.tx(tx => tx.setProperty(bRow, layoutColumnWeightProp, 2),
-      {scope: ChangeScope.UiState, description: 'set column weight'})
-
-    await insertSidebarStackedPanel(env.repo, layoutSessionBlock(), 'n', {sourcePanelId: await rowFor('a')})
-
-    const stack = (await layoutRows()).find(isPanelStackRow)
-    expect(stack && layoutColumnWeight(stack)).toBe(2)
   })
 })
 

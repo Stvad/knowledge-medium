@@ -8,7 +8,6 @@ import {
   activePanelIdProp,
   focusedBlockLocationProp,
   isPanelRowMaximized,
-  layoutColumnWeightProp,
   normalizeViewMode,
   panelMaximizedProp,
   panelViewModeProp,
@@ -652,9 +651,6 @@ export const insertSidebarStackedPanel = async (
         if (rightSibling) {
           const [, rightOrderKey] = keysBetween(null, null, 2)
           await tx.move(rightSibling.id, {parentId: stackId, orderKey: rightOrderKey})
-          // The stack takes the sibling's place, so it takes its width too.
-          const weight = peekRowProperty(rightSibling, layoutColumnWeightProp)
-          if (weight !== undefined) await tx.setProperty(stackId, layoutColumnWeightProp, weight)
         }
         const panelId = await insertPanelAtStartOfStackInTx(repo, tx, {
           workspaceId: parent.workspaceId,

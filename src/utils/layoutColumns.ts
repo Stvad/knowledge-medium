@@ -30,3 +30,21 @@ export const equalizeColumnPair = (weights: readonly number[], divider: number):
   const half = round((weights[divider - 1] + weights[divider]) / 2)
   return weights.map((weight, index) => index === divider - 1 || index === divider ? half : weight)
 }
+
+export type WeightSlot =
+  | {kind: 'panel'; id: string; weight?: number}
+  | {kind: 'stack'; children: readonly WeightSlot[]}
+
+const panelsOf = (slot: WeightSlot): Array<Extract<WeightSlot, {kind: 'panel'}>> =>
+  slot.kind === 'panel' ? [slot] : slot.children.flatMap(panelsOf)
+
+/** The panel row a column's width is stored on, with the width (absent ≡ 1):
+ *  a panel's own; for a stack, its first panel with a width stored, else its
+ *  first panel. Kept on panels, never on a stack row, so a column's width
+ *  stays with its panels when a stack is made around them, collapses to one
+ *  of them, or is rebuilt from the URL. Undefined for an empty stack. */
+export const columnWeightHolder = (slot: WeightSlot): {id: string; weight: number} | undefined => {
+  const panels = panelsOf(slot)
+  const holder = panels.find(panel => panel.weight !== undefined) ?? panels[0]
+  return holder && {id: holder.id, weight: holder.weight ?? 1}
+}

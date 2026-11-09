@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {equalizeColumnPair, resizeColumns} from './layoutColumns'
+import {columnWeightHolder, equalizeColumnPair, resizeColumns} from './layoutColumns'
 
 describe('resizeColumns', () => {
   it('moves width across the divider and leaves the other columns where they are', () => {
@@ -23,5 +23,23 @@ describe('resizeColumns', () => {
 describe('equalizeColumnPair', () => {
   it('splits the pair\'s weight evenly and leaves the rest', () => {
     expect(equalizeColumnPair([0.5, 1.5, 2], 1)).toEqual([1, 1, 2])
+  })
+})
+
+describe('columnWeightHolder', () => {
+  const panel = (id: string, weight?: number) => ({kind: 'panel' as const, id, weight})
+
+  it('holds a panel column\'s width on the panel', () => {
+    expect(columnWeightHolder(panel('a', 2))).toEqual({id: 'a', weight: 2})
+    expect(columnWeightHolder(panel('a'))).toEqual({id: 'a', weight: 1})
+  })
+
+  it('holds a stack\'s width on its first panel with one, so a panel stacked in front leaves it', () => {
+    expect(columnWeightHolder({kind: 'stack', children: [panel('n'), panel('b', 2)]})).toEqual({id: 'b', weight: 2})
+  })
+
+  it('puts a stack\'s first width on its first panel', () => {
+    expect(columnWeightHolder({kind: 'stack', children: [panel('x'), panel('y')]})).toEqual({id: 'x', weight: 1})
+    expect(columnWeightHolder({kind: 'stack', children: []})).toBeUndefined()
   })
 })

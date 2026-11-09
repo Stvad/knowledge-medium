@@ -139,10 +139,12 @@ export const panelMaximizedProp = seedProperty({
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
 
-/** A top-level layout column's share of the layout's width, as a grid `fr`
- *  weight, on the column's row: the panel's, or its stack's. Absent ≡ 1, an
- *  equal share. Not in the layout URL: the URL says what is open, and this is
- *  how it is arranged on this device. */
+/** A layout column's share of the layout's width, as a grid `fr` weight, on
+ *  a PANEL row, never a stack's: a stack's column takes it from its panels
+ *  (`columnWeightHolder`), so the width outlives stack rows being made and
+ *  rebuilt around them. Absent ≡ 1, an equal share. Not in the layout URL:
+ *  the URL says what is open, and this is how it is arranged on this
+ *  device. */
 export const layoutColumnWeightProp = seedProperty({
   seedKey: 'system:kernel-data/property/layout-column-weight',
   revision: 1,
@@ -151,11 +153,12 @@ export const layoutColumnWeightProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 
-/** Lenient, like `isPanelRowMaximized`: a malformed weight costs the column
- *  its width, not the layout its render. */
-export const layoutColumnWeight = (row: Pick<BlockData, 'properties'>): number => {
+/** The stored weight, or undefined for none. Lenient, like
+ *  `isPanelRowMaximized`: a malformed weight costs the column its width, not
+ *  the layout its render. */
+export const layoutColumnWeight = (row: Pick<BlockData, 'properties'>): number | undefined => {
   const weight = safeDecodeRowProperty(row, layoutColumnWeightProp)
-  return weight !== undefined && Number.isFinite(weight) && weight > 0 ? weight : 1
+  return weight !== undefined && Number.isFinite(weight) && weight > 0 ? weight : undefined
 }
 
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
