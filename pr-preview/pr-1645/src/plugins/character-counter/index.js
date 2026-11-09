@@ -1,0 +1,1 @@
+export{ZY as CHAR_COUNTER_TYPE,nX as RAW_CHARACTER_COUNT_PROFILE_ID,rX as WORDS_COUNT_PROFILE_ID,eX as WORD_COUNTER_TYPE,Gn as charCountDisplay,iX as charLimitProp,aX as charProfileProp,oX as charScopeProp,Ln as characterCountProfilesFacet,Mn as characterCounterPlugin,Vn as textCountProfile}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{ZN as ClientLocalSettings,QN as clientLocalSettings}from"../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{Pz as BlockProperties}from"../../chunks/app-PtQjndca.js";

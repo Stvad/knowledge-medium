@@ -1,0 +1,1 @@
+export{Ip as agentDispatchCompanionPlugin}from"../../../chunks/app-PtQjndca.js";

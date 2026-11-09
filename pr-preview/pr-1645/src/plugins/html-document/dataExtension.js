@@ -1,0 +1,1 @@
+export{vK as htmlDocumentDataExtension}from"../../../chunks/app-PtQjndca.js";

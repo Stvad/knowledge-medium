@@ -1,0 +1,1 @@
+export{Ux as videoPlayerPlugin}from"../../../chunks/app-PtQjndca.js";

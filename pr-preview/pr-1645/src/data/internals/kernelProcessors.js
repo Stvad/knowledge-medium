@@ -1,0 +1,1 @@
+export{f3 as KERNEL_PROCESSORS}from"../../../chunks/app-PtQjndca.js";

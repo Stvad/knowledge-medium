@@ -1,0 +1,1 @@
+export{oF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,sF as openExtensionsSettings}from"../../chunks/app-PtQjndca.js";

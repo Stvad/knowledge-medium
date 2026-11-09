@@ -1,0 +1,1 @@
+export{iM as TypeChip}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{YE as useMinuteClock}from"../../chunks/app-PtQjndca.js";

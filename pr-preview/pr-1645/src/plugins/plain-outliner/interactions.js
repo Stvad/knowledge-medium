@@ -1,0 +1,1 @@
+export{bw as blockEditingContentRenderer}from"../../../chunks/app-PtQjndca.js";

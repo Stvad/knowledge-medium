@@ -1,0 +1,1 @@
+export{AZ as aliasDataExtension}from"../../../chunks/app-PtQjndca.js";

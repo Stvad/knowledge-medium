@@ -1,0 +1,1 @@
+export{gN as appUpdatePromptExtension}from"../../../chunks/app-PtQjndca.js";

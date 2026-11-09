@@ -1,0 +1,1 @@
+export{$F as GESTURE_ACTIVE,eI as GESTURE_CANCEL,tI as GESTURE_IDLE,nI as TOUCH_HOLD_MS,rI as TOUCH_SLOP_PX,iI as continuousGestureRecognizersFacet,aI as createBlockGestureController,oI as enabledTouchAction,sI as suppressNextClick,cI as unionTouchAction,lI as useContinuousGestures}from"../../chunks/app-PtQjndca.js";

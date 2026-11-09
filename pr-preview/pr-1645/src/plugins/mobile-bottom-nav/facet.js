@@ -1,0 +1,1 @@
+export{aw as mobileBottomNavItemsFacet}from"../../../chunks/app-PtQjndca.js";

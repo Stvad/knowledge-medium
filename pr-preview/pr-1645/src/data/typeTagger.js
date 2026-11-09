@@ -1,0 +1,1 @@
+export{R1 as TypeTagger,z1 as applyTypeTagInTx}from"../../chunks/app-PtQjndca.js";

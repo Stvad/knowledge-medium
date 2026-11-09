@@ -1,0 +1,1 @@
+export{Av as Wikilink}from"../../../../../chunks/app-PtQjndca.js";

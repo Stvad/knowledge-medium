@@ -1,0 +1,1 @@
+export{NI as useIsMobile,PI as usePointerCoarse}from"../../chunks/app-PtQjndca.js";

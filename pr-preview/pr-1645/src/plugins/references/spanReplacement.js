@@ -1,0 +1,1 @@
+export{iK as preferredSpanReplacement}from"../../../chunks/app-PtQjndca.js";

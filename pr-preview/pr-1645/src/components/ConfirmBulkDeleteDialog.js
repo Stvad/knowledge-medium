@@ -1,0 +1,1 @@
+export{YF as ConfirmBulkDeleteDialog}from"../../chunks/app-PtQjndca.js";

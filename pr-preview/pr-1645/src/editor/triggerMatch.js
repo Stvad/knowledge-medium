@@ -1,0 +1,1 @@
+export{xq as matchCharTrigger}from"../../chunks/app-PtQjndca.js";

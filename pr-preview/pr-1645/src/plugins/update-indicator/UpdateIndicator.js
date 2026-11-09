@@ -1,0 +1,1 @@
+export{g_ as UpdateIndicator}from"../../../chunks/app-PtQjndca.js";

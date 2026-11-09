@@ -1,0 +1,1 @@
+export{sG as staticDataExtensions}from"../../chunks/app-PtQjndca.js";

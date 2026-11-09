@@ -1,0 +1,1 @@
+export{Tr as KeyCaptureInput}from"../../../chunks/app-PtQjndca.js";

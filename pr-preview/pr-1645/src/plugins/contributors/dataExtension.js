@@ -1,0 +1,1 @@
+export{AY as contributorsDataExtension}from"../../../chunks/app-PtQjndca.js";

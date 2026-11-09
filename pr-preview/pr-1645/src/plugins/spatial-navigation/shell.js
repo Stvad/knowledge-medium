@@ -1,0 +1,1 @@
+export{ZS as spatialNavigationShellDecorator}from"../../../chunks/app-PtQjndca.js";

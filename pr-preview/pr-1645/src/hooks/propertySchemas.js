@@ -1,0 +1,1 @@
+export{iW as usePropertySchemas}from"../../chunks/app-PtQjndca.js";

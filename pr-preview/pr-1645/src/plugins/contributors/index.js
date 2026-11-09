@@ -1,0 +1,1 @@
+export{Np as contributorsPlugin}from"../../../chunks/app-PtQjndca.js";

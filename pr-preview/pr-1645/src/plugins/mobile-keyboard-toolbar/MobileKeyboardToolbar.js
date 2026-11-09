@@ -1,0 +1,1 @@
+export{BC as MobileKeyboardToolbar}from"../../../chunks/app-PtQjndca.js";

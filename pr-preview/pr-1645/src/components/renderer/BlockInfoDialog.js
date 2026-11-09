@@ -1,0 +1,1 @@
+export{BI as BlockInfoDialog}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{DN as appUpdate,ON as useAppUpdateAvailable}from"../chunks/app-PtQjndca.js";

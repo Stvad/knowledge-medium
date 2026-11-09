@@ -1,0 +1,1 @@
+export{KL as BlockEditor}from"../../chunks/app-PtQjndca.js";

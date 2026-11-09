@@ -1,0 +1,1 @@
+export{mw as Breadcrumbs}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{$L as useShortcutSurfaceActivations}from"../../chunks/app-PtQjndca.js";

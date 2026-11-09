@@ -1,0 +1,1 @@
+export{pct as CHANGE_SCOPE_POLICIES,mct as ChangeScope,hct as isChangeScope,gct as policyForScope,_ct as scopeAllowedInReadOnly,vct as scopeIsUndoable,yct as scopePoliciesEquivalent,bct as scopeUploadsToServer,xct as sourceForScope}from"../../../chunks/app-PtQjndca.js";

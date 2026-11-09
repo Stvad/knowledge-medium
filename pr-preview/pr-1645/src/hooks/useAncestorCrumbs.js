@@ -1,0 +1,1 @@
+export{CD as useAncestorCrumbs}from"../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{g4 as Block,_4 as requireLoadedBlock}from"../../chunks/app-PtQjndca.js";

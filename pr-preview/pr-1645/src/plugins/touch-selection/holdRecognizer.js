@@ -1,0 +1,1 @@
+export{Qv as BLOCK_HOLD_GESTURE,$v as BLOCK_HOLD_RECOGNIZER_ID,ey as blockHoldRecognizer}from"../../../chunks/app-PtQjndca.js";

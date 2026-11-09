@@ -1,0 +1,1 @@
+export{y4 as kernelDataExtension}from"../../chunks/app-PtQjndca.js";

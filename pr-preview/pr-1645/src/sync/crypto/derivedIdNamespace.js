@@ -1,0 +1,1 @@
+export{Urt as deriveWorkspaceIdNamespace}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{cW as propertyShapeLabel}from"../../../chunks/app-PtQjndca.js";

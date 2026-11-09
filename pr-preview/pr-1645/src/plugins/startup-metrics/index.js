@@ -1,0 +1,1 @@
+export{ua as startupMetricsPlugin}from"../../../chunks/app-PtQjndca.js";

@@ -1,0 +1,1 @@
+export{UM as BlockPasteShellDecorator,WM as blockPasteShellDecorator}from"../../chunks/app-PtQjndca.js";

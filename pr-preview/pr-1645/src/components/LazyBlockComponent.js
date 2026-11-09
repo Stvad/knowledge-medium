@@ -1,0 +1,1 @@
+export{IP as LazyBlockComponent}from"../../chunks/app-PtQjndca.js";

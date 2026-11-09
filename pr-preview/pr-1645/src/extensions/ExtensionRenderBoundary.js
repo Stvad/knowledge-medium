@@ -1,0 +1,1 @@
+export{VI as ExtensionRenderBoundary}from"../../chunks/app-PtQjndca.js";

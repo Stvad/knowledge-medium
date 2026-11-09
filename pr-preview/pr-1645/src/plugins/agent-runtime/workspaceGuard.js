@@ -1,0 +1,1 @@
+export{wh as assertActiveWorkspace}from"../../../chunks/app-PtQjndca.js";

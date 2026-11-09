@@ -1,0 +1,1 @@
+export{yK as htmlDocumentTypeSeed}from"../../../chunks/app-PtQjndca.js";

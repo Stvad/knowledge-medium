@@ -1,0 +1,1 @@
+export{mot as isTypeSeedDeclaration,hot as isTypeSeedKey,got as seedType}from"../../chunks/app-PtQjndca.js";

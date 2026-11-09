@@ -1,0 +1,1 @@
+export{wY as annotationMarginOpenProp,TY as annotationMarginWidthProp}from"../../../chunks/app-PtQjndca.js";

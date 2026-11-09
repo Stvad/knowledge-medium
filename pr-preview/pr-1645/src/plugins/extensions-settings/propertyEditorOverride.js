@@ -1,0 +1,1 @@
+export{jr as extensionsOverridesUi}from"../../../chunks/app-PtQjndca.js";

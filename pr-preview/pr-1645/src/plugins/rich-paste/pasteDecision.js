@@ -1,0 +1,1 @@
+export{Vy as richPasteDecisionContribution}from"../../../chunks/app-PtQjndca.js";

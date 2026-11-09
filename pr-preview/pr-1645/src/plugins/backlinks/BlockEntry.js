@@ -1,0 +1,1 @@
+export{J_ as LazyBlockEntry}from"../../../chunks/app-PtQjndca.js";

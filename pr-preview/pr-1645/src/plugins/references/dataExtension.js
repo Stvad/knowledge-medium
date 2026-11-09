@@ -1,0 +1,1 @@
+export{CG as referencesDataExtension}from"../../../chunks/app-PtQjndca.js";

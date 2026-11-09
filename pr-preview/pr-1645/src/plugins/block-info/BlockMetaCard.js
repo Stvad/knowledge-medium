@@ -1,0 +1,1 @@
+export{m_ as BlockMetaCard}from"../../../chunks/app-PtQjndca.js";

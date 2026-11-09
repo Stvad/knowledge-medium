@@ -1,0 +1,1 @@
+export{iw as MobileBottomNavButton}from"../../../chunks/app-PtQjndca.js";

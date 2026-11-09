@@ -1,0 +1,1 @@
+export{$M as editorAutocompleteExtension}from"../../chunks/app-PtQjndca.js";

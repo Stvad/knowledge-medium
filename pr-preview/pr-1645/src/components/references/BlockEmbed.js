@@ -1,0 +1,1 @@
+export{Yj as BlockEmbed}from"../../../chunks/app-PtQjndca.js";

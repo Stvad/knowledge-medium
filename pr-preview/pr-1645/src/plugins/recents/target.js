@@ -1,0 +1,1 @@
+export{ZE as openRecentsPage}from"../../../chunks/app-PtQjndca.js";
