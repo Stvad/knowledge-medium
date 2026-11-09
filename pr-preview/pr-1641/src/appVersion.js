@@ -1,1 +1,0 @@
-export{$s as appVersion}from"../chunks/app-Dtvd7WGa.js";

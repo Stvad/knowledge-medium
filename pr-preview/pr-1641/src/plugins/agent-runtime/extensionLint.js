@@ -1,1 +1,0 @@
-export{Xm as lintExtensionSource}from"../../../chunks/app-Dtvd7WGa.js";

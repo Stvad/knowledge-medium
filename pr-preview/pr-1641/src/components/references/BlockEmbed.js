@@ -1,1 +1,0 @@
-export{Uj as BlockEmbed}from"../../../chunks/app-Dtvd7WGa.js";

@@ -1,1 +1,0 @@
-export{uN as appUpdatePromptExtension}from"../../../chunks/app-Dtvd7WGa.js";

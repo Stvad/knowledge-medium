@@ -1,1 +1,0 @@
-export{XA as CommandPaletteHeaderItem}from"../../../chunks/app-Dtvd7WGa.js";

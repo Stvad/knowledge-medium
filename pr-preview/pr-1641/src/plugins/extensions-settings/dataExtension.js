@@ -1,1 +1,0 @@
-export{Ar as extensionsDataExtension}from"../../../chunks/app-Dtvd7WGa.js";

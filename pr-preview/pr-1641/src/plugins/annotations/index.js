@@ -1,1 +1,0 @@
-export{yd as annotationsPlugin}from"../../../chunks/app-Dtvd7WGa.js";

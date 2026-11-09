@@ -1,1 +1,0 @@
-export{O3 as agree,k3 as pluralize}from"../../chunks/app-Dtvd7WGa.js";

@@ -1,1 +1,0 @@
-export{GU as usePropertySchemas}from"../../chunks/app-Dtvd7WGa.js";

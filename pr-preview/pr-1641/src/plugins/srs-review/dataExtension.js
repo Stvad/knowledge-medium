@@ -1,1 +1,0 @@
-export{Wc as srsReviewDataExtension}from"../../../chunks/app-Dtvd7WGa.js";

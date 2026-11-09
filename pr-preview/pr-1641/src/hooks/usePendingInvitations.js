@@ -1,1 +1,0 @@
-export{gE as usePendingInvitations}from"../../chunks/app-Dtvd7WGa.js";

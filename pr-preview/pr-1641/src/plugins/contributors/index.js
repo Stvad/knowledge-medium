@@ -1,1 +1,0 @@
-export{Pp as contributorsPlugin}from"../../../chunks/app-Dtvd7WGa.js";

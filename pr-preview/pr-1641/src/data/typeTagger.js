@@ -1,1 +1,0 @@
-export{w1 as TypeTagger,T1 as applyTypeTagInTx}from"../../chunks/app-Dtvd7WGa.js";

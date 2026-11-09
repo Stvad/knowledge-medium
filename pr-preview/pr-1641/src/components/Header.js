@@ -1,1 +1,0 @@
-export{XP as Header}from"../../chunks/app-Dtvd7WGa.js";

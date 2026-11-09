@@ -1,1 +1,0 @@
-export{TA as useCommandPaletteActions}from"../../../chunks/app-Dtvd7WGa.js";

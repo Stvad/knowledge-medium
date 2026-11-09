@@ -1,1 +1,0 @@
-export{pD as useMinuteClock}from"../../chunks/app-Dtvd7WGa.js";

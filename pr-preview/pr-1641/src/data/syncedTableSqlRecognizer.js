@@ -1,1 +1,0 @@
-export{mQ as SYNCED_TABLES,hQ as syncedWriteTarget,gQ as writeTargets}from"../../chunks/app-Dtvd7WGa.js";

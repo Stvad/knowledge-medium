@@ -1,1 +1,0 @@
-export{DM as resolveStructuralEditPolicy,OM as structuralEditPolicyForBlock}from"../../chunks/app-Dtvd7WGa.js";

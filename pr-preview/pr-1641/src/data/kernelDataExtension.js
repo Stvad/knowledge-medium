@@ -1,1 +1,0 @@
-export{a4 as kernelDataExtension}from"../../chunks/app-Dtvd7WGa.js";

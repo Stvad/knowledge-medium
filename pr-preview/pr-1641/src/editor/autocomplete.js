@@ -1,1 +1,0 @@
-export{qM as editorAutocompleteExtension}from"../../chunks/app-Dtvd7WGa.js";

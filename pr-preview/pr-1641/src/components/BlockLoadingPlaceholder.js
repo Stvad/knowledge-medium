@@ -1,1 +1,0 @@
-export{NP as BlockLoadingPlaceholder}from"../../chunks/app-Dtvd7WGa.js";

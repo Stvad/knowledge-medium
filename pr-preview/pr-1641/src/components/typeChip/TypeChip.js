@@ -1,1 +1,0 @@
-export{Qj as TypeChip}from"../../../chunks/app-Dtvd7WGa.js";

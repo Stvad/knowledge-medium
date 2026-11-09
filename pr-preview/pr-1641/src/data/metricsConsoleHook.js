@@ -1,1 +1,0 @@
-export{gM as ensureMetricsConsoleHook}from"../../chunks/app-Dtvd7WGa.js";

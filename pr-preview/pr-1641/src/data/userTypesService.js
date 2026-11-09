@@ -1,1 +1,0 @@
-export{M4 as USER_TYPES_PROJECTOR_ID,N4 as UserTypesService,P4 as userTypesProjector}from"../../chunks/app-Dtvd7WGa.js";

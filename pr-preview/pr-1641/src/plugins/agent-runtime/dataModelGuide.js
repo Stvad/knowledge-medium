@@ -1,1 +1,0 @@
-export{l_ as DATA_MODEL_GUIDE,u_ as dataModelGuide}from"../../../chunks/app-Dtvd7WGa.js";
