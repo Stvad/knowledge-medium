@@ -1,0 +1,1 @@
+export{Ttt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Ett as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Dtt as __resetLayoutSessionIdForTesting,Ott as getLayoutSessionId,ktt as isInstalledAppDisplayMode,Att as readOrCreateLayoutSessionId}from"../../chunks/app-CggG4DMX.js";

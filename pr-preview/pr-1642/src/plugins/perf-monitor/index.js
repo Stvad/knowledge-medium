@@ -1,0 +1,1 @@
+export{Hr as perfMonitorPlugin}from"../../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{qv as wikilinkMarkdownExtension}from"../../../../../chunks/app-CggG4DMX.js";

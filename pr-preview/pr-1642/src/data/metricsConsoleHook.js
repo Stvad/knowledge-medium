@@ -1,0 +1,1 @@
+export{_M as ensureMetricsConsoleHook}from"../../chunks/app-CggG4DMX.js";

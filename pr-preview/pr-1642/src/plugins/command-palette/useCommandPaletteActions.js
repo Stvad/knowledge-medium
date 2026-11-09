@@ -1,0 +1,1 @@
+export{EA as useCommandPaletteActions}from"../../../chunks/app-CggG4DMX.js";

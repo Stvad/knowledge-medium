@@ -1,0 +1,1 @@
+export{NN as gestureBindingDescriptor,PN as matchesGestureEvent}from"../../chunks/app-CggG4DMX.js";

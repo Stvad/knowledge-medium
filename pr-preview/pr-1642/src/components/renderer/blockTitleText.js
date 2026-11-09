@@ -1,0 +1,1 @@
+export{ER as BLOCK_TITLE_TEXT_CLASS,DR as useBlockTitleTextClass}from"../../../chunks/app-CggG4DMX.js";

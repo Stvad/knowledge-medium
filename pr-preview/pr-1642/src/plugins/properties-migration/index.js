@@ -1,0 +1,1 @@
+export{Ja as migratePropertiesToBlocksAction,Wa as propertiesMigrationPlugin}from"../../../chunks/app-CggG4DMX.js";

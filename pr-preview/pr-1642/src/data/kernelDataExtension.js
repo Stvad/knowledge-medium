@@ -1,0 +1,1 @@
+export{s4 as kernelDataExtension}from"../../chunks/app-CggG4DMX.js";

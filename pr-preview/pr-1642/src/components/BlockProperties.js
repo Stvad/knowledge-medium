@@ -1,0 +1,1 @@
+export{Sz as BlockProperties}from"../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{A3 as agree,j3 as pluralize}from"../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{ww as mobileBottomNavItemsFacet}from"../../../chunks/app-CggG4DMX.js";

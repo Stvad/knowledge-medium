@@ -1,0 +1,1 @@
+export{JM as editorAutocompleteExtension}from"../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{oK as htmlDocumentDataExtension}from"../../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{Kl as blockTagsConfigUi}from"../../../chunks/app-CggG4DMX.js";

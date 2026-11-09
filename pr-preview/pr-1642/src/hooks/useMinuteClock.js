@@ -1,0 +1,1 @@
+export{mD as useMinuteClock}from"../../chunks/app-CggG4DMX.js";

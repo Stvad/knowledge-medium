@@ -1,0 +1,1 @@
+export{gC as spatialNavigationShellDecorator}from"../../../chunks/app-CggG4DMX.js";

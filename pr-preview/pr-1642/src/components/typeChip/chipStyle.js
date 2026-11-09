@@ -1,0 +1,1 @@
+export{eM as chipStyle}from"../../../chunks/app-CggG4DMX.js";

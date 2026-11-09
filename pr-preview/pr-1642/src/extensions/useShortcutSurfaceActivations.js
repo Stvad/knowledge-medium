@@ -1,0 +1,1 @@
+export{VL as useShortcutSurfaceActivations}from"../../chunks/app-CggG4DMX.js";

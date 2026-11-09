@@ -1,0 +1,1 @@
+export{vY as contributorsDataExtension}from"../../../chunks/app-CggG4DMX.js";

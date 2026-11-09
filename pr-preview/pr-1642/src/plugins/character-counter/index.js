@@ -1,0 +1,1 @@
+export{zY as CHAR_COUNTER_TYPE,WY as RAW_CHARACTER_COUNT_PROFILE_ID,GY as WORDS_COUNT_PROFILE_ID,HY as WORD_COUNTER_TYPE,Gn as charCountDisplay,KY as charLimitProp,qY as charProfileProp,JY as charScopeProp,Ln as characterCountProfilesFacet,Mn as characterCounterPlugin,Vn as textCountProfile}from"../../../chunks/app-CggG4DMX.js";

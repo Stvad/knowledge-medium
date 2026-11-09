@@ -1,0 +1,1 @@
+export{XN as dynamicExtensionsExtension}from"../../chunks/app-CggG4DMX.js";

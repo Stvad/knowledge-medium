@@ -1,0 +1,1 @@
+export{YW as staticDataExtensions}from"../../chunks/app-CggG4DMX.js";

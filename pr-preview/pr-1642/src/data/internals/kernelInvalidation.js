@@ -1,0 +1,1 @@
+export{L4 as emitKernelInvalidations,R4 as kernelInvalidationRule}from"../../../chunks/app-CggG4DMX.js";

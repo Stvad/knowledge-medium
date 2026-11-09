@@ -1,0 +1,1 @@
+export{fh as authorIdOf}from"../../../chunks/app-CggG4DMX.js";

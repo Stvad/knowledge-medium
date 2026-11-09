@@ -1,0 +1,1 @@
+export{kx as useAssetObjectUrl}from"../../../chunks/app-CggG4DMX.js";

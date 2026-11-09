@@ -1,0 +1,1 @@
+export{wL as defaultPasteDecision,TL as pasteDecisionVerb}from"../../chunks/app-CggG4DMX.js";

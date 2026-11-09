@@ -1,0 +1,1 @@
+export{Wj as BlockEmbed}from"../../../chunks/app-CggG4DMX.js";

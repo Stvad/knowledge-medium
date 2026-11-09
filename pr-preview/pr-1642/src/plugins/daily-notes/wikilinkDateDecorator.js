@@ -1,0 +1,1 @@
+export{nk as dailyDateWikilinkDecorator}from"../../../chunks/app-CggG4DMX.js";

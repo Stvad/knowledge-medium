@@ -1,0 +1,1 @@
+export{AS as DEFAULT_VIDEO_NOTES_PANE_RATIO,jS as VIDEO_NOTES_VIEW_MODE,MS as videoNotesPaneRatioProp}from"../../../chunks/app-CggG4DMX.js";

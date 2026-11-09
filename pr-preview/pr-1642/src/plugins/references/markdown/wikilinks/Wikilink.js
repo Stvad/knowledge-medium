@@ -1,0 +1,1 @@
+export{Jv as Wikilink}from"../../../../../chunks/app-CggG4DMX.js";

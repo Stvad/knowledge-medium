@@ -1,0 +1,1 @@
+export{ev as inlineBacklinksApplies}from"../../../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{Yv as remarkWikilinks}from"../../../../../chunks/app-CggG4DMX.js";

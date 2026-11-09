@@ -1,0 +1,1 @@
+export{XE as DEFAULT_THEME_ID_DARK,ZE as DEFAULT_THEME_ID_LIGHT,FE as defaultThemeContributions,PE as defaultThemesPlugin}from"../../../chunks/app-CggG4DMX.js";

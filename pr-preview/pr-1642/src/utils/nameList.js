@@ -1,0 +1,1 @@
+export{M3 as NAMES_IN_A_SENTENCE,N3 as describeNames,P3 as firstFew}from"../../chunks/app-CggG4DMX.js";

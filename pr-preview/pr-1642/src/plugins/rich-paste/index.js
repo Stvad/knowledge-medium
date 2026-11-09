@@ -1,0 +1,1 @@
+export{ab as richPastePlugin}from"../../../chunks/app-CggG4DMX.js";

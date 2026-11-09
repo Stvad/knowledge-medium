@@ -1,0 +1,1 @@
+export{Fw as plainOutlinerPlugin}from"../../../chunks/app-CggG4DMX.js";

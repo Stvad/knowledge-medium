@@ -1,0 +1,1 @@
+export{Znt as getOrCreatePropertiesPage,Qnt as propertiesPageBlockId,$nt as propertiesPageSpec}from"../../chunks/app-CggG4DMX.js";

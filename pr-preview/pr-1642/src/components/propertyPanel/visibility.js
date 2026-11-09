@@ -1,0 +1,1 @@
+export{YV as isPropertyPanelHiddenProperty,XV as isPropertyPanelReadOnlyProperty}from"../../../chunks/app-CggG4DMX.js";

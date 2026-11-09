@@ -1,0 +1,1 @@
+export{$s as appVersion}from"../chunks/app-CggG4DMX.js";

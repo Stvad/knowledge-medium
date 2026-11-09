@@ -1,0 +1,1 @@
+export{kI as ExtensionRenderBoundary}from"../../chunks/app-CggG4DMX.js";

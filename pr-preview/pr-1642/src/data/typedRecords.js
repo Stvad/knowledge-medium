@@ -1,0 +1,1 @@
+export{jh as adoptTypedBlock,Mh as createTypedChild,ait as derivedBlockId,Nh as getOrCreateTypedChild}from"../../chunks/app-CggG4DMX.js";

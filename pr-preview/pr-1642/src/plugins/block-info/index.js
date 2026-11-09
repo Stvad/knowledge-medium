@@ -1,0 +1,1 @@
+export{j_ as blockInfoPlugin}from"../../../chunks/app-CggG4DMX.js";

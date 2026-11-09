@@ -1,0 +1,1 @@
+export{gD as openRecentsPage}from"../../../chunks/app-CggG4DMX.js";

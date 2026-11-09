@@ -1,0 +1,1 @@
+export{JN as resolveAppRuntime,YN as resolveAppRuntimeSync}from"../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{Vq as dailyNotesDataExtension}from"../../../chunks/app-CggG4DMX.js";

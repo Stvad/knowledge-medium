@@ -1,0 +1,1 @@
+export{VF as GESTURE_ACTIVE,HF as GESTURE_CANCEL,UF as GESTURE_IDLE,WF as TOUCH_HOLD_MS,GF as TOUCH_SLOP_PX,KF as continuousGestureRecognizersFacet,qF as createBlockGestureController,JF as enabledTouchAction,YF as suppressNextClick,XF as unionTouchAction,ZF as useContinuousGestures}from"../../chunks/app-CggG4DMX.js";

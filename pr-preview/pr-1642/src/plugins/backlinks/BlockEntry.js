@@ -1,0 +1,1 @@
+export{fv as LazyBlockEntry}from"../../../chunks/app-CggG4DMX.js";

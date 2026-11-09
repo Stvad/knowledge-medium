@@ -1,0 +1,1 @@
+export{QA as commandPaletteToggle}from"../../../chunks/app-CggG4DMX.js";

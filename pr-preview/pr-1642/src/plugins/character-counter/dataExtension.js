@@ -1,0 +1,1 @@
+export{RY as characterCounterDataExtension}from"../../../chunks/app-CggG4DMX.js";

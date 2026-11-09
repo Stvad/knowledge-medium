@@ -1,0 +1,1 @@
+export{Ip as agentDispatchCompanionPlugin}from"../../../chunks/app-CggG4DMX.js";

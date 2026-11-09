@@ -1,0 +1,1 @@
+export{dN as appUpdatePromptExtension}from"../../../chunks/app-CggG4DMX.js";

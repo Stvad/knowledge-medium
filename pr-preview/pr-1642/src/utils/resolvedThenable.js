@@ -1,0 +1,1 @@
+export{XX as resolvedThenable,ZX as stampFulfilled}from"../../chunks/app-CggG4DMX.js";

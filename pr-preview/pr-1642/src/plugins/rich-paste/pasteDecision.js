@@ -1,0 +1,1 @@
+export{ob as richPasteDecisionContribution}from"../../../chunks/app-CggG4DMX.js";

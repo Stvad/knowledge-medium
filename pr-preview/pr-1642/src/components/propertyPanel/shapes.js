@@ -1,0 +1,1 @@
+export{XU as propertyShapeLabel}from"../../../chunks/app-CggG4DMX.js";

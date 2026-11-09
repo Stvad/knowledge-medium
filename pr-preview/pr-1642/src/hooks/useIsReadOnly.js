@@ -1,0 +1,1 @@
+export{Ay as useIsReadOnly}from"../../chunks/app-CggG4DMX.js";

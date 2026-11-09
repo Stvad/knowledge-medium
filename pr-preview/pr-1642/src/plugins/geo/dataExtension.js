@@ -1,0 +1,1 @@
+export{FK as geoDataExtension}from"../../../chunks/app-CggG4DMX.js";

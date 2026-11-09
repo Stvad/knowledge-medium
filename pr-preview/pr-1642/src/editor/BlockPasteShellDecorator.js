@@ -1,0 +1,1 @@
+export{RM as BlockPasteShellDecorator,zM as blockPasteShellDecorator}from"../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{jP as LazyBlockComponent}from"../../chunks/app-CggG4DMX.js";

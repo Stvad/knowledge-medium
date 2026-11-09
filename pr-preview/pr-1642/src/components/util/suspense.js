@@ -1,0 +1,1 @@
+export{DW as SuspenseFallback}from"../../../chunks/app-CggG4DMX.js";

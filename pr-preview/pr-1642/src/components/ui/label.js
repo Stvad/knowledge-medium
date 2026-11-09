@@ -1,0 +1,1 @@
+export{yO as Label}from"../../../chunks/app-CggG4DMX.js";

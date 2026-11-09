@@ -1,0 +1,1 @@
+export{Ff as confirmThreadDeletion}from"../../../chunks/app-CggG4DMX.js";

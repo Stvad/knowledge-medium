@@ -1,0 +1,1 @@
+export{CI as __resetDialogsForTests,wI as getDialogQueue,TI as isDialogOpenForWorkspace,EI as openDialog,DI as subscribeDialogs}from"../../chunks/app-CggG4DMX.js";

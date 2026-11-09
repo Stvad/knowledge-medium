@@ -1,0 +1,1 @@
+export{Gn as charCountDisplay}from"../../../chunks/app-CggG4DMX.js";

@@ -1,0 +1,1 @@
+export{Vr as openExtensionsSettingsAction}from"../../../chunks/app-CggG4DMX.js";

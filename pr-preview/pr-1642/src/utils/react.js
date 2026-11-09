@@ -1,0 +1,1 @@
+export{xI as useIsMobile,SI as usePointerCoarse}from"../../chunks/app-CggG4DMX.js";

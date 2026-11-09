@@ -1,0 +1,1 @@
+export{ik as isWikilinkDisplayParts,ak as resolveWikilinkDisplay,ok as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-CggG4DMX.js";

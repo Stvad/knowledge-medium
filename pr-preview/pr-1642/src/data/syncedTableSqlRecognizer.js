@@ -1,0 +1,1 @@
+export{gQ as SYNCED_TABLES,_Q as syncedWriteTarget,vQ as writeTargets}from"../../chunks/app-CggG4DMX.js";

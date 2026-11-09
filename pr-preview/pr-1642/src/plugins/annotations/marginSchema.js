@@ -1,0 +1,1 @@
+export{fY as annotationMarginOpenProp,pY as annotationMarginWidthProp}from"../../../chunks/app-CggG4DMX.js";

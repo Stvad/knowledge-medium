@@ -1,0 +1,1 @@
+export{FN as dispatchPointerAction,IN as setPointerActionDispatcher}from"../../chunks/app-CggG4DMX.js";

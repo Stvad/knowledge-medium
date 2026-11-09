@@ -1,0 +1,1 @@
+export{by as blockDragPlugin}from"../../../chunks/app-CggG4DMX.js";
