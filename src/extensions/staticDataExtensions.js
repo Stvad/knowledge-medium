@@ -1,1 +1,1 @@
-export{JW as staticDataExtensions}from"../../chunks/app-GCSVpJWh.js";
+export{JW as staticDataExtensions}from"../../chunks/app-aBzOpQaB.js";

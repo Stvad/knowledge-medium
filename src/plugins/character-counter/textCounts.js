@@ -1,1 +1,1 @@
-export{Un as countCharacters,Wn as countWords}from"../../../chunks/app-GCSVpJWh.js";
+export{Un as countCharacters,Wn as countWords}from"../../../chunks/app-aBzOpQaB.js";
