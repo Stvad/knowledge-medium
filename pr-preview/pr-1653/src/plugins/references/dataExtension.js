@@ -1,0 +1,1 @@
+export{UG as referencesDataExtension}from"../../../chunks/app-V9BNhMCF.js";

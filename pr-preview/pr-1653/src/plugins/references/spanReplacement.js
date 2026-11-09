@@ -1,0 +1,1 @@
+export{wK as preferredSpanReplacement}from"../../../chunks/app-V9BNhMCF.js";

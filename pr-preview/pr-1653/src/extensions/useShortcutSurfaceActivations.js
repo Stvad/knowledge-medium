@@ -1,0 +1,1 @@
+export{GL as useShortcutSurfaceActivations}from"../../chunks/app-V9BNhMCF.js";

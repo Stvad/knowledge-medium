@@ -1,0 +1,1 @@
+export{cM as BlockEmbed}from"../../../chunks/app-V9BNhMCF.js";

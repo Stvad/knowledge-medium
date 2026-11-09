@@ -1,0 +1,1 @@
+export{SX as RAW_CHARACTER_COUNT_PROFILE_ID,CX as WORDS_COUNT_PROFILE_ID,wX as charLimitProp,TX as charProfileProp,EX as charScopeProp}from"../../../chunks/app-V9BNhMCF.js";

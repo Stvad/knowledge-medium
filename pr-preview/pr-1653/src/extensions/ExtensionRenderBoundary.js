@@ -1,0 +1,1 @@
+export{IR as ExtensionRenderBoundary}from"../../chunks/app-V9BNhMCF.js";

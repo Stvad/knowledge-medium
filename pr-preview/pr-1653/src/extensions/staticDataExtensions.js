@@ -1,0 +1,1 @@
+export{DG as staticDataExtensions}from"../../chunks/app-V9BNhMCF.js";

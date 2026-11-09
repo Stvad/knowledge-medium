@@ -1,0 +1,1 @@
+export{M3 as KERNEL_PROCESSORS}from"../../../chunks/app-V9BNhMCF.js";
