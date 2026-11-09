@@ -653,8 +653,8 @@ export function DefaultBlockRenderer(
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
-  // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click,
+  // produce keep stable identity. This is what stops the content
+  // decorators and gutter items from remounting on every click,
   // and — because every slot below is a `useMemo` over this object, i.e.
   // a React element TYPE — what stops the live editor being torn down and
   // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
