@@ -56,8 +56,7 @@ export type Executor = 'claude' | 'codex'
 
 /** The longest `runner.timeoutMs` a watcher may set. The stale-running
  *  sweep window (STALE_RUNNING_MS, watchers.ts) is derived from it, so a
- *  live slow run is never concurrently re-claimed as crashed. The
- *  LaunchAgent's ExitTimeOut covers it by hand (launchd/*.plist). */
+ *  live slow run is never concurrently re-claimed as crashed. */
 export const MAX_RUN_TIMEOUT_MS = 60 * 60_000
 
 const runnerBase = {

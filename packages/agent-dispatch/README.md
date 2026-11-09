@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.8.1
 
-`runner.timeoutMs` may now be up to 60 min (was 25), and a `running` task left by a crashed daemon re-queues after 65 min instead of 30. The LaunchAgent's `ExitTimeOut` grew to match, so a stop waits for a long run to finish; an installed plist keeps the old value until you regenerate it (the install step under Setup, then `launchctl unload` / `load`). Until then a stop during a run past 26 min orphans that run, and its task re-queues after the stale sweep.
+`runner.timeoutMs` may now be up to 60 min (was 25), and a `running` task left by a crashed daemon re-queues after 65 min instead of 30. Stopping the daemon (`launchctl kickstart -k`, a reboot) waits at most 60 s for in-flight runs: launchd caps a user agent's `ExitTimeOut` there whatever the plist asks for. A run still going then is killed, and its task re-queues after the stale sweep, so restart while nothing is running.
 
 ## Upgrade to 0.8.0
 
