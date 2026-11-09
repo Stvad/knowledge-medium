@@ -1,1 +1,0 @@
-export{yB as declarationOnlyDefinitionForName,bB as declarationOnlyStatusText}from"../../../chunks/app-BIXeeDey.js";

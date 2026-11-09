@@ -1,1 +1,0 @@
-export{hN as ExtensionPromptSurface,gN as extensionPromptsExtension}from"../../../chunks/app-BIXeeDey.js";

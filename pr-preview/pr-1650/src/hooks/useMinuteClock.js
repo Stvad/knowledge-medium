@@ -1,1 +1,0 @@
-export{lD as useMinuteClock}from"../../chunks/app-BIXeeDey.js";

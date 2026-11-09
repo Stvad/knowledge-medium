@@ -1,1 +1,0 @@
-export{KM as resolveStructuralEditPolicy,qM as structuralEditPolicyForBlock}from"../../chunks/app-BIXeeDey.js";

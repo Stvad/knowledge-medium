@@ -1,1 +1,0 @@
-export{vM as chipStyle}from"../../../chunks/app-BIXeeDey.js";

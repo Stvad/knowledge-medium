@@ -1,1 +1,0 @@
-export{WM as exampleExtensions,GM as insertExampleExtensionsUnder}from"../../chunks/app-BIXeeDey.js";

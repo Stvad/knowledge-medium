@@ -1,1 +1,0 @@
-export{WV as blockAfterSubtreeRemoval,GV as blockIdsInOrderedSelectionRange,KV as commitSelectionRange,qV as extendSelection,JV as findBestSelectionAnchorIndex,YV as getBlocksInRange,XV as getLastVisibleDescendant,ZV as getRootBlock,QV as insertInDocumentOrder,$V as nextVisibleBlock,eH as previousVisibleBlock,tH as validateSelectionHierarchy}from"../../chunks/app-BIXeeDey.js";

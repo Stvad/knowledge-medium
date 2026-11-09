@@ -1,1 +1,0 @@
-export{Zw as getOrCreateShortcutsBlock,Qw as journalShortcutBlockId,$w as shortcutsBlockId}from"../../../chunks/app-BIXeeDey.js";

@@ -1,1 +1,0 @@
-export{bG as staticDataExtensions}from"../../chunks/app-BIXeeDey.js";

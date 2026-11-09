@@ -1,1 +1,0 @@
-export{kw as BreadcrumbList,Ew as BreadcrumbRenderer,Ow as Breadcrumbs,Tw as PromotableBreadcrumbList,Sw as breadcrumbRendererContribution,Cw as breadcrumbsPlugin,Dw as getBreadcrumbContentPreview,ww as usePromotableBreadcrumb}from"../../../chunks/app-BIXeeDey.js";

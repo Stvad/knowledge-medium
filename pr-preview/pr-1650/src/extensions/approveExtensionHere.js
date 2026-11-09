@@ -1,1 +1,0 @@
-export{wN as approveExtensionHere}from"../../chunks/app-BIXeeDey.js";

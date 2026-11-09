@@ -1,1 +1,0 @@
-export{ZO as dailyDateWikilinkDecorator}from"../../../chunks/app-BIXeeDey.js";

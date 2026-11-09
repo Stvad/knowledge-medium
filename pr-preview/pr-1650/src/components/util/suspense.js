@@ -1,1 +1,0 @@
-export{QW as SuspenseFallback}from"../../../chunks/app-BIXeeDey.js";

@@ -1,1 +1,0 @@
-export{xW as propertyShapeLabel}from"../../../chunks/app-BIXeeDey.js";

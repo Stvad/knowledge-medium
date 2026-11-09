@@ -1,1 +1,0 @@
-export{VQ as SYNCED_TABLES,HQ as syncedWriteTarget,UQ as writeTargets}from"../../chunks/app-BIXeeDey.js";

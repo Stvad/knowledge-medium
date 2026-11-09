@@ -1,1 +1,0 @@
-export{_M as TypeChip}from"../../../chunks/app-BIXeeDey.js";

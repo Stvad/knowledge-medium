@@ -1,1 +1,0 @@
-export{KI as useIsMobile,qI as usePointerCoarse}from"../../chunks/app-BIXeeDey.js";

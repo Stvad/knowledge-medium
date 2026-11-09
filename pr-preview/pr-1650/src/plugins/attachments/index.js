@@ -1,1 +1,0 @@
-export{ib as attachmentsPlugin}from"../../../chunks/app-BIXeeDey.js";

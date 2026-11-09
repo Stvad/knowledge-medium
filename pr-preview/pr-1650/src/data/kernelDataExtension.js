@@ -1,1 +1,0 @@
-export{M4 as kernelDataExtension}from"../../chunks/app-BIXeeDey.js";

@@ -1,1 +1,0 @@
-export{IG as referencesDataExtension}from"../../../chunks/app-BIXeeDey.js";

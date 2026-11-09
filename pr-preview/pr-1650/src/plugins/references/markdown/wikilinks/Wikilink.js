@@ -1,1 +1,0 @@
-export{Wv as Wikilink}from"../../../../../chunks/app-BIXeeDey.js";

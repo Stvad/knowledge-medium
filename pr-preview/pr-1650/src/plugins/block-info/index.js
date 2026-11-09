@@ -1,1 +1,0 @@
-export{D_ as blockInfoPlugin}from"../../../chunks/app-BIXeeDey.js";

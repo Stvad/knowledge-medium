@@ -1,1 +1,0 @@
-export{kN as appUpdatePromptExtension}from"../../../chunks/app-BIXeeDey.js";

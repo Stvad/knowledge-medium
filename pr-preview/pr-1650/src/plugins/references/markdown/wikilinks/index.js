@@ -1,1 +1,0 @@
-export{Uv as wikilinkMarkdownExtension}from"../../../../../chunks/app-BIXeeDey.js";
