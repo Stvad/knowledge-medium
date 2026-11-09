@@ -15,7 +15,7 @@
  *  gates, and if the renderer's slot identity is ever stabilized the
  *  no-remount invariant holds here without changes. The WeakMap cache
  *  keeps identity stable across parent re-renders (same invariant as
- *  CharacterCountDecorator). */
+ *  `cachedContentDecorator`). */
 
 import { useContext } from 'react'
 import type { TypeContribution } from '@/data/api'
