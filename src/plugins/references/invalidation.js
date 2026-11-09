@@ -1,1 +1,1 @@
-export{dG as REFERENCES_TARGET_INVALIDATION_CHANNEL,fG as referencesInvalidationRule}from"../../../chunks/app-aBzOpQaB.js";
+export{dG as REFERENCES_TARGET_INVALIDATION_CHANNEL,fG as referencesInvalidationRule}from"../../../chunks/app-BP7RX6q1.js";

@@ -1,1 +1,1 @@
-export{Dz as PropertyRow}from"../../../chunks/app-aBzOpQaB.js";
+export{Dz as PropertyRow}from"../../../chunks/app-BP7RX6q1.js";
