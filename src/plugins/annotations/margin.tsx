@@ -119,6 +119,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   const [rows, setRows] = useState<readonly string[]>([])
   const cards = useRef(new Map<string, CardEntry>())
   const scheduleRef = useRef<() => void>(() => {})
+  /** Runs a scheduled layout pass now, for a reader of `frameRef`. */
+  const flushRef = useRef<() => void>(() => {})
   const scrollportRef = useRef<HTMLElement | null>(null)
   const cardObserver = useRef<ResizeObserver | null>(null)
   const repo = useRepo()
@@ -254,6 +256,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       if (!pending) pending = requestAnimationFrame(run)
     }
     scheduleRef.current = schedule
+    flushRef.current = () => {
+      cancelAnimationFrame(pending)
+      run()
+    }
 
     const resize = new ResizeObserver(schedule)
     resize.observe(panelEl)
@@ -278,6 +284,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       setExtraBottom(0)
       setClearance(0)
       scheduleRef.current = () => {}
+      flushRef.current = () => {}
     }
   }, [panelId, scope, topLevelBlockId, repo])
 
@@ -322,6 +329,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
             scheduleRef.current()
           }}
           onEnd={() => {
+            flushRef.current()
             const width = frameRef.current?.width
             if (width === undefined || width === storedWidth) preferredWidth.current = storedWidth
             else void widthOwner.set(annotationMarginWidthProp, width)
@@ -498,8 +506,8 @@ const WidthHandle = ({frame, onDrag, onEnd, onReset}: WidthHandleProps) => {
       onPointerDown={event => {
         if (event.button !== 0) return
         event.preventDefault()
-        event.currentTarget.setPointerCapture(event.pointerId)
         drag.current = {x: event.clientX, width: frame.width, moved: false}
+        event.currentTarget.setPointerCapture(event.pointerId)
       }}
       onPointerMove={event => {
         if (!drag.current || event.clientX === drag.current.x) return
@@ -509,7 +517,7 @@ const WidthHandle = ({frame, onDrag, onEnd, onReset}: WidthHandleProps) => {
       onPointerUp={end}
       onPointerCancel={end}
       onDoubleClick={onReset}
-      className="group absolute z-[6] flex w-2 cursor-col-resize justify-center"
+      className="group absolute z-[6] flex w-2 cursor-col-resize touch-none justify-center"
       style={{left: frame.left - EDGE_PX / 2 - 4, top: frame.top, height: frame.height}}
     >
       <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border group-active:bg-ring"/>
