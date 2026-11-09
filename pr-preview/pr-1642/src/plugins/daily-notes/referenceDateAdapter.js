@@ -1,1 +1,1 @@
-export{sk as referenceDateAdapter,ck as replaceSingleDateReferenceContent,lk as singleDateReferenceMatch}from"../../../chunks/app-CN70TUAF.js";
+export{ok as referenceDateAdapter,sk as replaceSingleDateReferenceContent,ck as singleDateReferenceMatch}from"../../../chunks/app-Dcv9ykBD.js";
