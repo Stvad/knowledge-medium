@@ -43,6 +43,7 @@ import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
+import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
@@ -154,6 +155,12 @@ export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean):
     : {kind: 'expand-inline'}
 }
 
+/** Whether the panel's margin shows this row's threads: it is drawn, and the
+ *  row is in the panel's own outline, the rows the margin lays out, not in an
+ *  embed or a backlink inside the panel. */
+const useInMargin = ({panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}): boolean =>
+  useMarginShowing(panelId) && isPanelRenderScopeId(renderScopeId ?? '')
+
 const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
@@ -161,7 +168,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const panelId = blockContext.panelId
   // With the margin drawn, the threads are already beside the block: the pill
   // pins its first card instead of expanding them a second time inline.
-  const inMargin = useMarginShowing(panelId)
+  const inMargin = useInMargin(blockContext)
   const activeThread = useActiveThread(panelId ?? '')
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
@@ -331,7 +338,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
   const key = viewKey(blockContext.renderScopeId, block.id)
   const composer = useComposer(key)
   const showResolved = useShowResolved(key)
-  const inMargin = useMarginShowing(blockContext.panelId)
+  const inMargin = useInMargin(blockContext)
   // The margin shows the threads; only a composer opened here stays inline.
   if (inMargin) {
     return composer
@@ -353,32 +360,32 @@ const ThreadsSection = ({block}: {block: Block}) => {
             {showResolved ? 'Hide' : 'Show'} {closed.length} closed
           </button>
         )}
-        {blockContext.panelId && <MarginSwitch panelId={blockContext.panelId}/>}
+        {blockContext.panelId && isPanelRenderScopeId(blockContext.renderScopeId ?? '') && (
+          <MarginSwitch panelId={blockContext.panelId}/>
+        )}
       </div>
       {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
     </section>
   )
 }
 
-/** Opens the panel's margin; one already open here has no room to show. */
+/** Opens the panel's margin. Absent once it is open: an open margin that
+ *  isn't drawn is waiting for a pane wide enough. Not offered below md, where
+ *  no pane is wide enough. */
 const MarginSwitch = ({panelId}: {panelId: string}) => {
   const panel = useRepo().block(panelId)
   const [open] = usePropertyValue(panel, annotationMarginOpenProp)
-  const setOpen = (next: boolean) => () => void panel.set(annotationMarginOpenProp, next)
-  const buttonClass = 'inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground'
-  return open
-    ? (
-      <span className="ml-auto text-xs text-muted-foreground">
-        No room for the margin in this panel.{' '}
-        <button type="button" onClick={setOpen(false)} className={`${buttonClass} underline`}>Close it</button>
-      </span>
-    )
-    : (
-      <button type="button" onClick={setOpen(true)} className={`ml-auto ${buttonClass}`}>
-        <PanelRight className="h-3 w-3" aria-hidden/>
-        Show in margin
-      </button>
-    )
+  if (open) return null
+  return (
+    <button
+      type="button"
+      onClick={() => void panel.set(annotationMarginOpenProp, true)}
+      className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground max-md:hidden"
+    >
+      <PanelRight className="h-3 w-3" aria-hidden/>
+      Show in margin
+    </button>
+  )
 }
 
 export const commentsBelowContentContribution: BlockBelowContentContribution = ctx => {

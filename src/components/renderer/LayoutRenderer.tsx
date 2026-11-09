@@ -177,7 +177,11 @@ function SlotView({
         ? 'contents'
         // A top-level stack scrolls its panes itself, so it reserves the
         // bottom clearance a pane's own scrollport would (PANEL_BOTTOM_CLEARANCE).
-        : `${topLevel ? `${TOP_LEVEL_COLUMN_CLASS} md:pb-[var(--panel-bottom-clearance,0px)]` : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-muted-foreground/25 hover:scrollbar-thumb-muted-foreground/45`}
+        // Its gutter is reserved too, so a pane's width doesn't depend on its
+        // own height: a panel mount that sizes the text from the pane's width
+        // (PANEL_RIGHT_CLEARANCE) would otherwise toggle the scrollbar it
+        // depends on.
+        : `${topLevel ? `${TOP_LEVEL_COLUMN_CLASS} md:pb-[var(--panel-bottom-clearance,0px)]` : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto [scrollbar-gutter:stable] scrollbar-thin scrollbar-track-transparent scrollbar-thumb-muted-foreground/25 hover:scrollbar-thumb-muted-foreground/45`}
     >
       {slot.children.map(child => (
         <SlotView

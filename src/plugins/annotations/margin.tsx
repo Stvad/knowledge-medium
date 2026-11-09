@@ -6,10 +6,11 @@
  * uses the width a wide panel leaves empty beside the text first, then moves
  * the text left, then narrows it (`fitColumn`, `PANEL_RIGHT_CLEARANCE`). Its
  * width is automatic until dragged, and the dragged width is kept on the
- * layout column's row (`annotationMarginWidthProp`). The cost is that it lives outside the scrollport: it finds the panel's rows
- * in the DOM (mounted rows and lazy placeholders alike, of the panel's own
- * render scope), reads their positions and moves the cards within one animation
- * frame of a scroll, a resize or a re-render.
+ * layout column's row (`annotationMarginWidthProp`). The cost is that it
+ * lives outside the scrollport: it finds the panel's rows in the DOM (mounted
+ * rows and lazy placeholders alike, of the panel's own render scope), reads
+ * their positions and moves the cards within one animation frame of a scroll
+ * or a re-render, and within the frame of a resize.
  *
  * A card sits beside its target row's top, or, for a quote, beside the line
  * the quote starts on (`quoteTop`).
@@ -27,7 +28,7 @@ import {NestedBlockContextProvider} from '@/context/block.js'
 import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
-import {PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MAX_WIDTH_PX, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
+import {PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
 import {isPanelStackRow} from '@/utils/panelLayoutProjection.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginWidthProp} from './marginSchema.ts'
@@ -51,8 +52,11 @@ import {
  *  The maximum bounds the automatic width, so the column doesn't outweigh the
  *  text unless dragged to. */
 const COLUMN_BOUNDS = {min: 240, max: 520}
-const TEXT_BOUNDS = {min: PANEL_TEXT_MIN_WIDTH_PX, max: PANEL_TEXT_MAX_WIDTH_PX}
 const EDGE_PX = 16
+/** The resize handle, centred in the gap left of the column. */
+const HANDLE_WIDTH_PX = 8
+/** How far a press moves before it is a drag; a click's jitter is not. */
+const DRAG_THRESHOLD_PX = 3
 const CARD_GAP_PX = 8
 
 interface ColumnFrame {
@@ -111,16 +115,15 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   const [storedWidth] = usePropertyValue(widthOwner, annotationMarginWidthProp)
   /** The width the layout pass asks for: the stored one, or a drag's. */
   const preferredWidth = useRef(storedWidth)
-  const frameRef = useRef<ColumnFrame | null>(null)
   const scope = panelRenderScopeId(panelId, topLevelBlockId)
   const probeRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
   const [frame, setFrame] = useState<ColumnFrame | null>(null)
   const [rows, setRows] = useState<readonly string[]>([])
   const cards = useRef(new Map<string, CardEntry>())
-  const scheduleRef = useRef<() => void>(() => {})
-  /** Runs a scheduled layout pass now, for a reader of `frameRef`. */
-  const flushRef = useRef<() => void>(() => {})
+  /** The layout pass, bound while the column is mounted: `schedule` runs it
+   *  in the next animation frame, `flush` runs it now and returns its frame. */
+  const layout = useRef(IDLE_LAYOUT)
   const scrollportRef = useRef<HTMLElement | null>(null)
   const cardObserver = useRef<ResizeObserver | null>(null)
   const repo = useRepo()
@@ -130,11 +133,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     register: (key, entry) => {
       cards.current.set(key, entry)
       cardObserver.current?.observe(entry.el)
-      scheduleRef.current()
+      layout.current.schedule()
       return () => {
         if (cards.current.get(key) === entry) cards.current.delete(key)
         cardObserver.current?.unobserve(entry.el)
-        scheduleRef.current()
+        layout.current.schedule()
       }
     },
   }))
@@ -169,13 +172,16 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     }
 
     /** From the pane's width alone, which the clearance (padding) leaves
-     *  as it is. */
+     *  as it is, and the text frame's maximum width as the CSS resolves it
+     *  (`max-w-3xl` is in rem). */
     const measure = (portRect: DOMRect): ColumnFrame | null => {
       const panelRect = panelEl.getBoundingClientRect()
+      const frameEl = scrollport.firstElementChild
+      const textMax = frameEl ? Number.parseFloat(getComputedStyle(frameEl).maxWidth) : Number.NaN
       const fit = fitColumn({
         pane: portRect.width,
         preferred: preferredWidth.current,
-        text: TEXT_BOUNDS,
+        text: {min: PANEL_TEXT_MIN_WIDTH_PX, max: Number.isFinite(textMax) ? textMax : portRect.width},
         column: COLUMN_BOUNDS,
         edge: EDGE_PX,
       })
@@ -188,7 +194,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
     }
 
-    const run = () => {
+    const run = (): ColumnFrame | null => {
       pending = 0
       const topRow = scrollport.querySelector(topRowSelector)
       if (topRow !== observedTopRow) {
@@ -198,7 +204,6 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
       const portRect = scrollport.getBoundingClientRect()
       const nextFrame = topRow && measure(portRect)
-      frameRef.current = nextFrame
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
       setClearance(nextFrame?.clearance ?? 0)
       const rowEls = new Map<string, Element>()
@@ -211,8 +216,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const column = columnRef.current
       if (!column || !topRow || !nextFrame) {
         setExtraBottom(0)
-        return
+        return nextFrame
       }
+      // Ahead of React's commit of `frame`, which lands after this frame's
+      // paint: the text has already moved.
+      Object.assign(column.style, frameStyle(nextFrame))
       const columnTop = column.getBoundingClientRect().top
       const anchorTop = (entry: CardEntry, row: Element): number => {
         const rowTop = row.getBoundingClientRect().top
@@ -251,17 +259,20 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       // converge on its size a frame at a time.
       const contentEnd = topRow.getBoundingClientRect().bottom - portRect.top + scrollport.scrollTop
       setExtraBottom(Math.max(0, Math.ceil(cardsEnd - contentEnd)))
+      return nextFrame
     }
     const schedule = () => {
       if (!pending) pending = requestAnimationFrame(run)
     }
-    scheduleRef.current = schedule
-    flushRef.current = () => {
+    const flush = () => {
       cancelAnimationFrame(pending)
-      run()
+      return run()
     }
+    layout.current = {schedule, flush}
 
-    const resize = new ResizeObserver(schedule)
+    // Before this frame's paint, so text narrowed by a resize and the column
+    // beside it move together.
+    const resize = new ResizeObserver(flush)
     resize.observe(panelEl)
     resize.observe(scrollport)
     cardObserver.current = resize
@@ -283,15 +294,15 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       unsubscribe()
       setExtraBottom(0)
       setClearance(0)
-      scheduleRef.current = () => {}
-      flushRef.current = () => {}
+      layout.current = IDLE_LAYOUT
     }
   }, [panelId, scope, topLevelBlockId, repo])
 
-  useEffect(() => {
+  const applyStoredWidth = () => {
     preferredWidth.current = storedWidth
-    scheduleRef.current()
-  }, [storedWidth])
+    layout.current.schedule()
+  }
+  useEffect(applyStoredWidth, [storedWidth])
 
   const showing = frame !== null
   useEffect(() => {
@@ -326,14 +337,14 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           frame={frame}
           onDrag={width => {
             preferredWidth.current = width
-            scheduleRef.current()
+            layout.current.schedule()
           }}
           onEnd={() => {
-            flushRef.current()
-            const width = frameRef.current?.width
-            if (width === undefined || width === storedWidth) preferredWidth.current = storedWidth
+            const width = layout.current.flush()?.width
+            if (width === undefined || width === storedWidth) applyStoredWidth()
             else void widthOwner.set(annotationMarginWidthProp, width)
           }}
+          onCancel={applyStoredWidth}
           onReset={() => void widthOwner.set(annotationMarginWidthProp, undefined)}
         />
       )}
@@ -344,7 +355,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           role="complementary"
           onWheel={forwardWheel}
           className="pointer-events-none absolute z-[5] overflow-clip"
-          style={{left: frame.left, top: frame.top, width: frame.width, height: frame.height}}
+          style={frameStyle(frame)}
         >
           <MarginRegistryContext value={registry}>
             <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
@@ -363,6 +374,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 }
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
+
+const IDLE_LAYOUT = {schedule: () => {}, flush: (): ColumnFrame | null => null}
+
+const frameStyle = (frame: ColumnFrame) =>
+  ({left: `${frame.left}px`, top: `${frame.top}px`, width: `${frame.width}px`, height: `${frame.height}px`})
 
 export interface MarginHosts {
   /** Rendered rows with cards of their own, in outline order. */
@@ -484,18 +500,20 @@ interface WidthHandleProps {
   /** A drag asking for `width`; the layout pass bounds it. */
   onDrag: (width: number) => void
   onEnd: () => void
+  /** A drag the browser took away: back to the stored width. */
+  onCancel: () => void
   onReset: () => void
 }
 
 /** In the gap left of the column: drag to set its width, double-click to make
  *  it automatic again. */
-const WidthHandle = ({frame, onDrag, onEnd, onReset}: WidthHandleProps) => {
+const WidthHandle = ({frame, onDrag, onEnd, onCancel, onReset}: WidthHandleProps) => {
   /** `moved`: a press that never moved (a double-click's) sets nothing. */
   const drag = useRef<{x: number; width: number; moved: boolean} | null>(null)
-  const end = () => {
+  const finish = (then: () => void) => () => {
     const moved = drag.current?.moved
     drag.current = null
-    if (moved) onEnd()
+    if (moved) then()
   }
   return (
     <div
@@ -510,15 +528,20 @@ const WidthHandle = ({frame, onDrag, onEnd, onReset}: WidthHandleProps) => {
         event.currentTarget.setPointerCapture(event.pointerId)
       }}
       onPointerMove={event => {
-        if (!drag.current || event.clientX === drag.current.x) return
+        if (!drag.current) return
+        const dx = drag.current.x - event.clientX
+        if (!drag.current.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return
         drag.current.moved = true
-        onDrag(drag.current.width + drag.current.x - event.clientX)
+        onDrag(drag.current.width + dx)
       }}
-      onPointerUp={end}
-      onPointerCancel={end}
+      onPointerUp={finish(onEnd)}
+      onPointerCancel={finish(onCancel)}
+      // After a pointerup has finished the drag; this is a capture lost
+      // without one.
+      onLostPointerCapture={finish(onCancel)}
       onDoubleClick={onReset}
-      className="group absolute z-[6] flex w-2 cursor-col-resize touch-none justify-center"
-      style={{left: frame.left - EDGE_PX / 2 - 4, top: frame.top, height: frame.height}}
+      className="group absolute z-[6] flex cursor-col-resize touch-none justify-center"
+      style={{left: frame.left - (EDGE_PX + HANDLE_WIDTH_PX) / 2, top: frame.top, width: HANDLE_WIDTH_PX, height: frame.height}}
     >
       <div className="h-full w-px bg-transparent transition-colors group-hover:bg-border group-active:bg-ring"/>
     </div>
