@@ -48,7 +48,9 @@ import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
-import {composerReady, reportFailure, submitComposer} from './actions.ts'
+import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
+import {highlightRanges} from './highlights.ts'
+import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
@@ -184,12 +186,15 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const count = pillCount(threads)
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
   const highlights = useHighlightFeed(block)
+  const surface = useAnnotationSurfaceFor(block, highlights)
   return (
     <div className="flex w-full items-start gap-1">
       <ReadSelectionMenu block={block}>
         <div className="min-w-0 flex-1">
           <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-            <Inner block={block}/>
+            <AnnotationSurfaceContext value={surface}>
+              <Inner block={block}/>
+            </AnnotationSurfaceContext>
           </MarkdownInputProvider>
         </div>
       </ReadSelectionMenu>
@@ -205,6 +210,26 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
       )}
     </div>
   )
+}
+
+/** The read-mode gestures and highlights, for a renderer that draws the text
+ *  itself (`surface.ts`). Same feed as the markdown's, so the two agree. */
+const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): AnnotationSurface => {
+  const {renderScopeId} = feed
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    highlightsIn: content => highlightRanges(content, feed.threads),
+    gestures: readSelectionGesturesIn(renderScopeId).map(gesture => ({
+      id: gesture.actionId,
+      label: gesture.label,
+      icon: gesture.icon,
+      run: range => gesture.step({block, renderScopeId, range}).catch(error => {
+        reportFailure(error)
+        return false
+      }),
+    })),
+  }), [block, renderScopeId, feed.threads])
 }
 
 const decoratePill = cachedContentDecorator(CommentPill, 'WithCommentPill')
