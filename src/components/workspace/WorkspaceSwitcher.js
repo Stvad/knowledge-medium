@@ -1,1 +1,1 @@
-export{rT as WorkspaceSwitcher}from"../../../chunks/app-Bea50SKU.js";
+export{rT as WorkspaceSwitcher}from"../../../chunks/app-Cr8NI7S5.js";

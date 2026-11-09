@@ -1,1 +1,1 @@
-export{G_ as inlineBacklinkCountDecoratorContribution,K_ as inlineBacklinkExpansionContribution}from"../../../../chunks/app-Bea50SKU.js";
+export{G_ as inlineBacklinkCountDecoratorContribution,K_ as inlineBacklinkExpansionContribution}from"../../../../chunks/app-Cr8NI7S5.js";

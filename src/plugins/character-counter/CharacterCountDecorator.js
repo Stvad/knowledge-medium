@@ -1,1 +1,1 @@
-export{Gn as characterCountDecoratorContribution}from"../../../chunks/app-Bea50SKU.js";
+export{Gn as characterCountDecoratorContribution}from"../../../chunks/app-Cr8NI7S5.js";

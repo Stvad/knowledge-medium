@@ -1,1 +1,1 @@
-export{UA as CommandPalette}from"../../../chunks/app-Bea50SKU.js";
+export{UA as CommandPalette}from"../../../chunks/app-Cr8NI7S5.js";

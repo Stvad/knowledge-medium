@@ -1,1 +1,1 @@
-export{_q as getOrCreateLocationsPage,vq as locationsPageBlockId,yq as locationsPageSpec}from"../../../chunks/app-Bea50SKU.js";
+export{_q as getOrCreateLocationsPage,vq as locationsPageBlockId,yq as locationsPageSpec}from"../../../chunks/app-Cr8NI7S5.js";

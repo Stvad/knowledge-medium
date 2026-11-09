@@ -1,1 +1,1 @@
-export{FX as BACKLINKS_COUNT_FOR_BLOCK_QUERY,IX as backlinksCountForBlockQuery}from"../../../../chunks/app-Bea50SKU.js";
+export{FX as BACKLINKS_COUNT_FOR_BLOCK_QUERY,IX as backlinksCountForBlockQuery}from"../../../../chunks/app-Cr8NI7S5.js";

@@ -1,1 +1,1 @@
-export{Ctt as InvalidBlockIdError,wtt as assertCanonicalBlockId}from"../../chunks/app-Bea50SKU.js";
+export{Ctt as InvalidBlockIdError,wtt as assertCanonicalBlockId}from"../../chunks/app-Cr8NI7S5.js";

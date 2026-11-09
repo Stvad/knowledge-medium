@@ -1,1 +1,1 @@
-export{nit as deriveWorkspaceIdNamespace}from"../../../chunks/app-Bea50SKU.js";
+export{nit as deriveWorkspaceIdNamespace}from"../../../chunks/app-Cr8NI7S5.js";

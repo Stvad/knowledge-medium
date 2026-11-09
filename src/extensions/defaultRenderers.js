@@ -1,1 +1,1 @@
-export{tF as defaultRegistry,nF as defaultRendererContributions,rF as defaultRenderersExtension}from"../../chunks/app-Bea50SKU.js";
+export{tF as defaultRegistry,nF as defaultRendererContributions,rF as defaultRenderersExtension}from"../../chunks/app-Cr8NI7S5.js";
