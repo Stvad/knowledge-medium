@@ -8,6 +8,8 @@ import {
   MAX_FRAME_HEIGHT,
   MIN_FRAME_HEIGHT,
   readReportedHeight,
+  readReportedSelection,
+  SELECTION_MESSAGE_TYPE,
 } from '../frameDocument.ts'
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html')
@@ -108,5 +110,33 @@ describe('readReportedHeight', () => {
   it('clamps to the frame limits, so a document cannot take over the page or vanish', () => {
     expect(readReportedHeight(message(1e9))).toBe(MAX_FRAME_HEIGHT)
     expect(readReportedHeight(message(-5))).toBe(MIN_FRAME_HEIGHT)
+  })
+})
+
+describe('readReportedSelection', () => {
+  const point = {text: 'some text', occurrence: 0, offset: 2}
+  const rect = {top: 1, left: 2, bottom: 3, right: 4}
+  const message = (selection: unknown) => ({type: SELECTION_MESSAGE_TYPE, selection})
+
+  it.each([[undefined], ['text'], [{type: HEIGHT_MESSAGE_TYPE, height: 100}], [{selection: {start: point, end: point, rect}}]])(
+    'is not a selection report: %j', data => {
+      expect(readReportedSelection(data)).toBeUndefined()
+    })
+
+  it.each([
+    [message(null)],
+    [message('text')],
+    [message({start: point, end: point})],
+    [message({start: point, end: {...point, offset: -1}, rect})],
+    [message({start: point, end: {...point, occurrence: 0.5}, rect})],
+    [message({start: {...point, text: 7}, end: point, rect})],
+    [message({start: point, end: point, rect: {...rect, top: Number.NaN}})],
+  ])('reads %j as no selection', data => {
+    expect(readReportedSelection(data)).toBeNull()
+  })
+
+  it('reads a well-formed report, and only what it names', () => {
+    expect(readReportedSelection(message({start: {...point, extra: 1}, end: point, rect, extra: 2})))
+      .toEqual({start: point, end: point, rect})
   })
 })

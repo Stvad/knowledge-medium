@@ -18,7 +18,7 @@ import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 import {BLOCK_EDITOR_BASIC_SETUP, createSourceEditorConfig, keepOutlineEditKeysInEditor} from '@/utils/codemirror.js'
 import {cn} from '@/lib/utils.js'
 import {confirmRunScripts} from './confirmRunScripts.tsx'
-import {HtmlFrame} from './HtmlFrame.tsx'
+import {AnnotatedFrame} from './frameAnnotations.tsx'
 import {useDocumentScripts} from './useDocumentScripts.ts'
 
 const STRIP_ACTION = 'rounded px-1 text-foreground hover:bg-muted'
@@ -53,7 +53,7 @@ export const HtmlDocumentView = ({block}: BlockRendererProps) => {
           {!block.repo.isReadOnly && <span>Edit source</span>}
         </span>
       </div>
-      <HtmlFrame source={source} scripts={mode}/>
+      <AnnotatedFrame source={source} scripts={mode}/>
     </div>
   )
 }

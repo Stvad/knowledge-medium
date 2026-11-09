@@ -2,7 +2,9 @@
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
-import type {ReactNode} from 'react'
+import {useEffect, type ReactNode} from 'react'
+import type {BlockContentDecorator, BlockResolveContext} from '@/extensions/blockInteraction'
+import type {BlockRenderer} from '@/types'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
 import {PAGE_TYPE} from '@/data/blockTypes'
@@ -28,7 +30,8 @@ import {annotationsPlugin} from './index'
 import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
-import {ThreadCard} from './ui'
+import {commentPillContribution, ThreadCard} from './ui'
+import {useAnnotationSurface, type AnnotationSurface} from './surface'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
 
 const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string | Promise<string>) => Promise<void>>()}))
@@ -499,6 +502,42 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       await dispatch()
       expect(peekComposer(viewKey(backlink, 'rich'))).toBeUndefined()
       expect(showInfo).toHaveBeenCalledWith('Open the block in its page to suggest an edit to it.')
+    })
+  })
+
+  describe('the surface a renderer that draws its own text gets', () => {
+    const seen: {surface: AnnotationSurface | null} = {surface: null}
+    const Probe: BlockRenderer = () => {
+      const surface = useAnnotationSurface()
+      useEffect(() => { seen.surface = surface })
+      return null
+    }
+    const Decorated = (commentPillContribution({} as BlockResolveContext) as BlockContentDecorator)(Probe)
+
+    afterEach(() => { seen.surface = null })
+
+    it('offers the read-mode gestures, and a highlight one makes comes back as a range', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>)
+      await waitFor(() => expect(seen.surface).not.toBeNull())
+      expect(seen.surface!.gestures.map(gesture => gesture.id)).toEqual(readSelectionGestures.map(gesture => gesture.actionId))
+
+      const content = 'Another block'
+      const range = {content, from: content.indexOf('block'), to: content.length}
+      const highlight = seen.surface!.gestures.find(gesture => gesture.label === 'Highlight')!
+      expect(await highlight.run(range)).toBe(true)
+
+      const [threadId] = await repo.query['core.typedBlockIds']({
+        workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: 'other', sourceField: annotationTargetProp.name},
+      }).load()
+      expect((await repo.load(threadId))?.content).toBe('block')
+      await waitFor(() => expect(seen.surface!.highlightsIn(content))
+        .toEqual([{from: range.from, to: range.to, moved: false, suggestion: false}]))
+    })
+
+    it('offers off the outline only the gestures that run there', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>, backlinkRenderScopeId(panelRenderScopeId('panel', 'page'), 'x'))
+      await waitFor(() => expect(seen.surface).not.toBeNull())
+      expect(seen.surface!.gestures.map(gesture => gesture.label)).toEqual(['Copy reference'])
     })
   })
 })
