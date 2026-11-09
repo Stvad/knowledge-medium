@@ -129,6 +129,17 @@ describe('DraftEditor', () => {
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Corner Cafe'))
   })
 
+  it('inserts a picked place into the draft, which has no block to write to', async () => {
+    const view = await mount()
+    type(view, '@Corn')
+    act(() => { startCompletion(view) })
+    await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Corner Cafe'))
+    await new Promise(resolve => setTimeout(resolve, COMPLETION_INTERACTION_DELAY_MS + 25))
+    press(view, {key: 'Enter'})
+    await waitFor(() => expect(view.state.doc.toString()).toBe('[[Corner Cafe]]'))
+    expect(values.at(-1)).toBe('[[Corner Cafe]]')
+  })
+
   it('submits on Mod+Enter, and makes a line break on Enter', async () => {
     const view = await mount()
     type(view, 'one')

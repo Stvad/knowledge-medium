@@ -21,12 +21,12 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
-import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
   placeCompletionSource,
   type PlaceAutocompleteCandidate,
+  type PlaceAutocompleteOptions,
   type PlaceResolveContext,
   type PlaceResolveResult,
 } from './placeAutocomplete'
@@ -42,6 +42,7 @@ import {
 import type { PlaceCandidate } from './createOrFindPlace'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
+import { locateText, replaceBlockText, replaceInView } from './blockTextReplace'
 
 const GOOGLE_MIN_QUERY_LEN = 2
 const LOCAL_RESULT_CAP = 8
@@ -317,25 +318,24 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     return null
   }
 
-  // The collision toast (and any slow resolution) outlives the pick:
-  // clicking it blurs the block, the per-block editor unmounts, and the
-  // captured view can't take the insert anymore. Apply the same
-  // replacement to the block's content instead — read-modify-write
-  // inside a tx so a pending editor flush can't be clobbered. A draft
-  // editor has no block, and unmounts only when its draft is dropped.
-  const persistInsert = block && (async ({triggerText, insert}: {triggerText: string, insert: string}) => {
-    await repo.tx(async tx => {
-      const data = await tx.get(block.id)
-      if (!data || data.deleted) return
-      const idx = data.content.indexOf(triggerText)
-      if (idx === -1) return
-      const next = data.content.slice(0, idx) + insert
-        + data.content.slice(idx + triggerText.length)
-      await tx.update(block.id, {content: next})
-    }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
-  })
+  const deliverInsert: PlaceAutocompleteOptions['deliverInsert'] = async ({view, span, triggerText, insert}) => {
+    const locate = (doc: string) => locateText(doc, triggerText, span)
+    // A draft has no block to find an editor by or to store into: the text
+    // lives only in its own view, and is gone once that view is.
+    if (!block) {
+      replaceInView(view, locate, insert)
+      return
+    }
+    await replaceBlockText({
+      repo,
+      blockId: block.id,
+      locate,
+      replacement: insert,
+      description: 'insert place link',
+    })
+  }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
+  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, deliverInsert})
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
