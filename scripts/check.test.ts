@@ -191,7 +191,7 @@ describe.skipIf(process.platform === 'win32')('the check gate', () => {
   it('re-runs the failing test files alone and says which fail without load', async () => {
     const { status, out } = await runGate({ SHIM_MODE: 'mixed' })
     expect(status).not.toBe(0)
-    expect(out).toContain('pnpm run test --no-file-parallelism scripts/slow.test.ts scripts/real.test.ts')
+    expect(out).toContain('pnpm run test --isolate --no-file-parallelism scripts/slow.test.ts scripts/real.test.ts')
     expect(out).toContain('fails alone too: scripts/real.test.ts; passed alone: scripts/slow.test.ts')
     expect(out).toMatch(/verdict: .*\(re-run at load average [\d.]+ on \d+ cores\)/)
     expect(lastLine(out)).toBe('check: FAIL (test)')
@@ -500,8 +500,17 @@ describe('unaccounted', () => {
 describe('loadVerdict', () => {
   const failed = ['a.test.ts', 'b.test.ts']
 
-  it('says the failure was load when every file passes alone', () => {
-    expect(loadVerdict(failed, { code: 0, output: '' })).toBe('failed only under load, passed alone: a.test.ts, b.test.ts')
+  it('blames the full run, not any one cause, when every file passes alone', () => {
+    expect(loadVerdict(failed, { code: 0, output: '' }))
+      .toBe('failed only in the full run (load, or state another file left in a shared worker), passed alone: a.test.ts, b.test.ts')
+  })
+
+  it.each([
+    ['tree row', ' ❯ |shared| b.test.ts (2 tests | 1 failed) 3ms'],
+    ['FAIL row', ' FAIL  |shared| b.test.ts > it'],
+  ])('reads a failing file behind the project label on a %s', (_row, line) => {
+    const output = [line, ' Test Files  1 failed | 1 passed (2)'].join('\n')
+    expect(loadVerdict(failed, { code: 1, output })).toBe('fails alone too: b.test.ts; passed alone: a.test.ts')
   })
 
   it('names the files that fail alone, and the rest separately', () => {

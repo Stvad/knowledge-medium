@@ -285,8 +285,10 @@ const rewriteHashTags = (
 // — apply the identical hashtag grammar instead of treating `#tag` text
 // as a literal page title.
 export const rewriteRoamHashtags = (content: string): string => {
-  const protectedRanges = collectHashRewriteProtectedRanges(content)
-  return rewriteHashTags(rewriteHashPages(content, protectedRanges), protectedRanges)
+  // Ranges are offsets into the string they were collected from, and the
+  // page pass shortens it (`#[[x]]` → `[[x]]`), so the tag pass needs its own.
+  const pagesRewritten = rewriteHashPages(content, collectHashRewriteProtectedRanges(content))
+  return rewriteHashTags(pagesRewritten, collectHashRewriteProtectedRanges(pagesRewritten))
 }
 
 export const rewriteRoamContent = (

@@ -1,3 +1,4 @@
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -218,8 +219,28 @@ export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptComplet
  *  Enter before it can reach a window shortcut). */
 export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
 
-/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
- *  for bracket closing. Keys, history and completion come from the app. */
+/** Keys the EDIT_MODE_CM shortcuts read as outline edits: Enter splits the block,
+ *  Tab and Shift+Tab re-nest it, Backspace and Delete at its edges merge it with a
+ *  neighbour. */
+const OUTLINE_EDIT_KEYS: ReadonlySet<string> = new Set(['Enter', 'Tab', 'Backspace', 'Delete'])
+
+/** `onKeyDown` for a `BlockEditor` holding source, where those keys edit the text
+ *  and must not reach the window-level block shortcuts. Pressed with Alt, Ctrl or
+ *  Cmd they are left to the app.
+ *
+ *  Bubble phase on purpose: CodeMirror has run its keymap or deferred it by now, so
+ *  its keymap keeps deciding what the key does, and only the way on to window is
+ *  cut. Taking the key in the capture phase would mean re-implementing that keymap:
+ *  accepting a completion, the next snippet field, a key typed in the search panel. */
+export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
+}
+
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it. What it
+ *  doesn't name stays on. Of its keymaps only bracket closing's, fold's and lint's do;
+ *  keys and history come from the app, and autocompletion brings its own keymap
+ *  whatever this says. */
 export const BLOCK_EDITOR_BASIC_SETUP = {
   closeBrackets: true,
   lineNumbers: false,
@@ -323,10 +344,15 @@ export const createMinimalMarkdownConfig = (
   return extensions
 }
 
-export const createTypeScriptConfig = (): Extension[] => [
-  javascript({jsx: true, typescript: true}),
+export const createTypeScriptConfig = (): Extension[] =>
+  createSourceEditorConfig(javascript({jsx: true, typescript: true}))
+
+/** An editor for source in `language` rather than a block's markdown. */
+export const createSourceEditorConfig = (language: Extension): Extension[] => [
+  language,
   EditorView.theme({
     '&': {background: 'transparent', color: 'inherit'},
+    '&.cm-focused': {outline: 'none'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
     // Wrapping (below) means no horizontal scroll, so the scroller can be a

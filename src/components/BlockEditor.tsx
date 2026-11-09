@@ -19,8 +19,9 @@ import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
-import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
+import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -113,17 +114,16 @@ export const BlockEditor = ({
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
 
+  // Content only: flushed before the focus write, a pending selection would
+  // pass pushSelection's guard and overwrite the selection the navigation just
+  // wrote for its target block.
+  const flushContent = useCallback(() => { pushChange.flush() }, [pushChange])
+  useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
+
   // Leaving this block's editor (unmount / block switch) is the "done
-  // editing" signal — consumers like watch-events short-circuit their
-  // settle window on it. The debounced content commit above may still
-  // be in flight when this fires; subscribers re-check after a beat.
-  useEffect(() => {
-    // Mounting means the user is editing (again): revoke whatever the
-    // last settled signal implied — e.g. a lingering blur exemption
-    // must not vouch for a block being retyped right now.
-    notifyBlockEditResumed(block.id)
-    return () => notifyBlockEditSettled(block.id)
-  }, [block.id])
+  // editing" signal. The debounced content commit above may still be in
+  // flight when this fires.
+  useEffect(() => () => notifyBlockEditSettled(block.id), [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return
@@ -235,8 +235,9 @@ export const BlockEditor = ({
   }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
-  // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
-  // mounted — for any consumer (markdown editor, extension editor, future).
+  // context (Escape, Tab, etc.) fire whenever this editor is mounted — for any
+  // consumer (markdown editor, extension editor, future). A consumer holding
+  // source opts out of the outline-edit keys: keepOutlineEditKeysInEditor.
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 

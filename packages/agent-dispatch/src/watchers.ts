@@ -12,7 +12,7 @@ export interface BlockView {
   content?: string
   properties?: Record<string, unknown>
   parentId?: string | null
-  /** Last user edit (ms) — gates the quiet period before claiming. */
+  /** Last user edit (ms) — gates the settle and the edit hold before claiming. */
   editedAtMs?: number | null
 }
 
@@ -23,6 +23,7 @@ export interface PendingDecision {
     | 'already-processed'
     | 'is-reply'
     | 'still-typing'
+    | 'being-edited'
     | 'stale-running'
     | 'attempts-exhausted'
     | 'pre-baseline'
@@ -54,18 +55,31 @@ export const STALE_RUNNING_MS = 30 * 60_000
  *  crashing or the ambient channel session keeps dropping the event. */
 export const MAX_ATTEMPTS = 3
 
+/** An ask is a "go" for the text it was made with: the ask's own write and the
+ *  editor's commit of the same text land within this of its stamp. A later
+ *  edit means the user went on writing, so the ask stops overriding the hold. */
+export const ASK_COVERS_EDIT_MS = 1_000
+
+const askCoversLatestEdit = (source: BlockView): boolean => {
+  const askedAt = prop(source, PROPS.askedAt)
+  return typeof askedAt === 'number'
+    && (source.editedAtMs ?? Number.POSITIVE_INFINITY) <= askedAt + ASK_COVERS_EDIT_MS
+}
+
 export interface PendingArgs {
   source: BlockView
   nowMs: number
-  /** Minimum quiet time since the last user edit before claiming. */
-  quietMs?: number
+  /** Minimum time since the last user edit before claiming. */
+  settleMs?: number
+  /** When the block is open in an editor on some client: that editor's
+   *  latest write to its ui-state row. null/undefined = not being edited. */
+  editingActiveAtMs?: number | null
+  /** How long a block open in an editor is held once neither its text nor
+   *  its editor has moved. */
+  editHoldMs?: number
   /** Watcher's first-tick timestamp: unclaimed blocks last edited before
    *  it are pre-existing content, never tasks. null/undefined = no gate. */
   baselineMs?: number | null
-  /** The quiet period was already confirmed at the SOURCE (the tab saw
-   *  the user leave the block, or its settle window elapsed) — skip the
-   *  clock-based still-typing gate. Baseline/status gates still apply. */
-  quietExempt?: boolean
 }
 
 /**
@@ -78,9 +92,11 @@ export interface PendingArgs {
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
  * - skip unclaimed blocks that predate the watcher baseline — pointing a
  *   watcher at an established page must not claim (and bill) its history;
- * - wait out the quiet period so half-typed requests aren't claimed.
+ * - hold a block open in an editor until the cap since the text or the editor
+ *   last moved, unless the user asked about the text as it stands;
+ * - wait out the settle window so an edit's last write isn't missed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExempt = false}: PendingArgs): PendingDecision => {
+export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = null, editHoldMs = 0, baselineMs}: PendingArgs): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
   const status = taskStatus(source)
@@ -102,9 +118,12 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExem
     return {pending: false, reason: 'pre-baseline'}
   }
 
-  if (!quietExempt && quietMs > 0 && typeof source.editedAtMs === 'number' && nowMs - source.editedAtMs < quietMs) {
-    return {pending: false, reason: 'still-typing'}
+  const editedAgoMs = typeof source.editedAtMs === 'number' ? nowMs - source.editedAtMs : Number.POSITIVE_INFINITY
+  if (typeof editingActiveAtMs === 'number' && !askCoversLatestEdit(source)
+    && Math.min(editedAgoMs, nowMs - editingActiveAtMs) < editHoldMs) {
+    return {pending: false, reason: 'being-edited'}
   }
+  if (editedAgoMs < settleMs) return {pending: false, reason: 'still-typing'}
 
   return {pending: true, reason: 'pending'}
 }

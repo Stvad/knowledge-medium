@@ -5,7 +5,7 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
+import {actionContextsFacet, actionsFacet, appMountsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {
   blockBelowContentFacet,
@@ -29,7 +29,7 @@ import {
 } from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
-import {CommentMargin, MarginHeaderItem} from './margin.tsx'
+import {CommentMargin} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
@@ -77,7 +77,6 @@ export const annotationsPlugin: AppExtension = systemToggle({
   // A panel mount, not a block layout: that facet is last-wins, and the video
   // notes and SRS review layouts already contribute to it.
   panelMountsFacet.of({id: 'annotations.margin', component: CommentMargin}, {source: SOURCE}),
-  headerItemsFacet.of({id: 'annotations.margin-toggle', region: 'end', component: MarginHeaderItem}, {source: SOURCE}),
   mobileKeyboardToolbarItemsFacet.of(
     {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
     {source: SOURCE, precedence: 60}),

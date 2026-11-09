@@ -13,6 +13,7 @@ import {
   type AnyPropertySeedDeclaration,
   type PropertySeedDeclaration,
 } from './propertySeeds'
+import { flushPendingEditorContent } from './pendingEditorContent'
 import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
@@ -137,6 +138,28 @@ export const panelMaximizedProp = seedProperty({
  *  path threw on a value the renderer was quietly degrading. */
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
+
+/** A layout column's share of the layout's width, as a grid `fr` weight, on
+ *  a PANEL row, never a stack's: a stack's column takes it from its panels
+ *  (`columnWeightHolder`), so the width outlives stack rows being made and
+ *  rebuilt around them. Absent ≡ 1, an equal share. Not in the layout URL:
+ *  the URL says what is open, and this is how it is arranged on this
+ *  device. */
+export const layoutColumnWeightProp = seedProperty({
+  seedKey: 'system:kernel-data/property/layout-column-weight',
+  revision: 1,
+  name: 'layoutColumnWeight',
+  preset: 'optional-number',
+  changeScope: ChangeScope.UiState,
+})
+
+/** The stored weight, or undefined for none. Lenient, like
+ *  `isPanelRowMaximized`: a malformed weight costs the column its width, not
+ *  the layout its render. */
+export const layoutColumnWeight = (row: Pick<BlockData, 'properties'>): number | undefined => {
+  const weight = safeDecodeRowProperty(row, layoutColumnWeightProp)
+  return weight !== undefined && Number.isFinite(weight) && weight > 0 ? weight : undefined
+}
 
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
@@ -593,6 +616,7 @@ export const setBlockTypesInProperties = (
  *  short-circuit, but this gate keeps any new caller honest. */
 export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   if (editing && uiStateBlock.repo.isReadOnly) return
+  flushPendingEditorContent()
   void uiStateBlock.set(isEditingProp, editing)
 }
 
@@ -687,6 +711,7 @@ export const focusBlock = async (
     blockId,
     renderScopeId: renderScopeId ?? fallbackRenderScopeId,
   }
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     const current = targetEdit ? null : await tx.get(uiStateBlock.id)
     const preserveCurrentEditMode = !targetEdit &&
@@ -721,6 +746,7 @@ export const exitEditModeForBlock = async (
   blockId: string,
   renderScopeId?: string,
 ): Promise<void> => {
+  flushPendingEditorContent()
   await uiStateBlock.repo.tx(async tx => {
     const location = focusedBlockLocationFromProperties((await tx.get(uiStateBlock.id))?.properties)
     // Another block owns the focused location now (or a different render-scope
@@ -759,6 +785,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   scrollTopProp,
   panelViewModeProp,
   panelMaximizedProp,
+  layoutColumnWeightProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,

@@ -496,6 +496,45 @@ describe('PanelCursorFollowsScroll', () => {
     }, {timeout: 2000})
   })
 
+  // Same reason as above, from inside the panel: panning a wide table moves no
+  // row up or down, so a cursor on a row that holds the rows has to ignore it.
+  it('ignores a sideways pan inside the panel', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [])
+    const container = dom.addNestingRow('backlog', -600, 2000)
+    dom.addRow('note-a', 20, container)
+    const scroller = document.createElement('div')
+    Object.defineProperties(scroller, {
+      scrollWidth: {value: 900},
+      clientWidth: {value: 300},
+      scrollHeight: {value: 100, configurable: true},
+      clientHeight: {value: 100},
+    })
+    container.appendChild(scroller)
+    await focusBlock(panel, 'backlog', {renderScopeId: SCOPE})
+    const fence = await withFence()
+
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
+
+    scroller.dispatchEvent(new Event('scroll', {bubbles: false}))
+    fence.scrollAway()
+
+    await fence.settled()
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('backlog')
+
+    // Once it also overflows vertically it can move rows, so it counts again.
+    Object.defineProperty(scroller, 'scrollHeight', {value: 500})
+    scroller.dispatchEvent(new Event('scroll', {bubbles: false}))
+    await afterSettling(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('note-a')
+    }, {timeout: 2000})
+  })
+
   // Content ABOVE the cursor can grow and push it past the fold while
   // `scrollTop` never moves — the norm on WebKit, which has no scroll
   // anchoring, and anywhere an image decodes. A scroll-only trigger sees none

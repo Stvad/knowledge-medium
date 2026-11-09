@@ -32,6 +32,27 @@ import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
 import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
+import { hasSourceContent } from '@/data/blockTypes'
+
+/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
+ *  by design: a row whose JSON is unparseable is not source content (its
+ *  `types` can't say so) — the same answer `hasSourceContent` gives for a
+ *  wrong-shaped value. */
+const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
+  if (json === null) return {}
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+/** {@link hasSourceContent} for a raw row. */
+const rowHasSourceContent = (propertiesJson: string | null): boolean =>
+  hasSourceContent({properties: parsePropertiesJson(propertiesJson)})
 
 /** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
 export interface AuditDb {
@@ -509,8 +530,8 @@ const runContentLinkRecomputeCheck = async (
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
   for (;;) {
-    const batch = await db.getAll<{ id: string; content: string; references_json: string }>(
-      `SELECT id, content, references_json FROM blocks
+    const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
+      `SELECT id, content, references_json, properties_json FROM blocks
        WHERE deleted=0 AND workspace_id=?
          AND (content LIKE '%[[%' OR content LIKE '%((%')
          AND id > ?
@@ -519,6 +540,7 @@ const runContentLinkRecomputeCheck = async (
     )
     if (batch.length === 0) break
     for (const row of batch) {
+      if (rowHasSourceContent(row.properties_json)) continue
       const parsedAliases = new Set<string>([
         ...parseReferences(row.content).map((m) => m.alias),
         ...parseBlockRefs(row.content).map((m) => m.blockId),

@@ -145,6 +145,18 @@ describe('appendTagToBlocks', () => {
     expect((await repo.load('b'))?.content).toBe('second [[srs]]')
   })
 
+  it('leaves source alone', async () => {
+    await repo.tx(tx => tx.create({
+      id: 'doc', workspaceId: 'ws-1', parentId: null, orderKey: 'a-doc',
+      content: '<p>source</p>', properties: {types: ['html-document']},
+    }), {scope: ChangeScope.BlockDefault, description: 'seed doc'})
+
+    const result = await appendTagToBlocks([repo.block('doc')], 'srs')
+
+    expect(result).toEqual({total: 1, updated: 0, alreadyTagged: 0})
+    expect((await repo.load('doc'))?.content).toBe('<p>source</p>')
+  })
+
   it('skips blocks that already carry the tag', async () => {
     await seed('a', 'already [[srs]] tagged')
     await seed('b', 'untagged')

@@ -7,7 +7,8 @@
  *   block's comments). It also hands the block's threads to the read-mode
  *   highlights (`readHighlights.ts`);
  * - its inline expansion under the block, holding an edit suggestion's
- *   composer and a card per thread;
+ *   composer and a card per thread, and the switch that opens the panel's
+ *   margin;
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
@@ -16,7 +17,7 @@
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
-import {MessageSquare} from 'lucide-react'
+import {MessageSquare, PanelRight} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
@@ -27,7 +28,7 @@ import {DraftEditor} from '@/components/DraftEditor.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
-import {useHandle, useWorkspaceId} from '@/hooks/block.js'
+import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {
   cachedContentDecorator,
   enterEditModeForBlock,
@@ -42,12 +43,14 @@ import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
+import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, reportFailure, submitComposer} from './actions.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
@@ -152,6 +155,12 @@ export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean):
     : {kind: 'expand-inline'}
 }
 
+/** Whether the panel's margin shows this row's threads: it is drawn, and the
+ *  row is in the panel's own outline, the rows the margin lays out, not in an
+ *  embed or a backlink inside the panel. */
+const useInMargin = ({panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}): boolean =>
+  useMarginShowing(panelId) && isPanelRenderScopeId(renderScopeId ?? '')
+
 const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
@@ -159,7 +168,7 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const panelId = blockContext.panelId
   // With the margin drawn, the threads are already beside the block: the pill
   // pins its first card instead of expanding them a second time inline.
-  const inMargin = useMarginShowing(panelId)
+  const inMargin = useInMargin(blockContext)
   const activeThread = useActiveThread(panelId ?? '')
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
@@ -329,7 +338,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
   const key = viewKey(blockContext.renderScopeId, block.id)
   const composer = useComposer(key)
   const showResolved = useShowResolved(key)
-  const inMargin = useMarginShowing(blockContext.panelId)
+  const inMargin = useInMargin(blockContext)
   // The margin shows the threads; only a composer opened here stays inline.
   if (inMargin) {
     return composer
@@ -345,13 +354,37 @@ const ThreadsSection = ({block}: {block: Block}) => {
       {!composer && open.length === 0 && closed.length === 0 && (
         <p className="px-1 text-xs text-muted-foreground">No comments.</p>
       )}
-      {closed.length > 0 && (
-        <button type="button" onClick={() => toggleShowResolved(key)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
-          {showResolved ? 'Hide' : 'Show'} {closed.length} closed
-        </button>
-      )}
+      <div className="flex items-center gap-3 px-1">
+        {closed.length > 0 && (
+          <button type="button" onClick={() => toggleShowResolved(key)} className="text-xs text-muted-foreground hover:text-foreground">
+            {showResolved ? 'Hide' : 'Show'} {closed.length} closed
+          </button>
+        )}
+        {blockContext.panelId && isPanelRenderScopeId(blockContext.renderScopeId ?? '') && (
+          <MarginSwitch panelId={blockContext.panelId}/>
+        )}
+      </div>
       {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
     </section>
+  )
+}
+
+/** Opens the panel's margin. Absent once it is open: an open margin that
+ *  isn't drawn is waiting for a pane wide enough. Not offered below md, where
+ *  no pane is wide enough. */
+const MarginSwitch = ({panelId}: {panelId: string}) => {
+  const panel = useRepo().block(panelId)
+  const [open] = usePropertyValue(panel, annotationMarginOpenProp)
+  if (open) return null
+  return (
+    <button
+      type="button"
+      onClick={() => void panel.set(annotationMarginOpenProp, true)}
+      className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground max-md:hidden"
+    >
+      <PanelRight className="h-3 w-3" aria-hidden/>
+      Show in margin
+    </button>
   )
 }
 

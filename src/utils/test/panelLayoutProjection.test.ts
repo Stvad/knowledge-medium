@@ -38,6 +38,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { buildLayoutFromSlots } from '@/utils/routing'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
@@ -48,6 +49,7 @@ import {
   deletePanelRow,
   insertPanelRow,
   insertSidebarStackedPanel,
+  isPanelStackRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -821,6 +823,29 @@ describe('applyCurrentLayoutUrl', () => {
   })
 })
 
+describe('reconcilePanelRows: an open editor', () => {
+  it('saves its pending text ahead of a Back navigation that replaces it', async () => {
+    await createPanelRows(['a', 'b'])
+    await env.repo.tx(tx => tx.create({
+      id: 'edited', workspaceId: WS, parentId: null, orderKey: 'n0', content: 'stored',
+    }).then(() => undefined), {scope: ChangeScope.BlockDefault, description: 'seed edited block'})
+    const stop = registerPendingContentFlush(() => {
+      void env.repo.mutate.setContent({id: 'edited', content: 'typed'})
+    })
+    try {
+      await reconcilePanelRows(env.repo, layoutSessionBlock(), ['c', 'b'])
+    } finally {
+      stop()
+    }
+    const order = (await env.h.db.getAll<{description: string}>(
+      'SELECT description FROM command_events ORDER BY rowid',
+    )).map(row => row.description)
+    expect(order).toContain('set content on edited')
+    expect(order.indexOf('set content on edited'))
+      .toBeLessThan(order.indexOf('reconcile panel layout from URL'))
+  })
+})
+
 describe('reconcilePanelRows: no-op guard', () => {
   it('does not open a tx when rows already match the target slots and active pointer', async () => {
     await createPanelRows(['a', 'b'])
@@ -1042,6 +1067,52 @@ describe('layoutSlotsFromRows normalization', () => {
     expect(result.kind).toBe('noop')
     const idsAfter = (await layoutRows()).map(row => row.id).sort()
     expect(idsAfter).toEqual(idsBefore) // the stack row silently survives
+  })
+})
+
+describe('stack rows across a reconcile', () => {
+  const stackIds = async () => (await layoutRows()).filter(isPanelStackRow).map(row => row.id)
+
+  it('keeps the row of a stack whose panels stay together when a pane changes content', async () => {
+    await applyUrl('#ws-1/a/x,b/c')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/a/x,d/c')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'x', 'd', 'c'])
+  })
+
+  it('keeps the row of a stack when a column is opened before it', async () => {
+    await applyUrl('#ws-1/a/x,b')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/n/a/x,b')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'n'},
+      {kind: 'leaf', blockId: 'a'},
+      {kind: 'stack', children: [{kind: 'leaf', blockId: 'x'}, {kind: 'leaf', blockId: 'b'}]},
+    ])
+  })
+
+  it('makes a new row for a stack whose panels were in none', async () => {
+    await applyUrl('#ws-1/a/b/c')
+
+    await applyUrl('#ws-1/a,b/c')
+
+    expect(await stackIds()).toHaveLength(1)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'b', 'c'])
+  })
+
+  it('deletes the row of a stack its panels left', async () => {
+    await applyUrl('#ws-1/x,b/c')
+
+    await applyUrl('#ws-1/x/b/c')
+
+    expect(await stackIds()).toEqual([])
+    expect(panelBlockIds(await rows())).toEqual(['x', 'b', 'c'])
   })
 })
 
