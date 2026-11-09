@@ -5,6 +5,8 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keysBetween } from '@/data/orderKey'
+import { recaptureAnchor } from '@/plugins/annotations/anchor'
+import { createThread } from '@/plugins/annotations/threads'
 import {
   EXTENSIONS_PAGE_TITLE,
   extensionsPageOutline,
@@ -12,6 +14,7 @@ import {
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
   type TutorialNode,
+  type TutorialThread,
 } from './outline'
 
 /**
@@ -38,6 +41,12 @@ import {
  * id of the default Tutorial so callers can use it as a tutorial-first
  * landing target.
  *
+ * The comment-thread demos (a node's `thread`) go in after that tx, through
+ * the annotations plugin's own `createThread`: a thread's anchor is checked
+ * against its target as committed, and the Comments page is that plugin's to
+ * create. They are decoration on a tutorial that already exists, so a failure
+ * there is logged rather than thrown — the caller still lands on the page.
+ *
  * The typed demos (todo / char-counter / srs / place / map) tag themselves
  * against `repo.snapshotTypeRegistries()` — the Repo's live registry. Those
  * plugin types are installed onto the Repo at construction via
@@ -56,6 +65,7 @@ export const seedTutorial = async (
   // (parent=null means no canonical sibling list) but `tx.create`
   // requires one.
   const [vimKey, defaultKey, extensionsKey] = keysBetween(null, null, 3)
+  const threads: SeededThread[] = []
 
   await repo.tx(
     async tx => {
@@ -66,6 +76,7 @@ export const seedTutorial = async (
         title: TUTORIAL_VIM_TITLE,
         aliases: [TUTORIAL_VIM_TITLE],
         children: tutorialOutline('vim'),
+        threads,
       })
       await seedPage(repo, tx, {
         id: defaultTutorialId,
@@ -74,6 +85,7 @@ export const seedTutorial = async (
         title: TUTORIAL_DEFAULT_TITLE,
         aliases: [TUTORIAL_DEFAULT_TITLE],
         children: tutorialOutline('default'),
+        threads,
       })
       await seedPage(repo, tx, {
         id: extensionsPageId,
@@ -82,12 +94,35 @@ export const seedTutorial = async (
         title: EXTENSIONS_PAGE_TITLE,
         aliases: [EXTENSIONS_PAGE_TITLE],
         children: extensionsPageOutline(),
+        threads,
       })
     },
     { scope: ChangeScope.BlockDefault, description: 'seed tutorial' },
   )
 
+  try {
+    for (const thread of threads) await seedThread(repo, thread)
+  } catch (error) {
+    console.error('[onboarding] seeding the tutorial\'s demo comments failed', error)
+  }
+
   return defaultTutorialId
+}
+
+export const SEED_THREAD_DESCRIPTION = 'seed tutorial comment'
+
+interface SeededThread extends TutorialThread {
+  targetId: string
+  targetContent: string
+}
+
+const seedThread = async (
+  repo: Repo,
+  {targetId, targetContent, quote, comment, replacement}: SeededThread,
+): Promise<void> => {
+  const anchor = recaptureAnchor(targetContent, targetContent.indexOf(quote), quote)
+  if (!anchor) throw new Error(`tutorial thread quote is not plain text of its block: ${quote}`)
+  await createThread(repo, {targetId, anchor, comment, replacement}, {description: SEED_THREAD_DESCRIPTION})
 }
 
 interface SeedPageArgs {
@@ -97,6 +132,8 @@ interface SeedPageArgs {
   title: string
   aliases: string[]
   children: ReadonlyArray<TutorialNode>
+  /** Collects the nodes' demo threads, written once the pages are committed. */
+  threads: SeededThread[]
 }
 
 const seedPage = async (
@@ -112,13 +149,13 @@ const seedPage = async (
     content: args.title,
   })
   await repo.addTypeInTx(tx, args.id, PAGE_TYPE, { [aliasesProp.name]: args.aliases })
-  await seedChildren(repo, tx, args.workspaceId, args.id, args.children)
+  await seedChildren(repo, tx, args, args.id, args.children)
 }
 
 const seedChildren = async (
   repo: Repo,
   tx: Tx,
-  workspaceId: string,
+  page: Pick<SeedPageArgs, 'workspaceId' | 'threads'>,
   parentId: string,
   nodes: ReadonlyArray<TutorialNode>,
 ): Promise<void> => {
@@ -129,7 +166,7 @@ const seedChildren = async (
     const id = node.id ?? uuidv4()
     await tx.create({
       id,
-      workspaceId,
+      workspaceId: page.workspaceId,
       parentId,
       orderKey: keys[i],
       content: node.content,
@@ -138,8 +175,9 @@ const seedChildren = async (
     if (node.type) {
       await repo.addTypeInTx(tx, id, node.type, node.typeProperties ?? {})
     }
+    if (node.thread) page.threads.push({...node.thread, targetId: id, targetContent: node.content})
     if (node.children && node.children.length > 0) {
-      await seedChildren(repo, tx, workspaceId, id, node.children)
+      await seedChildren(repo, tx, page, id, node.children)
     }
   }
 }

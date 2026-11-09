@@ -8,13 +8,13 @@
  *
  * Each page carries its canonical alias, the outline sections (Welcome,
  * basics, navigation, …), and an `extensions/` sub-page whose children
- * are one block per example extension. All inserts run in a single
- * `repo.tx` so both pages land atomically.
+ * are one block per example extension. The pages land in a single
+ * `repo.tx`; the demo comment threads follow, each in its own.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
-import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { EXTENSION_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
@@ -22,45 +22,32 @@ import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { typeSeedsFacet } from '@/data/facets'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
-import { todoDataExtension } from '@/plugins/todo/dataExtension'
-import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
-import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
-import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import { TODO_TYPE } from '@/plugins/todo/schema'
-import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
+import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
 import { charLimitProp } from '@/plugins/character-counter/properties'
 import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
 import { MAP_TYPE, PLACE_TYPE } from '@/plugins/geo/blockTypes'
 import { placeLatProp } from '@/plugins/geo/properties'
-import { seedTutorial } from '../seed'
+import { resolveAnchor } from '@/plugins/annotations/anchor'
+import { THREAD_TYPE, threadAnchorOf, threadReplacementOf, threadTargetIdOf } from '@/plugins/annotations/schema'
+import { SEED_THREAD_DESCRIPTION, seedTutorial } from '../seed'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import {
   EXTENSIONS_PAGE_TITLE,
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
 } from '../outline'
+import { TUTORIAL_TYPE_EXTENSIONS } from './tutorialTypeExtensions'
+import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 
 const WS = 'ws-1'
-
-// The block-type data extensions the tutorial's demos depend on. A focused
-// list — NOT the full `staticDataExtensions` — so the seed tx doesn't register
-// the references/alias post-commit processors, which fire async and would make
-// the "single command_events row" assertion racy. The separate completeness
-// test below guards that production's `staticDataExtensions` actually contains
-// these (the original bug was char-counter + geo missing from it).
-const TUTORIAL_TYPE_EXTENSIONS = [
-  todoDataExtension,
-  characterCounterDataExtension,
-  srsReschedulingDataExtension,
-  geoDataExtension,
-]
 
 interface Harness {
   h: TestDb
   repo: Repo
 }
 
-const setup = async (): Promise<Harness> => {
+const setup = async (extensions = TUTORIAL_TYPE_EXTENSIONS): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   // Mirror production: at construction the Repo gets its data-layer types from
@@ -70,7 +57,7 @@ const setup = async (): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: { id: 'user-1' },
-    extensions: TUTORIAL_TYPE_EXTENSIONS,
+    extensions,
   })
   return { h, repo }
 }
@@ -141,6 +128,8 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     expect(hasTyped(TODO_TYPE)).toBe(true)
     expect(hasTyped(SRS_SM25_TYPE)).toBe(true)
     expect(hasTyped(MAP_TYPE)).toBe(true)
+    expect(hasTyped(WORD_COUNTER_TYPE)).toBe(true)
+    expect(hasTyped(HTML_DOCUMENT_TYPE)).toBe(true)
 
     // Char-counter demo carries its type-lifted `char:limit` (set via addType).
     const charBlock = blocks.find(b => b.hasType(CHAR_COUNTER_TYPE))
@@ -207,11 +196,31 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     }
   })
 
-  it('all inserts share a single tx — exactly one command_events row', async () => {
+  it('writes the pages in a single tx', async () => {
     const rows = await env.h.db.getAll<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM command_events',
+      "SELECT COUNT(*) AS count FROM command_events WHERE description = 'seed tutorial'",
     )
     expect(rows[0]?.count).toBe(1)
+  })
+
+  it('starts a demo comment thread and a demo edit suggestion in each variant, anchored exactly', async () => {
+    const ids = await listAllBlockIds(env.h)
+    for (const id of ids) await env.repo.load(id)
+    const roots = ids.map(id => env.repo.block(id)).filter(b => b.hasType(THREAD_TYPE)).map(b => b.peek()!)
+    expect(roots).toHaveLength(4)
+
+    for (const root of roots) {
+      const target = env.repo.block(threadTargetIdOf(root)!).peek()!
+      const anchor = threadAnchorOf(root)
+      expect(anchor.kind).toBe('range')
+      if (anchor.kind === 'range') expect(resolveAnchor(target.content, anchor).state).toBe('exact')
+    }
+    expect(roots.map(threadReplacementOf).filter(Boolean)).toEqual(['receive', 'receive'])
+    const threadTxs = await env.h.db.getAll<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM command_events WHERE description = ?',
+      [SEED_THREAD_DESCRIPTION],
+    )
+    expect(threadTxs[0]?.count).toBe(4)
   })
 
   // The seed runs at bootstrap against the Repo's construction-time registry,
@@ -227,9 +236,30 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     const typeIds = new Set<string>(
       runtime.read(typeSeedsFacet).map(t => t.id),
     )
-    for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
+    for (const typeId of [
+      TODO_TYPE, CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE,
+      HTML_DOCUMENT_TYPE, THREAD_TYPE,
+    ]) {
       expect(typeIds.has(typeId)).toBe(true)
     }
+  })
+})
+
+describe('seedTutorial when a demo thread cannot be written', {timeout: 30_000}, () => {
+  it('still seeds the pages and returns the tutorial', async () => {
+    // Without the annotations types, every thread write refuses.
+    env = await setup(TUTORIAL_TYPE_EXTENSIONS.filter(ext => ext !== annotationsDataExtension))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let tutorialId: string
+    try {
+      tutorialId = await seedTutorial(env.repo, WS)
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('demo comments failed'), expect.any(Error))
+    } finally {
+      logged.mockRestore()
+    }
+    await env.repo.load(tutorialId)
+    expect(env.repo.block(tutorialId).peek()?.content).toBe(TUTORIAL_DEFAULT_TITLE)
+    expect(await findPageByAlias(env.h, env.repo, TUTORIAL_VIM_TITLE)).not.toBeNull()
   })
 })
 
