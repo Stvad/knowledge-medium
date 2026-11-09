@@ -1,0 +1,1 @@
+export{Pw as plainOutlinerPlugin}from"../../../chunks/app-Dtvd7WGa.js";

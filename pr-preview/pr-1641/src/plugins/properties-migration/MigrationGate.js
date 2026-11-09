@@ -1,0 +1,1 @@
+export{Ga as MigrationGate}from"../../../chunks/app-Dtvd7WGa.js";

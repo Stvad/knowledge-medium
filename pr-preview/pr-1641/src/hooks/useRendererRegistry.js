@@ -1,0 +1,1 @@
+export{IP as defaultRegistry,PP as refreshRendererRegistry,FP as useRenderer}from"../../chunks/app-Dtvd7WGa.js";

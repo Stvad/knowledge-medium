@@ -1,0 +1,1 @@
+export{OI as ExtensionRenderBoundary}from"../../chunks/app-Dtvd7WGa.js";

@@ -1,0 +1,1 @@
+export{Vq as dailyNotesLocalSchema}from"../../../chunks/app-Dtvd7WGa.js";

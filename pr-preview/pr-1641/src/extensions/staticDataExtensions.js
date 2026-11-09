@@ -1,0 +1,1 @@
+export{JW as staticDataExtensions}from"../../chunks/app-Dtvd7WGa.js";

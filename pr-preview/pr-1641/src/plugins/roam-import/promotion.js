@@ -1,0 +1,1 @@
+export{wu as computePromotedFromChildren,Tu as detectInlineAttribute}from"../../../chunks/app-Dtvd7WGa.js";

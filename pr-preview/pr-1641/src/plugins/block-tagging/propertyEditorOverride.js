@@ -1,0 +1,1 @@
+export{Kl as blockTagsConfigUi}from"../../../chunks/app-Dtvd7WGa.js";

@@ -1,0 +1,1 @@
+export{DI as BlockInfoDialog}from"../../../chunks/app-Dtvd7WGa.js";

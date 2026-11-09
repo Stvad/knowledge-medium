@@ -1,0 +1,1 @@
+export{krt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dtvd7WGa.js";

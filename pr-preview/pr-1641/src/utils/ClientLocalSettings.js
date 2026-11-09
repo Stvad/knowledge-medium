@@ -1,0 +1,1 @@
+export{GN as ClientLocalSettings,KN as clientLocalSettings}from"../../chunks/app-Dtvd7WGa.js";

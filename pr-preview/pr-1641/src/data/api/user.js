@@ -1,0 +1,1 @@
+export{Qot as SYSTEM_AUTHOR_PREFIX,$ot as isSystemAuthor,est as systemAuthor}from"../../../chunks/app-Dtvd7WGa.js";

@@ -1,0 +1,1 @@
+export{fst as definePostCommitProcessor}from"../../../chunks/app-Dtvd7WGa.js";

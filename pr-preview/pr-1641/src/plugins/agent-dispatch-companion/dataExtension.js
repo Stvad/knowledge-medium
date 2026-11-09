@@ -1,0 +1,1 @@
+export{$Z as agentDispatchCompanionDataExtension}from"../../../chunks/app-Dtvd7WGa.js";

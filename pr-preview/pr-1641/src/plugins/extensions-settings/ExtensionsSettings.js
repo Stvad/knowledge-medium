@@ -1,0 +1,1 @@
+export{Ir as ExtensionsSettings}from"../../../chunks/app-Dtvd7WGa.js";

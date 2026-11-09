@@ -1,0 +1,1 @@
+export{GG as preferredSpanReplacement}from"../../../chunks/app-Dtvd7WGa.js";

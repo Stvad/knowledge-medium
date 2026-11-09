@@ -1,0 +1,1 @@
+export{cb as attachmentsPlugin}from"../../../chunks/app-Dtvd7WGa.js";

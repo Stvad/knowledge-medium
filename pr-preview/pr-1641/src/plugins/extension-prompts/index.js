@@ -1,0 +1,1 @@
+export{XM as ExtensionPromptSurface,ZM as extensionPromptsExtension}from"../../../chunks/app-Dtvd7WGa.js";

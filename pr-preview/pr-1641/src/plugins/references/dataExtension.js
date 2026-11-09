@@ -1,0 +1,1 @@
+export{uG as referencesDataExtension}from"../../../chunks/app-Dtvd7WGa.js";
