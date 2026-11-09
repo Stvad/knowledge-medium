@@ -15,6 +15,7 @@ import type {
   BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import { GUTTER_PILL_CLASS } from '@/components/GutterPill.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +43,7 @@ const useElapsedLabel = (sinceMs: number | null): string | null => {
  *  gutter, so any change in its width re-wraps the block's text. Anything
  *  variable (the run's activity, a long executor name) goes in the title and
  *  the menu. */
-const CHIP_CLASS = 'group inline-flex h-4 w-24 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1 text-xs leading-none text-muted-foreground'
+const CHIP_CLASS = `group ${GUTTER_PILL_CLASS} w-24 gap-1 bg-muted px-1 text-muted-foreground`
 
 const ChipLabel = ({children}: {children: ReactNode}) => (
   <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>

@@ -15,6 +15,7 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
+import {GUTTER_PILL_CLASS} from '@/components/GutterPill.js'
 import {FilePlus2, PencilLine} from 'lucide-react'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {
@@ -110,7 +111,7 @@ const ContributorBadgeItem: BlockRenderer = ({block}) => {
           aria-label={`Authorship details: ${summary}`}
           title={summary}
           onClick={event => event.stopPropagation()}
-          className="inline-flex h-4 max-w-28 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={`${GUTTER_PILL_CLASS} max-w-28 gap-1 bg-muted px-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           <PrimaryIcon aria-hidden="true" className="h-3 w-3 shrink-0"/>
           <span className="min-w-0 truncate">{primary.name}</span>
