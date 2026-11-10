@@ -1,1 +1,0 @@
-export{MB as AddPropertyForm}from"../../../chunks/app-ByrxUHDH.js";

@@ -1,1 +1,0 @@
-export{JE as DEFAULT_THEME_ID_DARK,YE as DEFAULT_THEME_ID_LIGHT,NE as defaultThemeContributions,ME as defaultThemesPlugin}from"../../../chunks/app-ByrxUHDH.js";

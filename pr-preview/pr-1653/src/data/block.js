@@ -1,1 +1,0 @@
-export{B4 as Block,V4 as requireLoadedBlock}from"../../chunks/app-ByrxUHDH.js";

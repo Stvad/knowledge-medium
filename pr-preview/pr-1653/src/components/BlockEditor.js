@@ -1,1 +1,0 @@
-export{VL as BlockEditor}from"../../chunks/app-ByrxUHDH.js";

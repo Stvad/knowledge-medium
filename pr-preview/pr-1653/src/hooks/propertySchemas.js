@@ -1,1 +1,0 @@
-export{OW as usePropertySchemas}from"../../chunks/app-ByrxUHDH.js";

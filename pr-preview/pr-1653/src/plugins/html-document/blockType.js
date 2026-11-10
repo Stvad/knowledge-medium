@@ -1,1 +1,0 @@
-export{UK as htmlDocumentTypeSeed}from"../../../chunks/app-ByrxUHDH.js";

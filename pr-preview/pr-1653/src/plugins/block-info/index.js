@@ -1,1 +1,0 @@
-export{k_ as blockInfoPlugin}from"../../../chunks/app-ByrxUHDH.js";

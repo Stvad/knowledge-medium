@@ -1,1 +1,0 @@
-export{jG as staticDataExtensions}from"../../chunks/app-ByrxUHDH.js";

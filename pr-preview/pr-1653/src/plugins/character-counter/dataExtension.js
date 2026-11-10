@@ -1,1 +1,0 @@
-export{bX as characterCounterDataExtension}from"../../../chunks/app-ByrxUHDH.js";

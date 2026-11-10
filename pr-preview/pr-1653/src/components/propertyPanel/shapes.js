@@ -1,1 +1,0 @@
-export{MW as propertyShapeLabel}from"../../../chunks/app-ByrxUHDH.js";

@@ -1,1 +1,0 @@
-export{U4 as kernelDataExtension}from"../../chunks/app-ByrxUHDH.js";

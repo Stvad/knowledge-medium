@@ -1,1 +1,0 @@
-export{vj as CommandPaletteHeaderItem}from"../../../chunks/app-ByrxUHDH.js";

@@ -1,1 +1,0 @@
-export{iB as BlockProperties}from"../../chunks/app-ByrxUHDH.js";

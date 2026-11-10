@@ -1,1 +1,0 @@
-export{vN as ExtensionPromptSurface,yN as extensionPromptsExtension}from"../../../chunks/app-ByrxUHDH.js";

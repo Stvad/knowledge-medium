@@ -1,1 +1,0 @@
-export{MN as appUpdatePromptExtension}from"../../../chunks/app-ByrxUHDH.js";

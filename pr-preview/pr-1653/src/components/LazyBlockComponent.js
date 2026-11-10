@@ -1,1 +1,0 @@
-export{QP as LazyBlockComponent}from"../../chunks/app-ByrxUHDH.js";

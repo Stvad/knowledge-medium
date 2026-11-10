@@ -1,1 +1,0 @@
-export{EX as RAW_CHARACTER_COUNT_PROFILE_ID,DX as WORDS_COUNT_PROFILE_ID,OX as charLimitProp,kX as charProfileProp,AX as charScopeProp}from"../../../chunks/app-ByrxUHDH.js";

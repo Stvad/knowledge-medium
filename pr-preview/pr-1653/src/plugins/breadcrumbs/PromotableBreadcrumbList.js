@@ -1,1 +1,0 @@
-export{Ow as PromotableBreadcrumbList}from"../../../chunks/app-ByrxUHDH.js";

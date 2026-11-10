@@ -1,1 +1,0 @@
-export{Oy as useIsReadOnly}from"../../chunks/app-ByrxUHDH.js";

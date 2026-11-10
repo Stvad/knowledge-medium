@@ -1,1 +1,0 @@
-export{YI as useIsMobile,XI as usePointerCoarse}from"../../chunks/app-ByrxUHDH.js";

@@ -1,1 +1,0 @@
-export{lG as SuspenseFallback}from"../../../chunks/app-ByrxUHDH.js";

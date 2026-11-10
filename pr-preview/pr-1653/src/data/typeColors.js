@@ -1,1 +1,0 @@
-export{SM as DEFAULT_TYPE_COLORS,CM as defaultTypeColor,wM as pickLeastUsedTypeColor}from"../../chunks/app-ByrxUHDH.js";
