@@ -120,9 +120,16 @@ export const extendSelectionToSpatialTarget = async (
   const anchorBlockId = currentState?.anchorBlockId ?? cursorLocation?.blockId
   if (!anchorBlockId) return false
 
-  const rows = panelRowsInOrder(panel, excludedSurfacesFor(uiStateBlock))
+  const allRows = panelRowsInOrder(panel, excludedSurfacesFor(uiStateBlock))
+  // A range stays in one lane of the panel (`laneOf`): an anchor in another
+  // starts a new one at the target.
+  const lane = laneOf(target)
+  const rows = allRows.filter(row => laneOf(row.element) === lane)
   const targetIndex = rows.findIndex(row => row.element === target)
-  const anchorIndex = findBestSelectionAnchorIndex(rows, {
+  const anchorElsewhere = !rows.some(row => row.blockId === anchorBlockId) &&
+    allRows.some(row => row.blockId === anchorBlockId)
+  const rangeAnchorId = anchorElsewhere ? targetLocation.blockId : anchorBlockId
+  const anchorIndex = anchorElsewhere ? targetIndex : findBestSelectionAnchorIndex(rows, {
     anchorBlockId,
     targetIndex,
     selectedBlockIds: currentState?.selectedBlockIds,
@@ -132,7 +139,7 @@ export const extendSelectionToSpatialTarget = async (
 
   return commitSelectionRange({
     uiStateBlock,
-    anchorBlockId,
+    anchorBlockId: rangeAnchorId,
     targetLocation,
     selectedBlockIds: blockIdsInRange(rows, rows[anchorIndex], rows[targetIndex]),
     clearEditing: true,

@@ -23,10 +23,10 @@
  * inline.
  */
 
-import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type WheelEvent} from 'react'
+import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type RefObject, type WheelEvent} from 'react'
 import {MessageSquare, X} from 'lucide-react'
 import type {Block} from '@/data/block'
-import {isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
+import {focusedBlockLocationProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
@@ -42,7 +42,7 @@ import {
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
-import {byPlacement, fitColumn, placeCards} from './placement.ts'
+import {byPlacement, fitColumn, placeCards, scrollToShow} from './placement.ts'
 import {quoteTop} from './quotePosition.ts'
 import type {RangeAnchor} from './anchor.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
@@ -201,7 +201,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         height: Math.round(portRect.height),
         pane: Math.floor(portRect.width),
         clearance: fit.clearance,
-        rightInset: Math.round(panelRect.width) - left - fit.width,
+        rightInset: panelRect.width - left - fit.width,
       }
     }
 
@@ -392,8 +392,51 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           </MarginRegistryContext>
         </div>
       )}
+      {frame && (
+        <FocusedCardInView panelBlock={panelBlock} scope={scope} columnRef={columnRef} scrollportRef={scrollportRef} layout={layout}/>
+      )}
     </>
   )
+}
+
+/** A row's own content, which a shell's rect (its whole subtree) is not. */
+const contentBox = (row: HTMLElement): DOMRect =>
+  (row.querySelector('[data-block-visibility-target="true"]') ?? row).getBoundingClientRect()
+
+const scopeRowOf = (root: ParentNode, scope: string, blockId: string | null): HTMLElement | undefined =>
+  [...root.querySelectorAll<HTMLElement>(scopeRowSelector(scope))].find(el => scopeRowBlockId(el) === blockId)
+
+/** The column clips what it cannot show and does not scroll, so focus that
+ *  steps onto a block out of view brings it in: its card becomes the active
+ *  one, pinned beside its row, and the outline scrolls until the block shows.
+ *  A layout effect, so that is done before the focus decorator asks whether
+ *  the block needs scrolling. A card in view is left alone: a pointer press
+ *  is aimed at it, and pinning would move it out from under the press. */
+const FocusedCardInView = ({panelBlock, scope, columnRef, scrollportRef, layout}: {
+  panelBlock: Block
+  scope: string
+  columnRef: RefObject<HTMLDivElement | null>
+  scrollportRef: RefObject<HTMLElement | null>
+  layout: RefObject<typeof IDLE_LAYOUT>
+}) => {
+  const [focused] = usePropertyValue(panelBlock, focusedBlockLocationProp)
+  useLayoutEffect(() => {
+    const column = columnRef.current
+    const scrollport = scrollportRef.current
+    if (!focused || !column || !scrollport) return
+    const shell = scopeRowOf(column, focused.renderScopeId, focused.blockId)
+    const card = shell?.closest<HTMLElement>('[data-margin-card]')
+    if (!shell || !card?.dataset.marginCard) return
+    const clip = column.getBoundingClientRect()
+    if (scrollToShow(contentBox(shell), clip, 0) === 0) return
+    activateThread(panelBlock.id, card.dataset.marginCard)
+    const row = scopeRowOf(scrollport, scope, card.getAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE))
+    if (row) scrollport.scrollTop += scrollToShow(contentBox(row), clip, CARD_GAP_PX)
+    layout.current.flush()
+    scrollport.scrollTop += scrollToShow(contentBox(shell), clip, CARD_GAP_PX)
+    layout.current.flush()
+  }, [focused, panelBlock, scope, columnRef, scrollportRef, layout])
+  return null
 }
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])

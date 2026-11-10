@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {byPlacement, fitColumn, placeCards, type MarginCard} from './placement'
+import {byPlacement, fitColumn, placeCards, scrollToShow, type MarginCard} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -55,6 +55,11 @@ describe('fitColumn', () => {
     expect(fit(2000, 0.35)).toEqual({width: 700, clearance: 232, left: 1284})
   })
 
+  it('gives back the width a share was taken from', () => {
+    // 611 / 1500 stores as 0.4073, a hair under the ratio.
+    expect(fit(1500, 0.4073)?.width).toBe(611)
+  })
+
   it('keeps a set share in a narrower pane, so the text narrows with the column', () => {
     expect(fit(1200, 0.35)).toEqual({width: 420, clearance: 452, left: 764})
   })
@@ -94,5 +99,25 @@ describe('byPlacement', () => {
 
   it('breaks a tie in place by stored order', () => {
     expect(sorted(card('b', 0, 10, 1), card('a', 0, 10, 0))).toEqual(['a', 'b'])
+  })
+})
+
+describe('scrollToShow', () => {
+  const clip = {top: 100, bottom: 900}
+
+  it('leaves a box that shows alone', () => {
+    expect(scrollToShow({top: 200, bottom: 300}, clip, 8)).toBe(0)
+  })
+
+  it('scrolls a box below the clip up to its foot', () => {
+    expect(scrollToShow({top: 1000, bottom: 1100}, clip, 8)).toBe(208)
+  })
+
+  it('scrolls a box above the clip down to its head', () => {
+    expect(scrollToShow({top: 20, bottom: 60}, clip, 8)).toBe(-88)
+  })
+
+  it('shows the top of a box taller than the clip', () => {
+    expect(scrollToShow({top: 1000, bottom: 2500}, clip, 8)).toBe(892)
   })
 })

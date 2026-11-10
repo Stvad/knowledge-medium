@@ -76,7 +76,9 @@ export interface ColumnFitInput {
 export const fitColumn = ({pane, share, text, column, edge}: ColumnFitInput): ColumnFit | null => {
   const width = Math.floor(pane)
   const automatic = Math.min(column.max, Math.max(width - text.max - 2 * edge, Math.floor(width / 3)))
-  let columnWidth = Math.max(column.min, Math.floor(share === undefined ? automatic : share * width))
+  // Rounded: a share stored to a few places lands a hair either side of the
+  // width it was taken from.
+  let columnWidth = Math.max(column.min, share === undefined ? automatic : Math.round(share * width))
   const fullTextClearance = Math.max(0, text.max + 2 * columnWidth + 4 * edge - width)
   if (fullTextClearance <= width - text.max) {
     return {
@@ -89,4 +91,19 @@ export const fitColumn = ({pane, share, text, column, edge}: ColumnFitInput): Co
   if (columnWidth < column.min) return null
   const clearance = columnWidth + 2 * edge
   return {width: columnWidth, clearance, left: width - clearance + edge}
+}
+
+interface Span {
+  top: number
+  bottom: number
+}
+
+/** How far to scroll, down when positive, for `box` to show inside `clip`,
+ *  `gap` in from its edges: none when it already does, and the top of a box
+ *  taller than the clip. */
+export const scrollToShow = (box: Span, clip: Span, gap: number): number => {
+  const toTop = box.top - clip.top - gap
+  if (toTop < 0) return toTop
+  const toBottom = box.bottom - clip.bottom + gap
+  return toBottom > 0 ? Math.min(toBottom, toTop) : 0
 }

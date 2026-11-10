@@ -1935,6 +1935,18 @@ describe('spatial navigation across a lane beside the panel content', () => {
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B1', renderScopeId: CARD})
   })
 
+  it('starts a new selection at a row shift-clicked in the other lane', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: OUTLINE})
+    const target = document.querySelector<HTMLElement>(`[data-block-id="B1"]`)!
+
+    const {structuralSelect} = await shiftClick({block: env.repo.block('B1'), uiStateBlock: panel, targetElement: target})
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({selectedBlockIds: ['B1'], anchorBlockId: 'B1'})
+  })
+
   it('stops at the end of the outline rather than stepping onto a row reserved in the lane', async () => {
     // 'C' is the last child of 'top', so the scope edge asks the rendered order.
     buildLaneLayout([{deferredBlockId: 'B1', deferredScopeId: CARD}])

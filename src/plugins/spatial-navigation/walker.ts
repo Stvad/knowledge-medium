@@ -117,6 +117,8 @@ interface PanelPositionHint {
   prevLocation: FocusedBlockLocation | undefined
   nextLocation: FocusedBlockLocation | undefined
   ancestorLocations: readonly FocusedBlockLocation[]
+  /** The content row the focused block's card stood beside, if it sat in one. */
+  laneAnchor: FocusedBlockLocation | null
 }
 
 const surfaceOf = (el: HTMLElement): string | undefined =>
@@ -235,6 +237,15 @@ const laneInstances = (
   lane: string,
   excludedSurfaces: ReadonlySet<string>,
 ): HTMLElement[] => panelInstances(panel, excludedSurfaces).filter(el => laneOf(el) === lane)
+
+/** The content row a lane row stands beside (`PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE`),
+ *  or null. */
+const laneAnchorOf = (el: HTMLElement): FocusedBlockLocation | null => {
+  const anchor = el.closest<HTMLElement>(LANE_ANCHOR_SELECTOR)
+  const blockId = anchor?.getAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE)
+  const renderScopeId = anchor?.getAttribute(PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE)
+  return blockId && renderScopeId ? {blockId, renderScopeId} : null
+}
 
 export interface PanelRow extends SelectionRangeRow {
   element: HTMLElement
@@ -426,6 +437,7 @@ export const rememberInstancePosition = (
     prevLocation: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
     nextLocation: findSameDepthSibling(instanceEl, instances, panel, 'next'),
     ancestorLocations: collectAncestorLocations(instanceEl, panel),
+    laneAnchor: laneAnchorOf(instanceEl),
   })
 }
 
@@ -496,6 +508,12 @@ export const findRecoveryAnchor = (
     const ancestor = visibleByLocation(ancestorLocation)
     if (ancestor) return ancestor
   }
+
+  // A card's rows all go with it, so its siblings and ancestors are gone too;
+  // the row it stood beside, on another surface, is not.
+  const laneAnchor = hint.laneAnchor
+  const anchorRow = laneAnchor && instances.find(el => isInstanceAt(el, laneAnchor))
+  if (anchorRow && isRecoveryTargetVisible(anchorRow)) return anchorRow
 
   const positionalChoice = candidates[clamp(hint.surfaceIndex, 0, candidates.length - 1)] ?? null
   return pickViewportFallback(candidates, positionalChoice)
@@ -700,9 +718,9 @@ export const lastInstanceIn = (
  *
  * 1. If there's a next/prev instance in the same lane of the panel in DOM
  *    order, return it.
- * 2. Else, if the panel sits inside a column that stacks multiple
- *    panels, fall through to the first/last instance of the
- *    immediately adjacent stack-sibling panel.
+ * 2. Else, from the panel's own content, if the panel sits inside a column
+ *    that stacks multiple panels, fall through to the first/last instance
+ *    of the immediately adjacent stack-sibling panel.
  * 3. Else, null (never crosses columns horizontally for h/k).
  */
 export const verticalNeighbor = (
@@ -722,7 +740,9 @@ export const verticalNeighbor = (
     if (idx - 1 >= 0) return instances[idx - 1]
   }
 
-  // Exhausted in-panel — try stack-sibling.
+  // Exhausted in-panel — try stack-sibling. A lane beside the content ends at
+  // its own edges: the panel's content continues above and below it.
+  if (laneOf(current) !== OWN_CONTENT_LANE) return null
   const sibling = stackSiblingPanel(panel, direction)
   if (!sibling) return null
   return direction === 'down'
@@ -760,15 +780,6 @@ const isLaneRowOnScreen = (el: HTMLElement): boolean => {
     top: Math.max(bounds.top, clip.top),
     bottom: Math.min(bounds.bottom, clip.bottom),
   })
-}
-
-/** The content row a lane row stands beside (`PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE`),
- *  or null. */
-const laneAnchorOf = (el: HTMLElement): FocusedBlockLocation | null => {
-  const anchor = el.closest<HTMLElement>(LANE_ANCHOR_SELECTOR)
-  const blockId = anchor?.getAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE)
-  const renderScopeId = anchor?.getAttribute(PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE)
-  return blockId && renderScopeId ? {blockId, renderScopeId} : null
 }
 
 /** Does one of the two stand beside the other? */

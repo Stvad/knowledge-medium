@@ -1095,6 +1095,37 @@ describe('lanes beside the panel content', () => {
     expect(verticalNeighbor(M1, 'down')).toBe(M2)
   })
 
+  it('stops at the ends of a lane rather than leaving for a stacked panel', () => {
+    const column = document.createElement('div')
+    column.setAttribute('data-layout-column-id', 'c1')
+    document.body.appendChild(column)
+    const above = document.createElement('div')
+    above.setAttribute('data-panel-id', 'p-above')
+    row(above, 'p-above', 'Z')
+    column.appendChild(above)
+    const middle = buildPanelWithLane('p-mid', column)
+    const below = document.createElement('div')
+    below.setAttribute('data-panel-id', 'p-below')
+    row(below, 'p-below', 'E')
+    column.appendChild(below)
+    expect(verticalNeighbor(middle.M2, 'down')).toBeNull()
+    expect(verticalNeighbor(middle.M1, 'up')).toBeNull()
+    // The content still falls through, both ways.
+    expect(verticalNeighbor(middle.D, 'down')?.dataset.blockId).toBe('E')
+    expect(verticalNeighbor(middle.A, 'up')?.dataset.blockId).toBe('Z')
+  })
+
+  it('recovers onto the row a card stood beside once the card is gone', () => {
+    // Focus on a comment under the card's root: its siblings and ancestors
+    // leave with the card.
+    const {C, M2, m2Slot} = buildPanelWithLane()
+    anchorTo(m2Slot, C)
+    const comment = row(M2, 'p1', 'M2c', margin(240, 270))
+    rememberInstancePosition('p1', comment)
+    m2Slot.remove()
+    expect(findRecoveryAnchor('p1', {blockId: 'M2c', renderScopeId: 'p1:M2c'})).toBe(C)
+  })
+
   it('enters a stack sibling at its own content, not at a lane beside it', () => {
     const column = document.createElement('div')
     column.setAttribute('data-layout-column-id', 'c1')
