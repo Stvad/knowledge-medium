@@ -205,7 +205,8 @@ interface GutterTextTarget {
 
 const GutterContext = createContext<GutterTextTarget | null>(null)
 
-/** For a renderer that draws the block's own text. Returns a callback ref for
+/** For a renderer that draws the block's own text (or a header above it, see
+ *  `useGutterHeader`). Returns a callback ref for
  *  the text's element, or undefined when this render is not the block's text
  *  in its own host. A registered element whose text starts at the top-right
  *  corner gets `data-gutter-flow`, and the stylesheet keeps its first line
@@ -231,6 +232,23 @@ export const useGutterText = (block: Block): ((element: HTMLElement | null) => v
   // today, but one that did must not take this block's corner.
   return target?.blockId === block.id ? attach : undefined
 }
+
+/** For a decorator that draws a header line above the block's text (a comment
+ *  card's author line). The header takes the gutter's first line, keeping
+ *  clear of the top-right cluster with padding, so the text under it is not
+ *  narrowed; spread the result on the header's element and render the text
+ *  inside `GutterTextBelowHeader`, which stops it registering in its place. */
+export const useGutterHeader = (block: Block): {
+  ref?: (element: HTMLElement | null) => void
+  'data-gutter-header'?: ''
+} => {
+  const attach = useGutterText(block)
+  return attach ? {ref: attach, 'data-gutter-header': ''} : {}
+}
+
+export const GutterTextBelowHeader = ({children}: {children: ReactNode}) => (
+  <GutterContext value={null}>{children}</GutterContext>
+)
 
 /** An item as the host renders it. `overlay` is host-internal for now: the
  *  only item that may draw over non-text content instead of having a row
