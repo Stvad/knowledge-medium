@@ -18,13 +18,13 @@
  *  reactive `aliases` read — so a block that gains or loses its ISO alias
  *  picks the arrows up (or drops them) without a decorator re-resolve.
  */
-import { useCallback, type ComponentType } from 'react'
+import { useCallback } from 'react'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useBlockContext } from '@/context/block.js'
 import type { Block } from '@/data/block'
 import { aliasesProp } from '@/data/properties.js'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import { useProperty, useWorkspaceId } from '@/hooks/block.js'
@@ -133,22 +133,7 @@ const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   )
 }
 
-// Memoized per inner renderer so a parent re-render doesn't hand React a new
-// component identity and unmount the content subtree (same invariant as the
-// todo / type-chip decorators).
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = inner => {
-  const cached = cache.get(inner)
-  if (cached) return cached
-
-  const Decorated: ComponentType<{block: Block}> = ({block}) => (
-    <DateNavDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithDateNav'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(DateNavDecorator, 'WithDateNav')
 
 export const dateNavDecoratorContribution: BlockContentDecoratorContribution =
   ctx => isFocalRender(ctx) ? decorate : null

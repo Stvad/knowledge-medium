@@ -13,6 +13,7 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContextMenuItemsFacet,
+  blockGutterItemsFacet,
   blockLayoutFacet,
 } from '@/extensions/blockInteraction.js'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
@@ -41,6 +42,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
+  commentSurfaceContribution,
   commentsBelowContentContribution,
   threadRootContentContribution,
 } from './ui.tsx'
@@ -63,7 +65,8 @@ export const annotationsPlugin: AppExtension = systemToggle({
   appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
-  blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
+  blockContentDecoratorsFacet.of(commentSurfaceContribution, {source: SOURCE}),
+  blockGutterItemsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(nestedReadSelectionMenuContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockBelowContentFacet.of(commentsBelowContentContribution, {source: SOURCE}),

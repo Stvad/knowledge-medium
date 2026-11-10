@@ -30,7 +30,7 @@ import {annotationsPlugin} from './index'
 import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
-import {commentPillContribution, ThreadCard} from './ui'
+import {commentSurfaceContribution, ThreadCard} from './ui'
 import {useAnnotationSurface, type AnnotationSurface} from './surface'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
 
@@ -524,7 +524,7 @@ describe('a read-mode selection, mapped to raw offsets', () => {
         </>
       )
     }
-    const Decorated = (commentPillContribution({} as BlockResolveContext) as BlockContentDecorator)(Probe)
+    const Decorated = (commentSurfaceContribution({} as BlockResolveContext) as BlockContentDecorator)(Probe)
 
     afterEach(() => {
       seen.surface = null

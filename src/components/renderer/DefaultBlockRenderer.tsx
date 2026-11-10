@@ -15,9 +15,10 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
+import { BlockGutterHost, createGutterControls, useGutterControlsItem, type HostGutterItem } from '@/components/renderer/BlockGutter.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo, useEffect, useState } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -354,6 +355,10 @@ const ExpandButton = ({block}: { block: Block }) => {
   )
 }
 
+/** On mobile the expand button sits in the gutter: the only item that may draw
+ *  over non-text content, where a row reserved for it alone would read oddly. */
+const MOBILE_EXPAND_GUTTER_ITEM: HostGutterItem = {corner: 'top-right', component: ExpandButton, overlay: true}
+
 
 
 /**
@@ -623,6 +628,7 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
+  const [gutterControls] = useState(createGutterControls)
   const isTopLevel = useIsFocalRender(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
@@ -651,8 +657,8 @@ export function DefaultBlockRenderer(
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
-  // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click,
+  // produce keep stable identity. This is what stops the content
+  // decorators and gutter items from remounting on every click,
   // and — because every slot below is a `useMemo` over this object, i.e.
   // a React element TYPE — what stops the live editor being torn down and
   // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
@@ -772,15 +778,17 @@ export function DefaultBlockRenderer(
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
-          <ErrorBoundary FallbackComponent={FallbackComponent}>
-            <ContentRenderer block={block}/>
-          </ErrorBoundary>
+          <BlockGutterHost resolveContext={resolveContext} controls={gutterControls}>
+            <ErrorBoundary FallbackComponent={FallbackComponent}>
+              <ContentRenderer block={block}/>
+            </ErrorBoundary>
+          </BlockGutterHost>
         </div>
       )
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef,
+    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef, gutterControls,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
@@ -801,32 +809,28 @@ export function DefaultBlockRenderer(
   const HeaderSlot = useSectionsSlot(blockHeaderFacet, block, resolveContext)
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
-  // (returns null since top-level blocks have no bullet) and of mobile
-  // (renders the expand button as a top-right floater rather than inline
-  // because mobile screens don't have desktop's horizontal real estate).
+  // (returns null since top-level blocks have no bullet) and of mobile, where
+  // there is no room for the expand button beside the bullet: it goes to the
+  // gutter instead. Handing it over from HERE, not contributing it to the
+  // gutter facet, is what keeps it off layouts that render Content but never
+  // collapse (a review card).
   const ControlsSlot = useMemo<ComponentType>(() => {
     return function BlockControlsSlot() {
       const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
+      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
 
       if (isFocal) return null
 
       return (
-        <>
-          <div className="block-controls flex items-center">
-            {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block} resolveContext={resolveContext}/>
-          </div>
-          {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
-              <ExpandButton block={block}/>
-            </div>
-          )}
-        </>
+        <div className="block-controls flex items-center">
+          {!isMobile && <ExpandButton block={block}/>}
+          <BlockBullet block={block} resolveContext={resolveContext}/>
+        </div>
       )
     }
-  }, [block, resolveContext])
+  }, [block, resolveContext, gutterControls])
 
   // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
   // to become focusable/editable; the shell's machinery (paste/click, shell

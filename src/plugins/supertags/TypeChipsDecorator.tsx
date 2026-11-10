@@ -1,7 +1,7 @@
 /** Block content decorator that renders a block's types as trailing
  *  `#label` chips (Tana-style supertags), each with a remove button.
  *
- *  Unlike the character-counter/geo decorators, the contribution does
+ *  Unlike the geo decorator, the contribution does
  *  NOT gate on `ctx.types` — the wrap applies to every block and the
  *  component decides whether to render chips. NOTE the honest scope of
  *  this: a types change still remounts the content subtree regardless,
@@ -13,9 +13,7 @@
  *  edits, late type
  *  publication) re-renders in place instead of re-resolving decorator
  *  gates, and if the renderer's slot identity is ever stabilized the
- *  no-remount invariant holds here without changes. The WeakMap cache
- *  keeps identity stable across parent re-renders (same invariant as
- *  CharacterCountDecorator). */
+ *  no-remount invariant holds here without changes. */
 
 import { useContext } from 'react'
 import type { TypeContribution } from '@/data/api'
@@ -27,7 +25,7 @@ import { useBlockOpener } from '@/utils/navigation'
 import { appHashForSession, LayoutWsContext } from '@/context/layoutWsContext'
 import { TypeChip } from '@/components/typeChip/TypeChip'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
@@ -162,17 +160,6 @@ const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
   )
 }
 
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = inner => {
-  const existing = cache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({block}) => (
-    <TypeChipsDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithTypeChips'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(TypeChipsDecorator, 'WithTypeChips')
 
 export const typeChipsDecoratorContribution: BlockContentDecoratorContribution = () => decorate

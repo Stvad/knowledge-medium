@@ -9,6 +9,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
+  commentSurfaceContribution,
   commentsBelowContentContribution,
   inCard,
   pillClick,
@@ -34,15 +35,15 @@ describe('where the comments UI attaches', () => {
     expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, isBacklink: true, isBreadcrumb: true}}))).toBeNull()
   })
 
-  it('puts the pill and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
-    expect(commentPillContribution(ctx({}))).toBeTruthy()
-    expect(commentsBelowContentContribution(ctx({}))).toBeTruthy()
-    // Unlike the reference pill: nothing else shows a focal block's comments.
-    expect(commentPillContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    expect(commentsBelowContentContribution(ctx({isTopLevel: true}))).toBeTruthy()
+  it('puts the pill, the read surface and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
+    const outlineOnly = [commentPillContribution, commentSurfaceContribution, commentsBelowContentContribution]
+    for (const contribution of outlineOnly) {
+      expect(contribution(ctx({}))).toBeTruthy()
+      // Unlike the reference pill: nothing else shows a focal block's comments.
+      expect(contribution(ctx({isTopLevel: true}))).toBeTruthy()
+      expect(contribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
+    }
     expect(commentContextMenuItem(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
-    expect(commentPillContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
-    expect(commentsBelowContentContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
   })
 
   it('gives Reply and Delete to comments inside a card, not to the root or to blocks outside one', () => {
