@@ -9,11 +9,11 @@ import type {
   CompletionSource,
 } from '@codemirror/autocomplete'
 import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
 import { AT_DROPDOWN_SECTIONS } from '@/editor/atDropdownSections'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
+import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
 import { contributorKindOf, type ContributorKind } from './schema'
 
 const RESULT_CAP = 8
@@ -23,16 +23,10 @@ export const matchContributorTrigger = (text: string, pos: number): TriggerMatch
 
 export interface ContributorMentionCandidate {
   id: string
-  /** An alias the profile owns, so `[[name]]` resolves to it. */
   name: string
   kind: ContributorKind
-}
-
-const ownedNameOf = (profile: BlockData): string | undefined => {
-  const raw = profile.properties[aliasesProp.name]
-  if (!Array.isArray(raw)) return undefined
-  const title = profile.content.trim().toLowerCase()
-  return raw.find((alias): alias is string => typeof alias === 'string' && alias.toLowerCase() === title)
+  /** `[[name]]`, verified to parse back to exactly `name`. */
+  wikilink: string
 }
 
 const matchesWordPrefix = (name: string, query: string): boolean => {
@@ -41,24 +35,30 @@ const matchesWordPrefix = (name: string, query: string): boolean => {
 }
 
 /** The profiles `@query` offers, in input order. A profile is offered
- *  only under a title it owns as an alias — `[[title]]` resolves by
- *  alias, so a title another page claimed would link that page.
- *  Automation contributors are not addressable. Matching is word-prefix,
- *  not fuzzy, so `@co` meant for a café does not select `Cobalt`. */
-export const contributorMentionCandidates = (
+ *  only when the link the pick inserts reaches it: its title must render
+ *  as a faithful `[[title]]`, and `resolveAlias` (the id `[[title]]`
+ *  binds to) must return the profile's own id — a title another page
+ *  claims, including a co-claim sync let through, would link there
+ *  instead. Automation contributors are not addressable. Matching is
+ *  word-prefix, not fuzzy, so `@co` meant for a café does not select
+ *  `Cobalt`. */
+export const contributorMentionCandidates = async (
   profiles: readonly BlockData[],
   query: string,
-): ContributorMentionCandidate[] => {
+  resolveAlias: (alias: string) => Promise<string | null>,
+): Promise<ContributorMentionCandidate[]> => {
   const trimmed = query.trim().toLowerCase()
   const out: ContributorMentionCandidate[] = []
   for (const profile of profiles) {
     if (profile.deleted) continue
     const kind = contributorKindOf(profile)
     if (kind === 'automation') continue
-    const name = ownedNameOf(profile)
-    if (!name) continue
+    const name = profile.content.trim()
     if (trimmed.length > 0 && !matchesWordPrefix(name, trimmed)) continue
-    out.push({id: profile.id, name, kind})
+    const replacement = faithfulWikilinkReplacement(name)
+    if (!replacement) continue
+    if (await resolveAlias(name) !== profile.id) continue
+    out.push({id: profile.id, name, kind, wikilink: replacement.text})
     if (out.length >= RESULT_CAP) break
   }
   return out
@@ -87,7 +87,7 @@ export const contributorMentionSource = (
         type: 'class',
         section: AT_DROPDOWN_SECTIONS.contributors,
         apply: (view, _completion, from, to) => {
-          const insert = `[[${candidate.name}]]`
+          const insert = candidate.wikilink
           view.dispatch({
             changes: {from, to, insert},
             selection: EditorSelection.cursor(from + insert.length),

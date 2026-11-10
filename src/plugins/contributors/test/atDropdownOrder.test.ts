@@ -13,8 +13,8 @@ const placeSource = placeCompletionSource({
   resolvePlace: async () => null,
 })
 const contributorSource = contributorMentionSource(async query => [
-  {id: 'a', name: 'Clio', kind: 'agent' as const},
-  {id: 'v', name: 'Ada', kind: 'human' as const},
+  {id: 'a', name: 'Clio', kind: 'agent' as const, wikilink: '[[Clio]]'},
+  {id: 'v', name: 'Ada', kind: 'human' as const, wikilink: '[[Ada]]'},
 ].filter(c => c.name.toLowerCase().startsWith(query.toLowerCase())))
 
 let view: EditorView | undefined

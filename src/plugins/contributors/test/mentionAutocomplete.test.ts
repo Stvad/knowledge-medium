@@ -5,7 +5,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it } from 'vitest'
 import type { BlockData } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { typesProp } from '@/data/properties'
 import { CONTRIBUTOR_TYPE, contributorKindProp, type ContributorKind } from '../schema'
 import {
   contributorMentionCandidates,
@@ -17,13 +17,12 @@ import {
 const profile = (
   id: string,
   content: string,
-  {kind = 'agent', aliases = [content], deleted = false}: {kind?: ContributorKind, aliases?: string[], deleted?: boolean} = {},
+  {kind = 'agent', deleted = false}: {kind?: ContributorKind, deleted?: boolean} = {},
 ): BlockData => ({
   id,
   content,
   deleted,
   properties: {
-    [aliasesProp.name]: aliases,
     [typesProp.name]: ['page', CONTRIBUTOR_TYPE],
     [contributorKindProp.name]: kind,
   },
@@ -42,30 +41,41 @@ describe('contributorMentionCandidates', () => {
     profile('b', 'Cobalt Reviewer'),
     profile('c', 'Nightly import', {kind: 'automation'}),
     profile('d', 'Ada', {kind: 'human'}),
-    profile('e', 'Shadowed', {aliases: []}),
+    profile('e', 'Shadowed'),
     profile('f', 'Gone', {deleted: true}),
   ]
+  // What `[[alias]]` binds to: every title resolves to its own profile,
+  // except `Shadowed`, which an older page also claims (a sync co-claim).
+  const resolveAlias = async (alias: string) =>
+    alias === 'Shadowed' ? 'older-page' : profiles.find(p => p.content === alias)?.id ?? null
+  const names = async (query: string, list = profiles) =>
+    (await contributorMentionCandidates(list, query, resolveAlias)).map(c => c.name)
 
-  it('lists addressable profiles that own their title, on an empty query', () => {
-    expect(contributorMentionCandidates(profiles, '').map(c => c.name))
-      .toEqual(['Clio', 'Cobalt Reviewer', 'Ada'])
+  it('lists addressable profiles whose link resolves to them, on an empty query', async () => {
+    expect(await names('')).toEqual(['Clio', 'Cobalt Reviewer', 'Ada'])
   })
 
-  it('matches by word prefix, not fuzzily', () => {
-    expect(contributorMentionCandidates(profiles, 'rev').map(c => c.name)).toEqual(['Cobalt Reviewer'])
-    expect(contributorMentionCandidates(profiles, 'CLI').map(c => c.name)).toEqual(['Clio'])
+  it('matches by word prefix, not fuzzily', async () => {
+    expect(await names('rev')).toEqual(['Cobalt Reviewer'])
+    expect(await names('CLI')).toEqual(['Clio'])
     // `cbl` is an in-order subsequence of "Cobalt" — a fuzzy match would take it.
-    expect(contributorMentionCandidates(profiles, 'cbl')).toEqual([])
+    expect(await names('cbl')).toEqual([])
   })
 
-  it('inserts the alias as the profile owns it', () => {
-    const [candidate] = contributorMentionCandidates([profile('a', 'clio ', {aliases: ['Clio']})], '')
-    expect(candidate).toMatchObject({id: 'a', name: 'Clio', kind: 'agent'})
+  it('drops a title the wikilink grammar cannot carry faithfully', async () => {
+    // `[[Agent]]]` parses as a link to `Agent` plus a stray bracket.
+    const agent = profile('g', 'Agent]')
+    expect(await contributorMentionCandidates([agent], '', async () => 'g')).toEqual([])
+  })
+
+  it('carries the verified wikilink text for the pick to insert', async () => {
+    const [candidate] = await contributorMentionCandidates([profile('a', ' Clio ')], '', async () => 'a')
+    expect(candidate).toEqual({id: 'a', name: 'Clio', kind: 'agent', wikilink: '[[Clio]]'})
   })
 })
 
 describe('contributorMentionSource', () => {
-  const clio: ContributorMentionCandidate = {id: 'a', name: 'Clio', kind: 'agent'}
+  const clio: ContributorMentionCandidate = {id: 'a', name: 'Clio', kind: 'agent', wikilink: '[[Clio]]'}
   const source = contributorMentionSource(async () => [clio])
 
   const viewAt = (doc: string, extensions = [] as never[]) => new EditorView({

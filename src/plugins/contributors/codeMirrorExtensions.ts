@@ -8,7 +8,8 @@ export const contributorsCodeMirrorExtensions: CodeMirrorExtensionContribution =
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return []
     const profiles = await repo.query.byType({workspaceId, type: CONTRIBUTOR_TYPE}).load()
-    return contributorMentionCandidates(profiles, query)
+    return contributorMentionCandidates(profiles, query, async alias =>
+      (await repo.query.aliasLookup({workspaceId, alias}).load())?.id ?? null)
   })
   return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }
