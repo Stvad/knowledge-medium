@@ -1,0 +1,1 @@
+export{VB as declarationOnlyDefinitionForName,HB as declarationOnlyStatusText}from"../../../chunks/app-A8qeF0zw.js";

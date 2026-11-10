@@ -1,0 +1,1 @@
+export{e3 as kernelDataExtension}from"../../chunks/app-A8qeF0zw.js";

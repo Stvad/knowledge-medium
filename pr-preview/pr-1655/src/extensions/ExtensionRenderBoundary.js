@@ -1,0 +1,1 @@
+export{XR as ExtensionRenderBoundary}from"../../chunks/app-A8qeF0zw.js";

@@ -1,0 +1,1 @@
+export{GQ as defineVerbFacet}from"../../chunks/app-A8qeF0zw.js";

@@ -1,0 +1,1 @@
+export{eY as annotationsDataExtension}from"../../../chunks/app-A8qeF0zw.js";

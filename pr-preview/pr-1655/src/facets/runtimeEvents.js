@@ -1,0 +1,1 @@
+export{KW as appRuntimeUpdateEvent,qW as refreshAppRuntime}from"../../chunks/app-A8qeF0zw.js";
