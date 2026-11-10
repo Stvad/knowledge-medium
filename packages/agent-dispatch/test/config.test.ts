@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import {configSchema, parseConfig} from '../src/config'
+import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
   it('refuses the retired quietMs rather than ignoring a meaning that changed', () => {
@@ -143,11 +143,13 @@ describe('parseConfig', () => {
     })).toThrow()
   })
 
-  it('caps runner timeoutMs below the stale-running sweep window', () => {
-    expect(() => parseConfig({
+  it('caps runner timeoutMs at MAX_RUN_TIMEOUT_MS', () => {
+    const withTimeout = (timeoutMs: number) => parseConfig({
       workspaceId: 'ws-test',
-      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', runner: {executor: 'claude', timeoutMs: 40 * 60_000}}],
-    })).toThrow()
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', runner: {executor: 'claude', timeoutMs}}],
+    })
+    expect(withTimeout(MAX_RUN_TIMEOUT_MS).watchers[0].runner.timeoutMs).toBe(MAX_RUN_TIMEOUT_MS)
+    expect(() => withTimeout(MAX_RUN_TIMEOUT_MS + 1)).toThrow()
   })
 
   it('expands ~ in runner cwd, codex addDirs, and statePath', () => {
