@@ -131,6 +131,7 @@ describe('BlockGutterHost', () => {
     ])
 
     expect(screen.getByText('content')).toBeTruthy()
+    expect(screen.getByRole('img', {name: 'Gutter item failed'}).getAttribute('title')).toBe('item boom')
   })
 })
 
@@ -152,6 +153,49 @@ describe('useGutterText', () => {
 
     expect(screen.getByTestId('text').dataset.attachable).toBe('no')
     expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top-right')).toBe('none')
+  })
+
+  it('keeps the registration when the same element is attached again', () => {
+    // BlockEditor hands CodeMirror an inline ref, so the editor's element is
+    // detached and re-attached on every render.
+    let attach: ((element: HTMLElement | null) => void) | undefined
+    const Capture = () => {
+      attach = useGutterText(block)
+      return <div ref={attach} data-testid="text"/>
+    }
+    renderHost([], {content: <Capture/>})
+    const text = screen.getByTestId('text')
+    // Stands for a flow decision the observer would have made.
+    text.setAttribute('data-gutter-flow', '')
+
+    act(() => {
+      attach!(null)
+      attach!(text)
+    })
+
+    expect(text.hasAttribute('data-gutter-flow')).toBe(true)
+  })
+
+  it('keeps a newer registration when an older one is released', () => {
+    const Both = ({showFirst}: {showFirst: boolean}) => (
+      <>
+        {showFirst && <TextOf of={block}/>}
+        <TextOf of={block}/>
+      </>
+    )
+    const view = renderHost([], {content: <Both showFirst/>})
+    const host = () => document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top-right')
+    expect(host()).toBe('column')
+
+    view.rerender(
+      <AppRuntimeContextProvider value={resolveFacetRuntimeSync([])}>
+        <BlockGutterHost resolveContext={contextFor()} controls={createGutterControls()}>
+          <Both showFirst={false}/>
+        </BlockGutterHost>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(host()).toBe('column')
   })
 
   it('does nothing outside a host', () => {

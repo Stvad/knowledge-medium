@@ -21,6 +21,8 @@ import type { Block } from '@/data/block'
 import { CallbackSet } from '@/utils/callbackSet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { errorMessage } from '@/components/util/error.js'
+import type { FallbackProps } from 'react-error-boundary'
 import {
   blockGutterItemsFacet,
   type BlockGutterCorner,
@@ -79,6 +81,9 @@ class GutterController {
   registerText(element: HTMLElement): () => void {
     this.replaceText(element)
     return () => {
+      // Defence in depth: a release that arrives after another element took
+      // the registration (two renderers of one block's text in one host) must
+      // not drop it.
       if (this.text === element) this.replaceText(null)
     }
   }
@@ -209,8 +214,11 @@ export const useGutterText = (block: Block): ((element: HTMLElement | null) => v
   const target = useContext(GutterContext)
   const registration = useRef<{element: HTMLElement; release: () => void} | null>(null)
   const attach = useCallback((element: HTMLElement | null) => {
-    // null is a detach, handled by the cleanup below; the same element again
-    // is a re-attached callback ref and keeps its registration.
+    // The same element again is a re-attached callback ref (BlockEditor's is
+    // inline, so it re-attaches on every render) and keeps its registration.
+    // null is ignored: the registration ends when this renderer unmounts or
+    // another element attaches, and a detached element meanwhile measures as
+    // off the corner, which only costs column mode.
     if (!target || !element || registration.current?.element === element) return
     registration.current?.release()
     registration.current = {element, release: target.registerText(element)}
@@ -275,9 +283,15 @@ const byCorner = (items: readonly HostGutterItem[]): Record<BlockGutterCorner, H
   return corners
 }
 
+/** A failing item keeps to its slot: the generic fallback is a paragraph,
+ *  which would widen the cluster and spill over the text. */
+const GutterItemFallback = ({error}: FallbackProps) => (
+  <span role="img" aria-label="Gutter item failed" title={errorMessage(error)} className="text-xs text-destructive">⚠</span>
+)
+
 const GutterItemSlot = ({item, block}: {item: HostGutterItem; block: Block}) => (
   <span data-gutter-item="" data-gutter-overlay={item.overlay ? '' : undefined} className="contents">
-    <ExtensionRenderBoundary>
+    <ExtensionRenderBoundary FallbackComponent={GutterItemFallback}>
       <item.component block={block}/>
     </ExtensionRenderBoundary>
   </span>
