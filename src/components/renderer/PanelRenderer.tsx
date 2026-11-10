@@ -347,14 +347,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      <div
-        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
-      >
-        <div
-          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
-        >
-          {actionButtons}
-        </div>
+      {/* `.panel-actions` ends the buttons where the content ends (`index.css`). */}
+      <div className="panel-actions pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-end gap-0.5">
+        {actionButtons}
       </div>
       <div
         ref={scrollRef}
