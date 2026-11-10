@@ -1,1 +1,1 @@
-export{pit as deriveWorkspaceIdNamespace}from"../../../chunks/app-B3yieFeI.js";
+export{Sit as deriveWorkspaceIdNamespace}from"../../../chunks/app-BKOvuDYB.js";

@@ -1,1 +1,1 @@
-export{St as installIdleCallbackPolyfill}from"../../chunks/app-B3yieFeI.js";
+export{St as installIdleCallbackPolyfill}from"../../chunks/app-BKOvuDYB.js";

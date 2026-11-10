@@ -1,1 +1,1 @@
-export{US as onboardingLanding}from"../../../chunks/app-B3yieFeI.js";
+export{GS as onboardingLanding}from"../../../chunks/app-BKOvuDYB.js";

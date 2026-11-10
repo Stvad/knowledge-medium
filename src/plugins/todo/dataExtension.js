@@ -1,1 +1,1 @@
-export{MG as todoDataExtension}from"../../../chunks/app-B3yieFeI.js";
+export{VG as todoDataExtension}from"../../../chunks/app-BKOvuDYB.js";

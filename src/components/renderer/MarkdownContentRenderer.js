@@ -1,1 +1,1 @@
-export{MR as MarkdownContentRenderer}from"../../../chunks/app-B3yieFeI.js";
+export{VR as MarkdownContentRenderer}from"../../../chunks/app-BKOvuDYB.js";

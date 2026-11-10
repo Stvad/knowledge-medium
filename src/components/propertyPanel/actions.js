@@ -1,1 +1,1 @@
-export{DB as addProperty,OB as deleteProperty,kB as writeProperty}from"../../../chunks/app-B3yieFeI.js";
+export{IB as addProperty,LB as deleteProperty,RB as writeProperty}from"../../../chunks/app-BKOvuDYB.js";
