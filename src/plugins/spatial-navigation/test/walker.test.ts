@@ -20,7 +20,7 @@ import {
   PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
   PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
   PANEL_LANE_ATTRIBUTE,
-} from '@/utils/panelClearance.js'
+} from '@/utils/panelLanes.js'
 import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 
 // happy-dom never lays out, so every rect is zero and every instance reads as

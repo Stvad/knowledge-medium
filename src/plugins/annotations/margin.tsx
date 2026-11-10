@@ -9,8 +9,7 @@
  * automatic until dragged, and the dragged width is kept on the panel's row as
  * a share of the pane (`annotationMarginShareProp`). It is a navigation lane
  * of its own (`PANEL_LANE_ATTRIBUTE`), each card paired with its row. The cost
- * is that it
- * lives outside the scrollport: it finds the panel's rows in the DOM (mounted
+ * is that it lives outside the scrollport: it finds the panel's rows in the DOM (mounted
  * rows and lazy placeholders alike, of the panel's own render scope), reads
  * their positions and moves the cards within one animation frame of a scroll
  * or a re-render, and within the frame of a resize.
@@ -24,6 +23,7 @@
  */
 
 import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type RefObject, type WheelEvent} from 'react'
+import {isEqual} from 'lodash-es'
 import {MessageSquare, X} from 'lucide-react'
 import type {Block} from '@/data/block'
 import {focusedBlockLocationProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
@@ -31,14 +31,8 @@ import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
-import {
-  PANEL_CONTENT_RIGHT_INSET,
-  PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
-  PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
-  PANEL_LANE_ATTRIBUTE,
-  PANEL_RIGHT_CLEARANCE,
-  PANEL_TEXT_MIN_WIDTH_PX,
-} from '@/utils/panelClearance.js'
+import {PANEL_CONTENT_RIGHT_INSET, PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
+import {PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, PANEL_LANE_ATTRIBUTE} from '@/utils/panelLanes.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
@@ -77,10 +71,6 @@ interface ColumnFrame {
   /** From the column's right edge to the pane's. */
   rightInset: number
 }
-
-const sameFrame = (a: ColumnFrame | null, b: ColumnFrame | null): boolean =>
-  a === b || (a !== null && b !== null &&
-    (Object.keys(a) as (keyof ColumnFrame)[]).every(key => a[key] === b[key]))
 
 /** A frame's width as a share of its pane, to four places: a fraction of a
  *  pixel at any pane width. */
@@ -215,7 +205,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
       const portRect = scrollport.getBoundingClientRect()
       const nextFrame = topRow && measure(portRect)
-      setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
+      setFrame(current => isEqual(current, nextFrame) ? current : nextFrame)
       setPanelGeometry(nextFrame)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll<HTMLElement>(selector)) {
@@ -223,7 +213,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         if (id && !rowEls.has(id)) rowEls.set(id, el)
       }
       const order = [...rowEls.keys()]
-      setRows(current => current.length === order.length && current.every((id, i) => id === order[i]) ? current : order)
+      setRows(current => isEqual(current, order) ? current : order)
       const column = columnRef.current
       if (!column || !topRow || !nextFrame) {
         setExtraBottom(0)

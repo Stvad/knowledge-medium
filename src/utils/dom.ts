@@ -64,9 +64,8 @@ export const isElementProperlyVisible = (
 ): boolean => {
   const rect = element.getBoundingClientRect()
   const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
-  if (viewportHeight <= 0) return false
-
   const elementHeight = rect.height
+  if (viewportHeight <= 0 || elementHeight <= 0) return false
 
   // Get computed line height for this element
   const computedStyle = window.getComputedStyle(element)
@@ -75,7 +74,6 @@ export const isElementProperlyVisible = (
 
   // A line must be in view, or the whole element when it is shorter than one
   // (a row in a smaller font than the line height it inherits).
-  if (elementHeight <= 0) return false
   const minVisibleHeight = Math.min(lineHeight, elementHeight)
 
   // Calculate how much of the element is visible vertically

@@ -34,7 +34,7 @@ import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/wal
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { waitFor } from '@/test/waitFor'
-import { PANEL_LANE_ATTRIBUTE } from '@/utils/panelClearance.js'
+import { PANEL_LANE_ATTRIBUTE } from '@/utils/panelLanes.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}

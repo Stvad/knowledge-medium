@@ -5,7 +5,7 @@ import {
   PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
   PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
   PANEL_LANE_ATTRIBUTE,
-} from '@/utils/panelClearance.js'
+} from '@/utils/panelLanes.js'
 import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
@@ -609,13 +609,14 @@ export const reservedRowBetween = (
   const panel = panelOf(from)
   if (!panel) return null
   const fromScope = from.dataset.renderScopeId
+  const fromLane = laneOf(from)
   const slots = Array.from(panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)).filter(slot =>
     aheadOf(from, slot, direction) &&
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
     slot.dataset.lazyRenderScopeId !== fromScope &&
-    laneOf(slot) === laneOf(from) &&
+    laneOf(slot) === fromLane &&
     !isInExcludedSurface(slot, excludedSurfaces) &&
     // Never picks a half-labelled slot and then gives up on it, which would
     // silently drop a valid one further along.
@@ -714,7 +715,7 @@ export const lastInstanceIn = (
 ): HTMLElement | null => laneEdgeInstance(panel, OWN_CONTENT_LANE, 'last', excludedSurfaces)
 
 /**
- * Within-lane + stack-sibling fall-through for h/k.
+ * Within-lane + stack-sibling fall-through for j/k.
  *
  * 1. If there's a next/prev instance in the same lane of the panel in DOM
  *    order, return it.
@@ -782,12 +783,6 @@ const isLaneRowOnScreen = (el: HTMLElement): boolean => {
   })
 }
 
-/** Does one of the two stand beside the other? */
-const arePaired = (a: HTMLElement, b: HTMLElement): boolean => {
-  const anchorA = laneAnchorOf(a)
-  const anchorB = laneAnchorOf(b)
-  return (anchorA !== null && isInstanceAt(b, anchorA)) || (anchorB !== null && isInstanceAt(a, anchorB))
-}
 
 /**
  * The row beside `current` in another lane of its panel, `direction` of it,
@@ -804,8 +799,9 @@ export const lateralNeighbor = (
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   const panel = panelOf(current)
-  if (!panel) return null
+  if (!panel?.querySelector(LANE_SELECTOR)) return null
   const lane = laneOf(current)
+  const currentAnchor = laneAnchorOf(current)
   const from = visibilityTargetFor(current).getBoundingClientRect()
   const fromCentre = (from.left + from.right) / 2
   let best: {el: HTMLElement; paired: boolean; gap: number; topLineGap: number} | null = null
@@ -814,13 +810,16 @@ export const lateralNeighbor = (
     const rect = visibilityTargetFor(el).getBoundingClientRect()
     const centre = (rect.left + rect.right) / 2
     if (direction === 'right' ? centre <= fromCentre : centre >= fromCentre) continue
-    if (!isLaneRowOnScreen(el)) continue
-    const paired = arePaired(current, el)
+    // Outside the window it can't be on screen: skips the style reads below.
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight) continue
+    const elAnchor = laneAnchorOf(el)
+    const paired = (currentAnchor !== null && isInstanceAt(el, currentAnchor)) ||
+      (elAnchor !== null && isInstanceAt(current, elAnchor))
     const gap = Math.max(0, rect.top - from.bottom, from.top - rect.bottom)
     const topLineGap = Math.max(0, rect.top - from.top, from.top - rect.bottom)
     const better = !best ||
       (paired !== best.paired ? paired : gap < best.gap || (gap === best.gap && topLineGap < best.topLineGap))
-    if (better) best = {el, paired, gap, topLineGap}
+    if (better && isLaneRowOnScreen(el)) best = {el, paired, gap, topLineGap}
   }
   return best?.el ?? null
 }
@@ -845,7 +844,8 @@ export const stackSiblingPanel = (
 }
 
 /**
- * Column-walker for j/l. Returns the *panel* to focus in the previous
+ * Column-walker for h/l, after `lateralNeighbor` finds nothing in the
+ * panel. Returns the *panel* to focus in the previous
  * or next layout column. For stacked columns it returns the column's
  * first panel; the caller can then apply sticky-return logic to pick
  * a different stack member (e.g. the last one the user focused in

@@ -39,6 +39,7 @@ import {
 } from '@/utils/selection.js'
 import {
   aheadOf,
+  firstInstanceIn,
   horizontalNeighborPanel,
   laneEdgeInstance,
   laneOf,
@@ -47,7 +48,6 @@ import {
   OWN_CONTENT_LANE,
   panelById,
   panelOf,
-  panelInstances,
   nextRowInScope,
   panelRowsInOrder,
   type PanelRow,
@@ -458,11 +458,8 @@ const findFirstInstanceLocation = (
   panel: HTMLElement,
   excludedSurfaces: ReadonlySet<string>,
 ): FocusedBlockLocation | undefined => {
-  for (const instance of panelInstances(panel, excludedSurfaces)) {
-    const location = locationOf(instance)
-    if (location) return location
-  }
-  return undefined
+  const first = firstInstanceIn(panel, excludedSurfaces)
+  return (first && locationOf(first)) ?? undefined
 }
 
 const crossPanelFocus = async (

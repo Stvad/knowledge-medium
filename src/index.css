@@ -426,14 +426,9 @@
 
   /* The panel's action buttons end where its content does: where a mount
      beside the text says it ends (PANEL_CONTENT_RIGHT_INSET), else at the
-     text frame's right edge — PanelRenderer's FRAME_RIGHT_CLEARANCE_CLASS,
-     plus half of what the centred max-w-3xl frame leaves of the rest. */
+     right edge of the centred max-w-3xl text frame. */
   .panel-actions {
-    --frame-clearance: min(var(--panel-right-clearance, 0px), max(0px, 100% - 480px));
-    padding-right: var(
-      --panel-content-right-inset,
-      calc(var(--frame-clearance) + max(0px, (100% - var(--frame-clearance) - var(--container-3xl, 48rem)) / 2))
-    );
+    padding-right: var(--panel-content-right-inset, max(0px, (100% - var(--container-3xl, 48rem)) / 2));
   }
 
   .block {
