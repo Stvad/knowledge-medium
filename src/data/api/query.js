@@ -1,1 +1,1 @@
-export{Nst as defineQuery}from"../../../chunks/app-T-raHsDh.js";
+export{Wst as defineQuery}from"../../../chunks/app-B3yieFeI.js";

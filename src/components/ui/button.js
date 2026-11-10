@@ -1,1 +1,1 @@
-export{P1 as Button}from"../../../chunks/app-T-raHsDh.js";
+export{G1 as Button}from"../../../chunks/app-B3yieFeI.js";

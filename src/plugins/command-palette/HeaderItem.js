@@ -1,1 +1,1 @@
-export{hj as CommandPaletteHeaderItem}from"../../../chunks/app-T-raHsDh.js";
+export{vj as CommandPaletteHeaderItem}from"../../../chunks/app-B3yieFeI.js";
