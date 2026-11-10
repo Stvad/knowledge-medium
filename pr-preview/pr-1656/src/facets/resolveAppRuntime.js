@@ -1,1 +1,0 @@
-export{OP as resolveAppRuntime,kP as resolveAppRuntimeSync}from"../../chunks/app-B16e1HD5.js";

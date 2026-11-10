@@ -1,1 +1,0 @@
-export{GW as PropertyShapeButton,KW as PropertyShapeGlyph}from"../../../chunks/app-B16e1HD5.js";
