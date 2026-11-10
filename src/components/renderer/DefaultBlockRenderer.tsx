@@ -335,6 +335,15 @@ const ExpandButton = ({block}: { block: Block }) => {
     })
   }
 
+  // On mobile the button sits in the gutter, beside pills. The glyph keeps to
+  // the box's left edge, so the gap before it matches the gap between pills;
+  // the box's empty right part and the strips above and below it keep the tap
+  // target near 32px without reaching left over the pill. It cannot reach
+  // right instead: `.block-content` clips horizontal overflow, hits included.
+  const sizeClass = isMobile
+    ? 'relative h-6 w-6 justify-start before:absolute before:inset-x-0 before:-inset-y-1'
+    : 'h-6 w-3'
+
   return (
     <Button
       variant="ghost"
@@ -346,7 +355,7 @@ const ExpandButton = ({block}: { block: Block }) => {
         e.stopPropagation()
         toggle()
       }}
-      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, isMobile ? 'h-8 w-8' : 'h-6 w-3')}
+      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, sizeClass)}
     >
       <span className="text-lg text-muted-foreground">
         {isCollapsed ? '▸' : '▾'}
