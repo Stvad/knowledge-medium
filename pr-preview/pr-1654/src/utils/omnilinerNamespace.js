@@ -1,1 +1,0 @@
-export{g$ as omnilinerNamespace}from"../../chunks/app-BG1pIxqJ.js";

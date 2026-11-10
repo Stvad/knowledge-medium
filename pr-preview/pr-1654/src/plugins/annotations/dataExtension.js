@@ -1,1 +1,0 @@
-export{QJ as annotationsDataExtension}from"../../../chunks/app-BG1pIxqJ.js";

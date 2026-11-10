@@ -1,1 +1,0 @@
-export{CD as openRecentsPage}from"../../../chunks/app-BG1pIxqJ.js";

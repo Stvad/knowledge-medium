@@ -1,1 +1,0 @@
-export{VW as propertyShapeLabel}from"../../../chunks/app-BG1pIxqJ.js";

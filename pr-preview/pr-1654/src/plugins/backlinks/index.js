@@ -1,1 +1,0 @@
-export{K_ as backlinksPlugin}from"../../../chunks/app-BG1pIxqJ.js";

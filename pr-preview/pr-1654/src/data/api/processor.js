@@ -1,1 +1,0 @@
-export{sct as definePostCommitProcessor}from"../../../chunks/app-BG1pIxqJ.js";

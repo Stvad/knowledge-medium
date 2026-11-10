@@ -1,1 +1,0 @@
-export{Q4 as kernelDataExtension}from"../../chunks/app-BG1pIxqJ.js";

@@ -1,1 +1,0 @@
-export{Ng as boundDisplayId,Pg as idMark}from"../../../../chunks/app-BG1pIxqJ.js";

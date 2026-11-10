@@ -1,1 +1,0 @@
-export{G3 as KERNEL_PROCESSORS}from"../../../chunks/app-BG1pIxqJ.js";

@@ -1,1 +1,0 @@
-export{LW as usePropertySchemas}from"../../chunks/app-BG1pIxqJ.js";

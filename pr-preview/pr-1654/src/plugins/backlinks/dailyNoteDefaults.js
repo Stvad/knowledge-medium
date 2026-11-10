@@ -1,1 +1,0 @@
-export{VX as INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,HX as backlinksPrefsType,UX as dailyNoteBacklinksDefaultsProp,WX as defaultBacklinksFilterForBlock,GX as effectiveBacklinksFilterForBlock,KX as isDailyNoteBlockData}from"../../../chunks/app-BG1pIxqJ.js";

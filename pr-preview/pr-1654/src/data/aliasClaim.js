@@ -1,1 +1,0 @@
-export{U3 as assertAliasClaimable,W3 as claimedAliases}from"../../chunks/app-BG1pIxqJ.js";
