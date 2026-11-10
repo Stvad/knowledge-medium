@@ -1,1 +1,0 @@
-export{bM as BlockEmbed}from"../../../chunks/app-bsdmQLbu.js";

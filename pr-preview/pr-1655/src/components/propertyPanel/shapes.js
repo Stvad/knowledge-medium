@@ -1,1 +1,0 @@
-export{UW as propertyShapeLabel}from"../../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{Oq as geoDataExtension}from"../../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{kd as annotationsPlugin}from"../../../chunks/app-bsdmQLbu.js";

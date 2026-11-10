@@ -1,1 +1,0 @@
-export{hB as BlockProperties}from"../../chunks/app-bsdmQLbu.js";

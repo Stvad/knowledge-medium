@@ -1,1 +1,0 @@
-export{GQ as defineVerbFacet}from"../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{A_ as blockInfoPlugin}from"../../../chunks/app-bsdmQLbu.js";

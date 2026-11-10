@@ -1,1 +1,0 @@
-export{LW as floatingAnchorFromRect,RW as useAnchoredFloating}from"../../../chunks/app-bsdmQLbu.js";

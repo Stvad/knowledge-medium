@@ -1,1 +1,0 @@
-export{gB as MetadataRow,_B as PropertySectionLabel}from"../../../chunks/app-bsdmQLbu.js";

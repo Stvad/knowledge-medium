@@ -1,1 +1,0 @@
-export{QT as BINARY_ENVELOPE_MAGIC,$T as BINARY_ENVELOPE_MIN_BYTES,eE as BINARY_ENVELOPE_OVERHEAD_BYTES,tE as BINARY_MAGIC_BYTES,nE as decodeBinaryEnvelope,rE as encodeBinaryEnvelope,iE as hasBinaryEnvelopeMagic}from"../../../chunks/app-bsdmQLbu.js";

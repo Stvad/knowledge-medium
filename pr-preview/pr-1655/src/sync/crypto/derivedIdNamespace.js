@@ -1,1 +1,0 @@
-export{wit as deriveWorkspaceIdNamespace}from"../../../chunks/app-bsdmQLbu.js";

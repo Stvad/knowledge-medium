@@ -1,1 +1,0 @@
-export{XR as ExtensionRenderBoundary}from"../../chunks/app-bsdmQLbu.js";

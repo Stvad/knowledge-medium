@@ -1,1 +1,0 @@
-export{dP as dispatchPointerAction,fP as setPointerActionDispatcher}from"../../chunks/app-bsdmQLbu.js";

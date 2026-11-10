@@ -1,1 +1,0 @@
-export{HG as staticDataExtensions}from"../../chunks/app-bsdmQLbu.js";

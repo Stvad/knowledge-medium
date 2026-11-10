@@ -1,1 +1,0 @@
-export{T6 as NAMES_IN_A_SENTENCE,E6 as describeNames,D6 as firstFew}from"../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{xD as useMinuteClock}from"../../chunks/app-bsdmQLbu.js";

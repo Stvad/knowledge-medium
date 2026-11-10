@@ -1,1 +1,0 @@
-export{M_ as updateIndicatorPlugin}from"../../../chunks/app-bsdmQLbu.js";

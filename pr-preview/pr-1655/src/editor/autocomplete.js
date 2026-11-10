@@ -1,1 +1,0 @@
-export{wN as editorAutocompleteExtension}from"../../chunks/app-bsdmQLbu.js";

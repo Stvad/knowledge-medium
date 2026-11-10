@@ -1,1 +1,0 @@
-export{QN as appUpdate,$N as useAppUpdateAvailable}from"../chunks/app-bsdmQLbu.js";

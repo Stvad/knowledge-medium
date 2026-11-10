@@ -1,1 +1,0 @@
-export{jX as characterCounterDataExtension}from"../../../chunks/app-bsdmQLbu.js";

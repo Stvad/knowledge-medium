@@ -1,1 +1,0 @@
-export{Wrt as getOrCreatePropertiesPage,Grt as propertiesPageBlockId,Krt as propertiesPageSpec}from"../../chunks/app-bsdmQLbu.js";

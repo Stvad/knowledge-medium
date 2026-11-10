@@ -1,1 +1,0 @@
-export{sF as LazyBlockComponent}from"../../chunks/app-bsdmQLbu.js";

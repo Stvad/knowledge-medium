@@ -1,1 +1,0 @@
-export{tct as defineQuery}from"../../../chunks/app-bsdmQLbu.js";

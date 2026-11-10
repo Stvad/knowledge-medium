@@ -1,1 +1,0 @@
-export{XN as checkForAppUpdate,ZN as registerServiceWorker}from"../chunks/app-bsdmQLbu.js";

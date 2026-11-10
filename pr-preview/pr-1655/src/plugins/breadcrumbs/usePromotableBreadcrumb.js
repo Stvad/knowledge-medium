@@ -1,1 +1,0 @@
-export{Iw as usePromotableBreadcrumb}from"../../../chunks/app-bsdmQLbu.js";

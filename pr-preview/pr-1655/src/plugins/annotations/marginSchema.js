@@ -1,1 +1,0 @@
-export{aX as annotationMarginOpenProp,oX as annotationMarginShareProp}from"../../../chunks/app-bsdmQLbu.js";

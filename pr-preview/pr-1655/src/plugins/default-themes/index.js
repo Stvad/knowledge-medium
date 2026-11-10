@@ -1,1 +1,0 @@
-export{rD as DEFAULT_THEME_ID_DARK,iD as DEFAULT_THEME_ID_LIGHT,HE as defaultThemeContributions,VE as defaultThemesPlugin}from"../../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{bG as SuspenseFallback}from"../../../chunks/app-bsdmQLbu.js";

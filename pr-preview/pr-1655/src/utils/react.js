@@ -1,1 +1,0 @@
-export{iL as useIsMobile,aL as usePointerCoarse}from"../../chunks/app-bsdmQLbu.js";

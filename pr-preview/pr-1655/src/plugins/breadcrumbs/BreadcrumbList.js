@@ -1,1 +1,0 @@
-export{Vw as BreadcrumbList}from"../../../chunks/app-bsdmQLbu.js";

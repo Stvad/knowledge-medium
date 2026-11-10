@@ -1,1 +1,0 @@
-export{Ay as useIsReadOnly}from"../../chunks/app-bsdmQLbu.js";

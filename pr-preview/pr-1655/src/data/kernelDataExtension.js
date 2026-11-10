@@ -1,1 +1,0 @@
-export{e3 as kernelDataExtension}from"../../chunks/app-bsdmQLbu.js";

@@ -1,1 +1,0 @@
-export{lk as dailyDateWikilinkDecorator}from"../../../chunks/app-bsdmQLbu.js";

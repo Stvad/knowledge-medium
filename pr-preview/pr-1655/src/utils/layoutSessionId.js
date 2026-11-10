@@ -1,1 +1,0 @@
-export{vnt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,ynt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,bnt as __resetLayoutSessionIdForTesting,xnt as getLayoutSessionId,Snt as isInstalledAppDisplayMode,Cnt as readOrCreateLayoutSessionId}from"../../chunks/app-bsdmQLbu.js";

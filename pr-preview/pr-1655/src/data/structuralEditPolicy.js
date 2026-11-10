@@ -1,1 +1,0 @@
-export{iN as resolveStructuralEditPolicy,aN as structuralEditPolicyForBlock}from"../../chunks/app-bsdmQLbu.js";

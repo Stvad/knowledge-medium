@@ -1,1 +1,0 @@
-export{h1 as instrumentAdapter}from"../../../chunks/app-bsdmQLbu.js";

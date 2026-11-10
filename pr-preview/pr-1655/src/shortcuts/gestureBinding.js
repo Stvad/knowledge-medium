@@ -1,1 +1,0 @@
-export{lP as gestureBindingDescriptor,uP as matchesGestureEvent}from"../../chunks/app-bsdmQLbu.js";

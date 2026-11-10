@@ -1,1 +1,0 @@
-export{jw as mobileBottomNavItemsFacet}from"../../../chunks/app-bsdmQLbu.js";

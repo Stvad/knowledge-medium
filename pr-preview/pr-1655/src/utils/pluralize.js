@@ -1,1 +1,0 @@
-export{C6 as agree,w6 as pluralize}from"../../chunks/app-bsdmQLbu.js";

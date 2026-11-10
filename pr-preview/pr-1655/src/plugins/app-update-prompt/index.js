@@ -1,1 +1,0 @@
-export{VN as appUpdatePromptExtension}from"../../../chunks/app-bsdmQLbu.js";
