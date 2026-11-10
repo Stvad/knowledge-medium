@@ -49,6 +49,14 @@ const referenceAutocompleteTheme = EditorView.theme({
     color: 'hsl(var(--popover-foreground))',
     lineHeight: '1.25rem',
   },
+  '.cm-tooltip.cm-tooltip-autocomplete.tm-reference-autocomplete > ul > completion-section': {
+    padding: '0.375rem 0.5rem 0.125rem',
+    border: 'none',
+    opacity: 1,
+    color: 'hsl(var(--muted-foreground))',
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+  },
   '.cm-tooltip.cm-tooltip-autocomplete.tm-reference-autocomplete > ul > li[aria-selected]': {
     backgroundColor: 'hsl(var(--muted))',
     color: 'hsl(var(--foreground))',
