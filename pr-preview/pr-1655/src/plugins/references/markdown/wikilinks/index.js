@@ -1,1 +1,1 @@
-export{qv as wikilinkMarkdownExtension}from"../../../../../chunks/app-A8qeF0zw.js";
+export{qv as wikilinkMarkdownExtension}from"../../../../../chunks/app-bsdmQLbu.js";

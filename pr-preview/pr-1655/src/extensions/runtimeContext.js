@@ -1,1 +1,1 @@
-export{WW as AppRuntimeContextProvider,GW as useAppRuntime}from"../../chunks/app-A8qeF0zw.js";
+export{WW as AppRuntimeContextProvider,GW as useAppRuntime}from"../../chunks/app-bsdmQLbu.js";
