@@ -1,0 +1,1 @@
+export{EP as ClientLocalSettings,DP as clientLocalSettings}from"../../chunks/app-DJv7nfI2.js";

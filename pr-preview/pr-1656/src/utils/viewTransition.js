@@ -1,0 +1,1 @@
+export{IU as withMoveTransition}from"../../chunks/app-DJv7nfI2.js";

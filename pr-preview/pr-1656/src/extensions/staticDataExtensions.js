@@ -1,0 +1,1 @@
+export{KG as staticDataExtensions}from"../../chunks/app-DJv7nfI2.js";

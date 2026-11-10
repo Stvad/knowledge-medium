@@ -1,0 +1,1 @@
+export{yB as BlockProperties}from"../../chunks/app-DJv7nfI2.js";

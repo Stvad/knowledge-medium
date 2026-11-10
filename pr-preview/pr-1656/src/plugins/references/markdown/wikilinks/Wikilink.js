@@ -1,0 +1,1 @@
+export{Qv as Wikilink}from"../../../../../chunks/app-DJv7nfI2.js";

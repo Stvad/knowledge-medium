@@ -1,0 +1,1 @@
+export{C$ as omnilinerNamespace}from"../../chunks/app-DJv7nfI2.js";

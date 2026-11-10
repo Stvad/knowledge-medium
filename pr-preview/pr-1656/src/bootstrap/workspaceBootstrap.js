@@ -1,0 +1,1 @@
+export{kt as bootstrapWorkspace}from"../../chunks/app-DJv7nfI2.js";

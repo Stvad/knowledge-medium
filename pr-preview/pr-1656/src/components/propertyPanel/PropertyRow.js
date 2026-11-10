@@ -1,0 +1,1 @@
+export{TB as PropertyRow}from"../../../chunks/app-DJv7nfI2.js";

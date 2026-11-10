@@ -1,0 +1,1 @@
+export{GB as declarationOnlyDefinitionForName,KB as declarationOnlyStatusText}from"../../../chunks/app-DJv7nfI2.js";

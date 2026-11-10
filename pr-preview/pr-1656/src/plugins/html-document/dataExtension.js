@@ -1,0 +1,1 @@
+export{rq as htmlDocumentDataExtension}from"../../../chunks/app-DJv7nfI2.js";

@@ -1,0 +1,1 @@
+export{Vv as geoContentDecoratorContribution}from"../../../chunks/app-DJv7nfI2.js";

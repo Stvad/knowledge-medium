@@ -1,0 +1,1 @@
+export{QD as BlockCrumbs}from"../../chunks/app-DJv7nfI2.js";

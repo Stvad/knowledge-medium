@@ -1,0 +1,1 @@
+export{Kw as plainOutlinerPlugin}from"../../../chunks/app-DJv7nfI2.js";

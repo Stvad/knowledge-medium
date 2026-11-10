@@ -1,0 +1,1 @@
+export{fn as hasScripts,pn as useDocumentScripts}from"../../../chunks/app-DJv7nfI2.js";
