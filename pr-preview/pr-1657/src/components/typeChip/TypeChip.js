@@ -1,0 +1,1 @@
+export{NM as TypeChip}from"../../../chunks/app-DdI00ks5.js";

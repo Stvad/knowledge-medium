@@ -1,0 +1,1 @@
+export{rm as agentDispatchCompanionPlugin}from"../../../chunks/app-DdI00ks5.js";

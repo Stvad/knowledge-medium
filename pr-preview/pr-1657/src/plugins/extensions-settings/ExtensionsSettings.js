@@ -1,0 +1,1 @@
+export{Kr as ExtensionsSettings}from"../../../chunks/app-DdI00ks5.js";

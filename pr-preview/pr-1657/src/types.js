@@ -1,0 +1,1 @@
+export{rat as isChildBackedPropertiesWorkspace}from"../chunks/app-DdI00ks5.js";

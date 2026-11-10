@@ -1,0 +1,1 @@
+export{Vnt as MIGRATIONS_PAGE_ALIAS,Hnt as getOrCreateMigrationsPage,Unt as migrationsPageBlockId,Wnt as migrationsPageSpec}from"../../chunks/app-DdI00ks5.js";

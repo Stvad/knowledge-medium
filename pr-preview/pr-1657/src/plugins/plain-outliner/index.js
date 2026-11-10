@@ -1,0 +1,1 @@
+export{Kw as plainOutlinerPlugin}from"../../../chunks/app-DdI00ks5.js";

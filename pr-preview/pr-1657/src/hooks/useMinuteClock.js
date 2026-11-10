@@ -1,0 +1,1 @@
+export{TD as useMinuteClock}from"../../chunks/app-DdI00ks5.js";

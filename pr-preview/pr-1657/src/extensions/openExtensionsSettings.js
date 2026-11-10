@@ -1,0 +1,1 @@
+export{FF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,IF as openExtensionsSettings}from"../../chunks/app-DdI00ks5.js";

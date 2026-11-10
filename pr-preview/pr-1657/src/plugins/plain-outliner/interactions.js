@@ -1,0 +1,1 @@
+export{Xw as blockEditingContentRenderer}from"../../../chunks/app-DdI00ks5.js";
