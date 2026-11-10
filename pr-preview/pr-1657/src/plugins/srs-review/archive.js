@@ -1,1 +1,0 @@
-export{Nc as archiveSrsCard}from"../../../chunks/app-DdI00ks5.js";

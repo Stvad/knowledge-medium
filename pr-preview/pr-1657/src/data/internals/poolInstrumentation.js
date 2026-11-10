@@ -1,1 +1,0 @@
-export{S1 as instrumentAdapter}from"../../../chunks/app-DdI00ks5.js";

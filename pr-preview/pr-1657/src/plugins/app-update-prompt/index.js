@@ -1,1 +1,0 @@
-export{GN as appUpdatePromptExtension}from"../../../chunks/app-DdI00ks5.js";
