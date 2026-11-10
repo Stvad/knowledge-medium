@@ -1,1 +1,1 @@
-export{qm as extensionsOverridesProp,Jm as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-Dz29ExfI.js";
+export{qm as extensionsOverridesProp,Jm as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-CaAZHurp.js";

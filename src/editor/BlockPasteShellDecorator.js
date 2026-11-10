@@ -1,1 +1,1 @@
-export{vN as BlockPasteShellDecorator,yN as blockPasteShellDecorator}from"../../chunks/app-Dz29ExfI.js";
+export{vN as BlockPasteShellDecorator,yN as blockPasteShellDecorator}from"../../chunks/app-CaAZHurp.js";

@@ -1,1 +1,1 @@
-export{Bot as backlinkRenderScopeId,Vot as breadcrumbRenderScopeId,Hot as embedRenderScopeId,Uot as isPanelRenderScopeId,Wot as outlineRenderScopeId,Got as panelIdOfRenderScopeId,Kot as panelRenderScopeId,qot as surfaceRenderScopeId}from"../../chunks/app-Dz29ExfI.js";
+export{Vot as backlinkRenderScopeId,Hot as breadcrumbRenderScopeId,Uot as embedRenderScopeId,Wot as isPanelRenderScopeId,Got as outlineRenderScopeId,Kot as panelIdOfRenderScopeId,qot as panelRenderScopeId,Jot as surfaceRenderScopeId}from"../../chunks/app-CaAZHurp.js";

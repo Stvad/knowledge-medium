@@ -1,1 +1,1 @@
-export{FM as DEFAULT_TYPE_COLORS,IM as defaultTypeColor,LM as pickLeastUsedTypeColor}from"../../chunks/app-Dz29ExfI.js";
+export{FM as DEFAULT_TYPE_COLORS,IM as defaultTypeColor,LM as pickLeastUsedTypeColor}from"../../chunks/app-CaAZHurp.js";

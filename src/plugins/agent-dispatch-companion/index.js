@@ -1,1 +1,1 @@
-export{rm as agentDispatchCompanionPlugin}from"../../../chunks/app-Dz29ExfI.js";
+export{rm as agentDispatchCompanionPlugin}from"../../../chunks/app-CaAZHurp.js";

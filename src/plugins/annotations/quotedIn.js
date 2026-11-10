@@ -1,1 +1,1 @@
-export{Nd as quotedInFooterContribution}from"../../../chunks/app-Dz29ExfI.js";
+export{Nd as quotedInFooterContribution}from"../../../chunks/app-CaAZHurp.js";

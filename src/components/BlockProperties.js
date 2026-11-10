@@ -1,1 +1,1 @@
-export{yB as BlockProperties}from"../../chunks/app-Dz29ExfI.js";
+export{yB as BlockProperties}from"../../chunks/app-CaAZHurp.js";

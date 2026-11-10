@@ -1,1 +1,1 @@
-export{AP as dynamicExtensionsExtension}from"../../chunks/app-Dz29ExfI.js";
+export{AP as dynamicExtensionsExtension}from"../../chunks/app-CaAZHurp.js";

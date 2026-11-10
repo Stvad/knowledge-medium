@@ -1,1 +1,1 @@
-export{EP as ClientLocalSettings,DP as clientLocalSettings}from"../../chunks/app-Dz29ExfI.js";
+export{EP as ClientLocalSettings,DP as clientLocalSettings}from"../../chunks/app-CaAZHurp.js";

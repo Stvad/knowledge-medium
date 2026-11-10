@@ -1,1 +1,1 @@
-export{EZ as pluginPrefsExtension,DZ as pluginUIStateExtension}from"../../chunks/app-Dz29ExfI.js";
+export{DZ as pluginPrefsExtension,OZ as pluginUIStateExtension}from"../../chunks/app-CaAZHurp.js";

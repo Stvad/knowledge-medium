@@ -1,1 +1,1 @@
-export{JA as keybindingOverridesProp,YA as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-Dz29ExfI.js";
+export{JA as keybindingOverridesProp,YA as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-CaAZHurp.js";
