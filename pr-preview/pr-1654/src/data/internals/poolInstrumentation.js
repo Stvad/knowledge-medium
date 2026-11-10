@@ -1,0 +1,1 @@
+export{t1 as instrumentAdapter}from"../../../chunks/app-CE67CJd8.js";

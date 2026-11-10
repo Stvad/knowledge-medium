@@ -1,0 +1,1 @@
+export{bN as editorAutocompleteExtension}from"../../chunks/app-CE67CJd8.js";

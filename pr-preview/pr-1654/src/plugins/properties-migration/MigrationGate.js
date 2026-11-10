@@ -1,0 +1,1 @@
+export{to as MigrationGate}from"../../../chunks/app-CE67CJd8.js";

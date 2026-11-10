@@ -1,0 +1,1 @@
+export{ZY as contributorsDataExtension}from"../../../chunks/app-CE67CJd8.js";

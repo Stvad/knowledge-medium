@@ -1,0 +1,1 @@
+export{DF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,OF as openExtensionsSettings}from"../../chunks/app-CE67CJd8.js";

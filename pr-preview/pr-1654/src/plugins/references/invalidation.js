@@ -1,0 +1,1 @@
+export{GG as REFERENCES_TARGET_INVALIDATION_CHANNEL,KG as referencesInvalidationRule}from"../../../chunks/app-CE67CJd8.js";

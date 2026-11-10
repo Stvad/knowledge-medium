@@ -1,0 +1,1 @@
+export{eN as resolveStructuralEditPolicy,tN as structuralEditPolicyForBlock}from"../../chunks/app-CE67CJd8.js";

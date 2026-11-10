@@ -1,0 +1,1 @@
+export{OG as staticDataExtensions}from"../../chunks/app-CE67CJd8.js";

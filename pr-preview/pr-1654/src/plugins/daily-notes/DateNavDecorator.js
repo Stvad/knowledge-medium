@@ -1,0 +1,1 @@
+export{vk as dateNavDecoratorContribution}from"../../../chunks/app-CE67CJd8.js";

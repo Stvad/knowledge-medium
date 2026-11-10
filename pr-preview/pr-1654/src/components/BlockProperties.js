@@ -1,0 +1,1 @@
+export{tB as BlockProperties}from"../../chunks/app-CE67CJd8.js";

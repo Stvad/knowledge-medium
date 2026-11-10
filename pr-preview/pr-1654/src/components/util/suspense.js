@@ -1,0 +1,1 @@
+export{oG as SuspenseFallback}from"../../../chunks/app-CE67CJd8.js";

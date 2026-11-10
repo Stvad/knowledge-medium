@@ -1,0 +1,1 @@
+export{WG as referencesDataExtension}from"../../../chunks/app-CE67CJd8.js";

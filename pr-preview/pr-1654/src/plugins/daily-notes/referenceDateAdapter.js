@@ -1,0 +1,1 @@
+export{uk as referenceDateAdapter,dk as replaceSingleDateReferenceContent,fk as singleDateReferenceMatch}from"../../../chunks/app-CE67CJd8.js";

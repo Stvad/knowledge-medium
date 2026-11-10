@@ -1,0 +1,1 @@
+export{Q1 as FacetBridge}from"../../chunks/app-CE67CJd8.js";

@@ -1,0 +1,1 @@
+export{eo as propertiesMigrationPlugin}from"../../../chunks/app-CE67CJd8.js";

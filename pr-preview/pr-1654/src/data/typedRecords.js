@@ -1,0 +1,1 @@
+export{PA as adoptTypedBlock,FA as createTypedChild,Rit as derivedBlockId,IA as getOrCreateTypedChild}from"../../chunks/app-CE67CJd8.js";

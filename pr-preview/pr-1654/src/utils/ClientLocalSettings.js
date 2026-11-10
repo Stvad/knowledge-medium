@@ -1,0 +1,1 @@
+export{vP as ClientLocalSettings,yP as clientLocalSettings}from"../../chunks/app-CE67CJd8.js";

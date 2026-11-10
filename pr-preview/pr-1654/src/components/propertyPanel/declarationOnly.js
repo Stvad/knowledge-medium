@@ -1,0 +1,1 @@
+export{DB as declarationOnlyDefinitionForName,OB as declarationOnlyStatusText}from"../../../chunks/app-CE67CJd8.js";

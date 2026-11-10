@@ -1,0 +1,1 @@
+export{iS as default}from"../../../chunks/app-CE67CJd8.js";

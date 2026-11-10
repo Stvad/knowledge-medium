@@ -1,0 +1,1 @@
+export{B4 as kernelDataExtension}from"../../chunks/app-CE67CJd8.js";

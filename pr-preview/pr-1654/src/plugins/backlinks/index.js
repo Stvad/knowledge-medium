@@ -1,0 +1,1 @@
+export{U_ as backlinksPlugin}from"../../../chunks/app-CE67CJd8.js";

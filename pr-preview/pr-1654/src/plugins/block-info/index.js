@@ -1,0 +1,1 @@
+export{D_ as blockInfoPlugin}from"../../../chunks/app-CE67CJd8.js";

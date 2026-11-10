@@ -1,0 +1,1 @@
+export{Wv as Wikilink}from"../../../../../chunks/app-CE67CJd8.js";

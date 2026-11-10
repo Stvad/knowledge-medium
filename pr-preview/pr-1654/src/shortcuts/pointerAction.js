@@ -1,0 +1,1 @@
+export{sP as dispatchPointerAction,cP as setPointerActionDispatcher}from"../../chunks/app-CE67CJd8.js";
