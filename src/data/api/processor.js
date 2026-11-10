@@ -1,1 +1,1 @@
-export{sct as definePostCommitProcessor}from"../../../chunks/app-BKOvuDYB.js";
+export{lct as definePostCommitProcessor}from"../../../chunks/app-Bz8493KN.js";

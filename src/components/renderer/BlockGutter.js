@@ -1,1 +1,1 @@
-export{HR as BlockGutterHost,UR as createGutterControls,WR as useGutterControlsItem,GR as useGutterText}from"../../../chunks/app-BKOvuDYB.js";
+export{HR as BlockGutterHost,UR as GutterTextBelowHeader,WR as createGutterControls,GR as useGutterControlsItem,KR as useGutterHeader,qR as useGutterText}from"../../../chunks/app-Bz8493KN.js";

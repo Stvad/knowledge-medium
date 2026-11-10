@@ -1,1 +1,1 @@
-export{SP as ClientLocalSettings,CP as clientLocalSettings}from"../../chunks/app-BKOvuDYB.js";
+export{SP as ClientLocalSettings,CP as clientLocalSettings}from"../../chunks/app-Bz8493KN.js";

@@ -1,1 +1,1 @@
-export{VB as AddPropertyForm}from"../../../chunks/app-BKOvuDYB.js";
+export{UB as AddPropertyForm}from"../../../chunks/app-Bz8493KN.js";
