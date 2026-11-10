@@ -1,6 +1,7 @@
-/** CodeMirror CompletionSource for the `@` contributor trigger: `@name`
- *  becomes `[[name]]`, a link to the contributor's profile page (which is
- *  what an agent-dispatch watcher listens for). `@@` belongs to places. */
+/** CodeMirror CompletionSource for the `@query` contributor trigger:
+ *  `@name` becomes `[[name]]`, a link to the contributor's profile page
+ *  (which is what an agent-dispatch watcher listens for). A bare `@` and
+ *  `@@` belong to places — see `src/editor/atTrigger.ts`. */
 
 import { EditorSelection } from '@codemirror/state'
 import type {
@@ -9,17 +10,14 @@ import type {
   CompletionSource,
 } from '@codemirror/autocomplete'
 import type { BlockData } from '@/data/api'
-import { AT_DROPDOWN_SECTIONS } from '@/editor/atDropdownSections'
+import type { Repo } from '@/data/repo'
+import { matchMentionTrigger } from '@/editor/atTrigger'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
-import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
-import { contributorKindOf, type ContributorKind } from './schema'
+import { CONTRIBUTOR_TYPE, contributorKindOf, type ContributorKind } from './schema'
 
 const RESULT_CAP = 8
-
-export const matchContributorTrigger = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '@', {doubled: 'reject'})
 
 export interface ContributorMentionCandidate {
   id: string
@@ -50,11 +48,10 @@ export const contributorMentionCandidates = async (
   const trimmed = query.trim().toLowerCase()
   const out: ContributorMentionCandidate[] = []
   for (const profile of profiles) {
-    if (profile.deleted) continue
     const kind = contributorKindOf(profile)
     if (kind === 'automation') continue
     const name = profile.content.trim()
-    if (trimmed.length > 0 && !matchesWordPrefix(name, trimmed)) continue
+    if (!matchesWordPrefix(name, trimmed)) continue
     const replacement = faithfulWikilinkReplacement(name)
     if (!replacement) continue
     if (await resolveAlias(name) !== profile.id) continue
@@ -64,13 +61,26 @@ export const contributorMentionCandidates = async (
   return out
 }
 
+/** `contributorMentionCandidates` over the workspace's live profiles,
+ *  resolving each title the way the references processor binds
+ *  `[[title]]` (`core.aliasLookup`, oldest claimant). */
+export const loadContributorMentionCandidates = async (
+  repo: Repo,
+  workspaceId: string,
+  query: string,
+): Promise<ContributorMentionCandidate[]> => {
+  const profiles = await repo.query.byType({workspaceId, type: CONTRIBUTOR_TYPE}).load()
+  return contributorMentionCandidates(profiles, query, async alias =>
+    (await repo.query.aliasLookup({workspaceId, alias}).load())?.id ?? null)
+}
+
 export const contributorMentionSource = (
   getCandidates: (query: string) => Promise<ContributorMentionCandidate[]>,
 ): CompletionSource =>
   async (context: CompletionContext): Promise<CompletionResult | null> => {
     const {state, pos} = context
     const line = state.doc.lineAt(pos)
-    const match = matchContributorTrigger(line.text, pos - line.from)
+    const match = matchMentionTrigger(line.text, pos - line.from)
     if (!match) return null
     // `@decorator` in code, `user@host` in a URL: Enter would replace it.
     if (isInsideLiteralMarkdown(state, pos)) return null
@@ -85,7 +95,6 @@ export const contributorMentionSource = (
         label: candidate.name,
         detail: candidate.kind,
         type: 'class',
-        section: AT_DROPDOWN_SECTIONS.contributors,
         apply: (view, _completion, from, to) => {
           const insert = candidate.wikilink
           view.dispatch({

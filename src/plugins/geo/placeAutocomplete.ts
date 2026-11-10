@@ -1,13 +1,12 @@
 /** CodeMirror CompletionSource for the `@@` place trigger.
  *
- *  Trigger shape: `@@<query>` at start of line or after whitespace (the
- *  shared matcher's `doubled: 'require'` — see `src/editor/triggerMatch.ts`
- *  for the query rules and guards). A single `@` belongs to the
- *  contributors plugin; this source answers it with one hand-off row
- *  ("Search places (@@)…") that turns `@query` into `@@query` and
- *  reopens the dropdown, so `@@` is discoverable from `@`. The query may
- *  be empty — that's the moment to surface the "Use current location"
- *  sentinel.
+ *  Trigger shape: `@@<query>` at start of line or after whitespace (see
+ *  `src/editor/atTrigger.ts` for how `@`, `@@` and a bare `@` split, and
+ *  `triggerMatch.ts` for the query rules and guards). A bare `@` gets one
+ *  hand-off row ("Search places (@@)…") that turns it into `@@` and
+ *  reopens the dropdown, so `@@` is discoverable from `@`; `@query`
+ *  belongs to the contributors plugin. The query may be empty — that's
+ *  the moment to surface the "Use current location" sentinel.
  *
  *  On select: the caller-supplied `resolvePlace` returns a
  *  `PlaceResolveResult`. Two kinds:
@@ -31,10 +30,9 @@
 import { startCompletion } from '@codemirror/autocomplete'
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import { AT_DROPDOWN_SECTIONS } from '@/editor/atDropdownSections'
+import { matchBareAt, matchPlaceTrigger } from '@/editor/atTrigger'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 import type {
   Completion,
   CompletionContext,
@@ -116,28 +114,14 @@ export interface PlaceAutocompleteOptions {
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
-/** `@@` trigger detection — the shared matcher with `doubled:
- *  'require'`, so `from` is the first `@` and the whole `@@query` is
- *  replaced. Exported for direct testing. */
-export const matchPlaceTrigger = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '@', {doubled: 'require'})
-
-/** A single `@` (the contributor trigger), which this source answers
- *  only with the hand-off row. */
-const matchSingleAt = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '@', {doubled: 'reject'})
-
-const handOffToPlaces = (query: string): Completion => ({
+const handOffToPlaces: Completion = {
   label: 'Search places (@@)…',
   type: 'keyword',
-  section: query.trim().length === 0
-    ? AT_DROPDOWN_SECTIONS.placesLeading
-    : AT_DROPDOWN_SECTIONS.placesTrailing,
   apply: (view, _completion, from) => {
     view.dispatch({changes: {from, insert: '@'}})
     startCompletion(view)
   },
-})
+}
 
 /** Where to apply the trigger-text → wikilink replacement once the
  *  resolution settles. Prefers the recorded span if the text is still
@@ -234,21 +218,19 @@ export const placeCompletionSource = (
     const lineText = line.text
     const inLinePos = pos - line.from
 
-    const match = matchPlaceTrigger(lineText, inLinePos)
-    const single = match ? null : matchSingleAt(lineText, inLinePos)
-    if (!match && !single) return null
-
     // `@word` is also what literal spans look like (`@decorator` /
     // `@media` in code, `user@host` in a URL) — and with the dropdown
-    // open, Enter accepts a candidate and replaces that text.
-    // The pending-candidates path above stays ungated: it re-opens a
+    // open, Enter accepts a candidate and replaces that text, so both
+    // branches check `isInsideLiteralMarkdown` once they matched. The
+    // pending-candidates path above stays ungated: it re-opens a
     // dropdown the pick flow itself stashed.
-    if (isInsideLiteralMarkdown(state, pos)) return null
-
-    if (single) {
-      return {from: line.from + single.from, to: pos, filter: false, options: [handOffToPlaces(single.query)]}
+    const match = matchPlaceTrigger(lineText, inLinePos)
+    if (!match) {
+      const bare = matchBareAt(lineText, inLinePos)
+      if (!bare || isInsideLiteralMarkdown(state, pos)) return null
+      return {from: line.from + bare.from, to: pos, filter: false, options: [handOffToPlaces]}
     }
-    if (!match) return null
+    if (isInsideLiteralMarkdown(state, pos)) return null
 
     const candidates = await options.getCandidates(match.query)
     if (candidates.length === 0 && !explicit) return null

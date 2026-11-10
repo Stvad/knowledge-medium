@@ -5,22 +5,10 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  matchPlaceTrigger,
   placeCompletionSource,
   planResolvedInsert,
   type PlaceAutocompleteCandidate,
 } from '../placeAutocomplete'
-
-describe('matchPlaceTrigger', () => {
-  // Char-generic matcher behavior (whitespace, caps, wikilink guards,
-  // email/anchor rejection, the doubled-trigger modes) is covered in
-  // src/editor/test/triggerMatch.test.ts against the shared
-  // matchCharTrigger; this suite pins only the @@-wrapper wiring.
-  it('matches @@ and spans both chars; a single @ is not a place query', () => {
-    expect(matchPlaceTrigger('met at @@blue bottle', 20)).toEqual({from: 7, query: 'blue bottle'})
-    expect(matchPlaceTrigger('met at @blue', 12)).toBeNull()
-  })
-})
 
 describe('planResolvedInsert', () => {
   it('uses the recorded span when the trigger text is still there', () => {
@@ -113,30 +101,28 @@ describe('placeCompletionSource', () => {
     expect(result!.from).toBe(0)
   })
 
-  it('answers a single @ with only the hand-off row, leading on an empty query and trailing otherwise', async () => {
+  it('answers a bare @ with only the hand-off row, and @query not at all', async () => {
     const getCandidates = vi.fn(async () => [
       {id: 't', source: 'local' as const, label: 'Local', insertText: 'Local'},
     ])
     const source = placeCompletionSource({getCandidates, resolvePlace: async () => null})
-    const empty = await source(docContext('ask @', 5))
-    expect(empty).toMatchObject({from: 4, to: 5})
-    expect(empty!.options.map(o => o.label)).toEqual(['Search places (@@)…'])
-    expect(empty!.options[0].section).toMatchObject({name: 'Places', rank: 0})
-    const typed = await source(docContext('ask @blu', 8))
-    expect(typed!.options[0].section).toMatchObject({name: 'Places', rank: 2})
+    const bare = await source(docContext('ask @', 5))
+    expect(bare).toMatchObject({from: 4, to: 5})
+    expect(bare!.options.map(o => o.label)).toEqual(['Search places (@@)…'])
+    expect(await source(docContext('ask @blu', 8))).toBeNull()
     // No place search runs (and no Google request) for a single @.
     expect(getCandidates).not.toHaveBeenCalled()
   })
 
-  it('the hand-off row turns @query into @@query and reopens the dropdown', async () => {
+  it('the hand-off row turns a bare @ into @@', async () => {
     const source = placeCompletionSource({getCandidates: async () => [], resolvePlace: async () => null})
-    const doc = 'ask @blu'
-    const view = new EditorView({state: EditorState.create({doc, selection: {anchor: doc.length}})})
-    const result = await source(new CompletionContext(view.state, doc.length, false))
+    const doc = 'ask @ later'
+    const view = new EditorView({state: EditorState.create({doc, selection: {anchor: 5}})})
+    const result = await source(new CompletionContext(view.state, 5, false))
     const option = result!.options[0]
-    ;(option.apply as (v: EditorView, c: unknown, from: number, to: number) => void)(view, option, 4, 8)
-    expect(view.state.doc.toString()).toBe('ask @@blu')
-    expect(view.state.selection.main.head).toBe(9)
+    ;(option.apply as (v: EditorView, c: unknown, from: number, to: number) => void)(view, option, 4, 5)
+    expect(view.state.doc.toString()).toBe('ask @@ later')
+    expect(view.state.selection.main.head).toBe(6)
     view.destroy()
   })
 

@@ -1,7 +1,7 @@
 /** Char-generic matcher cases, exercised through `@` (no options) —
- *  the production wrappers (`matchContributorTrigger`,
- *  `matchPlaceTrigger`, `matchHashTrigger`) are thin parameterizations
- *  of this one implementation; their suites keep only wiring checks. */
+ *  the production wrappers (the `@` family in `atTrigger.ts`,
+ *  `matchHashTrigger`) are thin parameterizations of this one
+ *  implementation; their suites keep only wiring checks. */
 import { describe, expect, it } from 'vitest'
 import { matchCharTrigger } from '../triggerMatch'
 

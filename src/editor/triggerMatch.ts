@@ -1,7 +1,7 @@
-/** Shared trigger-char detection for editor autocompletes (`@`
- *  contributors, `@@` places, `#` type tags). One implementation of the backward walk + guards so
- *  the fiddly parts — especially the wikilink-ownership parsing — can
- *  only be fixed in one place.
+/** Shared trigger-char detection for editor autocompletes (the `@`
+ *  family in `atTrigger.ts`, `#` type tags). One implementation of the
+ *  backward walk + guards so the fiddly parts — especially the
+ *  wikilink-ownership parsing — can only be fixed in one place.
  *
  *  Trigger shape: `<trigger><query>` and no `[`/`]` in the query (the
  *  wikilink autocomplete owns `[[…`). What may precede the trigger is
@@ -117,12 +117,14 @@ const siblingWouldFire = (text: string, sibPos: number, pos: number): boolean =>
   if (afterPos < pos && text[afterPos] === ' ') return false
   const before = sibPos > 0 ? text[sibPos - 1] : ''
   if (text[sibPos] === '#') return before !== '#' && !tokenBeforeHasSlash(text, sibPos)
+  // Ignores `@` doubling: junk like `#bar x@@` yields to an `@@` that the
+  // place trigger then refuses, so nothing opens. Accepted.
   return !/\w/.test(before)
 }
 
-/** Pure trigger-detection helper. Callers export thin wrappers
- *  (`matchContributorTrigger`, `matchPlaceTrigger`, `matchHashTrigger`)
- *  for their CompletionSources and tests. */
+/** Pure trigger-detection helper. Callers use thin wrappers (the `@`
+ *  family in `atTrigger.ts`, `matchHashTrigger`) for their
+ *  CompletionSources and tests. */
 export const matchCharTrigger = (
   text: string,
   pos: number,

@@ -7,29 +7,27 @@
  * ──── Contract, grounded at the call sites ────
  *
  * `matchCharTrigger` is the ONE shared backward-walk implementation
- * behind three thin wrappers, mirrored by `PRODUCTION_SOURCES` below:
- * `matchContributorTrigger` (`@`, src/plugins/contributors/mentionAutocomplete.ts),
- * `matchPlaceTrigger` (`@@`, src/plugins/geo/placeAutocomplete.ts) and
- * `matchHashTrigger` (`#`, src/plugins/supertags/typeAutocomplete.ts).
- * All feed it a single line's
+ * behind the production wrappers listed in `PRODUCTION_SOURCES` below:
+ * the `@` family (src/editor/atTrigger.ts) and `matchHashTrigger` (`#`,
+ * src/plugins/supertags/typeAutocomplete.ts). All feed it a single line's
  * text plus an in-line cursor position, exactly as generated below (no
  * `\n` in the generated text, so `text`/`pos` here stand in for a
  * completion source's `lineText`/`linePos`).
  *
  * The module's own docblock states the ownership invariant this suite
- * differentials against (triggerMatch.ts:14-16): "spans owned by other
+ * differentials against (triggerMatch.ts): "spans owned by other
  * autocompletes — unclosed `[[` wikilinks and `((` blockrefs — never
- * fire a char trigger." The `TRIGGER_CHARS` comment (triggerMatch.ts:34-39)
+ * fire a char trigger." The `TRIGGER_CHARS` comment (triggerMatch.ts)
  * is the sibling half of the same ownership story (trigger-vs-trigger,
  * not trigger-vs-bracket-span) and isn't independently re-tested here —
  * `triggerMatch.test.ts` already pins the "nearest trigger wins" example
  * cases; this suite's differential is the bracket-span half.
  *
  * `matchCharTrigger` claims to implement that wikilink half via
- * `isInsideUnclosedWikilink` (triggerMatch.ts:52-68) and the blockref
+ * `isInsideUnclosedWikilink` (triggerMatch.ts) and the blockref
  * half via a same-shape regex the docblock says "mirrors
  * blockrefAutocomplete's own matcher exactly"
- * (triggerMatch.ts:125-129). Property B below checks that claim against
+ * (triggerMatch.ts). Property B below checks that claim against
  * the ACTUAL sibling regexes rather than trusting the docblock:
  *   - `backlinkCompletionSource`'s open-bracket match,
  *     src/utils/backlinkAutocomplete.ts:56: `/\[\[([^\]]*?)$/` against
@@ -49,7 +47,7 @@
  * `matchCharTrigger` used to return `{from: 6, query: 'tag'}`, but
  * `beforeCursor.match(/\[\[([^\]]*?)$/)` matches at index 3 (the second
  * `[[`), claiming span `[3, 10)` — which contains `from = 6`. Root
- * cause: `isInsideUnclosedWikilink` (triggerMatch.ts:55-68, pre-fix)
+ * cause: `isInsideUnclosedWikilink` (triggerMatch.ts, pre-fix)
  * counted `[[` and `]]` occurrences as a flat pair-count (`opens >
  * closes`) rather than tracking whether the LAST bracket pair before
  * `triggerPos` is an unmatched open. The leading, unmatched `]]` there
@@ -57,7 +55,7 @@
  * `[[` in the count, so `opens (1) > closes (1)` was false even though
  * position 6 sits inside a genuinely-unclosed `[[` span. This was a
  * real product bug (the module's own stated invariant,
- * triggerMatch.ts:14-16, disagreed with the code). Fixed in
+ * triggerMatch.ts, disagreed with the code). Fixed in
  * `triggerMatch.ts` by rewriting `isInsideUnclosedWikilink` to the
  * anchored regex `/\[\[[^\]]*$/` (mirroring the sibling wikilink
  * matcher exactly, instead of pair-counting). The counterexample above
@@ -79,7 +77,9 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { matchCharTrigger, type CharTriggerOptions } from '../triggerMatch'
+import type { TriggerMatch } from '../triggerMatch'
+import { matchBareAt, matchMentionTrigger, matchPlaceTrigger } from '../atTrigger'
+import { matchHashTrigger } from '@/plugins/supertags/typeAutocomplete'
 
 const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', '/', ' ', '\t', 'a', 'b'] as const
 
@@ -106,39 +106,37 @@ const caseArb: fc.Arbitrary<Case> = fc.oneof(
   {weight: 8, arbitrary: randomCaseArb},
 )
 
-/** Mirrors the real wrappers' fixed opts rather than fuzzing `opts`
- *  independently — the properties are about span ownership, and this
- *  keeps the suite differentialing against what production code calls. */
-const PRODUCTION_SOURCES: ReadonlyArray<{name: string, trigger: '@' | '#', opts: CharTriggerOptions}> = [
-  {name: 'contributor @', trigger: '@', opts: {doubled: 'reject'}},
-  {name: 'place @@', trigger: '@', opts: {doubled: 'require'}},
-  {name: 'type #', trigger: '#', opts: {doubled: 'reject', allowWordCharBefore: true}},
+/** The real wrappers, each with the trigger prefix its span starts with. */
+const PRODUCTION_SOURCES: ReadonlyArray<{name: string, prefix: string, match: (text: string, pos: number) => TriggerMatch | null}> = [
+  {name: 'mention @query', prefix: '@', match: matchMentionTrigger},
+  {name: 'bare @', prefix: '@', match: matchBareAt},
+  {name: 'place @@', prefix: '@@', match: matchPlaceTrigger},
+  {name: 'type #', prefix: '#', match: matchHashTrigger},
 ]
 
 const sourceArb = fc.constantFrom(...PRODUCTION_SOURCES)
 
 describe('matchCharTrigger', () => {
-  it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts:73-133)', () => {
+  it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts)', () => {
     fc.assert(
-      fc.property(caseArb, sourceArb, ({text, pos}, {trigger, opts}) => {
-        const result = matchCharTrigger(text, pos, trigger, opts)
+      fc.property(caseArb, sourceArb, ({text, pos}, {prefix, match}) => {
+        const result = match(text, pos)
         if (result === null) return
         // `from` is the (first) trigger char's own position, strictly
         // before `pos`, and the replaced span is exactly the trigger
-        // (doubled for `require`) followed by the query.
+        // prefix followed by the query.
         expect(result.from).toBeGreaterThanOrEqual(0)
         expect(result.from).toBeLessThan(pos)
-        const prefix = opts.doubled === 'require' ? trigger + trigger : trigger
         expect(text.slice(result.from, pos)).toBe(prefix + result.query)
       }),
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
 
-  it('a match never falls inside a span backlinkAutocomplete or blockrefAutocomplete claims as an unclosed bracket sequence (triggerMatch.ts:14-16 ownership invariant, differentialed against backlinkAutocomplete.ts:56 and blockrefAutocomplete.ts:38)', () => {
+  it('a match never falls inside a span backlinkAutocomplete or blockrefAutocomplete claims as an unclosed bracket sequence (triggerMatch.ts ownership invariant, differentialed against backlinkAutocomplete.ts:56 and blockrefAutocomplete.ts:38)', () => {
     fc.assert(
-      fc.property(caseArb, sourceArb, ({text, pos}, {trigger, opts}) => {
-        const result = matchCharTrigger(text, pos, trigger, opts)
+      fc.property(caseArb, sourceArb, ({text, pos}, {match}) => {
+        const result = match(text, pos)
         if (result === null) return
 
         // Both completion sources compute this exact slice from their
@@ -175,14 +173,14 @@ describe('matchCharTrigger', () => {
     // (src/editor/autocomplete.ts), so if two sources returned a match
     // at the same cursor they'd merge into one dropdown and each fire a
     // query for the other's text. The sibling-ownership walk (between
-    // `@` and `#`) and the `doubled` reject/require split (between `@`
-    // and `@@`) exist to make at most one source own any position. This
+    // `@` and `#`) and the `@` family split (src/editor/atTrigger.ts)
+    // exist to make at most one source own any position. This
     // catches DOUBLE-fires only; dead zones (every source null, e.g.
     // `@a/b#c`) are pinned by the example tests in triggerMatch.test.ts.
     fc.assert(
       fc.property(caseArb, ({text, pos}) => {
         const firing = PRODUCTION_SOURCES
-          .filter(({trigger, opts}) => matchCharTrigger(text, pos, trigger, opts) !== null)
+          .filter(({match}) => match(text, pos) !== null)
           .map(s => s.name)
         expect(firing.length).toBeLessThanOrEqual(1)
       }),

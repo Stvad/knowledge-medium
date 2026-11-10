@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-/** The `@` dropdown merges two plugins' sources; this drives both through
- *  CodeMirror's own merge and sort to pin the order a user sees. */
-import { autocompletion, currentCompletions, startCompletion } from '@codemirror/autocomplete'
+/** Both `@` sources installed together, driven through CodeMirror's own
+ *  merge: each position opens at most one of them. */
+import { autocompletion, completionStatus, currentCompletions, startCompletion } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,12 +14,12 @@ const placeSource = placeCompletionSource({
 })
 const contributorSource = contributorMentionSource(async query => [
   {id: 'a', name: 'Clio', kind: 'agent' as const, wikilink: '[[Clio]]'},
-  {id: 'v', name: 'Ada', kind: 'human' as const, wikilink: '[[Ada]]'},
 ].filter(c => c.name.toLowerCase().startsWith(query.toLowerCase())))
 
 let view: EditorView | undefined
 afterEach(() => view?.destroy())
 
+/** The dropdown's labels once every source has answered; `[]` when none opened it. */
 const dropdownFor = async (doc: string): Promise<string[]> => {
   view = new EditorView({
     parent: document.body,
@@ -28,31 +28,30 @@ const dropdownFor = async (doc: string): Promise<string[]> => {
       selection: {anchor: doc.length},
       extensions: [
         autocompletion(),
-        // Places registered FIRST: the order must come from the sections,
-        // not from registration order.
         EditorState.languageData.of(() => [{autocomplete: placeSource}, {autocomplete: contributorSource}]),
       ],
     }),
   })
   startCompletion(view)
-  let labels: string[] = []
-  await vi.waitFor(() => {
-    labels = currentCompletions(view!.state).map(c => c.label)
-    expect(labels.length).toBeGreaterThan(0)
-  })
-  return labels
+  expect(completionStatus(view.state)).toBe('pending')
+  await vi.waitFor(() => expect(completionStatus(view!.state)).not.toBe('pending'))
+  return currentCompletions(view.state).map(c => c.label)
 }
 
-describe('the merged @ dropdown', () => {
-  it('lists contributors above the places hand-off once a query is typed', async () => {
-    expect(await dropdownFor('ask @cl')).toEqual(['Clio', 'Search places (@@)…'])
+describe('the @ trigger family in one editor', () => {
+  it('a bare @ offers only the places hand-off, so Enter cannot mention anyone', async () => {
+    expect(await dropdownFor('ask @')).toEqual(['Search places (@@)…'])
   })
 
-  it('leads with the places hand-off on a bare @, so Enter does not mention anyone', async () => {
-    expect(await dropdownFor('ask @')).toEqual(['Search places (@@)…', 'Clio', 'Ada'])
+  it('@query offers only contributors', async () => {
+    expect(await dropdownFor('ask @cl')).toEqual(['Clio'])
   })
 
-  it('shows only places on @@', async () => {
+  it('@word matching no contributor opens nothing, leaving Enter to the editor', async () => {
+    expect(await dropdownFor('ping @john about it')).toEqual([])
+  })
+
+  it('@@query offers only places', async () => {
     expect(await dropdownFor('ask @@cl')).toEqual(['Clinic'])
   })
 })
