@@ -567,48 +567,49 @@
     overflow: visible;
   }
 
-  /* The block gutter (`BlockGutter.tsx`). The host writes the top cluster's
-     width and the text's line height; the defaults reset both for every
-     nested host. */
+  /* The block gutter (`BlockGutter.tsx`). The host writes the top-right
+     cluster's width and the text's line height; the defaults reset both for
+     every nested host. */
   .km-gutter-host {
     position: relative;
-    --km-gutter-top-w: 0px;
+    --km-gutter-top-right-w: 0px;
     --km-gutter-line: 1lh;
   }
-  .km-gutter-top,
-  .km-gutter-bottom {
+  .km-gutter-cluster {
     position: absolute;
-    right: 0;
     display: flex;
     align-items: center;
     gap: 0.25rem;
   }
-  .km-gutter-top {
+  .km-gutter-top-right {
     top: 0;
+    right: 0;
     height: var(--km-gutter-line);
   }
-  .km-gutter-bottom {
+  .km-gutter-bottom-right {
     bottom: 0;
+    right: 0;
     height: 1lh;
   }
-  .km-gutter-host[data-gutter-top='column'] {
-    padding-right: var(--km-gutter-top-w);
+  .km-gutter-host[data-gutter-top-right='column'] {
+    padding-right: var(--km-gutter-top-right-w);
   }
-  /* No text to flow: a row above the content, unless every item showing may
-     draw over it. */
-  .km-gutter-host[data-gutter-top='none']:has(> .km-gutter-top > [data-gutter-item]:not([data-gutter-overlay]):not(:empty)) {
+  /* A corner with no text to flow reserves a row, unless every item showing in
+     it may draw over the content. */
+  .km-gutter-host[data-gutter-top-right='none']:has(> .km-gutter-top-right > [data-gutter-item]:not([data-gutter-overlay]):not(:empty)) {
     padding-top: var(--km-gutter-line);
   }
-  .km-gutter-host:has(> .km-gutter-bottom > [data-gutter-item]:not(:empty)) {
+  .km-gutter-host:has(> .km-gutter-bottom-right > [data-gutter-item]:not([data-gutter-overlay]):not(:empty)) {
     padding-bottom: 1lh;
   }
-  /* Flow: the registered text keeps its first line clear of the cluster. The
-     same float in read (markdown) and edit (CodeMirror) mode. */
+  /* Flow: the registered text keeps its first line clear of the top-right
+     cluster. The same float in read (markdown) and edit (CodeMirror) mode;
+     each kind of text has room for this one first-line spacer. */
   .markdown-content[data-gutter-flow]::before,
   [data-gutter-flow] .cm-content > .cm-line:first-child::before {
     content: '';
     float: right;
-    width: var(--km-gutter-top-w);
+    width: var(--km-gutter-top-right-w);
     height: 1lh;
   }
 }

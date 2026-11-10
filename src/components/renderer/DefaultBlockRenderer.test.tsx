@@ -1222,7 +1222,7 @@ describe('the mobile expand button', () => {
 
     const parentHost = () => document.querySelector('[data-block-id="block-1"] .km-gutter-host')
     await waitFor(() => expect(parentHost()?.querySelector('.expand-collapse-button')).not.toBeNull())
-    const slots = parentHost()!.querySelectorAll(':scope > .km-gutter-top > [data-gutter-item]')
+    const slots = parentHost()!.querySelectorAll(':scope > .km-gutter-top-right > [data-gutter-item]')
     expect(slots[slots.length - 1].hasAttribute('data-gutter-overlay')).toBe(true)
     expect(document.querySelector('[data-block-id="block-1"] .block-controls .expand-collapse-button')).toBeNull()
   })
@@ -1233,7 +1233,7 @@ describe('the mobile expand button', () => {
 
     await waitFor(() => expect(screen.getByText('block-1')).toBeTruthy())
     expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host')).not.toBeNull()
-    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host > .km-gutter-top')).toBeNull()
+    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host > .km-gutter-top-right')).toBeNull()
   })
 
   it('is absent from a layout that renders content but never collapses', async () => {

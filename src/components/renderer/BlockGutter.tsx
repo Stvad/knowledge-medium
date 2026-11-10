@@ -18,12 +18,12 @@ import {
   type ReactNode,
 } from 'react'
 import type { Block } from '@/data/block'
-import type { BlockRenderer } from '@/types.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
   blockGutterItemsFacet,
+  type BlockGutterCorner,
   type BlockGutterItem,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
@@ -34,18 +34,23 @@ import {
   type GutterTopState,
 } from './blockGutterMode.ts'
 
-/** The clusters' `gap`, kept between the text and the top cluster too. */
+/** The clusters' `gap`, kept between the text and the top-right cluster too. */
 const ITEM_GAP_PX = 4
+
+const MODE_ATTRIBUTE = 'data-gutter-top-right'
+const WIDTH_PROPERTY = '--km-gutter-top-right-w'
 
 const NO_TEXT_STATE: GutterTopState = {mode: 'none', stuckKey: null}
 
 interface GutterMeasurement {
-  /** Room the top cluster needs, gap included; 0 when nothing shows. */
+  /** Room the top-right cluster needs, gap included; 0 when nothing shows. */
   width: number
   lineHeight: number | null
   top: GutterTopMeasure | null
 }
 
+/** Measures the top-right corner, the one gutter that takes room inside the
+ *  text, and decides its mode. */
 class GutterController {
   private host: HTMLElement | null = null
   private cluster: HTMLElement | null = null
@@ -54,6 +59,7 @@ class GutterController {
   private generation = 0
   private state: GutterTopState = NO_TEXT_STATE
   private appliedWidth = 0
+  private appliedLineHeight: number | null = null
 
   readonly setHost = (element: HTMLDivElement | null) => {
     this.host = element
@@ -92,7 +98,6 @@ class GutterController {
       width,
       lineHeight: Number.isFinite(lineHeight) ? lineHeight : null,
       top: {
-        hasText: true,
         topGap: textRect.top - hostRect.top,
         rightGap: hostRect.right - padding - textRect.right,
         key: `${Math.round(hostRect.width)}|${width}|${this.generation}`,
@@ -103,10 +108,15 @@ class GutterController {
   apply({width, lineHeight, top}: GutterMeasurement) {
     const host = this.host
     if (!host) return
-    host.style.setProperty('--km-gutter-top-w', `${width}px`)
-    if (lineHeight === null) host.style.removeProperty('--km-gutter-line')
-    else host.style.setProperty('--km-gutter-line', `${lineHeight}px`)
+    // Most clusters stay empty for their whole life; writing their unchanged
+    // zero would restyle every host on mount.
+    if (width !== this.appliedWidth) host.style.setProperty(WIDTH_PROPERTY, `${width}px`)
+    if (lineHeight !== this.appliedLineHeight) {
+      if (lineHeight === null) host.style.removeProperty('--km-gutter-line')
+      else host.style.setProperty('--km-gutter-line', `${lineHeight}px`)
+    }
     this.appliedWidth = width
+    this.appliedLineHeight = lineHeight
     // With nothing showing there is no corner to protect; the next item that
     // shows starts the decision over.
     this.state = top ? decideGutterTopMode(this.state, top) : this.restingState()
@@ -129,8 +139,11 @@ class GutterController {
   }
 
   private writeMode() {
-    this.host?.setAttribute('data-gutter-top', this.state.mode)
-    this.text?.toggleAttribute('data-gutter-flow', this.state.mode === 'flow')
+    const {mode} = this.state
+    if (this.host && this.host.getAttribute(MODE_ATTRIBUTE) !== mode) this.host.setAttribute(MODE_ATTRIBUTE, mode)
+    if (this.text && this.text.hasAttribute('data-gutter-flow') !== (mode === 'flow')) {
+      this.text.toggleAttribute('data-gutter-flow', mode === 'flow')
+    }
   }
 
   private observeText(element: HTMLElement | null) {
@@ -211,17 +224,24 @@ export const useGutterText = (block: Block): ((element: HTMLElement | null) => v
   return target?.blockId === block.id ? attach : undefined
 }
 
+/** An item as the host renders it. `overlay` is host-internal for now: the
+ *  only item that may draw over non-text content instead of having a row
+ *  reserved for it is the layout's own control, below. */
+export interface HostGutterItem extends BlockGutterItem {
+  overlay?: true
+}
+
 /** Hands the host an item that the layout itself owns — the mobile expand
- *  button, which only means something to a layout that collapses. Rendered
- *  last, so it is the rightmost item. */
+ *  button, which only means something to a layout that collapses. Placed
+ *  after the facet's items, so it is the outermost item of its corner. */
 export interface GutterControls {
   subscribe: (listener: () => void) => () => void
-  get: () => BlockRenderer | null
-  set: (item: BlockRenderer | null) => void
+  get: () => HostGutterItem | null
+  set: (item: HostGutterItem | null) => void
 }
 
 export const createGutterControls = (): GutterControls => {
-  let current: BlockRenderer | null = null
+  let current: HostGutterItem | null = null
   const listeners = new CallbackSet('gutter controls')
   return {
     subscribe: listener => listeners.add(listener),
@@ -234,7 +254,7 @@ export const createGutterControls = (): GutterControls => {
   }
 }
 
-export const useGutterControlsItem = (controls: GutterControls, item: BlockRenderer | null) => {
+export const useGutterControlsItem = (controls: GutterControls, item: HostGutterItem | null) => {
   useLayoutEffect(() => {
     controls.set(item)
     return () => controls.set(null)
@@ -246,21 +266,33 @@ export const useGutterControlsItem = (controls: GutterControls, item: BlockRende
 const showsGutter = ({blockContext}: BlockResolveContext): boolean =>
   !blockContext?.isBreadcrumb && !blockContext?.isReference
 
-const GutterItemSlot = ({Item, block, overlay = false}: {
-  Item: BlockRenderer
-  block: Block
-  /** May draw over non-text content rather than have a row reserved for it. */
-  overlay?: boolean
-}) => (
-  <span data-gutter-item="" data-gutter-overlay={overlay ? '' : undefined} className="contents">
+/** A record over the corner union, so a corner added to it fails here until
+ *  the host renders it. An unknown corner at runtime (an extension built
+ *  against a newer kernel) is skipped. */
+const byCorner = (items: readonly HostGutterItem[]): Record<BlockGutterCorner, HostGutterItem[]> => {
+  const corners: Record<BlockGutterCorner, HostGutterItem[]> = {'top-right': [], 'bottom-right': []}
+  for (const item of items) corners[item.corner]?.push(item)
+  return corners
+}
+
+const GutterItemSlot = ({item, block}: {item: HostGutterItem; block: Block}) => (
+  <span data-gutter-item="" data-gutter-overlay={item.overlay ? '' : undefined} className="contents">
     <ExtensionRenderBoundary>
-      <Item block={block}/>
+      <item.component block={block}/>
     </ExtensionRenderBoundary>
   </span>
 )
 
-const itemsIn = (items: readonly BlockGutterItem[], corner: BlockGutterItem['corner']) =>
-  items.filter(item => item.corner === corner)
+const GutterCluster = ({corner, items, block, clusterRef}: {
+  corner: BlockGutterCorner
+  items: readonly HostGutterItem[]
+  block: Block
+  clusterRef?: (element: HTMLDivElement | null) => void
+}) => items.length === 0 ? null : (
+  <div ref={clusterRef} className={`km-gutter-cluster km-gutter-${corner}`}>
+    {items.map((item, index) => <GutterItemSlot key={index} item={item} block={block}/>)}
+  </div>
+)
 
 export function BlockGutterHost({resolveContext, controls, children}: {
   resolveContext: BlockResolveContext
@@ -271,34 +303,29 @@ export function BlockGutterHost({resolveContext, controls, children}: {
   const runtime = useAppRuntime()
   const resolveItems = runtime.read(blockGutterItemsFacet)
   const items = useMemo(() => resolveItems(resolveContext), [resolveItems, resolveContext])
-  const ControlsItem = useSyncExternalStore(controls.subscribe, controls.get)
+  const controlsItem = useSyncExternalStore(controls.subscribe, controls.get)
   const [controller] = useState(() => new GutterController())
+  // Wrapped rather than passed as `controller.setHost`: the compiler's lint
+  // reads a member passed as a ref as a ref read during render.
   const setHost = useCallback((element: HTMLDivElement | null) => controller.setHost(element), [controller])
   const setCluster = useCallback((element: HTMLDivElement | null) => controller.setCluster(element), [controller])
   const target = useMemo<GutterTextTarget>(() => ({
     blockId: block.id,
     registerText: element => controller.registerText(element),
   }), [controller, block.id])
+  const corners = useMemo(
+    () => byCorner(controlsItem ? [...items, controlsItem] : items),
+    [items, controlsItem],
+  )
 
   if (!showsGutter(resolveContext)) return <GutterContext value={null}>{children}</GutterContext>
 
-  const top = itemsIn(items, 'top-right')
-  const bottom = itemsIn(items, 'bottom-right')
   return (
     <GutterContext value={target}>
       <div ref={setHost} className="km-gutter-host">
         {children}
-        {(top.length > 0 || ControlsItem) && (
-          <div ref={setCluster} className="km-gutter-top">
-            {top.map((item, index) => <GutterItemSlot key={index} Item={item.component} block={block}/>)}
-            {ControlsItem && <GutterItemSlot key="controls" Item={ControlsItem} block={block} overlay/>}
-          </div>
-        )}
-        {bottom.length > 0 && (
-          <div className="km-gutter-bottom">
-            {bottom.map((item, index) => <GutterItemSlot key={index} Item={item.component} block={block}/>)}
-          </div>
-        )}
+        <GutterCluster corner="top-right" items={corners['top-right']} block={block} clusterRef={setCluster}/>
+        <GutterCluster corner="bottom-right" items={corners['bottom-right']} block={block}/>
       </div>
     </GutterContext>
   )

@@ -15,7 +15,7 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
-import { BlockGutterHost, createGutterControls, useGutterControlsItem } from '@/components/renderer/BlockGutter.js'
+import { BlockGutterHost, createGutterControls, useGutterControlsItem, type HostGutterItem } from '@/components/renderer/BlockGutter.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { useRef, useMemo, useEffect, useState } from 'react'
@@ -354,6 +354,10 @@ const ExpandButton = ({block}: { block: Block }) => {
     </Button>
   )
 }
+
+/** On mobile the expand button sits in the gutter: the only item that may draw
+ *  over non-text content, where a row reserved for it alone would read oddly. */
+const MOBILE_EXPAND_GUTTER_ITEM: HostGutterItem = {corner: 'top-right', component: ExpandButton, overlay: true}
 
 
 
@@ -815,7 +819,7 @@ export function DefaultBlockRenderer(
       const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
-      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? ExpandButton : null)
+      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
 
       if (isFocal) return null
 

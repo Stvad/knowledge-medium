@@ -6,14 +6,9 @@ import {
   type GutterTopState,
 } from './blockGutterMode'
 
-const atCorner = (key = 'k1'): GutterTopMeasure => ({hasText: true, topGap: 0, rightGap: 0, key})
+const atCorner = (key = 'k1'): GutterTopMeasure => ({topGap: 0, rightGap: 0, key})
 
 describe('decideGutterTopMode', () => {
-  it('has nothing to choose without registered text', () => {
-    expect(decideGutterTopMode(INITIAL_GUTTER_TOP_STATE, {hasText: false, topGap: 0, rightGap: 0, key: 'k1'}).mode)
-      .toBe('none')
-  })
-
   it('lets text that starts at the corner flow around it', () => {
     expect(decideGutterTopMode(INITIAL_GUTTER_TOP_STATE, atCorner()).mode).toBe('flow')
   })

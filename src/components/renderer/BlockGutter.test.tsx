@@ -54,8 +54,8 @@ describe('BlockGutterHost', () => {
       blockGutterItemsFacet.of(() => null, {source: 'c'}),
     ])
 
-    expect(itemTexts('.km-gutter-top')).toEqual(['first', 'second'])
-    expect(itemTexts('.km-gutter-bottom')).toEqual(['count'])
+    expect(itemTexts('.km-gutter-top-right')).toEqual(['first', 'second'])
+    expect(itemTexts('.km-gutter-bottom-right')).toEqual(['count'])
   })
 
   it('never remounts the content when an item starts showing', () => {
@@ -103,7 +103,7 @@ describe('BlockGutterHost', () => {
     expect(screen.queryByTestId('item')).toBeNull()
   })
 
-  it('puts the layout\'s own control last, allowed to overlay', () => {
+  it('puts the layout\'s own control after the facet\'s items, marked when it may overlay', () => {
     const controls = createGutterControls()
     renderHost(
       [blockGutterItemsFacet.of(() => ({corner: 'top-right', component: Label('pill')}), {source: 'test'})],
@@ -111,10 +111,10 @@ describe('BlockGutterHost', () => {
     )
     expect(document.querySelector('[data-gutter-overlay]')).toBeNull()
 
-    act(() => controls.set(Label('expand')))
+    act(() => controls.set({corner: 'top-right', component: Label('expand'), overlay: true}))
 
-    expect(itemTexts('.km-gutter-top')).toEqual(['pill', 'expand'])
-    const slots = document.querySelectorAll('.km-gutter-top > [data-gutter-item]')
+    expect(itemTexts('.km-gutter-top-right')).toEqual(['pill', 'expand'])
+    const slots = document.querySelectorAll('.km-gutter-top-right > [data-gutter-item]')
     expect(slots[0].hasAttribute('data-gutter-overlay')).toBe(false)
     expect(slots[1].hasAttribute('data-gutter-overlay')).toBe(true)
   })
@@ -144,14 +144,14 @@ describe('useGutterText', () => {
     renderHost([], {content: <TextOf of={block}/>})
 
     expect(screen.getByTestId('text').dataset.attachable).toBe('yes')
-    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top')).toBe('column')
+    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top-right')).toBe('column')
   })
 
   it('leaves another block\'s text alone', () => {
     renderHost([], {content: <TextOf of={{id: 'other'} as Block}/>})
 
     expect(screen.getByTestId('text').dataset.attachable).toBe('no')
-    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top')).toBe('none')
+    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top-right')).toBe('none')
   })
 
   it('does nothing outside a host', () => {
