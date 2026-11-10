@@ -7,9 +7,8 @@
  * because block refs target arbitrary blocks, not aliased pages.
  */
 
-import { EditorSelection } from '@codemirror/state'
 import { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
-import { flushEditorContent } from '@/editor/contentFlush.js'
+import { acceptCompletionInsert } from '@/editor/contentFlush.js'
 import { completionQueryEnd } from '@/utils/codemirrorCompletion.js'
 
 export interface BlockSearchHit {
@@ -63,16 +62,12 @@ export function blockrefCompletionSource(options: BlockrefAutocompleteOptions) {
           label,
           // The literal block id is what actually gets inserted; we surface
           // the content as the user-facing label since UUIDs are unreadable.
-          apply: (view, _, from, to) => {
-            view.dispatch({
-              changes: {from, to, insert: closingExists ? hit.id : `${hit.id}))`},
-              selection: EditorSelection.cursor(from + hit.id.length + 2),
-            })
-            // Persist the insert now (completion accept = sync point), so
-            // the block ref is durable for the resolution processors
-            // rather than waiting on the 300ms debounce.
-            flushEditorContent(view)
-          },
+          // The cursor lands after '))', whether inserted or already there.
+          apply: (view, _, from, to) => acceptCompletionInsert(
+            view,
+            {from, to, insert: closingExists ? hit.id : `${hit.id}))`},
+            from + hit.id.length + 2,
+          ),
           type: 'variable',
         }
       }),

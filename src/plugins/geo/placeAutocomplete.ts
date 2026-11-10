@@ -28,11 +28,10 @@
  *  CodeMirror extension. */
 
 import { startCompletion } from '@codemirror/autocomplete'
-import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { matchBareAt, matchPlaceTrigger } from '@/editor/atTrigger'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
-import { flushEditorContent } from '@/editor/contentFlush'
+import { acceptCompletionInsert } from '@/editor/contentFlush'
 import type {
   Completion,
   CompletionContext,
@@ -156,10 +155,7 @@ const applyInsertToView = (
   const plan = planResolvedInsert(view.state.doc.toString(), span, triggerText)
   if (plan === null) return false
   try {
-    view.dispatch({
-      changes: {from: plan.from, to: plan.to, insert},
-      selection: EditorSelection.cursor(plan.from + insert.length),
-    })
+    acceptCompletionInsert(view, {from: plan.from, to: plan.to, insert})
     return true
   } catch {
     return false
@@ -187,14 +183,8 @@ const candidateToOption = (
       const delivered = applyInsertToView(
         view, {from: applyFrom, to: applyTo}, triggerText, insert,
       )
-      if (delivered) {
-        // Persist the wikilink insert now so it's durable for the
-        // reference-resolution processors instead of waiting on the
-        // 300ms debounce. The unmounted-view path persists directly.
-        flushEditorContent(view)
-      } else {
-        await options.persistInsert?.({triggerText, insert})
-      }
+      // The unmounted-view path persists the insert directly.
+      if (!delivered) await options.persistInsert?.({triggerText, insert})
     })()
   },
 })

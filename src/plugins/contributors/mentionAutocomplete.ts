@@ -3,7 +3,6 @@
  *  (which is what an agent-dispatch watcher listens for). A bare `@` and
  *  `@@` belong to places — see `src/editor/atTrigger.ts`. */
 
-import { EditorSelection } from '@codemirror/state'
 import type {
   CompletionContext,
   CompletionResult,
@@ -12,7 +11,7 @@ import type {
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { matchMentionTrigger } from '@/editor/atTrigger'
-import { flushEditorContent } from '@/editor/contentFlush'
+import { acceptCompletionInsert } from '@/editor/contentFlush'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
 import { CONTRIBUTOR_TYPE, contributorKindOf, type ContributorKind } from './schema'
@@ -95,14 +94,8 @@ export const contributorMentionSource = (
         label: candidate.name,
         detail: candidate.kind,
         type: 'class',
-        apply: (view, _completion, from, to) => {
-          const insert = candidate.wikilink
-          view.dispatch({
-            changes: {from, to, insert},
-            selection: EditorSelection.cursor(from + insert.length),
-          })
-          flushEditorContent(view)
-        },
+        apply: (view, _completion, from, to) =>
+          acceptCompletionInsert(view, {from, to, insert: candidate.wikilink}),
       })),
     }
   }
