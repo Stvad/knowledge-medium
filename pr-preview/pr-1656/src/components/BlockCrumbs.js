@@ -1,1 +1,1 @@
-export{QD as BlockCrumbs}from"../../chunks/app-Dj4dTNjR.js";
+export{QD as BlockCrumbs}from"../../chunks/app-B16e1HD5.js";
