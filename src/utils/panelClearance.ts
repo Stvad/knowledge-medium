@@ -18,3 +18,10 @@ export const PANEL_RIGHT_CLEARANCE = '--panel-right-clearance'
 /** The least a `PANEL_RIGHT_CLEARANCE` may narrow a panel's centred frames
  *  to. `PanelRenderer` names it literally in its class. */
 export const PANEL_TEXT_MIN_WIDTH_PX = 480
+
+/** CSS custom property a panel mount beside the text sets on its panel to say
+ *  where the panel's content now ends, as its distance from the pane's right
+ *  edge; a mount that sets `PANEL_RIGHT_CLEARANCE` sets this too. The panel's
+ *  action buttons end there; unset, they end at the text frame's right edge.
+ *  `.panel-actions` (`index.css`) names it literally. */
+export const PANEL_CONTENT_RIGHT_INSET = '--panel-content-right-inset'

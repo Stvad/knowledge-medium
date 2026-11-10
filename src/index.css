@@ -424,6 +424,13 @@
     transition: opacity 150ms ease;
   }
 
+  /* The panel's action buttons end where its content does: where a mount
+     beside the text says it ends (PANEL_CONTENT_RIGHT_INSET), else at the
+     right edge of the centred max-w-3xl text frame. */
+  .panel-actions {
+    padding-right: var(--panel-content-right-inset, max(0px, (100% - var(--container-3xl, 48rem)) / 2));
+  }
+
   .block {
     @apply ml-2 md:ml-5 mb-2 flex flex-row relative;
     max-width: 100%;

@@ -57,9 +57,10 @@ export interface ColumnFit {
 
 export interface ColumnFitInput {
   pane: number
-  /** A width the user set; absent, the column takes the side room the full
-   *  text leaves, or a third of the pane, whichever is wider. */
-  preferred?: number
+  /** The share of the pane the user set the column to, so it keeps its
+   *  proportion when the pane narrows; absent, the column takes the side room
+   *  the full text leaves, or a third of the pane, whichever is wider. */
+  share?: number
   text: {min: number; max: number}
   /** `max` bounds the automatic width only: a set width is bounded by the
    *  text's minimum. */
@@ -72,10 +73,12 @@ export interface ColumnFitInput {
  *  column's minimum fits beside the text's. The text keeps its full width and
  *  moves left only as far as the column needs; past that it narrows, down to
  *  its minimum, and only then does the column give up width. */
-export const fitColumn = ({pane, preferred, text, column, edge}: ColumnFitInput): ColumnFit | null => {
+export const fitColumn = ({pane, share, text, column, edge}: ColumnFitInput): ColumnFit | null => {
   const width = Math.floor(pane)
   const automatic = Math.min(column.max, Math.max(width - text.max - 2 * edge, Math.floor(width / 3)))
-  let columnWidth = Math.max(column.min, Math.floor(preferred ?? automatic))
+  // Rounded: a share stored to a few places lands a hair either side of the
+  // width it was taken from.
+  let columnWidth = Math.max(column.min, share === undefined ? automatic : Math.round(share * width))
   const fullTextClearance = Math.max(0, text.max + 2 * columnWidth + 4 * edge - width)
   if (fullTextClearance <= width - text.max) {
     return {
@@ -88,4 +91,19 @@ export const fitColumn = ({pane, preferred, text, column, edge}: ColumnFitInput)
   if (columnWidth < column.min) return null
   const clearance = columnWidth + 2 * edge
   return {width: columnWidth, clearance, left: width - clearance + edge}
+}
+
+interface Span {
+  top: number
+  bottom: number
+}
+
+/** How far to scroll, down when positive, for `box` to show inside `clip`,
+ *  `gap` in from its edges: none when it already does, and the top of a box
+ *  taller than the clip. */
+export const scrollToShow = (box: Span, clip: Span, gap: number): number => {
+  const toTop = box.top - clip.top - gap
+  if (toTop < 0) return toTop
+  const toBottom = box.bottom - clip.bottom + gap
+  return toBottom > 0 ? Math.min(toBottom, toTop) : 0
 }
