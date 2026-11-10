@@ -22,7 +22,10 @@ import {
 } from '@/shortcuts/types.js'
 import { extendSelectionDown } from '@/shortcuts/blockActions.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
-import { getSpatialNavigationDispatchDecorators } from '@/plugins/spatial-navigation/actions.js'
+import {
+  getSpatialNavigationActions,
+  getSpatialNavigationDispatchDecorators,
+} from '@/plugins/spatial-navigation/actions.js'
 import {
   resolveSpatialNavExclusions,
   spatialNavExclusionsFacet,
@@ -31,6 +34,7 @@ import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/wal
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { waitFor } from '@/test/waitFor'
+import { PANEL_LANE_ATTRIBUTE } from '@/utils/panelClearance.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -1838,6 +1842,113 @@ describe('spatial navigation vertical actions', () => {
         renderScopeId: 'below:outline',
       })
     })
+  })
+})
+
+describe('spatial navigation across a lane beside the panel content', () => {
+  const placeAt = (el: HTMLElement, top: number, left: number, right: number): void => {
+    el.getBoundingClientRect = () =>
+      ({top, bottom: top + 30, left, right, width: right - left, height: 30, x: left, y: top, toJSON: () => ({})}) as DOMRect
+  }
+  const OUTLINE = 'panel:outline'
+  const CARD = 'panel:margin:thread'
+
+  /** The panel's outline (A, C) and a lane right of it, after it in document
+   *  order as a panel mount is, holding `laneRows` level with C; then a panel in
+   *  the next layout column. */
+  const buildLaneLayout = (laneRows: readonly NavChild[]): void => {
+    const columns = [document.createElement('div'), document.createElement('div')]
+    columns.forEach((column, i) => { column.dataset.layoutColumnId = `col-${i}` })
+    const panelEl = document.createElement('div')
+    panelEl.dataset.panelId = 'panel'
+    appendInstances(panelEl, [
+      {blockId: 'A', renderScopeId: OUTLINE, surface: 'outline'},
+      {blockId: 'C', renderScopeId: OUTLINE, surface: 'outline'},
+    ])
+    const lane = document.createElement('div')
+    lane.setAttribute(PANEL_LANE_ATTRIBUTE, 'margin')
+    appendInstances(lane, laneRows)
+    panelEl.appendChild(lane)
+    columns[0].appendChild(panelEl)
+    const right = document.createElement('div')
+    right.dataset.panelId = 'panel-below'
+    appendInstances(right, [{blockId: 'X', renderScopeId: 'below:outline', surface: 'outline'}])
+    columns[1].appendChild(right)
+    document.body.append(...columns)
+    const rows = panelEl.querySelectorAll<HTMLElement>('[data-block-nav-item]')
+    rows.forEach((row, i) => placeAt(row, i < 2 ? 100 * i : 100 + 40 * (i - 2), i < 2 ? 0 : 640, i < 2 ? 600 : 900))
+    lane.getBoundingClientRect = () =>
+      ({top: 0, bottom: 700, left: 640, right: 900, width: 260, height: 700, x: 640, y: 0, toJSON: () => ({})}) as DOMRect
+  }
+
+  const pressHorizontal = async (id: 'move_left' | 'move_right', deps: BlockShortcutDependencies) => {
+    const action = getSpatialNavigationActions().find(candidate => candidate.id === id)!
+    await action.handler(deps, {} as ActionTrigger)
+  }
+
+  beforeEach(async () => { await seedPanelBelow(env.repo) })
+
+  it('moves right onto the lane row level with it, and left back', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'C', {renderScopeId: OUTLINE})
+
+    await pressHorizontal('move_right', {block: env.repo.block('C'), uiStateBlock: panel, renderScopeId: OUTLINE})
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B1', renderScopeId: CARD})
+
+    await pressHorizontal('move_left', {block: env.repo.block('B1'), uiStateBlock: panel, renderScopeId: CARD})
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'C', renderScopeId: OUTLINE})
+  })
+
+  it('leaves for the next column from the lane, where nothing lies further right', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B1', {renderScopeId: CARD})
+
+    await pressHorizontal('move_right', {block: env.repo.block('B1'), uiStateBlock: panel, renderScopeId: CARD})
+
+    await waitFor(() => {
+      expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'below:outline',
+      })
+    })
+  })
+
+  it('jumps to the last row of the lane focus is in', async () => {
+    buildLaneLayout([
+      {blockId: 'B', renderScopeId: CARD, surface: 'nested'},
+      {blockId: 'B1', renderScopeId: CARD, surface: 'nested'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: OUTLINE})
+
+    await pressNavigationKey('jump_to_last_visible_block', {
+      block: env.repo.block('A'), uiStateBlock: panel, renderScopeId: OUTLINE, scopeRootId: 'top',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'C', renderScopeId: OUTLINE})
+
+    await focusBlock(panel, 'B', {renderScopeId: CARD})
+    await pressNavigationKey('jump_to_last_visible_block', {
+      block: env.repo.block('B'), uiStateBlock: panel, renderScopeId: CARD, scopeRootId: 'B',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B1', renderScopeId: CARD})
+  })
+
+  it('stops at the end of the outline rather than stepping onto a row reserved in the lane', async () => {
+    // 'C' is the last child of 'top', so the scope edge asks the rendered order.
+    buildLaneLayout([{deferredBlockId: 'B1', deferredScopeId: CARD}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'C', {renderScopeId: OUTLINE})
+    const focusWrites = vi.spyOn(panel.repo, 'tx')
+
+    const {modelWalk} = await pressNavigationKey('move_down', {
+      block: env.repo.block('C'), uiStateBlock: panel, renderScopeId: OUTLINE, scopeRootId: 'top',
+    })
+
+    // A step onto the reserved row is a focus write the handler doesn't await.
+    expect(focusWrites).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
   })
 })
 

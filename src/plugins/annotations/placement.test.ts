@@ -37,7 +37,7 @@ describe('fitColumn', () => {
     column: {min: 240, max: 520},
     edge: 16,
   }
-  const fit = (pane: number, preferred?: number) => fitColumn({pane, preferred, ...bounds})
+  const fit = (pane: number, share?: number) => fitColumn({pane, share, ...bounds})
 
   it('leaves the text centred when the side beside it holds the widest column', () => {
     expect(fit(2000)).toEqual({width: 520, clearance: 0, left: 1400})
@@ -51,22 +51,26 @@ describe('fitColumn', () => {
     expect(fit(1000)).toEqual({width: 333, clearance: 365, left: 651})
   })
 
-  it('takes a set width over the automatic one, past the automatic maximum', () => {
-    expect(fit(2000, 700)).toEqual({width: 700, clearance: 232, left: 1284})
+  it('takes a set share of the pane over the automatic width, past the automatic maximum', () => {
+    expect(fit(2000, 0.35)).toEqual({width: 700, clearance: 232, left: 1284})
   })
 
-  it('gives up set width before the text goes under its minimum', () => {
-    expect(fit(1000, 700)).toEqual({width: 488, clearance: 520, left: 496})
+  it('keeps a set share in a narrower pane, so the text narrows with the column', () => {
+    expect(fit(1200, 0.35)).toEqual({width: 420, clearance: 452, left: 764})
+  })
+
+  it('gives up set share before the text goes under its minimum', () => {
+    expect(fit(1000, 0.7)).toEqual({width: 488, clearance: 520, left: 496})
   })
 
   it('never goes under the column minimum, even when set narrower', () => {
-    expect(fit(2000, 100)).toEqual({width: 240, clearance: 0, left: 1400})
+    expect(fit(2000, 0.05)).toEqual({width: 240, clearance: 0, left: 1400})
   })
 
   it('refuses a pane that holds the text minimum but not the column minimum beside it', () => {
     expect(fit(752)).toEqual({width: 240, clearance: 272, left: 496})
     expect(fit(751)).toBeNull()
-    expect(fit(751, 900)).toBeNull()
+    expect(fit(751, 0.9)).toBeNull()
   })
 
   it('gives whole pixels, so the text never lands between them', () => {

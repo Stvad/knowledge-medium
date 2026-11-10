@@ -1,6 +1,11 @@
 import { clamp } from 'lodash-es'
-import { isElementProperlyVisible } from '@/utils/dom.js'
+import { getElementScrollportBounds, isElementProperlyVisible } from '@/utils/dom.js'
 import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
+import {
+  PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
+  PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
+  PANEL_LANE_ATTRIBUTE,
+} from '@/utils/panelClearance.js'
 import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
@@ -23,6 +28,10 @@ import type { SelectionRangeRow } from '@/utils/selection.js'
  *                          `data-render-scope-id="<render scope>"`
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
  *   Block visibility target: `data-block-visibility-target="true"`
+ *   Lane beside the panel's content: `data-panel-lane="<name>"`
+ *                          (`PANEL_LANE_ATTRIBUTE`, on a panel mount's root)
+ *   In a lane, beside a content row: `data-lane-anchor-block-id`,
+ *                          `data-lane-anchor-render-scope-id`
  *   Deferred row's slot:   `data-lazy-block-id="<block.id>"` (set by
  *                          `LazyViewportMount` while it shows a placeholder —
  *                          the row's reserved place in document order)
@@ -41,11 +50,13 @@ import type { SelectionRangeRow } from '@/utils/selection.js'
  *
  * Direction model:
  *
- *   `up`/`down`: walk block instances within the current panel in
+ *   `up`/`down`: walk block instances within the current panel's lane in
  *     DOM order; on exhaustion, fall through to the panel that is the
- *     direct stack-sibling above/below in the same layout column.
- *   `left`/`right`: walk top-level layout columns; never moves
- *     within a panel.
+ *     direct stack-sibling above/below in the same layout column, at its
+ *     own content.
+ *   `left`/`right`: move to a row in another lane of the panel: the one
+ *     paired with this one (a card and the row it stands beside), else the
+ *     one level with it; failing that, walk top-level layout columns.
  *
  * Recovery: two entry points share the same neighbor map.
  *   `locateInstance` (keystroke-time) keeps its tier 1+2 identity-match
@@ -63,6 +74,8 @@ import type { SelectionRangeRow } from '@/utils/selection.js'
 
 const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
+const LANE_SELECTOR = `[${PANEL_LANE_ATTRIBUTE}]`
+const LANE_ANCHOR_SELECTOR = `[${PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE}][${PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE}]`
 const COLUMN_SELECTOR = '[data-layout-column-id]'
 const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
 /** A deferred row's slot, and one that also names the occurrence it holds a
@@ -209,6 +222,19 @@ export const panelInstances = (
     return ownPanel === panel
   })
 }
+
+/** `laneOf` the panel's own content. */
+export const OWN_CONTENT_LANE = ''
+
+/** The lane `el` sits in: its marked root's name, or `OWN_CONTENT_LANE`. */
+export const laneOf = (el: HTMLElement): string =>
+  el.closest<HTMLElement>(LANE_SELECTOR)?.getAttribute(PANEL_LANE_ATTRIBUTE) ?? OWN_CONTENT_LANE
+
+const laneInstances = (
+  panel: HTMLElement,
+  lane: string,
+  excludedSurfaces: ReadonlySet<string>,
+): HTMLElement[] => panelInstances(panel, excludedSurfaces).filter(el => laneOf(el) === lane)
 
 export interface PanelRow extends SelectionRangeRow {
   element: HTMLElement
@@ -571,6 +597,7 @@ export const reservedRowBetween = (
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
     slot.dataset.lazyRenderScopeId !== fromScope &&
+    laneOf(slot) === laneOf(from) &&
     !isInExcludedSurface(slot, excludedSurfaces) &&
     // Never picks a half-labelled slot and then gives up on it, which would
     // silently drop a valid one further along.
@@ -645,25 +672,34 @@ export const locateInstance = (
   return instances[0] ?? null
 }
 
+/** The first or last row of one lane of `panel`. */
+export const laneEdgeInstance = (
+  panel: HTMLElement,
+  lane: string,
+  edge: 'first' | 'last',
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const instances = laneInstances(panel, lane, excludedSurfaces)
+  return (edge === 'first' ? instances[0] : instances.at(-1)) ?? null
+}
+
+/** The first and last rows of a panel's own content, where a move into the
+ *  panel from above or below lands. */
 export const firstInstanceIn = (
   panel: HTMLElement,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null =>
-  panelInstances(panel, excludedSurfaces)[0] ?? null
+): HTMLElement | null => laneEdgeInstance(panel, OWN_CONTENT_LANE, 'first', excludedSurfaces)
 
 export const lastInstanceIn = (
   panel: HTMLElement,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null => {
-  const all = panelInstances(panel, excludedSurfaces)
-  return all.length > 0 ? all[all.length - 1] : null
-}
+): HTMLElement | null => laneEdgeInstance(panel, OWN_CONTENT_LANE, 'last', excludedSurfaces)
 
 /**
- * Within-panel + stack-sibling fall-through for h/k.
+ * Within-lane + stack-sibling fall-through for h/k.
  *
- * 1. If there's a next/prev instance in the same panel in DOM order,
- *    return it.
+ * 1. If there's a next/prev instance in the same lane of the panel in DOM
+ *    order, return it.
  * 2. Else, if the panel sits inside a column that stacks multiple
  *    panels, fall through to the first/last instance of the
  *    immediately adjacent stack-sibling panel.
@@ -676,7 +712,7 @@ export const verticalNeighbor = (
 ): HTMLElement | null => {
   const panel = panelOf(current)
   if (!panel) return null
-  const instances = panelInstances(panel, excludedSurfaces)
+  const instances = laneInstances(panel, laneOf(current), excludedSurfaces)
   const idx = instances.indexOf(current)
   if (idx === -1) return null
 
@@ -709,6 +745,73 @@ export const nextRowInScope = (
   if (from === -1) return null
   const ahead = direction === 'down' ? instances.slice(from + 1) : instances.slice(0, from).reverse()
   return ahead.find(el => locationOf(el)?.renderScopeId === scope) ?? null
+}
+
+/** Can the user see this lane row: shown, and on screen within both its
+ *  scrollports and its lane's root, which a mount may clip to. */
+const isLaneRowOnScreen = (el: HTMLElement): boolean => {
+  const target = visibilityTargetFor(el)
+  if (getComputedStyle(target).visibility === 'hidden') return false
+  const bounds = getElementScrollportBounds(target)
+  const laneRoot = el.closest<HTMLElement>(LANE_SELECTOR)
+  if (!laneRoot) return isElementProperlyVisible(target, bounds)
+  const clip = laneRoot.getBoundingClientRect()
+  return isElementProperlyVisible(target, {
+    top: Math.max(bounds.top, clip.top),
+    bottom: Math.min(bounds.bottom, clip.bottom),
+  })
+}
+
+/** The content row a lane row stands beside (`PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE`),
+ *  or null. */
+const laneAnchorOf = (el: HTMLElement): FocusedBlockLocation | null => {
+  const anchor = el.closest<HTMLElement>(LANE_ANCHOR_SELECTOR)
+  const blockId = anchor?.getAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE)
+  const renderScopeId = anchor?.getAttribute(PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE)
+  return blockId && renderScopeId ? {blockId, renderScopeId} : null
+}
+
+/** Does one of the two stand beside the other? */
+const arePaired = (a: HTMLElement, b: HTMLElement): boolean => {
+  const anchorA = laneAnchorOf(a)
+  const anchorB = laneAnchorOf(b)
+  return (anchorA !== null && isInstanceAt(b, anchorA)) || (anchorB !== null && isInstanceAt(a, anchorB))
+}
+
+/**
+ * The row beside `current` in another lane of its panel, `direction` of it,
+ * of the rows on screen that way: one paired with it if any (a card and the
+ * row it stands beside), else any. Of those, the nearest to `current`'s own
+ * row (one level with it, if any), with ties to the nearest to its top line,
+ * whatever the document order. Rows showing a view (`isRowAContentView`) are
+ * out: their rect is the view's. Null when no other lane has such a row, and
+ * the move leaves the panel.
+ */
+export const lateralNeighbor = (
+  current: HTMLElement,
+  direction: 'left' | 'right',
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const panel = panelOf(current)
+  if (!panel) return null
+  const lane = laneOf(current)
+  const from = visibilityTargetFor(current).getBoundingClientRect()
+  const fromCentre = (from.left + from.right) / 2
+  let best: {el: HTMLElement; paired: boolean; gap: number; topLineGap: number} | null = null
+  for (const el of panelInstances(panel, excludedSurfaces)) {
+    if (laneOf(el) === lane || isRowAContentView(el)) continue
+    const rect = visibilityTargetFor(el).getBoundingClientRect()
+    const centre = (rect.left + rect.right) / 2
+    if (direction === 'right' ? centre <= fromCentre : centre >= fromCentre) continue
+    if (!isLaneRowOnScreen(el)) continue
+    const paired = arePaired(current, el)
+    const gap = Math.max(0, rect.top - from.bottom, from.top - rect.bottom)
+    const topLineGap = Math.max(0, rect.top - from.top, from.top - rect.bottom)
+    const better = !best ||
+      (paired !== best.paired ? paired : gap < best.gap || (gap === best.gap && topLineGap < best.topLineGap))
+    if (better) best = {el, paired, gap, topLineGap}
+  }
+  return best?.el ?? null
 }
 
 /**

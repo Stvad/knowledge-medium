@@ -4,9 +4,12 @@
  *
  * A panel mount, so it composes with whatever layout renders the panel. It
  * uses the width a wide panel leaves empty beside the text first, then moves
- * the text left, then narrows it (`fitColumn`, `PANEL_RIGHT_CLEARANCE`). Its
- * width is automatic until dragged, and the dragged width is kept on the
- * panel's row (`annotationMarginWidthProp`). The cost is that it
+ * the text left, then narrows it (`fitColumn`, `PANEL_RIGHT_CLEARANCE`), and
+ * the panel's buttons move over it (`PANEL_CONTENT_RIGHT_INSET`). Its width is
+ * automatic until dragged, and the dragged width is kept on the panel's row as
+ * a share of the pane (`annotationMarginShareProp`). It is a navigation lane
+ * of its own (`PANEL_LANE_ATTRIBUTE`), each card paired with its row. The cost
+ * is that it
  * lives outside the scrollport: it finds the panel's rows in the DOM (mounted
  * rows and lazy placeholders alike, of the panel's own render scope), reads
  * their positions and moves the cards within one animation frame of a scroll
@@ -24,14 +27,21 @@ import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, 
 import {MessageSquare, X} from 'lucide-react'
 import type {Block} from '@/data/block'
 import {isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
-import {NestedBlockContextProvider} from '@/context/block.js'
+import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
-import {PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
+import {
+  PANEL_CONTENT_RIGHT_INSET,
+  PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
+  PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
+  PANEL_LANE_ATTRIBUTE,
+  PANEL_RIGHT_CLEARANCE,
+  PANEL_TEXT_MIN_WIDTH_PX,
+} from '@/utils/panelClearance.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
-import {annotationMarginOpenProp, annotationMarginWidthProp} from './marginSchema.ts'
+import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
 import {byPlacement, fitColumn, placeCards} from './placement.ts'
 import {quoteTop} from './quotePosition.ts'
 import type {RangeAnchor} from './anchor.ts'
@@ -60,13 +70,21 @@ interface ColumnFrame {
   top: number
   width: number
   height: number
+  /** The pane's width, which a dragged width is stored as a share of. */
+  pane: number
   /** How much of the pane's right the text gives up to the column. */
   clearance: number
+  /** From the column's right edge to the pane's. */
+  rightInset: number
 }
 
 const sameFrame = (a: ColumnFrame | null, b: ColumnFrame | null): boolean =>
   a === b || (a !== null && b !== null &&
-    a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height && a.clearance === b.clearance)
+    (Object.keys(a) as (keyof ColumnFrame)[]).every(key => a[key] === b[key]))
+
+/** A frame's width as a share of its pane, to four places: a fraction of a
+ *  pixel at any pane width. */
+const shareOf = (frame: ColumnFrame): number => Math.round(frame.width / frame.pane * 1e4) / 1e4
 
 /** A card slot: where a card registers its element for the layout pass. */
 interface CardEntry {
@@ -97,10 +115,11 @@ export const CommentMargin = ({block}: {block: Block}) => {
 
 const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLevelBlockId: string}) => {
   const panelId = panelBlock.id
-  const [storedWidth] = usePropertyValue(panelBlock, annotationMarginWidthProp)
-  /** The width the layout pass asks for: the stored one, or a drag's. */
-  const preferredWidth = useRef(storedWidth)
-  const dragStartWidth = useRef(0)
+  const [storedShare] = usePropertyValue(panelBlock, annotationMarginShareProp)
+  /** The share of the pane the layout pass asks for: the stored one, or a
+   *  drag's. */
+  const preferredShare = useRef(storedShare)
+  const dragStart = useRef({width: 0, pane: 0})
   const scope = panelRenderScopeId(panelId, topLevelBlockId)
   const probeRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -152,9 +171,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
      *  is re-found each pass, since the row can remount. */
     let observedTopRow: Element | null = null
 
-    const setClearance = (px: number) => {
-      if (px > 0) panelEl.style.setProperty(PANEL_RIGHT_CLEARANCE, `${px}px`)
+    const setPanelGeometry = (frame: ColumnFrame | null) => {
+      if (frame && frame.clearance > 0) panelEl.style.setProperty(PANEL_RIGHT_CLEARANCE, `${frame.clearance}px`)
       else panelEl.style.removeProperty(PANEL_RIGHT_CLEARANCE)
+      if (frame) panelEl.style.setProperty(PANEL_CONTENT_RIGHT_INSET, `${frame.rightInset}px`)
+      else panelEl.style.removeProperty(PANEL_CONTENT_RIGHT_INSET)
     }
 
     /** From the pane's width alone, which the clearance (padding) leaves
@@ -166,17 +187,21 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const textMax = frameEl ? Number.parseFloat(getComputedStyle(frameEl).maxWidth) : Number.NaN
       const fit = fitColumn({
         pane: portRect.width,
-        preferred: preferredWidth.current,
+        share: preferredShare.current,
         text: {min: PANEL_TEXT_MIN_WIDTH_PX, max: Number.isFinite(textMax) ? textMax : portRect.width},
         column: COLUMN_BOUNDS,
         edge: EDGE_PX,
       })
-      return fit && {
-        left: Math.round(portRect.left - panelRect.left + fit.left),
+      if (!fit) return null
+      const left = Math.round(portRect.left - panelRect.left + fit.left)
+      return {
+        left,
         top: Math.round(portRect.top - panelRect.top),
         width: fit.width,
         height: Math.round(portRect.height),
+        pane: Math.floor(portRect.width),
         clearance: fit.clearance,
+        rightInset: Math.round(panelRect.width) - left - fit.width,
       }
     }
 
@@ -191,7 +216,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const portRect = scrollport.getBoundingClientRect()
       const nextFrame = topRow && measure(portRect)
       setFrame(current => sameFrame(current, nextFrame) ? current : nextFrame)
-      setClearance(nextFrame?.clearance ?? 0)
+      setPanelGeometry(nextFrame)
       const rowEls = new Map<string, Element>()
       for (const el of scrollport.querySelectorAll<HTMLElement>(selector)) {
         const id = scopeRowBlockId(el)
@@ -279,16 +304,16 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       scrollport.removeEventListener('scroll', schedule)
       unsubscribe()
       setExtraBottom(0)
-      setClearance(0)
+      setPanelGeometry(null)
       layout.current = IDLE_LAYOUT
     }
   }, [panelId, scope, topLevelBlockId, repo])
 
-  const applyStoredWidth = () => {
-    preferredWidth.current = storedWidth
+  const applyStoredShare = () => {
+    preferredShare.current = storedShare
     layout.current.schedule()
   }
-  useEffect(applyStoredWidth, [storedWidth])
+  useEffect(applyStoredShare, [storedShare])
 
   const showing = frame !== null
   useEffect(() => {
@@ -326,22 +351,23 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           style={{left: frame.left - (EDGE_PX + DIVIDER_HANDLE_WIDTH_PX) / 2, top: frame.top, height: frame.height}}
           drag={{
             onStart: () => {
-              dragStartWidth.current = frame.width
+              dragStart.current = {width: frame.width, pane: frame.pane}
               return true
             },
             // The layout pass bounds the width asked for.
             onMove: dx => {
-              preferredWidth.current = dragStartWidth.current - dx
+              preferredShare.current = (dragStart.current.width - dx) / dragStart.current.pane
               layout.current.schedule()
             },
             onEnd: () => {
-              const width = layout.current.flush()?.width
-              if (width === undefined || width === storedWidth) applyStoredWidth()
-              else void panelBlock.set(annotationMarginWidthProp, width)
+              const end = layout.current.flush()
+              const share = end ? shareOf(end) : undefined
+              if (share === undefined || share === storedShare) applyStoredShare()
+              else void panelBlock.set(annotationMarginShareProp, share)
             },
-            onCancel: applyStoredWidth,
+            onCancel: applyStoredShare,
           }}
-          onReset={() => void panelBlock.set(annotationMarginWidthProp, undefined)}
+          onReset={() => void panelBlock.set(annotationMarginShareProp, undefined)}
         />
       )}
       {frame && (
@@ -349,6 +375,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           ref={columnRef}
           aria-label="Comments margin"
           role="complementary"
+          {...{[PANEL_LANE_ATTRIBUTE]: 'comments-margin'}}
           onWheel={forwardWheel}
           className="pointer-events-none absolute z-[5] overflow-clip"
           style={frameStyle(frame)}
@@ -448,6 +475,8 @@ interface CardSlotProps {
 
 const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlotProps) => {
   const registry = useContext(MarginRegistryContext)!
+  // The panel's scope, which the column renders in: the scope of the row.
+  const {renderScopeId: rowScope} = useBlockContext()
   const ref = useRef<HTMLDivElement>(null)
   const active = useActiveThread(registry.panelId) === slotKey
   useLayoutEffect(
@@ -458,6 +487,7 @@ const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlot
     <div
       ref={ref}
       data-margin-card={slotKey}
+      {...{[PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE]: blockId, [PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE]: rowScope}}
       onClick={() => activateThread(registry.panelId, slotKey)}
       onFocus={event => { if (isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
       // Placed by the layout pass; transparent until it has, not hidden: an

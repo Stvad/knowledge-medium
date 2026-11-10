@@ -71,7 +71,8 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 }
 
 /** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
- *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
+ *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. `.panel-actions`
+ *  (`index.css`) repeats it, to end the buttons at that frame's right edge. */
 const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
 export function PanelRenderer({block}: BlockRendererProps) {
@@ -347,14 +348,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      <div
-        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
-      >
-        <div
-          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
-        >
-          {actionButtons}
-        </div>
+      {/* `.panel-actions` ends the buttons where the content ends (`index.css`). */}
+      <div className="panel-actions pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-end gap-0.5">
+        {actionButtons}
       </div>
       <div
         ref={scrollRef}

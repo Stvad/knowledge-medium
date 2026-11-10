@@ -40,7 +40,11 @@ import {
 import {
   aheadOf,
   horizontalNeighborPanel,
+  laneEdgeInstance,
+  laneOf,
+  lateralNeighbor,
   locationOf,
+  OWN_CONTENT_LANE,
   panelById,
   panelOf,
   panelInstances,
@@ -413,6 +417,13 @@ const moveHorizontal = async (
   if (!block || !uiStateBlock) return false
   const current = currentInstance(deps)
   if (!current) return false
+  const excludedSurfaces = excludedSurfacesFor(uiStateBlock)
+  const beside = lateralNeighbor(current, direction, excludedSurfaces)
+  const besideLocation = beside ? locationOf(beside) : null
+  if (besideLocation) {
+    await focusBlock(uiStateBlock, besideLocation.blockId, {renderScopeId: besideLocation.renderScopeId})
+    return true
+  }
   // Scope the column walk to the ACTIVE layout session: with the
   // session host mounted, N warm sessions each carry their own
   // `[data-layout-column-id]` columns, so an unscoped document-wide query
@@ -430,7 +441,7 @@ const moveHorizontal = async (
   // top-level (the panel's `topLevelBlockIdProp` aligned to its
   // outline root).
   const destLocation = peekFocusedBlockLocation(destPanelBlock)
-    ?? findFirstInstanceLocation(destPanel, excludedSurfacesFor(uiStateBlock))
+    ?? findFirstInstanceLocation(destPanel, excludedSurfaces)
   if (!destLocation) return false
   await crossPanelFocus(uiStateBlock, destPanelId, destLocation)
   return true
@@ -477,7 +488,8 @@ const crossPanelFocus = async (
 }
 
 /**
- * Jump focus to the first / last navigable instance in the panel, in
+ * Jump focus to the first / last navigable instance in the focused row's lane
+ * of the panel (its own content, unless focus is in a lane beside it), in
  * visible DOM order. This is the `gg` / `Shift+G` counterpart to
  * `moveVertical`: since spatial nav steps `j`/`k` through the rendered
  * DOM (outline bullets *and* trailing surfaces like backlinks/embeds),
@@ -503,9 +515,10 @@ const jumpToPanelEdge = async (
   if (typeof document === 'undefined') return false
   const panel = panelById(uiStateBlock.id)
   if (!panel) return false
-  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
-  if (instances.length === 0) return false
-  const target = edge === 'first' ? instances[0] : instances[instances.length - 1]
+  const current = currentInstance(deps)
+  const lane = current ? laneOf(current) : OWN_CONTENT_LANE
+  const target = laneEdgeInstance(panel, lane, edge, excludedSurfacesFor(uiStateBlock))
+  if (!target) return false
   const location = locationOf(target)
   if (!location) return false
   await focusBlock(uiStateBlock, location.blockId, {renderScopeId: location.renderScopeId})
@@ -519,7 +532,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
   return [
     bindNormal({
       id: 'move_left',
-      description: 'Move focus to the panel on the left',
+      description: 'Move focus left (beside it in the panel, else the panel on the left)',
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'left')
       },
@@ -527,7 +540,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
     }),
     bindNormal({
       id: 'move_right',
-      description: 'Move focus to the panel on the right',
+      description: 'Move focus right (beside it in the panel, else the panel on the right)',
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'right')
       },

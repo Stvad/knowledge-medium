@@ -57,9 +57,10 @@ export interface ColumnFit {
 
 export interface ColumnFitInput {
   pane: number
-  /** A width the user set; absent, the column takes the side room the full
-   *  text leaves, or a third of the pane, whichever is wider. */
-  preferred?: number
+  /** The share of the pane the user set the column to, so it keeps its
+   *  proportion when the pane narrows; absent, the column takes the side room
+   *  the full text leaves, or a third of the pane, whichever is wider. */
+  share?: number
   text: {min: number; max: number}
   /** `max` bounds the automatic width only: a set width is bounded by the
    *  text's minimum. */
@@ -72,10 +73,10 @@ export interface ColumnFitInput {
  *  column's minimum fits beside the text's. The text keeps its full width and
  *  moves left only as far as the column needs; past that it narrows, down to
  *  its minimum, and only then does the column give up width. */
-export const fitColumn = ({pane, preferred, text, column, edge}: ColumnFitInput): ColumnFit | null => {
+export const fitColumn = ({pane, share, text, column, edge}: ColumnFitInput): ColumnFit | null => {
   const width = Math.floor(pane)
   const automatic = Math.min(column.max, Math.max(width - text.max - 2 * edge, Math.floor(width / 3)))
-  let columnWidth = Math.max(column.min, Math.floor(preferred ?? automatic))
+  let columnWidth = Math.max(column.min, Math.floor(share === undefined ? automatic : share * width))
   const fullTextClearance = Math.max(0, text.max + 2 * columnWidth + 4 * edge - width)
   if (fullTextClearance <= width - text.max) {
     return {

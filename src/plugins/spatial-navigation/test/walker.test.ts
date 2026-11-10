@@ -7,6 +7,7 @@ import {
   firstInstanceIn,
   horizontalNeighborPanel,
   lastInstanceIn,
+  lateralNeighbor,
   locateInstance,
   panelById,
   rememberInstancePosition,
@@ -15,6 +16,12 @@ import {
   verticalNeighbor,
 } from '@/plugins/spatial-navigation/walker.js'
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom.js'
+import {
+  PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE,
+  PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE,
+  PANEL_LANE_ATTRIBUTE,
+} from '@/utils/panelClearance.js'
+import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 
 // happy-dom never lays out, so every rect is zero and every instance reads as
 // off-screen. Every tier INCLUDING the positional clamp is viewport-gated, so
@@ -920,5 +927,184 @@ describe('firstInstanceIn / lastInstanceIn', () => {
     const panel = panelById('p1')!
     expect(scopeOf(firstInstanceIn(panel))).toBe('p1:A')
     expect(scopeOf(lastInstanceIn(panel))).toBe('p1:B')
+  })
+})
+
+describe('lanes beside the panel content', () => {
+  interface Box {top: number; bottom: number; left: number; right: number}
+  const placeAt = (el: HTMLElement, {top, bottom, left, right}: Box): void => {
+    el.getBoundingClientRect = () =>
+      ({top, bottom, left, right, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({})}) as DOMRect
+  }
+  const row = (parent: HTMLElement, panelId: string, blockId: string, box?: Box): HTMLElement => {
+    const el = document.createElement('div')
+    el.setAttribute('data-block-nav-item', 'true')
+    el.setAttribute('data-block-id', blockId)
+    el.setAttribute('data-render-scope-id', `${panelId}:${blockId}`)
+    if (box) placeAt(el, box)
+    parent.appendChild(el)
+    return el
+  }
+  const text = (top: number, bottom: number): Box => ({top, bottom, left: 0, right: 600})
+  const margin = (top: number, bottom: number): Box => ({top, bottom, left: 640, right: 900})
+
+  /** `p1`'s own content (A, B, C, D) and, after it in document order as a
+   *  panel mount is, a lane right of it holding two cards (M1, M2), each in a
+   *  slot as the margin renders them. */
+  const buildPanelWithLane = (panelId = 'p1', parent: HTMLElement = document.body) => {
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', panelId)
+    const content = document.createElement('div')
+    panel.appendChild(content)
+    const rows = {
+      A: row(content, panelId, 'A', text(0, 30)),
+      B: row(content, panelId, 'B', text(100, 130)),
+      C: row(content, panelId, 'C', text(200, 230)),
+      D: row(content, panelId, 'D', text(300, 330)),
+    }
+    const lane = document.createElement('div')
+    lane.setAttribute(PANEL_LANE_ATTRIBUTE, 'margin')
+    placeAt(lane, {top: 0, bottom: 700, left: 640, right: 900})
+    panel.appendChild(lane)
+    const card = (blockId: string, box: Box) => {
+      const slot = document.createElement('div')
+      lane.appendChild(slot)
+      return {slot, row: row(slot, panelId, blockId, box)}
+    }
+    const m1 = card('M1', margin(90, 120))
+    const m2 = card('M2', margin(210, 400))
+    parent.appendChild(panel)
+    return {panel, lane, ...rows, M1: m1.row, M2: m2.row, m1Slot: m1.slot, m2Slot: m2.slot}
+  }
+
+  /** Marks a card's slot as standing beside `row`. */
+  const anchorTo = (slot: HTMLElement, row: HTMLElement): void => {
+    slot.setAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, row.dataset.blockId!)
+    slot.setAttribute(PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, row.dataset.renderScopeId!)
+  }
+
+  it('moves right onto the lane row level with it, and left back to the content row level with it', () => {
+    const {B, C, M1, M2} = buildPanelWithLane()
+    expect(lateralNeighbor(B, 'right')).toBe(M1)
+    expect(lateralNeighbor(C, 'right')).toBe(M2)
+    expect(lateralNeighbor(M1, 'left')).toBe(B)
+  })
+
+  it('takes, of the rows level with it, the one beside its top line', () => {
+    // M2 spans both C and D.
+    const {C, M2} = buildPanelWithLane()
+    expect(lateralNeighbor(M2, 'left')).toBe(C)
+  })
+
+  it('takes a row level with a tall one over a nearer row above it', () => {
+    // C is a long paragraph; M2 is beside its middle, M1 just above its top.
+    const {C, M1, M2} = buildPanelWithLane()
+    placeAt(C, text(200, 400))
+    placeAt(M1, margin(120, 150))
+    placeAt(M2, margin(300, 330))
+    expect(lateralNeighbor(C, 'right')).toBe(M2)
+  })
+
+  it('takes the row beside its top line whatever the document order', () => {
+    // A pinned card pushes the ones before it up, so the later M2 can sit
+    // above M1: both overlap C, and M2 holds C's top line.
+    const {C, M1, M2} = buildPanelWithLane()
+    placeAt(M1, margin(215, 260))
+    placeAt(M2, margin(190, 212))
+    expect(lateralNeighbor(C, 'right')).toBe(M2)
+  })
+
+  it('never moves within its own lane, onto an indented row included', () => {
+    const {A, M1, panel} = buildPanelWithLane()
+    const A1 = row(panel.firstElementChild as HTMLElement, 'p1', 'A1', {top: 40, bottom: 70, left: 48, right: 600})
+    A.after(A1)
+    expect(lateralNeighbor(A, 'right')).toBe(M1)
+  })
+
+  it('passes over a row showing a view, whose rect is the view', () => {
+    const {B, M1} = buildPanelWithLane()
+    // Its view starts nearer M1's top line than B does.
+    const viewRow = row(B.parentElement!, 'p1', 'V')
+    const view = document.createElement('div')
+    view.setAttribute('data-block-visibility-target', 'true')
+    view.setAttribute(BLOCK_CONTENT_VIEW_ATTRIBUTE, '')
+    placeAt(view, {top: 92, bottom: 2000, left: 0, right: 600})
+    viewRow.appendChild(view)
+    B.before(viewRow)
+    expect(lateralNeighbor(M1, 'left')).toBe(B)
+  })
+
+  it('takes the nearest row when none is level with it', () => {
+    const {A, M1} = buildPanelWithLane()
+    expect(lateralNeighbor(A, 'right')).toBe(M1)
+  })
+
+  it('skips a lane row that is hidden or clipped out of its lane', () => {
+    const {lane, B, M2, m1Slot} = buildPanelWithLane()
+    m1Slot.style.visibility = 'hidden'
+    expect(lateralNeighbor(B, 'right')).toBe(M2)
+    // The lane clips what is pushed past its foot.
+    placeAt(lane, {top: 0, bottom: 200, left: 640, right: 900})
+    expect(lateralNeighbor(B, 'right')).toBeNull()
+  })
+
+  it('moves right onto the card beside its own row, even pushed below a neighbour card', () => {
+    // M1 belongs to B but was pushed down over C's top; C's own card sits lower.
+    const {B, C, D, M1, M2, m1Slot, m2Slot} = buildPanelWithLane()
+    anchorTo(m1Slot, B)
+    anchorTo(m2Slot, C)
+    placeAt(M1, margin(180, 210))
+    placeAt(M2, margin(225, 330))
+    expect(lateralNeighbor(C, 'right')).toBe(M2)
+    // D has no card: whatever is nearest.
+    expect(lateralNeighbor(D, 'right')).toBe(M2)
+  })
+
+  it('moves left from a card onto the row it stands beside, wherever it was pushed', () => {
+    const {C, M2, m2Slot} = buildPanelWithLane()
+    anchorTo(m2Slot, C)
+    placeAt(M2, margin(290, 330))
+    expect(lateralNeighbor(M2, 'left')).toBe(C)
+  })
+
+  it('goes by position when the paired row is not on screen', () => {
+    const {C, D, M2, m2Slot} = buildPanelWithLane()
+    anchorTo(m2Slot, C)
+    placeAt(C, text(2000, 2030))
+    placeAt(M2, margin(290, 330))
+    expect(lateralNeighbor(M2, 'left')).toBe(D)
+  })
+
+  it('finds nothing where no other lane lies that way', () => {
+    const {A, M1} = buildPanelWithLane()
+    expect(lateralNeighbor(A, 'left')).toBeNull()
+    expect(lateralNeighbor(M1, 'right')).toBeNull()
+  })
+
+  it('finds nothing in a panel without lanes', () => {
+    const panel = buildP1Panel([p1Instance('A'), p1Instance('B')])
+    const [A] = panel.querySelectorAll<HTMLElement>('[data-block-nav-item]')
+    placeAt(A, text(0, 30))
+    expect(lateralNeighbor(A, 'right')).toBeNull()
+  })
+
+  it('keeps up and down within a lane', () => {
+    const {D, M1, M2} = buildPanelWithLane()
+    expect(verticalNeighbor(D, 'down')).toBeNull()
+    expect(verticalNeighbor(M1, 'up')).toBeNull()
+    expect(verticalNeighbor(M1, 'down')).toBe(M2)
+  })
+
+  it('enters a stack sibling at its own content, not at a lane beside it', () => {
+    const column = document.createElement('div')
+    column.setAttribute('data-layout-column-id', 'c1')
+    document.body.appendChild(column)
+    const top = buildPanelWithLane('p-top', column)
+    const bottom = document.createElement('div')
+    bottom.setAttribute('data-panel-id', 'p-bot')
+    const E = row(bottom, 'p-bot', 'E')
+    column.appendChild(bottom)
+    expect(verticalNeighbor(E, 'up')).toBe(top.D)
+    expect(lastInstanceIn(top.panel)).toBe(top.D)
   })
 })
