@@ -158,12 +158,14 @@ describe('useGutterText', () => {
   it('keeps the registration when the same element is attached again', () => {
     // BlockEditor hands CodeMirror an inline ref, so the editor's element is
     // detached and re-attached on every render.
-    let attach: ((element: HTMLElement | null) => void) | undefined
-    const Capture = () => {
-      attach = useGutterText(block)
+    type Attach = ReturnType<typeof useGutterText>
+    const Capture = ({onAttach}: {onAttach: (attach: Attach) => void}) => {
+      const attach = useGutterText(block)
+      useEffect(() => onAttach(attach), [attach, onAttach])
       return <div ref={attach} data-testid="text"/>
     }
-    renderHost([], {content: <Capture/>})
+    let attach: Attach
+    renderHost([], {content: <Capture onAttach={captured => { attach = captured }}/>})
     const text = screen.getByTestId('text')
     // Stands for a flow decision the observer would have made.
     text.setAttribute('data-gutter-flow', '')
