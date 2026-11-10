@@ -21,7 +21,6 @@ import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } fr
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
-import type { Block } from '@/data/block.js'
 import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
@@ -1312,20 +1311,18 @@ const firstHttpUrl = (value: unknown): string | null => {
   return null
 }
 
-const matrixAudioStyles = {
-  link: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '22px',
-    height: '22px',
-    borderRadius: '4px',
-    color: 'var(--muted-foreground)',
-    background: 'var(--background)',
-    cursor: 'pointer',
-    textDecoration: 'none',
-  },
-} satisfies Record<string, CSSProperties>
+const matrixAudioLinkStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '22px',
+  height: '22px',
+  borderRadius: '4px',
+  color: 'var(--muted-foreground)',
+  background: 'var(--background)',
+  cursor: 'pointer',
+  textDecoration: 'none',
+}
 
 // lucide `audio-lines` glyph, inlined to avoid a runtime dependency import.
 const AudioGlyph = () => (
@@ -1362,7 +1359,7 @@ const MatrixAudioLink: BlockRenderer = ({block}) => {
       rel='noreferrer'
       title='Open audio'
       aria-label='Open audio'
-      style={matrixAudioStyles.link}
+      style={matrixAudioLinkStyle}
       onClick={event => event.stopPropagation()}
       onMouseDown={event => event.stopPropagation()}
     >
