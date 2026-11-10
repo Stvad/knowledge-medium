@@ -16,6 +16,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import type {BlockRenderer} from '@/types.js'
 import {GUTTER_PILL_CLASS} from '@/components/GutterPill.js'
+import {GutterTextBelowHeader, useGutterHeader} from '@/components/renderer/BlockGutter.js'
 import {FilePlus2, PencilLine} from 'lucide-react'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {
@@ -158,17 +159,22 @@ const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer
   const authorName = creatorId ? creator?.name ?? 'Contributor' : userPage.name
   const open = useOpenBlock({blockId: authorId ?? '', workspaceId: meta?.workspaceId ?? ''})
   const href = useAppHashInContext(meta?.workspaceId ?? '', authorId ?? '')
+  // The author line sits on the gutter's first line, beside a status chip,
+  // so the comment under it keeps its full width.
+  const gutterHeader = useGutterHeader(block)
   if (!meta) return <Inner block={block}/>
   return (
     <div className="w-full">
-      <div className="flex items-baseline gap-1 text-xs leading-5 text-muted-foreground">
+      <div {...gutterHeader} className="flex items-baseline gap-1 text-xs leading-5 text-muted-foreground">
         {authorId
           ? <a href={href} onClick={open} className="font-medium text-foreground hover:underline">{authorName}</a>
           : <span className="font-medium text-foreground">{authorName}</span>}
         {creator && creator.kind !== 'human' && <span>· {creator.kind}</span>}
         <span title={formatAbsoluteDateTime(meta.createdAt)}>· {formatRelativeTime(meta.createdAt, now)}</span>
       </div>
-      <Inner block={block}/>
+      <GutterTextBelowHeader>
+        <Inner block={block}/>
+      </GutterTextBelowHeader>
     </div>
   )
 }

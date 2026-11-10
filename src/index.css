@@ -609,6 +609,12 @@
   .km-gutter-host:has(> .km-gutter-bottom-right > [data-gutter-item]:not([data-gutter-overlay]):not(:empty)) {
     padding-bottom: 1lh;
   }
+  /* A header line drawn above the text (`useGutterHeader`) is one line: it
+     keeps clear of the cluster with padding, and the text under it is not
+     narrowed. */
+  [data-gutter-header][data-gutter-flow] {
+    padding-right: var(--km-gutter-top-right-w);
+  }
   /* Flow: the registered text keeps its first line clear of the top-right
      cluster. The same float in read (markdown) and edit (CodeMirror) mode;
      each kind of text has room for this one first-line spacer. */

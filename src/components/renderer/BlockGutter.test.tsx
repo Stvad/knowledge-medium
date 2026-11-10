@@ -8,7 +8,14 @@ import type { BlockContextType, BlockRenderer } from '@/types'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { blockGutterItemsFacet, type BlockResolveContext } from '@/extensions/blockInteraction'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
-import { BlockGutterHost, createGutterControls, useGutterText, type GutterControls } from './BlockGutter'
+import {
+  BlockGutterHost,
+  createGutterControls,
+  GutterTextBelowHeader,
+  useGutterHeader,
+  useGutterText,
+  type GutterControls,
+} from './BlockGutter'
 
 afterEach(cleanup)
 
@@ -198,6 +205,23 @@ describe('useGutterText', () => {
     )
 
     expect(host()).toBe('column')
+  })
+
+  it('gives the first line to a header drawn above the text', () => {
+    const Header = () => {
+      const header = useGutterHeader(block)
+      return <div {...header} data-testid="header"/>
+    }
+    renderHost([], {content: (
+      <>
+        <Header/>
+        <GutterTextBelowHeader><TextOf of={block}/></GutterTextBelowHeader>
+      </>
+    )})
+
+    expect(screen.getByTestId('header').hasAttribute('data-gutter-header')).toBe(true)
+    expect(screen.getByTestId('text').dataset.attachable).toBe('no')
+    expect(document.querySelector('.km-gutter-host')?.getAttribute('data-gutter-top-right')).toBe('column')
   })
 
   it('does nothing outside a host', () => {
