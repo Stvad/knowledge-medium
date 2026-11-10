@@ -1,13 +1,12 @@
-/** CodeMirror CompletionSource for the `@` place trigger.
+/** CodeMirror CompletionSource for the `@@` place trigger.
  *
- *  Trigger shape: `@<query>` at start of line or after whitespace, with
- *  no `[` in the query (so we don't fire inside `[[`) and no preceding
- *  word character (so we don't fire mid-email `a@b`). The query may
- *  contain single spaces ("Blue Bottle Coffee") — a double space, other
- *  whitespace, or the length/word caps end it so prose after a bare
- *  `@word` doesn't keep the dropdown alive. The query may be empty —
- *  that's the moment to surface the "Use current location" sentinel
- *  (Phase F).
+ *  Trigger shape: `@@<query>` at start of line or after whitespace (see
+ *  `src/editor/atTrigger.ts` for how `@`, `@@` and a bare `@` split, and
+ *  `triggerMatch.ts` for the query rules and guards). A bare `@` gets one
+ *  hand-off row ("Search places (@@)…") that turns it into `@@` and
+ *  reopens the dropdown, so `@@` is discoverable from `@`; `@query`
+ *  belongs to the contributors plugin. The query may be empty — that's
+ *  the moment to surface the "Use current location" sentinel.
  *
  *  On select: the caller-supplied `resolvePlace` returns a
  *  `PlaceResolveResult`. Two kinds:
@@ -17,7 +16,7 @@
  *      opened a follow-up picker; the source stays out of the way.
  *  Returning `null` cancels the insertion (user dismissed a sub-prompt).
  *
- *  Follow-up pickers (Phase F current-location list) re-enter the
+ *  Follow-up pickers (the current-location list) re-enter the
  *  source via `consumePendingCandidates`: a one-shot stash of
  *  candidates + span that the caller pushes from a candidate's apply
  *  handler, then triggers `startCompletion(view)` so CM re-opens the
@@ -28,11 +27,12 @@
  *  Google client, and `createOrFindPlace` happens in the geo plugin's
  *  CodeMirror extension. */
 
+import { startCompletion } from '@codemirror/autocomplete'
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import { matchBareAt, matchPlaceTrigger } from '@/editor/atTrigger'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 import type {
   Completion,
   CompletionContext,
@@ -77,7 +77,7 @@ export interface PlaceResolveContext {
   view: EditorView
   /** Trigger span in the doc — same range CM passes to the apply
    *  callback. Resolvers that re-open the dropdown should re-use this
-   *  span for the follow-up so the user's `@here` text stays in place. */
+   *  span for the follow-up so the user's `@@here` text stays in place. */
   from: number
   to: number
 }
@@ -99,7 +99,7 @@ export interface PlaceAutocompleteOptions {
    *  Used by follow-up pickers: a candidate's resolver stashes the next
    *  round of candidates (with their target span) and calls
    *  `startCompletion(view)`. The next invocation returns them
-   *  verbatim, bypassing `@` trigger detection. */
+   *  verbatim, bypassing `@@` trigger detection. */
   consumePendingCandidates?: () => {
     span: {from: number, to: number}
     candidates: PlaceAutocompleteCandidate[]
@@ -114,12 +114,14 @@ export interface PlaceAutocompleteOptions {
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
-/** `@` trigger detection — the shared matcher (see
- *  `src/editor/triggerMatch.ts` for the query/guard semantics: single
- *  spaces allowed for multi-word place names, email guard, wikilink
- *  ownership, length/word caps). Exported for direct testing. */
-export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '@')
+const handOffToPlaces: Completion = {
+  label: 'Search places (@@)…',
+  type: 'keyword',
+  apply: (view, _completion, from) => {
+    view.dispatch({changes: {from, insert: '@'}})
+    startCompletion(view)
+  },
+}
 
 /** Where to apply the trigger-text → wikilink replacement once the
  *  resolution settles. Prefers the recorded span if the text is still
@@ -216,17 +218,18 @@ export const placeCompletionSource = (
     const lineText = line.text
     const inLinePos = pos - line.from
 
-    const match = matchAtTrigger(lineText, inLinePos)
-    if (!match) return null
-    // Don't open on every keystroke until the user has typed `@` — the
-    // matcher already enforces that. We do show on an empty query
-    // (matched immediately after `@`) so the sentinel surfaces.
-
     // `@word` is also what literal spans look like (`@decorator` /
     // `@media` in code, `user@host` in a URL) — and with the dropdown
-    // open, Enter accepts a place candidate and replaces that text.
-    // The pending-candidates path above stays ungated: it re-opens a
+    // open, Enter accepts a candidate and replaces that text, so both
+    // branches check `isInsideLiteralMarkdown` once they matched. The
+    // pending-candidates path above stays ungated: it re-opens a
     // dropdown the pick flow itself stashed.
+    const match = matchPlaceTrigger(lineText, inLinePos)
+    if (!match) {
+      const bare = matchBareAt(lineText, inLinePos)
+      if (!bare || isInsideLiteralMarkdown(state, pos)) return null
+      return {from: line.from + bare.from, to: pos, filter: false, options: [handOffToPlaces]}
+    }
     if (isInsideLiteralMarkdown(state, pos)) return null
 
     const candidates = await options.getCandidates(match.query)
