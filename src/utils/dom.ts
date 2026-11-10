@@ -73,15 +73,17 @@ export const isElementProperlyVisible = (
   const lineHeight = parseFloat(computedStyle.lineHeight) ||
     parseFloat(computedStyle.fontSize) * 1.2 // Fallback to 1.2 * fontSize
 
-  // Use line height as minimum visibility threshold
-  const minVisibleHeight = lineHeight
+  // A line must be in view, or the whole element when it is shorter than one
+  // (a row in a smaller font than the line height it inherits).
+  if (elementHeight <= 0) return false
+  const minVisibleHeight = Math.min(lineHeight, elementHeight)
 
   // Calculate how much of the element is visible vertically
   const visibleTop = Math.max(visibilityBounds.top, rect.top)
   const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
 
-  // For small elements (shorter than viewport): require at least one line height to be visible
+  // For small elements (shorter than viewport): require that line in view
   if (elementHeight <= viewportHeight) {
     return visibleHeight >= minVisibleHeight
   }
