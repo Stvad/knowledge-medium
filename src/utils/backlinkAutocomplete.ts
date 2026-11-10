@@ -3,14 +3,14 @@
  * Triggers on [[ input and shows available aliases
  */
 
-import { Extension, EditorSelection } from '@codemirror/state'
+import { Extension } from '@codemirror/state'
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
 import {
   completionKeymapWithEscapeFallthrough,
   completionQueryEnd,
 } from '@/utils/codemirrorCompletion.js'
-import { flushEditorContent } from '@/editor/contentFlush.js'
+import { acceptCompletionInsert } from '@/editor/contentFlush.js'
 
 export interface BacklinkCompletionCandidate {
   label: string
@@ -97,18 +97,12 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
         return {
           label,
           detail,
-          apply: (view, _, from, to) => {
-            view.dispatch({
-              changes: { from, to, insert: hasClosingBrackets ? applyText : `${applyText}]]` },
-              // Place cursor two characters past the insertion start (after ']]')
-              selection: EditorSelection.cursor(from + applyText.length + 2)
-            });
-            // Persist the insert now (completion accept = sync point), so
-            // the reference is durable for the resolution processors that
-            // key off committed content rather than waiting on the 300ms
-            // debounce.
-            flushEditorContent(view)
-          },
+          // The cursor lands after ']]', whether inserted or already there.
+          apply: (view, _, from, to) => acceptCompletionInsert(
+            view,
+            {from, to, insert: hasClosingBrackets ? applyText : `${applyText}]]`},
+            from + applyText.length + 2,
+          ),
           type,
         }
       })
