@@ -1,1 +1,1 @@
-export{Bh as addMedia}from"../../../chunks/app-CE67CJd8.js";
+export{Uh as addMedia}from"../../../chunks/app-BG1pIxqJ.js";

@@ -1,1 +1,1 @@
-export{MQ as agentRuntimeDataExtension}from"../../../chunks/app-CE67CJd8.js";
+export{WQ as agentRuntimeDataExtension}from"../../../chunks/app-BG1pIxqJ.js";
