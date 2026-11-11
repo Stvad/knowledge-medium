@@ -1,1 +1,1 @@
-export{KG as staticDataExtensions}from"../../chunks/app-ZSXuBtVT.js";
+export{KG as staticDataExtensions}from"../../chunks/app-DcqV25KZ.js";

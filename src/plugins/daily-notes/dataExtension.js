@@ -1,1 +1,1 @@
-export{VJ as dailyNotesDataExtension}from"../../../chunks/app-ZSXuBtVT.js";
+export{VJ as dailyNotesDataExtension}from"../../../chunks/app-DcqV25KZ.js";
