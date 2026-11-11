@@ -1,1 +1,0 @@
-export{qm as extensionApiCatalog,Jm as extensionApiRuntimeExports}from"../../chunks/app-DPwyRNbr.js";

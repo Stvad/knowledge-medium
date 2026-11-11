@@ -1,1 +1,0 @@
-export{aK as staticDataExtensions}from"../../chunks/app-DPwyRNbr.js";

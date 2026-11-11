@@ -1,1 +1,0 @@
-export{Gj as SwipeActionMenu}from"../../../chunks/app-DPwyRNbr.js";

@@ -1,1 +1,0 @@
-export{gq as htmlDocumentDataExtension}from"../../../chunks/app-DPwyRNbr.js";

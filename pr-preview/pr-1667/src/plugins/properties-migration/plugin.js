@@ -1,1 +1,0 @@
-export{eo as propertiesMigrationPlugin}from"../../../chunks/app-DPwyRNbr.js";

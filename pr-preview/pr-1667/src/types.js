@@ -1,1 +1,0 @@
-export{vat as isChildBackedPropertiesWorkspace}from"../chunks/app-DPwyRNbr.js";

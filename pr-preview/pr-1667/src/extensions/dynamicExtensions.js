@@ -1,1 +1,0 @@
-export{NP as dynamicExtensionsExtension}from"../../chunks/app-DPwyRNbr.js";

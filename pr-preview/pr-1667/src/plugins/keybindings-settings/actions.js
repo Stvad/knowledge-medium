@@ -1,1 +1,0 @@
-export{JA as openKeybindingsSettingsAction}from"../../../chunks/app-DPwyRNbr.js";

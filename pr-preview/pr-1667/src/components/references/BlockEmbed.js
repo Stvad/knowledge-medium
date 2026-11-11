@@ -1,1 +1,0 @@
-export{DM as BlockEmbed}from"../../../chunks/app-DPwyRNbr.js";

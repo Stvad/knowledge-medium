@@ -1,1 +1,0 @@
-export{Xf as confirmThreadDeletion}from"../../../chunks/app-DPwyRNbr.js";

@@ -1,1 +1,0 @@
-export{Ix as useAssetObjectUrl}from"../../../chunks/app-DPwyRNbr.js";

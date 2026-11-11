@@ -1,1 +1,0 @@
-export{gS as videoPlayerMarkdownExtension}from"../../../chunks/app-DPwyRNbr.js";

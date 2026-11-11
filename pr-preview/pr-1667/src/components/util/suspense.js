@@ -1,1 +1,0 @@
-export{LG as SuspenseFallback}from"../../../chunks/app-DPwyRNbr.js";

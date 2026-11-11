@@ -1,1 +1,0 @@
-export{gb as attachmentsPlugin}from"../../../chunks/app-DPwyRNbr.js";

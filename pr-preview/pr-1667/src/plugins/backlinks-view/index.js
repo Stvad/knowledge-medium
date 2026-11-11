@@ -1,1 +1,0 @@
-export{K_ as backlinksViewPlugin}from"../../../chunks/app-DPwyRNbr.js";

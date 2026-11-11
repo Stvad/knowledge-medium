@@ -1,1 +1,0 @@
-export{F1 as instrumentAdapter}from"../../../chunks/app-DPwyRNbr.js";
