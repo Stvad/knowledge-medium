@@ -1,0 +1,1 @@
+export{Kit as deriveWorkspaceIdNamespace}from"../../../chunks/app-DOJ1be8h.js";

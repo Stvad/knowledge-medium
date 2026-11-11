@@ -1,0 +1,1 @@
+export{Xm as extensionsOverridesProp,Zm as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DOJ1be8h.js";

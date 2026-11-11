@@ -1,0 +1,1 @@
+export{ru as BlockTagsConfigEditor}from"../../../chunks/app-DOJ1be8h.js";

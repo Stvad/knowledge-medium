@@ -1,0 +1,1 @@
+export{OD as useMinuteClock}from"../../chunks/app-DOJ1be8h.js";

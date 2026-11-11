@@ -1,0 +1,1 @@
+export{rz as ExtensionRenderBoundary}from"../../chunks/app-DOJ1be8h.js";

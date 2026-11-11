@@ -1,0 +1,1 @@
+export{fit as getOrCreatePropertiesPage,pit as propertiesPageBlockId,mit as propertiesPageSpec}from"../../chunks/app-DOJ1be8h.js";

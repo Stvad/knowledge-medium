@@ -1,0 +1,1 @@
+export{nq as preferredSpanReplacement}from"../../../chunks/app-DOJ1be8h.js";

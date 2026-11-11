@@ -1,0 +1,1 @@
+export{RF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,zF as openExtensionsSettings}from"../../chunks/app-DOJ1be8h.js";
