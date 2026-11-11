@@ -19,7 +19,7 @@
  * back even if something else changed it since, as whole-row replay did.
  */
 import { isEqual } from 'lodash-es'
-import type { BlockData, BlockReference } from '@/data/api'
+import { normalizeReferences, type BlockData, type BlockReference } from '@/data/api'
 
 const contentRefs = (row: BlockData): BlockReference[] =>
   row.references.filter(ref => !ref.sourceField)
@@ -81,10 +81,13 @@ export const replayTarget = (current: BlockData, from: BlockData | null, to: Blo
     else delete merged.properties[key]
   }
 
-  merged.references = [
+  // Canonical order, as every stored row holds it: replay skips the
+  // processors that would normalize it, and a receiving client rejects
+  // non-canonical references.
+  merged.references = normalizeReferences([
     ...(contentChanged ? contentRefs(to) : contentRefs(current)),
     ...current.references.filter(ref => ref.sourceField && !restoredKeys.has(ref.sourceField)),
     ...to.references.filter(ref => ref.sourceField && restoredKeys.has(ref.sourceField)),
-  ]
+  ])
   return merged
 }

@@ -22,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ReadOnlyError } from '@/data/api'
+import { ChangeScope, CycleError, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
@@ -358,6 +358,47 @@ describe('field-level replay', () => {
     expect(await env.repo.undo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('synced')
     expect(await readProperties(env.repo, 'a')).toEqual({'test:mine': 'before', 'test:theirs': 'x'})
+  })
+})
+
+describe('replay refuses a parent cycle', () => {
+  const parentOf = async (id: string) =>
+    (await env.repo.db.get<{parent_id: string | null}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
+
+  const seedTree = async () => {
+    await env.repo.tx(async (tx) => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'a'})
+      await tx.create({id: 'b', workspaceId: WS, parentId: 'a', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed tree'})
+    env.repo.undoManager.clear()
+  }
+
+  // Another device moves `a` under `b` once `b` is a root.
+  const moveAUnderBElsewhere = () => env.repo.db.execute(`UPDATE blocks SET parent_id = 'b' WHERE id = 'a'`)
+
+  it('refuses an undo that would put b back under a, which now sits under b', async () => {
+    await seedTree()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'a edited'})
+      await tx.move('b', {parentId: null, orderKey: 'c0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a, root b'})
+    await moveAUnderBElsewhere()
+
+    await expect(env.repo.undo()).rejects.toThrow(CycleError)
+    expect([await parentOf('a'), await parentOf('b')]).toEqual(['b', null])
+    expect(await readContent(env.repo, 'a')).toBe('a edited')
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+  })
+
+  it('refuses it when the entry touched only the moved block', async () => {
+    await seedTree()
+    await env.repo.tx(async (tx) => {
+      await tx.move('b', {parentId: null, orderKey: 'c0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'root b'})
+    await moveAUnderBElsewhere()
+
+    await expect(env.repo.undo()).rejects.toThrow(CycleError)
+    expect([await parentOf('a'), await parentOf('b')]).toEqual(['b', null])
   })
 })
 

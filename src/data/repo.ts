@@ -2466,6 +2466,7 @@ export class Repo {
         if (deferred.length === pending.length) throw lastError
         pending = deferred
       }
+      await txImpl.assertReplayAcyclic()
     }, {scope, description: action}, {isReplay: true, lockHooks: {
       beforeCommit: () => {
         // The history was dropped while this replay held the lock — only a

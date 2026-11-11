@@ -1481,6 +1481,17 @@ export class TxImpl implements Tx {
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
 
+  /** Refuse a replay that left a parent cycle: `applyRaw` skips `move`'s
+   *  cycle walk, and a row it puts back under its old parent can find that
+   *  parent moved beneath it since. Run once, after every row of the entry is
+   *  applied, over the rows this tx reparented. */
+  async assertReplayAcyclic(): Promise<void> {
+    for (const [id, {before, after}] of this.ctx.snapshots) {
+      if (!after || after.parentId === null || after.parentId === before?.parentId) continue
+      if (await this.isDescendantOf(after.parentId, id)) throw new CycleError(id, after.parentId)
+    }
+  }
+
   /** Drive the row at `id` to `target` (or soft-delete if target is null),
    *  for the parts of the row the entry changed between `from` (its other
    *  side) and `target` — see `replayMerge.ts`; every other part keeps its

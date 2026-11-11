@@ -99,6 +99,20 @@ describe('replayTarget', () => {
     ])
   })
 
+  it('keeps the merged references in canonical order', () => {
+    const before = row({properties: {a: 'x'}, references: [{id: 'x', alias: 'x', sourceField: 'a'}]})
+    const after = row({properties: {a: 'y'}, references: [{id: 'y', alias: 'y', sourceField: 'a'}]})
+    const current = row({
+      properties: {a: 'y', b: 'z'},
+      references: [{id: 'y', alias: 'y', sourceField: 'a'}, {id: 'z', alias: 'z', sourceField: 'b'}],
+    })
+
+    expect(replayTarget(current, after, before).references).toEqual([
+      {id: 'x', alias: 'x', sourceField: 'a'},
+      {id: 'z', alias: 'z', sourceField: 'b'},
+    ])
+  })
+
   it('restores position as a pair and leaves it alone when the entry did not move the row', () => {
     const moved = replayTarget(
       row({parentId: 'q', orderKey: 'b0', content: 'typed since'}), row({parentId: 'q', orderKey: 'b0'}), row())
