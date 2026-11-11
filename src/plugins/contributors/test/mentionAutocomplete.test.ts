@@ -109,6 +109,19 @@ describe('contributorMentionSource', () => {
     view.destroy()
   })
 
+  it('a bare @ starts the span after the @, so the filter keeps every row, and the pick still replaces the @', async () => {
+    const doc = 'ask @'
+    const view = new EditorView({state: EditorState.create({doc, selection: {anchor: doc.length}})})
+    const result = await source(new CompletionContext(view.state, doc.length, false))
+    expect(result).toMatchObject({from: 5, to: 5})
+    expect(result!.filter).not.toBe(false)
+    const option = result!.options[0]
+    ;(option.apply as (v: EditorView, c: unknown, from: number, to: number) => void)(view, option, 5, 5)
+    expect(view.state.doc.toString()).toBe('ask [[Clio]]')
+    expect(view.state.selection.main.head).toBe(12)
+    view.destroy()
+  })
+
   it('stays silent inside inline code, but fires in prose', async () => {
     const at = (doc: string, pos: number) => source(new CompletionContext(
       EditorState.create({doc, extensions: [markdown({base: markdownLanguage})]}), pos, false,

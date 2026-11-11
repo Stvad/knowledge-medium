@@ -168,13 +168,15 @@ describe('matchCharTrigger', () => {
     )
   }, fuzzTestTimeout())
 
-  it('no two production wrappers fire at one cursor position (sibling ownership: at most one trigger owns any position — no merged double-fire dropdown)', () => {
+  it('no two production wrappers fire at one cursor position, except the bare @ the hand-off and mentions share by design (sibling ownership — no merged double-fire dropdown)', () => {
     // `autocompletion()` is installed once with no `override`
     // (src/editor/autocomplete.ts), so if two sources returned a match
     // at the same cursor they'd merge into one dropdown and each fire a
     // query for the other's text. The sibling-ownership walk (between
     // `@` and `#`) and the `@` family split (src/editor/atTrigger.ts)
-    // exist to make at most one source own any position. This
+    // exist to make at most one source own any position. The one
+    // deliberate exception is a bare `@`, where geo's unfiltered hand-off
+    // ranks above the filtered contributor list (atTrigger.ts). This
     // catches DOUBLE-fires only; dead zones (every source null, e.g.
     // `@a/b#c`) are pinned by the example tests in triggerMatch.test.ts.
     fc.assert(
@@ -182,7 +184,8 @@ describe('matchCharTrigger', () => {
         const firing = PRODUCTION_SOURCES
           .filter(({match}) => match(text, pos) !== null)
           .map(s => s.name)
-        expect(firing.length).toBeLessThanOrEqual(1)
+        if (firing.includes('bare @')) expect(firing).toEqual(['mention @query', 'bare @'])
+        else expect(firing.length).toBeLessThanOrEqual(1)
       }),
       fuzzParams(300),
     )

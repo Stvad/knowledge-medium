@@ -13,6 +13,7 @@ const placeSource = placeCompletionSource({
   resolvePlace: async () => null,
 })
 const contributorSource = contributorMentionSource(async query => [
+  {id: 'b', name: 'Zeno', kind: 'human' as const, wikilink: '[[Zeno]]'},
   {id: 'a', name: 'Clio', kind: 'agent' as const, wikilink: '[[Clio]]'},
 ].filter(c => c.name.toLowerCase().startsWith(query.toLowerCase())))
 
@@ -20,7 +21,9 @@ let view: EditorView | undefined
 afterEach(() => view?.destroy())
 
 /** The dropdown's labels once every source has answered; `[]` when none opened it. */
-const dropdownFor = async (doc: string): Promise<string[]> => {
+const dropdownFor = async (doc: string, {contributorsFirst = false} = {}): Promise<string[]> => {
+  const sources = [{autocomplete: placeSource}, {autocomplete: contributorSource}]
+  if (contributorsFirst) sources.reverse()
   view = new EditorView({
     parent: document.body,
     state: EditorState.create({
@@ -28,7 +31,7 @@ const dropdownFor = async (doc: string): Promise<string[]> => {
       selection: {anchor: doc.length},
       extensions: [
         autocompletion(),
-        EditorState.languageData.of(() => [{autocomplete: placeSource}, {autocomplete: contributorSource}]),
+        EditorState.languageData.of(() => sources),
       ],
     }),
   })
@@ -39,11 +42,13 @@ const dropdownFor = async (doc: string): Promise<string[]> => {
 }
 
 describe('the @ trigger family in one editor', () => {
-  it('a bare @ offers only the places hand-off, so Enter cannot mention anyone', async () => {
-    expect(await dropdownFor('ask @')).toEqual(['Search places (@@)…'])
+  it('a bare @ puts the places hand-off first, then every contributor in input order', async () => {
+    const expected = ['Search places (@@)…', 'Zeno', 'Clio']
+    expect(await dropdownFor('ask @')).toEqual(expected)
+    expect(await dropdownFor('ask @', {contributorsFirst: true})).toEqual(expected)
   })
 
-  it('@query offers only contributors', async () => {
+  it('@query offers only the contributors it matches', async () => {
     expect(await dropdownFor('ask @cl')).toEqual(['Clio'])
   })
 

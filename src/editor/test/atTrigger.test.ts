@@ -8,8 +8,8 @@ const owners = (text: string, pos = text.length) => ({
 })
 
 describe('the @ trigger family', () => {
-  it('a bare @ belongs only to the places hand-off', () => {
-    expect(owners('ask @')).toEqual({bare: {from: 4, query: ''}, mention: null, place: null})
+  it('a bare @ belongs to the places hand-off and to contributor mentions', () => {
+    expect(owners('ask @')).toEqual({bare: {from: 4, query: ''}, mention: {from: 4, query: ''}, place: null})
   })
 
   it('@query belongs only to contributor mentions', () => {

@@ -1,7 +1,8 @@
-/** CodeMirror CompletionSource for the `@query` contributor trigger:
- *  `@name` becomes `[[name]]`, a link to the contributor's profile page
- *  (which is what an agent-dispatch watcher listens for). A bare `@` and
- *  `@@` belong to places — see `src/editor/atTrigger.ts`. */
+/** CodeMirror CompletionSource for the `@` contributor trigger: `@name`
+ *  becomes `[[name]]`, a link to the contributor's profile page (which is
+ *  what an agent-dispatch watcher listens for). A bare `@` lists every
+ *  contributor below geo's hand-off row; `@@` belongs to places — see
+ *  `src/editor/atTrigger.ts`. */
 
 import type {
   CompletionContext,
@@ -86,16 +87,24 @@ export const contributorMentionSource = (
 
     const candidates = await getCandidates(match.query)
     if (candidates.length === 0) return null
+    const triggerFrom = line.from + match.from
+    const bare = match.query === ''
     return {
-      from: line.from + match.from,
+      // CodeMirror filters a filtered result against its span's text, so a
+      // bare `@`'s span starts AFTER the `@`: the empty pattern keeps every
+      // row, and the pick reaches back over the `@`.
+      from: bare ? triggerFrom + 1 : triggerFrom,
       to: pos,
-      filter: false,
-      options: candidates.map(candidate => ({
+      // Filtered ranks below geo's unfiltered hand-off; see atTrigger.ts.
+      filter: bare,
+      options: candidates.map((candidate, index) => ({
         label: candidate.name,
         detail: candidate.kind,
         type: 'class',
+        // Under `filter` every row scores the same; keep the input order.
+        boost: -index,
         apply: (view, _completion, from, to) =>
-          acceptCompletionInsert(view, {from, to, insert: candidate.wikilink}),
+          acceptCompletionInsert(view, {from: bare ? from - 1 : from, to, insert: candidate.wikilink}),
       })),
     }
   }

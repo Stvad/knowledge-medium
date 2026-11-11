@@ -1,26 +1,21 @@
 import { matchCharTrigger, type TriggerMatch } from './triggerMatch'
 
-/** The `@` trigger family. Each cursor position belongs to at most one of
- *  these, so two sources never merge into one dropdown and no row can
- *  jump above another under Enter:
+/** The `@` trigger family:
  *   - `@@query` — places (geo);
- *   - a bare `@` — the hand-off row into `@@` (geo);
- *   - `@query` — contributor mentions (contributors).
- *  A bare `@` goes to places rather than listing contributors, so `@` +
- *  Enter cannot mention (and so dispatch) anyone. */
+ *   - `@query` — contributor mentions (contributors);
+ *   - a bare `@` — both: geo's hand-off row into `@@`, then every
+ *     contributor. The hand-off is an unfiltered result and the
+ *     contributors a filtered one, which CodeMirror always ranks below it,
+ *     so `@` + Enter turns into `@@` rather than mentioning (and so
+ *     dispatching) anyone. No other position is shared. */
 
 export const matchPlaceTrigger = (text: string, pos: number): TriggerMatch | null =>
   matchCharTrigger(text, pos, '@', {doubled: 'require'})
 
-const matchSingleAt = (text: string, pos: number): TriggerMatch | null =>
+export const matchMentionTrigger = (text: string, pos: number): TriggerMatch | null =>
   matchCharTrigger(text, pos, '@', {doubled: 'reject'})
 
 export const matchBareAt = (text: string, pos: number): TriggerMatch | null => {
-  const match = matchSingleAt(text, pos)
+  const match = matchMentionTrigger(text, pos)
   return match?.query === '' ? match : null
-}
-
-export const matchMentionTrigger = (text: string, pos: number): TriggerMatch | null => {
-  const match = matchSingleAt(text, pos)
-  return match && match.query !== '' ? match : null
 }
