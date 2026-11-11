@@ -1,1 +1,1 @@
-export{Q3 as assertAliasClaimable,$3 as claimedAliases}from"../../chunks/app-tcZ6IZ74.js";
+export{Q3 as assertAliasClaimable,$3 as claimedAliases}from"../../chunks/app-xDqm7U4m.js";
