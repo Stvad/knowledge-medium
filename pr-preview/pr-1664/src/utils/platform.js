@@ -1,0 +1,1 @@
+export{qU as isIOS,JU as isMacPlatform}from"../../chunks/app-CejPNmfl.js";

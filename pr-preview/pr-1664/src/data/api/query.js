@@ -1,0 +1,1 @@
+export{Dct as defineQuery}from"../../../chunks/app-CejPNmfl.js";

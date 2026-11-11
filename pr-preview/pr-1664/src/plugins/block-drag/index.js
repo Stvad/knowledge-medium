@@ -1,0 +1,1 @@
+export{Oy as blockDragPlugin}from"../../../chunks/app-CejPNmfl.js";

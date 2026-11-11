@@ -1,0 +1,1 @@
+export{Wnt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Gnt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Knt as __resetLayoutSessionIdForTesting,qnt as getLayoutSessionId,Jnt as isInstalledAppDisplayMode,Ynt as readOrCreateLayoutSessionId}from"../../chunks/app-CejPNmfl.js";

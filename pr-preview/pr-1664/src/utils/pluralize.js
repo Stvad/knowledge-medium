@@ -1,0 +1,1 @@
+export{q6 as agree,J6 as pluralize}from"../../chunks/app-CejPNmfl.js";

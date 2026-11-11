@@ -1,0 +1,1 @@
+export{bq as htmlDocumentDataExtension}from"../../../chunks/app-CejPNmfl.js";

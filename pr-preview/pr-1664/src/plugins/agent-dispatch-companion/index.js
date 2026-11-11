@@ -1,0 +1,1 @@
+export{sm as agentDispatchCompanionPlugin}from"../../../chunks/app-CejPNmfl.js";

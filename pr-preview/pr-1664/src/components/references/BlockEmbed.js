@@ -1,0 +1,1 @@
+export{OM as BlockEmbed}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{BG as BootFallback}from"../../../chunks/app-CejPNmfl.js";

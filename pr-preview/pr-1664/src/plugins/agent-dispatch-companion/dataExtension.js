@@ -1,0 +1,1 @@
+export{v$ as agentDispatchCompanionDataExtension}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{q_ as backlinksViewPlugin}from"../../../chunks/app-CejPNmfl.js";

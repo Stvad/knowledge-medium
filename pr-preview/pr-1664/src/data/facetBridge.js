@@ -1,0 +1,1 @@
+export{I0 as FacetBridge}from"../../chunks/app-CejPNmfl.js";

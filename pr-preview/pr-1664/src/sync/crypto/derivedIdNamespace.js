@@ -1,0 +1,1 @@
+export{Xit as deriveWorkspaceIdNamespace}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{tZ as characterCounterDataExtension}from"../../../chunks/app-CejPNmfl.js";

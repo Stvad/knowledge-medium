@@ -1,0 +1,1 @@
+export{Yq as geoDataExtension}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{sZ as RAW_CHARACTER_COUNT_PROFILE_ID,cZ as WORDS_COUNT_PROFILE_ID,lZ as charLimitProp,uZ as charProfileProp,dZ as charScopeProp}from"../../../chunks/app-CejPNmfl.js";

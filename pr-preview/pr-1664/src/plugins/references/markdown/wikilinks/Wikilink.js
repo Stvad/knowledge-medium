@@ -1,0 +1,1 @@
+export{ny as Wikilink}from"../../../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{xq as htmlDocumentTypeSeed}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{R_ as blockInfoPlugin}from"../../../chunks/app-CejPNmfl.js";

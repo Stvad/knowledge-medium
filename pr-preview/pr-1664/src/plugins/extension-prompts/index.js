@@ -1,0 +1,1 @@
+export{FN as ExtensionPromptSurface,IN as extensionPromptsExtension}from"../../../chunks/app-CejPNmfl.js";

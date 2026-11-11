@@ -1,0 +1,1 @@
+export{uG as propertyShapeLabel}from"../../../chunks/app-CejPNmfl.js";

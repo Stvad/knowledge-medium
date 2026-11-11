@@ -1,0 +1,1 @@
+export{FX as contributorsDataExtension}from"../../../chunks/app-CejPNmfl.js";

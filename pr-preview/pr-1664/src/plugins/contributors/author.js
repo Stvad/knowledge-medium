@@ -1,0 +1,1 @@
+export{Lh as authorIdOf}from"../../../chunks/app-CejPNmfl.js";

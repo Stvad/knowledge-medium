@@ -1,0 +1,1 @@
+export{w3 as kernelDataExtension}from"../../chunks/app-CejPNmfl.js";

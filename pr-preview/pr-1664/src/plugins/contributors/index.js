@@ -1,0 +1,1 @@
+export{Qp as contributorsPlugin}from"../../../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{lK as staticDataExtensions}from"../../chunks/app-CejPNmfl.js";

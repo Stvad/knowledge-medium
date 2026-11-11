@@ -1,0 +1,1 @@
+export{Ry as useIsReadOnly}from"../../chunks/app-CejPNmfl.js";

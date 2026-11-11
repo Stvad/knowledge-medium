@@ -1,0 +1,1 @@
+export{FQ as aliasDataExtension}from"../../../chunks/app-CejPNmfl.js";

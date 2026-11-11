@@ -1,0 +1,1 @@
+export{Fct as definePostCommitProcessor}from"../../../chunks/app-CejPNmfl.js";

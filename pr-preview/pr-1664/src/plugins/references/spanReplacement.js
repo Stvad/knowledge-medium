@@ -1,0 +1,1 @@
+export{oq as preferredSpanReplacement}from"../../../chunks/app-CejPNmfl.js";

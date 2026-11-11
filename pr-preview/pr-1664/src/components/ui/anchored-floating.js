@@ -1,0 +1,1 @@
+export{iG as floatingAnchorFromRect,aG as useAnchoredFloating}from"../../../chunks/app-CejPNmfl.js";

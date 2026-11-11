@@ -1,0 +1,1 @@
+export{pb as richPastePlugin}from"../../../chunks/app-CejPNmfl.js";

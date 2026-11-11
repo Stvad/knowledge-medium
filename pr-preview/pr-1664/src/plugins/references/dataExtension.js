@@ -1,0 +1,1 @@
+export{TK as referencesDataExtension}from"../../../chunks/app-CejPNmfl.js";

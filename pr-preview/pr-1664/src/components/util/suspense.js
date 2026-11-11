@@ -1,0 +1,1 @@
+export{VG as SuspenseFallback}from"../../../chunks/app-CejPNmfl.js";

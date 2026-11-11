@@ -1,0 +1,1 @@
+export{Sat as isChildBackedPropertiesWorkspace}from"../chunks/app-CejPNmfl.js";

@@ -1,0 +1,1 @@
+export{vF as BlockLoadingPlaceholder}from"../../chunks/app-CejPNmfl.js";

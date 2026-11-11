@@ -1,0 +1,1 @@
+export{_b as attachmentsPlugin}from"../../../chunks/app-CejPNmfl.js";

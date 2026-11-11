@@ -1,0 +1,1 @@
+export{uv as DEFAULT_BACKLINKS_VIEW_ID,dv as FLAT_BACKLINKS_VIEW_ID,fv as GROUPED_BACKLINKS_VIEW_ID,pv as backlinksViewProp,mv as defaultBacklinksViewIdForBlock}from"../../../chunks/app-CejPNmfl.js";

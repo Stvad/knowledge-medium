@@ -1,0 +1,1 @@
+export{wY as annotationsDataExtension}from"../../../chunks/app-CejPNmfl.js";
