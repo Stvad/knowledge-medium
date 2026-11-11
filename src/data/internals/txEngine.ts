@@ -115,7 +115,7 @@ import {
 } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
-import { replayTarget } from './replayMerge'
+import { replayConflicts, replayTarget } from './replayMerge'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -1481,6 +1481,20 @@ export class TxImpl implements Tx {
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
 
+  /** Whether any row of an entry was written since, in a part the entry also
+   *  changed (`replayConflicts`): such an entry restores its far side whole.
+   *  Read before the replay writes anything. */
+  async replayEntryConflicts(
+    rows: ReadonlyArray<readonly [id: string, target: BlockData | null, from: BlockData | null]>,
+  ): Promise<boolean> {
+    for (const [id, target, from] of rows) {
+      if (target === null) continue
+      const current = await this.get(id)
+      if (current !== null && replayConflicts(current, from, target)) return true
+    }
+    return false
+  }
+
   /** Refuse a replay that left a parent cycle: `applyRaw` skips `move`'s
    *  cycle walk, and a row it puts back under its old parent can find that
    *  parent moved beneath it since. Run once, after every row of the entry is
@@ -1492,8 +1506,8 @@ export class TxImpl implements Tx {
     }
   }
 
-  /** Drive the row at `id` to `target` (or soft-delete if target is null),
-   *  for the parts of the row the entry changed between `from` (its other
+  /** Drive the row at `id` to `target` (or soft-delete if target is null).
+   *  With `merge`, only the parts the entry changed between `from` (its other
    *  side) and `target` — see `replayMerge.ts`; every other part keeps its
    *  current value. Bypasses the public primitives — intentionally — because
    *  undo replay restores arbitrary snapshot state that the narrow patch
@@ -1501,9 +1515,9 @@ export class TxImpl implements Tx {
    *  + `deleted` flipping in one write). Spec §10 step 7 + the
    *  BlockDataPatch comment in `api/blockData.ts`.
    *
-   *  Cycle / parent-deleted UX checks are skipped: each restored part
-   *  comes from a previously-committed tx, which the engine validated
-   *  then. The
+   *  `move`'s checks don't run per row: the parent-deleted trigger still
+   *  fires (`Repo._replay` retries around it) and the cycle walk runs once
+   *  per entry (`assertReplayAcyclic`). The
    *  workspace-invariant trigger still fires on UPDATE-of-parent_id, so
    *  the storage-level guarantee holds. `updatedAt` / `updatedBy` are
    *  stamped to the replay tx's user + now() — a redo at 10:01 by user
@@ -1525,7 +1539,7 @@ export class TxImpl implements Tx {
    *  though the target state is valid — `applyRaw` itself does no
    *  ordering or retry around that; callers own it (see
    *  `replayApplicationOrder` in txSnapshots.ts). */
-  async applyRaw(id: string, target: BlockData | null, from: BlockData | null): Promise<void> {
+  async applyRaw(id: string, target: BlockData | null, from: BlockData | null, merge: boolean): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
     const now = this.ctx.now()
@@ -1586,11 +1600,12 @@ export class TxImpl implements Tx {
       return
     }
 
-    // Row exists: restore the parts of it the entry changed, onto the row as
-    // it is now (`replayTarget`). workspace_id, id, created_at, created_by
+    // Row exists: with `merge`, restore the parts of it the entry changed,
+    // onto the row as it is now (`replayTarget`); else the far side whole.
+    // workspace_id, id, created_at, created_by
     // are immutable by contract (§4.1.1); updated_at / updated_by stamp the
     // replay action.
-    const restored = replayTarget(beforeData, from, target)
+    const restored = merge ? replayTarget(beforeData, from, target) : target
     const after: BlockData = {
       ...restored,
       // Locally monotonic row-version (invariant I3) — see the soft-delete

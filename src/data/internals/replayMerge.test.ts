@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import type { BlockData } from '@/data/api'
-import { replayTarget } from './replayMerge'
+import { replayConflicts, replayTarget } from './replayMerge'
 
 const row = (patch: Partial<BlockData> = {}): BlockData => ({
   id: 'a',
@@ -140,14 +140,46 @@ describe('replayTarget', () => {
     expect(replayTarget(current, after, before).references).toEqual([{id: 'x', alias: 'x', sourceField: 'link'}])
   })
 
-  it('takes the far side whole when nothing touched the row since the entry', () => {
+  it('restores the far side exactly, key order included, when nothing touched the row since the entry', () => {
     const before = row({properties: {b: 1, a: 1}})
     const after = row({properties: {a: 2, b: 1}})
-    expect(replayTarget(row({properties: {a: 2, b: 1}}), after, before)).toBe(before)
+    expect(Object.keys(replayTarget(row({properties: {a: 2, b: 1}}), after, before).properties)).toEqual(['b', 'a'])
   })
 
-  it('takes the far side whole when the entry created the row', () => {
+  it('redoes a create by reviving its tombstone, keeping what was written to it since', () => {
     const created = row({content: 'born', properties: {a: 1}})
-    expect(replayTarget(row({deleted: true, properties: {b: 2}}), null, created)).toBe(created)
+
+    expect(replayTarget({...created, deleted: true}, null, created)).toEqual(created)
+    expect(replayTarget({...created, deleted: true, properties: {a: 1, status: 'done'}}, null, created))
+      .toEqual({...created, properties: {a: 1, status: 'done'}})
+  })
+
+  it('reads property keys as own keys only', () => {
+    const before = row()
+    const after = row({properties: {constructor: 'x'}})
+    const target = replayTarget(row({properties: {constructor: 'x', other: 1}}), after, before)
+    expect(target.properties).toEqual({other: 1})
+  })
+})
+
+describe('replayConflicts', () => {
+  it('is false when the write since touched only parts the entry did not change', () => {
+    const before = row({content: 'old'})
+    const after = row({content: 'new'})
+    expect(replayConflicts(row({content: 'new', properties: {status: 'done'}}), after, before)).toBe(false)
+  })
+
+  it('is true when the write since touched a part the entry changed', () => {
+    const before = row({properties: {alias: ['Old']}})
+    const after = row({properties: {alias: ['Old', 'X']}})
+    expect(replayConflicts(row({content: 'New', properties: {alias: ['New', 'X']}}), after, before)).toBe(true)
+    expect(replayConflicts(row({content: 'typed since'}), row({content: 'new'}), row({content: 'old'}))).toBe(true)
+    expect(replayConflicts(row({parentId: 'r'}), row({parentId: 'q'}), row())).toBe(true)
+  })
+
+  it('sees a created row\'s tombstone as the entry\'s side', () => {
+    const created = row({content: 'born'})
+    expect(replayConflicts({...created, deleted: true, properties: {status: 'done'}}, null, created)).toBe(false)
+    expect(replayConflicts({...created, deleted: false}, null, created)).toBe(true)
   })
 })

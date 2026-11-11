@@ -581,6 +581,10 @@ export interface RepoTxOptions {
    *  Prefer a non-undoable SCOPE when the write genuinely is not a document
    *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
    *  where the scope must stay `BlockDefault` for gating reasons but the entry
-   *  would be a trap. Default false (entries are recorded as usual). */
+   *  would be a trap. Default false (entries are recorded as usual).
+   *
+   *  A skipped tx does not clear the redo stack, so a redo can find its rows
+   *  moved since and refuse (as after a synced edit) — accepted: it writes
+   *  nothing. */
   skipUndo?: boolean
 }

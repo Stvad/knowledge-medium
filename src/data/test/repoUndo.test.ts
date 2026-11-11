@@ -361,6 +361,31 @@ describe('field-level replay', () => {
   })
 })
 
+describe('replay over a conflicting write', () => {
+  it('restores every row of the entry whole when a write since touched a part the entry changed', async () => {
+    await env.repo.tx(async (tx) => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'a'})
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'b'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+    env.repo.undoManager.clear()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:k': 'mine'}})
+      await tx.update('b', {content: 'b edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'entry'})
+    // Off the stack: the same key on `a`, and an unrelated key on `b`.
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:k': 'theirs'}})
+      await tx.update('b', {properties: {'test:other': 'x'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'since', skipUndo: true})
+
+    expect(await env.repo.undo()).toBe(true)
+    const a = await env.repo.load('a')
+    const b = await env.repo.load('b')
+    expect(a?.properties['test:k']).toBeUndefined()
+    expect([b?.content, b?.properties['test:other']]).toEqual(['b', undefined])
+  })
+})
+
 describe('replay refuses a parent cycle', () => {
   const parentOf = async (id: string) =>
     (await env.repo.db.get<{parent_id: string | null}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id

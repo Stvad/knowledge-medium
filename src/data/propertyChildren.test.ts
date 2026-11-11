@@ -222,6 +222,19 @@ describe('flipped workspace (properties_migration = children)', () => {
   })
 
 
+  it('an undo of a value edit, after an unset made off the stack, leaves cell and children agreeing', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'v1'), {scope: ChangeScope.BlockDefault})
+    repo.undoManager.clear()
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'v2'), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault, skipUndo: true})
+
+    await repo.undo().catch(() => false)
+    expect({cell: await cellValue('p'), fields: (await liveFieldRows('p')).length}).toEqual({cell: undefined, fields: 0})
+  })
+
   it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
     await seedWorkspace('children')
     const repo = setup()

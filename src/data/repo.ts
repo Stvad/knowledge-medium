@@ -2447,13 +2447,17 @@ export class Repo {
       // replay) can still collide with it. Either way a full pass with
       // zero progress rethrows, failing the gesture rather than forcing it.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
+      const fromOf = (id: string): BlockData | null => {
+        const snap = replaying.snapshots.get(id)!
+        return direction === 'before' ? snap.after : snap.before
+      }
+      const merge = !await txImpl.replayEntryConflicts(pending.map(([id, target]) => [id, target, fromOf(id)] as const))
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
         for (const [id, target] of pending) {
           try {
-            const snap = replaying.snapshots.get(id)!
-            await txImpl.applyRaw(id, target, direction === 'before' ? snap.after : snap.before)
+            await txImpl.applyRaw(id, target, fromOf(id), merge)
           } catch (err) {
             if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
               deferred.push([id, target])
