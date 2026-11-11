@@ -173,10 +173,10 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     // globally-registered servers.
     args.push('--mcp-config', options.mcpConfigPath, '--strict-mcp-config')
   }
-  // Every request of the run carries the skill listing and the definition
-  // of every tool offered, and print mode denies anything outside
-  // --allowedTools anyway: offer only the built-in tools it allows, and no
-  // skills (the user's interactive plugins would otherwise ride along).
+  // --allowedTools only pre-approves: an offered tool that needs no approval
+  // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
+  // anyway, so the offered set is the boundary. Offer only the built-ins the
+  // allow list names, and no skills: every request carries each one offered.
   args.push('--disable-slash-commands', '--tools', builtInToolsAllowed(options.allowedTools).join(','))
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))

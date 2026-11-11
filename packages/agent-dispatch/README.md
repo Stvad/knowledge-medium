@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.8.5
 
-A claude run is offered only the built-in tools its `allowedTools` names, and no skills, so its fixed prompt no longer carries every tool definition and every installed plugin's skill listing on each request. A watcher whose prompt asks for a skill, or a built-in tool it doesn't allow, no longer sees it; it could never call the tool, since print mode denied it. Each run's `done` / `FAILED` log line now ends with its token usage, for example `tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34`.
+A claude run is offered only the built-in tools its `allowedTools` names, and no skills, so its fixed prompt no longer carries every tool definition and every installed plugin's skill listing on each request. This also makes the allow list the real boundary: `--allowedTools` only pre-approves, and before 0.8.5 a run without them could still use the tools that need no approval — read-only shell commands (`ls`, `cat`, `git status`), `Read`/`Glob`/`Grep`, subagents, and writes to Claude Code's auto-memory. A watcher that wants any of these now lists them in `runner.allowedTools`. Each run's `done` / `FAILED` log line now ends with its token usage, for example `tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34`.
 
 ## Upgrade to 0.8.4
 
