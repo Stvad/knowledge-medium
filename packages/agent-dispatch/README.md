@@ -43,7 +43,7 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.8.3
 
-0.8.3 requires `@knowledge-medium/agent-cli` 0.13.1. A task's `agent:*` writes and its reply no longer go on the person's undo stack, so a cmd-Z in the app undoes their own edit instead of flipping a finished task back to `running`. An app tab older than this release ignores the option, and the writes stay undoable there until it reloads.
+0.8.3 requires `@knowledge-medium/agent-cli` 0.13.1. For `spawn` delivery, the daemon's `agent:*` writes and its replies no longer go on the person's undo stack, so a cmd-Z in the app undoes their own edit instead of flipping a finished task back to `running`. With `channel` delivery the ambient session still closes the task through the generic MCP tools, whose writes stay undoable. An app tab older than this release ignores the option, and the writes stay undoable there until it reloads.
 
 ## Upgrade to 0.8.1
 
