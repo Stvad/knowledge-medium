@@ -12,7 +12,8 @@
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
- *   Delete (`CommentActions`).
+ *   Delete (`CommentActions`). A card zoomed into a comment renders that
+ *   comment in the root's place (`cardZoom.tsx`).
  */
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
@@ -53,6 +54,7 @@ import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
+import {CardZoomCrumbs, useCardZoomIn} from './cardZoom.tsx'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
@@ -343,7 +345,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
 const CARD_CHAIN_KEY = 'annotations.cardChain'
 
 const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
-  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
+  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : NO_IDS
 
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
@@ -351,18 +353,25 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
 export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
+  const zoom = useCardZoomIn(renderScopeId, thread.id)
+  const shownId = zoom?.blockId ?? thread.id
+  // Stable across the card's own re-renders (a zoom), which would otherwise
+  // hand every block in it a new context.
+  const outerChain = cardChainOf(parent)
+  const chain = useMemo(() => [...outerChain, thread.id], [outerChain, thread.id])
   return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
+      {zoom && <CardZoomCrumbs cardScope={renderScopeId} anchor={thread.anchor} zoom={zoom}/>}
       <NestedBlockContextProvider overrides={{
         isNestedSurface: true,
         layoutBoundary: false,
         renderScopeId,
-        scopeRootId: thread.id,
+        scopeRootId: shownId,
         [COMMENT_CARD_KEY]: renderScopeId,
         [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
-        [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
+        [CARD_CHAIN_KEY]: chain,
       }}>
-        <BlockComponent blockId={thread.id}/>
+        <BlockComponent blockId={shownId}/>
       </NestedBlockContextProvider>
     </div>
   )

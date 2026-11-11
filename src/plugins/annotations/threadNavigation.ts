@@ -16,10 +16,10 @@ import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {lazyBlockCacheKey, requestLazyMount} from '@/components/util/lazyMountRegistry.js'
 import {decodeRowProperty} from '@/data/rowProperty'
-import {navigationVerb, type NavigationResult} from '@/utils/navigation'
+import {navigationVerb, ZOOM_ORIGIN, ZOOM_OUT_ORIGIN, type NavigatePanelInput, type NavigationResult} from '@/utils/navigation'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
-import {cardRenderScopeId, outerCardSurface, revealThread, viewKey} from './uiStore.ts'
+import {cardRenderScopeId, isCardRenderScopeId, outerCardSurface, peekCardZoom, revealThread, setCardZoom, viewKey} from './uiStore.ts'
 
 export interface ThreadLanding {
   /** Where the navigation lands: the outermost thread's target. */
@@ -81,10 +81,14 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
  *  scope derives from the one around it; the outermost is a margin card where
  *  the margin is drawn. */
 export const landingFocusScope = (panelId: string, landing: ThreadLanding, inMargin: boolean): string =>
-  landing.threads.reduce(
-    (scope, thread, depth) => cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id),
-    panelRenderScopeId(panelId, landing.targetId),
-  )
+  landingCardScopes(panelId, landing, inMargin).at(-1)!
+
+/** The render scope of each card of `landing`, outermost first. */
+const landingCardScopes = (panelId: string, landing: ThreadLanding, inMargin: boolean): string[] => {
+  let scope = panelRenderScopeId(panelId, landing.targetId)
+  return landing.threads.map((thread, depth) =>
+    scope = cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id))
+}
 
 /** The last landing's rows, wanted mounted until the next landing. A card
  *  mounts its rows lazily, and `FocusedRowLazyMount` walks a focused row's
@@ -111,11 +115,47 @@ const revealLanding = async (
       for (const id of landing.collapsed) await revealChildren(tx, id)
     }, {scope: ChangeScope.BlockDefault, description: 'reveal comment'})
   }
+  const cardScopes = landingCardScopes(panelId, landing, outerCardSurface(panelId) === 'margin')
+  // A card zoomed into another part of its thread would hide the block.
+  for (const scope of cardScopes) {
+    const zoomed = peekCardZoom(scope)
+    if (zoomed !== undefined && !landing.rows.includes(zoomed)) setCardZoom(scope, null)
+  }
   // Focus is the panel's, as `writePanelContent` sets it for the landing.
-  await focusBlock(repo.block(panelId), blockId, {renderScopeId: landingFocusScope(panelId, landing, outerCardSurface(panelId) === 'margin')})
+  await focusBlock(repo.block(panelId), blockId, {renderScopeId: cardScopes.at(-1)!})
+}
+
+/** A zoom made inside a card (a comment's bullet, Zoom In, zoom out) zooms
+ *  the card, as one made in a panel's outline zooms the panel. Only one aimed
+ *  at the card's own panel: a bullet opened in a new panel is a navigation.
+ *  False where it is the panel's to handle: made elsewhere, or a zoom out of a
+ *  card showing its whole thread. */
+const zoomInsideCard = async (repo: Repo, input: NavigatePanelInput): Promise<boolean> => {
+  const scope = input.sourceRenderScopeId
+  if (scope === undefined || !isCardRenderScopeId(scope)) return false
+  if (input.origin === ZOOM_ORIGIN) {
+    const found = await threadRootOf(repo, input.blockId)
+    if (!found) return false
+    setCardZoom(scope, found.root.id === input.blockId ? null : input.blockId)
+    await focusBlock(repo.block(input.panelId), input.blockId, {renderScopeId: scope})
+    return true
+  }
+  if (input.origin === ZOOM_OUT_ORIGIN) {
+    const zoomed = peekCardZoom(scope)
+    if (zoomed === undefined) return false
+    const found = await threadRootOf(repo, zoomed)
+    const parent = found?.above[0]
+    setCardZoom(scope, parent && parent.id !== found.root.id ? parent.id : null)
+    return true
+  }
+  return false
 }
 
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {
+  const {input} = request
+  if (input.target === 'panel' && await zoomInsideCard(request.repo, input)) {
+    return {panelId: input.panelId, blockId: input.blockId, workspaceId: input.workspaceId}
+  }
   const landing = await threadLanding(request.repo, request.input.blockId)
   // A viewer can't expand the comments that hide the block, so it opens the
   // block itself.

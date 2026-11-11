@@ -59,3 +59,7 @@ export const surfaceRenderScopeId = (
   parentRenderScopeId: string,
   occurrenceId: string,
 ): string => joinScope(`surface.${surface}`, [occurrenceId, parentRenderScopeId])
+
+/** Is `renderScopeId` a `surfaceRenderScopeId` of `surface`? */
+export const isSurfaceRenderScopeId = (surface: string, renderScopeId: string): boolean =>
+  renderScopeId.startsWith(`surface.${surface}:`)

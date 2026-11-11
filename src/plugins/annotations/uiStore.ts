@@ -6,13 +6,14 @@
  * - Inline threads, resolved threads shown and open composers are keyed by
  *   `viewKey`, one block as shown in one render scope, so expanding or
  *   commenting on a block in one panel leaves the same block in another alone.
- * - The margin's state is keyed by panel.
+ * - The margin's state is keyed by panel, a card's zoom by the card's render
+ *   scope.
  * - A pending re-anchor is one for the tab.
  */
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
-import {surfaceRenderScopeId} from '@/utils/renderScope'
+import {isSurfaceRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -27,6 +28,11 @@ export type CardSurface = 'comments' | 'margin'
  *  definition: a card renders in it, and a navigation focuses into it. */
 export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
   surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
+
+const CARD_SURFACES: readonly CardSurface[] = ['comments', 'margin']
+
+export const isCardRenderScopeId = (renderScopeId: string): boolean =>
+  CARD_SURFACES.some(surface => isSurfaceRenderScopeId(surface, renderScopeId))
 
 /** An edit suggestion being composed. A comment needs no composer: it is
  *  written at once (`startComment`). */
@@ -97,6 +103,30 @@ export const peekComposer = (key: string): ComposerState | undefined => composer
 
 export const useComposer = (key: string): ComposerState | undefined =>
   useSyncExternalStore(subscribe, () => composers.get(key))
+
+// ──── A card's zoom ────
+
+/** The comment each zoomed card shows in place of its whole thread, by the
+ *  card's render scope. A block that is no longer inside the card's thread
+ *  (moved, deleted) is ignored by the card (`useCardZoom`). */
+const cardZooms = new Map<string, string>()
+
+export const setCardZoom = (cardScope: string, blockId: string | null): void => {
+  if ((cardZooms.get(cardScope) ?? null) === blockId) return
+  if (blockId === null) cardZooms.delete(cardScope)
+  else cardZooms.set(cardScope, blockId)
+  listeners.notify()
+}
+
+export const __resetCardZoomsForTesting = (): void => {
+  cardZooms.clear()
+  listeners.notify()
+}
+
+export const peekCardZoom = (cardScope: string): string | undefined => cardZooms.get(cardScope)
+
+export const useCardZoom = (cardScope: string): string | undefined =>
+  useSyncExternalStore(subscribe, () => cardZooms.get(cardScope))
 
 // ──── The side margin, per panel ────
 
