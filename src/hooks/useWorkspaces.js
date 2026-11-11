@@ -1,1 +1,1 @@
-export{CW as useActiveWorkspaceId,wW as useMyWorkspaceRoles,TW as useWorkspaceMembers,EW as useWorkspaces}from"../../chunks/app-MKXYaneJ.js";
+export{wW as useActiveWorkspaceId,TW as useMyWorkspaceRoles,EW as useWorkspaceMembers,DW as useWorkspaces}from"../../chunks/app-C6ip3iwR.js";
