@@ -3,9 +3,9 @@
  *  Trigger shape: `@@<query>` at start of line or after whitespace (see
  *  `src/editor/atTrigger.ts` for how `@`, `@@` and a bare `@` split, and
  *  `triggerMatch.ts` for the query rules and guards). A bare `@` gets one
- *  hand-off row ("Search places (@@)…") that turns it into `@@` and
- *  reopens the dropdown, so `@@` is discoverable from `@`; `@query`
- *  belongs to the contributors plugin. The query may be empty — that's
+ *  hand-off row ("Search places (@@)…"), above the contributor list,
+ *  that turns it into `@@` and reopens the dropdown, so `@@` is
+ *  discoverable from `@`; `@query` belongs to the contributors plugin. The query may be empty — that's
  *  the moment to surface the "Use current location" sentinel.
  *
  *  On select: the caller-supplied `resolvePlace` returns a
