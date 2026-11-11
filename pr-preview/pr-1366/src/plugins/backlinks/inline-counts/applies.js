@@ -1,1 +1,1 @@
-export{tv as inlineBacklinksApplies}from"../../../../chunks/app-C8BnKxYU.js";
+export{rv as inlineBacklinksApplies}from"../../../../chunks/app-B8GTeJ0S.js";

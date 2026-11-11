@@ -1,1 +1,1 @@
-export{cj as SWIPE_QUICK_ACTIONS_GESTURE_ID,lj as SWIPE_TRIGGER_PX,uj as swipeRecognizer}from"../../../chunks/app-C8BnKxYU.js";
+export{Uj as SWIPE_QUICK_ACTIONS_GESTURE_ID,Wj as SWIPE_TRIGGER_PX,Gj as swipeRecognizer}from"../../../chunks/app-B8GTeJ0S.js";

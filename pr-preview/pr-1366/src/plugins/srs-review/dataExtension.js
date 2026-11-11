@@ -1,1 +1,1 @@
-export{Wc as srsReviewDataExtension}from"../../../chunks/app-C8BnKxYU.js";
+export{el as srsReviewDataExtension}from"../../../chunks/app-B8GTeJ0S.js";

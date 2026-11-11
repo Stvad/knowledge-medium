@@ -1,1 +1,1 @@
-export{Qv as EmbedComponent,$v as referenceTargetOf}from"../../../../chunks/app-C8BnKxYU.js";
+export{ty as EmbedComponent,ny as referenceTargetOf}from"../../../../chunks/app-B8GTeJ0S.js";
