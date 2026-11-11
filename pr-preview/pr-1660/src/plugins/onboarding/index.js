@@ -1,1 +1,0 @@
-export{_A as EXTENSIONS_PAGE_TITLE,vA as TUTORIAL_DEFAULT_TITLE,yA as TUTORIAL_VIM_TITLE,HS as onboardingPlugin,gA as seedTutorial}from"../../../chunks/app-xnFAPejy.js";

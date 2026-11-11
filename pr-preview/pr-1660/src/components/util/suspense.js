@@ -1,1 +1,0 @@
-export{wG as SuspenseFallback}from"../../../chunks/app-xnFAPejy.js";

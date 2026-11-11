@@ -1,1 +1,0 @@
-export{fJ as matchCharTrigger}from"../../chunks/app-xnFAPejy.js";

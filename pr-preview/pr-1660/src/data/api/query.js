@@ -1,1 +1,0 @@
-export{uct as defineQuery}from"../../../chunks/app-xnFAPejy.js";

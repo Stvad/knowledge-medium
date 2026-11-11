@@ -1,1 +1,0 @@
-export{Yp as contributorsPlugin}from"../../../chunks/app-xnFAPejy.js";

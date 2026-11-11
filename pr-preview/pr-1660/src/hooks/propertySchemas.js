@@ -1,1 +1,0 @@
-export{UW as usePropertySchemas}from"../../chunks/app-xnFAPejy.js";

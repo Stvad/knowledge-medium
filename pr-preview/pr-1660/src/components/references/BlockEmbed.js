@@ -1,1 +1,0 @@
-export{wM as BlockEmbed}from"../../../chunks/app-xnFAPejy.js";

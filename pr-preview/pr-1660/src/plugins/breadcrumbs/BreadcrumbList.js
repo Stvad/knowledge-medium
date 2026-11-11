@@ -1,1 +1,0 @@
-export{Gw as BreadcrumbList}from"../../../chunks/app-xnFAPejy.js";

@@ -1,1 +1,0 @@
-export{ez as ExtensionRenderBoundary}from"../../chunks/app-xnFAPejy.js";
