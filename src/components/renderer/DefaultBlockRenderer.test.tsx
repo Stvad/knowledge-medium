@@ -82,6 +82,13 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
+const isMobileRef = vi.hoisted(() => ({current: false}))
+
+vi.mock('@/utils/react.tsx', async () => ({
+  ...await vi.importActual<typeof import('@/utils/react.js')>('@/utils/react.tsx'),
+  useIsMobile: () => isMobileRef.current,
+}))
+
 vi.mock('@/paste/operations.ts', () => ({
   // Not the armed cut unless a test says so: fall through to the text paste.
   pasteArmedCut: vi.fn(async () => null),
@@ -1149,5 +1156,91 @@ describe('a layout that drops shellProps', () => {
     await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
     expect(error).not.toHaveBeenCalled()
     error.mockRestore()
+  })
+})
+
+// Review cards render Content with no Controls and never collapse.
+const ContentOnlyLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell>
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`content-only ${className ?? ''}`}>
+        <Content />
+      </div>
+    )}
+  </Shell>
+)
+
+describe('the mobile expand button', () => {
+  let repo: Repo
+  const runtimeWith = (layout?: BlockLayout) => createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    newId: () => crypto.randomUUID(),
+    extensions: [
+      defaultEditorInteractionExtension,
+      ...(layout ? [blockLayoutFacet.of(() => ({id: 'test-layout', label: 'Test', render: layout}), {source: 'test'})] : []),
+    ],
+  }).repo.facetRuntime!
+
+  beforeEach(async () => {
+    isMobileRef.current = true
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, newId: () => crypto.randomUUID()}).repo
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Root'})
+      await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Parent'})
+      await tx.create({id: 'child-1', workspaceId: 'ws-1', parentId: 'block-1', orderKey: 'a0', content: 'Child'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'mobile expand fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    isMobileRef.current = false
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderParent = (runtime: FacetRuntime) => render(
+    <AppRuntimeContextProvider value={runtime}>
+      <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <ActiveContextsProvider>
+          <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={TestContentRenderer}/>
+        </ActiveContextsProvider>
+      </BlockContextProvider>
+    </AppRuntimeContextProvider>,
+  )
+
+  it('sits in the gutter, last, allowed to overlay', async () => {
+    renderParent(runtimeWith())
+
+    const parentHost = () => document.querySelector('[data-block-id="block-1"] .km-gutter-host')
+    await waitFor(() => expect(parentHost()?.querySelector('.expand-collapse-button')).not.toBeNull())
+    const slots = parentHost()!.querySelectorAll(':scope > .km-gutter-top-right > [data-gutter-item]')
+    expect(slots[slots.length - 1].hasAttribute('data-gutter-overlay')).toBe(true)
+    expect(document.querySelector('[data-block-id="block-1"] .block-controls .expand-collapse-button')).toBeNull()
+  })
+
+  it('stays off the focal block, which renders no bullet row', async () => {
+    await repo.block('ui-state').set(topLevelBlockIdProp, 'block-1')
+    renderParent(runtimeWith())
+
+    await waitFor(() => expect(screen.getByText('block-1')).toBeTruthy())
+    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host')).not.toBeNull()
+    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host > .km-gutter-top-right')).toBeNull()
+  })
+
+  it('is absent from a layout that renders content but never collapses', async () => {
+    renderParent(runtimeWith(ContentOnlyLayout))
+
+    await waitFor(() => expect(document.querySelector('.content-only')).not.toBeNull())
+    await waitFor(() => expect(screen.getByText('block-1')).toBeTruthy())
+    expect(document.querySelector('.expand-collapse-button')).toBeNull()
   })
 })

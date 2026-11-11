@@ -237,7 +237,10 @@ export interface ReplayYield {
  *  fail the undo, and every retry of it, for as long as that holder lives.
  *
  *  Only the cells change: in a child-backed workspace the caller also releases
- *  the yielded names' value children once the replay has written them all. */
+ *  the yielded names' value children once the replay has written them all.
+ *  Accepted: under field-level replay the names are read from the entry's
+ *  target, not from a later write to a tombstone's aliases — no gesture
+ *  writes one. */
 export const yieldNamesHeldPastReplay = async (
   tx: Tx,
   stuck: ReadonlyArray<readonly [string, BlockData | null]>,

@@ -239,14 +239,14 @@ describe('PanelRenderer', () => {
     expect(contentFrame?.className).toContain('max-w-3xl')
   })
 
-  it('centers panel chrome and lets its empty space pass clicks through', async () => {
+  it('ends panel chrome where the content ends and lets its empty space pass clicks through', async () => {
     renderPanel()
 
     const backButton = await screen.findByLabelText('Back')
     expect(backButton.className).toContain('pointer-events-auto')
+    // `.panel-actions` (index.css) places the bar's right edge.
+    expect(backButton.parentElement?.className).toContain('panel-actions')
     expect(backButton.parentElement?.className).toContain('pointer-events-none')
-    expect(backButton.parentElement?.parentElement?.className).toContain('pointer-events-none')
-    expect(backButton.parentElement?.className).toContain('max-w-3xl')
   })
 
   it('activates the panel from history chrome pointer events', async () => {

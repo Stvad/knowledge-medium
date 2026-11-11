@@ -21,14 +21,14 @@
  *  Neither is redundant: a day whose ISO name another page claims has yielded
  *  it, and would lose its arrows on an alias-only read.
  */
-import { useCallback, type ComponentType } from 'react'
+import { useCallback } from 'react'
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react'
 import { useBlockContext } from '@/context/block.js'
 import type { Block } from '@/data/block'
 import { aliasesProp } from '@/data/properties.js'
 import { dailyNoteDateProp } from './schema.js'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import { useHandle, useProperty, useWorkspaceId } from '@/hooks/block.js'
@@ -151,22 +151,7 @@ const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
   )
 }
 
-// Memoized per inner renderer so a parent re-render doesn't hand React a new
-// component identity and unmount the content subtree (same invariant as the
-// todo / type-chip decorators).
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = inner => {
-  const cached = cache.get(inner)
-  if (cached) return cached
-
-  const Decorated: ComponentType<{block: Block}> = ({block}) => (
-    <DateNavDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithDateNav'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(DateNavDecorator, 'WithDateNav')
 
 export const dateNavDecoratorContribution: BlockContentDecoratorContribution =
   ctx => isFocalRender(ctx) ? decorate : null

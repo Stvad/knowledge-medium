@@ -3,16 +3,16 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
+import type { BlockGutterItem } from '@/extensions/blockInteraction.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
-import type { BlockRendererProps } from '@/types'
 import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from '../blockType'
 import { characterCounterDataExtension } from '../dataExtension'
 import { charLimitProp, charProfileProp, charScopeProp, type CharacterCounterScope } from '../properties'
 import { builtinCountProfiles, characterCountProfilesFacet } from '../profiles'
-import { characterCountDecoratorContribution } from '../CharacterCountDecorator'
+import { characterCountItemContribution } from '../CharacterCountItem'
 
 const WS = 'ws-char-counter'
 const TIMEOUT_MS = 3_000
@@ -23,10 +23,9 @@ const runtime = resolveFacetRuntimeSync([
   characterCountProfilesFacet.of({id: 'hook-only', useCount: useHookOnlyCount}, {source: 'test'}),
 ])
 
-const Inner = ({block}: BlockRendererProps) => <div data-testid={`inner-${block.id}`}/>
-const decorate = characterCountDecoratorContribution(undefined as never)
-if (typeof decorate !== 'function') throw new Error('expected a decorator')
-const Decorated = decorate(Inner)
+const item = characterCountItemContribution(undefined as never)
+if (!item || Array.isArray(item)) throw new Error('expected one gutter item')
+const CountItem = (item as BlockGutterItem).component
 
 let sharedDb: TestDb
 let repo: Repo
@@ -70,15 +69,19 @@ const seedTree = async (counter: {
   return root
 }
 
+// The item can suspend while its block loads, and a suspended tree commits
+// nothing, so the sibling marker appearing is the fence for "the item has
+// rendered, and chose to show nothing".
 const renderBlock = (id: string) => render(
   <AppRuntimeContextProvider value={runtime}>
-    <Decorated block={repo.block(id)}/>
+    <CountItem block={repo.block(id)}/>
+    <span data-testid="committed"/>
   </AppRuntimeContextProvider>,
 )
 
 const badgeText = () => screen.getByLabelText(/count/i).textContent
 
-describe('CharacterCountDecorator', () => {
+describe('CharacterCountItem', () => {
   it('counts words in the block itself with the words profile', async () => {
     await seedTree({scope: 'self', profile: 'words'})
     renderBlock(ROOT)
@@ -103,14 +106,14 @@ describe('CharacterCountDecorator', () => {
     await waitFor(() => expect(badgeText()).toBe(String(11 + 13 + 9)), {timeout: TIMEOUT_MS})
   })
 
-  it('subtree scope does not decorate the descendants themselves', async () => {
+  it('subtree scope shows nothing on the descendants themselves', async () => {
     await seedTree({scope: 'subtree', profile: 'words'})
     renderBlock(ROOT)
     await waitFor(() => expect(badgeText()).toBe('7'), {timeout: TIMEOUT_MS})
     cleanup()
 
     renderBlock(CHILD)
-    await waitFor(() => expect(screen.getByTestId(`inner-${CHILD}`)).toBeTruthy(), {timeout: TIMEOUT_MS})
+    await screen.findByTestId('committed', {}, {timeout: TIMEOUT_MS})
     expect(screen.queryByLabelText(/count/i)).toBeNull()
   })
 
@@ -144,19 +147,19 @@ describe('CharacterCountDecorator', () => {
     await waitFor(() => expect(badgeText()).toBe('7'), {timeout: TIMEOUT_MS})
   })
 
-  it('a word counter configured for its children decorates each child', async () => {
+  it('a word counter configured for its children counts each child', async () => {
     await seedTree({type: WORD_COUNTER_TYPE, scope: 'children'})
     renderBlock(CHILD)
     await waitFor(() => expect(badgeText()).toBe('3'), {timeout: TIMEOUT_MS})
   })
 
-  it('renders a block with a malformed types cell, and its child, undecorated instead of throwing', async () => {
+  it('shows nothing for a block with a malformed types cell, and its child, instead of throwing', async () => {
     await seedTree({scope: 'self'})
     await repo.tx(async tx => { await tx.update(CHILD, {properties: {types: 'not-a-list'}}) }, {scope: ChangeScope.BlockDefault})
     expect(repo.block(CHILD).peek()!.properties.types).toBe('not-a-list')
     for (const id of [CHILD, GRANDCHILD]) {
       renderBlock(id)
-      await waitFor(() => expect(screen.getByTestId(`inner-${id}`)).toBeTruthy(), {timeout: TIMEOUT_MS})
+      await screen.findByTestId('committed', {}, {timeout: TIMEOUT_MS})
       expect(screen.queryByLabelText(/count/i)).toBeNull()
       cleanup()
     }

@@ -119,11 +119,12 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'block-interaction',
     importPath: '@/extensions/blockInteraction.js',
-    description: 'Block-interaction facets — click handlers, content/layout renderers, shortcut activations.',
+    description: 'Block-interaction facets — click handlers, content/layout renderers, gutter items, shortcut activations.',
     exports: [
       'blockBelowContentFacet', 'blockBulletClassFacet', 'blockBulletHoverFacet', 'blockChildrenFooterFacet',
       'blockClickHandlersFacet',
       'blockContentDecoratorsFacet', 'blockContentRendererFacet', 'blockContentSurfacePropsFacet',
+      'blockGutterItemsFacet',
       'blockTextClassFacet',
       'blockHeaderFacet', 'blockLayoutFacet', 'shortcutSurfaceActivationsFacet', 'enterBlockEditMode',
       'getBlockContentRendererSlot', 'isSelectionClick',
@@ -133,7 +134,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'BlockBulletHoverContribution', 'BlockChildrenFooterContribution', 'BlockClickContribution',
       'BlockHeaderContribution', 'BlockContentDecorator', 'BlockContentDecoratorContribution',
       'BlockContentRendererContribution', 'BlockContentRendererSlot', 'BlockContentSurfaceContribution',
-      'BlockContentSurfaceProps', 'BlockInteractionContext', 'BlockResolveContext', 'BlockLayout',
+      'BlockContentSurfaceProps', 'BlockGutterCorner', 'BlockGutterItem', 'BlockGutterItemContribution',
+      'BlockInteractionContext', 'BlockResolveContext', 'BlockLayout',
       'BlockLayoutContribution', 'BlockLayoutSlots', 'BlockShellProps', 'ShortcutActivationContribution',
       'ShortcutSurfaceContext',
     ],

@@ -2441,23 +2441,29 @@ export class Repo {
       // alias-carrying blocks must revert the target (releasing the
       // merged alias) before restoring the source (re-claiming it). A
       // statement-level RAISE(ABORT) only rolls back that statement, so
-      // deferring the aborted row and applying the rest is safe.
-      //
-      // The end state was valid when it was observed, but only as far as
-      // this entry's rows go: a block outside it can have claimed one of
-      // their names since. So a pass with zero progress first yields the
-      // names a holder keeps past the replay (`yieldNamesHeldPastReplay`)
-      // instead of failing every cmd-Z — its children, stuck behind it on
-      // the parent check, follow on the next pass. Nothing left to yield
-      // means the entry itself is inconsistent, and we rethrow.
+      // deferring the aborted row and applying the rest is safe. When
+      // nothing wrote the entry's rows since, the end state is a
+      // previously-observed valid state, so every constraint-blocked row
+      // eventually unblocks; a row merged with a later write (field-level
+      // replay) can still collide with it, and a block outside the entry can
+      // have claimed one of its names since. So a pass with zero progress
+      // first yields the names a holder keeps past the replay
+      // (`yieldNamesHeldPastReplay`) instead of failing every cmd-Z — its
+      // children, stuck behind it on the parent check, follow on the next
+      // pass. Nothing left to yield fails the gesture rather than forcing it.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
       const yielded = new Map<string, Set<string>>()
+      const fromOf = (id: string): BlockData | null => {
+        const snap = replaying.snapshots.get(id)!
+        return direction === 'before' ? snap.after : snap.before
+      }
+      const merge = !await txImpl.replayEntryConflicts(pending.map(([id, target]) => [id, target, fromOf(id)] as const))
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
         for (const [id, target] of pending) {
           try {
-            await txImpl.applyRaw(id, target)
+            await txImpl.applyRaw(id, target, fromOf(id), merge)
           } catch (err) {
             if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
               deferred.push([id, target])
@@ -2482,6 +2488,7 @@ export class Repo {
       // verbatim — past the properties flip those children are the truth, so
       // the yielded names leave them too.
       for (const [id, names] of yielded) await txImpl.releasePropertyMembers(id, aliasesProp.name, names)
+      await txImpl.assertReplayAcyclic()
     }, {scope, description: action}, {isReplay: true, lockHooks: {
       beforeCommit: () => {
         // The history was dropped while this replay held the lock — only a

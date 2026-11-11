@@ -2,7 +2,9 @@
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
-import type {ReactNode} from 'react'
+import {useEffect, type ReactNode} from 'react'
+import type {BlockContentDecorator, BlockResolveContext} from '@/extensions/blockInteraction'
+import type {BlockRenderer} from '@/types'
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
 import {PAGE_TYPE} from '@/data/blockTypes'
@@ -10,7 +12,7 @@ import {topLevelBlockIdProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {BlockContextProvider} from '@/context/block'
+import {BlockContextProvider, NestedBlockContextProvider} from '@/context/block'
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer'
@@ -28,7 +30,8 @@ import {annotationsPlugin} from './index'
 import {annotationActions, COPY_REFERENCE_TO_READ_SELECTION_ACTION_ID, readSelectionGestures, readSelectionTarget, runOnReadTarget, SUGGEST_EDIT_READ_SELECTION_ACTION_ID, type SelectionTarget} from './actions'
 import {THREAD_TYPE, annotationTargetProp} from './schema'
 import {mapReadSelection, type SelectionEnds} from './readSelection'
-import {ThreadCard} from './ui'
+import {commentSurfaceContribution, ThreadCard} from './ui'
+import {useAnnotationSurface, type AnnotationSurface} from './surface'
 import {closeComposer, peekComposer, viewKey} from './uiStore'
 
 const clipboard = vi.hoisted(() => ({write: vi.fn<(text: string | Promise<string>) => Promise<void>>()}))
@@ -499,6 +502,64 @@ describe('a read-mode selection, mapped to raw offsets', () => {
       await dispatch()
       expect(peekComposer(viewKey(backlink, 'rich'))).toBeUndefined()
       expect(showInfo).toHaveBeenCalledWith('Open the block in its page to suggest an edit to it.')
+    })
+  })
+
+  describe('the surface a renderer that draws its own text gets', () => {
+    const seen: {surface: AnnotationSurface | null; inside: (AnnotationSurface | null)[]} = {surface: null, inside: []}
+    /** What renders inside a block's content sees: another block, or the
+     *  same block in another render scope, as an embed or a block ref is. */
+    const Inside = ({blockId}: {blockId: string}) => {
+      const surface = useAnnotationSurface(blockId)
+      useEffect(() => { seen.inside.push(surface) })
+      return null
+    }
+    const Probe: BlockRenderer = ({block}) => {
+      const surface = useAnnotationSurface(block.id)
+      useEffect(() => { seen.surface = surface })
+      return (
+        <>
+          <Inside blockId="rich"/>
+          <NestedBlockContextProvider overrides={{renderScopeId: 'embed-scope'}}><Inside blockId={block.id}/></NestedBlockContextProvider>
+        </>
+      )
+    }
+    const Decorated = (commentSurfaceContribution({} as BlockResolveContext) as BlockContentDecorator)(Probe)
+
+    afterEach(() => {
+      seen.surface = null
+      seen.inside = []
+    })
+
+    it('belongs to its block as rendered there, not to another block or scope inside it', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>)
+      await waitFor(() => expect(seen.surface).toMatchObject({blockId: 'other'}))
+      expect(seen.inside.length).toBeGreaterThan(0)
+      expect(seen.inside.every(surface => surface === null)).toBe(true)
+    })
+
+    it('offers the read-mode gestures, and a highlight one makes comes back as a range', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>)
+      await waitFor(() => expect(seen.surface).not.toBeNull())
+      expect(seen.surface!.gestures.map(gesture => gesture.id)).toEqual(readSelectionGestures.map(gesture => gesture.actionId))
+
+      const content = 'Another block'
+      const range = {content, from: content.indexOf('block'), to: content.length}
+      const highlight = seen.surface!.gestures.find(gesture => gesture.label === 'Highlight')!
+      expect(await highlight.run(range)).toBe(true)
+
+      const [threadId] = await repo.query['core.typedBlockIds']({
+        workspaceId: WS, types: [THREAD_TYPE], referencedBy: {id: 'other', sourceField: annotationTargetProp.name},
+      }).load()
+      expect((await repo.load(threadId))?.content).toBe('block')
+      await waitFor(() => expect(seen.surface!.highlightsIn(content))
+        .toEqual([{from: range.from, to: range.to, moved: false, suggestion: false}]))
+    })
+
+    it('offers off the outline only the gestures that run there', async () => {
+      renderInOutline(<Decorated block={repo.block('other')}/>, backlinkRenderScopeId(panelRenderScopeId('panel', 'page'), 'x'))
+      await waitFor(() => expect(seen.surface).not.toBeNull())
+      expect(seen.surface!.gestures.map(gesture => gesture.label)).toEqual(['Copy reference'])
     })
   })
 })

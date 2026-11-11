@@ -2,17 +2,21 @@
  *  `HtmlFrame`, under an origin holding a secret in every place the app keeps
  *  anything. Bundled and served by `boundaryHarness.ts`. */
 
+import {createRef} from 'react'
 import {createRoot} from 'react-dom/client'
-import type {FrameScripts} from '../frameDocument.ts'
-import {HtmlFrame} from '../HtmlFrame.tsx'
+import type {FrameMarks, FrameScripts, FrameSelection} from '../frameDocument.ts'
+import {HtmlFrame, type HtmlFrameHandle} from '../HtmlFrame.tsx'
 
 declare global {
   interface Window {
     reports: unknown[]
     channelReports: unknown[]
+    /** Every selection the frame handed up, latest last. */
+    selections: (FrameSelection | null)[]
     kmSecret: string
     secretsReady: Promise<void>
-    mountSandboxed: (source: string, scripts?: FrameScripts) => void
+    mountSandboxed: (source: string, scripts?: FrameScripts, marks?: FrameMarks) => void
+    clearSelection: () => void
     mountControl: (source: string) => void
   }
 }
@@ -62,7 +66,14 @@ window.secretsReady = storeSecrets()
 const mount = document.getElementById('mount') as HTMLElement
 const root = createRoot(mount)
 
-window.mountSandboxed = (source, scripts = 'run') => root.render(<HtmlFrame source={source} scripts={scripts}/>)
+const frame = createRef<HtmlFrameHandle>()
+window.selections = []
+const onSelection = (selection: FrameSelection | null) => window.selections.push(selection)
+
+window.mountSandboxed = (source, scripts = 'run', marks) => root.render(
+  <HtmlFrame ref={frame} source={source} scripts={scripts} marks={marks} onSelection={onSelection}/>,
+)
+window.clearSelection = () => frame.current?.clearSelection()
 
 /** The same document with no sandbox: every probe must succeed here, or its
  *  failure under the sandbox proves nothing. */

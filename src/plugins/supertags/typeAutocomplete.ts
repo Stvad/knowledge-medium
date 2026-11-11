@@ -78,7 +78,7 @@ const RESULT_CAP = 12
  *  throwaway leading space; URL paths like `example.com/page#section`
  *  still bow out). Exported for direct testing. */
 export const matchHashTrigger = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '#', {rejectDoubledTrigger: true, allowWordCharBefore: true})
+  matchCharTrigger(text, pos, '#', {doubled: 'reject', allowWordCharBefore: true})
 
 const labelOf = (type: TypeContribution): string => type.label ?? type.id
 

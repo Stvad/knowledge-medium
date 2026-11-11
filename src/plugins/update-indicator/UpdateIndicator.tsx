@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Block } from '../../data/block'
+import type { BlockRenderer } from '@/types.js'
 import { useInFocus, usePluginPrefsProperty, useUserPage } from '@/data/globalState'
 import { useUpdateMetadata } from '@/hooks/block.js'
 import { previousLoadTimeProp, updateIndicatorPrefsType } from './loadTimes.ts'
 
-export const UpdateIndicator = ({block}: { block: Block }) => {
+export const UpdateIndicator: BlockRenderer = ({block}) => {
   const inFocus = useInFocus(block.id)
   const [previousLoadTime] = usePluginPrefsProperty(updateIndicatorPrefsType, previousLoadTimeProp)
   const updateInfo = useUpdateMetadata(block)
@@ -31,8 +31,8 @@ export const UpdateIndicator = ({block}: { block: Block }) => {
   if (!shouldShowUpdateIndicator) return null
 
   return (
-    <div
-      className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
+    <span
+      className="h-2 w-2 shrink-0 rounded-full bg-blue-400"
       title={`Updated by ${updatedByName} on ${new Date(updateInfo.userUpdatedAt).toLocaleString()}`}
     />
   )
