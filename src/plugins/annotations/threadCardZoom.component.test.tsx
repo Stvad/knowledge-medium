@@ -131,8 +131,8 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
     await waitFor(() => expect(row(ids.nested)).not.toBeNull())
   }
 
-  /** Re-found each time: a zoom remounts the card. */
-  /** The outermost card: a thread on one of its comments renders inside it. */
+  /** The outermost card (a thread on one of its comments renders inside it),
+   *  re-found each time: a zoom remounts the card. */
   const cardEl = () => screen.queryAllByTestId('comment-thread').at(0)
 
   const card = () => within(cardEl()!)

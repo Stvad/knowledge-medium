@@ -33,6 +33,8 @@ const mounted = new Map<string, MountedSurface>()
 const zooms = new Map<string, string>()
 const listeners = new CallbackSet('surface-zoom')
 
+/** One mount per render scope. ACCEPTED: a second mount on the same scope
+ *  replaces the first, and its unmount leaves the scope unregistered. */
 export const registerZoomableSurface = (renderScopeId: string, surface: MountedSurface): (() => void) => {
   mounted.set(renderScopeId, surface)
   return () => {
