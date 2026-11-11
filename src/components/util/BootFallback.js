@@ -1,1 +1,1 @@
-export{IG as BootFallback}from"../../../chunks/app-C6ip3iwR.js";
+export{IG as BootFallback}from"../../../chunks/app-DyRl5ztF.js";

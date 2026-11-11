@@ -1,1 +1,1 @@
-export{sv as BacklinksViewSection,cv as backlinksViewFooterContribution}from"../../../chunks/app-C6ip3iwR.js";
+export{sv as BacklinksViewSection,cv as backlinksViewFooterContribution}from"../../../chunks/app-DyRl5ztF.js";
