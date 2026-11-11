@@ -1,1 +1,1 @@
-export{jN as ExtensionPromptSurface,MN as extensionPromptsExtension}from"../../../chunks/app-DcqV25KZ.js";
+export{VN as ExtensionPromptSurface,HN as extensionPromptsExtension}from"../../../chunks/app-MKXYaneJ.js";

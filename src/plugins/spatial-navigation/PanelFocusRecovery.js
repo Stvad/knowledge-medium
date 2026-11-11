@@ -1,1 +1,1 @@
-export{TC as PanelFocusRecovery}from"../../../chunks/app-DcqV25KZ.js";
+export{FC as PanelFocusRecovery}from"../../../chunks/app-MKXYaneJ.js";

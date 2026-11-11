@@ -1,1 +1,1 @@
-export{P_ as blockInfoPlugin}from"../../../chunks/app-DcqV25KZ.js";
+export{W_ as blockInfoPlugin}from"../../../chunks/app-MKXYaneJ.js";

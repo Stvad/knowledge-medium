@@ -1,1 +1,1 @@
-export{Nit as deriveWorkspaceIdNamespace}from"../../../chunks/app-DcqV25KZ.js";
+export{Git as deriveWorkspaceIdNamespace}from"../../../chunks/app-MKXYaneJ.js";
