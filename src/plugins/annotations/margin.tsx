@@ -34,6 +34,7 @@ import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {PANEL_CONTENT_RIGHT_INSET, PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_PX} from '@/utils/panelClearance.js'
 import {PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, PANEL_LANE_ATTRIBUTE} from '@/utils/panelLanes.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
+import {shouldScrollFocusedBlockIntoView} from '@/extensions/BlockFocusShellDecorator.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
 import {byPlacement, fitColumn, placeCards, scrollToShow} from './placement.ts'
@@ -146,12 +147,18 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     let pending = 0
     /** Room added below the outline so the last cards, pushed below the last
      *  row, can be scrolled to. Inline style, which React leaves alone on the
-     *  scrollport, and removed with the margin. */
-    let extraBottom = 0
+     *  text frame, and removed with the margin. On the frame, never the
+     *  scrollport: a box is never shorter than its own padding, so padding
+     *  taller than the scrollport would stretch it past the panel, and the
+     *  panel, `overflow: hidden` yet scrollable from script, would then scroll
+     *  on a focus change's `scrollIntoView`. */
+    let padded: {frame: HTMLElement; px: number} | null = null
     const setExtraBottom = (px: number) => {
-      if (px === extraBottom) return
-      extraBottom = px
-      scrollport.style.paddingBottom = px > 0 ? `${px}px` : ''
+      const frame = px > 0 ? scrollport.firstElementChild : null
+      if (padded?.frame === frame && padded.px === px) return
+      if (padded) padded.frame.style.paddingBottom = ''
+      padded = frame instanceof HTMLElement ? {frame, px} : null
+      if (padded) padded.frame.style.paddingBottom = `${px}px`
     }
 
     const topRowSelector =
@@ -390,8 +397,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 }
 
 /** A row's own content, which a shell's rect (its whole subtree) is not. */
-const contentBox = (row: HTMLElement): DOMRect =>
-  (row.querySelector('[data-block-visibility-target="true"]') ?? row).getBoundingClientRect()
+const visibilityTarget = (row: HTMLElement): HTMLElement =>
+  row.querySelector<HTMLElement>('[data-block-visibility-target="true"]') ?? row
+
+const contentBox = (row: HTMLElement): DOMRect => visibilityTarget(row).getBoundingClientRect()
 
 const scopeRowOf = (root: ParentNode, scope: string, blockId: string | null): HTMLElement | undefined =>
   [...root.querySelectorAll<HTMLElement>(scopeRowSelector(scope))].find(el => scopeRowBlockId(el) === blockId)
@@ -400,8 +409,10 @@ const scopeRowOf = (root: ParentNode, scope: string, blockId: string | null): HT
  *  steps onto a block out of view brings it in: its card becomes the active
  *  one, pinned beside its row, and the outline scrolls until the block shows.
  *  A layout effect, so that is done before the focus decorator asks whether
- *  the block needs scrolling. A card in view is left alone: a pointer press
- *  is aimed at it, and pinning would move it out from under the press. */
+ *  the block needs scrolling. A block in view is left alone: a pointer press
+ *  is aimed at it, and pinning would move it out from under the press. In
+ *  view is the decorator's own question, so a row the cursor followed the
+ *  scroll onto, a line of it showing, stays where the user scrolled it. */
 const FocusedCardInView = ({panelBlock, scope, columnRef, scrollportRef, layout}: {
   panelBlock: Block
   scope: string
@@ -417,8 +428,9 @@ const FocusedCardInView = ({panelBlock, scope, columnRef, scrollportRef, layout}
     const shell = scopeRowOf(column, focused.renderScopeId, focused.blockId)
     const card = shell?.closest<HTMLElement>('[data-margin-card]')
     if (!shell || !card?.dataset.marginCard) return
+    const content = visibilityTarget(shell)
+    if (!shouldScrollFocusedBlockIntoView(content.parentElement, content)) return
     const clip = column.getBoundingClientRect()
-    if (scrollToShow(contentBox(shell), clip, 0) === 0) return
     activateThread(panelBlock.id, card.dataset.marginCard)
     const row = scopeRowOf(scrollport, scope, card.getAttribute(PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE))
     if (row) scrollport.scrollTop += scrollToShow(contentBox(row), clip, CARD_GAP_PX)
