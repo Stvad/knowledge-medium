@@ -1,1 +1,1 @@
-export{ON as editorAutocompleteExtension}from"../../chunks/app-CLGL5pg_.js";
+export{ON as editorAutocompleteExtension}from"../../chunks/app-ZSXuBtVT.js";

@@ -1,1 +1,1 @@
-export{jN as ExtensionPromptSurface,MN as extensionPromptsExtension}from"../../../chunks/app-CLGL5pg_.js";
+export{jN as ExtensionPromptSurface,MN as extensionPromptsExtension}from"../../../chunks/app-ZSXuBtVT.js";

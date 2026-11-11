@@ -1,1 +1,1 @@
-export{Xp as contributorsCodeMirrorExtensions}from"../../../chunks/app-CLGL5pg_.js";
+export{Xp as contributorsCodeMirrorExtensions}from"../../../chunks/app-ZSXuBtVT.js";

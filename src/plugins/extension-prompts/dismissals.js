@@ -1,1 +1,1 @@
-export{LN as ExtensionPromptDismissalStore,RN as extensionPromptDismissals,zN as useExtensionPromptDismissals}from"../../../chunks/app-CLGL5pg_.js";
+export{LN as ExtensionPromptDismissalStore,RN as extensionPromptDismissals,zN as useExtensionPromptDismissals}from"../../../chunks/app-ZSXuBtVT.js";
