@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest'
-import {createEngine, type EngineDeps} from '../src/engine'
+import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
@@ -418,12 +418,63 @@ describe('mention lifecycle', () => {
     await engine.tick()
     for (let i = 0; i < 50; i += 1) await Promise.resolve()
 
-    expect(blocks.get('child')?.properties?.[PROPS.status]).toBeUndefined()
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued')
     expect(runTask).toHaveBeenCalledTimes(1) // only the parent
 
     releaseParent()
     await parentTick
     await engine.drain()
+  })
+
+  it('marks a follow-up waiting on its thread as queued, logs it once, and runs it when the thread frees', async () => {
+    const backlinks: Array<{id: string}> = [{id: 'parent'}]
+    const {graph, blocks} = fakeGraph({
+      backlinks,
+      blocks: {parent: {content: '[[claude]] long parent task'}},
+    })
+    let releaseParent = () => {}
+    const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
+    const runTask = vi.fn(async (opts: {prompt: string, onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      if (!opts.prompt.includes('quick follow-up')) {
+        opts.onEvent?.({kind: 'session', sessionId: 'sess-parent'})
+        await parentGate
+        return okRun({sessionId: 'sess-parent'})
+      }
+      childActivityAtRun = blocks.get('child')?.properties?.[PROPS.activity]
+      return okRun({resultText: 'child reply', sessionId: 'sess-parent'})
+    })
+    let childActivityAtRun: unknown = 'not run'
+    const logs: string[] = []
+    const engine = engineWith({graph, runTask, log: line => logs.push(line), config: mentionConfig({maxConcurrent: 5})})
+
+    const parentTick = engine.tick()
+    await vi.waitFor(() => expect(blocks.get('parent')?.properties?.[PROPS.session]).toBe('sess-parent'))
+    blocks.set('child', {id: 'child', parentId: 'parent', content: '[[claude]] quick follow-up', properties: {}, editedAtMs: NOW})
+    backlinks.push({id: 'child'})
+
+    await engine.tick()
+    await vi.waitFor(() => expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued'))
+    const queuedProps = blocks.get('child')?.properties ?? {}
+    expect(queuedProps[PROPS.executor]).toBe('claude')
+    expect(queuedProps[PROPS.activity]).toBe(THREAD_BUSY_ACTIVITY)
+
+    // A second sweep while still blocked neither re-logs nor re-writes.
+    const queuedStamp = queuedProps[PROPS.updatedAt]
+    await engine.tick()
+    for (let i = 0; i < 50; i += 1) await Promise.resolve()
+    expect(logs.filter(line => line.includes('child') && line.includes('waiting'))).toHaveLength(1)
+    expect(blocks.get('child')?.properties?.[PROPS.updatedAt]).toBe(queuedStamp)
+
+    releaseParent()
+    await parentTick
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(2)
+    // The claim drops the waiting label; the run's own activity replaces it.
+    expect(childActivityAtRun).toBe('')
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('done')
   })
 
   it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {

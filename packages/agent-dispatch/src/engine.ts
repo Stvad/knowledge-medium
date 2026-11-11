@@ -96,6 +96,9 @@ const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
 const storedSessionFor = (executor: 'claude' | 'codex', sessionId: string | null): string | null =>
   sessionId && executor === 'codex' ? `${CODEX_SESSION_PREFIX}${sessionId}` : sessionId
 
+/** `agent:activity` on a follow-up queued behind its thread's live run. */
+export const THREAD_BUSY_ACTIVITY = 'waiting for the run already going in this thread'
+
 const executorLabel = (executor: 'claude' | 'codex'): string =>
   executor === 'codex' ? 'Codex' : 'Claude'
 
@@ -277,7 +280,15 @@ export const createEngine = (deps: EngineDeps) => {
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
-    if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
+    if (sessionKey && running.has(sessionKey)) {
+      refundLaunch(launchStamp)
+      if (block.properties?.[PROPS.status] === 'queued') return
+      log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
+      await graph.setTaskProps(sourceId, {
+        status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
+      })
+      return
+    }
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     // A fresh run's session id is unknown until mid-run. The instant it is
@@ -347,7 +358,7 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, nowMs: claimStamp,
       })
 
       // Claim-verify: re-read and confirm OUR claim stuck. Defends only

@@ -17,7 +17,8 @@ import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
 export const PROPS = {
-  /** queued | running | done | error — presence means "seen". */
+  /** queued | running | done | error — presence means "seen"; `queued` is
+   *  seen but not yet claimed, so it stays pending. */
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
@@ -293,7 +294,7 @@ const rawConfigSchema = z.strictObject({
    *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
    *  Claude graph-only. */
   defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
-  maxConcurrent: z.number().int().positive().default(2),
+  maxConcurrent: z.number().int().positive().default(4),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all
    *  watchers. Converts any trigger-loop bug from an unbounded bill
