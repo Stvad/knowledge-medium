@@ -228,7 +228,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
      "profile": "agent-dispatch",
      "workspaceId": "YOUR_WORKSPACE_ID", // required: the workspace the daemon acts on
      "pollIntervalMs": 5000,
-     "maxConcurrent": 2,
+     "maxConcurrent": 4,
      "watchers": [
        {
          "kind": "backlinks",
@@ -313,7 +313,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher; `{{target}}` is the watcher's page alias), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped). A mention that is a comment in a thread also gets the thread: the annotated block's text and page path, the quote, and the comments from the thread's first one down to the mention, with their authors (`{{thread}}`; a custom `prompt` without it gets the thread appended). Reading it needs an app with the `comments` verb; without one the mention is answered without it.
 4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`. `runner.timeoutMs` kills a run that is still going after it (default 10 min, at most 60 min).
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
-6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
+6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session: a follow-up whose thread is still running is marked `agent:status=queued`, with an `agent:activity` saying why, and runs once that run ends). For parallel runs, mention outside the running thread — that starts a fresh session.
 
 Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
 

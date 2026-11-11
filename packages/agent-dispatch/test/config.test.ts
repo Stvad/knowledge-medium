@@ -19,7 +19,7 @@ describe('parseConfig', () => {
 
     expect(config.profile).toBe('agent-dispatch')
     expect(config.pollIntervalMs).toBe(5_000)
-    expect(config.maxConcurrent).toBe(2)
+    expect(config.maxConcurrent).toBe(4)
     expect(config.billing).toBe('subscription') // safe default
     const watcher = config.watchers[0]
     expect(watcher).toMatchObject({
