@@ -1,0 +1,1 @@
+export{MM as BlockEmbed}from"../../../chunks/app-BwiWSsAX.js";

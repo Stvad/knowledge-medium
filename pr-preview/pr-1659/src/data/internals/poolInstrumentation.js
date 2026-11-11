@@ -1,0 +1,1 @@
+export{M1 as instrumentAdapter}from"../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{XA as adoptTypedBlock,ZA as createTypedChild,hat as derivedBlockId,QA as getOrCreateTypedChild}from"../../chunks/app-BwiWSsAX.js";

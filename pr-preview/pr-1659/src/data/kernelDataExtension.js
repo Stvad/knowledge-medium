@@ -1,0 +1,1 @@
+export{_3 as kernelDataExtension}from"../../chunks/app-BwiWSsAX.js";

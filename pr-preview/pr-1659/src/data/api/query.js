@@ -1,0 +1,1 @@
+export{yct as defineQuery}from"../../../chunks/app-BwiWSsAX.js";

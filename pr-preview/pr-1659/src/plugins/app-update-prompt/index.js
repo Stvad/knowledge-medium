@@ -1,0 +1,1 @@
+export{$N as appUpdatePromptExtension}from"../../../chunks/app-BwiWSsAX.js";

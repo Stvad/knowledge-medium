@@ -1,0 +1,1 @@
+export{QJ as dailyNotesLocalSchema}from"../../../chunks/app-BwiWSsAX.js";

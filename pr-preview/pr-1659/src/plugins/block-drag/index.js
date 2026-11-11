@@ -1,0 +1,1 @@
+export{My as blockDragPlugin}from"../../../chunks/app-BwiWSsAX.js";

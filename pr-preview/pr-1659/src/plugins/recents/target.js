@@ -1,0 +1,1 @@
+export{FD as openRecentsPage}from"../../../chunks/app-BwiWSsAX.js";

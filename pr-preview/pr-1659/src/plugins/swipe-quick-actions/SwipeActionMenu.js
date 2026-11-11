@@ -1,0 +1,1 @@
+export{Xj as SwipeActionMenu}from"../../../chunks/app-BwiWSsAX.js";

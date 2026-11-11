@@ -1,0 +1,1 @@
+export{qp as HIGHLIGHT_CLASS,Jp as MOVED_HIGHLIGHT_CLASS,Yp as SUGGESTION_HIGHLIGHT_CLASS,Xp as coveringStyle,Zp as highlightClasses,Qp as highlightField,$p as highlightRange,em as highlightRanges,tm as threadHighlights,nm as threadHighlightsContribution}from"../../../chunks/app-BwiWSsAX.js";

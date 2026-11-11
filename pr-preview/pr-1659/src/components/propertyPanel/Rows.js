@@ -1,0 +1,1 @@
+export{OB as MetadataRow,kB as PropertySectionLabel}from"../../../chunks/app-BwiWSsAX.js";

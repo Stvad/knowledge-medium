@@ -1,0 +1,1 @@
+export{B6 as agree,V6 as pluralize}from"../../chunks/app-BwiWSsAX.js";

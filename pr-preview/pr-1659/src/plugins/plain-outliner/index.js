@@ -1,0 +1,1 @@
+export{eT as plainOutlinerPlugin}from"../../../chunks/app-BwiWSsAX.js";

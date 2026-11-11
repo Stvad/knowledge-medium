@@ -1,0 +1,1 @@
+export{H_ as blockInfoPlugin}from"../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{Z_ as backlinksViewPlugin}from"../../../chunks/app-BwiWSsAX.js";

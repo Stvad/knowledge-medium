@@ -1,0 +1,1 @@
+export{Jw as usePromotableBreadcrumb}from"../../../chunks/app-BwiWSsAX.js";

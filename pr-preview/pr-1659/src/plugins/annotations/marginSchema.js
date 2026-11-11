@@ -1,0 +1,1 @@
+export{SX as annotationMarginOpenProp,CX as annotationMarginShareProp}from"../../../chunks/app-BwiWSsAX.js";

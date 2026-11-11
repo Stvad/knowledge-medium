@@ -1,0 +1,1 @@
+export{VL as canConvertEmptyChildBlockToProperty,HL as convertEmptyChildBlockToProperty}from"../../chunks/app-BwiWSsAX.js";

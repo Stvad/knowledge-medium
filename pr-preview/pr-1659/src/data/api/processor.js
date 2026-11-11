@@ -1,0 +1,1 @@
+export{Dct as definePostCommitProcessor}from"../../../chunks/app-BwiWSsAX.js";

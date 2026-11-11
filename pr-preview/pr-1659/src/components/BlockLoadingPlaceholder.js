@@ -1,0 +1,1 @@
+export{SF as BlockLoadingPlaceholder}from"../../chunks/app-BwiWSsAX.js";

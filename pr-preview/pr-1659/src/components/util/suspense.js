@@ -1,0 +1,1 @@
+export{PG as SuspenseFallback}from"../../../chunks/app-BwiWSsAX.js";

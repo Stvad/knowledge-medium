@@ -1,0 +1,1 @@
+export{Znt as MIGRATIONS_PAGE_ALIAS,Qnt as getOrCreateMigrationsPage,$nt as migrationsPageBlockId,ert as migrationsPageSpec}from"../../chunks/app-BwiWSsAX.js";

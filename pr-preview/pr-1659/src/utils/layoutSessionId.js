@@ -1,0 +1,1 @@
+export{Fnt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Int as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Lnt as __resetLayoutSessionIdForTesting,Rnt as getLayoutSessionId,znt as isInstalledAppDisplayMode,Bnt as readOrCreateLayoutSessionId}from"../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{a3 as applySyncInvalidation}from"../../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{RP as dynamicExtensionsExtension}from"../../chunks/app-BwiWSsAX.js";

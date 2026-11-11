@@ -1,0 +1,1 @@
+export{NG as BootFallback}from"../../../chunks/app-BwiWSsAX.js";

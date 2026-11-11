@@ -1,0 +1,1 @@
+export{VM as TypeChip}from"../../../chunks/app-BwiWSsAX.js";

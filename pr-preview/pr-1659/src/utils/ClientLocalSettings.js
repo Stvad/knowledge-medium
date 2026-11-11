@@ -1,0 +1,1 @@
+export{PP as ClientLocalSettings,FP as clientLocalSettings}from"../../chunks/app-BwiWSsAX.js";

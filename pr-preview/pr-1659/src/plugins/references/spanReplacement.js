@@ -1,0 +1,1 @@
+export{$K as preferredSpanReplacement}from"../../../chunks/app-BwiWSsAX.js";

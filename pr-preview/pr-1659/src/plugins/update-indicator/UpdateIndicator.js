@@ -1,0 +1,1 @@
+export{G_ as UpdateIndicator}from"../../../chunks/app-BwiWSsAX.js";

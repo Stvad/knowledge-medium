@@ -1,0 +1,1 @@
+export{ND as useMinuteClock}from"../../chunks/app-BwiWSsAX.js";

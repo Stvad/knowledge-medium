@@ -1,0 +1,1 @@
+export{mq as htmlDocumentTypeSeed}from"../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{xY as ANCHOR_CONTEXT_LENGTH,SY as captureAnchor,CY as recaptureAnchor,wY as resolveAnchor,TY as widenToReferenceSpans,EY as widenToSpans}from"../../../chunks/app-BwiWSsAX.js";

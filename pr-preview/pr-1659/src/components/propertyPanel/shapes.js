@@ -1,0 +1,1 @@
+export{rG as propertyShapeLabel}from"../../../chunks/app-BwiWSsAX.js";

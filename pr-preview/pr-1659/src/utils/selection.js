@@ -1,0 +1,1 @@
+export{EH as blockAfterSubtreeRemoval,DH as blockIdsInOrderedSelectionRange,OH as commitSelectionRange,kH as extendSelection,AH as findBestSelectionAnchorIndex,jH as getBlocksInRange,MH as getLastVisibleDescendant,NH as getRootBlock,PH as insertInDocumentOrder,FH as nextVisibleBlock,IH as previousVisibleBlock,LH as validateSelectionHierarchy}from"../../chunks/app-BwiWSsAX.js";

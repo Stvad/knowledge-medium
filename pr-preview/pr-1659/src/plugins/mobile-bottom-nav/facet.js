@@ -1,0 +1,1 @@
+export{Uw as mobileBottomNavItemsFacet}from"../../../chunks/app-BwiWSsAX.js";

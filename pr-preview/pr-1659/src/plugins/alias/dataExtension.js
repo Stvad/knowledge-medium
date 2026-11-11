@@ -1,0 +1,1 @@
+export{OQ as aliasDataExtension}from"../../../chunks/app-BwiWSsAX.js";

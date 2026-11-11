@@ -1,0 +1,1 @@
+export{eZ as RAW_CHARACTER_COUNT_PROFILE_ID,tZ as WORDS_COUNT_PROFILE_ID,nZ as charLimitProp,rZ as charProfileProp,iZ as charScopeProp}from"../../../chunks/app-BwiWSsAX.js";

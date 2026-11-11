@@ -1,0 +1,1 @@
+export{pat as isChildBackedPropertiesWorkspace}from"../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{BU as isIOS,VU as isMacPlatform}from"../../chunks/app-BwiWSsAX.js";

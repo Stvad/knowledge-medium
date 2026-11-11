@@ -1,0 +1,1 @@
+export{Hy as useIsReadOnly}from"../../chunks/app-BwiWSsAX.js";

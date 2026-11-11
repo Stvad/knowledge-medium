@@ -1,0 +1,1 @@
+export{Vh as authorIdOf}from"../../../chunks/app-BwiWSsAX.js";

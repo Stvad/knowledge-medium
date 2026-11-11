@@ -1,0 +1,1 @@
+export{sit as getOrCreatePropertiesPage,cit as propertiesPageBlockId,lit as propertiesPageSpec}from"../../chunks/app-BwiWSsAX.js";

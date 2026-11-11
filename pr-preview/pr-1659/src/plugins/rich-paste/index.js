@@ -1,0 +1,1 @@
+export{_b as richPastePlugin}from"../../../chunks/app-BwiWSsAX.js";

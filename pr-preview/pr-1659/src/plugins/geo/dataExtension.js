@@ -1,0 +1,1 @@
+export{Hq as geoDataExtension}from"../../../chunks/app-BwiWSsAX.js";

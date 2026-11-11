@@ -1,0 +1,1 @@
+export{pq as htmlDocumentDataExtension}from"../../../chunks/app-BwiWSsAX.js";

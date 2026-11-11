@@ -1,0 +1,1 @@
+export{xb as attachmentsPlugin}from"../../../chunks/app-BwiWSsAX.js";

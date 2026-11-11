@@ -1,0 +1,1 @@
+export{bS as videoPlayerPlugin}from"../../../chunks/app-BwiWSsAX.js";

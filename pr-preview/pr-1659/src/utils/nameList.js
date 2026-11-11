@@ -1,0 +1,1 @@
+export{H6 as NAMES_IN_A_SENTENCE,U6 as describeNames,W6 as firstFew}from"../../chunks/app-BwiWSsAX.js";

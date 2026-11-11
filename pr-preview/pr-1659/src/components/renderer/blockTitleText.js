@@ -1,0 +1,1 @@
+export{Az as BLOCK_TITLE_TEXT_CLASS,jz as useBlockTitleTextClass}from"../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{vK as referencesDataExtension}from"../../../chunks/app-BwiWSsAX.js";

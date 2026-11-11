@@ -1,0 +1,1 @@
+export{KK as RENAME_BACKLINKS_PRECEDENCE,qK as RENAME_BACKLINKS_PROCESSOR,JK as applyRefRewrites,YK as renameBacklinksProcessor,XK as renameSameTxProcessors,ZK as replacementFor,QK as splitBySurvivingSpan}from"../../../chunks/app-BwiWSsAX.js";

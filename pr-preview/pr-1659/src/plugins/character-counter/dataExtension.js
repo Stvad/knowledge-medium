@@ -1,0 +1,1 @@
+export{JX as characterCounterDataExtension}from"../../../chunks/app-BwiWSsAX.js";

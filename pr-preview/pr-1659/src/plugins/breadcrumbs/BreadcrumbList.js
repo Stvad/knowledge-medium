@@ -1,0 +1,1 @@
+export{$w as BreadcrumbList}from"../../../chunks/app-BwiWSsAX.js";

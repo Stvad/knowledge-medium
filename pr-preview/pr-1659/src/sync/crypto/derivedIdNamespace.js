@@ -1,0 +1,1 @@
+export{Vit as deriveWorkspaceIdNamespace}from"../../../chunks/app-BwiWSsAX.js";

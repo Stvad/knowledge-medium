@@ -1,0 +1,1 @@
+export{nK as staticDataExtensions}from"../../chunks/app-BwiWSsAX.js";

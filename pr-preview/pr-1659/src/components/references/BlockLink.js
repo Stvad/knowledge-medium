@@ -1,0 +1,1 @@
+export{jD as BlockLink}from"../../../chunks/app-BwiWSsAX.js";

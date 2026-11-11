@@ -1,0 +1,1 @@
+export{tG as PropertyShapeButton,nG as PropertyShapeGlyph}from"../../../chunks/app-BwiWSsAX.js";

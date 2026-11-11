@@ -1,0 +1,1 @@
+export{_Y as annotationsDataExtension}from"../../../chunks/app-BwiWSsAX.js";

@@ -1,0 +1,1 @@
+export{cR as BlockEditor}from"../../chunks/app-BwiWSsAX.js";

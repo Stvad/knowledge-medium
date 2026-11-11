@@ -1,0 +1,1 @@
+export{SJ as matchCharTrigger}from"../../chunks/app-BwiWSsAX.js";

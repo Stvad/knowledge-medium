@@ -1,0 +1,1 @@
+export{Gg as boundDisplayId,Kg as idMark}from"../../../../chunks/app-BwiWSsAX.js";
