@@ -2440,18 +2440,20 @@ export class Repo {
       // alias-carrying blocks must revert the target (releasing the
       // merged alias) before restoring the source (re-claiming it). A
       // statement-level RAISE(ABORT) only rolls back that statement, so
-      // deferring the aborted row and applying the rest is safe; the
-      // replay's end state is a previously-observed valid state, so
-      // every constraint-blocked row eventually unblocks — a full pass
-      // with zero progress means the entry itself is inconsistent, and
-      // we rethrow.
+      // deferring the aborted row and applying the rest is safe. When
+      // nothing wrote the entry's rows since, the end state is a
+      // previously-observed valid state, so every constraint-blocked row
+      // eventually unblocks; a row merged with a later write (field-level
+      // replay) can still collide with it. Either way a full pass with
+      // zero progress rethrows, failing the gesture rather than forcing it.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
         for (const [id, target] of pending) {
           try {
-            await txImpl.applyRaw(id, target)
+            const snap = replaying.snapshots.get(id)!
+            await txImpl.applyRaw(id, target, direction === 'before' ? snap.after : snap.before)
           } catch (err) {
             if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
               deferred.push([id, target])

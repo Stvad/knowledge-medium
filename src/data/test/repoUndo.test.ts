@@ -317,6 +317,50 @@ describe('local and preference writes are not undoable', () => {
   })
 })
 
+describe('field-level replay', () => {
+  const readProperties = async (repo: Repo, id: string): Promise<Record<string, unknown>> => {
+    const row = await repo.db.get<{properties_json: string}>('SELECT properties_json FROM blocks WHERE id = ?', [id])
+    return JSON.parse(row.properties_json) as Record<string, unknown>
+  }
+
+  it('keeps an automation write to the same block across undo and redo of a content edit', async () => {
+    await seedRoot(env.repo, 'a', 'original')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:status': 'done'}})
+    }, {scope: ChangeScope.Automation, description: 'automation'})
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('original')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:status': 'done'})
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:status': 'done'})
+  })
+
+  it('restores the property the entry changed and keeps one another device changed since', async () => {
+    await seedRoot(env.repo, 'a', 'text')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:mine': 'before'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed props'})
+    env.repo.undoManager.clear()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:mine': 'after'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit prop'})
+    // Another device's edit to another field, arriving as a raw row write.
+    await env.repo.db.execute(
+      `UPDATE blocks SET content = 'synced', properties_json = json_set(properties_json, '$."test:theirs"', 'x') WHERE id = 'a'`)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('synced')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:mine': 'before', 'test:theirs': 'x'})
+  })
+})
+
 describe('References scope', () => {
   it('records into a separate stack — does not affect BlockDefault undo', async () => {
     await seedRoot(env.repo, 'a', 'live')

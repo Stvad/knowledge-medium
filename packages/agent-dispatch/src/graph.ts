@@ -24,6 +24,12 @@ interface TaskPropsWrite {
 export const createGraph = (client: BridgeClient) => {
   const bridgeGraph = createBridgeGraph(withContributorId(client, null))
 
+  /** Every `agent:*` write: merged into the bag, and kept off the user's undo
+   *  stack — a cmd-Z in the app must undo the person's own edit, not flip a
+   *  task back to `running`. */
+  const writeTaskProps = (id: string, properties: Record<string, unknown>) =>
+    bridgeGraph.updateBlock(id, {properties, undoable: false})
+
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
   // so a claimed mention jumps to the top of "recently edited" views.
@@ -45,24 +51,22 @@ export const createGraph = (client: BridgeClient) => {
     // Clear the cancel REQUEST on terminal writes (merged, like activity)
     // so a satisfied/stale cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
-    await bridgeGraph.updateBlock(id, {properties})
+    await writeTaskProps(id, properties)
   }
 
   /** Transient "what the run is doing now" label — merged
    *  (update-block merges the properties map) so it never clobbers
    *  other dispatch state written concurrently. */
   const setActivity = async (id: string, label: string): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {properties: {[PROPS.activity]: label}})
+    await writeTaskProps(id, {[PROPS.activity]: label})
   }
 
   /** Persist the run's session id the instant it's known (mid-run),
    *  merged so it never clobbers concurrent dispatch state. */
   const setSession = async (id: string, session: string, resumeOptions?: AgentResumeOptions | null): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {
-      properties: {
-        [PROPS.session]: session,
-        ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
-      },
+    await writeTaskProps(id, {
+      [PROPS.session]: session,
+      ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
     })
   }
 
@@ -70,7 +74,7 @@ export const createGraph = (client: BridgeClient) => {
    *  setSession) so a Stop the daemon cannot act on cannot clobber a
    *  concurrently terminal task. */
   const clearCancel = async (id: string): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {properties: {[PROPS.cancel]: ''}})
+    await writeTaskProps(id, {[PROPS.cancel]: ''})
   }
 
   return {
@@ -96,6 +100,8 @@ export type Graph = ReturnType<typeof createGraph>
 export const createReplyWriter = (client: BridgeClient) => {
   const bridgeGraph = createBridgeGraph(client)
 
+  /** The rare error note; `create-block` has no `undoable` option, so this
+   *  one write stays on the user's undo stack. */
   const createReply = async (parentId: string, content: string): Promise<BlockData> =>
     bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
 
@@ -116,6 +122,8 @@ export const createReplyWriter = (client: BridgeClient) => {
       shape: opts.shape,
       ...(opts.final ? {final: true} : {}),
       properties: {[PROPS.reply]: true},
+      // A reply is the agent's write, not the person's: off their undo stack.
+      undoable: false,
     })
   }
 

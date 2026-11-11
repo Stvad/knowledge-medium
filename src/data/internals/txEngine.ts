@@ -115,6 +115,7 @@ import {
 } from './propertyChildrenProcessor'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
+import { replayTarget } from './replayMerge'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -1480,16 +1481,18 @@ export class TxImpl implements Tx {
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
 
-  /** Drive the row at `id` to exactly `target` (or soft-delete if target
-   *  is null). Bypasses the public primitives — intentionally — because
+  /** Drive the row at `id` to `target` (or soft-delete if target is null),
+   *  for the parts of the row the entry changed between `from` (its other
+   *  side) and `target` — see `replayMerge.ts`; every other part keeps its
+   *  current value. Bypasses the public primitives — intentionally — because
    *  undo replay restores arbitrary snapshot state that the narrow patch
    *  shape of `tx.update` can't express (e.g. `parent_id` + `order_key`
    *  + `deleted` flipping in one write). Spec §10 step 7 + the
    *  BlockDataPatch comment in `api/blockData.ts`.
    *
-   *  Cycle / parent-deleted UX checks are skipped: the snapshot was
-   *  captured from a previously-committed tx, so the target state is
-   *  known to be valid (the engine validated it then). The
+   *  Cycle / parent-deleted UX checks are skipped: each restored part
+   *  comes from a previously-committed tx, which the engine validated
+   *  then. The
    *  workspace-invariant trigger still fires on UPDATE-of-parent_id, so
    *  the storage-level guarantee holds. `updatedAt` / `updatedBy` are
    *  stamped to the replay tx's user + now() — a redo at 10:01 by user
@@ -1511,7 +1514,7 @@ export class TxImpl implements Tx {
    *  though the target state is valid — `applyRaw` itself does no
    *  ordering or retry around that; callers own it (see
    *  `replayApplicationOrder` in txSnapshots.ts). */
-  async applyRaw(id: string, target: BlockData | null): Promise<void> {
+  async applyRaw(id: string, target: BlockData | null, from: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
     const now = this.ctx.now()
@@ -1572,13 +1575,13 @@ export class TxImpl implements Tx {
       return
     }
 
-    // Row exists; UPDATE all non-immutable fields to match target.
-    // workspace_id, id, created_at, created_by are immutable by
-    // contract (§4.1.1) and the snapshot's values for these match
-    // the row's current values when the original tx pre-existed the
-    // row. updated_at / updated_by stamp the replay action.
+    // Row exists: restore the parts of it the entry changed, onto the row as
+    // it is now (`replayTarget`). workspace_id, id, created_at, created_by
+    // are immutable by contract (§4.1.1); updated_at / updated_by stamp the
+    // replay action.
+    const restored = replayTarget(beforeData, from, target)
     const after: BlockData = {
-      ...target,
+      ...restored,
       // Locally monotonic row-version (invariant I3) — see the soft-delete
       // branch above. Undo IS a user action → fresh display stamp (also
       // overrides a pre-migration snapshot's missing `userUpdatedAt`).
@@ -1589,18 +1592,18 @@ export class TxImpl implements Tx {
     await this.ctx.txDb.execute(
       `UPDATE blocks SET parent_id = ?, reference_target_id = ?, is_field_form = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
-        target.parentId,
+        restored.parentId,
         // Undo replay must restore the local derived columns too: same-tx
         // processors are skipped on replay (`isReplay`), so nothing
         // re-derives them — the snapshot is the only source (invariants
         // index: "undo restores what processors won't re-derive").
-        target.referenceTargetId ?? null,
-        target.isFieldForm ? 1 : null,
-        target.orderKey,
-        target.content,
-        JSON.stringify(target.properties),
-        JSON.stringify(target.references),
-        target.deleted ? 1 : 0,
+        restored.referenceTargetId ?? null,
+        restored.isFieldForm ? 1 : null,
+        restored.orderKey,
+        restored.content,
+        JSON.stringify(restored.properties),
+        JSON.stringify(restored.references),
+        restored.deleted ? 1 : 0,
         after.updatedAt,
         now,
         userId,
