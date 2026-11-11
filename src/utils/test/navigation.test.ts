@@ -198,6 +198,25 @@ describe('navigate', () => {
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
   })
 
+  // Below the split breakpoint the layout renders one pane, so a row these
+  // targets would add is one the user never sees and never closes. Every
+  // programmatic open (share target, capture, "open in panel") takes this path.
+  it("'new-panel' and 'sidebar-stack' land in the active pane when the viewport cannot render a split", async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    const stacked = await navigate(env.repo, {blockId: 'b-stacked', target: 'sidebar-stack', sourcePanelId: activePanel})
+    const split = await navigate(env.repo, {blockId: 'b-split', target: 'new-panel', sourcePanelId: activePanel})
+
+    expect(stacked?.panelId).toBe(activePanel)
+    expect(split?.panelId).toBe(activePanel)
+    expect(await currentLayoutBlockIds()).toEqual(['b-main', 'b-split'])
+    expect(await currentActivePanelId()).toBe(activePanel)
+    expect(panelHistory.getSnapshot(activePanel).back.map(entry => entry.blockId)).toEqual(['b-side', 'b-stacked'])
+  })
+
   it('a navigation commits its active-panel write before resolving (no deferred write clobbers a later nav)', async () => {
     const layoutSession = await layoutSessionBlock()
     const mainPanel = await insertPanelRow(env.repo, layoutSession, 'b-main')
