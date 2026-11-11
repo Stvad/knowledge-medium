@@ -1,0 +1,1 @@
+export{fS as videoPlayerPlugin}from"../../../chunks/app-DjnzYi0L.js";

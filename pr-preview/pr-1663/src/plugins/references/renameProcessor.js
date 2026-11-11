@@ -1,0 +1,1 @@
+export{IK as RENAME_BACKLINKS_PRECEDENCE,LK as RENAME_BACKLINKS_PROCESSOR,RK as applyRefRewrites,zK as renameBacklinksProcessor,BK as renameSameTxProcessors,VK as replacementFor,HK as splitBySurvivingSpan}from"../../../chunks/app-DjnzYi0L.js";

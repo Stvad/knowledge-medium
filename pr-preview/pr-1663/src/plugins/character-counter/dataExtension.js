@@ -1,0 +1,1 @@
+export{RX as characterCounterDataExtension}from"../../../chunks/app-DjnzYi0L.js";
