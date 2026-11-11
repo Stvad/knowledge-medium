@@ -74,6 +74,22 @@ describe('getElementScrollportBounds', () => {
     expect(getElementScrollportBounds(row)).toEqual({top: 200, bottom: 400})
   })
 
+  // The comments margin sits outside the outline's scrollport and clips its
+  // cards (`overflow: clip`) to the scrollport's band: a card row above that
+  // band is hidden although no scrollport cuts it.
+  it.each(['clip', 'hidden'])('clips to an ancestor that clips its overflow without scrolling (%s)', overflowY => {
+    const port = scrollport(0, 700)
+    const column = document.createElement('div')
+    column.style.overflowY = overflowY
+    stubRect(column, 48, 600)
+    port.appendChild(column)
+    const row = document.createElement('div')
+    column.appendChild(row)
+    document.body.appendChild(port)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 48, bottom: 648})
+  })
+
   it('ignores ancestors that do not scroll', () => {
     const port = scrollport(100, 300)
     const plain = document.createElement('div')
