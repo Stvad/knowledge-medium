@@ -1,0 +1,1 @@
+export{Yp as contributorsPlugin}from"../../../chunks/app-tcZ6IZ74.js";

@@ -1,0 +1,1 @@
+export{CD as BlockLink}from"../../../chunks/app-tcZ6IZ74.js";

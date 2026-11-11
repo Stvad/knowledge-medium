@@ -1,0 +1,1 @@
+export{FM as DEFAULT_TYPE_COLORS,IM as defaultTypeColor,LM as pickLeastUsedTypeColor}from"../../chunks/app-tcZ6IZ74.js";

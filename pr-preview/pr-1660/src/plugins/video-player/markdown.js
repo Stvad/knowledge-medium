@@ -1,0 +1,1 @@
+export{pS as videoPlayerMarkdownExtension}from"../../../chunks/app-tcZ6IZ74.js";

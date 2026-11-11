@@ -1,0 +1,1 @@
+export{rm as agentDispatchCompanionPlugin}from"../../../chunks/app-tcZ6IZ74.js";

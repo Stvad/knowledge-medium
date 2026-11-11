@@ -1,0 +1,1 @@
+export{AP as dynamicExtensionsExtension}from"../../chunks/app-tcZ6IZ74.js";

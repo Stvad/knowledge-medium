@@ -1,0 +1,1 @@
+export{Mit as deriveWorkspaceIdNamespace}from"../../../chunks/app-tcZ6IZ74.js";

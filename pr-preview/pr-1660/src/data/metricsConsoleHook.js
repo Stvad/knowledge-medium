@@ -1,0 +1,1 @@
+export{ZM as ensureMetricsConsoleHook}from"../../chunks/app-tcZ6IZ74.js";

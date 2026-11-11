@@ -1,0 +1,1 @@
+export{Get as ancestorWalk}from"../../../chunks/app-tcZ6IZ74.js";
