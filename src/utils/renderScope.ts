@@ -59,13 +59,3 @@ export const surfaceRenderScopeId = (
   parentRenderScopeId: string,
   occurrenceId: string,
 ): string => joinScope(`surface.${surface}`, [occurrenceId, parentRenderScopeId])
-
-/** What a `surfaceRenderScopeId` was made from. */
-export const surfaceRenderScopeParts = (renderScopeId: string): {occurrenceId: string; parentRenderScopeId: string} => {
-  const [, occurrenceId, parentRenderScopeId] = renderScopeId.split(':')
-  return {occurrenceId: decodeURIComponent(occurrenceId), parentRenderScopeId: decodeURIComponent(parentRenderScopeId)}
-}
-
-/** Is `renderScopeId` a `surfaceRenderScopeId` of `surface`? */
-export const isSurfaceRenderScopeId = (surface: string, renderScopeId: string): boolean =>
-  renderScopeId.startsWith(`surface.${surface}:`)

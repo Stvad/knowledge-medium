@@ -49,6 +49,7 @@ import { navigateInPanel } from './panelHistory'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
+import { zoomSurfaceIn, zoomSurfaceOut } from '@/utils/surfaceZoom'
 import { blockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
 import {
   insertPanelRow,
@@ -77,8 +78,8 @@ interface NavigateBaseInput {
    *  Optional — untagged navigations are still redirectable by target/block. */
   origin?: string
   /** The render scope the gesture was made in (the clicked row's, the focused
-   *  block's), where there is one. Lets a surface nested in a panel, which
-   *  shares the panel's id, claim a navigation made inside it. */
+   *  block's), where there is one. A surface nested in a panel shares the
+   *  panel's id; this tells a navigation made inside it from the panel's own. */
   sourceRenderScopeId?: string
 }
 
@@ -151,6 +152,19 @@ export interface NavigationResult {
 export interface NavigationRequest {
   repo: Repo
   input: ResolvedNavigateInput
+}
+
+/** Applies a zoom made inside a zoomable surface (`@/utils/surfaceZoom`),
+ *  which zooms that surface and leaves its panel as it is, returning that
+ *  panel. Only one aimed at the surface's own panel: a bullet opened in a new
+ *  panel is a navigation. Null when the navigation is the panel's after all. */
+const zoomSurface = async (repo: Repo, input: NavigateInput): Promise<string | null> => {
+  const renderScopeId = input.sourceRenderScopeId
+  if (input.target !== 'panel' || renderScopeId === undefined) return null
+  const zoomed = input.origin === ZOOM_ORIGIN
+    ? await zoomSurfaceIn(repo, {renderScopeId, blockId: input.blockId, panelId: input.panelId})
+    : input.origin === ZOOM_OUT_ORIGIN && await zoomSurfaceOut(repo, renderScopeId)
+  return zoomed ? input.panelId : null
 }
 
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
@@ -359,6 +373,13 @@ export const navigate = async (
   const request: NavigationRequest = {repo, input: {...input, workspaceId}}
   const runtime = repo.facetRuntime
   try {
+    // Ahead of the verb: a zoom of a surface nested in the panel is not a
+    // navigation, so no decorator has to know to leave it alone.
+    const zoomedPanelId = await zoomSurface(repo, request.input)
+    if (zoomedPanelId !== null) {
+      const shown = repo.block(zoomedPanelId).peekProperty(topLevelBlockIdProp) ?? input.blockId
+      return {panelId: zoomedPanelId, blockId: shown, workspaceId}
+    }
     return runtime
       ? await navigationVerb.run(runtime, request)
       : await applyNavigation(request)

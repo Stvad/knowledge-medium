@@ -13,12 +13,13 @@ import {navigate} from '@/utils/navigation'
 import {lazyBlockCacheKey, registerPendingLazyMount} from '@/components/util/lazyMountRegistry'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId} from '@/utils/renderScope'
+import {__resetSurfaceZoomsForTesting, peekSurfaceZoom, registerZoomableSurface} from '@/utils/surfaceZoom'
 import {captureAnchor} from './anchor'
 import {annotationsPlugin} from './index'
 import {annotationTargetProp} from './schema'
 import {landingCardScopes} from './threadNavigation'
 import {createThread, setThreadStatus} from './threads'
-import {__resetCardZoomsForTesting, cardRenderScopeId, peekActiveThread, peekCardZoom} from './uiStore'
+import {cardRenderScopeId, peekActiveThread} from './uiStore'
 
 const WS = 'ws'
 const USER: User = {id: 'alex', name: 'Alex'}
@@ -32,7 +33,7 @@ afterAll(async () => { await db.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
-  __resetCardZoomsForTesting()
+  __resetSurfaceZoomsForTesting()
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, annotationsPlugin]}).repo
   repo.setActiveWorkspaceId(WS)
@@ -207,123 +208,56 @@ describe('navigating into a thread', () => {
 })
 
 describe('zooming inside a card', () => {
-  /** A thread on `B` with a comment, a reply and a reply to that, shown in a
-   *  panel on `page`. */
+  /** A thread on `B` with a comment and a reply, its card mounted in a panel
+   *  on `page` (a mounted card is a zoomable surface). */
   const shownThread = async () => {
     const {threadId, commentId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Is it confirmed?'})
     const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Yes, as of today.'})
-    const nested = await repo.mutate.createChild({parentId: reply, content: 'By whom?'})
     await navigate(repo, {blockId: 'page', target: 'main'})
     const {panelId} = await shownPanel()
-    const scope = cardScope(panelId, threadId, panelRenderScopeId(panelId, 'page'))
-    const zoom = (blockId: string, origin = 'zoom', sourceRenderScopeId = scope) =>
-      navigate(repo, {blockId, target: 'panel', panelId, origin, sourceRenderScopeId})
-    return {threadId, commentId: commentId!, reply, nested, panelId, scope, zoom}
+    const mount = (parent: string) => {
+      const scope = cardScope(panelId, threadId, parent)
+      registerZoomableSurface(scope, {rootId: threadId, parentRenderScopeId: parent})
+      return scope
+    }
+    const zoom = (blockId: string, sourceRenderScopeId: string) =>
+      navigate(repo, {blockId, target: 'panel', panelId, origin: 'zoom', sourceRenderScopeId})
+    return {threadId, commentId: commentId!, reply, panelId, mount, zoom}
   }
 
   it('a zoom made in a card zooms the card, and leaves the panel where it is', async () => {
-    const {reply, panelId, scope, zoom} = await shownThread()
+    const {reply, panelId, mount, zoom} = await shownThread()
+    const scope = mount(panelRenderScopeId(panelId, 'page'))
 
-    const result = await zoom(reply)
+    await zoom(reply, scope)
 
-    expect(result).toMatchObject({panelId, blockId: 'page'})
     expect((await shownPanel()).blockIds).toEqual(['page'])
-    expect(peekCardZoom(scope)).toBe(reply)
+    expect(peekSurfaceZoom(scope)).toBe(reply)
     expect(await focused(panelId)).toEqual({blockId: reply, renderScopeId: scope})
   })
 
-  it('a zoom on the thread root shows the whole thread again', async () => {
-    const {threadId, reply, scope, zoom} = await shownThread()
-    await zoom(reply)
-
-    await zoom(threadId)
-
-    expect(peekCardZoom(scope)).toBeUndefined()
-    expect((await shownPanel()).blockIds).toEqual(['page'])
-  })
-
-  it('a zoom out steps to the parent comment, then to the whole thread, then zooms the panel', async () => {
-    const {commentId, reply, nested, scope, zoom} = await shownThread()
-    await repo.tx(tx => tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Other'}), opts)
-    await zoom(nested)
-
-    await zoom('other', 'zoom-out')
-    expect(peekCardZoom(scope)).toBe(reply)
-
-    await zoom('other', 'zoom-out')
-    expect(peekCardZoom(scope)).toBe(commentId)
-
-    await zoom('other', 'zoom-out')
-    expect(peekCardZoom(scope)).toBeUndefined()
-    expect((await shownPanel()).blockIds).toEqual(['page'])
-
-    await zoom('other', 'zoom-out')
-    expect((await shownPanel()).blockIds).toEqual(['other'])
-  })
-
-  it('a zoom into a collapsed comment expands it', async () => {
-    const {reply, zoom} = await shownThread()
-    await repo.tx(tx => tx.setProperty(reply, isCollapsedProp, true), opts)
-
-    await zoom(reply)
-
-    expect((await repo.load(reply))?.properties[isCollapsedProp.name]).toBeFalsy()
-  })
-
-  it('a zoom out in a card inside a zoomed card’s comment steps the outer card out', async () => {
-    const {reply, commentId, scope, zoom, threadId} = await shownThread()
-    const inner = await createThread(repo, {targetId: reply, anchor: null, comment: 'On the reply.'})
-    await zoom(reply)
-
-    await zoom('page', 'zoom-out', cardRenderScopeId('comments', scope, inner.threadId))
-
-    expect(peekCardZoom(scope)).toBe(commentId)
-    expect(threadId).not.toBe(inner.threadId)
-  })
-
-  it('a zoom out of a card whose zoomed comment has left the thread is the panel’s', async () => {
-    const {reply, scope, zoom} = await shownThread()
-    await repo.tx(tx => tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Other'}), opts)
-    await zoom(reply)
-    await repo.mutate.delete({id: reply})
-
-    await zoom('other', 'zoom-out')
-
-    expect(peekCardZoom(scope)).toBeUndefined()
-    expect((await shownPanel()).blockIds).toEqual(['other'])
-  })
-
   it('a zoom made outside a card lands on the target, as any navigation to a comment does', async () => {
-    const {reply, panelId, scope, zoom} = await shownThread()
+    const {reply, panelId, mount, zoom} = await shownThread()
+    const scope = mount(panelRenderScopeId(panelId, 'page'))
 
-    await zoom(reply, 'zoom', panelRenderScopeId(panelId, 'page'))
+    await zoom(reply, panelRenderScopeId(panelId, 'page'))
 
     expect((await shownPanel()).blockIds).toEqual(['B'])
-    expect(peekCardZoom(scope)).toBeUndefined()
-  })
-
-  it('a comment’s bullet opened in a new panel leaves the card as it is', async () => {
-    const {reply, panelId, scope} = await shownThread()
-
-    await navigate(repo, {blockId: reply, target: 'new-panel', sourcePanelId: panelId, origin: 'zoom', sourceRenderScopeId: scope})
-
-    expect(peekCardZoom(scope)).toBeUndefined()
-    expect((await shownPanel()).blockIds).toEqual(['page', 'B'])
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
   })
 
   it('a landing on a comment the card’s zoom hides shows the whole thread; one inside the zoom keeps it', async () => {
-    const {commentId, reply, nested, panelId, threadId} = await shownThread()
+    const {commentId, reply, panelId, mount, zoom} = await shownThread()
+    const nested = await repo.mutate.createChild({parentId: reply, content: 'By whom?'})
     await navigate(repo, {blockId: 'B', target: 'main'})
-    const scope = cardScope(panelId, threadId)
-    const zoom = (blockId: string) =>
-      navigate(repo, {blockId, target: 'panel', panelId, origin: 'zoom', sourceRenderScopeId: scope})
-    await zoom(reply)
+    const scope = mount(panelRenderScopeId(panelId, 'B'))
+    await zoom(reply, scope)
 
     await navigate(repo, {blockId: nested, target: 'main'})
-    expect(peekCardZoom(scope)).toBe(reply)
+    expect(peekSurfaceZoom(scope)).toBe(reply)
 
     await navigate(repo, {blockId: commentId, target: 'main'})
-    expect(peekCardZoom(scope)).toBeUndefined()
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
   })
 })
 
