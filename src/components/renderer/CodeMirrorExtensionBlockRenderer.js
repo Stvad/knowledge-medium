@@ -1,1 +1,1 @@
-export{fI as CodeMirrorExtensionBlockRenderer,pI as ExtensionEditor}from"../../../chunks/app-DyRl5ztF.js";
+export{fI as CodeMirrorExtensionBlockRenderer,pI as ExtensionEditor}from"../../../chunks/app-BOi6Z-bc.js";

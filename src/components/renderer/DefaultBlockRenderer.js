@@ -1,1 +1,1 @@
-export{OI as BulletDot,kI as DefaultBlockLayout,AI as DefaultBlockRenderer}from"../../../chunks/app-DyRl5ztF.js";
+export{OI as BulletDot,kI as DefaultBlockLayout,AI as DefaultBlockRenderer}from"../../../chunks/app-BOi6Z-bc.js";
