@@ -1,1 +1,0 @@
-export{Gw as BreadcrumbRenderer}from"../../../chunks/app-DOJ1be8h.js";

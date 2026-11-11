@@ -1,1 +1,0 @@
-export{ty as Wikilink}from"../../../../../chunks/app-DOJ1be8h.js";

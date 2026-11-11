@@ -1,1 +1,0 @@
-export{Ly as useIsReadOnly}from"../../chunks/app-DOJ1be8h.js";

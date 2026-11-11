@@ -1,1 +1,0 @@
-export{IM as TypeChip}from"../../../chunks/app-DOJ1be8h.js";
