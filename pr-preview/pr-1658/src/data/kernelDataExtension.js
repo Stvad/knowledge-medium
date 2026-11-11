@@ -1,0 +1,1 @@
+export{s3 as kernelDataExtension}from"../../chunks/app-rLyycFHi.js";

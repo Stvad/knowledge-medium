@@ -1,0 +1,1 @@
+export{CG as BootFallback}from"../../../chunks/app-rLyycFHi.js";

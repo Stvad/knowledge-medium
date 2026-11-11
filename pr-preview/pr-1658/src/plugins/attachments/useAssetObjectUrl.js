@@ -1,0 +1,1 @@
+export{Nx as useAssetObjectUrl}from"../../../chunks/app-rLyycFHi.js";

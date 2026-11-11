@@ -1,0 +1,1 @@
+export{Y4 as applySyncInvalidation}from"../../../../chunks/app-rLyycFHi.js";
