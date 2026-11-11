@@ -1,1 +1,0 @@
-export{RN as editorAutocompleteExtension}from"../../chunks/app-Dk3ZXpF3.js";

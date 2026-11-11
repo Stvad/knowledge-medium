@@ -1,1 +1,0 @@
-export{K3 as USER_TYPES_PROJECTOR_ID,q3 as UserTypesService,J3 as userTypesProjector}from"../../chunks/app-Dk3ZXpF3.js";

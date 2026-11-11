@@ -1,1 +1,0 @@
-export{hq as htmlDocumentDataExtension}from"../../../chunks/app-Dk3ZXpF3.js";

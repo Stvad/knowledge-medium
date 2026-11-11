@@ -1,1 +1,0 @@
-export{IG as SuspenseFallback}from"../../../chunks/app-Dk3ZXpF3.js";

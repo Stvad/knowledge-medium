@@ -1,1 +1,0 @@
-export{iK as staticDataExtensions}from"../../chunks/app-Dk3ZXpF3.js";

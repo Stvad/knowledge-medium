@@ -1,1 +1,0 @@
-export{gq as htmlDocumentTypeSeed}from"../../../chunks/app-Dk3ZXpF3.js";

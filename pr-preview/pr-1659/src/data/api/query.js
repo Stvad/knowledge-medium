@@ -1,1 +1,0 @@
-export{Sct as defineQuery}from"../../../chunks/app-Dk3ZXpF3.js";

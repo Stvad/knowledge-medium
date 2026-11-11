@@ -1,1 +1,0 @@
-export{FD as useMinuteClock}from"../../chunks/app-Dk3ZXpF3.js";

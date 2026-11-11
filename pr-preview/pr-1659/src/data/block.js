@@ -1,1 +1,0 @@
-export{g3 as Block,_3 as requireLoadedBlock}from"../../chunks/app-Dk3ZXpF3.js";

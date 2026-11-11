@@ -1,1 +1,0 @@
-export{UM as TypeChip}from"../../../chunks/app-Dk3ZXpF3.js";

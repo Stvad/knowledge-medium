@@ -1,1 +1,0 @@
-export{PM as BlockEmbed}from"../../../chunks/app-Dk3ZXpF3.js";
