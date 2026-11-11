@@ -1,1 +1,0 @@
-export{BZ as pluginPrefsExtension,VZ as pluginUIStateExtension}from"../../chunks/app-CS0B-Se-.js";

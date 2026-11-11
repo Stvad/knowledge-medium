@@ -1,1 +1,0 @@
-export{L_ as blockInfoPlugin}from"../../../chunks/app-CS0B-Se-.js";

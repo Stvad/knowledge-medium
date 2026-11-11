@@ -1,1 +1,0 @@
-export{lG as appRuntimeUpdateEvent,uG as refreshAppRuntime}from"../../chunks/app-CS0B-Se-.js";

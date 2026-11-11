@@ -1,1 +1,0 @@
-export{UN as approveExtensionHere}from"../../chunks/app-CS0B-Se-.js";

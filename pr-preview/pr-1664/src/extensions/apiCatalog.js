@@ -1,1 +1,0 @@
-export{qm as extensionApiCatalog,Jm as extensionApiRuntimeExports}from"../../chunks/app-CS0B-Se-.js";

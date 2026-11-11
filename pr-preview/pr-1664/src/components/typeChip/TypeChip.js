@@ -1,1 +1,0 @@
-export{IM as TypeChip}from"../../../chunks/app-CS0B-Se-.js";

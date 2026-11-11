@@ -1,1 +1,0 @@
-export{zP as extensionDisplayName,BP as extensionName,VP as userExtensionShellToggle,HP as userExtensionToggle}from"../../chunks/app-CS0B-Se-.js";

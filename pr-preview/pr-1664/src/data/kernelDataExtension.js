@@ -1,1 +1,0 @@
-export{b3 as kernelDataExtension}from"../../chunks/app-CS0B-Se-.js";

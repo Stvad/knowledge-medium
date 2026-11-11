@@ -1,1 +1,0 @@
-export{rP as checkForAppUpdate,iP as registerServiceWorker}from"../chunks/app-CS0B-Se-.js";

@@ -1,1 +1,0 @@
-export{SB as BlockProperties}from"../../chunks/app-CS0B-Se-.js";

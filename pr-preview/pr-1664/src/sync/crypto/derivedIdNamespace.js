@@ -1,1 +1,0 @@
-export{Kit as deriveWorkspaceIdNamespace}from"../../../chunks/app-CS0B-Se-.js";

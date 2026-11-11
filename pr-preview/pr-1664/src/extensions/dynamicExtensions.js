@@ -1,1 +1,0 @@
-export{NP as dynamicExtensionsExtension}from"../../chunks/app-CS0B-Se-.js";

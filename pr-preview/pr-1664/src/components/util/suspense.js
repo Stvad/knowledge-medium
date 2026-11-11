@@ -1,1 +1,0 @@
-export{LG as SuspenseFallback}from"../../../chunks/app-CS0B-Se-.js";

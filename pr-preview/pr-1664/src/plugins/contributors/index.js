@@ -1,1 +1,0 @@
-export{Zp as contributorsPlugin}from"../../../chunks/app-CS0B-Se-.js";
