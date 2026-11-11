@@ -5,7 +5,7 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
-import {actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet, panelMountsFacet} from '@/extensions/core.js'
+import {actionContextsFacet, actionsFacet, appMountsFacet, panelMountsFacet} from '@/extensions/core.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {
   blockBelowContentFacet,
@@ -13,15 +13,18 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContextMenuItemsFacet,
+  blockGutterItemsFacet,
   blockLayoutFacet,
 } from '@/extensions/blockInteraction.js'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions.js'
 import {markdownExtensionsFacet} from '@/markdown/extensions.js'
 import {backlinksDataExtension} from '@/plugins/backlinks/dataExtension.js'
 import {mobileKeyboardToolbarItemsFacet} from '@/plugins/mobile-keyboard-toolbar/facet.js'
+import {quickActionItemsFacet} from '@/plugins/swipe-quick-actions/actions.js'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch.js'
 import {
   annotationActions,
+  COMMENT_ON_BLOCK_ACTION_ID,
   COMMENT_ON_SELECTION_ACTION_ID,
   keepSelectionOnClick,
   readSelectionContext,
@@ -29,7 +32,7 @@ import {
 } from './actions.ts'
 import {annotationsDataExtension} from './dataExtension.ts'
 import {threadHighlightsContribution} from './highlights.ts'
-import {CommentMargin, MarginHeaderItem} from './margin.tsx'
+import {CommentMargin} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
@@ -39,6 +42,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
+  commentSurfaceContribution,
   commentsBelowContentContribution,
   threadRootContentContribution,
 } from './ui.tsx'
@@ -61,7 +65,8 @@ export const annotationsPlugin: AppExtension = systemToggle({
   appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
-  blockContentDecoratorsFacet.of(commentPillContribution, {source: SOURCE}),
+  blockContentDecoratorsFacet.of(commentSurfaceContribution, {source: SOURCE}),
+  blockGutterItemsFacet.of(commentPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(nestedReadSelectionMenuContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockBelowContentFacet.of(commentsBelowContentContribution, {source: SOURCE}),
@@ -70,6 +75,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   // Over the references plugin's reference layout, which it replaces for roots.
   blockLayoutFacet.of(quotedRangeLayoutContribution, {source: SOURCE, precedence: 10}),
   blockContextMenuItemsFacet.of(commentContextMenuItem, {source: SOURCE}),
+  quickActionItemsFacet.of({actionId: COMMENT_ON_BLOCK_ACTION_ID, label: 'Comment'}, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(threadHighlightsContribution, {source: SOURCE}),
   // After every other markdown extension (default precedence), so its
   // transform marks their nodes rather than splitting their tokens.
@@ -77,7 +83,6 @@ export const annotationsPlugin: AppExtension = systemToggle({
   // A panel mount, not a block layout: that facet is last-wins, and the video
   // notes and SRS review layouts already contribute to it.
   panelMountsFacet.of({id: 'annotations.margin', component: CommentMargin}, {source: SOURCE}),
-  headerItemsFacet.of({id: 'annotations.margin-toggle', region: 'end', component: MarginHeaderItem}, {source: SOURCE}),
   mobileKeyboardToolbarItemsFacet.of(
     {id: 'annotations.comment', actionId: COMMENT_ON_SELECTION_ACTION_ID, movesFocus: true},
     {source: SOURCE, precedence: 60}),

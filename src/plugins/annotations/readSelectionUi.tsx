@@ -13,8 +13,7 @@ import type {BlockRenderer} from '@/types.js'
 import {useActionContext} from '@/shortcuts/useActionContext.js'
 import {
   READ_SELECTION_CONTEXT,
-  gestureRunsHere,
-  readSelectionGestures,
+  readSelectionGesturesIn,
   readSelectionTarget,
   reportFailure,
   runOnReadTarget,
@@ -45,7 +44,7 @@ export const readSelectionShortcutsMount: AppMountContribution = {
  */
 export const ReadSelectionMenu = ({block, children}: {block: Block; children: ReactElement}) => {
   const {renderScopeId} = useBlockContext()
-  const gestures = readSelectionGestures.filter(gesture => gestureRunsHere(gesture, {renderScopeId}))
+  const gestures = readSelectionGesturesIn(renderScopeId)
   const holds = useHoldsReadSelection(block.id, renderScopeId)
   const [target, setTarget] = useState<SelectionTarget | string | null>(null)
   return (

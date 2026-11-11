@@ -118,6 +118,11 @@ const contributorField = {contributorId: z.string().nullable().optional()}
  *  the one lossless way to name an odd stored id. */
 const exactIdsField = {exactIds: z.boolean().optional()}
 
+/** `false` keeps the write off the user's undo stack: for a caller whose
+ *  writes are not the user's action, such as the dispatch daemon's task
+ *  bookkeeping and replies. Default: undoable, like the user's own edit. */
+const undoableField = {undoable: z.boolean().optional()}
+
 // Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
 // `command.id ?? command.actionId`) keep working through the narrowing:
 // declared fields are still type-checked, extras flow through as `unknown`.
@@ -245,6 +250,7 @@ export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
   key: z.string(),
   shape: z.enum(['outline', 'block']).optional(),
   final: z.boolean().optional(),
+  ...undoableField,
   ...contributorField,
   ...commandIdField,
 })
@@ -259,6 +265,7 @@ export const updateBlockCommandSchema = z.looseObject({
    *  still exactly this — what the caller read before deciding to write. */
   expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
+  ...undoableField,
   ...exactIdsField,
   ...contributorField,
   ...commandIdField,

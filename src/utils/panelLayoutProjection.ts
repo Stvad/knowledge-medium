@@ -1026,9 +1026,8 @@ export const reconcilePanelRows = async (
     // Topology-equal targets (same kinds + block ids) must NEVER take the
     // destructive materialization below: real sessions always have an
     // active panel, so any inbound hash without `;active` (old bookmark,
-    // shared link) would otherwise delete+recreate stack rows (React
-    // remounts), re-key rows via tx.move (junk UiState uploads), and
-    // un-stack singleton stacks. Context diffs are applied surgically.
+    // shared link) would otherwise re-key rows via tx.move (junk UiState
+    // uploads) and un-stack singleton stacks. Context diffs are applied surgically.
     const targetLeaves = collectLeafSlots(targetSlots)
     const currentLeafRows = allPanelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
       .filter(row => panelBlockId(row) !== undefined)
@@ -1082,20 +1081,35 @@ export const reconcilePanelRows = async (
     const currentSlots = currentRows
       .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
       .map(row => ({row, blockId: panelBlockId(row)}))
-    const stackRowsToDelete = currentRows
+    const currentStackRows = new Map(currentRows
       .filter(row => row.id !== layoutSessionBlock.id && isPanelStackRow(row))
+      .map(row => [row.id, row]))
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
+
+    /** The current stack a target stack keeps, given the target leaves it
+     *  holds: the first one's whose reused panel row is in a stack no earlier
+     *  target took. A stack's row carries the column's UiState (its width),
+     *  which belongs with its panels rather than with the URL; a target
+     *  stack none of whose panels was stacked gets a new row. */
+    const reusableStackRow = (firstLeafIndex: number, leafCount: number): BlockData | undefined => {
+      for (let index = firstLeafIndex; index < firstLeafIndex + leafCount; index++) {
+        const parentId = rowsByTargetIndex.get(index)?.row.parentId
+        const stack = parentId ? currentStackRows.get(parentId) : undefined
+        if (stack) return stack
+      }
+      return undefined
+    }
 
     // Removed layout rows are deleted WITH their whole subtree
     // (`deleteLayoutRowSubtreeInTx`), same as `deletePanelRow`. Hierarchical
     // editing: anything meant to survive a reconcile is moved out of the doomed
-    // subtree FIRST — the reused panels are relocated into the freshly-built
-    // stacks by `materializeSlots` (`tx.move`), and unmatched panels are leaves
+    // subtree FIRST — the reused panels and kept stacks are relocated to their
+    // targets by `materializeSlots` (`tx.move`), and unmatched panels are leaves
     // with nothing to preserve. So by delete time each doomed row's subtree
     // holds only what should go: its hidden property-field machinery (a flipped
-    // workspace's materialized UiState props) and husk stacks that are their own
-    // `stackRowsToDelete` entries (idempotent re-delete). A bare `tx.delete`
+    // workspace's materialized UiState props) and husk stacks that are deleted
+    // again below if no target stack keeps them (idempotent). A bare `tx.delete`
     // would instead strand that machinery live under the tombstone (#8).
     for (const slot of rowsToDelete) {
       await deleteLayoutRowSubtreeInTx(tx, slot.row.id)
@@ -1111,7 +1125,14 @@ export const reconcilePanelRows = async (
         const target = slots[index]
         const orderKey = orderKeys[index]
         if (target.kind === 'stack') {
-          const stackId = await createPanelStackRowInTx(repo, tx, {
+          const kept = reusableStackRow(targetLeafIndex, collectLeafSlots(target.children).length)
+          if (kept) {
+            currentStackRows.delete(kept.id)
+            if (kept.orderKey !== orderKey || kept.parentId !== parentId) {
+              await tx.move(kept.id, {parentId, orderKey})
+            }
+          }
+          const stackId = kept?.id ?? await createPanelStackRowInTx(repo, tx, {
             workspaceId: parent.workspaceId,
             parentId,
             orderKey,
@@ -1177,7 +1198,7 @@ export const reconcilePanelRows = async (
 
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
-    for (const stackRow of stackRowsToDelete) {
+    for (const stackRow of currentStackRows.values()) {
       await deleteLayoutRowSubtreeInTx(tx, stackRow.id)
     }
 

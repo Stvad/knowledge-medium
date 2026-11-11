@@ -1,8 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import { chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
-import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 import { contentWithAgentMention } from '../askAgent.ts'
 
 describe('chipStateFor', () => {
@@ -101,28 +99,5 @@ describe('contentWithAgentMention', () => {
     expect(contentWithAgentMention('summarize this  ')).toBe('summarize this [[claude]]')
     expect(contentWithAgentMention('already [[claude]] here')).toBe('already [[claude]] here')
     expect(contentWithAgentMention('case [[CLAUDE]] variant')).toBe('case [[CLAUDE]] variant')
-  })
-})
-
-describe('agentStatusChipContribution gate', () => {
-  const ctx = (over: Partial<BlockResolveContext>): BlockResolveContext =>
-    ({isTopLevel: false, ...over}) as BlockResolveContext
-
-  const withContext = (over: Record<string, unknown>) =>
-    ctx({blockContext: over as BlockResolveContext['blockContext']})
-
-  it('attaches where the block renders as a full row — outline, backlinks, embeds', () => {
-    expect(agentStatusChipContribution(ctx({}))).toBeTruthy()
-    expect(agentStatusChipContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    // A backlink-entry body / embed sets isNestedSurface but still renders
-    // the block as a full row, so the chip belongs there — the review
-    // surface for what the daemon picked up must not hide status.
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isBacklink: true}))).toBeTruthy()
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isEmbedded: true}))).toBeTruthy()
-  })
-
-  it('suppresses only inline references and breadcrumb segments (a gutter pill cannot lay out inline)', () => {
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isReference: true}))).toBeNull()
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isBreadcrumb: true}))).toBeNull()
   })
 })

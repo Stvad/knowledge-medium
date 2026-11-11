@@ -193,6 +193,20 @@ export type BlockBelowContentContribution = BlockSectionContribution
 // References" lives here.
 export type BlockChildrenFooterContribution = BlockSectionContribution
 
+export type BlockGutterCorner = 'top-right' | 'bottom-right'
+
+export interface BlockGutterItem {
+  corner: BlockGutterCorner
+  /** Renders the item, or null to show nothing for this block right now. */
+  component: BlockRenderer
+}
+
+export type BlockGutterItemContribution =
+  (context: BlockResolveContext) => BlockGutterItem | readonly BlockGutterItem[] | null | undefined | false
+
+export type BlockGutterItemsResolver =
+  (context: BlockResolveContext) => readonly BlockGutterItem[]
+
 // Slot for sections rendered inside a block's bullet hover-card — block
 // metadata (created/edited/by, counts, id) lives here. `BlockBullet` shows a
 // floating card populated with all returned components when the bullet is
@@ -429,6 +443,21 @@ export const blockChildrenFooterFacet = defineFacet<
   combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockChildrenFooterContribution>,
+})
+
+// Small items in a corner of a block's content: counts, status chips, markers.
+// `BlockGutterHost` lays every one of them out, so an item never positions
+// itself. Within a corner they run in contribution order (precedence, then
+// registration), first leftmost. The gate is structural, as the note on
+// `blockContentDecoratorsFacet` says; an item hides itself by rendering null.
+export const blockGutterItemsFacet = defineFacet<
+  BlockGutterItemContribution,
+  BlockGutterItemsResolver
+>({
+  id: 'core.block-gutter-items',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockGutterItemContribution>,
 })
 
 export const blockBulletHoverFacet = defineFacet<

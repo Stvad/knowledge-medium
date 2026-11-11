@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -15,6 +15,9 @@ import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { type ActionConfig, ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
+import { annotationsPlugin } from '@/plugins/annotations'
+import * as newComment from '@/plugins/annotations/newComment'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import { quickActionItemsFacet, SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
@@ -148,13 +151,13 @@ describe('SwipeActionMenu', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderMenu = () =>
+  const renderMenu = (renderScopeId?: string) =>
     render(
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
           <div className="panel">
-            <div data-block-id="block-1">Block</div>
+            <div data-block-id="block-1" data-render-scope-id={renderScopeId}>Block</div>
             <SwipeActionMenu/>
           </div>
         </ActiveContextsProvider>
@@ -198,6 +201,23 @@ describe('SwipeActionMenu', () => {
 
     expect(await screen.findByRole('button', {name: 'Copy'})).toHaveTextContent('Copy')
     expect(screen.queryByRole('button', {name: 'Close'})).toBeNull()
+  })
+
+  it('starts a whole-block comment on the swiped outline occurrence', async () => {
+    const startComment = vi.spyOn(newComment, 'startComment').mockResolvedValue(true)
+    onTestFinished(() => { startComment.mockRestore() })
+    runtime = buildRuntime(annotationsPlugin)
+    const renderScopeId = panelRenderScopeId('panel-1', 'root')
+    renderMenu(renderScopeId)
+
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT, 'block-1', renderScopeId))
+    })
+    fireEvent.click(await screen.findByRole('button', {name: 'Comment'}))
+
+    expect(startComment).toHaveBeenCalledExactlyOnceWith(repo, {
+      targetId: 'block-1', anchor: null, renderScopeId,
+    })
   })
 
   it('closes from a same-block panel-local swipe event', async () => {

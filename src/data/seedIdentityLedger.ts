@@ -108,6 +108,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/watcher', 'agent:watcher', 'string', 'string'],
   ['system:agent-runtime/property/subtree-key', 'agent:subtreeKey', 'string', 'string'],
   ['system:annotations/property/margin-open', 'annotation:marginOpen', 'boolean', 'boolean'],
+  ['system:annotations/property/margin-share', 'annotation:marginShare', 'optional-number', 'number'],
   ['system:annotations/property/quote-prefix', 'annotation:quotePrefix', 'optional-string', 'string'],
   ['system:annotations/property/quote-start', 'annotation:quoteStart', 'optional-number', 'number'],
   ['system:annotations/property/quote-suffix', 'annotation:quoteSuffix', 'optional-string', 'string'],
@@ -162,6 +163,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:kernel-data/property/extension-name', 'extension:name', 'string', 'string'],
   ['system:kernel-data/property/focused-block-location', 'focusedBlockLocation', 'optional-json', 'object'],
   ['system:kernel-data/property/is-editing', 'isEditing', 'boolean', 'boolean'],
+  ['system:kernel-data/property/layout-column-weight', 'layoutColumnWeight', 'optional-number', 'number'],
   ['system:kernel-data/property/migration-claimant', 'migration:claimant', 'string', 'string'],
   ['system:kernel-data/property/migration-claimed-at', 'migration:claimed-at', 'number', 'number'],
   ['system:kernel-data/property/migration-completed-at', 'migration:completed-at', 'optional-number', 'number'],
@@ -273,6 +275,11 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
+  // The comments margin's dragged width in px, replaced by its share of the
+  // pane (`annotation:marginShare`) so it scales with the pane. Not converted:
+  // a panel with a dragged width goes back to the automatic one; the px cells
+  // stay on the panels' UI-state rows.
+  'annotation:marginWidth',
   // Renamed to `backlinks:predicates` when the filter shape changed from
   // {includeIds, removeIds} to predicate arrays; stored values were dropped,
   // not converted. A remove id is ONE ancestor-scoped `referencedBy` predicate

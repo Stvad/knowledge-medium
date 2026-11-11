@@ -18,7 +18,7 @@ Design notes: task state lives **in the graph** (`agent:*` block properties), so
 
 Runs execute via `claude -p` on a machine authenticated with `claude login`. The daemon **scrubs `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and the `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY` switches from every child environment** — any of them would silently redirect billing. One thing env-scrubbing can't reach: a user-level `settings.json` `apiKeyHelper` — check yours if runs bill unexpectedly. Nothing here touches the Agent SDK (API-key-only by policy).
 
-**Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 30-min stale sweep) before being parked as `error` with a visible reply.
+**Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 65-min stale sweep) before being parked as `error` with a visible reply.
 
 ## Executors
 
@@ -40,6 +40,14 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Approvals:** codex `exec` runs default to headless `approval_policy = "never"`; interactive `-a/--ask-for-approval` is not a supported exec-runner control. To route approval requests through Codex's classifier instead of a human prompt, set `"approvalPolicy": "on-request"` together with `"approvalsReviewer": "auto_review"` under the codex runner. Other non-`never` policies are rejected at config parse time because `codex exec` would not honor them here.
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
+
+## Upgrade to 0.8.3
+
+0.8.3 requires `@knowledge-medium/agent-cli` 0.13.1. For `spawn` delivery, the daemon's `agent:*` writes and its replies no longer go on the person's undo stack, so a cmd-Z in the app undoes their own edit instead of flipping a finished task back to `running`. With `channel` delivery the ambient session still closes the task through the generic MCP tools, whose writes stay undoable. An app tab older than this release ignores the option, and the writes stay undoable there until it reloads.
+
+## Upgrade to 0.8.1
+
+`runner.timeoutMs` may now be up to 60 min (was 25), and a `running` task left by a crashed daemon re-queues after 65 min instead of 30. Stopping the daemon (`launchctl kickstart -k`, a reboot) waits at most 60 s for in-flight runs: launchd caps a user agent's `ExitTimeOut` there whatever the plist asks for. A run still going then is killed, and its task re-queues after the stale sweep, so restart while nothing is running.
 
 ## Upgrade to 0.8.0
 
@@ -303,11 +311,11 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    - **Or you use Ask Agent**, which fires from inside the editor without waiting for you to leave. It covers the text as you asked about it: keep writing afterwards and the mention waits again.
 2. Claim: `agent:status=running` + `agent:watcher` + `agent:executor` + `agent:attempts` + `agent:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher; `{{target}}` is the watcher's page alias), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped). A mention that is a comment in a thread also gets the thread: the annotated block's text and page path, the quote, and the comments from the thread's first one down to the mention, with their authors (`{{thread}}`; a custom `prompt` without it gets the thread appended). Reading it needs an app with the `comments` verb; without one the mention is answered without it.
-4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`.
+4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`. `runner.timeoutMs` kills a run that is still going after it (default 10 min, at most 60 min).
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
 
-Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
+Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
 
 **One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
 
@@ -397,7 +405,7 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 
 3. Mark watchers `"delivery": "channel"` in the daemon config.
 
-The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are marked `error`; query rows keep their cursor and re-fire when it's back.
+The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 65 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are marked `error`; query rows keep their cursor and re-fire when it's back.
 
 **Listener auth:** loopback is not an auth boundary (any local process — or a browser page POSTing at `127.0.0.1` — could otherwise inject prompts into a write-capable session). Requests must carry `x-km-channel-secret` from `~/.config/knowledge-medium/agent-dispatch-channel.secret` (0600, auto-generated; the daemon sends it automatically) and be `application/json` with no `Origin` header.
 
@@ -411,4 +419,4 @@ Caveats, honestly: research preview (flag syntax/protocol may change — nothing
 - `Page "claude" does not exist` → create the page (type `[[claude]]`, click it).
 - Daemon logs `no app tab connected` → watchers idle until a paired tab appears; they catch up on the next tick.
 - Runs fail instantly with auth errors → check `claude login` state on this machine and that nothing exports `ANTHROPIC_API_KEY` into launchd's environment (the daemon scrubs its children, but `claude` itself must be logged in).
-- Known limitation: if the daemon is SIGKILLed mid-run, the spawned `claude` child survives un-timed; its reply is lost and the task re-queues after the 30-min sweep (bounded by the 3-attempt cap).
+- Known limitation: if the daemon is SIGKILLed mid-run, the spawned `claude` child survives un-timed; its reply is lost and the task re-queues after the 65-min sweep (bounded by the 3-attempt cap).

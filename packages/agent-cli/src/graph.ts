@@ -169,7 +169,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
    *  update unless the block still has exactly that content. */
   const updateBlock = async (
     id: string,
-    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string} & ExactIds,
+    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string, undoable?: boolean} & ExactIds,
   ): Promise<unknown> => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
@@ -256,7 +256,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
   const reconcileMarkdownSubtree = async (
     parentId: string,
     markdown: string,
-    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>},
+    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>, undoable?: boolean},
   ): Promise<unknown> => {
     return client.runCommand({
       type: 'reconcile-markdown-subtree',
@@ -266,6 +266,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
       ...(opts.shape ? {shape: opts.shape} : {}),
       ...(opts.final ? {final: true} : {}),
       ...(opts.properties ? {properties: opts.properties} : {}),
+      ...(opts.undoable === false ? {undoable: false} : {}),
     })
   }
 
