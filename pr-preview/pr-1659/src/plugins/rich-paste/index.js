@@ -1,1 +1,1 @@
-export{_b as richPastePlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{vb as richPastePlugin}from"../../../chunks/app-CagCWdMX.js";

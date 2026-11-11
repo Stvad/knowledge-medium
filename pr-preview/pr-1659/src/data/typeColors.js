@@ -1,1 +1,1 @@
-export{UM as DEFAULT_TYPE_COLORS,WM as defaultTypeColor,GM as pickLeastUsedTypeColor}from"../../chunks/app-BwiWSsAX.js";
+export{WM as DEFAULT_TYPE_COLORS,GM as defaultTypeColor,KM as pickLeastUsedTypeColor}from"../../chunks/app-CagCWdMX.js";

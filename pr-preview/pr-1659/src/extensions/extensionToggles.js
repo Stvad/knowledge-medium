@@ -1,1 +1,1 @@
-export{WP as extensionDisplayName,GP as extensionName,KP as userExtensionShellToggle,qP as userExtensionToggle}from"../../chunks/app-BwiWSsAX.js";
+export{GP as extensionDisplayName,KP as extensionName,qP as userExtensionShellToggle,JP as userExtensionToggle}from"../../chunks/app-CagCWdMX.js";

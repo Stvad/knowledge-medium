@@ -1,1 +1,1 @@
-export{YB as buildPropertyPanelSections}from"../../chunks/app-BwiWSsAX.js";
+export{XB as buildPropertyPanelSections}from"../../chunks/app-CagCWdMX.js";

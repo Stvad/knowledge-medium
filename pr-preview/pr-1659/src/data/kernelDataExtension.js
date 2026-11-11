@@ -1,1 +1,1 @@
-export{_3 as kernelDataExtension}from"../../chunks/app-BwiWSsAX.js";
+export{v3 as kernelDataExtension}from"../../chunks/app-CagCWdMX.js";

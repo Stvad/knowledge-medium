@@ -1,1 +1,1 @@
-export{rm as contributorsPlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{rm as contributorsPlugin}from"../../../chunks/app-CagCWdMX.js";

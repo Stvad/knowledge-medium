@@ -1,1 +1,1 @@
-export{RP as dynamicExtensionsExtension}from"../../chunks/app-BwiWSsAX.js";
+export{zP as dynamicExtensionsExtension}from"../../chunks/app-CagCWdMX.js";

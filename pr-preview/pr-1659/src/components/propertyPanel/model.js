@@ -1,1 +1,1 @@
-export{PB as HIDDEN_SECTION,FB as buildPropertyPanelModel}from"../../../chunks/app-BwiWSsAX.js";
+export{FB as HIDDEN_SECTION,IB as buildPropertyPanelModel}from"../../../chunks/app-CagCWdMX.js";

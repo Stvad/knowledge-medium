@@ -1,1 +1,1 @@
-export{Zf as confirmThreadDeletion}from"../../../chunks/app-BwiWSsAX.js";
+export{Zf as confirmThreadDeletion}from"../../../chunks/app-CagCWdMX.js";

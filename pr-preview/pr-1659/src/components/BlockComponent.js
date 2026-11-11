@@ -1,1 +1,1 @@
-export{_F as BlockChildren,vF as BlockComponent}from"../../chunks/app-BwiWSsAX.js";
+export{vF as BlockChildren,yF as BlockComponent}from"../../chunks/app-CagCWdMX.js";

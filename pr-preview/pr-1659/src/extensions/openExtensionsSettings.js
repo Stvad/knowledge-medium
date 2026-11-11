@@ -1,1 +1,1 @@
-export{UF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,WF as openExtensionsSettings}from"../../chunks/app-BwiWSsAX.js";
+export{WF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,GF as openExtensionsSettings}from"../../chunks/app-CagCWdMX.js";

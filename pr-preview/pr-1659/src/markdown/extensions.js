@@ -1,1 +1,1 @@
-export{bB as markdownExtensionsFacet,xB as resolveMarkdownRenderConfig}from"../../chunks/app-BwiWSsAX.js";
+export{xB as markdownExtensionsFacet,SB as resolveMarkdownRenderConfig}from"../../chunks/app-CagCWdMX.js";

@@ -1,1 +1,1 @@
-export{Vit as deriveWorkspaceIdNamespace}from"../../../chunks/app-BwiWSsAX.js";
+export{Hit as deriveWorkspaceIdNamespace}from"../../../chunks/app-CagCWdMX.js";

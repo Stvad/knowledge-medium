@@ -1,1 +1,1 @@
-export{wh as lintExtensionSource}from"../../../chunks/app-BwiWSsAX.js";
+export{Th as lintExtensionSource}from"../../../chunks/app-CagCWdMX.js";

@@ -1,1 +1,1 @@
-export{wv as LazyBlockEntry}from"../../../chunks/app-BwiWSsAX.js";
+export{Tv as LazyBlockEntry}from"../../../chunks/app-CagCWdMX.js";

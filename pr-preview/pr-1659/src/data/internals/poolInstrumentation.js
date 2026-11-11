@@ -1,1 +1,1 @@
-export{M1 as instrumentAdapter}from"../../../chunks/app-BwiWSsAX.js";
+export{N1 as instrumentAdapter}from"../../../chunks/app-CagCWdMX.js";

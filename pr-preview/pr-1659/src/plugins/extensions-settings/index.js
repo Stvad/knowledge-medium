@@ -1,1 +1,1 @@
-export{th as extensionsOverridesProp,nh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{nh as extensionsOverridesProp,rh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-CagCWdMX.js";

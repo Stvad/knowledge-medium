@@ -1,1 +1,1 @@
-export{DB as BlockProperties}from"../../chunks/app-BwiWSsAX.js";
+export{OB as BlockProperties}from"../../chunks/app-CagCWdMX.js";

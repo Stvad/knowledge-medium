@@ -1,1 +1,1 @@
-export{NG as BootFallback}from"../../../chunks/app-BwiWSsAX.js";
+export{PG as BootFallback}from"../../../chunks/app-CagCWdMX.js";

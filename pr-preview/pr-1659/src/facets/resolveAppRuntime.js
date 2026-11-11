@@ -1,1 +1,1 @@
-export{IP as resolveAppRuntime,LP as resolveAppRuntimeSync}from"../../chunks/app-BwiWSsAX.js";
+export{LP as resolveAppRuntime,RP as resolveAppRuntimeSync}from"../../chunks/app-CagCWdMX.js";

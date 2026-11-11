@@ -1,1 +1,1 @@
-export{eo as propertiesMigrationPlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{eo as propertiesMigrationPlugin}from"../../../chunks/app-CagCWdMX.js";

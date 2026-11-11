@@ -1,1 +1,1 @@
-export{PP as ClientLocalSettings,FP as clientLocalSettings}from"../../chunks/app-BwiWSsAX.js";
+export{FP as ClientLocalSettings,IP as clientLocalSettings}from"../../chunks/app-CagCWdMX.js";

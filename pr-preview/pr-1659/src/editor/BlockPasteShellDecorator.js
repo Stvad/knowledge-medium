@@ -1,1 +1,1 @@
-export{EN as BlockPasteShellDecorator,DN as blockPasteShellDecorator}from"../../chunks/app-BwiWSsAX.js";
+export{DN as BlockPasteShellDecorator,ON as blockPasteShellDecorator}from"../../chunks/app-CagCWdMX.js";

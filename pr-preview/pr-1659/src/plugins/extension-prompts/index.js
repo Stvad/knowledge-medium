@@ -1,1 +1,1 @@
-export{zN as ExtensionPromptSurface,BN as extensionPromptsExtension}from"../../../chunks/app-BwiWSsAX.js";
+export{BN as ExtensionPromptSurface,VN as extensionPromptsExtension}from"../../../chunks/app-CagCWdMX.js";

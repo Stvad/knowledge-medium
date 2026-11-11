@@ -1,1 +1,1 @@
-export{xb as attachmentsPlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{Sb as attachmentsPlugin}from"../../../chunks/app-CagCWdMX.js";

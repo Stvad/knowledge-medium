@@ -1,1 +1,1 @@
-export{OX as contributorsDataExtension}from"../../../chunks/app-BwiWSsAX.js";
+export{kX as contributorsDataExtension}from"../../../chunks/app-CagCWdMX.js";

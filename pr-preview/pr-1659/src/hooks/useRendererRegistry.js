@@ -1,1 +1,1 @@
-export{TF as defaultRegistry,CF as refreshRendererRegistry,wF as useRenderer}from"../../chunks/app-BwiWSsAX.js";
+export{EF as defaultRegistry,wF as refreshRendererRegistry,TF as useRenderer}from"../../chunks/app-CagCWdMX.js";

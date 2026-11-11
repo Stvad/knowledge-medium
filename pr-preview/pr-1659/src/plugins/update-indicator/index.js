@@ -1,1 +1,1 @@
-export{W_ as updateIndicatorPlugin}from"../../../chunks/app-BwiWSsAX.js";
+export{G_ as updateIndicatorPlugin}from"../../../chunks/app-CagCWdMX.js";

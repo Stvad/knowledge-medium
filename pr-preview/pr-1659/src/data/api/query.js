@@ -1,1 +1,1 @@
-export{yct as defineQuery}from"../../../chunks/app-BwiWSsAX.js";
+export{bct as defineQuery}from"../../../chunks/app-CagCWdMX.js";

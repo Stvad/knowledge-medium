@@ -1,1 +1,1 @@
-export{VM as TypeChip}from"../../../chunks/app-BwiWSsAX.js";
+export{HM as TypeChip}from"../../../chunks/app-CagCWdMX.js";

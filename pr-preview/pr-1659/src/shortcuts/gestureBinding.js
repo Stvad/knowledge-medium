@@ -1,1 +1,1 @@
-export{xP as gestureBindingDescriptor,SP as matchesGestureEvent}from"../../chunks/app-BwiWSsAX.js";
+export{SP as gestureBindingDescriptor,CP as matchesGestureEvent}from"../../chunks/app-CagCWdMX.js";
