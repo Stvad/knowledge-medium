@@ -139,7 +139,7 @@ const memoryState = (
 }
 
 const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
-  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {},
+  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {}, usage: null,
   ...overrides,
 })
 
@@ -335,6 +335,21 @@ describe('mention lifecycle', () => {
     const claimLog = logs.find(line => line.includes('claiming b-1'))
     // Whitespace-collapsed onto one line, and the text is present.
     expect(claimLog).toContain('"[[browser emacs]] investigate the flaky test"')
+  })
+
+  it('logs a finished run\'s token usage beside its done line', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[browser emacs]] hi'}}})
+    const logs: string[] = []
+    const runTask = vi.fn(async () => okRun({
+      usage: {inputTokens: 4, cacheReadTokens: 14_244, cacheWriteTokens: 14_625, outputTokens: 34},
+    }))
+    const engine = engineWith({graph, runTask, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(logs.find(line => line.includes('done b-1')))
+      .toContain('tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34')
   })
 
   it('strips control bytes from the claim-log preview so synced block text cannot spoof the terminal', async () => {

@@ -287,13 +287,15 @@ const rawConfigSchema = z.strictObject({
   /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
    *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
    *  web research (WebSearch + WebFetch) — the common "look this up for
-   *  me" mention needs it, and neither tool touches the local machine.
+   *  me" mention needs it, and neither tool touches the local machine —
+   *  and subagents (Agent), which get only the tools the run itself is
+   *  offered.
    *  TRADE-OFF: WebFetch ingests arbitrary page text, so a
    *  prompt-injected page can steer a run that also holds graph WRITE
    *  tools — including exfiltrating note content through crafted fetch
    *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
    *  Claude graph-only. */
-  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
+  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch', 'Agent']),
   maxConcurrent: z.number().int().positive().default(4),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all

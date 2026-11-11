@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process'
 import {
   buildCodexArgs,
   CODEX_BILLING_ENV_DENYLIST,
+  codexUsageFrom,
   createCodexJsonlParser,
   runCodex,
   scrubCodexEnv,
@@ -135,6 +136,16 @@ describe('createCodexJsonlParser', () => {
       sawTurnCompleted: true,
       failed: false,
     })
+  })
+
+  it('reads the run\'s token usage off turn.completed, where input_tokens includes the cached ones', () => {
+    const parser = createCodexJsonlParser()
+    parser.feed(line({
+      type: 'turn.completed',
+      usage: {input_tokens: 13917, cached_input_tokens: 2432, output_tokens: 20, reasoning_output_tokens: 13},
+    }))
+    expect(codexUsageFrom(parser.finish().raw))
+      .toEqual({inputTokens: 11485, cacheReadTokens: 2432, cacheWriteTokens: null, outputTokens: 20})
   })
 
   it('replays the REAL failure transcript verbatim (exit code 1)', () => {
