@@ -142,6 +142,13 @@ describe('createStreamJsonParser', () => {
     expect(parser.finish()).toMatchObject({resultText: 'ok'})
   })
 
+  it('the last result line wins: a run that waited on a background subagent ends with a second one', () => {
+    const parser = createStreamJsonParser()
+    parser.feed(line({type: 'result', result: 'Launched the agent; I will reply when it returns.', session_id: 's', is_error: false}))
+    parser.feed(line({type: 'result', result: 'The final answer', session_id: 's', is_error: false}))
+    expect(parser.finish()).toMatchObject({resultText: 'The final answer'})
+  })
+
   it('finish() returns null when no result line was seen', () => {
     const parser = createStreamJsonParser()
     parser.feed(line({type: 'system', subtype: 'init', session_id: 's'}))
@@ -261,6 +268,21 @@ describe('runClaude', () => {
       usage: {input_tokens: 4, cache_creation_input_tokens: 14625, cache_read_input_tokens: 14244, output_tokens: 34},
     })))
     expect(result.usage).toEqual({inputTokens: 4, cacheWriteTokens: 14625, cacheReadTokens: 14244, outputTokens: 34})
+  })
+
+  it('totals usage over the whole process — every model and subagent — from modelUsage', async () => {
+    // A background subagent makes claude emit a result line per parent turn;
+    // each line's `usage` covers that turn only, while `modelUsage` is the
+    // process-wide total.
+    const result = await runClaude(baseOptions, fakeClaude(streamResult({
+      type: 'result', result: 'hi', session_id: 's1', is_error: false,
+      usage: {input_tokens: 2, cache_creation_input_tokens: 723, cache_read_input_tokens: 18720, output_tokens: 12},
+      modelUsage: {
+        'claude-opus-5-5': {inputTokens: 6, cacheReadInputTokens: 37_032, cacheCreationInputTokens: 33_302, outputTokens: 1132},
+        'claude-haiku-5-5': {inputTokens: 4, cacheReadInputTokens: 100, cacheCreationInputTokens: 200, outputTokens: 30},
+      },
+    })))
+    expect(result.usage).toEqual({inputTokens: 10, cacheReadTokens: 37_132, cacheWriteTokens: 33_502, outputTokens: 1162})
   })
 
   it('reports no usage when the result line carries none', async () => {

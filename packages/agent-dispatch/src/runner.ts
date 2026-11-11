@@ -94,11 +94,25 @@ export interface RunUsage {
 /** A token count off an executor's usage object; 0 for a missing field. */
 export const tokenCount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
-/** The usage on a claude `result` line, which already sums the run's requests. */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+/** The run's usage from a claude `result` line. `modelUsage` totals the whole
+ *  process, every model and subagent; `usage` covers only the turn that line
+ *  ends, and a run that waits on a background subagent has one per turn. */
 export const claudeUsageFrom = (raw: Record<string, unknown> | null): RunUsage | null => {
-  const usage = raw?.usage
-  if (!usage || typeof usage !== 'object') return null
-  const counts = usage as Record<string, unknown>
+  if (isRecord(raw?.modelUsage)) {
+    const perModel = Object.values(raw.modelUsage).filter(isRecord)
+    const sum = (key: string) => perModel.reduce((total, counts) => total + tokenCount(counts[key]), 0)
+    return {
+      inputTokens: sum('inputTokens'),
+      cacheReadTokens: sum('cacheReadInputTokens'),
+      cacheWriteTokens: sum('cacheCreationInputTokens'),
+      outputTokens: sum('outputTokens'),
+    }
+  }
+  if (!isRecord(raw?.usage)) return null
+  const counts = raw.usage
   return {
     inputTokens: tokenCount(counts.input_tokens),
     cacheReadTokens: tokenCount(counts.cache_read_input_tokens),
