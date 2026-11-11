@@ -1,1 +1,1 @@
-export{WF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,GF as openExtensionsSettings}from"../../chunks/app-CagCWdMX.js";
+export{GF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,KF as openExtensionsSettings}from"../../chunks/app-Dk3ZXpF3.js";

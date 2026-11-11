@@ -1,1 +1,1 @@
-export{Su as collectTypeCandidates,Cu as formatTypeCandidateReport}from"../../../chunks/app-CagCWdMX.js";
+export{Su as collectTypeCandidates,Cu as formatTypeCandidateReport}from"../../../chunks/app-Dk3ZXpF3.js";

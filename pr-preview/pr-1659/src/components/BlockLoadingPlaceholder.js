@@ -1,1 +1,1 @@
-export{CF as BlockLoadingPlaceholder}from"../../chunks/app-CagCWdMX.js";
+export{wF as BlockLoadingPlaceholder}from"../../chunks/app-Dk3ZXpF3.js";

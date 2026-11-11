@@ -1,1 +1,1 @@
-export{CX as annotationMarginOpenProp,wX as annotationMarginShareProp}from"../../../chunks/app-CagCWdMX.js";
+export{wX as annotationMarginOpenProp,TX as annotationMarginShareProp}from"../../../chunks/app-Dk3ZXpF3.js";

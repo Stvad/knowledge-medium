@@ -1,1 +1,1 @@
-export{SS as videoPlayerMarkdownExtension}from"../../../chunks/app-CagCWdMX.js";
+export{CS as videoPlayerMarkdownExtension}from"../../../chunks/app-Dk3ZXpF3.js";

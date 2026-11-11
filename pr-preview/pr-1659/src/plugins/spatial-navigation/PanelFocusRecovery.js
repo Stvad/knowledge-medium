@@ -1,1 +1,1 @@
-export{PC as PanelFocusRecovery}from"../../../chunks/app-CagCWdMX.js";
+export{FC as PanelFocusRecovery}from"../../../chunks/app-Dk3ZXpF3.js";

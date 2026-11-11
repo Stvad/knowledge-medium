@@ -1,1 +1,1 @@
-export{EF as defaultRegistry,DF as defaultRendererContributions,OF as defaultRenderersExtension}from"../../chunks/app-CagCWdMX.js";
+export{DF as defaultRegistry,OF as defaultRendererContributions,kF as defaultRenderersExtension}from"../../chunks/app-Dk3ZXpF3.js";
