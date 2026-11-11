@@ -13,7 +13,7 @@
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
  *   Delete (`CommentActions`). A card zoomed into a comment renders that
- *   comment in the root's place (`cardZoom.tsx`).
+ *   comment in the root's place (`ZoomableSurface`).
  */
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
@@ -44,6 +44,7 @@ import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
 import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
+import {crumbLabel, SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
@@ -54,7 +55,6 @@ import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
-import {CardZoomCrumbs, useCardZoomIn, type CardZoom} from './cardZoom.tsx'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
@@ -83,7 +83,6 @@ import {
   toggleThreadsExpanded,
   updateComposer,
   useActiveThread,
-  useCardZoom,
   useComposer,
   useMarginShowing,
   usePendingReanchor,
@@ -354,16 +353,19 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
 export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
-  const zoomed = useCardZoom(renderScopeId)
-  return zoomed === undefined
-    ? <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={null}/>
-    : <ZoomedThreadCard thread={thread} renderScopeId={renderScopeId} zoomed={zoomed}/>
+  return (
+    <ZoomableSurface renderScopeId={renderScopeId} rootId={thread.id}>
+      {zoom => <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={zoom}/>}
+    </ZoomableSurface>
+  )
 }
 
-const ZoomedThreadCard = ({thread, renderScopeId, zoomed}: {thread: ThreadSummary; renderScopeId: string; zoomed: string}) =>
-  <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={useCardZoomIn(zoomed, thread.id)}/>
+/** A zoomed card shows a comment in the root's place, so the thread's header
+ *  and the comments outside the zoom are hidden until it is zoomed out. */
+const rootCrumbLabel = (anchor: ThreadAnchor): string =>
+  anchor.kind === 'block' ? 'Thread' : `“${crumbLabel(anchor.quote)}”`
 
-const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: CardZoom | null}) => {
+const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: SurfaceZoom | null}) => {
   const parent = useBlockContext()
   const shownId = zoom?.blockId ?? thread.id
   // Stable across the card's own re-renders (a zoom), which would otherwise
@@ -372,7 +374,14 @@ const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; r
   const chain = useMemo(() => [...outerChain, thread.id], [outerChain, thread.id])
   return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
-      {zoom && <CardZoomCrumbs cardScope={renderScopeId} anchor={thread.anchor} zoom={zoom}/>}
+      {zoom && (
+        <SurfaceZoomCrumbs
+          renderScopeId={renderScopeId}
+          zoom={zoom}
+          rootLabel={rootCrumbLabel(thread.anchor)}
+          label="Zoomed in comment thread"
+        />
+      )}
       <NestedBlockContextProvider overrides={{
         isNestedSurface: true,
         layoutBoundary: false,

@@ -21,19 +21,12 @@ import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
 import {getDefaultActions} from '@/shortcuts/defaultShortcuts'
 import {panelRenderScopeId} from '@/utils/renderScope'
+import {__resetSurfaceZoomsForTesting, peekSurfaceZoom, setSurfaceZoom} from '@/utils/surfaceZoom'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
-import {zoomCrumbs} from './cardZoom'
 import {annotationsPlugin} from './index'
 import {createThread} from './threads'
-import {
-  __resetCardZoomsForTesting,
-  cardRenderScopeId,
-  peekCardZoom,
-  setCardZoom,
-  toggleThreadsExpanded,
-  viewKey,
-} from './uiStore'
+import {cardRenderScopeId, toggleThreadsExpanded, viewKey} from './uiStore'
 
 const WS = 'ws'
 const PANEL = 'ui-state'
@@ -73,19 +66,6 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
-describe('zoomCrumbs', () => {
-  const chain = [{id: 'reply', content: 'Yes.\nSecond line'}, {id: 'comment', content: 'Is it confirmed?'}, {id: 'T', content: ''}, {id: 'page', content: 'Comments'}]
-
-  it('lists the comments between the root and the zoomed block, outermost first', () => {
-    expect(zoomCrumbs(chain, 'T')).toEqual([{id: 'comment', label: 'Is it confirmed?'}, {id: 'reply', label: 'Yes.'}])
-  })
-
-  it('is empty for a first-level comment, and null for a block outside the thread', () => {
-    expect(zoomCrumbs(chain.slice(2), 'T')).toEqual([])
-    expect(zoomCrumbs(chain, 'other')).toBeNull()
-  })
-})
-
 // A render with its comments resolved and mounted measures ~250ms alone.
 describe('a card zoomed into a comment', {timeout: 20_000}, () => {
   let db: TestDb
@@ -99,7 +79,7 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
 
   beforeEach(async () => {
     await resetTestDb(db.db)
-    __resetCardZoomsForTesting()
+    __resetSurfaceZoomsForTesting()
     repo = createTestRepo({
       db: db.db,
       user: {id: 'alex', name: 'Alex'},
@@ -160,7 +140,7 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
   it('shows that comment’s subtree alone, under crumbs that lead back out', async () => {
     await renderCard()
 
-    act(() => setCardZoom(cardScope, ids.reply))
+    act(() => setSurfaceZoom(cardScope, ids.reply))
 
     await waitFor(() => expect(row(ids.comment)).toBeNull())
     expect(row(ids.sibling)).toBeNull()
@@ -183,27 +163,30 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
 
     fireEvent.click(row(ids.reply)!.querySelector(`[${BLOCK_BULLET_ATTRIBUTE}]`)!)
 
-    await waitFor(() => expect(peekCardZoom(cardScope)).toBe(ids.reply))
+    await waitFor(() => expect(peekSurfaceZoom(cardScope)).toBe(ids.reply))
     await waitFor(() => expect(row(ids.sibling)).toBeNull())
   })
 
   it('the zoom out action steps the card out in a panel whose own root has no parent', async () => {
     await repo.block(PANEL).set(topLevelBlockIdProp, 'page')
-    setCardZoom(cardScope, ids.reply)
+    await renderCard()
+    act(() => setSurfaceZoom(cardScope, ids.reply))
     const zoomOut = getDefaultActions({repo}).find(action => action.id === 'zoom_out')!
 
-    await zoomOut.handler(
-      {block: repo.block(ids.reply), uiStateBlock: repo.block(PANEL), renderScopeId: cardScope} as never,
-      new KeyboardEvent('keydown'),
-    )
+    await act(async () => {
+      await zoomOut.handler(
+        {block: repo.block(ids.reply), uiStateBlock: repo.block(PANEL), renderScopeId: cardScope} as never,
+        new KeyboardEvent('keydown'),
+      )
+    })
 
-    expect(peekCardZoom(cardScope)).toBe(ids.comment)
+    expect(peekSurfaceZoom(cardScope)).toBe(ids.comment)
     expect(repo.block(PANEL).peekProperty(topLevelBlockIdProp)).toBe('page')
   })
 
   it('shows the whole thread once the zoomed comment is deleted', async () => {
     await renderCard()
-    act(() => setCardZoom(cardScope, ids.reply))
+    act(() => setSurfaceZoom(cardScope, ids.reply))
     await waitFor(() => expect(row(ids.sibling)).toBeNull())
 
     await act(async () => { await repo.mutate.delete({id: ids.reply}) })

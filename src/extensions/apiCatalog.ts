@@ -175,13 +175,27 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'navigationVerb', 'navigationIntentVerb', 'defaultNavigationIntent', 'goTo', 'PASSTHROUGH',
       'SUPPRESS', 'mapNavigate', 'navigate', 'useNavigate', 'navigateFromGesture',
       'navigateFromGlobalCommand', 'useNavigateFromGlobalCommand', 'useOpenBlock', 'useBlockOpener',
-      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN',
+      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN', 'isSurfaceZoom',
     ],
     types: [
       'NavigateInput', 'NavigationDecision', 'ResolvedNavigateInput', 'GlobalCommandNavigateInput',
       'NavigationRequest', 'NavigationResult', 'NavigationGesture', 'NavigationRole',
       'NavigationViewport', 'BlockOpenerPlainClick', 'BlockOpenerOptions', 'OpenBlockContext',
     ],
+  },
+  {
+    category: 'navigation',
+    importPath: '@/components/ZoomableSurface.js',
+    description: 'A subtree rendered nested in a panel that zooms on its own: a zoom made inside it re-roots it, under crumbs that lead back out.',
+    exports: ['ZoomableSurface', 'SurfaceZoomCrumbs', 'crumbLabel'],
+    types: ['SurfaceZoom', 'ZoomCrumb'],
+  },
+  {
+    category: 'navigation',
+    importPath: '@/utils/surfaceZoom.js',
+    description: 'A zoomable surface\'s zoom, as view state keyed by its render scope.',
+    exports: ['setSurfaceZoom', 'peekSurfaceZoom', 'useSurfaceZoom'],
+    types: [],
   },
 
   // --- Actions / shortcuts --------------------------------------------------

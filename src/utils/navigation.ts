@@ -49,6 +49,7 @@ import { navigateInPanel } from './panelHistory'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
+import { isZoomableSurface, isZoomedAround, zoomSurfaceIn, zoomSurfaceOut } from '@/utils/surfaceZoom'
 import { blockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
 import {
   insertPanelRow,
@@ -77,8 +78,9 @@ interface NavigateBaseInput {
    *  Optional — untagged navigations are still redirectable by target/block. */
   origin?: string
   /** The render scope the gesture was made in (the clicked row's, the focused
-   *  block's), where there is one. Lets a surface nested in a panel, which
-   *  shares the panel's id, claim a navigation made inside it. */
+   *  block's), where there is one. A surface nested in a panel shares the
+   *  panel's id; this tells a navigation made inside it from the panel's own
+   *  (`isSurfaceZoom`). */
   sourceRenderScopeId?: string
 }
 
@@ -151,6 +153,31 @@ export interface NavigationResult {
 export interface NavigationRequest {
   repo: Repo
   input: ResolvedNavigateInput
+}
+
+/** Is this a zoom made inside a zoomable surface (`@/utils/surfaceZoom`),
+ *  which zooms that surface and leaves the panel as it is? Only one aimed at
+ *  the surface's own panel: a bullet opened in a new panel is a navigation.
+ *  A decorator that redirects navigations by their block passes these on. */
+export const isSurfaceZoom = (input: NavigateInput): boolean => surfaceZoomOf(input) !== null
+
+const surfaceZoomOf = (input: NavigateInput): {renderScopeId: string; panelId: string; out: boolean} | null => {
+  const renderScopeId = input.sourceRenderScopeId
+  if (input.target !== 'panel' || !isZoomableSurface(renderScopeId)) return null
+  const out = input.origin === ZOOM_OUT_ORIGIN
+  const zooms = out ? isZoomedAround(renderScopeId) : input.origin === ZOOM_ORIGIN
+  return zooms ? {renderScopeId, panelId: input.panelId, out} : null
+}
+
+/** Applies a surface zoom, returning the panel it was made in. Null when the
+ *  navigation is the panel's after all: not a surface zoom, or a zoom out
+ *  that found every zoom around it stale. */
+const zoomSurface = async (repo: Repo, input: NavigateInput): Promise<string | null> => {
+  const zoom = surfaceZoomOf(input)
+  if (!zoom) return null
+  if (zoom.out) return await zoomSurfaceOut(repo, zoom.renderScopeId) ? zoom.panelId : null
+  await zoomSurfaceIn(repo, {...zoom, blockId: input.blockId})
+  return zoom.panelId
 }
 
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
@@ -266,6 +293,12 @@ const resolveDestination = async (
 const applyNavigation = async (
   {repo, input}: NavigationRequest,
 ): Promise<NavigationResult | null> => {
+  const zoomedIn = await zoomSurface(repo, input)
+  if (zoomedIn !== null) {
+    // The panel shows what it showed.
+    const shown = repo.block(zoomedIn).peekProperty(topLevelBlockIdProp) ?? input.blockId
+    return {panelId: zoomedIn, blockId: shown, workspaceId: input.workspaceId}
+  }
   const dest = await resolveDestination(repo, input)
   if (!dest) return null
   const {workspaceId} = dest
