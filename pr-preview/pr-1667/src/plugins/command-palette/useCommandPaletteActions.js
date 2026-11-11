@@ -1,1 +1,1 @@
-export{lj as useCommandPaletteActions}from"../../../chunks/app-Cgpq6Uv_.js";
+export{lj as useCommandPaletteActions}from"../../../chunks/app-DPwyRNbr.js";

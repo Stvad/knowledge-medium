@@ -1,1 +1,1 @@
-export{Qp as contributorsCodeMirrorExtensions}from"../../../chunks/app-Cgpq6Uv_.js";
+export{Qp as contributorsCodeMirrorExtensions}from"../../../chunks/app-DPwyRNbr.js";
