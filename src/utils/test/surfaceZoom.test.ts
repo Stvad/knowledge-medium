@@ -7,7 +7,7 @@ import {getLayoutSessionBlock, getUIStateBlock} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
-import {isSurfaceZoom, navigate} from '@/utils/navigation'
+import {navigate} from '@/utils/navigation'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
 import {
@@ -135,11 +135,33 @@ describe('a zoom made inside a zoomable surface', () => {
     expect(await shown()).toEqual(['b'])
   })
 
-  it('is a navigation when it opens another panel, or is not a zoom', async () => {
-    const from = {blockId: 'b', origin: 'zoom', sourceRenderScopeId: scope}
-    expect(isSurfaceZoom({...from, target: 'new-panel', sourcePanelId: panelId})).toBe(false)
-    expect(isSurfaceZoom({...from, target: 'panel', panelId, origin: 'follow-link'})).toBe(false)
-    expect(isSurfaceZoom({...from, target: 'panel', panelId})).toBe(true)
+  it('is a navigation when it opens another panel', async () => {
+    await navigate(repo, {blockId: 'b', target: 'new-panel', sourcePanelId: panelId, origin: 'zoom', sourceRenderScopeId: scope})
+
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
+    expect(await shown()).toEqual(['page', 'b'])
+  })
+
+  it('is a navigation when it is not a zoom', async () => {
+    await zoom('b', 'follow-link')
+
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
+    expect(await shown()).toEqual(['b'])
+  })
+
+  it('is the panel’s when the block is not under the surface’s root', async () => {
+    await zoom('other')
+
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
+    expect(await shown()).toEqual(['other'])
+  })
+
+  it('out ends at a surface registered as its own parent', async () => {
+    registerZoomableSurface(scope, {rootId: 'root', parentRenderScopeId: scope})
+
+    await zoom('other', 'zoom-out')
+
+    expect(await shown()).toEqual(['other'])
   })
 })
 

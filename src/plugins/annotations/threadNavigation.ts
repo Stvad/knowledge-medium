@@ -16,7 +16,7 @@ import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {lazyBlockCacheKey, requestLazyMount} from '@/components/util/lazyMountRegistry.js'
 import {decodeRowProperty} from '@/data/rowProperty'
-import {isSurfaceZoom, navigationVerb, type NavigationResult} from '@/utils/navigation'
+import {navigationVerb, type NavigationResult} from '@/utils/navigation'
 import {peekSurfaceZoom, setSurfaceZoom} from '@/utils/surfaceZoom'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
@@ -123,9 +123,6 @@ const revealLanding = async (
 }
 
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {
-  // A zoom made inside a card zooms the card (`ThreadCard` is a zoomable
-  // surface); it lands nowhere.
-  if (isSurfaceZoom(request.input)) return next(request)
   const landing = await threadLanding(request.repo, request.input.blockId)
   // A viewer can't expand the comments that hide the block, so it opens the
   // block itself.

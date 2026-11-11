@@ -4,7 +4,7 @@
  * zoom says, under crumbs that lead back out.
  */
 
-import {useEffect, type ReactNode} from 'react'
+import {useLayoutEffect, type ReactNode} from 'react'
 import {ChevronRight} from 'lucide-react'
 import {useBlockContext} from '@/context/block.js'
 import {useRepo} from '@/context/repo.js'
@@ -26,7 +26,7 @@ export interface SurfaceZoom {
 
 const CRUMB_CHARS = 32
 
-export const crumbLabel = (text: string): string => truncate(firstLine(text.trimStart()), CRUMB_CHARS)
+const crumbLabel = (text: string): string => truncate(firstLine(text.trimStart()), CRUMB_CHARS)
 
 const NO_CRUMBS: readonly ZoomCrumb[] = Object.freeze([])
 
@@ -42,7 +42,8 @@ interface ZoomableSurfaceProps {
  *  context: that outer scope is what nests it in another zoomable surface. */
 export const ZoomableSurface = ({renderScopeId, rootId, children}: ZoomableSurfaceProps) => {
   const {renderScopeId: parentRenderScopeId} = useBlockContext()
-  useEffect(
+  // A layout effect: the surface is zoomable by the time it can be clicked.
+  useLayoutEffect(
     () => registerZoomableSurface(renderScopeId, {rootId, parentRenderScopeId}),
     [renderScopeId, rootId, parentRenderScopeId],
   )

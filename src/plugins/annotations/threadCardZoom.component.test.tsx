@@ -102,7 +102,7 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
       await tx.create({id: PANEL, workspaceId: WS, parentId: null, orderKey: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
     uiStateBlockRef.current = repo.block(PANEL)
-    const {threadId, commentId} = await createThread(repo, {targetId: 'target', anchor: null, comment: 'First comment'})
+    const {threadId, commentId} = await createThread(repo, {targetId: 'target', anchor: null, comment: 'First comment\nwith a second line'})
     const reply = await repo.mutate.createChild({parentId: commentId!, content: 'A reply'})
     const nested = await repo.mutate.createChild({parentId: reply, content: 'A nested reply'})
     const sibling = await repo.mutate.createChild({parentId: threadId, content: 'Second comment'})
@@ -132,10 +132,12 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
   }
 
   /** Re-found each time: a zoom remounts the card. */
-  const card = () => within(screen.getByTestId('comment-thread'))
+  /** The outermost card: a thread on one of its comments renders inside it. */
+  const cardEl = () => screen.queryAllByTestId('comment-thread').at(0)
 
-  const row = (id: string) =>
-    screen.queryByTestId('comment-thread')?.querySelector(`[data-block-shell][data-block-id="${id}"]`) ?? null
+  const card = () => within(cardEl()!)
+
+  const row = (id: string) => cardEl()?.querySelector(`[data-block-shell][data-block-id="${id}"]`) ?? null
 
   it('shows that comment’s subtree alone, under crumbs that lead back out', async () => {
     await renderCard()
@@ -182,6 +184,28 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
 
     expect(peekSurfaceZoom(cardScope)).toBe(ids.comment)
     expect(repo.block(PANEL).peekProperty(topLevelBlockIdProp)).toBe('page')
+  })
+
+  it('a zoom out in a card inside the zoomed card’s comment steps the outer card out', async () => {
+    await repo.block(PANEL).set(topLevelBlockIdProp, 'page')
+    const inner = await createThread(repo, {targetId: ids.reply, anchor: null, comment: 'On the reply'})
+    await renderCard()
+    act(() => setSurfaceZoom(cardScope, ids.reply))
+    await waitFor(() => expect(screen.getAllByTestId('comment-thread')).toHaveLength(2))
+    const zoomOut = getDefaultActions({repo}).find(action => action.id === 'zoom_out')!
+
+    await act(async () => {
+      await zoomOut.handler(
+        {
+          block: repo.block(inner.commentId!),
+          uiStateBlock: repo.block(PANEL),
+          renderScopeId: cardRenderScopeId('comments', cardScope, inner.threadId),
+        } as never,
+        new KeyboardEvent('keydown'),
+      )
+    })
+
+    expect(peekSurfaceZoom(cardScope)).toBe(ids.comment)
   })
 
   it('shows the whole thread once the zoomed comment is deleted', async () => {

@@ -175,7 +175,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'navigationVerb', 'navigationIntentVerb', 'defaultNavigationIntent', 'goTo', 'PASSTHROUGH',
       'SUPPRESS', 'mapNavigate', 'navigate', 'useNavigate', 'navigateFromGesture',
       'navigateFromGlobalCommand', 'useNavigateFromGlobalCommand', 'useOpenBlock', 'useBlockOpener',
-      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN', 'isSurfaceZoom',
+      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN',
     ],
     types: [
       'NavigateInput', 'NavigationDecision', 'ResolvedNavigateInput', 'GlobalCommandNavigateInput',
@@ -187,7 +187,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     category: 'navigation',
     importPath: '@/components/ZoomableSurface.js',
     description: 'A subtree rendered nested in a panel that zooms on its own: a zoom made inside it re-roots it, under crumbs that lead back out.',
-    exports: ['ZoomableSurface', 'SurfaceZoomCrumbs', 'crumbLabel'],
+    exports: ['ZoomableSurface', 'SurfaceZoomCrumbs'],
     types: ['SurfaceZoom', 'ZoomCrumb'],
   },
   {

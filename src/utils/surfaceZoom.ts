@@ -5,9 +5,9 @@
  *
  * A surface is zoomable while it is mounted (`registerZoomableSurface`,
  * through `ZoomableSurface`). Its zoom is per-tab view state keyed by its
- * render scope, and outlives the mount. `navigation.ts` hands a zoom whose
- * `sourceRenderScopeId` is a zoomable surface's here, in place of navigating
- * the panel.
+ * render scope, and outlives the mount. `navigate` hands a zoom whose
+ * `sourceRenderScopeId` is a mounted surface's here, before the navigation
+ * verb runs: it is not a navigation, and no decorator sees it.
  *
  * A stored zoom is a request, not the surface's state: a block no longer
  * under the surface's root (moved, deleted) zooms nothing. `zoomPath` is the
@@ -40,9 +40,6 @@ export const registerZoomableSurface = (renderScopeId: string, surface: MountedS
   }
 }
 
-export const isZoomableSurface = (renderScopeId: string | undefined): renderScopeId is string =>
-  renderScopeId !== undefined && mounted.has(renderScopeId)
-
 export const setSurfaceZoom = (renderScopeId: string, blockId: string | null): void => {
   if ((zooms.get(renderScopeId) ?? null) === blockId) return
   if (blockId === null) zooms.delete(renderScopeId)
@@ -52,8 +49,10 @@ export const setSurfaceZoom = (renderScopeId: string, blockId: string | null): v
 
 export const peekSurfaceZoom = (renderScopeId: string): string | undefined => zooms.get(renderScopeId)
 
+const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
+
 export const useSurfaceZoom = (renderScopeId: string): string | undefined =>
-  useSyncExternalStore(listener => listeners.add(listener), () => zooms.get(renderScopeId))
+  useSyncExternalStore(subscribe, () => zooms.get(renderScopeId))
 
 export const __resetSurfaceZoomsForTesting = (): void => {
   mounted.clear()
@@ -70,26 +69,29 @@ export const zoomPath = <T extends Pick<BlockData, 'id'>>(ancestors: readonly T[
 }
 
 /** The mounted surfaces from `renderScopeId` outwards: a surface nested in
- *  another one's row is inside that one's zoom. */
+ *  another one's row is inside that one's zoom. Each once, so a surface
+ *  registered as its own parent ends the walk. */
 function* surfacesAround(renderScopeId: string): Generator<[string, MountedSurface]> {
-  for (let at: string | undefined = renderScopeId, surface; at !== undefined && (surface = mounted.get(at)); at = surface.parentRenderScopeId) {
+  const seen = new Set<string>()
+  for (let at: string | undefined = renderScopeId, surface; at !== undefined && !seen.has(at) && (surface = mounted.get(at)); at = surface.parentRenderScopeId) {
+    seen.add(at)
     yield [at, surface]
   }
 }
 
-/** Is a surface at or around `renderScopeId` asked to zoom? */
-export const isZoomedAround = (renderScopeId: string): boolean =>
-  [...surfacesAround(renderScopeId)].some(([scope]) => zooms.has(scope))
-
-/** Zooms the surface at `renderScopeId` into `blockId`, one of its rows, and
- *  focuses it there; onto the surface's root, shows the whole surface again.
- *  A collapsed block is expanded, as a panel shows its root's children
- *  whatever the root's collapse. */
+/** Zooms the surface mounted at `renderScopeId` into `blockId` and focuses
+ *  it there; onto the surface's root, shows the whole surface again. A
+ *  collapsed block is expanded, as a panel shows its root's children whatever
+ *  the root's collapse. False, having done nothing, when there is no such
+ *  surface or the block is not under its root: the zoom is the panel's. */
 export const zoomSurfaceIn = async (
   repo: Repo,
   {renderScopeId, blockId, panelId}: {renderScopeId: string; blockId: string; panelId: string},
-): Promise<void> => {
-  const zoomsIn = mounted.get(renderScopeId)?.rootId !== blockId
+): Promise<boolean> => {
+  const surface = mounted.get(renderScopeId)
+  if (!surface) return false
+  const zoomsIn = surface.rootId !== blockId
+  if (zoomsIn && !zoomPath((await repo.query.ancestors({id: blockId}).load()).ancestors, surface.rootId)) return false
   setSurfaceZoom(renderScopeId, zoomsIn ? blockId : null)
   if (zoomsIn && !repo.isReadOnly) {
     const block = repo.block(blockId)
@@ -99,6 +101,7 @@ export const zoomSurfaceIn = async (
     }
   }
   await focusBlock(repo.block(panelId), blockId, {renderScopeId})
+  return true
 }
 
 /** Steps the innermost zoomed surface at or around `renderScopeId` out one

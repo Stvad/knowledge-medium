@@ -44,7 +44,7 @@ import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
 import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
-import {crumbLabel, SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
+import {SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
@@ -360,11 +360,11 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
   )
 }
 
+const rootCrumbLabel = (anchor: ThreadAnchor): string =>
+  anchor.kind === 'block' ? 'Thread' : `“${truncate(firstLine(anchor.quote), 32)}”`
+
 /** A zoomed card shows a comment in the root's place, so the thread's header
  *  and the comments outside the zoom are hidden until it is zoomed out. */
-const rootCrumbLabel = (anchor: ThreadAnchor): string =>
-  anchor.kind === 'block' ? 'Thread' : `“${crumbLabel(anchor.quote)}”`
-
 const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: SurfaceZoom | null}) => {
   const parent = useBlockContext()
   const shownId = zoom?.blockId ?? thread.id
