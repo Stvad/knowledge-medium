@@ -1,0 +1,1 @@
+export{fb as richPastePlugin}from"../../../chunks/app-Cgpq6Uv_.js";

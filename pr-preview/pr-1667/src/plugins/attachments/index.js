@@ -1,0 +1,1 @@
+export{gb as attachmentsPlugin}from"../../../chunks/app-Cgpq6Uv_.js";

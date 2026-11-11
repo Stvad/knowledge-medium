@@ -1,0 +1,1 @@
+export{ca as ResponsivenessTotals,la as SLOW_MS,ua as observeResponsiveness}from"../../../chunks/app-Cgpq6Uv_.js";

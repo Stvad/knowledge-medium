@@ -1,0 +1,1 @@
+export{Zp as contributorsPlugin}from"../../../chunks/app-Cgpq6Uv_.js";

@@ -1,0 +1,1 @@
+export{Kj as SWIPE_QUICK_ACTIONS_GESTURE_ID,qj as SWIPE_TRIGGER_PX,Jj as swipeRecognizer}from"../../../chunks/app-Cgpq6Uv_.js";

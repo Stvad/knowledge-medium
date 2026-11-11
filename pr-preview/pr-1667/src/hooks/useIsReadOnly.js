@@ -1,0 +1,1 @@
+export{Ly as useIsReadOnly}from"../../chunks/app-Cgpq6Uv_.js";

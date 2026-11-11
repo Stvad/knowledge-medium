@@ -1,0 +1,1 @@
+export{jct as definePostCommitProcessor}from"../../../chunks/app-Cgpq6Uv_.js";

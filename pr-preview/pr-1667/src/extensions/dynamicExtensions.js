@@ -1,0 +1,1 @@
+export{NP as dynamicExtensionsExtension}from"../../chunks/app-Cgpq6Uv_.js";

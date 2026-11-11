@@ -1,0 +1,1 @@
+export{aK as staticDataExtensions}from"../../chunks/app-Cgpq6Uv_.js";
