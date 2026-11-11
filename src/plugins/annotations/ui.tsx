@@ -54,7 +54,7 @@ import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
-import {CardZoomCrumbs, useCardZoomIn} from './cardZoom.tsx'
+import {CardZoomCrumbs, useCardZoomIn, type CardZoom} from './cardZoom.tsx'
 import {deleteCommentFromCard} from './deleteComment.ts'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
@@ -83,6 +83,7 @@ import {
   toggleThreadsExpanded,
   updateComposer,
   useActiveThread,
+  useCardZoom,
   useComposer,
   useMarginShowing,
   usePendingReanchor,
@@ -353,7 +354,17 @@ const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =
 export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
-  const zoom = useCardZoomIn(renderScopeId, thread.id)
+  const zoomed = useCardZoom(renderScopeId)
+  return zoomed === undefined
+    ? <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={null}/>
+    : <ZoomedThreadCard thread={thread} renderScopeId={renderScopeId} zoomed={zoomed}/>
+}
+
+const ZoomedThreadCard = ({thread, renderScopeId, zoomed}: {thread: ThreadSummary; renderScopeId: string; zoomed: string}) =>
+  <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={useCardZoomIn(zoomed, thread.id)}/>
+
+const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: CardZoom | null}) => {
+  const parent = useBlockContext()
   const shownId = zoom?.blockId ?? thread.id
   // Stable across the card's own re-renders (a zoom), which would otherwise
   // hand every block in it a new context.

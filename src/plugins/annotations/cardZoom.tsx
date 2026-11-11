@@ -11,7 +11,7 @@ import {useRepo} from '@/context/repo.js'
 import {useHandle} from '@/hooks/block.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import type {ThreadAnchor} from './schema.ts'
-import {setCardZoom, useCardZoom} from './uiStore.ts'
+import {setCardZoom} from './uiStore.ts'
 
 export interface ZoomCrumb {
   id: string
@@ -30,7 +30,7 @@ export const zoomCrumbs = (
   const root = ancestors.findIndex(ancestor => ancestor.id === threadId)
   if (root < 0) return null
   return ancestors.slice(0, root).reverse()
-    .map(({id, content}) => ({id, label: truncate(firstLine(content), CRUMB_CHARS)}))
+    .map(({id, content}) => ({id, label: truncate(firstLine(content.trimStart()), CRUMB_CHARS)}))
 }
 
 export interface CardZoom {
@@ -41,18 +41,16 @@ export interface CardZoom {
 
 const NO_CRUMBS: readonly ZoomCrumb[] = Object.freeze([])
 
-/** The card's zoom, or null for a card showing its whole thread. While the
- *  zoomed block's ancestors are being read the card is zoomed, without its
- *  inner crumbs: falling back to the whole thread until they arrive would
- *  remount the card twice. A card that isn't zoomed selects a constant, so
- *  the read doesn't re-render it. */
-export const useCardZoomIn = (cardScope: string, threadId: string): CardZoom | null => {
+/** The zoom of a card asked to show `zoomed`, or null where that block has
+ *  left the thread. While its ancestors are being read the card is zoomed,
+ *  without its inner crumbs: falling back to the whole thread until they
+ *  arrive would remount the card twice. */
+export const useCardZoomIn = (zoomed: string, threadId: string): CardZoom | null => {
   const repo = useRepo()
-  const zoomed = useCardZoom(cardScope)
-  const crumbs = useHandle(repo.query.ancestors({id: zoomed ?? threadId}), {
-    selector: chain => zoomed !== undefined && chain ? zoomCrumbs(chain.ancestors, threadId) : NO_CRUMBS,
+  const crumbs = useHandle(repo.query.ancestors({id: zoomed}), {
+    selector: chain => chain ? zoomCrumbs(chain.ancestors, threadId) : NO_CRUMBS,
   })
-  return zoomed !== undefined && crumbs ? {blockId: zoomed, crumbs} : null
+  return crumbs ? {blockId: zoomed, crumbs} : null
 }
 
 const rootLabel = (anchor: ThreadAnchor): string =>

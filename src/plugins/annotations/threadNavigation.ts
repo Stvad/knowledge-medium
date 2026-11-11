@@ -12,14 +12,15 @@
 
 import {ChangeScope, type BlockData} from '@/data/api'
 import {revealChildren} from '@/data/mutators'
-import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
+import {hasBlockType, focusBlock, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {lazyBlockCacheKey, requestLazyMount} from '@/components/util/lazyMountRegistry.js'
 import {decodeRowProperty} from '@/data/rowProperty'
 import {navigationVerb, ZOOM_ORIGIN, ZOOM_OUT_ORIGIN, type NavigatePanelInput, type NavigationResult} from '@/utils/navigation'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
-import {cardRenderScopeId, isCardRenderScopeId, outerCardSurface, peekCardZoom, revealThread, setCardZoom, viewKey} from './uiStore.ts'
+import {zoomCrumbs} from './cardZoom.tsx'
+import {cardOfRenderScopeId, cardRenderScopeId, isCardRenderScopeId, outerCardSurface, peekCardZoom, revealThread, setCardZoom, viewKey} from './uiStore.ts'
 
 export interface ThreadLanding {
   /** Where the navigation lands: the outermost thread's target. */
@@ -76,15 +77,11 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
   return threads.length === 0 ? null : {targetId: at, threads, collapsed, rows}
 }
 
-/** The render scope `blockId` has inside the cards of `landing`, once the
- *  navigation has made the target its panel's top-level block. Each card's
- *  scope derives from the one around it; the outermost is a margin card where
- *  the margin is drawn. */
-export const landingFocusScope = (panelId: string, landing: ThreadLanding, inMargin: boolean): string =>
-  landingCardScopes(panelId, landing, inMargin).at(-1)!
-
-/** The render scope of each card of `landing`, outermost first. */
-const landingCardScopes = (panelId: string, landing: ThreadLanding, inMargin: boolean): string[] => {
+/** The render scope of each card of `landing`, outermost first, once the
+ *  navigation has made the target its panel's top-level block; the navigated
+ *  block is focused in the last. Each card's scope derives from the one
+ *  around it; the outermost is a margin card where the margin is drawn. */
+export const landingCardScopes = (panelId: string, landing: ThreadLanding, inMargin: boolean): string[] => {
   let scope = panelRenderScopeId(panelId, landing.targetId)
   return landing.threads.map((thread, depth) =>
     scope = cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id))
@@ -136,17 +133,29 @@ const zoomInsideCard = async (repo: Repo, input: NavigatePanelInput): Promise<bo
   if (input.origin === ZOOM_ORIGIN) {
     const found = await threadRootOf(repo, input.blockId)
     if (!found) return false
-    setCardZoom(scope, found.root.id === input.blockId ? null : input.blockId)
+    const zoomsIn = found.root.id !== input.blockId
+    setCardZoom(scope, zoomsIn ? input.blockId : null)
+    // As a panel shows its root's children whatever the root's collapse.
+    if (zoomsIn && !repo.isReadOnly && decodeRowProperty((await repo.block(input.blockId).load())!, isCollapsedProp)) {
+      await repo.tx(tx => revealChildren(tx, input.blockId), {scope: ChangeScope.BlockDefault, description: 'reveal comment'})
+    }
     await focusBlock(repo.block(input.panelId), input.blockId, {renderScopeId: scope})
     return true
   }
-  if (input.origin === ZOOM_OUT_ORIGIN) {
-    const zoomed = peekCardZoom(scope)
-    if (zoomed === undefined) return false
-    const found = await threadRootOf(repo, zoomed)
-    const parent = found?.above[0]
-    setCardZoom(scope, parent && parent.id !== found.root.id ? parent.id : null)
-    return true
+  return input.origin === ZOOM_OUT_ORIGIN && zoomOutOfCard(repo, scope)
+}
+
+/** Steps the innermost zoomed card at or around `scope` out one level: a
+ *  card inside another card's comment is inside that card's zoom. False when
+ *  none is zoomed. */
+const zoomOutOfCard = async (repo: Repo, scope: string): Promise<boolean> => {
+  for (let at = scope; isCardRenderScopeId(at); at = cardOfRenderScopeId(at).parentRenderScopeId) {
+    const zoomed = peekCardZoom(at)
+    if (zoomed === undefined) continue
+    const {ancestors} = await repo.query.ancestors({id: zoomed}).load()
+    const crumbs = zoomCrumbs(ancestors, cardOfRenderScopeId(at).threadId)
+    setCardZoom(at, crumbs?.at(-1)?.id ?? null)
+    if (crumbs) return true
   }
   return false
 }
@@ -154,7 +163,9 @@ const zoomInsideCard = async (repo: Repo, input: NavigatePanelInput): Promise<bo
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {
   const {input} = request
   if (input.target === 'panel' && await zoomInsideCard(request.repo, input)) {
-    return {panelId: input.panelId, blockId: input.blockId, workspaceId: input.workspaceId}
+    // The panel shows what it showed.
+    const shown = request.repo.block(input.panelId).peekProperty(topLevelBlockIdProp) ?? input.blockId
+    return {panelId: input.panelId, blockId: shown, workspaceId: input.workspaceId}
   }
   const landing = await threadLanding(request.repo, request.input.blockId)
   // A viewer can't expand the comments that hide the block, so it opens the

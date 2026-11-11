@@ -13,7 +13,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
-import {isSurfaceRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
+import {isSurfaceRenderScopeId, surfaceRenderScopeId, surfaceRenderScopeParts} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -33,6 +33,12 @@ const CARD_SURFACES: readonly CardSurface[] = ['comments', 'margin']
 
 export const isCardRenderScopeId = (renderScopeId: string): boolean =>
   CARD_SURFACES.some(surface => isSurfaceRenderScopeId(surface, renderScopeId))
+
+/** The thread a card scope shows, and the scope the card renders in. */
+export const cardOfRenderScopeId = (cardScope: string): {threadId: string; parentRenderScopeId: string} => {
+  const {occurrenceId, parentRenderScopeId} = surfaceRenderScopeParts(cardScope)
+  return {threadId: occurrenceId, parentRenderScopeId}
+}
 
 /** An edit suggestion being composed. A comment needs no composer: it is
  *  written at once (`startComment`). */
@@ -107,8 +113,10 @@ export const useComposer = (key: string): ComposerState | undefined =>
 // ──── A card's zoom ────
 
 /** The comment each zoomed card shows in place of its whole thread, by the
- *  card's render scope. A block that is no longer inside the card's thread
- *  (moved, deleted) is ignored by the card (`useCardZoom`). */
+ *  card's render scope. An entry is a request, not the card's state: a block
+ *  no longer inside the card's thread (moved, deleted) zooms nothing, by the
+ *  one rule `zoomCrumbs` (`cardZoom.tsx`). A zoomed card hides its thread's
+ *  header, and the comments outside the zoom, until zoomed out. */
 const cardZooms = new Map<string, string>()
 
 export const setCardZoom = (cardScope: string, blockId: string | null): void => {

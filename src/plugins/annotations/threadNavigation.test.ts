@@ -16,7 +16,7 @@ import {panelRenderScopeId} from '@/utils/renderScope'
 import {captureAnchor} from './anchor'
 import {annotationsPlugin} from './index'
 import {annotationTargetProp} from './schema'
-import {landingFocusScope} from './threadNavigation'
+import {landingCardScopes} from './threadNavigation'
 import {createThread, setThreadStatus} from './threads'
 import {__resetCardZoomsForTesting, cardRenderScopeId, peekActiveThread, peekCardZoom} from './uiStore'
 
@@ -226,7 +226,7 @@ describe('zooming inside a card', () => {
 
     const result = await zoom(reply)
 
-    expect(result).toMatchObject({panelId, blockId: reply})
+    expect(result).toMatchObject({panelId, blockId: 'page'})
     expect((await shownPanel()).blockIds).toEqual(['page'])
     expect(peekCardZoom(scope)).toBe(reply)
     expect(await focused(panelId)).toEqual({blockId: reply, renderScopeId: scope})
@@ -258,6 +258,38 @@ describe('zooming inside a card', () => {
     expect((await shownPanel()).blockIds).toEqual(['page'])
 
     await zoom('other', 'zoom-out')
+    expect((await shownPanel()).blockIds).toEqual(['other'])
+  })
+
+  it('a zoom into a collapsed comment expands it', async () => {
+    const {reply, zoom} = await shownThread()
+    await repo.tx(tx => tx.setProperty(reply, isCollapsedProp, true), opts)
+
+    await zoom(reply)
+
+    expect((await repo.load(reply))?.properties[isCollapsedProp.name]).toBeFalsy()
+  })
+
+  it('a zoom out in a card inside a zoomed card’s comment steps the outer card out', async () => {
+    const {reply, commentId, scope, zoom, threadId} = await shownThread()
+    const inner = await createThread(repo, {targetId: reply, anchor: null, comment: 'On the reply.'})
+    await zoom(reply)
+
+    await zoom('page', 'zoom-out', cardRenderScopeId('comments', scope, inner.threadId))
+
+    expect(peekCardZoom(scope)).toBe(commentId)
+    expect(threadId).not.toBe(inner.threadId)
+  })
+
+  it('a zoom out of a card whose zoomed comment has left the thread is the panel’s', async () => {
+    const {reply, scope, zoom} = await shownThread()
+    await repo.tx(tx => tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Other'}), opts)
+    await zoom(reply)
+    await repo.mutate.delete({id: reply})
+
+    await zoom('other', 'zoom-out')
+
+    expect(peekCardZoom(scope)).toBeUndefined()
     expect((await shownPanel()).blockIds).toEqual(['other'])
   })
 
@@ -295,11 +327,11 @@ describe('zooming inside a card', () => {
   })
 })
 
-describe('landingFocusScope', () => {
+describe('landingCardScopes', () => {
   it('puts the outermost card in the margin where the margin is drawn, and the cards inside it inline', () => {
     const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: [], rows: []}
     const margin = cardRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
-    expect(landingFocusScope('p', landing, true)).toBe(cardRenderScopeId('comments', margin, 'T2'))
+    expect(landingCardScopes('p', landing, true)).toEqual([margin, cardRenderScopeId('comments', margin, 'T2')])
   })
 })

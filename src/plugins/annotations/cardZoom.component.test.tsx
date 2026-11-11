@@ -149,14 +149,16 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
       </AppRuntimeContextProvider>,
     )
     await waitFor(() => expect(row(ids.nested)).not.toBeNull())
-    return within(screen.getByTestId('comment-thread'))
   }
+
+  /** Re-found each time: a zoom remounts the card. */
+  const card = () => within(screen.getByTestId('comment-thread'))
 
   const row = (id: string) =>
     screen.queryByTestId('comment-thread')?.querySelector(`[data-block-shell][data-block-id="${id}"]`) ?? null
 
   it('shows that comment’s subtree alone, under crumbs that lead back out', async () => {
-    const card = await renderCard()
+    await renderCard()
 
     act(() => setCardZoom(cardScope, ids.reply))
 
@@ -165,15 +167,15 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
     expect(row(ids.threadId)).toBeNull()
     expect(row(ids.reply)).not.toBeNull()
     expect(row(ids.nested)).not.toBeNull()
-    const crumbs = within(card.getByRole('navigation'))
+    const crumbs = within(card().getByRole('navigation'))
 
     fireEvent.click(await crumbs.findByRole('button', {name: 'First comment'}))
     await waitFor(() => expect(row(ids.comment)).not.toBeNull())
     expect(row(ids.sibling)).toBeNull()
 
-    fireEvent.click(within(card.getByRole('navigation')).getByRole('button', {name: 'Thread'}))
+    fireEvent.click(within(card().getByRole('navigation')).getByRole('button', {name: 'Thread'}))
     await waitFor(() => expect(row(ids.sibling)).not.toBeNull())
-    expect(card.queryByRole('navigation')).toBeNull()
+    expect(card().queryByRole('navigation')).toBeNull()
   })
 
   it('a click on a comment’s bullet zooms the card into it', async () => {
