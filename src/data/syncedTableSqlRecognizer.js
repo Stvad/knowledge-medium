@@ -1,1 +1,1 @@
-export{g$ as SYNCED_TABLES,_$ as syncedWriteTarget,v$ as writeTargets}from"../../chunks/app-CaAZHurp.js";
+export{g$ as SYNCED_TABLES,_$ as syncedWriteTarget,v$ as writeTargets}from"../../chunks/app-CLGL5pg_.js";

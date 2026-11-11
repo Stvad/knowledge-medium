@@ -1,1 +1,1 @@
-export{EP as ClientLocalSettings,DP as clientLocalSettings}from"../../chunks/app-CaAZHurp.js";
+export{EP as ClientLocalSettings,DP as clientLocalSettings}from"../../chunks/app-CLGL5pg_.js";

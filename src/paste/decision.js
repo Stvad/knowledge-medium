@@ -1,1 +1,1 @@
-export{WL as defaultPasteDecision,GL as pasteDecisionVerb}from"../../chunks/app-CaAZHurp.js";
+export{WL as defaultPasteDecision,GL as pasteDecisionVerb}from"../../chunks/app-CLGL5pg_.js";

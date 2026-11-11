@@ -1,1 +1,1 @@
-export{OM as kernelPropertyUiExtension,kM as typesPropertyUi,AM as typesPropertyUiExtension}from"../../../chunks/app-CaAZHurp.js";
+export{OM as kernelPropertyUiExtension,kM as typesPropertyUi,AM as typesPropertyUiExtension}from"../../../chunks/app-CLGL5pg_.js";

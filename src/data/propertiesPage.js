@@ -1,1 +1,1 @@
-export{Zrt as getOrCreatePropertiesPage,Qrt as propertiesPageBlockId,$rt as propertiesPageSpec}from"../../chunks/app-CaAZHurp.js";
+export{Zrt as getOrCreatePropertiesPage,Qrt as propertiesPageBlockId,$rt as propertiesPageSpec}from"../../chunks/app-CLGL5pg_.js";

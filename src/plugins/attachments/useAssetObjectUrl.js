@@ -1,1 +1,1 @@
-export{Nx as useAssetObjectUrl}from"../../../chunks/app-CaAZHurp.js";
+export{Nx as useAssetObjectUrl}from"../../../chunks/app-CLGL5pg_.js";

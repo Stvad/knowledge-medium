@@ -1,1 +1,1 @@
-export{OP as resolveAppRuntime,kP as resolveAppRuntimeSync}from"../../chunks/app-CaAZHurp.js";
+export{OP as resolveAppRuntime,kP as resolveAppRuntimeSync}from"../../chunks/app-CLGL5pg_.js";

@@ -1,1 +1,1 @@
-export{dF as LazyBlockComponent}from"../../chunks/app-CaAZHurp.js";
+export{dF as LazyBlockComponent}from"../../chunks/app-CLGL5pg_.js";

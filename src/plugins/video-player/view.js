@@ -1,1 +1,1 @@
-export{PS as DEFAULT_VIDEO_NOTES_PANE_RATIO,FS as VIDEO_NOTES_VIEW_MODE,IS as videoNotesPaneRatioProp}from"../../../chunks/app-CaAZHurp.js";
+export{PS as DEFAULT_VIDEO_NOTES_PANE_RATIO,FS as VIDEO_NOTES_VIEW_MODE,IS as videoNotesPaneRatioProp}from"../../../chunks/app-CLGL5pg_.js";

@@ -1,1 +1,1 @@
-export{SD as ReferenceLink}from"../../../chunks/app-CaAZHurp.js";
+export{SD as ReferenceLink}from"../../../chunks/app-CLGL5pg_.js";

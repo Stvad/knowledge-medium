@@ -1,1 +1,1 @@
-export{P_ as blockInfoPlugin}from"../../../chunks/app-CaAZHurp.js";
+export{P_ as blockInfoPlugin}from"../../../chunks/app-CLGL5pg_.js";

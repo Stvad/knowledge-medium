@@ -1,1 +1,1 @@
-export{ez as ExtensionRenderBoundary}from"../../chunks/app-CaAZHurp.js";
+export{ez as ExtensionRenderBoundary}from"../../chunks/app-CLGL5pg_.js";

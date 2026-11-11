@@ -1,1 +1,1 @@
-export{GB as declarationOnlyDefinitionForName,KB as declarationOnlyStatusText}from"../../../chunks/app-CaAZHurp.js";
+export{GB as declarationOnlyDefinitionForName,KB as declarationOnlyStatusText}from"../../../chunks/app-CLGL5pg_.js";

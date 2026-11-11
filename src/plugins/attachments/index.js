@@ -1,1 +1,1 @@
-export{pb as attachmentsPlugin}from"../../../chunks/app-CaAZHurp.js";
+export{pb as attachmentsPlugin}from"../../../chunks/app-CLGL5pg_.js";

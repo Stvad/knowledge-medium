@@ -1,2 +1,2 @@
-import{Dit as e,Oit as t,kit as n}from"../../chunks/app-CaAZHurp.js";var r=e=>t(e),i=(e,t)=>n(e,t),a=()=>{let t=new e(`km-boot`,`entries`);return{get:e=>t.tx(`readonly`,t=>t.get(e)),putAll:e=>t.runTransaction(`readwrite`,async t=>{for(let[n,r]of e)t.put(r,n)}),deletePrefix:e=>t.deleteByPrefix(e)}};export{i as bootKey,r as bootKeyPrefix,a as idbBootStore};
+import{Dit as e,Oit as t,kit as n}from"../../chunks/app-CLGL5pg_.js";var r=e=>t(e),i=(e,t)=>n(e,t),a=()=>{let t=new e(`km-boot`,`entries`);return{get:e=>t.tx(`readonly`,t=>t.get(e)),putAll:e=>t.runTransaction(`readwrite`,async t=>{for(let[n,r]of e)t.put(r,n)}),deletePrefix:e=>t.deleteByPrefix(e)}};export{i as bootKey,r as bootKeyPrefix,a as idbBootStore};
 //# sourceMappingURL=bootStore.js.map

@@ -1,1 +1,1 @@
-export{UK as preferredSpanReplacement}from"../../../chunks/app-CaAZHurp.js";
+export{UK as preferredSpanReplacement}from"../../../chunks/app-CLGL5pg_.js";

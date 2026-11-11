@@ -1,1 +1,1 @@
-export{mF as BlockLoadingPlaceholder}from"../../chunks/app-CaAZHurp.js";
+export{mF as BlockLoadingPlaceholder}from"../../chunks/app-CLGL5pg_.js";

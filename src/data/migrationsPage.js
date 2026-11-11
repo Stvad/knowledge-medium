@@ -1,1 +1,1 @@
-export{Vnt as MIGRATIONS_PAGE_ALIAS,Hnt as getOrCreateMigrationsPage,Unt as migrationsPageBlockId,Wnt as migrationsPageSpec}from"../../chunks/app-CaAZHurp.js";
+export{Vnt as MIGRATIONS_PAGE_ALIAS,Hnt as getOrCreateMigrationsPage,Unt as migrationsPageBlockId,Wnt as migrationsPageSpec}from"../../chunks/app-CLGL5pg_.js";

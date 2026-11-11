@@ -1,1 +1,1 @@
-export{ru as BlockTagsConfigEditor}from"../../../chunks/app-CaAZHurp.js";
+export{ru as BlockTagsConfigEditor}from"../../../chunks/app-CLGL5pg_.js";

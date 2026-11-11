@@ -1,1 +1,1 @@
-export{vQ as aliasDataExtension}from"../../../chunks/app-CaAZHurp.js";
+export{vQ as aliasDataExtension}from"../../../chunks/app-CLGL5pg_.js";
