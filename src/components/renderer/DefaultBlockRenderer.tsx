@@ -28,7 +28,7 @@ import {
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useAppHashInContext } from '@/context/layoutWsContext.js'
-import { navigate, useOpenBlock } from '@/utils/navigation.js'
+import { navigate, useOpenBlock, ZOOM_ORIGIN } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -109,11 +109,10 @@ const copyBlockEmbed = (block: Block) => {
   void writeTextToClipboard(`!((${block.id}))`)
 }
 
-const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
+const zoomIn = (block: Block, workspaceId: string, {panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}) => {
   if (typeof window !== 'undefined') {
-    navigate(block.repo, panelId
-      ? {blockId: block.id, workspaceId, target: 'panel', panelId}
-      : {blockId: block.id, workspaceId, target: 'active'})
+    const input = {blockId: block.id, workspaceId, origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId}
+    void navigate(block.repo, panelId ? {...input, target: 'panel', panelId} : {...input, target: 'active'})
   }
 }
 
@@ -138,7 +137,7 @@ export function BulletDot({withChildrenIndicator = false, className = ''}: {
 const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: BlockResolveContext }) => {
   const repo = useRepo()
   const runtime = useAppRuntime()
-  const {panelId} = useBlockContext()
+  const {panelId, renderScopeId} = useBlockContext()
   const isMobile = useIsMobile()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
@@ -185,7 +184,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
-  const onClick = useOpenBlock({blockId: block.id, workspaceId})
+  const onClick = useOpenBlock({blockId: block.id, workspaceId}, {origin: ZOOM_ORIGIN})
   const bulletHref = useAppHashInContext(workspaceId, block.id)
 
   return (
@@ -244,7 +243,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
             </ContextMenuItem>
             <ContextMenuItem
               className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => zoomIn(block, workspaceId, panelId)}
+              onSelect={() => zoomIn(block, workspaceId, {panelId, renderScopeId})}
             >
               Zoom In
             </ContextMenuItem>

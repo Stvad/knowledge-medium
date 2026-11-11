@@ -175,7 +175,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'navigationVerb', 'navigationIntentVerb', 'defaultNavigationIntent', 'goTo', 'PASSTHROUGH',
       'SUPPRESS', 'mapNavigate', 'navigate', 'useNavigate', 'navigateFromGesture',
       'navigateFromGlobalCommand', 'useNavigateFromGlobalCommand', 'useOpenBlock', 'useBlockOpener',
-      'applyNavigationDecision',
+      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN',
     ],
     types: [
       'NavigateInput', 'NavigationDecision', 'ResolvedNavigateInput', 'GlobalCommandNavigateInput',

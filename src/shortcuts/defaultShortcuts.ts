@@ -71,6 +71,8 @@ import {
   navigate,
   navigateFromGlobalCommand,
   resolveActivePanelRow,
+  ZOOM_ORIGIN,
+  ZOOM_OUT_ORIGIN,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
@@ -269,13 +271,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     id: 'zoom_in',
     description: 'Zoom into focused block',
     icon: ZoomIn,
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       // Through navigate() so zoom is observable/interceptable via
-      // navigationVerb; target 'panel' swaps this panel's content (the swap
-      // still wraps in withMoveTransition inside navigateInPanel) and marks this
-      // panel active (it's the one being interacted with) — a benign addition
-      // over the old direct navigateInPanel.
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
+      // navigationVerb; target 'panel' swaps this panel's content and marks
+      // it active.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: block.id,
+        origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -285,15 +288,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const zoomOutBlock: BlockAction = {
     id: 'zoom_out',
     description: 'Zoom out to parent of current view',
-    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
       await repo.load(topLevelBlockId, {ancestors: true})
       const parent = repo.block(topLevelBlockId).parent
-      if (!parent) return
 
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
+      // Sent from a root too, where the panel stays as it is: a view nested in
+      // the panel may be zoomed in on its own, and claims the zoom out by
+      // `sourceRenderScopeId`.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: parent?.id ?? topLevelBlockId,
+        origin: ZOOM_OUT_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+,',
