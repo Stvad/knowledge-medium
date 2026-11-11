@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.8.3
+
+0.8.3 requires `@knowledge-medium/agent-cli` 0.13.1. For `spawn` delivery, the daemon's `agent:*` writes and its replies no longer go on the person's undo stack, so a cmd-Z in the app undoes their own edit instead of flipping a finished task back to `running`. With `channel` delivery the ambient session still closes the task through the generic MCP tools, whose writes stay undoable. An app tab older than this release ignores the option, and the writes stay undoable there until it reloads.
+
 ## Upgrade to 0.8.1
 
 `runner.timeoutMs` may now be up to 60 min (was 25), and a `running` task left by a crashed daemon re-queues after 65 min instead of 30. Stopping the daemon (`launchctl kickstart -k`, a reboot) waits at most 60 s for in-flight runs: launchd caps a user agent's `ExitTimeOut` there whatever the plist asks for. A run still going then is killed, and its task re-queues after the stale sweep, so restart while nothing is running.

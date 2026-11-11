@@ -27,7 +27,6 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     // lifecycle, where a candidate block was just edited.
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
-  const replies: Array<{parentId: string, content: string}> = []
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
@@ -73,12 +72,6 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
     },
-    createReply: async (parentId, content) => {
-      replies.push({parentId, content})
-      const reply: BlockData = {id: `reply-${replies.length}`, parentId, content, properties: {[PROPS.reply]: true}}
-      blocks.set(reply.id, reply)
-      return reply
-    },
     reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
       reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
     },
@@ -119,7 +112,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
+  return {graph, blocks, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
 }
 
 const memoryState = (
@@ -301,7 +294,7 @@ describe('channel delivery', () => {
 
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
-    const {graph, blocks, replies, reconciles, propWrites} = fakeGraph({
+    const {graph, blocks, reconciles, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
     })
@@ -317,7 +310,6 @@ describe('mention lifecycle', () => {
     expect(reconciles).toEqual([
       {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
     ])
-    expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
     expect(blocks.get('b-1')?.properties?.[PROPS.attempts]).toBe(1)
@@ -781,7 +773,7 @@ describe('mention lifecycle', () => {
   })
 
   it('parks a task after MAX_ATTEMPTS with a terminal error write', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
@@ -800,16 +792,18 @@ describe('mention lifecycle', () => {
 
     expect(runTask).not.toHaveBeenCalled()
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(replies[0].content).toContain('gave up after')
+    expect(reconciles).toEqual([{
+      parentId: 'b-1', markdown: expect.stringContaining('gave up after'), replyKey: 'park:b-1', shape: 'block', final: true,
+    }])
 
     // Terminal: later ticks skip it entirely.
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(1)
+    expect(reconciles).toHaveLength(1)
   })
 
   it('parks props-FIRST so a failed reply write cannot spam ⚠️ blocks', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
@@ -818,7 +812,7 @@ describe('mention lifecycle', () => {
     })
     // Reply write is broken; the terminal status must still land so the
     // block isn't re-parked (and re-replied) every tick.
-    graph.createReply = vi.fn(async () => { throw new Error('reply write failed') })
+    graph.reconcileReplyTree = vi.fn(async () => { throw new Error('reply write failed') })
     const engine = engineWith({graph})
 
     await engine.tick()
@@ -827,12 +821,11 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect((graph.createReply as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
-    expect(replies).toHaveLength(0)
+    expect((graph.reconcileReplyTree as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
   })
 
   it('does not re-park a task the channel session already closed (fresh re-read)', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
@@ -850,7 +843,7 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('does not count a resumed-thread placeholder against maxConcurrent', async () => {
@@ -908,7 +901,7 @@ describe('mention lifecycle', () => {
   })
 
   it('backs off when another daemon wins the claim race', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] contested'}},
     })
@@ -928,7 +921,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).not.toHaveBeenCalled()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('resumes the nearest ancestor session for follow-up mentions', async () => {
@@ -1708,7 +1701,7 @@ describe('channel delivery (experimental)', () => {
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ambient task'}},
     })
@@ -1726,7 +1719,7 @@ describe('channel delivery (experimental)', () => {
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('marks the task error when the channel listener is unreachable', async () => {

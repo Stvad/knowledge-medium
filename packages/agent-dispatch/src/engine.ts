@@ -229,7 +229,7 @@ export const createEngine = (deps: EngineDeps) => {
    *  (the pre-filter used a tick-start snapshot; the ambient session may
    *  have closed it since), then write the terminal `error` props BEFORE
    *  the reply, so the state sticks even if the reply write fails: a
-   *  createReply-succeeds / setTaskProps-fails split would re-enter every
+   *  reply-succeeds / setTaskProps-fails split would re-enter every
    *  tick and spam ⚠️ blocks into the user's notes (the one write path with
    *  no billed-run circuit breaker). */
   const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
@@ -237,7 +237,9 @@ export const createEngine = (deps: EngineDeps) => {
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
     await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await replies.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
+    await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
+      replyKey: `park:${sourceId}`, shape: 'block', final: true,
+    }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 

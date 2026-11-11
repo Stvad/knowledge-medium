@@ -174,3 +174,26 @@ describe('dispatch attribution', () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
   })
 })
+
+describe('dispatch writes and the person\'s undo stack', () => {
+  it('keeps a run\'s writes off it, so undoing an edit made mid-run keeps the run done and its reply', async () => {
+    repo.undoManager.clear()
+    const engine = engineFor(async options => {
+      options.onEvent?.({kind: 'activity', label: 'Reading the page'})
+      options.onEvent?.({kind: 'text', text: 'Half an answer'})
+      // The person keeps typing into the mention while the run is live.
+      await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this, briefly'}) }, opts)
+      return result({resultText: 'The summary.'})
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+
+    expect(await repo.undo()).toBe(true)
+    const mention = await repo.load(MENTION)
+    expect(mention?.content).toBe('[[claude]] summarize this')
+    expect(mention?.properties).toMatchObject({[PROPS.status]: 'done', [PROPS.activity]: ''})
+    expect(await replyIds()).toHaveLength(1)
+  })
+})

@@ -1168,7 +1168,7 @@ const reconcileMarkdownSubtree = async (
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, agentTxOptions('reconcile-markdown-subtree'))
+  }, agentTxOptions('reconcile-markdown-subtree', {undoable: input.undoable}))
 
   return {ids, rootIds}
 }
@@ -1217,7 +1217,7 @@ const updateRuntimeBlock = async (
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, agentTxOptions('update-block'))
+  }, agentTxOptions('update-block', {undoable: input.undoable}))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -2437,6 +2437,7 @@ const executeAttributedCommand = async (
         shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
         final: command.final === true,
         properties,
+        undoable: command.undoable,
       })
     }
 
@@ -2470,6 +2471,7 @@ const executeAttributedCommand = async (
         expectedContent: command.expectedContent === undefined
           ? undefined
           : requireString(command.expectedContent, 'expectedContent'),
+        undoable: command.undoable,
       })
     }
 
