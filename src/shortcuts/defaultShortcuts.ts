@@ -95,6 +95,7 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+import { grabSoftKeyboard } from '@/utils/softKeyboardGrab.js'
 
 const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
   editorView.state.facet(language)?.name === markdownLanguage.name
@@ -454,6 +455,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       icon: Plus,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        // Before the first await: the new block's editor focuses after a
+        // database round trip, outside the tap's gesture, and iOS raises the
+        // keyboard only for a focus inside it. See grabSoftKeyboard.
+        if (!uiStateBlock.repo.isReadOnly) grabSoftKeyboard()
         await createNodeInActivePanelFromGlobalContext(uiStateBlock)
       },
     },
