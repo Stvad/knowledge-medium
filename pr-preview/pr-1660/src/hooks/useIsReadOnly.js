@@ -1,1 +1,1 @@
-export{Py as useIsReadOnly}from"../../chunks/app-xDqm7U4m.js";
+export{Py as useIsReadOnly}from"../../chunks/app-xnFAPejy.js";

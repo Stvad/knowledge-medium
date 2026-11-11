@@ -1,1 +1,1 @@
-export{OW as BlockContext,kW as BlockContextProvider,AW as NestedBlockContextProvider,jW as useBlockContext}from"../../chunks/app-xDqm7U4m.js";
+export{OW as BlockContext,kW as BlockContextProvider,AW as NestedBlockContextProvider,jW as useBlockContext}from"../../chunks/app-xnFAPejy.js";
