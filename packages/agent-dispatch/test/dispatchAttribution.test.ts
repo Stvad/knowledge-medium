@@ -104,7 +104,7 @@ const replyIds = async (): Promise<string[]> => {
 }
 
 const result = (overrides: Partial<AgentRunResult>): AgentRunResult => ({
-  ok: true, resultText: '', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {}, ...overrides,
+  ok: true, resultText: '', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {}, usage: null, ...overrides,
 })
 
 describe('dispatch attribution', () => {

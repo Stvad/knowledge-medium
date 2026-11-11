@@ -10,7 +10,7 @@ import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
 import type { Graph, ReplyWriter } from './graph.js'
-import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
+import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
@@ -42,6 +42,9 @@ export interface EngineDeps {
    *  instantly (default is a real timer). */
   delay?: (ms: number) => Promise<void>
 }
+
+const usageNote = (result: AgentRunResult): string =>
+  result.usage ? ` · ${formatRunUsage(result.usage)}` : ''
 
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
@@ -523,7 +526,7 @@ export const createEngine = (deps: EngineDeps) => {
           cancel: null,
           nowMs: now(),
         })
-        log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
         // a timeout/crash so the task parks `error: cancelled` (deliberate,
@@ -556,7 +559,7 @@ export const createEngine = (deps: EngineDeps) => {
           cancel: null,
           nowMs: now(),
         })
-        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
@@ -741,9 +744,9 @@ export const createEngine = (deps: EngineDeps) => {
       }))
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
-        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
+        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}${usageNote(result)}: ${truncate(result.resultText.trim(), 200)}`)
       } else {
-        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}${usageNote(result)}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
       }
     })
   }
