@@ -1,1 +1,1 @@
-export{qU as isIOS,JU as isMacPlatform}from"../../chunks/app-CejPNmfl.js";
+export{UU as isIOS,WU as isMacPlatform}from"../../chunks/app-CS0B-Se-.js";

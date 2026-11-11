@@ -1,1 +1,1 @@
-export{Sq as groupedBacklinksDataExtension}from"../../../chunks/app-CejPNmfl.js";
+export{vq as groupedBacklinksDataExtension}from"../../../chunks/app-CS0B-Se-.js";

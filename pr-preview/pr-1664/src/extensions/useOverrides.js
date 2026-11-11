@@ -1,1 +1,1 @@
-export{TP as useOverrides}from"../../chunks/app-CejPNmfl.js";
+export{wP as useOverrides}from"../../chunks/app-CS0B-Se-.js";
