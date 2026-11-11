@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.8.4
+
+`maxConcurrent` now defaults to 4 (was 2). A follow-up that has to wait for its thread's run to finish now shows as `agent:status=queued`, its chip says why, and the log says so once. Earlier versions treat `queued` as finished, so if you downgrade, delete the `agent:*` properties on any block still queued to run it.
+
 ## Upgrade to 0.8.3
 
 0.8.3 requires `@knowledge-medium/agent-cli` 0.13.1. For `spawn` delivery, the daemon's `agent:*` writes and its replies no longer go on the person's undo stack, so a cmd-Z in the app undoes their own edit instead of flipping a finished task back to `running`. With `channel` delivery the ambient session still closes the task through the generic MCP tools, whose writes stay undoable. An app tab older than this release ignores the option, and the writes stay undoable there until it reloads.
