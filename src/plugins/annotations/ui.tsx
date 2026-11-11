@@ -41,7 +41,7 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
-import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
+import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
@@ -368,7 +368,8 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
         renderScopeId,
         scopeRootId: shownId,
         [COMMENT_CARD_KEY]: renderScopeId,
-        [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
+        [CONTRIBUTOR_CARD_MODE_KEY]: shownId,
+        [CONTRIBUTOR_CARD_HEADER_KEY]: thread.id,
         [CARD_CHAIN_KEY]: chain,
       }}>
         <BlockComponent blockId={shownId}/>

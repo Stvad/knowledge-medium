@@ -4,6 +4,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react'
 import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
+import {topLevelBlockIdProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -18,6 +19,7 @@ import {actionContextsFacet} from '@/extensions/core'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
+import {getDefaultActions} from '@/shortcuts/defaultShortcuts'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
@@ -181,6 +183,20 @@ describe('a card zoomed into a comment', {timeout: 20_000}, () => {
 
     await waitFor(() => expect(peekCardZoom(cardScope)).toBe(ids.reply))
     await waitFor(() => expect(row(ids.sibling)).toBeNull())
+  })
+
+  it('the zoom out action steps the card out in a panel whose own root has no parent', async () => {
+    await repo.block(PANEL).set(topLevelBlockIdProp, 'page')
+    setCardZoom(cardScope, ids.reply)
+    const zoomOut = getDefaultActions({repo}).find(action => action.id === 'zoom_out')!
+
+    await zoomOut.handler(
+      {block: repo.block(ids.reply), uiStateBlock: repo.block(PANEL), renderScopeId: cardScope} as never,
+      new KeyboardEvent('keydown'),
+    )
+
+    expect(peekCardZoom(cardScope)).toBe(ids.comment)
+    expect(repo.block(PANEL).peekProperty(topLevelBlockIdProp)).toBe('page')
   })
 
   it('shows the whole thread once the zoomed comment is deleted', async () => {

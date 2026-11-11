@@ -296,10 +296,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
       await repo.load(topLevelBlockId, {ancestors: true})
       const parent = repo.block(topLevelBlockId).parent
-      if (!parent) return
 
+      // Sent from a root too, where the panel stays as it is: a view nested in
+      // the panel may be zoomed in on its own, and claims the zoom out by
+      // `sourceRenderScopeId`.
       await navigate(repo, {
-        target: 'panel', panelId: uiStateBlock.id, blockId: parent.id,
+        target: 'panel', panelId: uiStateBlock.id, blockId: parent?.id ?? topLevelBlockId,
         origin: ZOOM_OUT_ORIGIN, sourceRenderScopeId: renderScopeId,
       })
     },
