@@ -1,1 +1,1 @@
-export{XN as appUpdatePromptExtension}from"../../../chunks/app-C5WBEjvT.js";
+export{XN as appUpdatePromptExtension}from"../../../chunks/app-ZmwwhcMd.js";
