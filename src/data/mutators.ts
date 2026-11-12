@@ -585,6 +585,9 @@ const changesValueSet = async (
 ): Promise<boolean> => {
   if (newParentId === self.parentId) return false
   if (await isPropertyValueRow(tx, self)) return true
+  // A marked row is never a value (`isFieldValueChild`): under a field row it
+  // is a property of that row, so it may enter one.
+  if (self.isFieldForm === true) return false
   const newParent = newParentId === null ? null : await tx.get(newParentId)
   return newParent !== null && await isPropertyFieldRow(tx, newParent)
 }

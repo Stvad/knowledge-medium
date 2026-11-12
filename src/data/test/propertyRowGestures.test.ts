@@ -188,6 +188,13 @@ describe('indent', () => {
     expect(await parentOf(ids.b)).toBe('owner')
   })
 
+  it('indents a drawn property row under the property row above it', async () => {
+    // A marked row under a field row is a property of that row, not a value.
+    await arrange('owner', [ids.status, ids.tags, ids.a, ids.secret, ids.b])
+    await repo.mutate.indent({id: ids.tags, propertyDisplay: NON_HIDDEN})
+    expect(await parentOf(ids.tags)).toBe(ids.status)
+  })
+
   it('no-ops on a value row rather than nesting it under its sibling value', async () => {
     await repo.mutate.indent({id: ids.y, propertyDisplay: ALL})
     expect(await parentOf(ids.y)).toBe(ids.tags)
