@@ -1,1 +1,1 @@
-export{Zit as deriveWorkspaceIdNamespace}from"../../../chunks/app-ClXlBqDc.js";
+export{Qit as deriveWorkspaceIdNamespace}from"../../../chunks/app-Tp0BfdRb.js";

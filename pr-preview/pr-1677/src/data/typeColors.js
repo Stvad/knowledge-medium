@@ -1,1 +1,1 @@
-export{UM as DEFAULT_TYPE_COLORS,WM as defaultTypeColor,GM as pickLeastUsedTypeColor}from"../../chunks/app-ClXlBqDc.js";
+export{UM as DEFAULT_TYPE_COLORS,WM as defaultTypeColor,GM as pickLeastUsedTypeColor}from"../../chunks/app-Tp0BfdRb.js";

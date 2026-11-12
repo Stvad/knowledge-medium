@@ -1,1 +1,1 @@
-export{Vx as useAssetObjectUrl}from"../../../chunks/app-ClXlBqDc.js";
+export{Vx as useAssetObjectUrl}from"../../../chunks/app-Tp0BfdRb.js";
