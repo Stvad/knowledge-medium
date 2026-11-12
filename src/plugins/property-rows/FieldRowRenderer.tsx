@@ -11,7 +11,6 @@ import type { MouseEvent } from 'react'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
-import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useIsSelected } from '@/data/globalState'
@@ -112,7 +111,9 @@ export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => (
   <DefaultBlockRenderer
     {...props}
     ContentRenderer={FieldRowLabel}
-    EditContentRenderer={CodeMirrorContentRenderer}
+    // Not the raw `::((id))` text: an Enter there makes a first value child
+    // (the projection's new value) and a split or merge un-marks the row.
+    EditContentRenderer={FieldRowLabel}
     Layout={FieldRowLayout}
   />
 )

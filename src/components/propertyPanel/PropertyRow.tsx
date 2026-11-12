@@ -173,7 +173,7 @@ export function PropertyValueCell({
       onFocus={valueFocusHandlers.onFocus}
       onBlur={valueFocusHandlers.onBlur}
     >
-      {Editor !== undefined && !row.decodeFailed && !row.readOnly ? (
+      {Editor !== undefined && !row.decodeFailed && !row.readOnly && !block.repo.isReadOnly ? (
         <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
       ) : row.decodeFailed ? (
         <RawJsonValue value={row.encodedValue} reason="Decode failed" />

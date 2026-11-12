@@ -28,9 +28,10 @@ const settingLabel = (setting: PropertyDisplaySetting): string =>
 const blockSetting = (block: Block): PropertyDisplaySetting =>
   parsePropertyDisplaySetting(block.peek()?.properties[propertyDisplayProp.name])
 
-/** Set the block level on `blocks`. `inherit` removes the key rather than
- *  storing it, so a cleared block carries nothing (no residue field row on a
- *  child-backed workspace). */
+/** Set the block level on `blocks`. `inherit` is STORED, never unset: on a
+ *  child-backed workspace an unset deletes the setting's field row and its
+ *  whole subtree, and this scope is not undoable, so content a user had nested
+ *  under that row would go with it. */
 export const setBlockPropertyDisplay = async (
   blocks: readonly Block[],
   setting: PropertyDisplaySetting,
@@ -38,10 +39,7 @@ export const setBlockPropertyDisplay = async (
   const repo = blocks[0]?.repo
   if (!repo || repo.isReadOnly) return
   await repo.tx(async tx => {
-    for (const block of blocks) {
-      if (setting === 'inherit') await tx.unsetProperty(block.id, propertyDisplayProp)
-      else await tx.setProperty(block.id, propertyDisplayProp, setting)
-    }
+    for (const block of blocks) await tx.setProperty(block.id, propertyDisplayProp, setting)
   }, {scope: ChangeScope.UiState, description: `property display: ${setting}`})
 }
 

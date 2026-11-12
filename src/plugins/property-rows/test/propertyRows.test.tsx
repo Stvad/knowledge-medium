@@ -15,7 +15,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import type { PropertyDisplaySetting } from '@/data/propertyDisplayMode'
+import { propertyDisplayProp, type PropertyDisplaySetting } from '@/data/propertyDisplayMode'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet } from '@/extensions/core'
@@ -228,5 +228,30 @@ describe('a scalar whose value children disagree', () => {
     })
     expect(stray.querySelector('[data-property-value-row]')).toBeNull()
     expect(screen.queryByDisplayValue('final')).toBeNull()
+  })
+})
+
+describe('resetting the block switch', () => {
+  // The switch is itself a property, so in show-all its field row is visible
+  // and a user can nest content under it. Clearing the switch must not take
+  // that content with it: the scope is not undoable.
+  it('keeps content a user nested under the switch\'s own row', async () => {
+    await setBlockPropertyDisplay([repo.block(OWNER)], 'all')
+    const switchRow = await waitFor(async () => {
+      const found = await sharedDb.db.getOptional<{id: string}>(
+        `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+           AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = 'all' AND v.deleted = 0)`,
+        [OWNER])
+      expect(found).not.toBeNull()
+      return found!
+    })
+    await repo.tx(tx => tx.create({
+      id: 'nested-note', workspaceId: WS, parentId: switchRow.id, orderKey: 'z0', content: 'mine',
+    }), {scope: ChangeScope.BlockDefault})
+
+    await setBlockPropertyDisplay([repo.block(OWNER)], 'inherit')
+
+    expect((await repo.load('nested-note'))?.deleted).toBe(false)
+    expect(repo.block(OWNER).peekProperty(propertyDisplayProp)).toBe('inherit')
   })
 })
