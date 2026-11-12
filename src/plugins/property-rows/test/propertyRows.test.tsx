@@ -308,7 +308,7 @@ describe('a field row shown by id, not as a listed child', () => {
       [OWNER])
     return row!.id
   }
-  const renderAlone = (id: string, {listing, breadcrumb}: {listing: boolean; breadcrumb: boolean}) => render(
+  const renderAlone = (id: string, {listing, breadcrumb}: {listing: string | null; breadcrumb: boolean}) => render(
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
@@ -329,8 +329,11 @@ describe('a field row shown by id, not as a listed child', () => {
   // A backlink of the definition, or a block's breadcrumb trail, mounts the
   // row by id — for every user, on every workspace, whatever the mode.
   it.each([
-    {where: 'outside any listing (a backlink entry)', listing: false, breadcrumb: false},
-    {where: 'as a breadcrumb crumb', listing: true, breadcrumb: true},
+    {where: 'outside any listing', listing: null, breadcrumb: false},
+    // A backlink entry root inside an outline listing that shows rows: the
+    // listing is some other block's, so this is not one of its rows.
+    {where: 'inside another block\'s listing (a backlink entry)', listing: 'some-other-block', breadcrumb: false},
+    {where: 'as a breadcrumb crumb', listing: OWNER, breadcrumb: true},
   ])('is an ordinary block $where', async ({listing, breadcrumb}) => {
     const id = await fieldRowId()
     renderAlone(id, {listing, breadcrumb})
@@ -342,7 +345,7 @@ describe('a field row shown by id, not as a listed child', () => {
 
   it('is a property row inside a listing that shows them (the positive control)', async () => {
     const id = await fieldRowId()
-    renderAlone(id, {listing: true, breadcrumb: false})
+    renderAlone(id, {listing: OWNER, breadcrumb: false})
     await waitFor(() => expect(document.querySelector('[data-property-field-row="true"]')).not.toBeNull())
     expect(await screen.findByDisplayValue('draft')).toBeTruthy()
   })

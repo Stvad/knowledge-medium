@@ -60,7 +60,7 @@ export const BlockChildren = ({block}: { block: Block }) => {
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
 
-  return <PropertyRowListingContext value={mode !== 'none'}>
+  return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
     {useChildIdsForMode(block, mode).map((childId) => (
       <LazyBlockComponent
         key={childId}

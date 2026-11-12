@@ -105,8 +105,10 @@ const FieldRowLayout: BlockLayout = ({
   )
 }
 
-export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) =>
-  useContext(PropertyRowListingContext)
+export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
+  const listingParentId = useContext(PropertyRowListingContext)
+  const parentId = useHandle(props.block, {selector: data => data?.parentId ?? null})
+  return listingParentId !== null && listingParentId === parentId
     ? <DefaultBlockRenderer
         {...props}
         ContentRenderer={FieldRowLabel}
@@ -115,9 +117,10 @@ export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) =>
         EditContentRenderer={FieldRowLabel}
         Layout={FieldRowLayout}
       />
-    // Shown by id outside a listing that shows property rows (a backlink of
-    // its definition, a listing in hide-all): an ordinary block.
+    // Not one of the rows of a listing that shows them (a backlink of its
+    // definition, a hide-all listing): an ordinary block.
     : <DefaultBlockRenderer {...props}/>
+}
 FieldRowRenderer.displayName = 'FieldRowRenderer'
 FieldRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
   drawsPropertyRows(context) && fieldRowDefinition(block.repo, block.peek()) !== undefined

@@ -33,7 +33,7 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   // A property-row renderer recognizes a field row through its DEFINITION, which
   // can register after the row mounted; re-choose on a registry swap — only in
   // a listing that shows property rows, so every other block ignores swaps.
-  usePropertyRegistryIn(block.repo, useContext(PropertyRowListingContext))
+  usePropertyRegistryIn(block.repo, useContext(PropertyRowListingContext) !== null)
 
   const [rendererKey] = usePropertyValue(block, rendererProp)
   const runtime = useAppRuntime()
