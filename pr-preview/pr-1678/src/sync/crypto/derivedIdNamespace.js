@@ -1,0 +1,1 @@
+export{xat as deriveWorkspaceIdNamespace}from"../../../chunks/app-Ts-RGehU.js";

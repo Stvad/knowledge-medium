@@ -1,0 +1,1 @@
+export{Lq as htmlDocumentDataExtension}from"../../../chunks/app-Ts-RGehU.js";

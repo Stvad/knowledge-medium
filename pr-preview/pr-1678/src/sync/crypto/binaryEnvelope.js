@@ -1,0 +1,1 @@
+export{hE as BINARY_ENVELOPE_MAGIC,gE as BINARY_ENVELOPE_MIN_BYTES,_E as BINARY_ENVELOPE_OVERHEAD_BYTES,vE as BINARY_MAGIC_BYTES,yE as decodeBinaryEnvelope,bE as encodeBinaryEnvelope,xE as hasBinaryEnvelopeMagic}from"../../../chunks/app-Ts-RGehU.js";

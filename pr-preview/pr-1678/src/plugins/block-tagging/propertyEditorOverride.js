@@ -1,0 +1,1 @@
+export{fu as blockTagsConfigUi}from"../../../chunks/app-Ts-RGehU.js";

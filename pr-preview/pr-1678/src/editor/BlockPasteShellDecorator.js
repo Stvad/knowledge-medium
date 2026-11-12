@@ -1,0 +1,1 @@
+export{jN as BlockPasteShellDecorator,MN as blockPasteShellDecorator}from"../../chunks/app-Ts-RGehU.js";

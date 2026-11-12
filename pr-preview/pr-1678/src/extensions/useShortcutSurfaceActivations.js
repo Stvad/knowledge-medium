@@ -1,0 +1,1 @@
+export{xR as useShortcutSurfaceActivations}from"../../chunks/app-Ts-RGehU.js";

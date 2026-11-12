@@ -1,0 +1,1 @@
+export{Zp as HIGHLIGHT_CLASS,Qp as MOVED_HIGHLIGHT_CLASS,$p as SUGGESTION_HIGHLIGHT_CLASS,em as coveringStyle,tm as highlightClasses,nm as highlightField,rm as highlightRange,im as highlightRanges,am as threadHighlights,om as threadHighlightsContribution}from"../../../chunks/app-Ts-RGehU.js";

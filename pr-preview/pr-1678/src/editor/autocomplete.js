@@ -1,0 +1,1 @@
+export{VN as editorAutocompleteExtension}from"../../chunks/app-Ts-RGehU.js";

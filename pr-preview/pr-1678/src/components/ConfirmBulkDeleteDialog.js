@@ -1,0 +1,1 @@
+export{RI as ConfirmBulkDeleteDialog}from"../../chunks/app-Ts-RGehU.js";

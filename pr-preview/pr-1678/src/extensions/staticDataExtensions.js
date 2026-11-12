@@ -1,0 +1,1 @@
+export{EK as staticDataExtensions}from"../../chunks/app-Ts-RGehU.js";

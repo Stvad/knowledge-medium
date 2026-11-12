@@ -1,0 +1,1 @@
+export{V3 as kernelDataExtension}from"../../chunks/app-Ts-RGehU.js";

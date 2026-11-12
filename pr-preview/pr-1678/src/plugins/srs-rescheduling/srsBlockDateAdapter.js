@@ -1,0 +1,1 @@
+export{Vl as srsBlockDateAdapter}from"../../../chunks/app-Ts-RGehU.js";

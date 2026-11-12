@@ -1,0 +1,1 @@
+export{uy as wikilinkMarkdownExtension}from"../../../../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{iP as appUpdatePromptExtension}from"../../../chunks/app-Ts-RGehU.js";

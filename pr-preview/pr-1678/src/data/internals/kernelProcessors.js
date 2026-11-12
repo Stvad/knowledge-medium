@@ -1,0 +1,1 @@
+export{P6 as KERNEL_PROCESSORS}from"../../../chunks/app-Ts-RGehU.js";

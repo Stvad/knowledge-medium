@@ -1,0 +1,1 @@
+export{Ek as dailyDateWikilinkDecorator}from"../../../chunks/app-Ts-RGehU.js";

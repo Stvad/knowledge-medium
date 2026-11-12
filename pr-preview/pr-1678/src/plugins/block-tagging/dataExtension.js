@@ -1,0 +1,1 @@
+export{hu as blockTaggingDataExtension}from"../../../chunks/app-Ts-RGehU.js";

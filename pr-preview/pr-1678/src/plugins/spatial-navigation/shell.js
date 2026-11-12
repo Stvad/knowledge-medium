@@ -1,0 +1,1 @@
+export{NC as spatialNavigationShellDecorator}from"../../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{LM as BlockEmbed}from"../../../chunks/app-Ts-RGehU.js";

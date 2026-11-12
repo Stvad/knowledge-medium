@@ -1,0 +1,1 @@
+export{QQ as aliasDataExtension}from"../../../chunks/app-Ts-RGehU.js";

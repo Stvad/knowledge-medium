@@ -1,0 +1,1 @@
+export{Ks as requestPersistenceActionContribution}from"../../../chunks/app-Ts-RGehU.js";

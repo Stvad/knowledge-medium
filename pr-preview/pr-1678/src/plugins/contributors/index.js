@@ -1,0 +1,1 @@
+export{sm as contributorsPlugin}from"../../../chunks/app-Ts-RGehU.js";

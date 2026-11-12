@@ -1,0 +1,1 @@
+export{do as MigrationGate}from"../../../chunks/app-Ts-RGehU.js";

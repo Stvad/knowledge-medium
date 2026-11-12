@@ -1,0 +1,1 @@
+export{ID as BlockLink}from"../../../chunks/app-Ts-RGehU.js";

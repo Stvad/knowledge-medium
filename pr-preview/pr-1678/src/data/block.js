@@ -1,0 +1,1 @@
+export{R3 as Block,z3 as requireLoadedBlock}from"../../chunks/app-Ts-RGehU.js";

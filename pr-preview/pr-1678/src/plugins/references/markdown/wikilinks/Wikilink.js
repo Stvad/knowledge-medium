@@ -1,0 +1,1 @@
+export{dy as Wikilink}from"../../../../../chunks/app-Ts-RGehU.js";

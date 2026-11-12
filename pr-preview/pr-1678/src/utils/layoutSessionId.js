@@ -1,0 +1,1 @@
+export{hrt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,grt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,_rt as __resetLayoutSessionIdForTesting,vrt as getLayoutSessionId,yrt as isInstalledAppDisplayMode,brt as readOrCreateLayoutSessionId}from"../../chunks/app-Ts-RGehU.js";

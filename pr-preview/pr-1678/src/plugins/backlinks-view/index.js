@@ -1,0 +1,1 @@
+export{nv as backlinksViewPlugin}from"../../../chunks/app-Ts-RGehU.js";

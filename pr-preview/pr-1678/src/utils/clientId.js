@@ -1,0 +1,1 @@
+export{urt as deviceSurface,drt as getClientId,frt as getDeviceLabel,prt as isClientIdPersistent,mrt as resetClientIdCache}from"../../chunks/app-Ts-RGehU.js";

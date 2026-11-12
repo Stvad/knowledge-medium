@@ -1,0 +1,1 @@
+export{aW as isIOS,oW as isMacPlatform}from"../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{wF as LazyBlockComponent}from"../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{vG as usePropertySchemas}from"../../chunks/app-Ts-RGehU.js";

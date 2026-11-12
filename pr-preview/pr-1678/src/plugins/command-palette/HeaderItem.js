@@ -1,0 +1,1 @@
+export{Wj as CommandPaletteHeaderItem}from"../../../chunks/app-Ts-RGehU.js";

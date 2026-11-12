@@ -1,0 +1,1 @@
+export{a1 as omnilinerNamespace}from"../../chunks/app-Ts-RGehU.js";

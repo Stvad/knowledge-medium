@@ -1,0 +1,1 @@
+export{BD as openRecentsPage}from"../../../chunks/app-Ts-RGehU.js";

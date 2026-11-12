@@ -1,0 +1,1 @@
+export{KX as annotationMarginOpenProp,qX as annotationMarginShareProp}from"../../../chunks/app-Ts-RGehU.js";

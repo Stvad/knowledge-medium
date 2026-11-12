@@ -1,0 +1,1 @@
+export{iK as SuspenseFallback}from"../../../chunks/app-Ts-RGehU.js";

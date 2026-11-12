@@ -1,0 +1,1 @@
+export{oh as extensionsOverridesProp,sh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-Ts-RGehU.js";

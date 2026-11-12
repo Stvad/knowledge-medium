@@ -1,0 +1,1 @@
+export{Vit as getOrCreatePropertiesPage,Hit as propertiesPageBlockId,Uit as propertiesPageSpec}from"../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{UP as dynamicExtensionsExtension}from"../../chunks/app-Ts-RGehU.js";

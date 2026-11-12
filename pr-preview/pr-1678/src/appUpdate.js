@@ -1,0 +1,1 @@
+export{hP as appUpdate,gP as useAppUpdateAvailable}from"../chunks/app-Ts-RGehU.js";

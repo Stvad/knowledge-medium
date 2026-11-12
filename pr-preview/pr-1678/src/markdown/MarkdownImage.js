@@ -1,0 +1,1 @@
+export{IF as MarkdownImage}from"../../chunks/app-Ts-RGehU.js";

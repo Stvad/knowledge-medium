@@ -1,0 +1,1 @@
+export{ms as dataIntegrityPlugin}from"../../../chunks/app-Ts-RGehU.js";

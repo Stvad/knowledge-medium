@@ -1,0 +1,1 @@
+export{wc as SrsReviewDeckRenderer}from"../../../chunks/app-Ts-RGehU.js";

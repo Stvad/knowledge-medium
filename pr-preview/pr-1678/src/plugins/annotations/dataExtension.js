@@ -1,0 +1,1 @@
+export{VY as annotationsDataExtension}from"../../../chunks/app-Ts-RGehU.js";

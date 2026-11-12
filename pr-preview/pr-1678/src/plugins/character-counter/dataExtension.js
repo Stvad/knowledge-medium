@@ -1,0 +1,1 @@
+export{vZ as characterCounterDataExtension}from"../../../chunks/app-Ts-RGehU.js";

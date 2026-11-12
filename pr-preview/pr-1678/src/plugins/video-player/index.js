@@ -1,0 +1,1 @@
+export{TS as videoPlayerPlugin}from"../../../chunks/app-Ts-RGehU.js";

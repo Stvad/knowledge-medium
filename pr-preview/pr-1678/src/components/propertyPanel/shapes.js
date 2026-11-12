@@ -1,0 +1,1 @@
+export{SG as propertyShapeLabel}from"../../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{uo as propertiesMigrationPlugin}from"../../../chunks/app-Ts-RGehU.js";

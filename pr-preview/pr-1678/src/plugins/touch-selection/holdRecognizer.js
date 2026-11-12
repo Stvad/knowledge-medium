@@ -1,0 +1,1 @@
+export{Py as BLOCK_HOLD_GESTURE,Fy as BLOCK_HOLD_RECOGNIZER_ID,Iy as blockHoldRecognizer}from"../../../chunks/app-Ts-RGehU.js";

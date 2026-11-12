@@ -1,0 +1,1 @@
+export{WN as ExtensionPromptSurface,GN as extensionPromptsExtension}from"../../../chunks/app-Ts-RGehU.js";

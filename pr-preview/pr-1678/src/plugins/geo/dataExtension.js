@@ -1,0 +1,1 @@
+export{fJ as geoDataExtension}from"../../../chunks/app-Ts-RGehU.js";

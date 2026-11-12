@@ -1,0 +1,1 @@
+export{AA as EXTENSIONS_PAGE_TITLE,jA as TUTORIAL_DEFAULT_TITLE,MA as TUTORIAL_VIM_TITLE,tC as onboardingPlugin,kA as seedTutorial}from"../../../chunks/app-Ts-RGehU.js";

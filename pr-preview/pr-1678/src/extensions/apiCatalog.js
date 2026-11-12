@@ -1,0 +1,1 @@
+export{rh as extensionApiCatalog,ih as extensionApiRuntimeExports}from"../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{aT as plainOutlinerPlugin}from"../../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{F$ as agentDispatchCompanionDataExtension}from"../../../chunks/app-Ts-RGehU.js";

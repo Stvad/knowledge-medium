@@ -1,0 +1,1 @@
+export{Rq as htmlDocumentTypeSeed}from"../../../chunks/app-Ts-RGehU.js";

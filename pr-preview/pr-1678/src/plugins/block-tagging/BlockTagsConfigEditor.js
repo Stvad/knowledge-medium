@@ -1,0 +1,1 @@
+export{pu as BlockTagsConfigEditor}from"../../../chunks/app-Ts-RGehU.js";

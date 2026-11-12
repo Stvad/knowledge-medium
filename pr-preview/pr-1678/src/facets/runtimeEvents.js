@@ -1,0 +1,1 @@
+export{TG as appRuntimeUpdateEvent,EG as refreshAppRuntime}from"../../chunks/app-Ts-RGehU.js";

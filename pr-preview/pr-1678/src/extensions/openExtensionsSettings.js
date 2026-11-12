@@ -1,0 +1,1 @@
+export{JF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,YF as openExtensionsSettings}from"../../chunks/app-Ts-RGehU.js";

@@ -1,0 +1,1 @@
+export{JM as DEFAULT_TYPE_COLORS,YM as defaultTypeColor,XM as pickLeastUsedTypeColor}from"../../chunks/app-Ts-RGehU.js";

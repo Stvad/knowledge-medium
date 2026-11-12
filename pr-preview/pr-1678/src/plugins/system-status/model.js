@@ -1,0 +1,1 @@
+export{vc as getSyncIndicatorView}from"../../../chunks/app-Ts-RGehU.js";

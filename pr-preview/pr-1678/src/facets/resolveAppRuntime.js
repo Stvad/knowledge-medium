@@ -1,0 +1,1 @@
+export{VP as resolveAppRuntime,HP as resolveAppRuntimeSync}from"../../chunks/app-Ts-RGehU.js";

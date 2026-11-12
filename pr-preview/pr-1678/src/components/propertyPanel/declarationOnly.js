@@ -1,0 +1,1 @@
+export{sV as declarationOnlyDefinitionForName,cV as declarationOnlyStatusText}from"../../../chunks/app-Ts-RGehU.js";

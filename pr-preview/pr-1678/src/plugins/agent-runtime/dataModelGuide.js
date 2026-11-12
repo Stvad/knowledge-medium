@@ -1,0 +1,1 @@
+export{w_ as DATA_MODEL_GUIDE,T_ as dataModelGuide}from"../../../chunks/app-Ts-RGehU.js";

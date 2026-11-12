@@ -1,0 +1,1 @@
+export{alt as SYSTEM_AUTHOR_PREFIX,olt as isSystemAuthor,slt as systemAuthor}from"../../../chunks/app-Ts-RGehU.js";

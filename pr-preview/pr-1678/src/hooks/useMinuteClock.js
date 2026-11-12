@@ -1,0 +1,1 @@
+export{RD as useMinuteClock}from"../../chunks/app-Ts-RGehU.js";

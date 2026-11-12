@@ -1,0 +1,1 @@
+export{gm as agentDispatchCompanionPlugin}from"../../../chunks/app-Ts-RGehU.js";

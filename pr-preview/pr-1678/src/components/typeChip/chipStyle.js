@@ -1,0 +1,1 @@
+export{qM as chipStyle}from"../../../chunks/app-Ts-RGehU.js";

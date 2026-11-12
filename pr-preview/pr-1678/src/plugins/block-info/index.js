@@ -1,0 +1,1 @@
+export{q_ as blockInfoPlugin}from"../../../chunks/app-Ts-RGehU.js";

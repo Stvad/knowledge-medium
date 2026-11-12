@@ -1,0 +1,1 @@
+export{UK as REFERENCES_TARGET_INVALIDATION_CHANNEL,WK as referencesInvalidationRule}from"../../../chunks/app-Ts-RGehU.js";

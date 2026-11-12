@@ -1,0 +1,1 @@
+export{NB as BlockProperties}from"../../chunks/app-Ts-RGehU.js";

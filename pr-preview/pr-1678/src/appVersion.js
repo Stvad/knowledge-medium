@@ -1,0 +1,1 @@
+export{yc as appVersion}from"../chunks/app-Ts-RGehU.js";

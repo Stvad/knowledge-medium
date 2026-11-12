@@ -1,0 +1,1 @@
+export{DF as BlockLoadingPlaceholder}from"../../chunks/app-Ts-RGehU.js";
