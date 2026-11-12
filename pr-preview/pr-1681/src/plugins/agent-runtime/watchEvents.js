@@ -1,1 +1,1 @@
-export{rg as BACKLINKS_WATCH_SQL,ig as createWatchEventsRegistry,ag as watchEventsRegistry}from"../../../chunks/app-Bqw9CkCm.js";
+export{rg as BACKLINKS_WATCH_SQL,ig as createWatchEventsRegistry,ag as watchEventsRegistry}from"../../../chunks/app-DKqDYDvN.js";

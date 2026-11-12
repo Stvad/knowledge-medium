@@ -1,1 +1,1 @@
-export{vv as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-Bqw9CkCm.js";
+export{vv as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-DKqDYDvN.js";
