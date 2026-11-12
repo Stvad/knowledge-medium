@@ -56,6 +56,7 @@ export interface SharedBlockActions {
   extendSelectionUp: BlockAction
   extendSelectionDown: BlockAction
   copyBlock: BlockAction
+  copyBlockWithHiddenProperties: BlockAction
   copyBlockRef: BlockAction
   copyBlockEmbed: BlockAction
   copyBlockContent: BlockAction
@@ -88,11 +89,10 @@ const writeToClipboard = (text: string): void => {
  *  `core.moveVertical` mutator (one transaction, undoable as a unit). */
 const reorderBlock = async (
   repo: Repo,
-  block: Block,
   direction: -1 | 1,
-  scopeRootId: string | undefined,
+  {block, scopeRootId, propertyDisplay}: BlockShortcutDependencies,
 ): Promise<boolean> =>
-  repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
+  repo.mutate.moveVertical({id: block.id, direction, scopeRootId, propertyDisplay})
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
@@ -194,7 +194,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // mutator separately no-ops when there's no previous sibling.
       const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
       if (!canIndent) return
-      await repo.mutate.indent({id: deps.block.id})
+      await repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -209,7 +209,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'outdent_block',
     description: 'Outdent block',
     icon: IndentDecrease,
-    handler: async ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) => {
+    handler: async ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) => {
       if (!scopeRootId) return
 
       // Don't outdent the scope root itself; the mutator additionally
@@ -218,7 +218,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
       if (!canOutdent) return
 
-      await repo.mutate.outdent({id: block.id, scopeRootId})
+      await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -233,10 +233,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Move block up',
     icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock, scopeRootId} = deps
-      if (!block) return
-      await withRowSlide(() => reorderBlock(repo, block, -1, scopeRootId))
-      requestEditorFocusIfEditing(uiStateBlock)
+      if (!deps.block) return
+      await withRowSlide(() => reorderBlock(repo, -1, deps))
+      requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
       keys: ['$mod+Shift+ArrowUp', '$mod+Shift+k'],
@@ -251,10 +250,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Move block down',
     icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock, scopeRootId} = deps
-      if (!block) return
-      await withRowSlide(() => reorderBlock(repo, block, 1, scopeRootId))
-      requestEditorFocusIfEditing(uiStateBlock)
+      if (!deps.block) return
+      await withRowSlide(() => reorderBlock(repo, 1, deps))
+      requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
       keys: ['$mod+Shift+ArrowDown', '$mod+Shift+j'],
@@ -365,7 +363,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'copy_block',
     description: 'Copy block to clipboard',
     icon: Copy,
-    handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
+    handler: ({block, propertyDisplay}: BlockShortcutDependencies) => copyBlockToClipboard(block, propertyDisplay),
     defaultBinding: {
       // Vim "yank" family — all copy variants share a `y` prefix:
       // `y y` block, `y r` reference, `y e` embed (see copyBlockRef /
@@ -374,6 +372,14 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       keys: ['$mod+c', 'y y'],
       eventOptions: {preventDefault: true},
     },
+  }
+
+  /** {@link copyBlock} carrying every property row, hidden tier included. */
+  const copyBlockWithHiddenProperties: BlockAction = {
+    id: 'copy_block_with_hidden_properties',
+    description: 'Copy block with hidden properties',
+    icon: Copy,
+    handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block, 'all'),
   }
 
   const copyBlockRef: BlockAction = {
@@ -484,6 +490,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     extendSelectionUp: extendSelectionUpAction,
     extendSelectionDown: extendSelectionDownAction,
     copyBlock,
+    copyBlockWithHiddenProperties,
     copyBlockRef,
     copyBlockEmbed,
     copyBlockContent,

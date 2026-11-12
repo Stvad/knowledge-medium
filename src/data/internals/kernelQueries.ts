@@ -28,6 +28,7 @@ import {
   type SubtreeRow,
   type TypedBlockQueryReferenceFilter,
   type AnyPropertySchema,
+  type PropertyChildrenView,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
@@ -893,10 +894,7 @@ export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   return params
 }
 
-/** Which property children a child listing leaves out: `false` none (the
- *  structural view), `true` every recognized field row, `'hidden-tier'` only
- *  the field rows whose definition is hidden. */
-export type PropertyChildrenView = boolean | 'hidden-tier'
+export type { PropertyChildrenView }
 
 const propertyChildrenViewSchema = z.union([z.boolean(), z.literal('hidden-tier')])
 

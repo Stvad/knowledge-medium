@@ -8,10 +8,16 @@ import type { ChangeScope, TxSource } from './changeScope'
 import type { AnyPropertyAssignment, AnyPropertySchema, PropertySchema } from './propertySchema'
 import type { User } from './user'
 
+/** Which property children a child listing leaves out: `false` none (the
+ *  structural view), `true` every recognized field row, `'hidden-tier'` only
+ *  the field rows whose definition is hidden. */
+export type PropertyChildrenView = boolean | 'hidden-tier'
+
 /** Per-write opt: skip the engine's automatic `updatedAt`/`updatedBy` bump
  *  (and `createdAt`/`createdBy` on `tx.create`). Used by bookkeeping writes
  *  whose state isn't user intent — e.g. parseReferences updating
  *  `references`. User-facing mutators should not set this. */
+
 export interface TxWriteOpts {
   skipMetadata?: boolean
 }
@@ -405,9 +411,11 @@ export interface Tx {
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
    *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
-   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
-   *  flip-gated, so it prunes in every workspace: the cell→children backfill
-   *  mints field rows while the workspace still reads cells.
+   *  `{hidePropertyChildren: true}`; `'hidden-tier'` drops only the field
+   *  rows whose definition is hidden (see {@link PropertyChildrenView}).
+   *  Recognition is data-keyed, not flip-gated, so it prunes in every
+   *  workspace: the cell→children backfill mints field rows while the
+   *  workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
@@ -424,7 +432,7 @@ export interface Tx {
   childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {hidePropertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by

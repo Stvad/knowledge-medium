@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useContext, useMemo } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.js'
 import type {
   BlockInteractionContext,
@@ -79,6 +80,7 @@ export function useShortcutSurfaceActivations(
   // this so it won't descend into a collapsed nested root's hidden
   // children.
   const scopeRootForcesOpen = !blockContext.isNestedSurface
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
 
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
@@ -104,7 +106,7 @@ export function useShortcutSurfaceActivations(
     // having to forward it by hand.
     }).map(activation => ({
       ...activation,
-      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
+      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen, propertyDisplay},
     })),
     [
       block,
@@ -114,6 +116,7 @@ export function useShortcutSurfaceActivations(
       topLevelBlockId,
       scopeRootId,
       scopeRootForcesOpen,
+      propertyDisplay,
       blockContext,
       inFocus,
       inEditMode,

@@ -35,7 +35,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
-import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
+import type { PropertyChildrenView } from '@/data/api'
 import { getAliases } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'

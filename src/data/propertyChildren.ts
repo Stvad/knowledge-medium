@@ -45,6 +45,7 @@ import {
   type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
+  type PropertyChildrenView,
   type Tx,
 } from '@/data/api'
 import {
@@ -84,6 +85,31 @@ export const isPropertyFieldInstance = (
   if (data.parentId === null) return false
   const fieldId = getPropertyFieldTargetId(data)
   return fieldId !== undefined && isFieldDefinition(fieldId)
+}
+
+/** The definition facts a child view needs, bound to one workspace. */
+export interface PropertyRowClassifier {
+  readonly isFieldDefinition: IsPropertyFieldDefinition
+  /** Is this definition in the hidden tier (`hiddenTierFieldIds`)? */
+  readonly isHiddenTier: (fieldId: string) => boolean
+}
+
+/** Does a child listing under `view` leave `row` out? The JS twin of the SQL
+ *  child views (`VISIBLE_CHILDREN_SQL`, `NON_HIDDEN_CHILDREN_SQL`), shared by
+ *  `tx.childrenOf` and the copy serializer's prune. A hidden-tier id is a
+ *  definition the registry resolved, so that view needs no recognition leg. */
+export const isLeftOutOfChildrenView = (
+  row: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'>,
+  view: PropertyChildrenView,
+  classifier: PropertyRowClassifier,
+): boolean => {
+  if (view === false) return false
+  if (view === 'hidden-tier') {
+    const fieldId = getPropertyFieldTargetId(row)
+    return row.isFieldForm === true && row.parentId !== null
+      && fieldId !== undefined && classifier.isHiddenTier(fieldId)
+  }
+  return isPropertyFieldInstance(row, classifier.isFieldDefinition)
 }
 
 /** The value-set half of §9's binding selection discipline: a field row's
