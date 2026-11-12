@@ -1,1 +1,0 @@
-export{aK as staticDataExtensions}from"../../chunks/app-xI4VnloK.js";

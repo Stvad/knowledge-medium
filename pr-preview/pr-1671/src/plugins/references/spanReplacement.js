@@ -1,1 +1,0 @@
-export{nq as preferredSpanReplacement}from"../../../chunks/app-xI4VnloK.js";

@@ -1,1 +1,0 @@
-export{PN as ExtensionPromptSurface,FN as extensionPromptsExtension}from"../../../chunks/app-xI4VnloK.js";

@@ -1,1 +1,0 @@
-export{ty as Wikilink}from"../../../../../chunks/app-xI4VnloK.js";

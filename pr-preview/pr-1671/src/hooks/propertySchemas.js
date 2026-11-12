@@ -1,1 +1,0 @@
-export{nG as usePropertySchemas}from"../../chunks/app-xI4VnloK.js";

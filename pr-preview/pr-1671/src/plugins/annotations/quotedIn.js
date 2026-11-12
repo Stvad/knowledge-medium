@@ -1,1 +1,0 @@
-export{Nd as quotedInFooterContribution}from"../../../chunks/app-xI4VnloK.js";

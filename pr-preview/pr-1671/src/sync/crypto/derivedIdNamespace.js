@@ -1,1 +1,0 @@
-export{Kit as deriveWorkspaceIdNamespace}from"../../../chunks/app-xI4VnloK.js";

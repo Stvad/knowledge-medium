@@ -1,1 +1,0 @@
-export{Rw as mobileBottomNavItemsFacet}from"../../../chunks/app-xI4VnloK.js";

@@ -1,1 +1,0 @@
-export{iG as PropertyShapeButton,aG as PropertyShapeGlyph}from"../../../chunks/app-xI4VnloK.js";
