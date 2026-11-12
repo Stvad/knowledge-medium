@@ -317,7 +317,7 @@ export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => {
   /** The completed claim bag an operator reclaim overwrote, by claim id, held
-   *  from that reclaim until the next claim attempt or release. A release puts
+   *  from that reclaim until the next writing claim attempt or release. A release puts
    *  it back instead of deleting the row, so a failed re-run of a finished pass
    *  leaves the workspace's record that it finished. In memory, so a process
    *  that dies mid-run still strands a plain in-flight claim (#617). */
@@ -329,7 +329,6 @@ export const createGraphBackfillClaim = (
     },
     async tryClaim(workspaceId, backfillId, opts) {
       const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
-      displacedCompletions.delete(claimId)
       // Ensure our own parent rather than trusting bootstrap ordering: a claim
       // that silently fails to write reads as "unclaimed" on every device,
       // which is the one outcome that turns this into a duplicated pass.
@@ -374,6 +373,9 @@ export const createGraphBackfillClaim = (
       const won: ClaimAttempt = first === 'proceed'
         ? 'inherited'
         : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {
+          // Cleared here, not on entry: the pass re-takes the gesture's claim
+          // through the `inherited` path above, which must keep it.
+          displacedCompletions.delete(claimId)
           // Re-checked inside the WRITING tx against this row: the read above
           // happened outside it, and a peer's claim can arrive in between.
           const existing = await tx.get(claimId)
