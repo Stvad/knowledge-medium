@@ -1,1 +1,0 @@
-export{_F as BlockLoadingPlaceholder}from"../../chunks/app-D2S5QRxm.js";

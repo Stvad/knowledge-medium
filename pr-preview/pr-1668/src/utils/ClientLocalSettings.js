@@ -1,1 +1,0 @@
-export{kP as ClientLocalSettings,AP as clientLocalSettings}from"../../chunks/app-D2S5QRxm.js";

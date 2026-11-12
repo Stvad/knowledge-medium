@@ -1,1 +1,0 @@
-export{NP as dynamicExtensionsExtension}from"../../chunks/app-D2S5QRxm.js";

@@ -1,1 +1,0 @@
-export{nG as usePropertySchemas}from"../../chunks/app-D2S5QRxm.js";
