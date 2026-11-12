@@ -18,7 +18,7 @@ Design notes: task state lives **in the graph** (`agent:*` block properties), so
 
 Runs execute via `claude -p` on a machine authenticated with `claude login`. The daemon **scrubs `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and the `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY` switches from every child environment** — any of them would silently redirect billing. One thing env-scrubbing can't reach: a user-level `settings.json` `apiKeyHelper` — check yours if runs bill unexpectedly. Nothing here touches the Agent SDK (API-key-only by policy).
 
-**Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 65-min stale sweep) before being parked as `error` with a visible reply.
+**Spend circuit-breaker:** `runsPerHour` (default 45, a top-level config key) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 65-min stale sweep) before being parked as `error` with a visible reply.
 
 ## Executors
 
@@ -48,6 +48,10 @@ Backlinks watchers now keep a memory in your notes (see [Memory](#memory)), on b
 - To keep a watcher out of it, set `"memory": false` on that watcher. Do this for a watcher whose custom `prompt` should not write to the notes.
 - Notes an earlier run saved to Claude Code's auto-memory (`~/.claude/projects/*/memory/`) are not moved. Copy any you want to keep into the `Memory` block by hand, one block per note.
 - Restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
+## Upgrade to 0.8.6
+
+`runsPerHour` now defaults to 45 (was 10). Set it at the top level of the config to keep a lower cap.
 
 ## Upgrade to 0.8.5
 
@@ -245,6 +249,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
      "workspaceId": "YOUR_WORKSPACE_ID", // required: the workspace the daemon acts on
      "pollIntervalMs": 5000,
      "maxConcurrent": 4,
+     "runsPerHour": 45, // launches per rolling hour, across all watchers
      "watchers": [
        {
          "kind": "backlinks",
