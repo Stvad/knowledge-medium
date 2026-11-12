@@ -3604,7 +3604,8 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     {'[[key]]': [`((${UUID}))`], 'q"[[': 'back\\[[slash'},
   ]
 
-  it.for(VALUES)('stores %j as JSON no reference reader reads a span in', value => {
+  it.for(VALUES.map(value => [JSON.stringify(value), value] as const))(
+    'stores %s as JSON no reference reader reads a span in', ([, value]) => {
     const contents = [
       encodedToValueChildContent(jsonSchema, value),
       ...encodedPropertyValueToChildContents(listSchema, [value]),
