@@ -36,7 +36,10 @@ export const fieldRowDefinition = (
 
 /** Does one value child hold the whole value? True for a scalar property;
  *  false for a list, whose value children are one MEMBER each — those render
- *  as the ordinary blocks they are, since no editor edits one member. */
+ *  as the ordinary blocks they are, since no editor edits one member.
+ *  Defence in depth for `ValueRowRenderer`: a member's content never stores
+ *  the whole list, so its owner-value check refuses one too; this keeps list
+ *  members off that path before any hook runs. */
 export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
   memberCodecOf(schema.codec) === undefined
 
