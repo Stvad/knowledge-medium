@@ -1,1 +1,0 @@
-export{Zr as openExtensionsSettingsAction}from"../../../chunks/app-BGKb2Vmj.js";

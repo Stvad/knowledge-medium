@@ -1,1 +1,0 @@
-export{NX as contributorsDataExtension}from"../../../chunks/app-BGKb2Vmj.js";

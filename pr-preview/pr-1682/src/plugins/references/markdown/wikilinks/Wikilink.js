@@ -1,1 +1,0 @@
-export{ry as Wikilink}from"../../../../../chunks/app-BGKb2Vmj.js";

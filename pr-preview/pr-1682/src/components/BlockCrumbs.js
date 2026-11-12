@@ -1,1 +1,0 @@
-export{rO as BlockCrumbs}from"../../chunks/app-BGKb2Vmj.js";

@@ -1,1 +1,0 @@
-export{XN as appUpdatePromptExtension}from"../../../chunks/app-BGKb2Vmj.js";

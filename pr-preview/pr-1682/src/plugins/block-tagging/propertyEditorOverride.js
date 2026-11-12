@@ -1,1 +1,0 @@
-export{iu as blockTagsConfigUi}from"../../../chunks/app-BGKb2Vmj.js";

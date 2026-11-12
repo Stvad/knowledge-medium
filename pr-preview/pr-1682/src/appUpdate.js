@@ -1,1 +1,0 @@
-export{sP as appUpdate,cP as useAppUpdateAvailable}from"../chunks/app-BGKb2Vmj.js";

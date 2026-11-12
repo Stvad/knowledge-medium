@@ -1,1 +1,0 @@
-export{Ij as CommandPaletteHeaderItem}from"../../../chunks/app-BGKb2Vmj.js";
