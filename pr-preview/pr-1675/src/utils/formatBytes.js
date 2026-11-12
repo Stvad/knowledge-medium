@@ -1,1 +1,1 @@
-export{x2 as formatBytes}from"../../chunks/app-l7didK-T.js";
+export{x2 as formatBytes}from"../../chunks/app-CqFM-Olm.js";

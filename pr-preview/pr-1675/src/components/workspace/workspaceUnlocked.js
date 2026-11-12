@@ -1,1 +1,1 @@
-export{Ut as notifyWorkspaceUnlocked,Wt as useOnWorkspaceUnlocked}from"../../../chunks/app-l7didK-T.js";
+export{Ut as notifyWorkspaceUnlocked,Wt as useOnWorkspaceUnlocked}from"../../../chunks/app-CqFM-Olm.js";

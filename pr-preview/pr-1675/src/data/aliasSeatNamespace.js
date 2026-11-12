@@ -1,1 +1,1 @@
-export{Git as AliasSeatNamespaceUnavailableError,Kit as aliasSeatNamespacesInTx,qit as resolveAliasSeatNamespaces}from"../../chunks/app-l7didK-T.js";
+export{Git as AliasSeatNamespaceUnavailableError,Kit as aliasSeatNamespacesInTx,qit as resolveAliasSeatNamespaces}from"../../chunks/app-CqFM-Olm.js";

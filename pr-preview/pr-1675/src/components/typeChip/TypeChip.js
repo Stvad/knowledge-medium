@@ -1,1 +1,1 @@
-export{XM as TypeChip}from"../../../chunks/app-l7didK-T.js";
+export{XM as TypeChip}from"../../../chunks/app-CqFM-Olm.js";
