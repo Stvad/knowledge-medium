@@ -34,6 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
+import { createSweepProgressLine } from './sweepProgress.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
 import { runBulkWrite } from '@/data/writeAheadLog'
 import {
@@ -690,6 +691,7 @@ const migrateUnderClaim = async (
   let pending = 0
   let valuesMaterializedTotal = 0
   const status = rememberingStatus(banner, 'Migrating properties to blocks…')
+  const progressLine = createSweepProgressLine(blockCount)
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
     // per-sweep count is "was what this sweep scanned acceptable", so on a
@@ -704,11 +706,7 @@ const migrateUnderClaim = async (
     // Counts are per-sweep, and the sweep number is shown because a second
     // pass over the same blocks is normal — without it the bar restarts from
     // zero for no reason the operator can see.
-    status.show(
-      `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
-      `${progress.blocksScanned.toLocaleString()}/` +
-      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
-    )
+    status.show(progressLine(progress))
   })
   try {
     const result = await runPassThenTidyDatabase(pass, repo, status)
