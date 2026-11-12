@@ -43,10 +43,10 @@ const uiStatePropertyNames = new Set([
 ])
 
 describe('kernel property seed conversion', () => {
-  it('defines all 42 kernel properties as valid, unique seeds', () => {
+  it('defines all 43 kernel properties as valid, unique seeds', () => {
     const seeds = KERNEL_PROPERTY_SEEDS
 
-    expect(seeds).toHaveLength(42)
+    expect(seeds).toHaveLength(43)
     expect(new Set(seeds.map(seed => seed.seedKey))).toHaveLength(seeds.length)
     expect(new Set(seeds.map(seed => seed.name))).toHaveLength(seeds.length)
     expect(seeds.every(isPropertySeedDeclaration)).toBe(true)

@@ -7,6 +7,7 @@ import {
   hasBlockType,
   propertyChangeScopeProp,
   propertyHiddenProp,
+  propertyShownElsewhereProp,
   propertyNameProp,
 } from '@/data/properties'
 
@@ -19,6 +20,8 @@ export interface PropertyDefinitionMetadata {
   readonly name: string
   readonly changeScope: ChangeScope
   readonly hidden: boolean
+  /** See `propertyShownElsewhereProp`; absent reads false. */
+  readonly shownElsewhere?: boolean
   readonly origin: PropertySchemaOrigin
   /** Present only when seed provenance passes the deterministic-id check. */
   readonly seedKey?: string
@@ -48,6 +51,9 @@ export const parsePropertyDefinitionMetadata = (
     // strings; definition metadata still requires one of the real tx scopes.
     if (!isChangeScope(changeScope)) return null
     const hidden = decodeRowProperty(row, propertyHiddenProp)
+    const shownElsewhere = decodeRowProperty(row, propertyShownElsewhereProp)
+      ? {shownElsewhere: true} as const
+      : {}
 
     // Require PROPERTY provenance. `seededDefinitionKey` now also validates
     // `/type/` rows (a `block-type` block can be a valid seeded definition), so a
@@ -64,6 +70,7 @@ export const parsePropertyDefinitionMetadata = (
         name,
         changeScope,
         hidden,
+        ...shownElsewhere,
         origin: 'user',
       }
     }
@@ -77,6 +84,7 @@ export const parsePropertyDefinitionMetadata = (
       name,
       changeScope,
       hidden,
+      ...shownElsewhere,
       origin: propertySchemaOriginForSeedKey(seedKey),
       seedKey,
     }

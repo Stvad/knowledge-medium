@@ -297,6 +297,19 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     expect(repo.block('user-schema')).toBeTruthy()
   })
 
+  it('sets a user definition as shown elsewhere from its outline checkbox, and locks it on a seed', async () => {
+    renderSchema('user-schema')
+    const box = screen.getByRole('checkbox', {name: /Shown elsewhere on the block/})
+    expect(box.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(box)
+    await waitFor(() => expect(repo.block('user-schema').peek()?.properties['property-schema:shown-elsewhere']).toBe(true))
+    await waitFor(() => expect(box.getAttribute('aria-checked')).toBe('true'))
+    cleanup()
+
+    renderSchema(SEED_ID)
+    expect((screen.getByRole('checkbox', {name: /Shown elsewhere on the block/}) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('keeps a user-created schema editable', () => {
     renderSchema('user-schema')
 

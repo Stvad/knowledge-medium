@@ -354,44 +354,44 @@ ${recognizedFieldRowSql('child')}
   SELECT * FROM subtree ORDER BY path
 `
 
-/** The registry's half of {@link hiddenTierFieldRowSql}, bound after the
- *  statement's own parameters: the JSON id list of hidden-tier definitions
- *  (`hiddenTierFieldIds`) and the workspace that registry belongs to. */
-export type HiddenTierParams = readonly [
-  hiddenDefinitionIdsJson: string,
+/** The registry's half of {@link outlineSkippedFieldRowSql}, bound after the
+ *  statement's own parameters: the JSON id list of definitions the outline's default view skips
+ *  (`outlineSkippedFieldIds`) and the workspace that registry belongs to. */
+export type OutlineSkipParams = readonly [
+  skippedDefinitionIdsJson: string,
   registryWorkspaceId: string,
 ]
 
-export const NO_REGISTRY_HIDDEN_TIER_PARAMS: HiddenTierParams = ['[]', '']
+export const NO_REGISTRY_OUTLINE_SKIP_PARAMS: OutlineSkipParams = ['[]', '']
 
 /**
- * HIDDEN-TIER field row: a field row (`is_field_form = 1`, non-root) whose
- * target is a hidden definition — the rows the outline's default property
- * display leaves out (§10). Narrower than {@link recognizedFieldRowSql}: every
+ * A field row the outline's default property display skips: one
+ * (`is_field_form = 1`, non-root) whose target is in the bound skip list
+ * (`outlineSkippedFieldIds` — hidden, or shown elsewhere on the block). Narrower than {@link recognizedFieldRowSql}: every
  * id in the bound list is a definition the registry resolved, so condition 3
  * holds by construction and needs no `block_types` leg. Workspace-guarded for
  * the same reason as there. NULL-safe under `NOT (...)` the same way: an
  * `EXISTS` is never NULL, where `IN` over a NULL target (a marked row whose
  * span resolves nothing) is NULL and would hide the row.
  */
-const hiddenTierFieldRowSql = (rowRef: string): string => `
+const outlineSkippedFieldRowSql = (rowRef: string): string => `
      COALESCE(${rowRef}.is_field_form, 0) = 1
      AND ${rowRef}.parent_id IS NOT NULL
      AND EXISTS (
-       SELECT 1 FROM json_each(?) hidden
-        WHERE hidden.value = ${rowRef}.reference_target_id
+       SELECT 1 FROM json_each(?) skipped
+        WHERE skipped.value = ${rowRef}.reference_target_id
           AND ${rowRef}.workspace_id = ?
      )
 `
 
 const NON_HIDDEN_CHILD_PREDICATE_SQL = `
    AND NOT (
-${hiddenTierFieldRowSql('blocks')}
+${outlineSkippedFieldRowSql('blocks')}
    )
 `
 
 /** Tier-aware outline form of {@link CHILDREN_SQL}: every child except the
- *  hidden-tier field rows. Bind `[parentId, ...HiddenTierParams]`. */
+ *  field rows the outline's default view skips. Bind `[parentId, ...OutlineSkipParams]`. */
 export const NON_HIDDEN_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -400,7 +400,7 @@ ${NON_HIDDEN_CHILD_PREDICATE_SQL}
 `
 
 /** Tier-aware outline form of {@link CHILDREN_IDS_SQL}. Bind
- *  `[parentId, ...HiddenTierParams]`. */
+ *  `[parentId, ...OutlineSkipParams]`. */
 export const NON_HIDDEN_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0

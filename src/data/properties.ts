@@ -376,6 +376,18 @@ export const propertyHiddenProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** A definition whose value something else on the block already shows (a
+ *  type chip, a page title, a todo checkbox). The outline's default property
+ *  display skips its rows; unlike `hidden`, nothing else does — the panel,
+ *  pickers and agent views still show it. Absent means not shown elsewhere. */
+export const propertyShownElsewhereProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-shown-elsewhere',
+  revision: 1,
+  name: 'property-schema:shown-elsewhere',
+  preset: 'boolean',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Stable code provenance shared by property and future type seeds. */
 export const seedKeyProp = seedProperty({
   seedKey: 'system:kernel-data/property/seed-key',
@@ -814,6 +826,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
+  propertyShownElsewhereProp,
   seedKeyProp,
   seedRevisionProp,
   // block-type fields

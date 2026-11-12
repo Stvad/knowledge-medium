@@ -16,6 +16,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import type { Repo } from '@/data/repo'
+import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility'
 
 const WS = 'ws-definition-recognition'
 const DEF = 'd0000000-0000-4000-8000-000000000001'
@@ -131,6 +132,16 @@ describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () =
     await repo.tx(tx => tx.update(DEF, {properties: definitionBag({'property-schema:hidden': true})}),
       {scope: ChangeScope.BlockDefault})
     await vi.waitFor(async () => expect(await tierView(repo)).toEqual([NOTE]))
+  })
+
+  it('drops a field row whose definition is shown elsewhere, which the panel still shows', async () => {
+    const repo = await openRepo()
+    await seed(repo, definitionBag({'property-schema:shown-elsewhere': true}))
+    await vi.waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.get(DEF)?.shownElsewhere).toBe(true))
+    expect(await tierView(repo)).toEqual([NOTE])
+    expect(await repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'all'})).toEqual([NOTE, FIELD])
+    // Only the outline's default view reads it: not hidden anywhere else.
+    expect(isPropertyPanelHiddenProperty('status', repo.propertySchemas, new Map(), repo.propertyDefinitions)).toBe(false)
   })
 
   it('re-resolves a mounted handle when the hidden bit moves, though recognition does not', async () => {
