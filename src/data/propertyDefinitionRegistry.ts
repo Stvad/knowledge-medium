@@ -210,19 +210,16 @@ const sameKeys = (
   return true
 }
 
-const hiddenTierBySnapshot = new WeakMap<PropertyDefinitionRegistrySnapshot, ReadonlySet<string>>()
-
 /** The field ids whose definition is `hidden` — the HIDDEN TIER of the
  *  outline's property display (§10): a field row targeting one of these stays
  *  out of the default view. A materialized definition answers for itself (its
  *  row's hidden bit); a seed whose row has not materialized yet answers with
- *  its declaration. Memoized on snapshot identity: the outline asks once per
- *  rendered block and the answer only moves when the registry is replaced. */
+ *  its declaration. Not memoized here: the query layer memoizes the params it
+ *  binds per snapshot (`kernelQueries`), and the only other reader runs once
+ *  per registry swap. */
 export const hiddenTierFieldIds = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): ReadonlySet<string> => {
-  const cached = hiddenTierBySnapshot.get(snapshot)
-  if (cached) return cached
   const hidden = new Set<string>()
   for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
     if (definition.hidden) hidden.add(fieldId)
@@ -231,7 +228,6 @@ export const hiddenTierFieldIds = (
     const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)
     if (!snapshot.definitionsByFieldId.has(fieldId) && seed.hidden) hidden.add(fieldId)
   }
-  hiddenTierBySnapshot.set(snapshot, hidden)
   return hidden
 }
 

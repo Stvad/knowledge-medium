@@ -43,9 +43,8 @@ import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import {
-  parsePropertyDisplaySetting,
+  blockPropertyDisplaySetting,
   propertyChildrenViewFor,
-  propertyDisplayProp,
   resolvePropertyDisplayMode,
   type PropertyDisplayMode,
 } from '@/data/propertyDisplayMode'
@@ -457,7 +456,7 @@ const defaultViewChildIdsWhileLoading = (block: Block, view: PropertyChildrenVie
 export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
   const scope = useContext(PropertyDisplayScopeContext)
   const blockSetting = useHandle(block, {
-    selector: doc => parsePropertyDisplaySetting(doc?.properties[propertyDisplayProp.name]),
+    selector: blockPropertyDisplaySetting,
   })
   return resolvePropertyDisplayMode({...scope, block: blockSetting})
 }

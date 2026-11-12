@@ -8,7 +8,7 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { getPluginPrefsBlock, requireWorkspaceId } from '@/data/stateBlocks'
 import {
-  parsePropertyDisplaySetting,
+  blockPropertyDisplaySetting,
   PROPERTY_DISPLAY_MODE_LABELS,
   PROPERTY_DISPLAY_MODES,
   propertyDisplayDefaultProp,
@@ -25,8 +25,7 @@ const SETTINGS: readonly PropertyDisplaySetting[] = [...PROPERTY_DISPLAY_MODES, 
 const settingLabel = (setting: PropertyDisplaySetting): string =>
   setting === 'inherit' ? 'Use the default property display' : PROPERTY_DISPLAY_MODE_LABELS[setting]
 
-const blockSetting = (block: Block): PropertyDisplaySetting =>
-  parsePropertyDisplaySetting(block.peek()?.properties[propertyDisplayProp.name])
+export const blockSetting = (block: Block): PropertyDisplaySetting => blockPropertyDisplaySetting(block.peek())
 
 /** Set the block level on `blocks`. `inherit` is STORED, never unset: on a
  *  child-backed workspace an unset deletes the setting's field row and its

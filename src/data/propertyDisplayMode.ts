@@ -77,6 +77,11 @@ export const propertyDisplayPrefsType = seedType({
   properties: [propertyDisplayDefaultProp],
 })
 
+/** The block level's stored setting on `data`, tolerantly (below). */
+export const blockPropertyDisplaySetting = (
+  data: {readonly properties: Readonly<Record<string, unknown>>} | null | undefined,
+): PropertyDisplaySetting => parsePropertyDisplaySetting(data?.properties[propertyDisplayProp.name])
+
 /** A stored setting read TOLERANTLY: anything but a known value is `inherit`.
  *  Every rendered block reads one, above the per-block error boundary, so a
  *  malformed value from sync or a hand edit must degrade, never throw. */

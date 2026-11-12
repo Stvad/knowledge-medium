@@ -245,9 +245,9 @@ export const NO_REGISTRY_RECOGNITION_PARAMS: RecognitionParams = ['[]', '[]', ''
 /**
  * VISIBLE-children predicate: excludes a recognized field row
  * (`is_field_form = 1`) from ordinary child listings at any depth — the
- * opt-in view (`hidePropertyChildren`), not the default. Pruning EVERY
- * recognized field row, rather than only hidden-tier ones, is an ACCEPTED
- * interim.
+ * opt-in view (`hidePropertyChildren: true`), not the default. The outline's
+ * hide-all property display; its show-non-hidden display is
+ * {@link NON_HIDDEN_CHILDREN_SQL}.
  *
  * Condition 3 (the target names a definition) is the REGISTRY's decision —
  * `isResolvableFieldDefinition` on the tx side. This SQL reads it from the

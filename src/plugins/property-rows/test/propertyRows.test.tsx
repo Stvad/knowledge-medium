@@ -50,6 +50,11 @@ const secretProp = seedProperty({
   preset: 'string', defaultValue: '', changeScope: ChangeScope.BlockDefault, hidden: true,
 })
 
+const tagsProp = seedProperty({
+  seedKey: 'test/property/rows-tags', revision: 1, name: 'rows:tags',
+  preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 let runtime: FacetRuntime
@@ -82,7 +87,7 @@ beforeEach(async () => {
     defaultRenderersExtension,
     propertyRowsPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [statusProp, secretProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    [statusProp, secretProp, tagsProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -155,7 +160,8 @@ describe('the property display mode', () => {
     mount({workspace: 'non-hidden'})
     await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
     const note = await outlineSettled()
-    const row = document.querySelector('[data-property-name="rows:status"]')!
+    const row = [...document.querySelectorAll('[data-property-definition-link="true"]')]
+      .find(link => link.textContent === 'rows:status')!
     expect(note.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(await screen.findByDisplayValue('draft')).toBeTruthy()
   })
@@ -338,5 +344,30 @@ describe('a field row shown by id, not as a listed child', () => {
     renderAlone(id, {listing: true, breadcrumb: false})
     await waitFor(() => expect(document.querySelector('[data-property-field-row="true"]')).not.toBeNull())
     expect(await screen.findByDisplayValue('draft')).toBeTruthy()
+  })
+})
+
+describe('a list property', () => {
+  // One value child per MEMBER: no editor edits one member, and binding each
+  // to the whole list's editor would show the list once per member.
+  it('shows each member as its own block, with no value editor', async () => {
+    await repo.block(OWNER).set(tagsProp, ['alpha', 'beta'])
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain('rows:tags'))
+    await screen.findByText('alpha')
+    await screen.findByText('beta')
+    expect(document.querySelector('[data-property-value-row="true"][data-property-name="rows:tags"]')).toBeNull()
+    // The scalar beside it still gets its editor (the positive control).
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
+  })
+})
+
+describe('a read-only workspace', () => {
+  it('shows values without editors', async () => {
+    repo.setReadOnly(true)
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    await screen.findByText('"draft"')
+    expect(screen.queryByDisplayValue('draft')).toBeNull()
   })
 })

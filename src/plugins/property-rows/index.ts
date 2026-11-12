@@ -7,8 +7,7 @@ import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
 import { actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { parsePropertyDisplaySetting, propertyDisplayProp } from '@/data/propertyDisplayMode'
-import { propertyDisplayActions, setBlockPropertyDisplay } from './actions'
+import { blockSetting, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
 import { FieldRowRenderer } from './FieldRowRenderer'
 import { ValueRowRenderer } from './ValueRowRenderer'
 
@@ -16,13 +15,15 @@ const SOURCE = 'property-rows'
 
 /** The doc's per-block reveal: show every property row on this block, or hand
  *  it back to the default. Decided at click time, so the static label never
- *  goes stale. */
+ *  goes stale. On every block, cell-backed workspaces included: a contribution
+ *  is resolved from BlockContext, which must not carry the workspace's
+ *  child-backed state (a flip there would remount every block's content);
+ *  there the setting is stored and shows nothing. */
 const revealPropertiesMenuItem: BlockContextMenuItemsContribution = ({block}) => ({
   id: 'property-rows.toggle-reveal',
   label: 'Toggle all properties here',
   onSelect: () => {
-    const current = parsePropertyDisplaySetting(block.peek()?.properties[propertyDisplayProp.name])
-    void setBlockPropertyDisplay([block], current === 'all' ? 'inherit' : 'all')
+    void setBlockPropertyDisplay([block], blockSetting(block) === 'all' ? 'inherit' : 'all')
   },
 })
 

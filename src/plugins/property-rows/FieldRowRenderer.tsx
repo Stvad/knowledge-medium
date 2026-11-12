@@ -7,11 +7,11 @@
  * value column; the value children (and anything nested under them) are its
  * children, rendered by `ValueRowRenderer`.
  */
-import type { MouseEvent } from 'react'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
+import { BlockLink } from '@/components/references/BlockLink'
 import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useIsSelected } from '@/data/globalState'
 import { isCollapsedProp } from '@/data/properties'
@@ -44,20 +44,17 @@ const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
   const openDefinition = useOpenBlock({blockId: fieldId, workspaceId})
   if (!definition) return null
   return (
-    <a
+    <BlockLink
+      blockId={fieldId}
+      workspaceId={workspaceId}
       href={href}
+      onClick={openDefinition}
       className="block min-w-0 truncate rounded-sm py-0.5 text-sm text-muted-foreground no-underline hover:text-foreground"
       data-property-definition-link="true"
       title={`Open the ${definition.name} definition`}
-      onClick={(event: MouseEvent) => {
-        // The link is inside the block's content surface, whose click enters
-        // edit mode; the definition opening is the click's whole meaning here.
-        event.stopPropagation()
-        openDefinition(event)
-      }}
     >
       {definition.name}
-    </a>
+    </BlockLink>
   )
 }
 FieldRowLabel.displayName = 'FieldRowLabel'
@@ -71,9 +68,6 @@ const FieldRowLayout: BlockLayout = ({
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
-  const definitionName = useHandle(block, {
-    selector: row => fieldRowDefinition(block.repo, row)?.name,
-  })
   return (
     <div>
       <Header/>
@@ -85,7 +79,6 @@ const FieldRowLayout: BlockLayout = ({
               {...collapsibleProps}
               open={!isCollapsed || isTopLevel}
               data-property-field-row="true"
-              data-property-name={definitionName}
               className={`tm-block tm-property-field-row group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>

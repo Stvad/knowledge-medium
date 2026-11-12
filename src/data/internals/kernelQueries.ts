@@ -946,8 +946,9 @@ const childrenStatement = (
  *  by default (property field rows included) — the structural view. The
  *  display-visible view — excluding recognized field rows
  *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
- *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
- *  `tx.childrenOf` takes. */
+ *  `hidePropertyChildren: true`, the boolean `tx.childrenOf` also takes;
+ *  `'hidden-tier'` drops only hidden-tier field rows. The outline hooks pass
+ *  whichever their property display mode resolves to. */
 export const childrenQuery = defineQuery<
   {id: string; hidePropertyChildren?: PropertyChildrenView},
   BlockData[]
