@@ -1,1 +1,1 @@
-export{ip as confirmThreadDeletion}from"../../../chunks/app-CQP2afTR.js";
+export{ip as confirmThreadDeletion}from"../../../chunks/app-H5bQgIlv.js";

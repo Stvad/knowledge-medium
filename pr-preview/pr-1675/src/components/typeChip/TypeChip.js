@@ -1,1 +1,1 @@
-export{WM as TypeChip}from"../../../chunks/app-CQP2afTR.js";
+export{WM as TypeChip}from"../../../chunks/app-H5bQgIlv.js";
