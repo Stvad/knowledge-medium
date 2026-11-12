@@ -316,11 +316,11 @@ export const releaseStrandedGraphBackfillClaim = async (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => {
-  /** The completed claim bag an operator reclaim overwrote, by claim id, kept
-   *  until this run completes or releases. A release puts it back instead of
-   *  deleting the row, so a failed re-run of a finished pass leaves the
-   *  workspace's record that it finished. In memory, so a process that dies
-   *  mid-run still strands a plain in-flight claim (#617). */
+  /** The completed claim bag an operator reclaim overwrote, by claim id, held
+   *  from that reclaim until the next claim attempt or release. A release puts
+   *  it back instead of deleting the row, so a failed re-run of a finished pass
+   *  leaves the workspace's record that it finished. In memory, so a process
+   *  that dies mid-run still strands a plain in-flight claim (#617). */
   const displacedCompletions = new Map<string, Record<string, unknown>>()
   return {
     async stillOwned(tx, workspaceId, backfillId) {
@@ -329,6 +329,7 @@ export const createGraphBackfillClaim = (
     },
     async tryClaim(workspaceId, backfillId, opts) {
       const claimId = graphBackfillClaimBlockId(workspaceId, backfillId)
+      displacedCompletions.delete(claimId)
       // Ensure our own parent rather than trusting bootstrap ordering: a claim
       // that silently fails to write reads as "unclaimed" on every device,
       // which is the one outcome that turns this into a duplicated pass.
@@ -399,7 +400,6 @@ export const createGraphBackfillClaim = (
             }
             await tx.update(claimId, {properties: claimProperties})
             if (live !== null) displacedCompletions.set(claimId, existing.properties)
-            else displacedCompletions.delete(claimId)
             return 'minted'
           }
           if (existing?.deleted) {
@@ -417,7 +417,6 @@ export const createGraphBackfillClaim = (
             // deliberately deleted a claim.
             await tx.restore(claimId, {content: backfillId})
             await tx.update(claimId, {properties: claimProperties})
-            displacedCompletions.delete(claimId)
             return 'minted'
           }
           // `systemMint` (stamp 0) like every other deterministic-id creator.
@@ -433,7 +432,6 @@ export const createGraphBackfillClaim = (
             content: backfillId,
             properties: claimProperties,
           }, {systemMint: true})
-          displacedCompletions.delete(claimId)
           return 'minted'
         })
 
@@ -489,7 +487,6 @@ export const createGraphBackfillClaim = (
           properties: {...row.properties, [migrationCompletedAtProp.name]: Date.now()},
         })
       })
-      displacedCompletions.delete(claimId)
     },
 
     async releaseClaim(workspaceId, backfillId) {
