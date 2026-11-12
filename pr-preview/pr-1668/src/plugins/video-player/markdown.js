@@ -1,1 +1,1 @@
-export{gS as videoPlayerMarkdownExtension}from"../../../chunks/app-Camzy489.js";
+export{gS as videoPlayerMarkdownExtension}from"../../../chunks/app-D2S5QRxm.js";

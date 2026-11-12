@@ -1,1 +1,1 @@
-export{ff as DraftEditor}from"../../chunks/app-Camzy489.js";
+export{ff as DraftEditor}from"../../chunks/app-D2S5QRxm.js";

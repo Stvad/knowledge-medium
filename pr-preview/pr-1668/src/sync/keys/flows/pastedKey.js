@@ -1,1 +1,1 @@
-export{GT as importPastedWorkspaceKey,KT as openCanaryWithPastedKey}from"../../../../chunks/app-Camzy489.js";
+export{GT as importPastedWorkspaceKey,KT as openCanaryWithPastedKey}from"../../../../chunks/app-D2S5QRxm.js";

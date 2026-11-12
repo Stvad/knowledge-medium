@@ -1,1 +1,1 @@
-export{bF as defaultRegistry,vF as refreshRendererRegistry,yF as useRenderer}from"../../chunks/app-Camzy489.js";
+export{bF as defaultRegistry,vF as refreshRendererRegistry,yF as useRenderer}from"../../chunks/app-D2S5QRxm.js";

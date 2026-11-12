@@ -1,1 +1,1 @@
-export{JN as appUpdatePromptExtension}from"../../../chunks/app-Camzy489.js";
+export{JN as appUpdatePromptExtension}from"../../../chunks/app-D2S5QRxm.js";

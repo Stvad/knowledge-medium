@@ -1,1 +1,1 @@
-export{vat as isChildBackedPropertiesWorkspace}from"../chunks/app-Camzy489.js";
+export{vat as isChildBackedPropertiesWorkspace}from"../chunks/app-D2S5QRxm.js";

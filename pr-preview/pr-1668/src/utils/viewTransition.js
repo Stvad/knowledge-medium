@@ -1,1 +1,1 @@
-export{YU as withMoveTransition}from"../../chunks/app-Camzy489.js";
+export{YU as withMoveTransition}from"../../chunks/app-D2S5QRxm.js";

@@ -1,1 +1,1 @@
-export{kP as ClientLocalSettings,AP as clientLocalSettings}from"../../chunks/app-Camzy489.js";
+export{kP as ClientLocalSettings,AP as clientLocalSettings}from"../../chunks/app-D2S5QRxm.js";

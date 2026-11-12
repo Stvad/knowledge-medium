@@ -1,1 +1,1 @@
-export{_q as htmlDocumentTypeSeed}from"../../../chunks/app-Camzy489.js";
+export{_q as htmlDocumentTypeSeed}from"../../../chunks/app-D2S5QRxm.js";

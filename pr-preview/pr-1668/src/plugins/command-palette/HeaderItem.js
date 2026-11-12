@@ -1,1 +1,1 @@
-export{Pj as CommandPaletteHeaderItem}from"../../../chunks/app-Camzy489.js";
+export{Pj as CommandPaletteHeaderItem}from"../../../chunks/app-D2S5QRxm.js";
