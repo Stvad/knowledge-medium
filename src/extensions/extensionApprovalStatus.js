@@ -1,1 +1,1 @@
-export{WN as ExtensionApprovalStatusProvider,GN as ExtensionApprovalStatusStore,KN as useExtensionApprovalStatus,qN as useExtensionApprovalStatuses}from"../../chunks/app-BOi6Z-bc.js";
+export{WN as ExtensionApprovalStatusProvider,GN as ExtensionApprovalStatusStore,KN as useExtensionApprovalStatus,qN as useExtensionApprovalStatuses}from"../../chunks/app-Ct5PqHus.js";
