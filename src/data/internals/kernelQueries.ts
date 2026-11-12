@@ -711,9 +711,9 @@ const propertyChildrenViewSchema = z.enum(['all', 'non-hidden', 'none'])
  *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
  *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `propertyChildren:
- *  'none'`, the same option `core.children` / `tx.childrenOf` take. The
- *  outline hooks pass it; structural consumers (copy, navigation) get
- *  everything. */
+ *  'none'`, the same option `core.children` / `tx.childrenOf` take. Copy
+ *  needs the per-parent mode, so it prunes the structural subtree itself
+ *  (`copiedSubtree`). */
 export const subtreeQuery = defineQuery<
   {id: string; propertyChildren?: PropertyChildrenView},
   SubtreeRow[]

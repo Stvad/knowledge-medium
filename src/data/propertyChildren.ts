@@ -21,9 +21,9 @@
  * Recognizing a row is not the same as HIDING it, and this file owns only the
  * first. Property children are ordinary blocks — that is the point of the
  * model, not a leak — so listing them is the default and exclusion is opt-IN
- * (`propertyChildren`), which most queries do not even offer. The one
- * surface that hides ALL recognized rows today does so as an accepted interim
- * pending §10's tier-aware predicate; see `visibleChildren.ts`.
+ * (`propertyChildren`), which most queries do not even offer. Which rows a
+ * listing leaves out is its view ({@link isLeftOutOfChildrenView}); the
+ * outline's comes from the property display mode (`visibleChildren.ts`).
  * Content-intrinsic and
  * identical at every depth: a `::` child of ANY block — value rows included —
  * is that block's field row, and an unmarked ref targeting a definition is a

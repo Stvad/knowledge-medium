@@ -18,7 +18,6 @@ export type PropertyChildrenView = 'all' | 'non-hidden' | 'none'
  *  (and `createdAt`/`createdBy` on `tx.create`). Used by bookkeeping writes
  *  whose state isn't user intent — e.g. parseReferences updating
  *  `references`. User-facing mutators should not set this. */
-
 export interface TxWriteOpts {
   skipMetadata?: boolean
 }

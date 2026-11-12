@@ -7,7 +7,6 @@ import {
 /** The levels of the property display mode above the block, provided once per
  *  panel by `PropertyDisplayScope`. Outside one (a dialog, a hover preview)
  *  the outline shows no property rows. */
-
 export const PropertyDisplayScopeContext =
   createContext<PropertyDisplayScopeLevels>(NO_PROPERTY_DISPLAY_SCOPE)
 

@@ -576,7 +576,7 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  *  processor may take it as the value and overwrite its text on the next
  *  write)? A user move that would is refused; the property's own editor and
  *  Enter within the values change them instead. */
-export const changesValueSet = async (
+const changesValueSet = async (
   tx: Tx,
   self: BlockData,
   newParentId: string | null,
