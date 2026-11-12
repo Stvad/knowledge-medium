@@ -280,9 +280,9 @@ export interface SeedHiddenTierInput {
    *  active workspace. */
   workspaceId: string
   /** Write the plan. Without it the verb only reports what it would do. */
-  apply?: boolean
+  apply: boolean
   /** Recovery: move the listed seeds back OUT of the hidden tier. */
-  revert?: boolean
+  revert: boolean
 }
 
 export interface RematerializeWorkspaceInput {

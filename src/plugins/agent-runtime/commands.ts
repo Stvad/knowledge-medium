@@ -895,7 +895,7 @@ const runSeedHiddenTier = (
   }
   return setSeedHiddenTier(repo, workspaceId, hiddenTierTargets(), {
     direction: input.revert ? 'unhide' : 'hide',
-    apply: input.apply === true,
+    apply: input.apply,
   })
 }
 

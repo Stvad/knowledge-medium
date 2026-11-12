@@ -22,8 +22,8 @@ import { roamTodoStateProp, statusProp } from '@/plugins/todo/schema'
 
 /** The built-in definitions moved to the hidden tier because something else
  *  on the block already shows their value. Their declarations carry
- *  `hidden: true` at revision 2; `kmagent seed-hidden-tier` brings rows that
- *  workspaces materialized before that up to it. */
+ *  `hidden: true`; `kmagent seed-hidden-tier` brings rows that workspaces
+ *  materialized before that up to it. */
 export const HIDDEN_TIER_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   typesProp,
   aliasesProp,
