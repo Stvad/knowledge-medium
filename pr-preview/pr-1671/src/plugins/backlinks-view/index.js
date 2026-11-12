@@ -1,0 +1,1 @@
+export{K_ as backlinksViewPlugin}from"../../../chunks/app-xI4VnloK.js";

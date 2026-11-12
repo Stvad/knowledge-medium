@@ -1,0 +1,1 @@
+export{L_ as blockInfoPlugin}from"../../../chunks/app-xI4VnloK.js";

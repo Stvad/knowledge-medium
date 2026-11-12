@@ -1,0 +1,1 @@
+export{AD as openRecentsPage}from"../../../chunks/app-xI4VnloK.js";

@@ -1,0 +1,1 @@
+export{vk as isWikilinkDisplayParts,yk as resolveWikilinkDisplay,bk as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-xI4VnloK.js";

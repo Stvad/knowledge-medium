@@ -1,0 +1,1 @@
+export{oG as propertyShapeLabel}from"../../../chunks/app-xI4VnloK.js";

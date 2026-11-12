@@ -1,0 +1,1 @@
+export{TJ as matchCharTrigger}from"../../chunks/app-xI4VnloK.js";

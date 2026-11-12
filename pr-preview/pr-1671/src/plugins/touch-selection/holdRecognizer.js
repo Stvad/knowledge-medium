@@ -1,0 +1,1 @@
+export{wy as BLOCK_HOLD_GESTURE,Ty as BLOCK_HOLD_RECOGNIZER_ID,Ey as blockHoldRecognizer}from"../../../chunks/app-xI4VnloK.js";

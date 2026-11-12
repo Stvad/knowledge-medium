@@ -1,0 +1,1 @@
+export{bY as annotationsDataExtension}from"../../../chunks/app-xI4VnloK.js";

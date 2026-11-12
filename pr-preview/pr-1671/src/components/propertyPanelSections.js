@@ -1,0 +1,1 @@
+export{WB as buildPropertyPanelSections}from"../../chunks/app-xI4VnloK.js";

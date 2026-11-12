@@ -1,0 +1,1 @@
+export{Yw as plainOutlinerPlugin}from"../../../chunks/app-xI4VnloK.js";

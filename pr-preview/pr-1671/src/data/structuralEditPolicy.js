@@ -1,0 +1,1 @@
+export{dN as resolveStructuralEditPolicy,fN as structuralEditPolicyForBlock}from"../../chunks/app-xI4VnloK.js";

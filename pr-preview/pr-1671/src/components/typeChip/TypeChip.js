@@ -1,0 +1,1 @@
+export{IM as TypeChip}from"../../../chunks/app-xI4VnloK.js";

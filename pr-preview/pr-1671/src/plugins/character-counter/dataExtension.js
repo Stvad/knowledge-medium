@@ -1,0 +1,1 @@
+export{ZX as characterCounterDataExtension}from"../../../chunks/app-xI4VnloK.js";

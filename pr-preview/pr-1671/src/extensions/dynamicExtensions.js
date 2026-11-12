@@ -1,0 +1,1 @@
+export{NP as dynamicExtensionsExtension}from"../../chunks/app-xI4VnloK.js";

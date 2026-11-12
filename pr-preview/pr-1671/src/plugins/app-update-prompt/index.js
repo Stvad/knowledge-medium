@@ -1,0 +1,1 @@
+export{JN as appUpdatePromptExtension}from"../../../chunks/app-xI4VnloK.js";

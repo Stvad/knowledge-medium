@@ -1,0 +1,1 @@
+export{mF as LazyBlockComponent}from"../../chunks/app-xI4VnloK.js";

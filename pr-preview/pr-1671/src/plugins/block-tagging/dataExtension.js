@@ -1,0 +1,1 @@
+export{au as blockTaggingDataExtension}from"../../../chunks/app-xI4VnloK.js";
