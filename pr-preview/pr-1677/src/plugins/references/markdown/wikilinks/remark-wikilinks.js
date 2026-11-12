@@ -1,0 +1,1 @@
+export{sy as remarkWikilinks}from"../../../../../chunks/app-ClXlBqDc.js";

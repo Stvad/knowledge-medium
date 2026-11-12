@@ -1,0 +1,1 @@
+export{xS as videoPlayerMarkdownExtension}from"../../../chunks/app-ClXlBqDc.js";

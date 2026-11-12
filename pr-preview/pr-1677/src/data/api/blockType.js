@@ -1,0 +1,1 @@
+export{Alt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-ClXlBqDc.js";

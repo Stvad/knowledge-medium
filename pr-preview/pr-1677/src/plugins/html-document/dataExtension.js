@@ -1,0 +1,1 @@
+export{xq as htmlDocumentDataExtension}from"../../../chunks/app-ClXlBqDc.js";

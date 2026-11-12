@@ -1,0 +1,1 @@
+export{IF as TopLevelRenderer}from"../../../chunks/app-ClXlBqDc.js";

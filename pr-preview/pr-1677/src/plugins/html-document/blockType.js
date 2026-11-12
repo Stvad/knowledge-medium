@@ -1,0 +1,1 @@
+export{Sq as htmlDocumentTypeSeed}from"../../../chunks/app-ClXlBqDc.js";

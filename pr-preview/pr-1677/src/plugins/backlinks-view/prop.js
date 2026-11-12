@@ -1,0 +1,1 @@
+export{mv as DEFAULT_BACKLINKS_VIEW_ID,hv as FLAT_BACKLINKS_VIEW_ID,gv as GROUPED_BACKLINKS_VIEW_ID,_v as backlinksViewProp,vv as defaultBacklinksViewIdForBlock}from"../../../chunks/app-ClXlBqDc.js";

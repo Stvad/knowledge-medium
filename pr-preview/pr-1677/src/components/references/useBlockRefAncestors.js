@@ -1,0 +1,1 @@
+export{NM as useBlockRefAncestors}from"../../../chunks/app-ClXlBqDc.js";

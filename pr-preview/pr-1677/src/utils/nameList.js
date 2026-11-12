@@ -1,0 +1,1 @@
+export{X6 as NAMES_IN_A_SENTENCE,Z6 as describeNames,Q6 as firstFew}from"../../chunks/app-ClXlBqDc.js";

@@ -1,0 +1,1 @@
+export{T3 as kernelDataExtension}from"../../chunks/app-ClXlBqDc.js";

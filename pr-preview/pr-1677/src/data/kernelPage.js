@@ -1,0 +1,1 @@
+export{drt as getOrCreateKernelPage,frt as kernelPageBlockId}from"../../chunks/app-ClXlBqDc.js";

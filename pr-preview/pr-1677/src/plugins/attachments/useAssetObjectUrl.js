@@ -1,0 +1,1 @@
+export{Vx as useAssetObjectUrl}from"../../../chunks/app-ClXlBqDc.js";

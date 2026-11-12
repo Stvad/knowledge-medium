@@ -1,0 +1,1 @@
+export{cz as ExtensionRenderBoundary}from"../../chunks/app-ClXlBqDc.js";

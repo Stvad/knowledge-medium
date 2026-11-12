@@ -1,0 +1,1 @@
+export{Cat as isChildBackedPropertiesWorkspace}from"../chunks/app-ClXlBqDc.js";
