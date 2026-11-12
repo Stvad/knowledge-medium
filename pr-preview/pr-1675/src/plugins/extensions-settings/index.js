@@ -1,1 +1,1 @@
-export{ih as extensionsOverridesProp,ah as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-H5bQgIlv.js";
+export{ih as extensionsOverridesProp,ah as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-h4f8CI5x.js";
