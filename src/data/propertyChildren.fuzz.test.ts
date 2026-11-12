@@ -58,7 +58,7 @@ import { kernelValuePresetCoresById } from './kernelValuePresetCores'
 import { parseExactReferenceBlockContent } from './referenceBlock'
 // Tests are exempt from `boundary/no-core-to-plugin-imports`, and the inline
 // parser is the other reader this content must be inert to.
-import { parseReferences } from '@/plugins/references/referenceParser'
+import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser'
 
 /** One scalar value's child content. Every schema in this file is
  *  single-valued, so grain and property value are the same thing here. */
@@ -316,6 +316,40 @@ describe('#688: content is always storable text, never a span and never ill-form
         fc.pre(a !== b)
         expect(propertyValueToChildContent(requiredStringSchema, a))
           .not.toBe(propertyValueToChildContent(requiredStringSchema, b))
+      }),
+      fuzzParams(300),
+    )
+  })
+})
+
+/** The JSON-spelled leg of the same output invariant (#1061): a generic list
+ *  member or `json` scalar is a serialization, so ANY span in its content is a
+ *  misread, prose included — unlike the verbatim string leg above. */
+describe('#1061: JSON-spelled content reads back as the value and is never a span', () => {
+  const jsonSchema = defineProperty<unknown>('fuzz-json', {
+    codec: codecs.unsafeIdentity<unknown>(),
+    defaultValue: null,
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const {json} = fc.letrec<{json: unknown}>(tie => ({
+    json: fc.oneof(
+      {depthSize: 'small'},
+      textArb,
+      fc.integer(),
+      fc.constant(null),
+      fc.array(tie('json'), {maxLength: 4}),
+      fc.dictionary(textArb, tie('json'), {maxKeys: 3}),
+    ),
+  }))
+
+  it('any JSON value', () => {
+    fc.assert(
+      fc.property(json, value => {
+        const content = encodedToValueChildContent(jsonSchema, value)
+        expect(valueChildContentToEncoded(jsonSchema, content)).toEqual(value)
+        expect(parseExactReferenceBlockContent(content)).toBeNull()
+        expect(parseReferences(content)).toEqual([])
+        expect(parseBlockRefs(content)).toEqual([])
       }),
       fuzzParams(300),
     )
