@@ -1,1 +1,0 @@
-export{kM as BlockEmbed}from"../../../chunks/app-DGTy4pEk.js";

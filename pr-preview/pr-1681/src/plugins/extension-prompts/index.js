@@ -1,1 +1,0 @@
-export{IN as ExtensionPromptSurface,LN as extensionPromptsExtension}from"../../../chunks/app-DGTy4pEk.js";

@@ -1,1 +1,0 @@
-export{kt as bootstrapWorkspace}from"../../chunks/app-DGTy4pEk.js";

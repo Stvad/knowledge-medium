@@ -1,1 +1,0 @@
-export{iq as preferredSpanReplacement}from"../../../chunks/app-DGTy4pEk.js";

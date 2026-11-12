@@ -1,1 +1,0 @@
-export{Ij as CommandPaletteHeaderItem}from"../../../chunks/app-DGTy4pEk.js";

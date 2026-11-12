@@ -1,1 +1,0 @@
-export{cG as propertyShapeLabel}from"../../../chunks/app-DGTy4pEk.js";

@@ -1,1 +1,0 @@
-export{vq as htmlDocumentDataExtension}from"../../../chunks/app-DGTy4pEk.js";

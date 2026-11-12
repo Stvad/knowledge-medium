@@ -1,1 +1,0 @@
-export{EY as ANCHOR_CONTEXT_LENGTH,DY as captureAnchor,OY as recaptureAnchor,kY as resolveAnchor,AY as widenToReferenceSpans,jY as widenToSpans}from"../../../chunks/app-DGTy4pEk.js";

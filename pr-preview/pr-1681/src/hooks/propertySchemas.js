@@ -1,1 +1,0 @@
-export{iG as usePropertySchemas}from"../../chunks/app-DGTy4pEk.js";

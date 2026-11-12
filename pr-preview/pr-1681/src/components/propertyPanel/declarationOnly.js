@@ -1,1 +1,0 @@
-export{XB as declarationOnlyDefinitionForName,ZB as declarationOnlyStatusText}from"../../../chunks/app-DGTy4pEk.js";

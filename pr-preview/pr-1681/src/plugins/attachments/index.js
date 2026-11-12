@@ -1,1 +1,0 @@
-export{vb as attachmentsPlugin}from"../../../chunks/app-DGTy4pEk.js";

@@ -1,1 +1,0 @@
-export{GN as approveExtensionHere}from"../../chunks/app-DGTy4pEk.js";

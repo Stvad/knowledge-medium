@@ -1,1 +1,0 @@
-export{xT as isLeftSidebarSectionContribution,ST as leftSidebarSectionsFacet}from"../../../chunks/app-DGTy4pEk.js";

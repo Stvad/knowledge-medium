@@ -1,1 +1,0 @@
-export{wB as BlockProperties}from"../../chunks/app-DGTy4pEk.js";

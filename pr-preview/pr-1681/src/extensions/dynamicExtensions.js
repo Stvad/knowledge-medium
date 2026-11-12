@@ -1,1 +1,0 @@
-export{FP as dynamicExtensionsExtension}from"../../chunks/app-DGTy4pEk.js";

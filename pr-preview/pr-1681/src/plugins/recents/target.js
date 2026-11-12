@@ -1,1 +1,0 @@
-export{MD as openRecentsPage}from"../../../chunks/app-DGTy4pEk.js";

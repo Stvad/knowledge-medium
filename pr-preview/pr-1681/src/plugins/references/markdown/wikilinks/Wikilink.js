@@ -1,1 +1,0 @@
-export{ry as Wikilink}from"../../../../../chunks/app-DGTy4pEk.js";
