@@ -1,1 +1,1 @@
-export{S3 as applySyncInvalidation}from"../../../../chunks/app-h4f8CI5x.js";
+export{D3 as applySyncInvalidation}from"../../../../chunks/app-Bb1rjZ6V.js";

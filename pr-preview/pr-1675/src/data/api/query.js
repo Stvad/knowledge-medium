@@ -1,1 +1,1 @@
-export{Qct as defineQuery}from"../../../chunks/app-h4f8CI5x.js";
+export{ilt as defineQuery}from"../../../chunks/app-Bb1rjZ6V.js";

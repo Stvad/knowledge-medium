@@ -1,1 +1,1 @@
-export{ID as useMinuteClock}from"../../chunks/app-h4f8CI5x.js";
+export{RD as useMinuteClock}from"../../chunks/app-Bb1rjZ6V.js";

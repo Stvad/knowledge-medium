@@ -1,1 +1,1 @@
-export{PF as MarkdownImage}from"../../chunks/app-h4f8CI5x.js";
+export{IF as MarkdownImage}from"../../chunks/app-Bb1rjZ6V.js";
