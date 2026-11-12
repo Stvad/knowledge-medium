@@ -1,0 +1,1 @@
+export{LP as ClientLocalSettings,RP as clientLocalSettings}from"../../chunks/app-CQP2afTR.js";

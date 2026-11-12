@@ -1,0 +1,1 @@
+export{fz as ExtensionRenderBoundary}from"../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{pu as blockTaggingDataExtension}from"../../../chunks/app-CQP2afTR.js";

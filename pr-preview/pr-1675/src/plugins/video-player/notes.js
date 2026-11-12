@@ -1,0 +1,1 @@
+export{VS as closeVideoNotesView,HS as ensureEditableVideoNoteChild,US as enterVideoNotesView,WS as focusVideoNote}from"../../../chunks/app-CQP2afTR.js";

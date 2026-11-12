@@ -1,0 +1,1 @@
+export{qP as extensionDisplayName,JP as extensionName,YP as userExtensionShellToggle,XP as userExtensionToggle}from"../../chunks/app-CQP2afTR.js";

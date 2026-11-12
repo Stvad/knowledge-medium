@@ -1,0 +1,1 @@
+export{Jg as boundDisplayId,Yg as idMark}from"../../../../chunks/app-CQP2afTR.js";

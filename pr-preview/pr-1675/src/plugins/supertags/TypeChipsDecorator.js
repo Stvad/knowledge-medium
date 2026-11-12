@@ -1,0 +1,1 @@
+export{Xt as typeChipsDecoratorContribution}from"../../../chunks/app-CQP2afTR.js";

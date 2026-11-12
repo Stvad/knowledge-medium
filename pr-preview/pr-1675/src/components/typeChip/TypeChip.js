@@ -1,0 +1,1 @@
+export{WM as TypeChip}from"../../../chunks/app-CQP2afTR.js";

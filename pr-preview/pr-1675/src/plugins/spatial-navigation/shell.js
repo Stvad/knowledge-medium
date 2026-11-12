@@ -1,0 +1,1 @@
+export{jC as spatialNavigationShellDecorator}from"../../../chunks/app-CQP2afTR.js";

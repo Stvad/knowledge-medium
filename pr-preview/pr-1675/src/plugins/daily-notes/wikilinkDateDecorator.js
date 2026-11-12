@@ -1,0 +1,1 @@
+export{wk as dailyDateWikilinkDecorator}from"../../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{OF as defaultRegistry,kF as defaultRendererContributions,AF as defaultRenderersExtension}from"../../chunks/app-CQP2afTR.js";

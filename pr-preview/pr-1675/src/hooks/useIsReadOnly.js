@@ -1,0 +1,1 @@
+export{Gy as useIsReadOnly}from"../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{GQ as aliasDataExtension}from"../../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{yK as staticDataExtensions}from"../../chunks/app-CQP2afTR.js";

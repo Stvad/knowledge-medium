@@ -1,0 +1,1 @@
+export{nP as appUpdatePromptExtension}from"../../../chunks/app-CQP2afTR.js";

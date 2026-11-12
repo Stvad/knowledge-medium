@@ -1,0 +1,1 @@
+export{wP as gestureBindingDescriptor,TP as matchesGestureEvent}from"../../chunks/app-CQP2afTR.js";

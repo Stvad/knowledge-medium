@@ -1,0 +1,1 @@
+export{RD as openRecentsPage}from"../../../chunks/app-CQP2afTR.js";

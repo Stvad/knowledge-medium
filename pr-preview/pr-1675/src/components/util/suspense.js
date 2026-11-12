@@ -1,0 +1,1 @@
+export{ZG as SuspenseFallback}from"../../../chunks/app-CQP2afTR.js";

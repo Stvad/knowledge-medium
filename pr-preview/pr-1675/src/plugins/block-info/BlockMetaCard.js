@@ -1,0 +1,1 @@
+export{K_ as BlockMetaCard}from"../../../chunks/app-CQP2afTR.js";

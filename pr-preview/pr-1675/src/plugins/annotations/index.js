@@ -1,0 +1,1 @@
+export{Ld as annotationsPlugin}from"../../../chunks/app-CQP2afTR.js";

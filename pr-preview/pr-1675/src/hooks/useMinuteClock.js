@@ -1,0 +1,1 @@
+export{ID as useMinuteClock}from"../../chunks/app-CQP2afTR.js";

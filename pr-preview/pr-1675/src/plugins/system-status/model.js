@@ -1,0 +1,1 @@
+export{gc as getSyncIndicatorView}from"../../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{Rat as isChildBackedPropertiesWorkspace}from"../chunks/app-CQP2afTR.js";

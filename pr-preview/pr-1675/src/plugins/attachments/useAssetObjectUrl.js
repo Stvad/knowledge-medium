@@ -1,0 +1,1 @@
+export{Wx as useAssetObjectUrl}from"../../../chunks/app-CQP2afTR.js";

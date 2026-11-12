@@ -1,0 +1,1 @@
+export{mv as inlineBacklinksApplies}from"../../../../chunks/app-CQP2afTR.js";

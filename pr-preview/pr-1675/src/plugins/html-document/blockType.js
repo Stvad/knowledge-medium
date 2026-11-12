@@ -1,0 +1,1 @@
+export{jq as htmlDocumentTypeSeed}from"../../../chunks/app-CQP2afTR.js";

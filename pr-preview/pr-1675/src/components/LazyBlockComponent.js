@@ -1,0 +1,1 @@
+export{SF as LazyBlockComponent}from"../../chunks/app-CQP2afTR.js";

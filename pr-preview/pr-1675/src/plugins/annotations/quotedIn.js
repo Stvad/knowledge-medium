@@ -1,0 +1,1 @@
+export{Vd as quotedInFooterContribution}from"../../../chunks/app-CQP2afTR.js";

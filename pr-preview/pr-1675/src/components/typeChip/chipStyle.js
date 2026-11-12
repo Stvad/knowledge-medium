@@ -1,0 +1,1 @@
+export{GM as chipStyle}from"../../../chunks/app-CQP2afTR.js";

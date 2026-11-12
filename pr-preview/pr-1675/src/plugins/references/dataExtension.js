@@ -1,0 +1,1 @@
+export{FK as referencesDataExtension}from"../../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{du as BlockTagsConfigEditor}from"../../../chunks/app-CQP2afTR.js";

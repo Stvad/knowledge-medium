@@ -1,0 +1,1 @@
+export{wb as attachmentsPlugin}from"../../../chunks/app-CQP2afTR.js";

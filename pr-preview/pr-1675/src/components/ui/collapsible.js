@@ -1,0 +1,1 @@
+"use client";export{DB as Collapsible,OB as CollapsibleContent,kB as CollapsibleTrigger}from"../../../chunks/app-CQP2afTR.js";

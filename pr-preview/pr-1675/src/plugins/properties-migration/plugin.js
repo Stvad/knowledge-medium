@@ -1,0 +1,1 @@
+export{co as propertiesMigrationPlugin}from"../../../chunks/app-CQP2afTR.js";

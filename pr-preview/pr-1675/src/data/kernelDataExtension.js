@@ -1,0 +1,1 @@
+export{P3 as kernelDataExtension}from"../../chunks/app-CQP2afTR.js";

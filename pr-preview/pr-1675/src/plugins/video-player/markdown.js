@@ -1,0 +1,1 @@
+export{wS as videoPlayerMarkdownExtension}from"../../../chunks/app-CQP2afTR.js";

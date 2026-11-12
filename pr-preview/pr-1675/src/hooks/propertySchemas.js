@@ -1,0 +1,1 @@
+export{pG as usePropertySchemas}from"../../chunks/app-CQP2afTR.js";

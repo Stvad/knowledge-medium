@@ -1,0 +1,1 @@
+export{ly as Wikilink}from"../../../../../chunks/app-CQP2afTR.js";

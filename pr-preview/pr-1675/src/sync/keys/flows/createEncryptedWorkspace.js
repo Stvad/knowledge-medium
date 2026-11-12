@@ -1,0 +1,1 @@
+export{XT as createEncryptedWorkspace}from"../../../../chunks/app-CQP2afTR.js";

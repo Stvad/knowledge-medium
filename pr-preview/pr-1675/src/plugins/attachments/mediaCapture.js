@@ -1,0 +1,1 @@
+export{kx as DEFAULT_MAX_CAPTURE_BYTES,Ax as captureMedia,jx as mediaBlockId}from"../../../chunks/app-CQP2afTR.js";

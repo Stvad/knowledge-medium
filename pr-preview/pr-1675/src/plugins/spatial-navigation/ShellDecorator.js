@@ -1,0 +1,1 @@
+export{MC as SpatialNavigationShellDecorator}from"../../../chunks/app-CQP2afTR.js";

@@ -1,0 +1,1 @@
+export{ip as confirmThreadDeletion}from"../../../chunks/app-CQP2afTR.js";

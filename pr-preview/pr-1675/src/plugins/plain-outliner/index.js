@@ -1,0 +1,1 @@
+export{rT as plainOutlinerPlugin}from"../../../chunks/app-CQP2afTR.js";

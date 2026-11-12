@@ -1,0 +1,1 @@
+export{wd as getExtraRoamProps}from"../../../chunks/app-CQP2afTR.js";

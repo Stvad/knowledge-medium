@@ -1,0 +1,1 @@
+export{kN as BlockPasteShellDecorator,AN as blockPasteShellDecorator}from"../../chunks/app-CQP2afTR.js";

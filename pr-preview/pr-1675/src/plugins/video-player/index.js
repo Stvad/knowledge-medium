@@ -1,0 +1,1 @@
+export{CS as videoPlayerPlugin}from"../../../chunks/app-CQP2afTR.js";

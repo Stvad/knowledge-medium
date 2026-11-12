@@ -1,0 +1,1 @@
+export{Tg as buildBlockView,Eg as renderBlockView}from"../../../../chunks/app-CQP2afTR.js";

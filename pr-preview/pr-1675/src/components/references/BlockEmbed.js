@@ -1,0 +1,1 @@
+export{FM as BlockEmbed}from"../../../chunks/app-CQP2afTR.js";

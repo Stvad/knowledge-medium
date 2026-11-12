@@ -1,0 +1,1 @@
+export{Qct as defineQuery}from"../../../chunks/app-CQP2afTR.js";

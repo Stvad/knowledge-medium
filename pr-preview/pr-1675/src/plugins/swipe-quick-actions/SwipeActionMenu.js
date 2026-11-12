@@ -1,0 +1,1 @@
+export{$j as SwipeActionMenu}from"../../../chunks/app-CQP2afTR.js";

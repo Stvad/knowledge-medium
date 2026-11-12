@@ -1,0 +1,1 @@
+export{j3 as Block,M3 as requireLoadedBlock}from"../../chunks/app-CQP2afTR.js";
