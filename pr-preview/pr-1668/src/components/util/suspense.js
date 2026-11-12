@@ -1,0 +1,1 @@
+export{LG as SuspenseFallback}from"../../../chunks/app-Camzy489.js";

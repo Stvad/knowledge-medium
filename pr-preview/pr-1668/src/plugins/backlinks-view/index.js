@@ -1,0 +1,1 @@
+export{K_ as backlinksViewPlugin}from"../../../chunks/app-Camzy489.js";

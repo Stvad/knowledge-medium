@@ -1,0 +1,1 @@
+export{gP as gestureBindingDescriptor,_P as matchesGestureEvent}from"../../chunks/app-Camzy489.js";

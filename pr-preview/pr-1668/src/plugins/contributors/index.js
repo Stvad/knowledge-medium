@@ -1,0 +1,1 @@
+export{Zp as contributorsPlugin}from"../../../chunks/app-Camzy489.js";

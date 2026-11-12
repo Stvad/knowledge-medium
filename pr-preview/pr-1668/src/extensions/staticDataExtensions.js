@@ -1,0 +1,1 @@
+export{aK as staticDataExtensions}from"../../chunks/app-Camzy489.js";

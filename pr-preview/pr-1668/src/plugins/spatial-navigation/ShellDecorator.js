@@ -1,0 +1,1 @@
+export{wC as SpatialNavigationShellDecorator}from"../../../chunks/app-Camzy489.js";

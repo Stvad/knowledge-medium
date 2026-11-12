@@ -1,0 +1,1 @@
+export{SB as BlockProperties}from"../../chunks/app-Camzy489.js";

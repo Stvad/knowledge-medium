@@ -1,0 +1,1 @@
+export{U6 as agree,W6 as pluralize}from"../../chunks/app-Camzy489.js";

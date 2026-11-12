@@ -1,0 +1,1 @@
+export{c3 as applySyncInvalidation}from"../../../../chunks/app-Camzy489.js";

@@ -1,0 +1,1 @@
+export{Gw as BreadcrumbRenderer}from"../../../chunks/app-Camzy489.js";

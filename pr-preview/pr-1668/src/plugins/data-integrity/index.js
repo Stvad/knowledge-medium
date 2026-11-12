@@ -1,0 +1,1 @@
+export{is as dataIntegrityPlugin}from"../../../chunks/app-Camzy489.js";

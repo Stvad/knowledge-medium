@@ -1,0 +1,1 @@
+export{jP as resolveAppRuntime,MP as resolveAppRuntimeSync}from"../../chunks/app-Camzy489.js";

@@ -1,0 +1,1 @@
+export{gS as videoPlayerMarkdownExtension}from"../../../chunks/app-Camzy489.js";

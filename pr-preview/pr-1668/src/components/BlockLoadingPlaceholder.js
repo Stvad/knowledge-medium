@@ -1,0 +1,1 @@
+export{_F as BlockLoadingPlaceholder}from"../../chunks/app-Camzy489.js";

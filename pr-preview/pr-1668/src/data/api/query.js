@@ -1,0 +1,1 @@
+export{Cct as defineQuery}from"../../../chunks/app-Camzy489.js";

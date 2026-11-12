@@ -1,0 +1,1 @@
+export{CC as spatialNavigationShellDecorator}from"../../../chunks/app-Camzy489.js";

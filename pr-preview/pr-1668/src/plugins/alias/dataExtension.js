@@ -1,0 +1,1 @@
+export{jQ as aliasDataExtension}from"../../../chunks/app-Camzy489.js";

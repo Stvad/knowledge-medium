@@ -1,0 +1,1 @@
+export{b3 as kernelDataExtension}from"../../chunks/app-Camzy489.js";

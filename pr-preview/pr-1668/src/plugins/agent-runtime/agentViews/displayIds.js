@@ -1,0 +1,1 @@
+export{Bg as boundDisplayId,Vg as idMark}from"../../../../chunks/app-Camzy489.js";

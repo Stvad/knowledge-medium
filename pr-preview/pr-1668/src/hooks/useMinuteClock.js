@@ -1,0 +1,1 @@
+export{OD as useMinuteClock}from"../../chunks/app-Camzy489.js";

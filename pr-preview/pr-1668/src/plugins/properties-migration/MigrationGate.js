@@ -1,0 +1,1 @@
+export{to as MigrationGate}from"../../../chunks/app-Camzy489.js";

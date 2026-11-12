@@ -1,0 +1,1 @@
+export{jN as editorAutocompleteExtension}from"../../chunks/app-Camzy489.js";

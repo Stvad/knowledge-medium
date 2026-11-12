@@ -1,0 +1,1 @@
+export{R8 as mergeProperties}from"../../chunks/app-Camzy489.js";

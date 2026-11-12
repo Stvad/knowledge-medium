@@ -1,0 +1,1 @@
+export{YU as withMoveTransition}from"../../chunks/app-Camzy489.js";

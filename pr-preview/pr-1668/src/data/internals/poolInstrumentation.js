@@ -1,0 +1,1 @@
+export{F1 as instrumentAdapter}from"../../../chunks/app-Camzy489.js";

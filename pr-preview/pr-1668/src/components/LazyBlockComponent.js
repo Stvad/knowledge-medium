@@ -1,0 +1,1 @@
+export{mF as LazyBlockComponent}from"../../chunks/app-Camzy489.js";

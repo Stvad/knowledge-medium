@@ -1,0 +1,1 @@
+export{lB as isFocalRender,uB as useIsFocalRender}from"../../chunks/app-Camzy489.js";

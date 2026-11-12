@@ -1,0 +1,1 @@
+export{ty as Wikilink}from"../../../../../chunks/app-Camzy489.js";
