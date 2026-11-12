@@ -1,0 +1,1 @@
+export{ty as Wikilink}from"../../../../../chunks/app-BAL_r3R-.js";

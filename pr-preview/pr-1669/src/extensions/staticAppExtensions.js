@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-BAL_r3R-.js";

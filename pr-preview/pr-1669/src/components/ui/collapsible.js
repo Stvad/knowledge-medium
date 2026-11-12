@@ -1,0 +1,1 @@
+"use client";export{vB as Collapsible,yB as CollapsibleContent,bB as CollapsibleTrigger}from"../../../chunks/app-BAL_r3R-.js";

@@ -1,0 +1,1 @@
+export{JA as openKeybindingsSettingsAction}from"../../../chunks/app-BAL_r3R-.js";

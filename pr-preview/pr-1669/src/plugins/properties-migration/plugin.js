@@ -1,0 +1,1 @@
+export{eo as propertiesMigrationPlugin}from"../../../chunks/app-BAL_r3R-.js";

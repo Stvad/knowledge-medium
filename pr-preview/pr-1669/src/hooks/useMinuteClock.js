@@ -1,0 +1,1 @@
+export{OD as useMinuteClock}from"../../chunks/app-BAL_r3R-.js";

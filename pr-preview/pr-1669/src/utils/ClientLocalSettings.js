@@ -1,0 +1,1 @@
+export{kP as ClientLocalSettings,AP as clientLocalSettings}from"../../chunks/app-BAL_r3R-.js";

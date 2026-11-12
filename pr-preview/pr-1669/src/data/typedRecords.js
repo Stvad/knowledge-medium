@@ -1,0 +1,1 @@
+export{GA as adoptTypedBlock,KA as createTypedChild,bat as derivedBlockId,qA as getOrCreateTypedChild}from"../../chunks/app-BAL_r3R-.js";

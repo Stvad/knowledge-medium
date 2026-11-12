@@ -1,0 +1,1 @@
+export{IG as BootFallback}from"../../../chunks/app-BAL_r3R-.js";

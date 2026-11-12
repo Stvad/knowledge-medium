@@ -1,0 +1,1 @@
+export{bY as annotationsDataExtension}from"../../../chunks/app-BAL_r3R-.js";

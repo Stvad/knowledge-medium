@@ -1,0 +1,1 @@
+export{TX as annotationMarginOpenProp,EX as annotationMarginShareProp}from"../../../chunks/app-BAL_r3R-.js";

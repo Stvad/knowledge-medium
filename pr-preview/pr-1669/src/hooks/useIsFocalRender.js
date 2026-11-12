@@ -1,0 +1,1 @@
+export{lB as isFocalRender,uB as useIsFocalRender}from"../../chunks/app-BAL_r3R-.js";

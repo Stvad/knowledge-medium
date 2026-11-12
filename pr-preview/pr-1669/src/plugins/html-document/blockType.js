@@ -1,0 +1,1 @@
+export{_q as htmlDocumentTypeSeed}from"../../../chunks/app-BAL_r3R-.js";

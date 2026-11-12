@@ -1,0 +1,1 @@
+export{ey as wikilinkMarkdownExtension}from"../../../../../chunks/app-BAL_r3R-.js";

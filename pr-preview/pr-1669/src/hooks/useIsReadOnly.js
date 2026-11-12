@@ -1,0 +1,1 @@
+export{Ly as useIsReadOnly}from"../../chunks/app-BAL_r3R-.js";

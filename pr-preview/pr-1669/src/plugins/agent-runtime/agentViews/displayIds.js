@@ -1,0 +1,1 @@
+export{Bg as boundDisplayId,Vg as idMark}from"../../../../chunks/app-BAL_r3R-.js";

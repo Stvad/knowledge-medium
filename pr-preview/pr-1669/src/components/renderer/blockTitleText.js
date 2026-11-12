@@ -1,0 +1,1 @@
+export{Tz as BLOCK_TITLE_TEXT_CLASS,Ez as useBlockTitleTextClass}from"../../../chunks/app-BAL_r3R-.js";

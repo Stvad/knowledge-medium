@@ -1,0 +1,1 @@
+export{hj as COMMAND_PALETTE_ACTION_ID,gj as COMMAND_PALETTE_CONTEXT,_j as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,vj as commandPaletteActionContext}from"../../../chunks/app-BAL_r3R-.js";

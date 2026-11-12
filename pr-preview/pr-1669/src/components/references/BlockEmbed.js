@@ -1,0 +1,1 @@
+export{DM as BlockEmbed}from"../../../chunks/app-BAL_r3R-.js";

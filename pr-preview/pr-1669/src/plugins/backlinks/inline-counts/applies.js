@@ -1,0 +1,1 @@
+export{ov as inlineBacklinksApplies}from"../../../../chunks/app-BAL_r3R-.js";

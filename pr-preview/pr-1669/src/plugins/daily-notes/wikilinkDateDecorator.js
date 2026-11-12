@@ -1,0 +1,1 @@
+export{gk as dailyDateWikilinkDecorator}from"../../../chunks/app-BAL_r3R-.js";

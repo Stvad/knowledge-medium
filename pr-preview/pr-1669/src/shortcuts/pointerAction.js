@@ -1,0 +1,1 @@
+export{vP as dispatchPointerAction,yP as setPointerActionDispatcher}from"../../chunks/app-BAL_r3R-.js";

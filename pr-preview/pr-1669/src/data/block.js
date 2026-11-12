@@ -1,0 +1,1 @@
+export{_3 as Block,v3 as requireLoadedBlock}from"../../chunks/app-BAL_r3R-.js";

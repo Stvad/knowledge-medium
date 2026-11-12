@@ -1,0 +1,1 @@
+export{is as dataIntegrityPlugin}from"../../../chunks/app-BAL_r3R-.js";

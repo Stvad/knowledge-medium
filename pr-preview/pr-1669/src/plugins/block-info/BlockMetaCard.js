@@ -1,0 +1,1 @@
+export{R_ as BlockMetaCard}from"../../../chunks/app-BAL_r3R-.js";

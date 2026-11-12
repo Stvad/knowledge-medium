@@ -1,0 +1,1 @@
+export{NP as dynamicExtensionsExtension}from"../../chunks/app-BAL_r3R-.js";

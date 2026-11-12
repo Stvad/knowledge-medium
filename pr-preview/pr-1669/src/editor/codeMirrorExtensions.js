@@ -1,0 +1,1 @@
+export{BJ as codeMirrorExtensionsFacet}from"../../chunks/app-BAL_r3R-.js";

@@ -1,0 +1,1 @@
+export{yv as LazyBlockEntry}from"../../../chunks/app-BAL_r3R-.js";

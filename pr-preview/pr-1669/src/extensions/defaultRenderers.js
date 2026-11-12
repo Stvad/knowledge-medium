@@ -1,0 +1,1 @@
+export{bF as defaultRegistry,xF as defaultRendererContributions,SF as defaultRenderersExtension}from"../../chunks/app-BAL_r3R-.js";

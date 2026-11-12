@@ -1,0 +1,1 @@
+export{JB as declarationOnlyDefinitionForName,YB as declarationOnlyStatusText}from"../../../chunks/app-BAL_r3R-.js";
