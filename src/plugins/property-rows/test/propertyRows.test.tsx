@@ -272,6 +272,16 @@ describe('resetting the block switch', () => {
 })
 
 describe('switching views', () => {
+  it('keeps the children both views show mounted across show-non-hidden → show-all', async () => {
+    const view = mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    const note = await outlineSettled()
+    view.rerender(outline({workspace: 'all'}))
+    await waitFor(() => expect(shownRows()).toHaveLength(2))
+    expect(note.isConnected).toBe(true)
+    expect(screen.getByText('a note')).toBe(note)
+  })
+
   // Every panel renders hide-all first (the workspace's child-backed answer
   // lands a render later), so a switched user's outline changes view on every
   // mount; the children both views show must not be torn down in between.
@@ -419,5 +429,22 @@ describe('a scalar whose first value child its codec cannot read', () => {
     // The scalar beside it still has its editor, so the outline has settled.
     expect(await screen.findByDisplayValue('draft')).toBeTruthy()
     expect(screen.queryByDisplayValue('5')).toBeNull()
+  })
+})
+
+describe('a definition renamed while its row is shown', () => {
+  it('relabels the row', async () => {
+    const DEF = 'renamed-definition'
+    const bag = (name: string) => ({types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string'})
+    await repo.tx(async tx => {
+      await tx.create({id: DEF, workspaceId: WS, parentId: null, orderKey: 'z0', content: '', properties: bag('rows:before')})
+      await tx.create({id: 'renamed-field', workspaceId: WS, parentId: OWNER, orderKey: 'zz', content: `::((${DEF}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    mount({workspace: 'all'})
+    await waitFor(() => expect(shownRows()).toContain('rows:before'))
+
+    await repo.tx(tx => tx.update(DEF, {properties: bag('rows:after')}), {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(shownRows()).toContain('rows:after'))
+    expect(shownRows()).not.toContain('rows:before')
   })
 })

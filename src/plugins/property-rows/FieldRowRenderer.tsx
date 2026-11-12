@@ -16,17 +16,15 @@ import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useIsSelected } from '@/data/globalState'
 import { isCollapsedProp } from '@/data/properties'
 import { useHandle, usePropertyValue } from '@/hooks/block'
-import { usePropertySchemas } from '@/hooks/propertySchemas'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender'
 import { useOpenBlock } from '@/utils/navigation'
 import { useContext } from 'react'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { drawsPropertyRows, fieldRowDefinition, useIsChildOf } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
 /** The name cell: the property's name as a link to its definition block. */
 const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
-  // Re-render when the registry moves (a rename, a definition arriving).
-  usePropertySchemas()
+  const definitions = usePropertyDefinitions(block.repo)
   const data = useHandle(block, {
     selector: row => row
       ? {
@@ -37,7 +35,7 @@ const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
       }
       : undefined,
   })
-  const definition = fieldRowDefinition(block.repo, data)
+  const definition = fieldRowDefinition(block.repo, definitions, data)
   const workspaceId = data?.workspaceId ?? ''
   const fieldId = definition?.fieldId ?? ''
   const href = useAppHashInContext(workspaceId, fieldId)
@@ -121,7 +119,8 @@ export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
 }
 FieldRowRenderer.displayName = 'FieldRowRenderer'
 FieldRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
-  drawsPropertyRows(context) && fieldRowDefinition(block.repo, block.peek()) !== undefined
-// Above the type renderers (a field row carries no type of its own, but a
-// hand-tagged one must still read as a property row).
+  drawsPropertyRows(context)
+  && fieldRowDefinition(block.repo, block.repo.propertyDefinitions, block.peek()) !== undefined
+// Above the type renderers: a field row hand-tagged with a type still reads as
+// a property row, and loses that type's renderer even outside a listing.
 FieldRowRenderer.priority = () => 150

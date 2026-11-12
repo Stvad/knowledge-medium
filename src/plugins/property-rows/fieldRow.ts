@@ -3,6 +3,8 @@ import { memberCodecOf } from '@/data/api'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
 import type { Repo } from '@/data/repo'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import { useCallback, useSyncExternalStore } from 'react'
 import type { BlockContextType } from '@/types'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block'
@@ -18,9 +20,15 @@ export interface FieldRowDefinition {
 /** The definition a FIELD ROW (§9 recognition, against the registry this repo
  *  holds for the row's workspace) names, or `undefined` for any other block.
  *  Total and synchronous — it backs `canRender`, which runs above the error
- *  boundary for every block, loaded or not. */
+ *  boundary for every block, loaded or not.
+ *
+ *  `definitions` is the registry snapshot the answer is read against, passed in
+ *  rather than read off `repo` so a render that calls this depends on it: the
+ *  React Compiler memoizes on the arguments a call uses, and a registry read
+ *  hidden inside would freeze the answer across a rename. */
 export const fieldRowDefinition = (
   repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
   data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'> | null | undefined,
 ): FieldRowDefinition | undefined => {
   if (!data) return undefined
@@ -32,7 +40,7 @@ export const fieldRowDefinition = (
   if (resolution.status === 'resolved') {
     return {fieldId, name: resolution.schema.name, schema: resolution.schema}
   }
-  const name = repo.propertyDefinitions?.definitionsByFieldId.get(fieldId)?.name ?? fieldId
+  const name = definitions?.definitionsByFieldId.get(fieldId)?.name ?? fieldId
   return {fieldId, name, schema: undefined}
 }
 
@@ -54,3 +62,12 @@ export const drawsPropertyRows = (context: BlockContextType | undefined): boolea
  *  against the context their parent provides (a listing, a field row). */
 export const useIsChildOf = (block: Block, parentId: string | null): boolean =>
   useHandle(block, {selector: data => parentId !== null && data?.parentId === parentId})
+
+/** The repo's property-definition registry snapshot, reactively: a new
+ *  snapshot on every registry rebuild (a rename, a definition arriving). The
+ *  input a render passes to {@link fieldRowDefinition}. */
+export const usePropertyDefinitions = (repo: Repo): PropertyDefinitionRegistrySnapshot | null => {
+  const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
+  const snapshot = useCallback(() => repo.propertyDefinitions, [repo])
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}

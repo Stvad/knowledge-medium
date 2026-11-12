@@ -433,21 +433,25 @@ export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): str
   const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
     selector: ids => ids,
   })
-  return ids ?? defaultViewChildIdsWhileLoading(block, view)
+  return ids ?? loadedListOfAnotherView(block, view)
 }
 
-/** While a non-default view's list loads, the default (no property rows)
- *  list of the same parent, when loaded. Every panel renders that view first —
- *  the workspace's child-backed answer arrives a render later — and answering
- *  `[]` in between unmounts every child, losing editor and lazy-mount state,
- *  only to mount them again; the default list shares the key of every child
- *  both views show. Only from a non-default view, so an outline that never
- *  switches allocates nothing here. */
-const defaultViewChildIdsWhileLoading = (block: Block, view: PropertyChildrenView): string[] =>
-  (view === true
-    ? undefined
-    : block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}).peek())
-  ?? EMPTY_STRING_ARRAY as string[]
+/** While a non-default view's list loads, a loaded list of another view of
+ *  the same parent: the other non-default view first (still live right after
+ *  a show-all ↔ show-non-hidden switch), then the default. Answering `[]`
+ *  instead unmounts every child — editor and lazy-mount state with it — only
+ *  to mount them again a moment later. Nothing for the default view, so an
+ *  outline that never switches allocates nothing here; switching back to
+ *  hide-all can remount the listing once. */
+const loadedListOfAnotherView = (block: Block, view: PropertyChildrenView): string[] => {
+  if (view === true) return EMPTY_STRING_ARRAY as string[]
+  const others: readonly PropertyChildrenView[] = view === 'hidden-tier' ? [false, true] : ['hidden-tier', true]
+  for (const other of others) {
+    const ids = block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: other}).peek()
+    if (ids) return ids
+  }
+  return EMPTY_STRING_ARRAY as string[]
+}
 
 /** The outline's property display mode for `block`'s children here: the
  *  block's own switch over the panel's scope (`PropertyDisplayScope`). The one
@@ -493,7 +497,7 @@ export const useHasChildren = (block: Block): boolean => {
   const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
     selector: ids => ids === undefined ? undefined : ids.length > 0,
   })
-  return hasChildren ?? defaultViewChildIdsWhileLoading(block, view).length > 0
+  return hasChildren ?? loadedListOfAnotherView(block, view).length > 0
 }
 
 /** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`

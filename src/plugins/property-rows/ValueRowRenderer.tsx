@@ -11,7 +11,9 @@
 import { useContext, useMemo } from 'react'
 import { PropertyFieldRowContext } from '@/context/propertyDisplay'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
-import type { AnyPropertySchema } from '@/data/api'
+import type { AnyPropertySchema, BlockData } from '@/data/api'
+import type { Repo } from '@/data/repo'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import { isFieldValueChild, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { persistedJsonKey } from '@/data/internals/jsonCanonical'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
@@ -25,17 +27,20 @@ import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
-import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, useIsChildOf } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
-/** The scalar property a value child is a value of, when its field row is
- *  recognized and the property is single-valued. */
-const scalarOf = (block: Block): {fieldId: string; schema: AnyPropertySchema} | undefined => {
-  const data = block.peek()
-  if (!data?.parentId || data.isFieldForm === true) return undefined
-  const fieldRow = block.repo.cache.getSnapshot(data.parentId)
-  const definition = fieldRowDefinition(block.repo, fieldRow)
+type FieldRowData = Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'>
+
+/** The scalar property a value child is a value of, given its field row: when
+ *  that row is recognized and the property is single-valued. */
+const scalarOf = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  fieldRow: FieldRowData | null | undefined,
+): {fieldId: string; schema: AnyPropertySchema} | undefined => {
+  const definition = fieldRowDefinition(repo, definitions, fieldRow)
   if (!fieldRow?.parentId || !definition?.schema || !isSingleValueProperty(definition.schema)) return undefined
   return {fieldId: definition.fieldId, schema: definition.schema}
 }
@@ -63,22 +68,28 @@ const useWriteTargetId = (repo: Block['repo'], ownerId: string | null, fieldId: 
  *  block: the conflict the data layer keeps stays visible, and the editor never
  *  sits on one row while its write overwrites another. */
 const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow} | null => {
+  const repo = block.repo
   const schemas = usePropertySchemas()
+  const definitions = usePropertyDefinitions(repo)
   const runtime = useAppRuntime()
   const child = useHandle(block, {
     selector: data => data ? {parentId: data.parentId, content: data.content} : null,
   })
-  const ownerId = useHandle(block.repo.block(child?.parentId ?? block.id), {
-    selector: data => data?.parentId ?? null,
+  const fieldRow = useHandle(repo.block(child?.parentId ?? block.id), {
+    selector: (data): FieldRowData | null => data
+      ? {referenceTargetId: data.referenceTargetId, parentId: data.parentId,
+          isFieldForm: data.isFieldForm, workspaceId: data.workspaceId}
+      : null,
   })
-  const owner = block.repo.block(ownerId ?? block.id)
+  const ownerId = fieldRow?.parentId ?? null
+  const owner = repo.block(ownerId ?? block.id)
   const ownerProperties = useHandle(owner, {selector: data => data?.properties ?? EMPTY_PROPERTIES})
-  const scalar = scalarOf(block)
-  const schema = scalar?.schema
-  const writeTargetId = useWriteTargetId(block.repo, ownerId, scalar?.fieldId)
+  const scalar = scalarOf(repo, definitions, fieldRow)
+  const writeTargetId = useWriteTargetId(repo, ownerId, scalar?.fieldId)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   return useMemo(() => {
+    const schema = scalar?.schema
     if (!schema || !child || ownerId === null || writeTargetId !== block.id) return null
     if (!Object.hasOwn(ownerProperties, schema.name)) return null
     if (storedFormOfContent(schema, child.content) !== persistedJsonKey(ownerProperties[schema.name])) return null
@@ -87,13 +98,13 @@ const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow
       properties: ownerProperties,
       name: schema.name,
       schemas,
-      propertyDefinitions: block.repo.propertyDefinitions,
-      typeDefinitions: block.repo.typeDefinitions,
+      propertyDefinitions: definitions,
+      typeDefinitions: repo.typeDefinitions,
       uis,
       presets,
     })
     return row ? {owner, row} : null
-  }, [block.id, block.repo, child, owner, ownerId, ownerProperties, presets, schema, schemas, uis, writeTargetId])
+  }, [block.id, child, definitions, owner, ownerId, ownerProperties, presets, repo, scalar, schemas, uis, writeTargetId])
 }
 
 /** The persisted form of a value child's content, or `undefined` when its
@@ -138,6 +149,14 @@ export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
     : <DefaultBlockRenderer {...props}/>
 }
 ValueRowRenderer.displayName = 'ValueRowRenderer'
-ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
-  drawsPropertyRows(context) && scalarOf(block) !== undefined
+// Reads the parent from the cache, so a value child mounted by id before its
+// field row loaded (a backlink entry after a reload) is first chosen as an
+// ordinary block and re-chosen on its next change — a remount there, accepted:
+// outside a value column both draw the same block.
+ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean => {
+  if (!drawsPropertyRows(context)) return false
+  const data = block.peek()
+  if (!data?.parentId || data.isFieldForm === true) return false
+  return scalarOf(block.repo, block.repo.propertyDefinitions, block.repo.cache.getSnapshot(data.parentId)) !== undefined
+}
 ValueRowRenderer.priority = () => 150
