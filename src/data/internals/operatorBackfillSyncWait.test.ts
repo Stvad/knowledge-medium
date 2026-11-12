@@ -595,14 +595,16 @@ describe('operator backfill transient sync waits', () => {
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     await waitFor(() => expect(batches).toEqual([0, 1]))
-    // Not waited on, but counted: the sweep it spans cannot prove convergence.
-    expect(observedWaitCounts).toEqual([0, 1])
     expect(await persistedBatchIds()).toEqual([
       'operator-sync-wait-batch-0', 'operator-sync-wait-batch-1',
     ])
     // The check after the scan still asks every arm, so the run does not
     // record completion over a download it never waited out.
     const result = await running
+    // Read once the run is over: each entry is recorded after its batch
+    // COMMITS, which lags the batch body `batches` fences on.
+    // Not waited on, but counted: the sweep it spans cannot prove convergence.
+    expect(observedWaitCounts).toEqual([0, 1])
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('not caught up with the server')
     expect(events).not.toContain('markComplete')
