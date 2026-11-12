@@ -1,1 +1,1 @@
-export{AP as ClientLocalSettings,jP as clientLocalSettings}from"../../chunks/app-D7GDJVES.js";
+export{jP as ClientLocalSettings,MP as clientLocalSettings}from"../../chunks/app-D2bRvqUs.js";

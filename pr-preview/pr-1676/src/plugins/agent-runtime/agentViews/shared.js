@@ -1,1 +1,1 @@
-export{bg as CUT_LEGEND,xg as EMPTY_CONTENT,Sg as clampInt,Cg as crumbLine,wg as displayLineChars,Tg as joinDisplayLines,Eg as loadRoot,Dg as metaSuffix,Og as plural,kg as siblingLines,Ag as toViewRow,jg as viewWorkspace}from"../../../../chunks/app-D7GDJVES.js";
+export{xg as CUT_LEGEND,Sg as EMPTY_CONTENT,Cg as clampInt,wg as crumbLine,Tg as displayLineChars,Eg as joinDisplayLines,Dg as loadRoot,Og as metaSuffix,kg as plural,Ag as siblingLines,jg as toViewRow,Mg as viewWorkspace}from"../../../../chunks/app-D2bRvqUs.js";

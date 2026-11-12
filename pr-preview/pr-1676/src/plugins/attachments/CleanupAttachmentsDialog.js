@@ -1,1 +1,1 @@
-export{xb as CleanupAttachmentsDialog}from"../../../chunks/app-D7GDJVES.js";
+export{Sb as CleanupAttachmentsDialog}from"../../../chunks/app-D2bRvqUs.js";
