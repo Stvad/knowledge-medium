@@ -207,6 +207,20 @@ describe('watcher memory against the app', () => {
     expect(prompts.at(-1)).toContain(`append_markdown with target ${memory.id}`)
   })
 
+  it('uses a Memory block the person made under the watched page', async () => {
+    const mine = await repo.mutate.createChild({parentId: CLAUDE, content: 'memory'})
+    const prompts: string[] = []
+    const engine = engineFor(async options => {
+      prompts.push(options.prompt)
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect((await memoryBlocks()).map(row => row.id)).toEqual([mine])
+    expect(prompts[0]).toContain(`append_markdown with target ${mine}`)
+  })
+
   it('says in the reply what a run saved to its memory', async () => {
     const engine = engineFor(async options => {
       const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]
