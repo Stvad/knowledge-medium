@@ -14,12 +14,15 @@ export const refreshRendererRegistry = async () => {
   refreshAppRuntime()
 }
 
-/** Re-render on a property-registry swap while `active`; otherwise the snapshot
- *  is a constant, so the subscription never re-renders the caller. */
+const NO_SUBSCRIPTION = () => () => {}
+const NO_SNAPSHOT = () => null
+
+/** Re-render on a property-registry swap while `active`; inactive, it neither
+ *  subscribes nor re-renders. */
 const usePropertyRegistryIn = (repo: Repo, active: boolean): void => {
   const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
-  const snapshot = () => (active ? repo.propertySchemas : null)
-  useSyncExternalStore(subscribe, snapshot, snapshot)
+  const snapshot = useCallback(() => repo.propertySchemas, [repo])
+  useSyncExternalStore(active ? subscribe : NO_SUBSCRIPTION, active ? snapshot : NO_SNAPSHOT)
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {

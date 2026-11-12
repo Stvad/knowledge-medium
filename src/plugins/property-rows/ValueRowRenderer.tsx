@@ -25,7 +25,7 @@ import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
-import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, useIsChildOf } from './fieldRow'
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
@@ -128,11 +128,9 @@ const ownersValueRenderer = (Fallback: BlockRenderer): BlockRenderer => {
 const ValueRowContent = ownersValueRenderer(MarkdownContentRenderer)
 
 export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
-  const fieldRowId = useContext(PropertyFieldRowContext)
-  const parentId = useHandle(props.block, {selector: data => data?.parentId ?? null})
   // Only as a value in a field row drawn as a property row; anywhere else (a
   // backlink of the value's target) an ordinary block.
-  return fieldRowId !== null && fieldRowId === parentId
+  return useIsChildOf(props.block, useContext(PropertyFieldRowContext))
     // Edit mode is the row's own text, as on any block — never the editor, so a
     // stray row edited into the owner's value is not swapped for an input
     // under the cursor.

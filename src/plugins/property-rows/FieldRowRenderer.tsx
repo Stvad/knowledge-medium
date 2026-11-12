@@ -21,7 +21,7 @@ import { useIsFocalRender } from '@/hooks/useIsFocalRender'
 import { useOpenBlock } from '@/utils/navigation'
 import { useContext } from 'react'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { drawsPropertyRows, fieldRowDefinition } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, useIsChildOf } from './fieldRow'
 
 /** The name cell: the property's name as a link to its definition block. */
 const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
@@ -106,9 +106,7 @@ const FieldRowLayout: BlockLayout = ({
 }
 
 export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
-  const listingParentId = useContext(PropertyRowListingContext)
-  const parentId = useHandle(props.block, {selector: data => data?.parentId ?? null})
-  return listingParentId !== null && listingParentId === parentId
+  return useIsChildOf(props.block, useContext(PropertyRowListingContext))
     ? <DefaultBlockRenderer
         {...props}
         ContentRenderer={FieldRowLabel}

@@ -4,6 +4,8 @@ import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
 import type { Repo } from '@/data/repo'
 import type { BlockContextType } from '@/types'
+import type { Block } from '@/data/block'
+import { useHandle } from '@/hooks/block'
 
 /** What a field row is a row OF: its definition id, the name the outline
  *  labels it with, and the schema when this device can build one. */
@@ -47,3 +49,8 @@ export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
  *  breadcrumb crumb, an inline reference — keep their own rendering. */
 export const drawsPropertyRows = (context: BlockContextType | undefined): boolean =>
   context?.isBreadcrumb !== true && context?.isReference !== true
+
+/** Is `block` a child of `parentId`? The one test both row renderers make
+ *  against the context their parent provides (a listing, a field row). */
+export const useIsChildOf = (block: Block, parentId: string | null): boolean =>
+  useHandle(block, {selector: data => parentId !== null && data?.parentId === parentId})
