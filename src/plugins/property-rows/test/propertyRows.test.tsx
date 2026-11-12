@@ -199,3 +199,34 @@ describe('editing through a property row', () => {
     await waitFor(() => expect(screen.getByDisplayValue('final')).toBeTruthy())
   })
 })
+
+describe('a scalar whose value children disagree', () => {
+  // Concurrent offline edits can leave two value children under one scalar's
+  // field row; the data layer keeps both. Written raw, so no processor folds
+  // the second into the owner's cell before the render.
+  it('shows the stray sibling as its own text, not as a second copy of the owner\'s value', async () => {
+    const fieldRow = await sharedDb.db.getOptional<{id: string}>(
+      `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+         AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = 'draft' AND v.deleted = 0)`,
+      [OWNER])
+    expect(fieldRow).not.toBeNull()
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+           created_at, updated_at, created_by, updated_by)
+         VALUES ('stray', ?, ?, 'z9', 'final', '{}', 0, 1, 1, ?, ?)`,
+        [WS, fieldRow!.id, USER.id, USER.id])
+    })
+    expect(repo.block(OWNER).peekProperty(statusProp)).toBe('draft')
+
+    mount({workspace: 'non-hidden'})
+    await screen.findByDisplayValue('draft')
+    const stray = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-block-id="stray"] .block-content')
+      expect(found?.textContent).toContain('final')
+      return found!
+    })
+    expect(stray.querySelector('[data-property-value-row]')).toBeNull()
+    expect(screen.queryByDisplayValue('final')).toBeNull()
+  })
+})

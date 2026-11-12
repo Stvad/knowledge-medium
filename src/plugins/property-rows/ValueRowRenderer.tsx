@@ -2,15 +2,22 @@
  * A scalar property's VALUE CHILD in the outline: renders the property type's
  * editor, the panel's own value cell, bound to the OWNER's property — so an
  * edit here is the panel's write (`writeProperty` → `setProperty`) of the
- * value the panel shows, not a text edit of the row. The value child stays an
- * ordinary block: its children nest under it and its bullet works as any
- * other's. List members are not this — see `isSingleValueProperty`.
+ * value the panel shows, not a text edit of the row — but only while the child
+ * IS that value (`useOwnersValue`); otherwise it shows its own text. Either way
+ * the value child is an ordinary block: its children nest under it and its
+ * bullet works as any other's. List members never get the editor — see
+ * `isSingleValueProperty`.
  */
 import { useMemo } from 'react'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
+import type { AnyPropertySchema } from '@/data/api'
+import { valueChildContentToEncoded } from '@/data/propertyChildren'
+import { persistedJsonKey } from '@/data/internals/jsonCanonical'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
+import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
 import { writeProperty } from '@/components/propertyPanel/actions'
-import { resolvePropertyModelRow } from '@/components/propertyPanel/model'
+import { resolvePropertyModelRow, type PropertyPanelModelRow } from '@/components/propertyPanel/model'
 import { PropertyValueCell } from '@/components/propertyPanel/PropertyRow'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { readValuePresets } from '@/data/valuePresetRegistry'
@@ -32,45 +39,81 @@ const scalarValueOf = (block: Block): {owner: string; definition: FieldRowDefini
   return {owner: fieldRow.parentId, definition}
 }
 
-const ValueRowEditor: BlockRenderer = ({block}: BlockRendererProps) => {
+/** The owner's property this value child shows, when the child IS that value:
+ *  its own content stores exactly what the owner's cell holds. `null` for a
+ *  child that is not — a sibling left divergent by concurrent offline edits,
+ *  or content its codec cannot read — which then shows its own text as an
+ *  ordinary block, so the conflict the data layer keeps stays visible and an
+ *  edit lands on the row the user is looking at. */
+const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow} | null => {
   const schemas = usePropertySchemas()
   const runtime = useAppRuntime()
-  const parentId = useHandle(block, {selector: row => row?.parentId ?? null})
-  const ownerId = useHandle(block.repo.block(parentId ?? block.id), {selector: row => row?.parentId ?? null})
+  const child = useHandle(block, {
+    selector: data => data ? {parentId: data.parentId, content: data.content} : null,
+  })
+  const ownerId = useHandle(block.repo.block(child?.parentId ?? block.id), {
+    selector: data => data?.parentId ?? null,
+  })
   const owner = block.repo.block(ownerId ?? block.id)
-  const ownerProperties = useHandle(owner, {selector: row => row?.properties ?? EMPTY_PROPERTIES})
-  const name = scalarValueOf(block)?.definition.name
+  const ownerProperties = useHandle(owner, {selector: data => data?.properties ?? EMPTY_PROPERTIES})
+  const schema = scalarValueOf(block)?.definition.schema
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
-  const row = useMemo(() => name === undefined ? null : resolvePropertyModelRow({
-    blockId: owner.id,
-    properties: ownerProperties,
-    name,
-    schemas,
-    propertyDefinitions: block.repo.propertyDefinitions,
-    typeDefinitions: block.repo.typeDefinitions,
-    uis,
-    presets,
-  }), [block.repo, name, owner.id, ownerProperties, presets, schemas, uis])
-
-  if (!row || ownerId === null) return null
-  return (
-    <div className="min-w-0" data-property-value-row="true" data-property-name={row.name}>
-      <PropertyValueCell
-        row={row}
-        block={owner}
-        onChange={next => { void writeProperty(owner, row.schema, next) }}
-      />
-    </div>
-  )
+  return useMemo(() => {
+    if (!schema || !child || ownerId === null) return null
+    if (!Object.hasOwn(ownerProperties, schema.name)) return null
+    if (storedFormOfContent(schema, child.content) !== persistedJsonKey(ownerProperties[schema.name])) return null
+    const row = resolvePropertyModelRow({
+      blockId: owner.id,
+      properties: ownerProperties,
+      name: schema.name,
+      schemas,
+      propertyDefinitions: block.repo.propertyDefinitions,
+      typeDefinitions: block.repo.typeDefinitions,
+      uis,
+      presets,
+    })
+    return row ? {owner, row} : null
+  }, [block.repo, child, owner, ownerId, ownerProperties, presets, schema, schemas, uis])
 }
-ValueRowEditor.displayName = 'ValueRowEditor'
+
+/** The persisted form of a value child's content, or `undefined` when its
+ *  codec cannot read it. */
+const storedFormOfContent = (schema: AnyPropertySchema, content: string): string | undefined => {
+  try {
+    return persistedJsonKey(valueChildContentToEncoded(schema, content))
+  } catch {
+    return undefined
+  }
+}
+
+const ownersValueRenderer = (Fallback: BlockRenderer): BlockRenderer => {
+  const Renderer: BlockRenderer = ({block}: BlockRendererProps) => {
+    const value = useOwnersValue(block)
+    if (!value) return <Fallback block={block}/>
+    const {owner, row} = value
+    return (
+      <div className="min-w-0" data-property-value-row="true" data-property-name={row.name}>
+        <PropertyValueCell
+          row={row}
+          block={owner}
+          onChange={next => { void writeProperty(owner, row.schema, next) }}
+        />
+      </div>
+    )
+  }
+  Renderer.displayName = `OwnersValue(${Fallback.displayName ?? Fallback.name})`
+  return Renderer
+}
+
+const ValueRowContent = ownersValueRenderer(MarkdownContentRenderer)
+const ValueRowEditContent = ownersValueRenderer(CodeMirrorContentRenderer)
 
 export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => (
   <DefaultBlockRenderer
     {...props}
-    ContentRenderer={ValueRowEditor}
-    EditContentRenderer={ValueRowEditor}
+    ContentRenderer={ValueRowContent}
+    EditContentRenderer={ValueRowEditContent}
   />
 )
 ValueRowRenderer.displayName = 'ValueRowRenderer'

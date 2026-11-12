@@ -370,13 +370,18 @@ export const NO_REGISTRY_HIDDEN_TIER_PARAMS: HiddenTierParams = ['[]', '']
  * display leaves out (§10). Narrower than {@link recognizedFieldRowSql}: every
  * id in the bound list is a definition the registry resolved, so condition 3
  * holds by construction and needs no `block_types` leg. Workspace-guarded for
- * the same reason as there. Same NULL-safety under `NOT (...)`.
+ * the same reason as there. NULL-safe under `NOT (...)` the same way: an
+ * `EXISTS` is never NULL, where `IN` over a NULL target (a marked row whose
+ * span resolves nothing) is NULL and would hide the row.
  */
 const hiddenTierFieldRowSql = (rowRef: string): string => `
      COALESCE(${rowRef}.is_field_form, 0) = 1
      AND ${rowRef}.parent_id IS NOT NULL
-     AND ${rowRef}.reference_target_id IN (SELECT value FROM json_each(?))
-     AND ${rowRef}.workspace_id = ?
+     AND EXISTS (
+       SELECT 1 FROM json_each(?) hidden
+        WHERE hidden.value = ${rowRef}.reference_target_id
+          AND ${rowRef}.workspace_id = ?
+     )
 `
 
 const NON_HIDDEN_CHILD_PREDICATE_SQL = `

@@ -148,6 +148,24 @@ describe('the hidden-tier child view (`hidePropertyChildren: \'hidden-tier\'`)',
     }
   })
 
+  // A marked row whose span resolves nothing has a NULL target: membership in
+  // the (never empty — kernel seeds are hidden) hidden list must read false,
+  // not NULL, or `NOT (...)` hides a row that is no property at all.
+  it('keeps a marked row whose span resolves nothing', async () => {
+    const repo = await openRepo()
+    await vi.waitFor(() => expect(repo.propertyDefinitions).not.toBeNull())
+    await repo.tx(async tx => {
+      await tx.create({id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
+      await tx.create({id: FIELD, workspaceId: WS, parentId: OWNER, orderKey: 'a1', content: '::[[future-field]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(async () => {
+      const row = await repo.db.getOptional<{is_field_form: number | null; reference_target_id: string | null}>(
+        'SELECT is_field_form, reference_target_id FROM blocks WHERE id = ?', [FIELD])
+      expect(row).toEqual({is_field_form: 1, reference_target_id: null})
+    })
+    expect(await tierView(repo)).toEqual([FIELD])
+  })
+
   it('drops the field row of a hidden kernel seed', async () => {
     const repo = await openRepo()
     await vi.waitFor(() => expect(repo.propertyDefinitions).not.toBeNull())
