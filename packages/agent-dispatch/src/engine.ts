@@ -16,6 +16,7 @@ import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
+import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
@@ -134,6 +135,13 @@ export const createEngine = (deps: EngineDeps) => {
    *  silently poll a dead id forever. */
   const pageIdCache = new Map<string, {id: string, resolvedAt: number}>()
   const PAGE_ID_TTL_MS = 10 * 60_000
+  const targetPageId = async (target: string): Promise<string> => {
+    const cached = pageIdCache.get(target)
+    if (cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS) return cached.id
+    const id = await graph.resolvePageId(target)
+    pageIdCache.set(target, {id, resolvedAt: now()})
+    return id
+  }
   /** Launch timestamps within the rolling hour — the global spend
    *  circuit-breaker. PERSISTED (state.ts): an in-memory-only log would
    *  re-arm a full budget on every crash/restart, unbounding the exact
@@ -247,6 +255,26 @@ export const createEngine = (deps: EngineDeps) => {
       replyKey: `park:${sourceId}`, shape: 'block', final: true,
     }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
+  }
+
+  /** The watcher's memory as the run starts: what its prompt shows, and the
+   *  entries the reply's account of memory changes is diffed against. */
+  const loadMemory = async (watcher: BacklinksWatcher) => {
+    const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
+    const [outline, entries] = await Promise.all([graph.memoryOutline(blockId), graph.memoryEntries(blockId)])
+    return {blockId, outline, entries}
+  }
+
+  /** What the run changed in its memory, for the reply; null when nothing. */
+  const memoryChanges = async (
+    watcher: BacklinksWatcher, memory: {blockId: string, entries: MemoryEntry[]},
+  ): Promise<string | null> => {
+    try {
+      return renderMemoryChanges(diffMemory(memory.entries, await graph.memoryEntries(memory.blockId)))
+    } catch (error) {
+      log(`[${watcher.name}] could not read memory ${memory.blockId} after the run: ${errorMessage(error)}`)
+      return null
+    }
   }
 
   /** The pre-claim re-check; null when the mention is no longer pending. */
@@ -393,6 +421,14 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
         return null
       })
+      // Context too: unreadable, the prompt leaves memory out, so the run
+      // isn't asked to keep what it can't see.
+      const memory = watcher.memory
+        ? await loadMemory(watcher).catch(error => {
+          log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
+          return null
+        })
+        : null
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
@@ -407,6 +443,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
+        memory: memory ? {blockId: memory.blockId, outline: memory.outline} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
@@ -505,6 +542,10 @@ export const createEngine = (deps: EngineDeps) => {
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
       const result = await runTask(runOptions)
       await writes // ordering guarantee: no progress write races the final one below
+      // On every terminal reply, a failed or cancelled run's too: it may have
+      // written its memory before it ended.
+      const memoryNote = memory ? await memoryChanges(watcher, memory) : null
+      const withMemoryNote = (text: string) => memoryNote ? `${text}\n\n${memoryNote}` : text
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -516,7 +557,7 @@ export const createEngine = (deps: EngineDeps) => {
         // Terminal write: converges a streamed tree onto the final text, or
         // creates it fresh. Retried so a transient bridge blip recovers
         // rather than losing the billed answer.
-        await reconcileReplyWithRetry(finalText, {final: true})
+        await reconcileReplyWithRetry(withMemoryNote(finalText), {final: true})
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
           status: 'done',
@@ -546,7 +587,7 @@ export const createEngine = (deps: EngineDeps) => {
         // note appended, rather than losing it.
         const partial = lastStreamedText.trim()
         await reconcileReplyWithRetry(
-          partial ? `${partial}\n\n${failureNote}` : failureNote,
+          withMemoryNote(partial ? `${partial}\n\n${failureNote}` : failureNote),
           {final: true, shape: 'block'},
         )
         terminalReplyDelivered = true
@@ -595,12 +636,7 @@ export const createEngine = (deps: EngineDeps) => {
     // while the first resolve/scan is in flight must not end up with
     // editedAtMs < baseline (it would be classed pre-baseline forever).
     const tickStartMs = now()
-    const cached = pageIdCache.get(watcher.target)
-    let targetId = cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS ? cached.id : undefined
-    if (!targetId) {
-      targetId = await graph.resolvePageId(watcher.target)
-      pageIdCache.set(watcher.target, {id: targetId, resolvedAt: now()})
-    }
+    const targetId = await targetPageId(watcher.target)
 
     const sources = (await graph.backlinkSources(targetId)).filter(source => isMention(source.sourceFields))
 

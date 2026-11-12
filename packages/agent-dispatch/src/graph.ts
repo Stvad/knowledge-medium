@@ -8,6 +8,7 @@ import { withContributorId, type BridgeClient } from '@knowledge-medium/agent-cl
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
+import { MEMORY_BLOCK_TITLE, type MemoryEntry } from './memory.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
@@ -21,8 +22,12 @@ interface TaskPropsWrite {
  *  through a client with `contributorId: null`, for which the contributors
  *  processor records nothing, so a person's note keeps exactly the authors
  *  who wrote it. */
-export const createGraph = (client: BridgeClient) => {
-  const bridgeGraph = createBridgeGraph(withContributorId(client, null))
+/** Blocks of memory a run's prompt shows (about 50 short lines). */
+const MEMORY_OUTLINE_LIMIT = 50
+
+export const createGraph = (bridgeClient: BridgeClient) => {
+  const client = withContributorId(bridgeClient, null)
+  const bridgeGraph = createBridgeGraph(client)
 
   /** Every `agent:*` write: merged into the bag (update-block merges), so it
    *  never clobbers dispatch state written concurrently, and kept off the
@@ -74,7 +79,53 @@ export const createGraph = (client: BridgeClient) => {
     await writeTaskProps(id, {[PROPS.cancel]: ''})
   }
 
+  const findMemoryBlock = async (pageId: string): Promise<string | null> => {
+    const rows = await bridgeGraph.sqlAll(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 AND lower(trim(content)) = lower(?) ORDER BY order_key, id LIMIT 1',
+      [pageId, MEMORY_BLOCK_TITLE],
+    )
+    const id = (rows[0] as {id?: unknown} | undefined)?.id
+    return typeof id === 'string' ? id : null
+  }
+
+  /** The watched page's memory block, created when missing. Created as a
+   *  keyed reconcile, not create-block: it stays off the person's undo stack,
+   *  and two runs creating it at once converge on one block. */
+  const ensureMemoryBlock = async (pageId: string): Promise<string> => {
+    const found = await findMemoryBlock(pageId)
+    if (found) return found
+    await bridgeGraph.reconcileMarkdownSubtree(pageId, MEMORY_BLOCK_TITLE, {
+      key: 'agent-dispatch:memory', shape: 'block', final: true, undoable: false,
+    })
+    const created = await findMemoryBlock(pageId)
+    if (!created) throw new Error(`no ${MEMORY_BLOCK_TITLE} block under ${pageId} after creating it`)
+    return created
+  }
+
+  /** The bounded outline the run's own `subtree` tool prints: shallow levels
+   *  first, long entries cut with a marker. */
+  const memoryOutline = async (memoryId: string): Promise<string> => {
+    const view = await client.runCommand({type: 'view-outline', ref: memoryId, depth: 2, limit: MEMORY_OUTLINE_LIMIT})
+    if (typeof view !== 'string') throw new Error('view-outline returned no text')
+    return view
+  }
+
+  /** The memory's entries, for the reply's account of what a run changed. */
+  const memoryEntries = async (memoryId: string): Promise<MemoryEntry[]> => {
+    const rows = await bridgeGraph.sqlAll(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id LIMIT 500',
+      [memoryId],
+    )
+    return rows.flatMap(row => {
+      const {id, content} = row as {id?: unknown, content?: unknown}
+      return typeof id === 'string' ? [{id, content: typeof content === 'string' ? content : ''}] : []
+    })
+  }
+
   return {
+    ensureMemoryBlock,
+    memoryOutline,
+    memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,
     backlinkSources: bridgeGraph.backlinkSources,
     getBlock: bridgeGraph.getBlock,

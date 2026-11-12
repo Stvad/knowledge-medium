@@ -34,6 +34,17 @@ describe('parseConfig', () => {
     })
   })
 
+  it('gives backlinks watchers memory unless one turns it off', () => {
+    const config = parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [
+        {kind: 'backlinks', name: 'claude-mentions', target: 'claude'},
+        {kind: 'backlinks', name: 'inbox', target: 'inbox', memory: false},
+      ],
+    })
+    expect(config.watchers.map(watcher => watcher.kind === 'backlinks' && watcher.memory)).toEqual([true, false])
+  })
+
   it('rejects unknown watcher kinds and missing fields', () => {
     expect(() => parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'webhook', name: 'x'}]})).toThrow()
     expect(() => parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q'}]})).toThrow()

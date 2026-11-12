@@ -5,6 +5,7 @@ import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
+import type {MemoryEntry} from '../src/memory'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
@@ -16,6 +17,8 @@ interface FakeGraphSeed {
   blocks?: Record<string, Partial<BlockData>>
   /** What `comments({thread})` answers, by root id. */
   threads?: Record<string, CommentThreadView>
+  /** The memory block's entries; a run edits this array to write memory. */
+  memory?: MemoryEntry[]
 }
 
 /** Minimal in-memory graph double tracking writes. One object stands in for
@@ -33,7 +36,11 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const sessionWrites: Array<{id: string, session: string}> = []
   const cancelClears: string[] = []
 
+  const memory = seed.memory ?? []
   const graph: Graph & ReplyWriter = {
+    ensureMemoryBlock: vi.fn(async () => 'mem-1'),
+    memoryOutline: vi.fn(async () => ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n')),
+    memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink, sourceFields}) => ({
@@ -112,7 +119,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
+  return {graph, blocks, reconciles, propWrites, activityWrites, sessionWrites, cancelClears, memory}
 }
 
 const memoryState = (
@@ -162,6 +169,92 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
+
+describe('watcher memory', () => {
+  const seed = (memory: MemoryEntry[] = [{id: 'n-1', content: 'replies short'}]): FakeGraphSeed => ({
+    pageId: 'page-claude', backlinks: [{id: 'b1'}], blocks: {b1: {content: '[[claude]] hi'}}, memory,
+  })
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  const finalReply = (reconciles: ReturnType<typeof fakeGraph>['reconciles']) => reconciles.filter(write => write.final).at(-1)!.markdown
+
+  it('shows the run the memory under its target page', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).toHaveBeenCalledWith('page-claude')
+    expect(promptOf(runTask)).toContain('- replies short  ^n-1')
+    expect(promptOf(runTask)).toContain('append_markdown with target mem-1')
+    // Nothing written: the reply says nothing about memory.
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('says in the reply what the run changed in its memory', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.push({id: 'n-2', content: 'prefers suggestions'})
+      return okRun()
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text\n\nMemory changed during this run: saved [prefers suggestions](((n-2)))')
+  })
+
+  it('says it on a failed run too, which may have written memory before it ended', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.splice(0, 1)
+      return okRun({ok: false, exitCode: 1, stderr: 'boom'})
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/run failed — exit 1: boom\n\nMemory changed during this run: removed "replies short"$/)
+  })
+
+  it('reads and shows no memory for a watcher that turns it off', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph: fake.graph, runTask,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, memory: false}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).not.toHaveBeenCalled()
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+  })
+
+  it('runs without memory when it cannot be read, and never asks the run to keep it', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryOutline = vi.fn(async () => { throw new Error('bridge blipped') })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('delivers the memory to a channel session', async () => {
+    const fake = fakeGraph(seed())
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph: fake.graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect((deliverToChannel.mock.calls[0] as unknown as [{content: string}])[0].content).toContain('- replies short  ^n-1')
+  })
+})
 
 describe('mention inside a comment thread', () => {
   const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})

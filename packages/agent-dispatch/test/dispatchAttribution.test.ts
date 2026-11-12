@@ -175,6 +175,55 @@ describe('dispatch attribution', () => {
   })
 })
 
+describe('watcher memory against the app', () => {
+  const memoryBlocks = () => db.db.getAll<{id: string, content: string}>(
+    'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0', [CLAUDE])
+
+  it('creates the memory block under the watched page once, off the undo stack and unattributed, and shows the run its entries', async () => {
+    repo.undoManager.clear()
+    const prompts: string[] = []
+    const run = async (options: AgentRunOptions) => {
+      prompts.push(options.prompt)
+      return result({resultText: 'Done.'})
+    }
+    const engine = engineFor(run)
+    await engine.tick()
+    await engine.drain()
+
+    const [memory] = await memoryBlocks()
+    expect(memory?.content).toBe('Memory')
+    expect(await attributionOf(memory.id)).toEqual({creators: [], editors: []})
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+
+    // The run's own write, as the km tools make it.
+    await inProcessClient().runCommand({type: 'append-markdown', target: memory.id, markdown: 'Replies short.'})
+    await writeInTab({[PROPS.status]: '', [PROPS.attempts]: 0})
+    await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this again'}) }, opts)
+    await engine.tick()
+    await engine.drain()
+
+    expect(await memoryBlocks()).toHaveLength(1)
+    expect(prompts.at(-1)).toContain(`Replies short.  ^`)
+    expect(prompts.at(-1)).toContain(`append_markdown with target ${memory.id}`)
+  })
+
+  it('says in the reply what a run saved to its memory', async () => {
+    const engine = engineFor(async options => {
+      const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]
+      await withContributorId(inProcessClient(), agentId).runCommand({type: 'append-markdown', target: memoryId, markdown: 'Prefers suggestions.'})
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+
+    const reply = await db.db.getAll<{content: string}>(
+      `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
+      [MENTION],
+    )
+    expect(reply.map(row => row.content).join('\n')).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
+  })
+})
+
 describe('dispatch writes and the person\'s undo stack', () => {
   it('keeps a run\'s writes off it, so undoing an edit made mid-run keeps the run done and its reply', async () => {
     repo.undoManager.clear()
