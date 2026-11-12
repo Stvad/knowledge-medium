@@ -9,14 +9,11 @@
  */
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { BlockLayout } from '@/extensions/blockInteraction'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
-import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
+import { BlockFrame, DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
+import { CollapsibleContent } from '@/components/ui/collapsible'
 import { BlockLink } from '@/components/references/BlockLink'
 import { useAppHashInContext } from '@/context/layoutWsContext'
-import { useIsSelected } from '@/data/globalState'
-import { isCollapsedProp } from '@/data/properties'
-import { useHandle, usePropertyValue } from '@/hooks/block'
-import { useIsFocalRender } from '@/hooks/useIsFocalRender'
+import { useHandle } from '@/hooks/block'
 import { useOpenBlock } from '@/utils/navigation'
 import { useContext } from 'react'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
@@ -62,46 +59,29 @@ const FieldRowLayout: BlockLayout = ({
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
-}) => {
-  const isSelected = useIsSelected(block.id)
-  const isTopLevel = useIsFocalRender(block)
-  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
-  return (
-    <div>
-      <Header/>
-      <Shell>
-        {(shellProps) => {
-          const {className: shellClassName, ...collapsibleProps} = shellProps
-          return (
-            <Collapsible
-              {...collapsibleProps}
-              open={!isCollapsed || isTopLevel}
-              data-property-field-row="true"
-              className={`tm-block tm-property-field-row group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
-            >
-              <Controls/>
-              <div className="block-body relative min-w-0 flex-grow">
-                <div className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
-                  <div className="min-w-0" data-property-name-cell="true">
-                    <Content/>
-                  </div>
-                  <CollapsibleContent className="min-w-0" data-property-value-cell="true">
-                    <PropertyFieldRowContext value={block.id}>
-                      <Children/>
-                    </PropertyFieldRowContext>
-                  </CollapsibleContent>
-                </div>
-                {Properties && <Properties/>}
-                <BelowContent/>
-                <Footer/>
-              </div>
-            </Collapsible>
-          )
-        }}
-      </Shell>
+}) => (
+  <BlockFrame
+    block={block} Header={Header} Shell={Shell} Controls={Controls}
+    className="tm-property-field-row"
+    frameProps={{'data-property-field-row': 'true'}}
+  >
+    <div className="block-body relative min-w-0 flex-grow">
+      <div className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
+        <div className="min-w-0" data-property-name-cell="true">
+          <Content/>
+        </div>
+        <CollapsibleContent className="min-w-0" data-property-value-cell="true">
+          <PropertyFieldRowContext value={block.id}>
+            <Children/>
+          </PropertyFieldRowContext>
+        </CollapsibleContent>
+      </div>
+      {Properties && <Properties/>}
+      <BelowContent/>
+      <Footer/>
     </div>
-  )
-}
+  </BlockFrame>
+)
 
 export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
   return useIsChildOf(props.block, useContext(PropertyRowListingContext))
