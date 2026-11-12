@@ -202,6 +202,10 @@ const backlinksWatcherSchema = z.strictObject({
    *  nested outline so the split threads naturally. Ignored for
    *  `delivery: 'channel'` (the ambient session posts its own reply). */
   splitReply: z.boolean().default(true),
+  /** Keep a memory under the target page (memory.ts), injected into every
+   *  run and kept by the run itself. Off for a watcher whose custom `prompt`
+   *  should not write to the notes. */
+  memory: z.boolean().default(true),
 })
 
 const queryWatcherSchema = z.strictObject({
