@@ -1,0 +1,1 @@
+export{vD as RecentsList,yD as RecentsPageBlockRenderer}from"../../../chunks/app-Dgm44TkJ.js";

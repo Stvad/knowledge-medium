@@ -1,0 +1,1 @@
+export{lc as appVersion}from"../chunks/app-Dgm44TkJ.js";

@@ -1,0 +1,1 @@
+export{jX as contributorsDataExtension}from"../../../chunks/app-Dgm44TkJ.js";

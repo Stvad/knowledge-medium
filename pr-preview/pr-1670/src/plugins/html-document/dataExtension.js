@@ -1,0 +1,1 @@
+export{gq as htmlDocumentDataExtension}from"../../../chunks/app-Dgm44TkJ.js";

@@ -1,0 +1,1 @@
+export{fit as getOrCreatePropertiesPage,pit as propertiesPageBlockId,mit as propertiesPageSpec}from"../../chunks/app-Dgm44TkJ.js";

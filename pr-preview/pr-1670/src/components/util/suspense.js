@@ -1,0 +1,1 @@
+export{LG as SuspenseFallback}from"../../../chunks/app-Dgm44TkJ.js";

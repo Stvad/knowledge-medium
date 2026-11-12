@@ -1,0 +1,1 @@
+export{kd as annotationsPlugin}from"../../../chunks/app-Dgm44TkJ.js";
