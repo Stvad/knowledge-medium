@@ -301,7 +301,7 @@ const rawConfigSchema = z.strictObject({
    *  (spawns or channel deliveries) per rolling hour, across all
    *  watchers. Converts any trigger-loop bug from an unbounded bill
    *  into a bounded one. */
-  runsPerHour: z.number().int().positive().default(10),
+  runsPerHour: z.number().int().positive().default(45),
   /** Loopback port the dispatch channel MCP listener binds when the
    *  ambient session runs (watchers with delivery: 'channel' post here). */
   channelPort: z.number().int().positive().default(8790),
