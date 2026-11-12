@@ -1,1 +1,1 @@
-export{NQ as aliasDataExtension}from"../../../chunks/app-CVpOHBmn.js";
+export{NQ as aliasDataExtension}from"../../../chunks/app-C5WBEjvT.js";

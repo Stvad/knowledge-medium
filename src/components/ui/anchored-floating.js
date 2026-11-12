@@ -1,1 +1,1 @@
-export{nG as floatingAnchorFromRect,rG as useAnchoredFloating}from"../../../chunks/app-CVpOHBmn.js";
+export{nG as floatingAnchorFromRect,rG as useAnchoredFloating}from"../../../chunks/app-C5WBEjvT.js";
