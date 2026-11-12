@@ -700,6 +700,9 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  `PropertyDisplayMode`. */
 export type PropertyChildrenView = 'all' | 'non-hidden' | 'none'
 
+// The child queries' args are `.strict()`: a caller still passing a renamed
+// option (`hidePropertyChildren`) fails loudly instead of silently getting the
+// default structural view.
 const propertyChildrenViewSchema = z.enum(['all', 'non-hidden', 'none'])
 
 /** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
@@ -721,7 +724,7 @@ export const subtreeQuery = defineQuery<
   SubtreeRow[]
 >({
   name: 'core.subtree',
-  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}),
+  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}).strict(),
   resultSchema: subtreeRowArraySchema,
   resolve: async ({id, propertyChildren = 'all'}, ctx) => {
     // No subtree SQL exists for the hidden-tier view.
@@ -959,7 +962,7 @@ export const childrenQuery = defineQuery<
   BlockData[]
 >({
   name: 'core.children',
-  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}),
+  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}).strict(),
   resultSchema: blockDataArraySchema,
   resolve: async ({id, propertyChildren = 'all'}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
@@ -983,7 +986,7 @@ export const childIdsQuery = defineQuery<
     id: z.string(),
     hydrate: z.boolean().optional(),
     propertyChildren: propertyChildrenViewSchema.optional(),
-  }),
+  }).strict(),
   resultSchema: z.array(z.string()),
   resolve: async ({id, hydrate = false, propertyChildren = 'all'}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})

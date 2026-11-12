@@ -181,3 +181,11 @@ describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () =
     expect(await tierView(repo)).toEqual([NOTE])
   })
 })
+
+describe('the child queries\' arguments', () => {
+  it.each(['core.children', 'core.childIds', 'core.subtree'] as const)(
+    '%s refuses an unknown option instead of ignoring it', async name => {
+      const repo = await openRepo()
+      await expect(repo.runQuery(name, {id: OWNER, hidePropertyChildren: true} as never)).rejects.toThrow()
+    })
+})
