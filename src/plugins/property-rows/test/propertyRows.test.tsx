@@ -97,8 +97,11 @@ beforeEach(async () => {
   await owner.set(secretProp, 'shh')
 })
 
-const mount = (scope: {childBacked?: boolean; workspace?: PropertyDisplaySetting} = {}) =>
-  render(
+type Scope = {childBacked?: boolean; workspace?: PropertyDisplaySetting}
+
+const mount = (scope: Scope = {}) => render(outline(scope))
+
+const outline = (scope: Scope) => (
     <RepoContext value={repo}>
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
@@ -115,8 +118,8 @@ const mount = (scope: {childBacked?: boolean; workspace?: PropertyDisplaySetting
           </Suspense>
         </ActiveContextsProvider>
       </AppRuntimeContextProvider>
-    </RepoContext>,
-  )
+    </RepoContext>
+)
 
 /** Names of the property rows on screen, in document order. */
 const shownRows = (): string[] =>
@@ -253,5 +256,39 @@ describe('resetting the block switch', () => {
 
     expect((await repo.load('nested-note'))?.deleted).toBe(false)
     expect(repo.block(OWNER).peekProperty(propertyDisplayProp)).toBe('inherit')
+  })
+})
+
+describe('switching views', () => {
+  // Every panel renders hide-all first (the workspace's child-backed answer
+  // lands a render later), so a switched user's outline changes view on every
+  // mount; the children both views show must not be torn down in between.
+  it('keeps the children both views show mounted while the new view loads', async () => {
+    const view = mount({childBacked: false, workspace: 'all'})
+    const note = await outlineSettled()
+    view.rerender(outline({childBacked: true, workspace: 'all'}))
+    await waitFor(() => expect(shownRows().length).toBeGreaterThan(0))
+    expect(note.isConnected).toBe(true)
+    expect(screen.getByText('a note')).toBe(note)
+  })
+})
+
+describe('a field row whose definition registers after it renders', () => {
+  it('becomes a property row once the definition arrives', async () => {
+    const LATE_DEF = 'late-definition'
+    await repo.tx(async tx => {
+      await tx.create({id: 'late-field', workspaceId: WS, parentId: OWNER, orderKey: 'zz', content: `::((${LATE_DEF}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    mount({workspace: 'all'})
+    await waitFor(() => expect(document.querySelector('[data-block-id="late-field"]')).not.toBeNull())
+    expect(document.querySelector('[data-block-id="late-field"][data-property-field-row="true"]')).toBeNull()
+
+    await repo.tx(tx => tx.create({
+      id: LATE_DEF, workspaceId: WS, parentId: null, orderKey: 'z0', content: '',
+      properties: {types: ['property-schema'], 'property-schema:name': 'rows:late', 'property-schema:preset': 'string'},
+    }), {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(
+      document.querySelector('[data-block-id="late-field"][data-property-field-row="true"]'),
+    ).not.toBeNull())
   })
 })

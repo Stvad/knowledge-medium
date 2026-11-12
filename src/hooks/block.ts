@@ -35,6 +35,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
 import { getAliases } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
@@ -426,10 +427,24 @@ export const useBlockAliases = (block: Block): readonly string[] =>
  *  them is `usePropertyDisplayMode`'s answer for this block. */
 export const useChildIds = (block: Block): string[] => {
   const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
-  return useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
-    selector: ids => ids ?? EMPTY_STRING_ARRAY,
-  }) as string[]
+  const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
+    selector: ids => ids,
+  })
+  return ids ?? defaultViewChildIdsWhileLoading(block, view)
 }
+
+/** While a non-default view's list loads, the default (no property rows)
+ *  list of the same parent, when loaded. Every panel renders that view first —
+ *  the workspace's child-backed answer arrives a render later — and answering
+ *  `[]` in between unmounts every child, losing editor and lazy-mount state,
+ *  only to mount them again; the default list shares the key of every child
+ *  both views show. Only from a non-default view, so an outline that never
+ *  switches allocates nothing here. */
+const defaultViewChildIdsWhileLoading = (block: Block, view: PropertyChildrenView): string[] =>
+  (view === true
+    ? undefined
+    : block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}).peek())
+  ?? EMPTY_STRING_ARRAY as string[]
 
 /** The outline's property display mode for `block`'s children here: the
  *  block's own switch over the panel's scope (`PropertyDisplayScope`). The one
@@ -472,9 +487,10 @@ export const useChildren = (block: Block): Block[] => {
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean => {
   const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
-  return useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
-    selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
+  const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
+    selector: ids => ids === undefined ? undefined : ids.length > 0,
   })
+  return hasChildren ?? defaultViewChildIdsWhileLoading(block, view).length > 0
 }
 
 /** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`

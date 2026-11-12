@@ -1,6 +1,7 @@
 import { BlockRendererProps } from '../types'
 import { rendererProp } from '@/data/properties.js'
 import { usePropertyValue, useData } from '@/hooks/block.js'
+import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -18,6 +19,11 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
    * The above is a cludge to make this re-render on useData changes, compiler would over-memoize this otherwise
    * Ideally we make the dependency clear and structural tho
    */
+
+  // A `canRender` may recognize the block through its property DEFINITIONS (a
+  // property field row), and a definition can register after the block
+  // mounted; re-choosing on a registry swap is what picks that up.
+  usePropertySchemas()
 
   const [rendererKey] = usePropertyValue(block, rendererProp)
   const runtime = useAppRuntime()
