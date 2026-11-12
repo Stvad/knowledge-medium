@@ -47,7 +47,7 @@ const seed = async (repo: Repo, bag: Record<string, unknown>): Promise<void> => 
 }
 
 const views = async (repo: Repo): Promise<{sql: string[]; tx: string[]}> => ({
-  sql: await repo.runQuery('core.childIds', {id: OWNER, hidePropertyChildren: true}) as string[],
+  sql: await repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'none'}) as string[],
   tx: (await repo.tx(tx => visibleChildrenOf(tx, OWNER), {scope: ChangeScope.BlockDefault}))
     .map(child => child.id),
 })
@@ -107,7 +107,7 @@ describe('a mounted outline view follows the registry', () => {
   ])('re-resolves when $why', async ({from, to, before, after}) => {
     const repo = await openRepo()
     await seed(repo, from)
-    const handle = repo.query.childIds({id: OWNER, hidePropertyChildren: true})
+    const handle = repo.query.childIds({id: OWNER, propertyChildren: 'none'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       await vi.waitFor(() => expect(handle.peek()).toEqual(before))
@@ -119,8 +119,8 @@ describe('a mounted outline view follows the registry', () => {
   })
 })
 
-describe('the hidden-tier child view (`hidePropertyChildren: \'hidden-tier\'`)', () => {
-  const tierView = (repo: Repo) => repo.runQuery('core.childIds', {id: OWNER, hidePropertyChildren: 'hidden-tier'})
+describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () => {
+  const tierView = (repo: Repo) => repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'non-hidden'})
 
   it('keeps a field row whose definition is not hidden, and drops one whose definition is', async () => {
     const repo = await openRepo()
@@ -136,7 +136,7 @@ describe('the hidden-tier child view (`hidePropertyChildren: \'hidden-tier\'`)',
   it('re-resolves a mounted handle when the hidden bit moves, though recognition does not', async () => {
     const repo = await openRepo()
     await seed(repo, definitionBag({'property-schema:hidden': true}))
-    const handle = repo.query.childIds({id: OWNER, hidePropertyChildren: 'hidden-tier'})
+    const handle = repo.query.childIds({id: OWNER, propertyChildren: 'non-hidden'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       await vi.waitFor(() => expect(handle.peek()).toEqual([NOTE]))
@@ -180,4 +180,12 @@ describe('the hidden-tier child view (`hidePropertyChildren: \'hidden-tier\'`)',
     expect(await repo.runQuery('core.childIds', {id: OWNER})).toEqual([NOTE, FIELD])
     expect(await tierView(repo)).toEqual([NOTE])
   })
+})
+
+describe('the child queries\' arguments', () => {
+  it.each(['core.children', 'core.childIds', 'core.subtree'] as const)(
+    '%s refuses an unknown option instead of ignoring it', async name => {
+      const repo = await openRepo()
+      await expect(repo.runQuery(name, {id: OWNER, hidePropertyChildren: true} as never)).rejects.toThrow()
+    })
 })

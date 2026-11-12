@@ -6,7 +6,7 @@
  * on its parent. Two independent holes were already found and fixed in
  * this one small guard:
  *  - 6956dfc63: guarded only the VISIBLE `childIds` facade
- *    (`hidePropertyChildren: true`), so a block whose only content was
+ *    (`propertyChildren: 'none'`), so a block whose only content was
  *    HIDDEN property field/value rows read as empty and got deleted,
  *    stranding that data. Fixed by also checking the cell
  *    (`data.properties`).
@@ -14,7 +14,7 @@
  *    are still live (a forced find-replace / broken value-row edit makes
  *    PROJECT drop the cell key while the rows stay live) — so cell-only
  *    was still not enough. Fixed by loading the STRUCTURAL child list
- *    (`hidePropertyChildren: false`) instead of the visible facade.
+ *    (`propertyChildren: 'all'`) instead of the visible facade.
  *
  * `src/utils/test/propertyCreation.test.ts` pins one fixed example per
  * fix. This suite sweeps the full lattice the guard's own two checks
@@ -23,7 +23,7 @@
  * across {cell state} × {structural-child-row state} × {workspace flip
  * state} — the flip axis matters because it's what makes the diverged
  * "empty cell, live hidden rows" state naturally reachable in practice,
- * but the guard's OWN check (`hidePropertyChildren: false`) is flip-
+ * but the guard's OWN check (`propertyChildren: 'all'`) is flip-
  * independent by construction, so the property must hold in BOTH flip
  * states for every cell/structural combination, not just the flipped one.
  *
@@ -146,7 +146,7 @@ const runCase = async (
   // (structural rows live, visible list AND cell both empty) at all.
   // Recognition is not flip-gated, so this holds in both flip states.
   if (structState === 'handAuthoredFieldRow') {
-    const visibleIds = await repo.query.childIds({id: 'child', hidePropertyChildren: true}).load()
+    const visibleIds = await repo.query.childIds({id: 'child', propertyChildren: 'none'}).load()
     expect(visibleIds, 'hand-authored field row must be hidden from the visible facade').toEqual([])
   }
 

@@ -265,7 +265,7 @@ export interface TxImplContext {
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
   /** The workspace's hidden-tier definition ids (`hiddenTierFieldIds` over the
    *  same tx-start registry snapshot the resolver reads), for the
-   *  `'hidden-tier'` child view. */
+   *  `'non-hidden'` child view. */
   hiddenTierFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
   /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
    *  A scope with workspaceId null has no open workspace and refuses writes. */
@@ -1320,7 +1320,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: PropertyChildrenView},
+    options?: {propertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -1344,7 +1344,7 @@ export class TxImpl implements Tx {
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
       data = rows.map(parseBlockRow)
     }
-    // Default is the structural view (EVERY child); `hidePropertyChildren`
+    // Default is the structural view (EVERY child); `propertyChildren: 'none'`
     // is the display view. Not flip-gated — it is the in-tx twin of
     // VISIBLE_CHILDREN_SQL and must answer the same question, and the
     // backfill mints field rows before the flip. Root listings are exempt:
@@ -1354,8 +1354,8 @@ export class TxImpl implements Tx {
     // `::` rows can classify, so a ref-typed VALUE pointing at a definition is
     // never misread, and a marked row inside a property subtree IS machinery
     // and filters like any other, at any depth.
-    const view = options?.hidePropertyChildren ?? false
-    if (parentId === null || view === false || data.length === 0) return data
+    const view = options?.propertyChildren ?? 'all'
+    if (parentId === null || view === 'all' || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
     const rowsWorkspaceId = data[0]!.workspaceId
     const classifier: PropertyRowClassifier = {

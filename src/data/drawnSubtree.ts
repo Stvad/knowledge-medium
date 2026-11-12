@@ -54,9 +54,9 @@ export const copiedSubtree = async (
   id: string,
   properties: PropertyCopy = NO_PROPERTY_DISPLAY_SCOPE,
 ): Promise<SubtreeRow[]> => {
-  if (properties === 'all') return repo.query.subtree({id, hidePropertyChildren: false}).load()
-  if (!properties.childBacked) return repo.query.subtree({id, hidePropertyChildren: true}).load()
-  const rows = await repo.query.subtree({id, hidePropertyChildren: false}).load()
+  if (properties === 'all') return repo.query.subtree({id, propertyChildren: 'all'}).load()
+  if (!properties.childBacked) return repo.query.subtree({id, propertyChildren: 'none'}).load()
+  const rows = await repo.query.subtree({id, propertyChildren: 'all'}).load()
   if (rows.length === 0) return rows
   return pruneSubtreeToDrawn(rows, properties, repoPropertyRowClassifier(repo, rows[0]!.workspaceId))
 }

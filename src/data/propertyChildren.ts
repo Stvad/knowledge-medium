@@ -21,7 +21,7 @@
  * Recognizing a row is not the same as HIDING it, and this file owns only the
  * first. Property children are ordinary blocks — that is the point of the
  * model, not a leak — so listing them is the default and exclusion is opt-IN
- * (`hidePropertyChildren`), which most queries do not even offer. The one
+ * (`propertyChildren`), which most queries do not even offer. The one
  * surface that hides ALL recognized rows today does so as an accepted interim
  * pending §10's tier-aware predicate; see `visibleChildren.ts`.
  * Content-intrinsic and
@@ -103,8 +103,8 @@ export const isLeftOutOfChildrenView = (
   view: PropertyChildrenView,
   classifier: PropertyRowClassifier,
 ): boolean => {
-  if (view === false) return false
-  if (view === 'hidden-tier') {
+  if (view === 'all') return false
+  if (view === 'non-hidden') {
     const fieldId = getPropertyFieldTargetId(row)
     return row.isFieldForm === true && row.parentId !== null
       && fieldId !== undefined && classifier.isHiddenTier(fieldId)

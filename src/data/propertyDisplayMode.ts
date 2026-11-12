@@ -19,8 +19,10 @@ import { ChangeScope, seedType } from '@/data/api'
 import type { PropertyChildrenView } from '@/data/api'
 import { seedProperty } from './propertySeeds'
 
-export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const
-export type PropertyDisplayMode = typeof PROPERTY_DISPLAY_MODES[number]
+export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const satisfies readonly PropertyChildrenView[]
+/** The mode IS the child listing it shows (`core.childIds` / `core.children`'s
+ *  `propertyChildren`): one type, so no translation between them. */
+export type PropertyDisplayMode = PropertyChildrenView
 
 /** A level's stored setting: a mode, or `inherit` (unset — the next less
  *  specific level decides). */
@@ -123,18 +125,14 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
 
-/** The child listing a mode shows (`core.childIds` / `core.children`). */
-export const propertyChildrenViewFor = (mode: PropertyDisplayMode): PropertyChildrenView =>
-  mode === 'all' ? false : mode === 'non-hidden' ? 'hidden-tier' : true
-
 /** The child listing of `parent` that a surface with `scope` draws: the
  *  parent's own block setting over the scope. `parent` is null for a
  *  workspace-root listing, which has no block setting. */
 export const childrenViewIn = (
   scope: PropertyDisplayScopeLevels,
   parent: {readonly properties: Readonly<Record<string, unknown>>} | null,
-): PropertyChildrenView =>
-  propertyChildrenViewFor(resolvePropertyDisplayMode({...scope, block: blockPropertyDisplaySetting(parent)}))
+): PropertyDisplayMode =>
+  resolvePropertyDisplayMode({...scope, block: blockPropertyDisplaySetting(parent)})
 
 export const propertyDisplayScopeSchema = z.object({
   childBacked: z.boolean(),

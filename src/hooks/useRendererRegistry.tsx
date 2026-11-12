@@ -2,7 +2,7 @@ import { BlockRendererProps } from '../types'
 import { rendererProp } from '@/data/properties.js'
 import { usePropertyValue, useData } from '@/hooks/block.js'
 import { useCallback, useContext, useSyncExternalStore } from 'react'
-import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
+import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import type { Repo } from '@/data/repo'
 import { blockRenderersFacet } from '@/extensions/core.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -14,12 +14,15 @@ export const refreshRendererRegistry = async () => {
   refreshAppRuntime()
 }
 
-/** Re-render on a property-registry swap while `active`; otherwise the snapshot
- *  is a constant, so the subscription never re-renders the caller. */
+const NO_SUBSCRIPTION = () => () => {}
+const NO_SNAPSHOT = () => null
+
+/** Re-render on a property-registry swap while `active`; inactive, it neither
+ *  subscribes nor re-renders. */
 const usePropertyRegistryIn = (repo: Repo, active: boolean): void => {
   const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
-  const snapshot = () => (active ? repo.propertySchemas : null)
-  useSyncExternalStore(subscribe, snapshot, snapshot)
+  const snapshot = useCallback(() => repo.propertySchemas, [repo])
+  useSyncExternalStore(active ? subscribe : NO_SUBSCRIPTION, active ? snapshot : NO_SNAPSHOT)
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
@@ -30,10 +33,13 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
    * Ideally we make the dependency clear and structural tho
    */
 
-  // A property-row renderer recognizes a field row through its DEFINITION, which
-  // can register after the row mounted; re-choose on a registry swap — only in
-  // a listing that shows property rows, so every other block ignores swaps.
-  usePropertyRegistryIn(block.repo, useContext(PropertyRowListingContext) !== null)
+  // A property-row renderer recognizes a field row (or a value) through its
+  // DEFINITION, which can register after the row mounted; re-choose on a
+  // registry swap — only where property rows are drawn, so every other block
+  // ignores swaps.
+  const listingParentId = useContext(PropertyRowListingContext)
+  const fieldRowId = useContext(PropertyFieldRowContext)
+  usePropertyRegistryIn(block.repo, listingParentId !== null || fieldRowId !== null)
 
   const [rendererKey] = usePropertyValue(block, rendererProp)
   const runtime = useAppRuntime()

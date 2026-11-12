@@ -31,5 +31,5 @@ export const visibleChildrenOf = async (
 ): Promise<BlockData[]> => {
   // A cell-backed scope is mode `none` whatever the parent says: skip the read.
   const parent = parentId === null || !scope.childBacked ? null : await tx.get(parentId)
-  return tx.childrenOf(parentId, workspaceId, {hidePropertyChildren: childrenViewIn(scope, parent)})
+  return tx.childrenOf(parentId, workspaceId, {propertyChildren: childrenViewIn(scope, parent)})
 }

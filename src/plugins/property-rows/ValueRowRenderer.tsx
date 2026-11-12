@@ -11,11 +11,12 @@
 import { useContext, useMemo } from 'react'
 import { PropertyFieldRowContext } from '@/context/propertyDisplay'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
-import type { AnyPropertySchema } from '@/data/api'
-import { valueChildContentToEncoded } from '@/data/propertyChildren'
+import type { AnyPropertySchema, BlockData } from '@/data/api'
+import type { Repo } from '@/data/repo'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import { isFieldValueChild, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { persistedJsonKey } from '@/data/internals/jsonCanonical'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
-import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
 import { writeProperty } from '@/components/propertyPanel/actions'
 import { resolvePropertyModelRow, type PropertyPanelModelRow } from '@/components/propertyPanel/model'
@@ -26,42 +27,70 @@ import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
-import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, type FieldRowDefinition } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
-/** The field row a value child belongs to, when it is a scalar's value. */
-const scalarValueOf = (block: Block): {owner: string; definition: FieldRowDefinition} | undefined => {
-  const data = block.peek()
-  if (!data?.parentId || data.isFieldForm === true) return undefined
-  const fieldRow = block.repo.cache.getSnapshot(data.parentId)
-  const definition = fieldRowDefinition(block.repo, fieldRow)
+type FieldRowData = Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'>
+
+/** The scalar property a value child is a value of, given its field row: when
+ *  that row is recognized and the property is single-valued. */
+const scalarOf = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  fieldRow: FieldRowData | null | undefined,
+): {fieldId: string; schema: AnyPropertySchema} | undefined => {
+  const definition = fieldRowDefinition(repo, definitions, fieldRow)
   if (!fieldRow?.parentId || !definition?.schema || !isSingleValueProperty(definition.schema)) return undefined
-  return {owner: fieldRow.parentId, definition}
+  return {fieldId: definition.fieldId, schema: definition.schema}
 }
 
-/** The owner's property this value child shows, when the child IS that value:
- *  its own content stores exactly what the owner's cell holds. `null` for a
- *  child that is not — a sibling left divergent by concurrent offline edits,
- *  or content its codec cannot read — which then shows its own text as an
- *  ordinary block, so the conflict the data layer keeps stays visible and an
- *  edit lands on the row the user is looking at. */
+/** The id of the value child a write of this scalar lands on: the first value
+ *  child of the owner's first field row for the definition, both in
+ *  `(order_key, id)` order — the row `upsertFieldRow` keeps and
+ *  `reconcileSingleValueChild` overwrites. Derived from the structural child
+ *  lists, so it follows reorders, folds and arrivals. */
+const useWriteTargetId = (repo: Block['repo'], ownerId: string | null, fieldId: string | undefined): string | null => {
+  const fieldRowId = useHandle(repo.query.children({id: ownerId ?? '', propertyChildren: 'all'}), {
+    selector: children => (children ?? []).find(child =>
+      child.isFieldForm === true && child.referenceTargetId === fieldId)?.id ?? null,
+  })
+  return useHandle(repo.query.children({id: fieldRowId ?? '', propertyChildren: 'all'}), {
+    selector: children => (children ?? []).find(isFieldValueChild)?.id ?? null,
+  })
+}
+
+/** The owner's property this value child shows, when the child IS where a
+ *  write of it lands ({@link useWriteTargetId}) and currently stores exactly
+ *  the owner's cell value. `null` for any other value child — a sibling left
+ *  divergent by concurrent offline edits, content its codec cannot read, a
+ *  second field row's value — which then shows its own text as an ordinary
+ *  block: the conflict the data layer keeps stays visible, and the editor never
+ *  sits on one row while its write overwrites another. */
 const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow} | null => {
+  const repo = block.repo
   const schemas = usePropertySchemas()
+  const definitions = usePropertyDefinitions(repo)
   const runtime = useAppRuntime()
   const child = useHandle(block, {
     selector: data => data ? {parentId: data.parentId, content: data.content} : null,
   })
-  const ownerId = useHandle(block.repo.block(child?.parentId ?? block.id), {
-    selector: data => data?.parentId ?? null,
+  const fieldRow = useHandle(repo.block(child?.parentId ?? block.id), {
+    selector: (data): FieldRowData | null => data
+      ? {referenceTargetId: data.referenceTargetId, parentId: data.parentId,
+          isFieldForm: data.isFieldForm, workspaceId: data.workspaceId}
+      : null,
   })
-  const owner = block.repo.block(ownerId ?? block.id)
+  const ownerId = fieldRow?.parentId ?? null
+  const owner = repo.block(ownerId ?? block.id)
   const ownerProperties = useHandle(owner, {selector: data => data?.properties ?? EMPTY_PROPERTIES})
-  const schema = scalarValueOf(block)?.definition.schema
+  const scalar = scalarOf(repo, definitions, fieldRow)
+  const writeTargetId = useWriteTargetId(repo, ownerId, scalar?.fieldId)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   return useMemo(() => {
-    if (!schema || !child || ownerId === null) return null
+    const schema = scalar?.schema
+    if (!schema || !child || ownerId === null || writeTargetId !== block.id) return null
     if (!Object.hasOwn(ownerProperties, schema.name)) return null
     if (storedFormOfContent(schema, child.content) !== persistedJsonKey(ownerProperties[schema.name])) return null
     const row = resolvePropertyModelRow({
@@ -69,13 +98,13 @@ const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow
       properties: ownerProperties,
       name: schema.name,
       schemas,
-      propertyDefinitions: block.repo.propertyDefinitions,
-      typeDefinitions: block.repo.typeDefinitions,
+      propertyDefinitions: definitions,
+      typeDefinitions: repo.typeDefinitions,
       uis,
       presets,
     })
     return row ? {owner, row} : null
-  }, [block.repo, child, owner, ownerId, ownerProperties, presets, schema, schemas, uis])
+  }, [block.id, child, definitions, owner, ownerId, ownerProperties, presets, repo, scalar, schemas, uis, writeTargetId])
 }
 
 /** The persisted form of a value child's content, or `undefined` when its
@@ -108,18 +137,26 @@ const ownersValueRenderer = (Fallback: BlockRenderer): BlockRenderer => {
 }
 
 const ValueRowContent = ownersValueRenderer(MarkdownContentRenderer)
-const ValueRowEditContent = ownersValueRenderer(CodeMirrorContentRenderer)
 
 export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
-  const fieldRowId = useContext(PropertyFieldRowContext)
-  const parentId = useHandle(props.block, {selector: data => data?.parentId ?? null})
   // Only as a value in a field row drawn as a property row; anywhere else (a
   // backlink of the value's target) an ordinary block.
-  return fieldRowId !== null && fieldRowId === parentId
-    ? <DefaultBlockRenderer {...props} ContentRenderer={ValueRowContent} EditContentRenderer={ValueRowEditContent}/>
+  return useIsChildOf(props.block, useContext(PropertyFieldRowContext))
+    // Edit mode is the row's own text, as on any block — never the editor, so a
+    // stray row edited into the owner's value is not swapped for an input
+    // under the cursor.
+    ? <DefaultBlockRenderer {...props} ContentRenderer={ValueRowContent}/>
     : <DefaultBlockRenderer {...props}/>
 }
 ValueRowRenderer.displayName = 'ValueRowRenderer'
-ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
-  drawsPropertyRows(context) && scalarValueOf(block) !== undefined
+// Reads the parent from the cache, so a value child mounted by id before its
+// field row loaded (a backlink entry after a reload) is first chosen as an
+// ordinary block and re-chosen on its next change — a remount there, accepted:
+// outside a value column both draw the same block.
+ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean => {
+  if (!drawsPropertyRows(context)) return false
+  const data = block.peek()
+  if (!data?.parentId || data.isFieldForm === true) return false
+  return scalarOf(block.repo, block.repo.propertyDefinitions, block.repo.cache.getSnapshot(data.parentId)) !== undefined
+}
 ValueRowRenderer.priority = () => 150
