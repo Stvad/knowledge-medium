@@ -157,7 +157,7 @@ describe('the property display mode', () => {
     const note = await outlineSettled()
     const row = document.querySelector('[data-property-name="rows:status"]')!
     expect(note.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getByDisplayValue('draft')).toBeTruthy()
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
   })
 
   it('shows hidden-tier rows too in show-all, in the structural order', async () => {
@@ -165,7 +165,7 @@ describe('the property display mode', () => {
     const expected = await structuralFieldRowNames()
     expect([...expected].sort()).toEqual(['rows:secret', 'rows:status'])
     await waitFor(() => expect(shownRows()).toEqual(expected))
-    expect(screen.getByDisplayValue('shh')).toBeTruthy()
+    expect(await screen.findByDisplayValue('shh')).toBeTruthy()
   })
 
   it('lets the block level win over the workspace level', async () => {
