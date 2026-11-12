@@ -316,13 +316,14 @@ export const releaseStrandedGraphBackfillClaim = async (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => {
-  /** The bag a claim overwrote IN PLACE, by claim id, held until the claim is
-   *  released — normally a completed claim an operator reclaimed. A release
-   *  puts it back instead of deleting the row, so a failed re-run of a
-   *  finished pass leaves the workspace's record that it finished. In memory,
-   *  so a process that dies mid-run still strands a plain in-flight claim
-   *  (#617). */
-  const displacedBags = new Map<string, Record<string, unknown>>()
+  /** The COMPLETED claim an operator reclaim overwrote, by claim id, held until
+   *  the claim is released. A release puts it back instead of deleting the row,
+   *  so a failed re-run of a finished pass leaves the workspace's record that it
+   *  finished. Only a completed claim: a malformed bag records nothing, and
+   *  written back post-flip its undecodable values would fail the release.
+   *  In memory: a process that dies mid-run loses it, and releasing that
+   *  stranded claim deletes the record (#617). */
+  const displacedCompletions = new Map<string, Record<string, unknown>>()
   return {
     async stillOwned(tx, workspaceId, backfillId) {
       const row = await tx.get(graphBackfillClaimBlockId(workspaceId, backfillId))
@@ -363,17 +364,11 @@ export const createGraphBackfillClaim = (
         [migrationClaimantProp.name]: deps.claimantId,
         [migrationClaimedAtProp.name]: Date.now(),
       }, MIGRATION_CLAIM_TYPE)
-      // `already-complete` under `reclaimCompleted` takes the writing path too:
-      // the row exists and carries a completion stamp, which has to be replaced
-      // by a fresh claim or `markComplete` would be re-stamping someone else's
-      // record of a run that is not this one.
+      let displaced: Record<string, unknown> | undefined
       // `proceed` writes NOTHING — a live claim already names us. Reported as
       // `inherited` rather than as a win: this claimant is a browser profile, so
       // the row may be a sibling TAB's live claim, and a caller that released it
       // would delete a claim somebody is still writing under.
-      /** Recorded only once the claim's tx has COMMITTED, so a reclaim that
-       *  failed to land leaves nothing for a later release to restore. */
-      let displaced: Record<string, unknown> | undefined
       const won: ClaimAttempt = first === 'proceed'
         ? 'inherited'
         : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {
@@ -402,7 +397,7 @@ export const createGraphBackfillClaim = (
               return 'declined'
             }
             await tx.update(claimId, {properties: claimProperties})
-            displaced = existing.properties
+            if (live !== null) displaced = existing.properties
             return 'minted'
           }
           if (existing?.deleted) {
@@ -440,7 +435,9 @@ export const createGraphBackfillClaim = (
 
       // No convergence wait. Under an operator trigger there is nothing to
       // arbitrate, and the wait was unwinnable anyway — see the module header.
-      if (displaced) displacedBags.set(claimId, displaced)
+      // Only once the claim's tx has committed: a reclaim that failed to land
+      // overwrote nothing a release should put back.
+      if (displaced) displacedCompletions.set(claimId, displaced)
       return won
     },
 
@@ -505,13 +502,10 @@ export const createGraphBackfillClaim = (
         refuseForeignOccupant(row, workspaceId, claimId)
         if (!row || row.deleted) return
         if (decideClaim(claimFromProperties(row.properties), deps.claimantId) !== 'proceed') return
-        // A claim this run took over a COMPLETED one goes back to that
-        // completion: the run failed, so the earlier one is still the last that
-        // finished, and deleting would read the graph as never migrated.
-        const displaced = displacedBags.get(claimId)
+        const displaced = displacedCompletions.get(claimId)
         if (displaced) await tx.update(claimId, {properties: displaced})
         else await tx.delete(claimId)
-      }).finally(() => displacedBags.delete(claimId))
+      }).finally(() => displacedCompletions.delete(claimId))
     },
   }
 }
