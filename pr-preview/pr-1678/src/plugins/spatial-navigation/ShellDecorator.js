@@ -1,1 +1,1 @@
-export{PC as SpatialNavigationShellDecorator}from"../../../chunks/app-Ts-RGehU.js";
+export{IC as SpatialNavigationShellDecorator}from"../../../chunks/app-CdK7Rnpv.js";

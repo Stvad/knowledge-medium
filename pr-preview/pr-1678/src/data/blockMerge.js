@@ -1,1 +1,1 @@
-export{r5 as computeMergedContent,i5 as foldBlocksInTx,a5 as mergeBlocksInTx}from"../../chunks/app-Ts-RGehU.js";
+export{o5 as PropertyMergeError,s5 as computeMergedContent,c5 as foldBlocksInTx,l5 as mergeBlocksInTx,u5 as mergeReshapesProperty,d5 as mergeReshapesPropertyInTx}from"../../chunks/app-CdK7Rnpv.js";

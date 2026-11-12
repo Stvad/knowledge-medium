@@ -1,1 +1,1 @@
-export{UO as Label}from"../../../chunks/app-Ts-RGehU.js";
+export{GO as Label}from"../../../chunks/app-CdK7Rnpv.js";
