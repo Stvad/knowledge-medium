@@ -18,13 +18,13 @@ interface TaskPropsWrite {
   attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
 }
 
+/** Blocks of memory a run's prompt shows (about 50 short lines). */
+const MEMORY_OUTLINE_LIMIT = 50
+
 /** Reads, and the `agent:*` writes to a mention's source block. They go
  *  through a client with `contributorId: null`, for which the contributors
  *  processor records nothing, so a person's note keeps exactly the authors
  *  who wrote it. */
-/** Blocks of memory a run's prompt shows (about 50 short lines). */
-const MEMORY_OUTLINE_LIMIT = 50
-
 export const createGraph = (bridgeClient: BridgeClient) => {
   const client = withContributorId(bridgeClient, null)
   const bridgeGraph = createBridgeGraph(client)

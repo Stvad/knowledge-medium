@@ -1,4 +1,4 @@
-/**
+/*
  * A watcher's memory: one block per note under a `Memory` block that is a
  * direct child of the watched page. The run keeps it with the ordinary km
  * write tools; the daemon reports what changed, so a write to it is never
