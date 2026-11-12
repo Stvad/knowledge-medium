@@ -1,1 +1,1 @@
-export{IM as TypeChip}from"../../../chunks/app-BEBQ4I6s.js";
+export{IM as TypeChip}from"../../../chunks/app-C9u_Xfqy.js";
