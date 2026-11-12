@@ -1,1 +1,1 @@
-export{fit as getOrCreatePropertiesPage,pit as propertiesPageBlockId,mit as propertiesPageSpec}from"../../chunks/app-C9u_Xfqy.js";
+export{mit as getOrCreatePropertiesPage,hit as propertiesPageBlockId,git as propertiesPageSpec}from"../../chunks/app-CVpOHBmn.js";

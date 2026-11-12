@@ -1,1 +1,1 @@
-export{mc as SrsReviewDeckRenderer}from"../../../chunks/app-C9u_Xfqy.js";
+export{gc as SrsReviewDeckRenderer}from"../../../chunks/app-CVpOHBmn.js";
