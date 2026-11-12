@@ -1,1 +1,1 @@
-export{fb as richPastePlugin}from"../../../chunks/app-Ct5PqHus.js";
+export{fb as richPastePlugin}from"../../../chunks/app-zZF4e3Uc.js";
