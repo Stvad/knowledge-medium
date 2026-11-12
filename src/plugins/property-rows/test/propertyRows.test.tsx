@@ -56,6 +56,11 @@ const tagsProp = seedProperty({
   preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
+const ratingProp = seedProperty({
+  seedKey: 'test/property/rows-rating', revision: 1, name: 'rows:rating',
+  preset: 'optional-number', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 let runtime: FacetRuntime
@@ -88,7 +93,7 @@ beforeEach(async () => {
     defaultRenderersExtension,
     propertyRowsPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [statusProp, secretProp, tagsProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    [statusProp, secretProp, tagsProp, ratingProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -385,5 +390,34 @@ describe('a field row\'s own properties', () => {
     expect(row.querySelector('.tm-property-fields')).toBeNull()
     await act(async () => { await repo.block(row.dataset.blockId!).set(showPropertiesProp, true) })
     await waitFor(() => expect(row.querySelector('.tm-property-fields')).not.toBeNull())
+  })
+})
+
+describe('a scalar whose first value child its codec cannot read', () => {
+  // The cell projects from the first child that decodes, but a write lands on
+  // the FIRST value child whatever it holds. An editor on the decoding child
+  // would write over the other one's text.
+  it('offers no editor, so no edit can overwrite the unreadable row', async () => {
+    await repo.block(OWNER).set(ratingProp, 5)
+    const fieldRow = await sharedDb.db.getOptional<{id: string}>(
+      `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+         AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = '5' AND v.deleted = 0)`,
+      [OWNER])
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+           created_at, updated_at, created_by, updated_by)
+         VALUES ('unreadable', ?, ?, 'A0', 'call Bob about this', '{}', 0, 1, 1, ?, ?)`,
+        [WS, fieldRow!.id, USER.id, USER.id])
+    })
+    expect(repo.block(OWNER).peekProperty(ratingProp)).toBe(5)
+
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain('rows:rating'))
+    await screen.findByText('call Bob about this')
+    await waitFor(() => expect(document.querySelector('[data-block-id="unreadable"]')).not.toBeNull())
+    // The scalar beside it still has its editor, so the outline has settled.
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
+    expect(screen.queryByDisplayValue('5')).toBeNull()
   })
 })
