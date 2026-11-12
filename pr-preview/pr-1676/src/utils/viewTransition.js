@@ -1,0 +1,1 @@
+export{XU as withMoveTransition}from"../../chunks/app-D7GDJVES.js";

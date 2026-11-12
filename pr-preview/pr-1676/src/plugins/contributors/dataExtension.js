@@ -1,0 +1,1 @@
+export{MX as contributorsDataExtension}from"../../../chunks/app-D7GDJVES.js";

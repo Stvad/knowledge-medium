@@ -1,0 +1,1 @@
+export{Xw as plainOutlinerPlugin}from"../../../chunks/app-D7GDJVES.js";

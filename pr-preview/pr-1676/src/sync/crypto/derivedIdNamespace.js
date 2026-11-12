@@ -1,0 +1,1 @@
+export{qit as deriveWorkspaceIdNamespace}from"../../../chunks/app-D7GDJVES.js";

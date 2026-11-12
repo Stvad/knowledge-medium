@@ -1,0 +1,1 @@
+export{AP as ClientLocalSettings,jP as clientLocalSettings}from"../../chunks/app-D7GDJVES.js";

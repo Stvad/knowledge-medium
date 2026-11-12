@@ -1,0 +1,1 @@
+export{LG as BootFallback}from"../../../chunks/app-D7GDJVES.js";

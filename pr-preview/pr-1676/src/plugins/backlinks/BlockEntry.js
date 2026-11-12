@@ -1,0 +1,1 @@
+export{bv as LazyBlockEntry}from"../../../chunks/app-D7GDJVES.js";

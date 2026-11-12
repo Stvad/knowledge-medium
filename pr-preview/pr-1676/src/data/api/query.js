@@ -1,0 +1,1 @@
+export{wct as defineQuery}from"../../../chunks/app-D7GDJVES.js";

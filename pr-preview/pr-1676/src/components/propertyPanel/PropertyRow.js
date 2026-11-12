@@ -1,0 +1,1 @@
+export{kB as PropertyRow}from"../../../chunks/app-D7GDJVES.js";

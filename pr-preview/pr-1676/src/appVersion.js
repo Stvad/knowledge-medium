@@ -1,0 +1,1 @@
+export{uc as appVersion}from"../chunks/app-D7GDJVES.js";

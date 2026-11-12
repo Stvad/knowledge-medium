@@ -1,0 +1,1 @@
+export{CB as BlockProperties}from"../../chunks/app-D7GDJVES.js";
