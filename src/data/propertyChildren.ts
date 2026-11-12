@@ -182,14 +182,16 @@ const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
   memberCodecOf(schema.codec) ?? schema.codec
 
 /** The characters every reference span OPENS with. Escaping these is what
- *  makes {@link grammarInertJson}'s output inert to BOTH readers of the grammar:
+ *  makes {@link escapeContent}'s output inert to BOTH readers of the grammar:
  *  quoting alone only stops the whole-block parser, and the inline one
  *  (`plugins/references/referenceParser`) scans spans anywhere in content, so
  *  a merely-quoted `"[[Page]]"` is still an inline reference that a rename
  *  rewrites — silently editing the value. Stated as the opener set rather than
  *  by consulting the inline parser because core cannot import a plugin, and
- *  because no span form in either reader can begin any other way. Never `g`:
- *  a global regex carries `lastIndex` across `.test` calls. */
+ *  because no span form in either reader can begin any other way. */
+const SPAN_OPENERS_RE = /[[(]/g
+/** The same class without `g`, for `.test`. A global regex carries `lastIndex`
+ *  across calls, so testing with one answers differently on alternate calls. */
 const SPAN_OPENER_RE = /[[(]/
 
 /** Does this codec store a value as RAW content, so that the text in the row
@@ -375,42 +377,37 @@ export const contentLosesPropertyValue = (
     || hasLoneSurrogate(content)
 }
 
-/** Respell JSON text so that neither reference reader finds a span in it,
- *  while `JSON.parse` reads back exactly the same value. THE owner of that
- *  rule for every value child stored as JSON — the string envelope and the
- *  JSON-spelled codecs alike — because a span the INLINE reader finds anywhere
- *  in the text is a live reference that a rename or merge rewrites, editing
- *  the value.
- *
- *  Every span opens with `[[`, `((`, `!((` or `[label](`. Inside a string
- *  literal both openers are `\u`-escaped. Outside one JSON has no `(` at all,
- *  and its only `[` is an array bracket: one directly followed by another is
- *  spaced apart, so a nested array never opens a wikilink. */
-const grammarInertJson = (serialized: string): string => {
-  if (!SPAN_OPENER_RE.test(serialized)) return serialized
-  let out = ''
-  let inString = false
-  for (let i = 0; i < serialized.length; i++) {
-    const c = serialized[i]!
-    if (inString && c === '\\') {
-      out += c + serialized[++i]!
-      continue
-    }
-    if (c === '"') inString = !inString
-    out += inString && SPAN_OPENER_RE.test(c)
-      ? `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
-      : c
-    if (!inString && c === '[' && serialized[i + 1] === '[') out += ' '
-  }
-  return out
-}
+const unicodeEscape = (c: string): string =>
+  `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
 
 /** Store `s` as content that reads back as exactly `s` and as nothing else.
  *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
- *  escapes); {@link grammarInertJson} neutralizes the reference grammar.
+ *  escapes); the extra opener escaping neutralizes the reference grammar.
  *  `JSON.parse` undoes both, so the decode needs no counterpart — only
  *  {@link isEscapedEnvelope} to know it is looking at one. */
-const escapeContent = (s: string): string => grammarInertJson(JSON.stringify(s))
+const escapeContent = (s: string): string =>
+  JSON.stringify(s).replace(SPAN_OPENERS_RE, unicodeEscape)
+
+/** A whole JSON string literal, or an array bracket that directly opens another. */
+const JSON_STRING_OR_NESTED_BRACKET_RE = /"(?:[^"\\]|\\.)*"|\[(?=\[)/g
+/** A span opener directly followed by the same opener. */
+const DOUBLED_OPENER_RE = /([[(])(?=\1)/g
+
+/** Respell JSON text so that neither reference reader finds a span in it,
+ *  while `JSON.parse` reads back the same value — for every JSON-spelled
+ *  value child, where any span is an accident of serialization that a rename
+ *  or merge would rewrite.
+ *
+ *  Every span form in either reader needs a doubled opener (`[[` or `((`;
+ *  `!((` and `[label](((` included), so breaking each pair is enough: inside a
+ *  string literal the first of the pair is `\u`-escaped, and outside one —
+ *  where JSON has no `(` and `[` only opens an array — a space separates the
+ *  brackets. A lone opener stays as written, so the text stays readable and
+ *  searchable. Narrower than {@link escapeContent}, which must escape every
+ *  opener so an envelope identifies itself. */
+const grammarInertJson = (serialized: string): string =>
+  serialized.replace(JSON_STRING_OR_NESTED_BRACKET_RE, match =>
+    match === '[' ? '[ ' : match.replace(DOUBLED_OPENER_RE, unicodeEscape))
 
 /** Could `trimmed` have come out of {@link escapeContent}? A JSON string
  *  literal carrying no literal span opener — the two properties escapeContent

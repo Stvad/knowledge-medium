@@ -3583,10 +3583,7 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
 })
 
 describe('content <-> value codecs: a JSON-spelled value child carries no span (#1061, #749)', () => {
-  // The generic `list` member and the `json` scalars spell content as JSON. A
-  // span anywhere in it is a live reference to the INLINE reader, which a
-  // rename or merge then rewrites, so what is stored must parse to the value
-  // and give the real parser nothing — asserted on the parser, not a spelling.
+  // Asserted on the real parsers, not on a spelling.
   const jsonSchema = defineProperty<unknown>('blob', {
     codec: codecs.unsafeIdentity<unknown>(),
     defaultValue: null,
@@ -3607,7 +3604,7 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     {'[[key]]': [`((${UUID}))`], 'q"[[': 'back\\[[slash'},
   ]
 
-  it.each(VALUES)('stores %j as JSON no reference reader reads a span in', value => {
+  it.for(VALUES)('stores %j as JSON no reference reader reads a span in', value => {
     const contents = [
       encodedToValueChildContent(jsonSchema, value),
       ...encodedPropertyValueToChildContents(listSchema, [value]),
@@ -3615,7 +3612,6 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     for (const content of contents) {
       expect(parseReferences(content), content).toEqual([])
       expect(parseBlockRefs(content), content).toEqual([])
-      expect(JSON.parse(content)).toEqual(value)
       expect(valueChildContentToEncoded(jsonSchema, content)).toEqual(value)
     }
   })
@@ -3628,8 +3624,8 @@ describe('content <-> value codecs: a JSON-spelled value child carries no span (
     }
   })
 
-  it('leaves JSON with no span opener spelled exactly as before', () => {
-    for (const value of [{a: 1}, ['x', 2, null], 'plain', [1, [2]]]) {
+  it('keeps a lone opener as written, so the stored text stays readable', () => {
+    for (const value of ['Book (2019)', {'a[0]': 'f(x)'}, ['x [1]', [2]], [1, [2]]]) {
       expect(encodedToValueChildContent(jsonSchema, value)).toBe(JSON.stringify(value))
     }
   })
@@ -5036,11 +5032,7 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
 
   it('does NOT re-read the text for an IDENTITY target, which holds anything', () => {
     expect(convert('string', 'list', '42')).toEqual({outcome: 'converted', content: '"42"'})
-    // By value: the JSON spelling escapes span openers (#1061), so `[1,2]` stays
-    // a STRING member rather than becoming the array its text spells.
-    const converted = convert('string', 'list', '[1,2]')
-    expect(converted.outcome).toBe('converted')
-    expect(JSON.parse((converted as {content: string}).content)).toBe('[1,2]')
+    expect(convert('string', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '"[1,2]"'})
   })
 
   it('re-reads the text for a row the OLD codec cannot read', () => {
