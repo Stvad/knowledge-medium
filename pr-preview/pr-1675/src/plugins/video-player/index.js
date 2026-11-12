@@ -1,1 +1,1 @@
-export{TS as videoPlayerPlugin}from"../../../chunks/app-BsFMcQZO.js";
+export{kS as videoPlayerPlugin}from"../../../chunks/app-C_TwvtFG.js";

@@ -1,1 +1,1 @@
-export{fo as MigrationGateDialog}from"../../../chunks/app-BsFMcQZO.js";
+export{mo as MigrationGateDialog}from"../../../chunks/app-C_TwvtFG.js";

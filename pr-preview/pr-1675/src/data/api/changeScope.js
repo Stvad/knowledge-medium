@@ -1,1 +1,1 @@
-export{Zlt as CHANGE_SCOPE_POLICIES,Qlt as ChangeScope,$lt as isChangeScope,eut as policyForScope,tut as scopeAllowedInReadOnly,nut as scopeIsUndoable,rut as scopePoliciesEquivalent,iut as scopeUploadsToServer,aut as sourceForScope}from"../../../chunks/app-BsFMcQZO.js";
+export{tut as CHANGE_SCOPE_POLICIES,nut as ChangeScope,rut as isChangeScope,iut as policyForScope,aut as scopeAllowedInReadOnly,out as scopeIsUndoable,sut as scopePoliciesEquivalent,cut as scopeUploadsToServer,lut as sourceForScope}from"../../../chunks/app-C_TwvtFG.js";

@@ -1,2 +1,0 @@
-import{t as e}from"./rolldown-runtime-CNOWq4Kh.js";import{t}from"./react-dom-server-legacy.browser.production-bm453JDl.js";import{t as n}from"./react-dom-server.browser.production-C3acn6_C.js";var r=e((e=>{var r=t(),i=n();e.version=r.version,e.renderToString=r.renderToString,e.renderToStaticMarkup=r.renderToStaticMarkup,e.renderToReadableStream=i.renderToReadableStream,e.resume=i.resume}));export{r as t};
-//# sourceMappingURL=server.browser-DxZH2szu.js.map
