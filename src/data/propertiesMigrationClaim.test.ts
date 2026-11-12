@@ -197,6 +197,24 @@ describe('the migration running under its own claim', {timeout: 30_000}, () => {
     expect(await claimRow()).toBeNull()
   })
 
+  it('leaves the previous completion in place when a re-run of a finished pass FAILS', async () => {
+    // The re-run reclaims the completed claim, overwriting its completion
+    // stamp; releasing it by deleting the row would erase the workspace's
+    // record that the migration ever finished, for a run that wrote nothing.
+    const repo = makeOperatorRepo()
+    await seedTarget(repo)
+    await seedClaim({completed: true})
+
+    expect((await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)).outcome)
+      .toBe('failed')
+
+    expect(await claimRow()).toMatchObject({
+      [migrationClaimantProp.name]: 'peer-device',
+      [migrationClaimedAtProp.name]: 1,
+      [migrationCompletedAtProp.name]: 2,
+    })
+  })
+
   it('turns a second device away without mistaking a peer\'s claim for a failure', async () => {
     // A peer's claim is in flight, so this device must report `held-by-peer`.
     // It reaches that verdict through `ensureHome`, which writes.

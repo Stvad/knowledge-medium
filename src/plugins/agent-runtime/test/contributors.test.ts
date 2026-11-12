@@ -15,6 +15,7 @@ import {PLAINTEXT_ALIAS_SEATS} from '@/data/test/plaintextAliasSeats'
 import {actionsFacet} from '@/extensions/core'
 import {contributorsDataExtension} from '@/plugins/contributors/dataExtension'
 import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
+import {PROPERTY_CELL_BACKFILL_ID} from '@/data/internals/propertyCellBackfill'
 
 const WS = 'ws'
 let db: TestDb
@@ -75,6 +76,13 @@ describe('agent contributor selection', () => {
     await expect(run({type: 'create-page', name: 'Unconfigured client'})).rejects.toThrow(/Choose a contributor.*CLI or MCP/)
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Unconfigured client'])).toEqual([])
     expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
+  })
+
+  it('refuses a backfill run with no contributor chosen before it takes the claim', async () => {
+    const runNow = vi.spyOn(context.repo, 'runWorkspaceBackfillNow')
+    await expect(run({type: 'run-backfill', backfillId: PROPERTY_CELL_BACKFILL_ID}))
+      .rejects.toThrow(/Choose a contributor/)
+    expect(runNow).not.toHaveBeenCalled()
   })
 
   it('binds schema creation reached through the supplied eval Repo to its contributor', async () => {
