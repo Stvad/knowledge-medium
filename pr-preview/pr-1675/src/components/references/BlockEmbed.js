@@ -1,1 +1,1 @@
-export{VM as BlockEmbed}from"../../../chunks/app-C_TwvtFG.js";
+export{VM as BlockEmbed}from"../../../chunks/app-l7didK-T.js";

@@ -1,1 +1,1 @@
-export{Jj as CommandPaletteHeaderItem}from"../../../chunks/app-C_TwvtFG.js";
+export{Jj as CommandPaletteHeaderItem}from"../../../chunks/app-l7didK-T.js";
