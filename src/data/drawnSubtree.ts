@@ -48,7 +48,10 @@ export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): Prop
 }
 
 /** The subtree under `id` a copy carries (see {@link PropertyCopy}), in
- *  pre-order with root-relative depths. */
+ *  pre-order with root-relative depths. On a child-backed workspace the prune
+ *  recognizes rows through the resolver, not the outline's SQL: the two agree
+ *  except for an unmaterialized seed whose name is ambiguous, which the
+ *  resolver does not count as a definition. */
 export const copiedSubtree = async (
   repo: Repo,
   id: string,
