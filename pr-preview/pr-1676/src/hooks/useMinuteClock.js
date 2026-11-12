@@ -1,1 +1,0 @@
-export{AD as useMinuteClock}from"../../chunks/app-D2bRvqUs.js";

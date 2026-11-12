@@ -1,1 +1,0 @@
-export{KB as buildPropertyPanelSections}from"../../chunks/app-D2bRvqUs.js";

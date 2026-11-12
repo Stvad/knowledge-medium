@@ -1,1 +1,0 @@
-export{DJ as matchCharTrigger}from"../../chunks/app-D2bRvqUs.js";

@@ -1,1 +1,0 @@
-export{VP as extensionDisplayName,HP as extensionName,UP as userExtensionShellToggle,WP as userExtensionToggle}from"../../chunks/app-D2bRvqUs.js";

@@ -1,1 +1,0 @@
-export{XR as MarkdownContentRenderer}from"../../../chunks/app-D2bRvqUs.js";

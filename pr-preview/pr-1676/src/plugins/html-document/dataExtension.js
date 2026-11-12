@@ -1,1 +1,0 @@
-export{vq as htmlDocumentDataExtension}from"../../../chunks/app-D2bRvqUs.js";

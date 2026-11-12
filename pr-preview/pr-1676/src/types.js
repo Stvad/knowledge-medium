@@ -1,1 +1,0 @@
-export{bat as isChildBackedPropertiesWorkspace}from"../chunks/app-D2bRvqUs.js";

@@ -1,1 +1,0 @@
-export{XA as openKeybindingsSettingsAction}from"../../../chunks/app-D2bRvqUs.js";
