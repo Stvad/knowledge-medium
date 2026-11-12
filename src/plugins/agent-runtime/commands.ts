@@ -1671,6 +1671,18 @@ const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
 const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
   context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
 
+/** The attribution processor's refusal, asked BEFORE a command's expensive or
+ *  unattributed first step — the one its own transaction-time check comes too
+ *  late for. */
+const refuseUnchosenContributor = (
+  context: AgentRuntimeContext,
+  command: {contributorId?: string | null},
+): void => {
+  if (contributorsEnabled(context) && command.contributorId === undefined) {
+    throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+  }
+}
+
 const requireComments = (context: AgentRuntimeContext): void => {
   if (!context.runtime.read(queriesFacet).has(THREAD_IDS_FOR_BLOCK_QUERY)) {
     throw new Error('Enable the Comments plugin to read or write comment threads.')
@@ -2388,9 +2400,7 @@ const executeAttributedCommand = async (
       }
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
-      if (contributorsEnabled(context) && command.contributorId === undefined) {
-        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
-      }
+      refuseUnchosenContributor(context, command)
       return addMedia(context.repo, workspaceId, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
@@ -2598,6 +2608,9 @@ const executeAttributedCommand = async (
       })
 
     case 'run-backfill':
+      // Refused here, not left to the pass's first batch: by then the claim is
+      // taken, over the workspace's record of an earlier completed run.
+      refuseUnchosenContributor(context, command)
       return context.runBackfill({
         backfillId: requireString(command.backfillId, 'backfillId'),
         workspaceId: command.workspaceId === undefined
