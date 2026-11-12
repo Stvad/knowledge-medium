@@ -38,6 +38,8 @@ import {
 } from '@/data/propertyDisplayMode'
 import {
   mergeBlocksInTx,
+  mergeReshapesPropertyInTx,
+  PropertyMergeError,
   type ContentStrategy,
 } from './blockMerge'
 import { deleteSubtreeInTx } from './subtreeDelete'
@@ -920,6 +922,7 @@ export const merge = defineMutator<MergeArgs, void>({
   apply: async (tx, {intoId, fromId, contentStrategy = 'concat'}) => {
     const into = await requireBlock(tx, intoId)
     const from = await requireBlock(tx, fromId)
+    if (await mergeReshapesPropertyInTx(tx, into, from)) throw new PropertyMergeError()
     await mergeBlocksInTx(tx, {into, from, contentStrategy})
   },
 })

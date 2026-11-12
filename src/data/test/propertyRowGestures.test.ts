@@ -26,6 +26,7 @@ import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { moveBlocksInTx, PropertyValueSetMoveError } from '@/data/mutators'
+import { PropertyMergeError } from '@/data/blockMerge'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -257,5 +258,39 @@ describe('every other user move (move command, drag, cut and paste)', () => {
     }, {scope: ChangeScope.BlockDefault})
     expect(await parentOf(ids.status)).toBe('page')
     expect(await childIds(ids.tags)).toEqual([ids.y, ids.x])
+  })
+})
+
+describe('merge (Backspace at a start, Delete at an end, the merge picker)', () => {
+  const contentOf = async (id: string): Promise<string | undefined> => (await repo.load(id))?.content
+
+  it('refuses to fold the first value into its field row', async () => {
+    await expect(repo.mutate.merge({intoId: ids.tags, fromId: ids.x})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(repo.block('owner').peekProperty(tagsProp)).toEqual(['x', 'y'])
+  })
+
+  it('refuses to fold a field row into the block above it', async () => {
+    await expect(repo.mutate.merge({intoId: ids.a, fromId: ids.status})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(await parentOf(ids.status)).toBe('owner')
+  })
+
+  it('refuses to fold an ordinary block into a value', async () => {
+    await expect(repo.mutate.merge({intoId: ids.y, fromId: ids.b})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(await contentOf(ids.y)).toBe('y')
+  })
+
+  it('refuses to fold a value into an ordinary block', async () => {
+    await expect(repo.mutate.merge({intoId: ids.a, fromId: ids.x})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(await parentOf(ids.x)).toBe(ids.tags)
+  })
+
+  it('refuses to fold one property\'s value into another\'s', async () => {
+    await expect(repo.mutate.merge({intoId: ids.x, fromId: ids.draft})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(await contentOf(ids.x)).toBe('x')
+  })
+
+  it('joins two values of one field row like any two blocks', async () => {
+    await repo.mutate.merge({intoId: ids.x, fromId: ids.y})
+    expect(await contentOf(ids.x)).toBe('xy')
   })
 })
