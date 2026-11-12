@@ -25,11 +25,12 @@ export const MEDIA_TYPE = 'media'
  *  cosmetic. Empty default = "no hash yet" → the renderer fails closed. */
 export const mediaHashProp = seedProperty({
   seedKey: 'system:attachments/property/media-hash',
-  revision: 1,
+  revision: 2,
   name: 'media:hash',
   preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** A media block's content hash from its stored properties, or null when it
@@ -56,31 +57,34 @@ export const mediaHashOfStoredRow = (propertiesJson: string): string | null => {
  *  to the bytes' on-the-wire type; the real value is set at capture (§11). */
 export const mediaMimeProp = seedProperty({
   seedKey: 'system:attachments/property/media-mime',
-  revision: 1,
+  revision: 2,
   name: 'media:mime',
   preset: 'string',
   defaultValue: 'application/octet-stream',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** Plaintext byte length (cosmetic — for the file chip / pending UI). */
 export const mediaSizeProp = seedProperty({
   seedKey: 'system:attachments/property/media-size',
-  revision: 1,
+  revision: 2,
   name: 'media:size',
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** Original filename, when captured from a file (cosmetic; cross-device LWW). */
 export const mediaFilenameProp = seedProperty({
   seedKey: 'system:attachments/property/media-filename',
-  revision: 1,
+  revision: 2,
   name: 'media:filename',
   preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const MEDIA_PROPERTY_SCHEMAS = [

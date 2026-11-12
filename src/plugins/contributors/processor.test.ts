@@ -12,7 +12,6 @@ import {contributorsDataExtension} from './dataExtension'
 import {attributionCreatorsProp, attributionEditorsProp, CONTRIBUTOR_TYPE, contributorKindProp, contributorRoleProp} from './schema'
 import {propertyFieldContent} from '@/data/propertyChildren'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
-import {deleteProperty} from '@/components/propertyPanel/actions'
 
 const WS = 'workspace'
 const HUMAN = userPageBlockId(WS, 'vlad')
@@ -180,7 +179,7 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
   })
 
-  it.each([false, true])('honors property-panel removals and batch unsets (children: %s)', async children => {
+  it.each([false, true])('honors single and batch unsets (children: %s)', async children => {
     if (children) {
       await db.db.execute(`INSERT INTO workspaces
         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
@@ -190,8 +189,7 @@ describe('automatic contributor attribution', () => {
     await create(repo.withTxContext({contributorId: 'atlas'}))
     await repo.withTxContext({contributorId: 'scout'}).tx(tx => tx.update('note', {content: 'Revision'}), opts)
     for (const schema of [attributionCreatorsProp, attributionEditorsProp]) {
-      await deleteProperty({block: repo.block('note'), properties: (await repo.load('note'))!.properties,
-        schemas: repo.propertySchemas, uis: new Map(), name: schema.name})
+      await repo.tx(tx => tx.unsetProperty('note', schema), opts)
       expect(await read('note', schema.name)).toBeUndefined()
     }
     await repo.tx(tx => tx.setProperties('note', {set: [

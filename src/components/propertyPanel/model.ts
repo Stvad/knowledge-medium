@@ -256,15 +256,18 @@ export const buildPropertyPanelModel = (args: {
     args.uis,
     args.propertyDefinitions,
   )
+  // The pinned row owns `types` whichever tier its definition is in, so it
+  // never also lands in a section or the hidden list.
   const pinnedRawRows: readonly PropertyPanelRow[] = [{
     name: typesProp.name,
-    encodedValue: Object.hasOwn(visibleProperties, typesProp.name)
-      ? visibleProperties[typesProp.name]
+    encodedValue: Object.hasOwn(args.properties, typesProp.name)
+      ? args.properties[typesProp.name]
       : typesProp.codec.encode(blockTypes),
     isSet: true,
   }]
   const sectionProperties = {...visibleProperties}
   delete sectionProperties[typesProp.name]
+  delete hiddenProperties[typesProp.name]
 
   const pinnedRows = pinnedRawRows
     .map(row => resolveModelRow(row, {

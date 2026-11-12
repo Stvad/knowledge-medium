@@ -487,7 +487,7 @@ describe('view-block', () => {
     expect(first.content).toBe('abcdefghij'.repeat(3))
     expect(first.nextContentOffset).toBe(30)
     expect(first.backlinkCount).toBe(1)
-    expect(first.hiddenProperties).toEqual(['system:collapsed'])
+    expect(first.hiddenProperties).toEqual(['system:collapsed', 'alias'])
 
     const rest = await view<BlockView>({type: 'view-block', ref: 'Long', contentOffset: 90, format: 'json'})
     expect(rest.content).toBe('abcdefghij')
@@ -505,7 +505,7 @@ describe('view-block', () => {
 
     const text = await view<string>({type: 'view-block', ref: id, maxChars: 30})
     expect(text).toContain('…[+70 chars — continue with contentOffset=30]')
-    expect(text).toContain('(hidden in the UI: system:collapsed)')
+    expect(text).toContain('(hidden in the UI: system:collapsed, alias)')
   })
 })
 

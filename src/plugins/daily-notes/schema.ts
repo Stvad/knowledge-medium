@@ -15,11 +15,12 @@ export const DAILY_NOTE_TYPE = 'daily-note'
  *  once per device from the ISO alias for pre-existing rows. */
 export const dailyNoteDateProp = seedProperty({
   seedKey: 'system:daily-notes/property/date',
-  revision: 1,
+  revision: 2,
   name: 'daily-note:date',
   preset: 'date',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const dailyNoteType = seedType({

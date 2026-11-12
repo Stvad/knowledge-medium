@@ -235,10 +235,11 @@ export const isCollapsedProp = seedProperty({
  *  reason and what covers merge retargeting instead. */
 export const typesProp = seedProperty({
   seedKey: 'system:kernel-data/property/types',
-  revision: 1,
+  revision: 2,
   name: 'types',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const rendererProp = seedProperty({
@@ -537,10 +538,11 @@ export const migrationCompletedAtProp = seedProperty({
 // handle contract without widening the public seedProperty overloads.
 export const aliasesProp = seedProperty({
   seedKey: 'system:kernel-data/property/alias',
-  revision: 1,
+  revision: 2,
   name: 'alias',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 }) as PropertySeedDeclaration<string[]>
 
 // ──── Helpers ────

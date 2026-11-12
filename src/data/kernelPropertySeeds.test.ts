@@ -14,6 +14,7 @@ import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPrope
 import {ChangeScope} from './api/changeScope'
 
 const hiddenKernelPropertyNames = new Set([
+  'alias',
   'createdAt',
   'migration:claimant',
   'migration:claimed-at',
@@ -30,6 +31,7 @@ const hiddenKernelPropertyNames = new Set([
   'system:showProperties',
   'sourceBlockId',
   'topLevelBlockId',
+  'types',
 ])
 
 const uiStatePropertyNames = new Set([

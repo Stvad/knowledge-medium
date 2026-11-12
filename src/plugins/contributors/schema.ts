@@ -48,22 +48,24 @@ export const contributorForProp = seedProperty({
 // Lists allow hand-recorded coauthorship; automatic creation adds one contributor.
 export const attributionCreatorsProp = seedProperty({
   seedKey: 'system:contributors/property/attribution-creators',
-  revision: 1,
+  revision: 2,
   name: 'attribution:creators',
   preset: 'refList',
   config: {targetTypes: [CONTRIBUTOR_TYPE]},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const attributionEditorsProp = seedProperty({
   seedKey: 'system:contributors/property/attribution-editors',
-  revision: 1,
+  revision: 2,
   name: 'attribution:editors',
   preset: 'refList',
   config: {targetTypes: [CONTRIBUTOR_TYPE]},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 // Contributor profiles are ordinary pages. The profile creation helper adds

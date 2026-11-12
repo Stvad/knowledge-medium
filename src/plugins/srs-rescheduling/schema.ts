@@ -18,66 +18,73 @@ export interface SrsReviewSnapshot {
 
 export const srsIntervalProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/interval',
-  revision: 1,
+  revision: 2,
   name: 'interval',
   preset: 'number',
   defaultValue: 2,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsFactorProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/factor',
-  revision: 1,
+  revision: 2,
   name: 'factor',
   preset: 'number',
   defaultValue: 2.5,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsNextReviewDateProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/next-review-date',
-  revision: 1,
+  revision: 2,
   name: 'next-review-date',
   preset: 'ref',
   config: {targetTypes: [DAILY_NOTE_TYPE]},
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsReviewCountProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/review-count',
-  revision: 1,
+  revision: 2,
   name: 'review-count',
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsGradeProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/grade',
-  revision: 1,
+  revision: 2,
   name: 'grade',
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsArchivedProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/archived',
-  revision: 1,
+  revision: 2,
   name: 'archived',
   preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 export const srsSnapshotHistoryProp = seedProperty({
   seedKey: 'system:srs-rescheduling/property/snapshot-history',
-  revision: 1,
+  revision: 2,
   name: 'snapshot-history',
   preset: 'list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 // The shared list core is runtime-equivalent to the historical
 // list(unsafeIdentity<SrsReviewSnapshot>()) codec. Keep the typed handle local.
 // The JSON list on purpose, and the only seed still on it: these members are
