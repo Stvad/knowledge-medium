@@ -3,6 +3,7 @@ import { memberCodecOf } from '@/data/api'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
 import type { Repo } from '@/data/repo'
+import type { BlockContextType } from '@/types'
 
 /** What a field row is a row OF: its definition id, the name the outline
  *  labels it with, and the schema when this device can build one. */
@@ -38,3 +39,8 @@ export const fieldRowDefinition = (
  *  as the ordinary blocks they are, since no editor edits one member. */
 export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
   memberCodecOf(schema.codec) === undefined
+
+/** Surfaces that show a block as something other than an outline row — a
+ *  breadcrumb crumb, an inline reference — keep their own rendering. */
+export const drawsPropertyRows = (context: BlockContextType | undefined): boolean =>
+  context?.isBreadcrumb !== true && context?.isReference !== true

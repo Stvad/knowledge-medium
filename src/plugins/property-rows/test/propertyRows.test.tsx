@@ -22,8 +22,8 @@ import { actionContextsFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
-import { BlockContextProvider } from '@/context/block'
-import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { BlockContextProvider, NestedBlockContextProvider } from '@/context/block'
+import { PropertyDisplayScopeContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { RepoContext } from '@/context/repo'
 import { BlockComponent } from '@/components/BlockComponent'
 import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewportMount'
@@ -290,5 +290,53 @@ describe('a field row whose definition registers after it renders', () => {
     await waitFor(() => expect(
       document.querySelector('[data-block-id="late-field"][data-property-field-row="true"]'),
     ).not.toBeNull())
+  })
+})
+
+describe('a field row shown by id, not as a listed child', () => {
+  const fieldRowId = async (): Promise<string> => {
+    const row = await sharedDb.db.getOptional<{id: string}>(
+      `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+         AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = 'draft' AND v.deleted = 0)`,
+      [OWNER])
+    return row!.id
+  }
+  const renderAlone = (id: string, {listing, breadcrumb}: {listing: boolean; breadcrumb: boolean}) => render(
+    <RepoContext value={repo}>
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <Suspense fallback={null}>
+            <BlockContextProvider initialValue={{panelId: PANEL}}>
+              <NestedBlockContextProvider overrides={breadcrumb ? {isNestedSurface: true, isBreadcrumb: true} : {}}>
+                <PropertyRowListingContext value={listing}>
+                  <BlockComponent blockId={id}/>
+                </PropertyRowListingContext>
+              </NestedBlockContextProvider>
+            </BlockContextProvider>
+          </Suspense>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>
+    </RepoContext>,
+  )
+
+  // A backlink of the definition, or a block's breadcrumb trail, mounts the
+  // row by id — for every user, on every workspace, whatever the mode.
+  it.each([
+    {where: 'outside any listing (a backlink entry)', listing: false, breadcrumb: false},
+    {where: 'as a breadcrumb crumb', listing: true, breadcrumb: true},
+  ])('is an ordinary block $where', async ({listing, breadcrumb}) => {
+    const id = await fieldRowId()
+    renderAlone(id, {listing, breadcrumb})
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${id}"]`)).not.toBeNull())
+    expect(document.querySelector('[data-property-field-row="true"]')).toBeNull()
+    expect(document.querySelector('[data-property-value-row="true"]')).toBeNull()
+    expect(screen.queryByDisplayValue('draft')).toBeNull()
+  })
+
+  it('is a property row inside a listing that shows them (the positive control)', async () => {
+    const id = await fieldRowId()
+    renderAlone(id, {listing: true, breadcrumb: false})
+    await waitFor(() => expect(document.querySelector('[data-property-field-row="true"]')).not.toBeNull())
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
   })
 })

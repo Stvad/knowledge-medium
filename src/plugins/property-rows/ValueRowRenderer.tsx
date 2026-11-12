@@ -8,7 +8,8 @@
  * bullet works as any other's. List members never get the editor — see
  * `isSingleValueProperty`.
  */
-import { useMemo } from 'react'
+import { useContext, useMemo } from 'react'
+import { PropertyFieldRowContext } from '@/context/propertyDisplay'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { AnyPropertySchema } from '@/data/api'
 import { valueChildContentToEncoded } from '@/data/propertyChildren'
@@ -25,7 +26,7 @@ import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
-import { fieldRowDefinition, isSingleValueProperty, type FieldRowDefinition } from './fieldRow'
+import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, type FieldRowDefinition } from './fieldRow'
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
@@ -109,13 +110,16 @@ const ownersValueRenderer = (Fallback: BlockRenderer): BlockRenderer => {
 const ValueRowContent = ownersValueRenderer(MarkdownContentRenderer)
 const ValueRowEditContent = ownersValueRenderer(CodeMirrorContentRenderer)
 
-export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => (
-  <DefaultBlockRenderer
-    {...props}
-    ContentRenderer={ValueRowContent}
-    EditContentRenderer={ValueRowEditContent}
-  />
-)
+export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
+  const fieldRowId = useContext(PropertyFieldRowContext)
+  const parentId = useHandle(props.block, {selector: data => data?.parentId ?? null})
+  // Only as a value in a field row drawn as a property row; anywhere else (a
+  // backlink of the value's target) an ordinary block.
+  return fieldRowId !== null && fieldRowId === parentId
+    ? <DefaultBlockRenderer {...props} ContentRenderer={ValueRowContent} EditContentRenderer={ValueRowEditContent}/>
+    : <DefaultBlockRenderer {...props}/>
+}
 ValueRowRenderer.displayName = 'ValueRowRenderer'
-ValueRowRenderer.canRender = ({block}: BlockRendererProps): boolean => scalarValueOf(block) !== undefined
+ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
+  drawsPropertyRows(context) && scalarValueOf(block) !== undefined
 ValueRowRenderer.priority = () => 150

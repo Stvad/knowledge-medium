@@ -14,3 +14,16 @@ export const NO_PROPERTY_DISPLAY_SCOPE: PropertyDisplayScopeLevels = Object.free
 
 export const PropertyDisplayScopeContext =
   createContext<PropertyDisplayScopeLevels>(NO_PROPERTY_DISPLAY_SCOPE)
+
+/** Whether the child listing a block was rendered in shows property rows (its
+ *  display mode is not `none`), provided by `BlockChildren`. A context of its
+ *  own rather than a `BlockContext` field: a block's `BlockContext` is part of
+ *  its renderer's slot identity, so flipping a field there on a mode switch
+ *  would remount every child's content; this is read only by the
+ *  property-row renderers. Outside any listing (a breadcrumb, a backlink
+ *  entry's root) it is `false`. */
+export const PropertyRowListingContext = createContext(false)
+
+/** The field row whose value column this is, provided by a field row drawn as
+ *  a property row around its own children. */
+export const PropertyFieldRowContext = createContext<string | null>(null)

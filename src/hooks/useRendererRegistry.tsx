@@ -1,7 +1,9 @@
 import { BlockRendererProps } from '../types'
 import { rendererProp } from '@/data/properties.js'
 import { usePropertyValue, useData } from '@/hooks/block.js'
-import { usePropertySchemas } from '@/hooks/propertySchemas.js'
+import { useCallback, useContext, useSyncExternalStore } from 'react'
+import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
+import { useRepo } from '@/context/repo.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -12,6 +14,15 @@ export const refreshRendererRegistry = async () => {
   refreshAppRuntime()
 }
 
+/** Re-render on a property-registry swap while `active`; otherwise the snapshot
+ *  is a constant, so the subscription never re-renders the caller. */
+const usePropertyRegistryIn = (active: boolean): void => {
+  const repo = useRepo()
+  const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
+  const snapshot = () => (active ? repo.propertySchemas : null)
+  useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
 export const useRenderer = ({block, context}: BlockRendererProps) => {
   'use no memo'
   useData(block)
@@ -20,10 +31,10 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
    * Ideally we make the dependency clear and structural tho
    */
 
-  // A `canRender` may recognize the block through its property DEFINITIONS (a
-  // property field row), and a definition can register after the block
-  // mounted; re-choosing on a registry swap is what picks that up.
-  usePropertySchemas()
+  // A property-row renderer recognizes a field row through its DEFINITION, which
+  // can register after the row mounted; re-choose on a registry swap — only in
+  // a listing that shows property rows, so every other block ignores swaps.
+  usePropertyRegistryIn(useContext(PropertyRowListingContext))
 
   const [rendererKey] = usePropertyValue(block, rendererProp)
   const runtime = useAppRuntime()

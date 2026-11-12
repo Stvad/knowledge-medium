@@ -19,7 +19,9 @@ import { useHandle, usePropertyValue } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender'
 import { useOpenBlock } from '@/utils/navigation'
-import { fieldRowDefinition } from './fieldRow'
+import { useContext } from 'react'
+import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
+import { drawsPropertyRows, fieldRowDefinition } from './fieldRow'
 
 /** The name cell: the property's name as a link to its definition block. */
 const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
@@ -93,7 +95,9 @@ const FieldRowLayout: BlockLayout = ({
                     <Content/>
                   </div>
                   <CollapsibleContent className="min-w-0" data-property-value-cell="true">
-                    <Children/>
+                    <PropertyFieldRowContext value={block.id}>
+                      <Children/>
+                    </PropertyFieldRowContext>
                   </CollapsibleContent>
                 </div>
                 <BelowContent/>
@@ -107,19 +111,22 @@ const FieldRowLayout: BlockLayout = ({
   )
 }
 
-export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => (
-  <DefaultBlockRenderer
-    {...props}
-    ContentRenderer={FieldRowLabel}
-    // Not the raw `::((id))` text: an Enter there makes a first value child
-    // (the projection's new value) and a split or merge un-marks the row.
-    EditContentRenderer={FieldRowLabel}
-    Layout={FieldRowLayout}
-  />
-)
+export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) =>
+  useContext(PropertyRowListingContext)
+    ? <DefaultBlockRenderer
+        {...props}
+        ContentRenderer={FieldRowLabel}
+        // Not the raw `::((id))` text: an Enter there makes a first value child
+        // (the projection's new value) and a split or merge un-marks the row.
+        EditContentRenderer={FieldRowLabel}
+        Layout={FieldRowLayout}
+      />
+    // Shown by id outside a listing that shows property rows (a backlink of
+    // its definition, a listing in hide-all): an ordinary block.
+    : <DefaultBlockRenderer {...props}/>
 FieldRowRenderer.displayName = 'FieldRowRenderer'
-FieldRowRenderer.canRender = ({block}: BlockRendererProps): boolean =>
-  fieldRowDefinition(block.repo, block.peek()) !== undefined
+FieldRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean =>
+  drawsPropertyRows(context) && fieldRowDefinition(block.repo, block.peek()) !== undefined
 // Above the type renderers (a field row carries no type of its own, but a
 // hand-tagged one must still read as a property row).
 FieldRowRenderer.priority = () => 150

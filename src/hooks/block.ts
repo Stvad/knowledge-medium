@@ -425,8 +425,12 @@ export const useBlockAliases = (block: Block): readonly string[] =>
  *
  *  Lists the children the outline shows: which property rows are among
  *  them is `usePropertyDisplayMode`'s answer for this block. */
-export const useChildIds = (block: Block): string[] => {
-  const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
+export const useChildIds = (block: Block): string[] =>
+  useChildIdsForMode(block, usePropertyDisplayMode(block))
+
+/** {@link useChildIds} for a caller that already resolved the mode. */
+export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): string[] => {
+  const view = propertyChildrenViewFor(mode)
   const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
     selector: ids => ids,
   })
