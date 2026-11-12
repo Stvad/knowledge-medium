@@ -25,6 +25,7 @@ import {
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { moveBlocksInTx, PropertyValueSetMoveError } from '@/data/mutators'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -138,15 +139,25 @@ describe('move up / down', () => {
     expect(await parentOf(ids.x)).toBe(ids.tags)
   })
 
-  it('steps into a drawn field row at an edge, like into any block', async () => {
-    // a's last child steps down into a's next DRAWN sibling, the status row,
-    // becoming a peer of its value.
+  it('no-ops at an edge whose next drawn row is a field row, rather than entering its values', async () => {
+    // a's last child would step down into a's next DRAWN sibling, the status
+    // row, landing first among its values: the scalar's value to the next write.
+    await repo.tx(async tx => {
+      await tx.create({id: 'a1', workspaceId: WS, parentId: 'a', orderKey: 'a0', content: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await repo.mutate.moveVertical({id: 'a1', direction: 1, scopeRootId: 'page', propertyDisplay: NON_HIDDEN}))
+      .toBe(false)
+    expect(await parentOf('a1')).toBe('a')
+  })
+
+  it('steps past a hidden row into the next drawn ordinary row at an edge', async () => {
+    await arrange('owner', [ids.a, ids.secret, ids.b, ids.status, ids.tags])
     await repo.tx(async tx => {
       await tx.create({id: 'a1', workspaceId: WS, parentId: 'a', orderKey: 'a0', content: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
     expect(await repo.mutate.moveVertical({id: 'a1', direction: 1, scopeRootId: 'page', propertyDisplay: NON_HIDDEN}))
       .toBe(true)
-    expect(await parentOf('a1')).toBe(ids.status)
+    expect(await parentOf('a1')).toBe(ids.b)
   })
 
   it('still reorders values within their field row', async () => {
@@ -168,6 +179,12 @@ describe('indent', () => {
     // Moves the property onto a, the row above it.
     await repo.mutate.indent({id: ids.status, propertyDisplay: NON_HIDDEN})
     expect(await parentOf(ids.status)).toBe(ids.a)
+  })
+
+  it('no-ops under a drawn field row rather than entering its values', async () => {
+    await arrange('owner', [ids.status, ids.b, ids.a, ids.secret, ids.tags])
+    await repo.mutate.indent({id: ids.b, propertyDisplay: NON_HIDDEN})
+    expect(await parentOf(ids.b)).toBe('owner')
   })
 
   it('no-ops on a value row rather than nesting it under its sibling value', async () => {
@@ -216,5 +233,29 @@ describe('without a display scope (mode none, as before property rows)', () => {
     expect(await repo.mutate.moveVertical({
       id: ids.status, direction: -1, propertyDisplay: {...ALL, childBacked: false},
     })).toBe(false)
+  })
+})
+
+describe('every other user move (move command, drag, cut and paste)', () => {
+  it('refuses to take a value out of its field row, moving nothing', async () => {
+    await expect(repo.tx(tx => moveBlocksInTx(tx, [ids.b, ids.x], {parentId: 'page', position: {kind: 'last'}}),
+      {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
+    expect(await parentOf(ids.x)).toBe(ids.tags)
+    expect(await parentOf(ids.b)).toBe('owner')
+  })
+
+  it('refuses to put a block among a field row\'s values', async () => {
+    await expect(repo.tx(tx => moveBlocksInTx(tx, [ids.b], {parentId: ids.status, position: {kind: 'first'}}),
+      {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
+    expect(await parentOf(ids.b)).toBe('owner')
+  })
+
+  it('moves a field row like any block, and values within their field row', async () => {
+    await repo.tx(async tx => {
+      await moveBlocksInTx(tx, [ids.status], {parentId: 'page', position: {kind: 'last'}})
+      await moveBlocksInTx(tx, [ids.y], {parentId: ids.tags, position: {kind: 'first'}})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await parentOf(ids.status)).toBe('page')
+    expect(await childIds(ids.tags)).toEqual([ids.y, ids.x])
   })
 })
