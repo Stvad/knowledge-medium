@@ -269,6 +269,11 @@ describe('merge (Backspace at a start, Delete at an end, the merge picker)', () 
     expect(repo.block('owner').peekProperty(tagsProp)).toEqual(['x', 'y'])
   })
 
+  it('refuses to fold a block into a field row', async () => {
+    await expect(repo.mutate.merge({intoId: ids.status, fromId: ids.b})).rejects.toBeInstanceOf(PropertyMergeError)
+    expect(repo.block('owner').peekProperty(statusProp)).toBe('draft')
+  })
+
   it('refuses to fold a field row into the block above it', async () => {
     await expect(repo.mutate.merge({intoId: ids.a, fromId: ids.status})).rejects.toBeInstanceOf(PropertyMergeError)
     expect(await parentOf(ids.status)).toBe('owner')
