@@ -20,7 +20,7 @@ describe('renderMemoryChanges', () => {
     expect(renderMemoryChanges({saved: [], edited: [], removed: []})).toBeNull()
   })
 
-  it('links saved and edited entries and quotes removed ones, whose block is gone', () => {
+  it('links saved and edited entries, and quotes removed ones with the id that restores them', () => {
     const line = renderMemoryChanges({
       saved: [{id: 'd', content: 'prefers suggestions over edits'}],
       edited: [{id: 'b', content: 'replies short'}],
@@ -28,7 +28,7 @@ describe('renderMemoryChanges', () => {
     })
     expect(line).toBe(
       'Memory changed during this run: saved [prefers suggestions over edits](((d))); '
-      + 'edited [replies short](((b))); removed "uses roam"',
+      + 'edited [replies short](((b))); removed "uses roam" (`c`)',
     )
   })
 

@@ -221,6 +221,49 @@ describe('watcher memory against the app', () => {
     expect(prompts[0]).toContain(`append_markdown with target ${mine}`)
   })
 
+  it('keeps a title the person gave the memory block, and the block', async () => {
+    const prompts: string[] = []
+    const engine = engineFor(async options => {
+      prompts.push(options.prompt)
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+    const [memory] = await memoryBlocks()
+    await repo.tx(async tx => { await tx.update(memory.id, {content: 'Memory for claude (keep)'}) }, opts)
+    await writeInTab({[PROPS.status]: '', [PROPS.attempts]: 0})
+    await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this again'}) }, opts)
+    await engine.tick()
+    await engine.drain()
+
+    expect(await memoryBlocks()).toEqual([{id: memory.id, content: 'Memory for claude (keep)'}])
+    expect(prompts.at(-1)).toContain(`append_markdown with target ${memory.id}`)
+  })
+
+  it('reports a note a run nests under another', async () => {
+    let entryId = ''
+    const engine = engineFor(async options => {
+      const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]
+      if (!entryId) {
+        await inProcessClient().runCommand({type: 'append-markdown', target: memoryId, markdown: 'Replies short.'})
+        entryId = (await repo.query['core.childIds']({id: memoryId}).load())[0]
+      } else {
+        await inProcessClient().runCommand({type: 'append-markdown', target: entryId, markdown: 'Unless asked for detail.'})
+      }
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+    await writeInTab({[PROPS.status]: '', [PROPS.attempts]: 0})
+    await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this again'}) }, opts)
+    await engine.tick()
+    await engine.drain()
+
+    const replies = await db.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0', [MENTION])
+    expect(replies.map(row => row.content).join('\n')).toContain('saved [Unless asked for detail.]')
+  })
+
   it('says in the reply what a run saved to its memory', async () => {
     const engine = engineFor(async options => {
       const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]

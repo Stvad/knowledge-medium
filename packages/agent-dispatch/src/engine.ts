@@ -17,6 +17,7 @@ import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPT
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
+import { MEMORY_DIFF_LIMIT } from './graph.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
@@ -267,10 +268,14 @@ export const createEngine = (deps: EngineDeps) => {
 
   /** What the run changed in its memory, for the reply; null when nothing. */
   const memoryChanges = async (
-    watcher: BacklinksWatcher, memory: {blockId: string, entries: MemoryEntry[]},
+    watcher: BacklinksWatcher, memory: {blockId: string, entries: MemoryEntry[] | null},
   ): Promise<string | null> => {
     try {
-      return renderMemoryChanges(diffMemory(memory.entries, await graph.memoryEntries(memory.blockId)))
+      const after = await graph.memoryEntries(memory.blockId)
+      if (!memory.entries || !after) {
+        return `Memory has more than ${MEMORY_DIFF_LIMIT} blocks, so changes to it are not listed here.`
+      }
+      return renderMemoryChanges(diffMemory(memory.entries, after))
     } catch (error) {
       log(`[${watcher.name}] could not read memory ${memory.blockId} after the run: ${errorMessage(error)}`)
       return null
@@ -421,8 +426,6 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
         return null
       })
-      // Context too: unreadable, the prompt leaves memory out, so the run
-      // isn't asked to keep what it can't see.
       const memory = watcher.memory
         ? await loadMemory(watcher).catch(error => {
           log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)

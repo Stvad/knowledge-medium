@@ -46,7 +46,8 @@ export const renderMemoryChanges = (diff: MemoryDiff): string | null => {
   const parts = [
     ...(diff.saved.length ? [`saved ${diff.saved.map(link).join(', ')}`] : []),
     ...(diff.edited.length ? [`edited ${diff.edited.map(link).join(', ')}`] : []),
-    ...(diff.removed.length ? [`removed ${diff.removed.map(entry => `"${preview(entry.content)}"`).join(', ')}`] : []),
+    // A removed block can't be linked; its id is what restore_block takes.
+    ...(diff.removed.length ? [`removed ${diff.removed.map(entry => `"${preview(entry.content)}" (\`${entry.id}\`)`).join(', ')}`] : []),
   ]
   return parts.length ? `Memory changed during this run: ${parts.join('; ')}` : null
 }

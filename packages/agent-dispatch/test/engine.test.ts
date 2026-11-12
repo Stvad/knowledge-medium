@@ -212,7 +212,39 @@ describe('watcher memory', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(finalReply(fake.reconciles)).toMatch(/run failed — exit 1: boom\n\nMemory changed during this run: removed "replies short"$/)
+    expect(finalReply(fake.reconciles)).toMatch(/run failed — exit 1: boom\n\nMemory changed during this run: removed "replies short" \(`n-1`\)$/)
+  })
+
+  it('keeps a streamed answer when the memory cannot be read after the run', async () => {
+    const fake = fakeGraph(seed())
+    const entries = fake.graph.memoryEntries
+    fake.graph.memoryEntries = vi.fn(async (id: string) => {
+      if (vi.mocked(fake.graph.memoryEntries).mock.calls.length > 1) throw new Error('bridge blipped')
+      return entries(id)
+    })
+    const engine = engineWith({
+      graph: fake.graph,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
+      runTask: vi.fn(async options => {
+        options.onEvent?.({kind: 'text', text: 'Reply'})
+        return okRun()
+      }),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+  })
+
+  it('says when the memory is too large to compare', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryEntries = vi.fn(async () => null)
+    const engine = engineWith({graph: fake.graph})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/Reply text\n\nMemory has more than \d+ blocks/)
   })
 
   it('reads and shows no memory for a watcher that turns it off', async () => {
