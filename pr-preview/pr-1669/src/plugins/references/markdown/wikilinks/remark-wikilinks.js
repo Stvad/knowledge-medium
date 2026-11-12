@@ -1,1 +1,0 @@
-export{ny as remarkWikilinks}from"../../../../../chunks/app-BAL_r3R-.js";

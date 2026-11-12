@@ -1,1 +1,0 @@
-export{oG as propertyShapeLabel}from"../../../chunks/app-BAL_r3R-.js";

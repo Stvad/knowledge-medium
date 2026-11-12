@@ -1,1 +1,0 @@
-export{RF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,zF as openExtensionsSettings}from"../../chunks/app-BAL_r3R-.js";

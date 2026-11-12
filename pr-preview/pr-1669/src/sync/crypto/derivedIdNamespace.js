@@ -1,1 +1,0 @@
-export{Kit as deriveWorkspaceIdNamespace}from"../../../chunks/app-BAL_r3R-.js";

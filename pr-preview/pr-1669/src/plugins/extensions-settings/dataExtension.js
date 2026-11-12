@@ -1,1 +1,0 @@
-export{Br as extensionsDataExtension}from"../../../chunks/app-BAL_r3R-.js";

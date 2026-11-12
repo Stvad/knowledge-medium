@@ -1,1 +1,0 @@
-export{gP as gestureBindingDescriptor,_P as matchesGestureEvent}from"../../chunks/app-BAL_r3R-.js";

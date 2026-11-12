@@ -1,1 +1,0 @@
-export{UU as isIOS,WU as isMacPlatform}from"../../chunks/app-BAL_r3R-.js";

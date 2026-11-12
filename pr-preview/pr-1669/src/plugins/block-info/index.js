@@ -1,1 +1,0 @@
-export{L_ as blockInfoPlugin}from"../../../chunks/app-BAL_r3R-.js";

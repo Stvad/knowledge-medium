@@ -1,1 +1,0 @@
-export{to as MigrationGate}from"../../../chunks/app-BAL_r3R-.js";

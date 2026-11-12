@@ -1,1 +1,0 @@
-export{jN as editorAutocompleteExtension}from"../../chunks/app-BAL_r3R-.js";

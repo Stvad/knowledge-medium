@@ -1,1 +1,0 @@
-export{gq as htmlDocumentDataExtension}from"../../../chunks/app-BAL_r3R-.js";

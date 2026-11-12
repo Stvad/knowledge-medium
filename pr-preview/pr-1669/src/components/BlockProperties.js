@@ -1,1 +1,0 @@
-export{SB as BlockProperties}from"../../chunks/app-BAL_r3R-.js";

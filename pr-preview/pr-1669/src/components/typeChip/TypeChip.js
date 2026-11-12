@@ -1,1 +1,0 @@
-export{IM as TypeChip}from"../../../chunks/app-BAL_r3R-.js";

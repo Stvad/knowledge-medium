@@ -1,1 +1,0 @@
-export{OB as PropertyRow}from"../../../chunks/app-BAL_r3R-.js";

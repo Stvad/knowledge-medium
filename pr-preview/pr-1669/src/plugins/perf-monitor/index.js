@@ -1,1 +1,0 @@
-export{Qr as perfMonitorPlugin}from"../../../chunks/app-BAL_r3R-.js";
