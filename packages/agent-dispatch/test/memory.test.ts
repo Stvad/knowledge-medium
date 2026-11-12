@@ -36,9 +36,9 @@ describe('renderMemoryChanges', () => {
     // Removed text is a hand-written entry the write guard never saw; the
     // reply is written outside it, so a [[watched page]] must not survive.
     const line = renderMemoryChanges({
-      saved: [{id: 'd', content: 'see [[Claudia]] and ((x)) #tag\nsecond line'}],
+      saved: [{id: 'd', content: 'see [[claude]] and ((x)) #tag\nsecond line'}],
       edited: [],
-      removed: [{id: 'c', content: 'ask [[Claudia]]'}],
+      removed: [{id: 'c', content: 'ask [[claude]]'}],
     })
     expect(line).not.toMatch(/\[\[|\(\(x|#tag|\n/)
     expect(line).toContain('(((d)))')
