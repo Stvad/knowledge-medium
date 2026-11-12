@@ -1,1 +1,0 @@
-export{JN as appUpdatePromptExtension}from"../../../chunks/app-Dgm44TkJ.js";

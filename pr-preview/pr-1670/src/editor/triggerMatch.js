@@ -1,1 +1,0 @@
-export{TJ as matchCharTrigger}from"../../chunks/app-Dgm44TkJ.js";
