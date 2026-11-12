@@ -166,7 +166,9 @@ export interface BackfillCompletionClaim {
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
-   *  thrown backfill). Give the claim back, or the pass never runs again. */
+   *  thrown backfill). Give the claim back, or the pass never runs again — and
+   *  a claim taken over a COMPLETED one back to that completion, so a failed
+   *  re-run does not erase the record that an earlier run finished. */
   releaseClaim(workspaceId: string, backfillId: string): Promise<void>
 }
 
