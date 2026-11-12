@@ -28,7 +28,7 @@ export const createSweepProgressLine = (
   return ({sweeps, blocksScanned}) => {
     const at = now()
     if (sweeps !== sweep) {
-      if (sweep !== 0) sweepStartedAt = lastReportAt
+      sweepStartedAt = lastReportAt
       sweep = sweeps
     }
     lastReportAt = at
