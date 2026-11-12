@@ -104,7 +104,8 @@ describe('setSeedHiddenTier hide', () => {
       // Hidden below the declared revision.
       await tx.update(idOf(delta), {properties: {...canonicalPropertySeedProperties(delta), [propertyHiddenProp.name]: true}})
       // No stored hidden at all.
-      const {[propertyHiddenProp.name]: _hidden, ...withoutHidden} = canonicalPropertySeedProperties(bare)
+      const withoutHidden = canonicalPropertySeedProperties(bare)
+      delete withoutHidden[propertyHiddenProp.name]
       await tx.update(idOf(bare), {properties: withoutHidden})
       // At the deterministic id, without seed provenance.
       await tx.create({id: idOf(forged), workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x',
