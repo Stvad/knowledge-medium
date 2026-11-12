@@ -49,11 +49,34 @@ describe('the migration progress line', () => {
       .toBe('Migrating properties to blocks… sweep 1, 1,200/1,200 · 600 blocks/s')
   })
 
-  it('shows no rate before any time has passed or any block was scanned', () => {
+  it('shows no rate before any time has passed', () => {
     const clock = manualClock()
     const line = createSweepProgressLine(1_000, clock.now)
 
-    expect(line({sweeps: 1, blocksScanned: 0})).toBe('Migrating properties to blocks… sweep 1, 0/1,000')
     expect(line({sweeps: 1, blocksScanned: 10})).toBe('Migrating properties to blocks… sweep 1, 10/1,000')
+  })
+
+  it('shows no rate for a sweep that has scanned nothing, however long it has run', () => {
+    // Blocks deleted since the survey can leave a converging sweep with nothing
+    // to scan; a zero rate there would divide the wait by zero.
+    const clock = manualClock()
+    const line = createSweepProgressLine(1_000, clock.now)
+
+    clock.advance(5_000)
+    expect(line({sweeps: 1, blocksScanned: 0})).toBe('Migrating properties to blocks… sweep 1, 0/1,000')
+  })
+
+  it('keeps a slow rate readable and rounds the wait before choosing its unit', () => {
+    const clock = manualClock()
+    const line = createSweepProgressLine(1_000, clock.now)
+
+    // 3 blocks in 10 s: 0.3/s, and 997 blocks left is 3323 s, about 55 min.
+    clock.advance(10_000)
+    expect(line({sweeps: 1, blocksScanned: 3})).toMatch(/0\.3 blocks\/s, about 55 min left/)
+
+    // 10 blocks/s with 596 left is 59.6 s, which reads as a minute, not "60 s".
+    const short = createSweepProgressLine(606, clock.now)
+    clock.advance(1_000)
+    expect(short({sweeps: 1, blocksScanned: 10})).toMatch(/10 blocks\/s, about 1 min left/)
   })
 })

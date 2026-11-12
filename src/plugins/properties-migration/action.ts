@@ -34,7 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
-import { createSweepProgressLine } from './sweepProgress.ts'
+import { MIGRATING_STATUS, createSweepProgressLine } from './sweepProgress.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
 import { runBulkWrite } from '@/data/writeAheadLog'
 import {
@@ -690,7 +690,7 @@ const migrateUnderClaim = async (
    *  gesture without the gesture changing. */
   let pending = 0
   let valuesMaterializedTotal = 0
-  const status = rememberingStatus(banner, 'Migrating properties to blocks…')
+  const status = rememberingStatus(banner, MIGRATING_STATUS)
   const progressLine = createSweepProgressLine(blockCount)
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
@@ -703,9 +703,6 @@ const migrateUnderClaim = async (
     unresolved = progress.unresolvedCount
     unresolvedNames = progress.unresolvedNames
     pending = pendingValueCount(progress)
-    // Counts are per-sweep, and the sweep number is shown because a second
-    // pass over the same blocks is normal — without it the bar restarts from
-    // zero for no reason the operator can see.
     status.show(progressLine(progress))
   })
   try {
@@ -883,7 +880,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // see `MigrationGate`. That is why the progress line and the outcome go to
     // different places: the dialog closes when the claim clears, and several
     // outcomes below are reported on paths where no claim was ever taken.
-    const banner = reportMigrationProgress(workspaceId, 'Migrating properties to blocks…')
+    const banner = reportMigrationProgress(workspaceId, MIGRATING_STATUS)
     try {
       // Before synthesis: once definitions are written, a pre-migration refusal
       // would conceal the writes already made.

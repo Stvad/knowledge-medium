@@ -3867,7 +3867,8 @@ export class Repo {
    * `graphBackfillClaim`'s header forbids by name and for a recorded reason.
    *
    * `body` runs with the claim held and does its own reporting; `pass.run()`
-   * runs the backfill under that same claim. The claim is handed back on every
+   * runs the backfill under that same claim. The claim is handed back (to the
+   * completion it displaced, for a re-run of a finished pass) on every
    * exit this process controls — return, throw, an early return inside the
    * body — except a pass that recorded completion, which `releaseClaim` leaves
    * alone so the graph keeps its record that the migration is done. A process

@@ -79,10 +79,20 @@ describe('agent contributor selection', () => {
   })
 
   it('refuses a backfill run with no contributor chosen before it takes the claim', async () => {
+    // Flipped, so the verb's own un-flipped refusal cannot answer first.
+    await db.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
     const runNow = vi.spyOn(context.repo, 'runWorkspaceBackfillNow')
+      .mockResolvedValue({outcome: 'ran', undoHistoryCleared: false})
     await expect(run({type: 'run-backfill', backfillId: PROPERTY_CELL_BACKFILL_ID}))
       .rejects.toThrow(/Choose a contributor/)
     expect(runNow).not.toHaveBeenCalled()
+
+    // `--contributor none` opts out, and still runs.
+    await run({type: 'run-backfill', backfillId: PROPERTY_CELL_BACKFILL_ID, contributorId: null})
+    expect(runNow).toHaveBeenCalledOnce()
   })
 
   it('binds schema creation reached through the supplied eval Repo to its contributor', async () => {
