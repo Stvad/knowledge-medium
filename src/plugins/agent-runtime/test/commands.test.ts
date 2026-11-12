@@ -43,6 +43,10 @@ import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
 import { PROPERTY_CELL_BACKFILL_ID, propertyCellBackfill } from '@/data/internals/propertyCellBackfill'
+import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { propertyHiddenProp, seedRevisionProp } from '@/data/properties'
+import type { SeedHiddenTierResult } from '@/data/seedHiddenTier'
+import { HIDDEN_TIER_SEEDS } from '../hiddenTierSeeds'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -1812,6 +1816,53 @@ describe('agent runtime commands', () => {
         spy.mockRestore()
       }
     })
+  })
+})
+
+describe('seed-hidden-tier', () => {
+  /** Every listed seed's row as a workspace that materialized it before the
+   *  bump holds it: visible, at revision 1. */
+  const seedPreBumpRows = async () => {
+    await materializePropertySeeds(env.repo, WS, HIDDEN_TIER_SEEDS)
+    await env.repo.tx(async tx => {
+      for (const seed of HIDDEN_TIER_SEEDS) {
+        const id = propertyDefinitionBlockId(WS, seed.seedKey)
+        const row = (await tx.get(id))!
+        await tx.update(id, {properties: {
+          ...row.properties, [propertyHiddenProp.name]: false, [seedRevisionProp.name]: 1,
+        }})
+      }
+    }, {scope: ChangeScope.Automation})
+  }
+  const storedHidden = async () => Promise.all(HIDDEN_TIER_SEEDS.map(async seed =>
+    (await env.repo.load(propertyDefinitionBlockId(WS, seed.seedKey)))!.properties[propertyHiddenProp.name]))
+  const run = (extra: Record<string, unknown>) =>
+    executeCommand({type: 'seed-hidden-tier', workspaceId: WS, ...extra}, env.context) as Promise<SeedHiddenTierResult>
+  const all = HIDDEN_TIER_SEEDS.length
+
+  it('is a dry run unless --apply, and a second applied run is a no-op', async () => {
+    await seedPreBumpRows()
+
+    const plan = await run({})
+    expect(plan).toMatchObject({applied: false, direction: 'hide',
+      counts: {upgraded: all, alreadyCurrent: 0, skippedDiverged: 0, absent: 0}})
+    expect(await storedHidden()).toEqual(HIDDEN_TIER_SEEDS.map(() => false))
+
+    expect((await run({apply: true})).counts.upgraded).toBe(all)
+    expect(await storedHidden()).toEqual(HIDDEN_TIER_SEEDS.map(() => true))
+    expect((await run({apply: true})).counts.alreadyCurrent).toBe(all)
+  })
+
+  it('--revert moves the seeds back out of the hidden tier', async () => {
+    await seedPreBumpRows()
+    await run({apply: true})
+    expect((await run({apply: true, revert: true})).counts.upgraded).toBe(all)
+    expect(await storedHidden()).toEqual(HIDDEN_TIER_SEEDS.map(() => false))
+  })
+
+  it('requires a named workspace', async () => {
+    await expect(executeCommand({type: 'seed-hidden-tier'} as never, env.context)).rejects.toThrow(/workspaceId/)
+    await expect(run({workspaceId: '  '})).rejects.toThrow(/required/)
   })
 })
 

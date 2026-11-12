@@ -486,6 +486,15 @@ export const runBackfillCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const seedHiddenTierCommandSchema = z.looseObject({
+  type: z.literal('seed-hidden-tier'),
+  workspaceId: z.string(),
+  apply: z.boolean().optional(),
+  revert: z.boolean().optional(),
+  ...contributorField,
+  ...commandIdField,
+})
+
 export const rematerializeWorkspaceCommandSchema = z.looseObject({
   type: z.literal('rematerialize-workspace'),
   workspaceId: z.string().optional(),
@@ -1029,6 +1038,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  seedHiddenTierCommandSchema,
   rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
@@ -1091,6 +1101,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   auditExtensionCommandSchema,
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
+  seedHiddenTierCommandSchema,
   rematerializeWorkspaceCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
@@ -1312,6 +1323,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'run-backfill': {
     usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
     description: 'Run one operator-triggered workspace backfill. Currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched. Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    readOnly: false,
+  },
+  'seed-hidden-tier': {
+    usage: 'kmagent seed-hidden-tier --workspace <id> [--apply] [--revert]',
+    description: 'Hide built-in seed rows. Moves to the hidden tier the built-in definitions, materialized before their hidden bump, whose value something else on the block already shows: types, alias, status, roam:todo-state, daily-note:date, the SRS fields, attribution, media. A DRY RUN by default: prints, per seed, what it would do and why, plus counts {upgraded, alreadyCurrent, skippedDiverged, absent}; `--apply` writes. `--workspace` is required and must be the active workspace. Writes only `property-schema:hidden` and `seed:revision` on each seed definition row whose stored revision trails the declaration and whose stored hidden is false, in one non-undoable Automation transaction; a second run is a no-op. Uploads source-of-truth rows: run it on ONE device per workspace. `--revert` is the recovery: hidden true -> false, at a revision past the declaration, so a later forward run reports those rows as diverged instead of re-hiding them.',
     readOnly: false,
   },
   'rematerialize-workspace': {

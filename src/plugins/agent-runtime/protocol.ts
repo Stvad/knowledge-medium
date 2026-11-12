@@ -2,6 +2,7 @@ import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
 import type { OperatorBackfillResult, Repo, WorkspaceRematerialization } from '@/data/repo'
+import type { SeedHiddenTierResult } from '@/data/seedHiddenTier'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
@@ -273,6 +274,17 @@ export type RunBackfillResult =
   & {backfillId: string; workspaceId: string}
   & Partial<PropertyCellBackfillProgress>
 
+export interface SeedHiddenTierInput {
+  /** Required: the pass writes source-of-truth rows, so the operator names
+   *  the graph rather than inheriting whichever one is open. Must be the
+   *  active workspace. */
+  workspaceId: string
+  /** Write the plan. Without it the verb only reports what it would do. */
+  apply?: boolean
+  /** Recovery: move the listed seeds back OUT of the hidden tier. */
+  revert?: boolean
+}
+
 export interface RematerializeWorkspaceInput {
   /** Workspace to re-materialize. Defaults to, and must be, the ACTIVE one —
    *  the pass rebuilds this client's view of the workspace it has open, so the
@@ -321,6 +333,7 @@ export interface AgentRuntimeContext {
   auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
   runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   rematerializeWorkspace: (input: RematerializeWorkspaceInput) => Promise<WorkspaceRematerialization>
+  seedHiddenTier: (input: SeedHiddenTierInput) => Promise<SeedHiddenTierResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

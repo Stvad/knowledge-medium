@@ -114,6 +114,8 @@ import {
   takeLastPropertyCellBackfillRun,
 } from '@/data/internals/propertyCellBackfill'
 import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
+import {setSeedHiddenTier, type SeedHiddenTierResult} from '@/data/seedHiddenTier'
+import {hiddenTierTargets} from './hiddenTierSeeds'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeContext,
@@ -132,6 +134,7 @@ import type {
   RestoreBlockInput,
   RunBackfillResult,
   RematerializeWorkspaceInput,
+  SeedHiddenTierInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -877,6 +880,23 @@ const rematerializeRuntimeWorkspace = async (
     )
   }
   return repo.rematerializeWorkspace(workspaceId, {scope})
+}
+
+/** Move the built-in seeds `hiddenTierSeeds` lists to the hidden tier in the
+ *  active workspace (or, with `revert`, back out of it). A dry run unless
+ *  `apply`; the workspace is named, never inherited. */
+const runSeedHiddenTier = (
+  repo: Repo,
+  input: SeedHiddenTierInput,
+): Promise<SeedHiddenTierResult> => {
+  const workspaceId = input.workspaceId.trim()
+  if (workspaceId === '') {
+    throw new Error('seed-hidden-tier: --workspace is required and was given an empty value.')
+  }
+  return setSeedHiddenTier(repo, workspaceId, hiddenTierTargets(), {
+    direction: input.revert ? 'unhide' : 'hide',
+    apply: input.apply === true,
+  })
 }
 
 const mapPosition = (
@@ -2277,6 +2297,7 @@ export const createAgentRuntimeContext = ({
     auditProperties: input => auditRuntimeProperties(repo, input),
     runBackfill: input => runRuntimeBackfill(repo, input),
     rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
+    seedHiddenTier: input => runSeedHiddenTier(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -2616,6 +2637,13 @@ const executeAttributedCommand = async (
         workspaceId: command.workspaceId === undefined
           ? undefined
           : requireString(command.workspaceId, 'workspaceId'),
+      })
+
+    case 'seed-hidden-tier':
+      return context.seedHiddenTier({
+        workspaceId: requireString(command.workspaceId, 'workspaceId'),
+        apply: command.apply === true,
+        revert: command.revert === true,
       })
 
     case 'rematerialize-workspace':

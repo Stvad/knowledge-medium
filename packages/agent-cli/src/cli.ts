@@ -1106,6 +1106,22 @@ cli
     process.stdout.write(`${toDisplayJson(value)}\n`)
   })
 
+cli
+  .command('seed-hidden-tier', wireDescription('seed-hidden-tier'))
+  .option('--workspace <id>', 'The workspace to move (required; must be the active one)')
+  .option('--apply', 'Write the plan (without it the verb is a dry run)')
+  .option('--revert', 'Move the seeds back out of the hidden tier (recovery)')
+  .action(async (options: {workspace?: unknown; apply?: boolean; revert?: boolean}) => {
+    const {workspaceId} = workspaceAssertion(options.workspace)
+    if (workspaceId === undefined) throw new Error('seed-hidden-tier: --workspace <id> is required.')
+    await runAndPrint({
+      type: 'seed-hidden-tier',
+      workspaceId,
+      apply: options.apply === true,
+      revert: options.revert === true,
+    })
+  })
+
 // A `--scope all` pass re-judges every staged row of the workspace, which on a
 // large graph is the same order of work as `run-backfill` — so it takes the
 // same wait, and for the same reason: the default command timeout would give up
