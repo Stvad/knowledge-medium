@@ -1,1 +1,1 @@
-export{GP as dynamicExtensionsExtension}from"../../chunks/app-CdK7Rnpv.js";
+export{GP as dynamicExtensionsExtension}from"../../chunks/app-DnUsVE__.js";

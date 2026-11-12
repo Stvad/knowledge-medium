@@ -1,1 +1,1 @@
-export{xG as usePropertySchemas}from"../../chunks/app-CdK7Rnpv.js";
+export{xG as usePropertySchemas}from"../../chunks/app-DnUsVE__.js";

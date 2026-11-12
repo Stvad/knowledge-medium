@@ -1,1 +1,1 @@
-export{py as Wikilink}from"../../../../../chunks/app-CdK7Rnpv.js";
+export{py as Wikilink}from"../../../../../chunks/app-DnUsVE__.js";

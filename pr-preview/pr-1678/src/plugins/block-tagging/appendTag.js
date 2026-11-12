@@ -1,1 +1,1 @@
-export{du as appendTagToBlocks,fu as appendTagToContent}from"../../../chunks/app-CdK7Rnpv.js";
+export{du as appendTagToBlocks,fu as appendTagToContent}from"../../../chunks/app-DnUsVE__.js";

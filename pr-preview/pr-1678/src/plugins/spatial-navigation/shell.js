@@ -1,1 +1,1 @@
-export{FC as spatialNavigationShellDecorator}from"../../../chunks/app-CdK7Rnpv.js";
+export{FC as spatialNavigationShellDecorator}from"../../../chunks/app-DnUsVE__.js";

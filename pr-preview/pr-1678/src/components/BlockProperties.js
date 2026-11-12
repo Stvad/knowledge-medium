@@ -1,1 +1,1 @@
-export{IB as BlockProperties}from"../../chunks/app-CdK7Rnpv.js";
+export{IB as BlockProperties}from"../../chunks/app-DnUsVE__.js";
