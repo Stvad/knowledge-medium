@@ -317,10 +317,10 @@ export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => {
   /** The completed claim bag an operator reclaim overwrote, by claim id, held
-   *  from that reclaim until the next writing claim attempt or release. A release puts
-   *  it back instead of deleting the row, so a failed re-run of a finished pass
-   *  leaves the workspace's record that it finished. In memory, so a process
-   *  that dies mid-run still strands a plain in-flight claim (#617). */
+   *  from that reclaim until the claim is released. A release puts it back
+   *  instead of deleting the row, so a failed re-run of a finished pass leaves
+   *  the workspace's record that it finished. In memory, so a process that
+   *  dies mid-run still strands a plain in-flight claim (#617). */
   const displacedCompletions = new Map<string, Record<string, unknown>>()
   return {
     async stillOwned(tx, workspaceId, backfillId) {
@@ -370,12 +370,13 @@ export const createGraphBackfillClaim = (
       // `inherited` rather than as a win: this claimant is a browser profile, so
       // the row may be a sibling TAB's live claim, and a caller that released it
       // would delete a claim somebody is still writing under.
+      /** Recorded only once the claim's tx has COMMITTED, so a reclaim that
+       *  failed to land leaves no completion for a later release to restore. */
+      let displaced: Record<string, unknown> | undefined
       const won: ClaimAttempt = first === 'proceed'
         ? 'inherited'
         : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {
-          // Cleared here, not on entry: the pass re-takes the gesture's claim
-          // through the `inherited` path above, which must keep it.
-          displacedCompletions.delete(claimId)
+          displaced = undefined
           // Re-checked inside the WRITING tx against this row: the read above
           // happened outside it, and a peer's claim can arrive in between.
           const existing = await tx.get(claimId)
@@ -401,7 +402,7 @@ export const createGraphBackfillClaim = (
               return 'declined'
             }
             await tx.update(claimId, {properties: claimProperties})
-            if (live !== null) displacedCompletions.set(claimId, existing.properties)
+            if (live !== null) displaced = existing.properties
             return 'minted'
           }
           if (existing?.deleted) {
@@ -439,6 +440,7 @@ export const createGraphBackfillClaim = (
 
       // No convergence wait. Under an operator trigger there is nothing to
       // arbitrate, and the wait was unwinnable anyway — see the module header.
+      if (displaced) displacedCompletions.set(claimId, displaced)
       return won
     },
 
