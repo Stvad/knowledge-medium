@@ -1,1 +1,1 @@
-export{G6 as agree,K6 as pluralize}from"../../chunks/app-DKqDYDvN.js";
+export{G6 as agree,K6 as pluralize}from"../../chunks/app-DGTy4pEk.js";

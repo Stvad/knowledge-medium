@@ -1,1 +1,1 @@
-export{jB as HIDDEN_SECTION,MB as buildPropertyPanelModel}from"../../../chunks/app-DKqDYDvN.js";
+export{jB as HIDDEN_SECTION,MB as buildPropertyPanelModel}from"../../../chunks/app-DGTy4pEk.js";

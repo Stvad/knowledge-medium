@@ -1,1 +1,1 @@
-export{GV as blockLinkClickIntent,KV as formatLinkClickGesture,qV as linkClickActions,JV as nativeLinkClickGesture}from"../../chunks/app-DKqDYDvN.js";
+export{GV as blockLinkClickIntent,KV as formatLinkClickGesture,qV as linkClickActions,JV as nativeLinkClickGesture}from"../../chunks/app-DGTy4pEk.js";
