@@ -214,14 +214,16 @@ export interface WorkspaceBackfill {
 }
 
 export interface WorkspaceBackfillContext {
-  /** Successful sync waits during this run. A scan spanning a change in this
-   *  count must revisit its candidates before declaring convergence. */
+  /** Sync activity this run waited for or saw. A scan spanning a change in
+   *  this count must revisit its candidates before declaring convergence. */
   readonly syncWaitCount: number
-  /** Wait until this device is caught up with the server, or throw why it is
-   *  not, as a batch's own check would. A pass that re-reads from the top
-   *  calls it first: an `operator` batch checks only rows already on this
-   *  device, not downloads still in flight, so a scan that must see the whole
-   *  graph asks here, once, before it starts. */
+  /** Ask the full view-gap check — downloads in flight included — and throw
+   *  why the view is incomplete. An `operator` pass waits for it to clear; a
+   *  `workspace-open` pass is refused at once. An `operator` batch checks only
+   *  rows already on this device, so a pass that re-reads from the top asks
+   *  here first. It does not wait for this device's own upload queue: until
+   *  their checkpoint arrives, queued uploads read as settled, and the sweep
+   *  that sees them land counts it through `syncWaitCount`. */
   awaitCaughtUp: () => Promise<void>
   /** The single workspace this run is scoped to. Every read and write MUST be
    *  filtered to it — a backfill never touches another workspace (that was the

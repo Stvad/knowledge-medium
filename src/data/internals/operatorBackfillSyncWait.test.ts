@@ -172,13 +172,13 @@ describe('operator backfill transient sync waits', () => {
     })
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
     const result = await running
 
     expect(gapObserved).toBe(true)
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('download is still running')
-    expect(result.reason).not.toContain('did not settle within')
+    expect(result.reason).not.toContain('made no progress')
     expect(events).not.toContain('markComplete')
     expect(events).toContain('releaseClaim')
     expect(warn.mock.calls.some(([message]) =>
@@ -557,7 +557,7 @@ describe('operator backfill transient sync waits', () => {
 
     expect(batches).toEqual([0])
     expect(warn.mock.calls.some(([message]) =>
-      typeof message === 'string' && message.includes('30 seconds'))).toBe(false)
+      typeof message === 'string' && message.includes('made no progress'))).toBe(false)
     warn.mockRestore()
   })
 
@@ -581,11 +581,13 @@ describe('operator backfill transient sync waits', () => {
   it('does not hold an operator batch for a download in flight', async () => {
     const events: string[] = []
     const batches: number[] = []
+    const observedWaitCounts: number[] = []
     const gate = controllableGate()
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
-      run: twoBatchWriter(batches, index => {
+      run: twoBatchWriter(batches, (index, ctx) => {
+        observedWaitCounts.push(ctx.syncWaitCount)
         if (index === 0) gate.close()
       }),
     }, events, {backfillSyncGate: gate.gate})
@@ -593,6 +595,8 @@ describe('operator backfill transient sync waits', () => {
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     await waitFor(() => expect(batches).toEqual([0, 1]))
+    // Not waited on, but counted: the sweep it spans cannot prove convergence.
+    expect(observedWaitCounts).toEqual([0, 1])
     expect(await persistedBatchIds()).toEqual([
       'operator-sync-wait-batch-0', 'operator-sync-wait-batch-1',
     ])
@@ -660,17 +664,27 @@ describe('operator backfill transient sync waits', () => {
     // The upload queue's head, scripted: it is this device's own progress, and
     // the real read is exercised by the plain timeout test above.
     let uploadQueueHead: number | null = 1
+    let stagedQueueHead: number | null = null
     const realGet = repo.db.get.bind(repo.db)
     vi.spyOn(repo.db, 'get').mockImplementation(async (sql: string, params?: unknown[]) =>
-      sql.includes('FROM ps_crud') ? {head: uploadQueueHead} : realGet(sql, params))
+      sql.includes('FROM ps_crud')
+        ? {upload: uploadQueueHead, staged: stagedQueueHead}
+        : realGet(sql, params))
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     let settled = false
     void running.then(() => { settled = true })
     await vi.advanceTimersByTimeAsync(4 * 60_000)
-    // One upload completes inside the first window, so the deadline renews.
+    // An upload completes inside the first window, so the deadline renews.
     uploadQueueHead = 2
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    // The queue empties and its echoes stage: the drain is progress too.
+    uploadQueueHead = null
+    stagedQueueHead = 7
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    stagedQueueHead = 8
     await vi.advanceTimersByTimeAsync(2 * 60_000)
     expect(settled).toBe(false)
 
@@ -678,8 +692,9 @@ describe('operator backfill transient sync waits', () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000)
     const result = await running
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
-    expect(result.reason).toContain('did not settle within 5 minutes')
+    expect(result.reason).toContain('made no progress for 5 minutes')
     expect(events).not.toContain('markComplete')
     warn.mockRestore()
+    info.mockRestore()
   })
 })

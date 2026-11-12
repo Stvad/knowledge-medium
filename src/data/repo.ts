@@ -553,15 +553,21 @@ export interface OperatorBackfillResult {
   retryable?: boolean
 }
 
-/** How long an operator run waits for a view gap with nothing visibly moving.
- *  Renewed for as long as this device's own upload queue keeps draining — see
- *  `backfillViewGap`. */
+/** How long an operator run waits for a view gap with nothing moving. Renewed
+ *  while the sync pipeline makes progress — see `backfillViewGap`. */
 const OPERATOR_BACKFILL_SYNC_WAIT_MS = 5 * 60_000
 const BACKFILL_SYNC_POLL_MS = 100
+/** A wait this old is a backlog, not a blip: poll it less often, since every
+ *  poll reads the staging queue the drain is working through. */
+const BACKFILL_SYNC_SLOW_POLL_AFTER_MS = 30_000
+const BACKFILL_SYNC_SLOW_POLL_MS = 1_000
 
-/** Oldest row still in this device's upload queue, or null when it is empty.
- *  Moves only when an upload completes, so a changed answer is progress. */
-const UPLOAD_QUEUE_HEAD_SQL = 'SELECT min(id) AS head FROM ps_crud'
+/** The oldest row of each queue between this device and a caught-up view: its
+ *  uploads, and downloaded rows awaiting the drain. A head changes when its
+ *  oldest row leaves, or when an empty queue gains a row. */
+const SYNC_PIPELINE_HEADS_SQL = `
+  SELECT (SELECT min(id) FROM ps_crud) AS upload,
+         (SELECT min(seq) FROM blocks_synced_changes) AS staged`
 
 /** Which arms of the view-gap predicate to ask. `local` leaves out the one
  *  that is DEVICE-wide and fed by the network — "not caught up with the
@@ -3640,39 +3646,53 @@ export class Repo {
   /** Wait outside the write lock while an already-claimed operator run catches up.
    *  Background passes keep their scheduler-driven retry; durable gaps never wait.
    *
-   *  The deadline renews while this device's upload queue drains: PowerSync
-   *  applies no downloaded checkpoint while `ps_crud` holds rows, so after a
-   *  pass that out-wrote its uploads the device reads "not caught up" for as
-   *  long as that backlog takes. That is progress, not a stall; a queue whose
-   *  head has not moved in a whole window is a stall, and times out. */
+   *  The deadline renews while the sync pipeline moves: PowerSync applies no
+   *  downloaded checkpoint while `ps_crud` holds rows, so after a pass that
+   *  out-wrote its uploads the device reads "not caught up" for the whole
+   *  backlog, and then for the drain of its echoes. A window in which neither
+   *  queue's head moved is a stall, and times out. ACCEPTED: the signal is
+   *  device-wide, so uploads of unrelated edits also renew it — a wait outlives
+   *  5 minutes only while something is still syncing. */
   private async backfillViewGap(
     workspaceId: string,
     generation: number,
     waitForSync: boolean,
-    arms: ViewGapArms = 'all',
+    arms: ViewGapArms,
   ): Promise<{gap: ViewGap | null; waited: boolean}> {
+    const pipelineHeads = async (): Promise<string> => {
+      const {upload, staged} = await this.db.get<{upload: number | null; staged: number | null}>(
+        SYNC_PIPELINE_HEADS_SQL)
+      return `${upload}:${staged}`
+    }
     let waited = false
-    let deadline = performance.now() + OPERATOR_BACKFILL_SYNC_WAIT_MS
-    const uploadQueueHead = async () =>
-      (await this.db.get<{head: number | null}>(UPLOAD_QUEUE_HEAD_SQL)).head
-    let uploadHead: number | null = null
+    let waitStart = 0
+    let deadline = 0
+    let heads = ''
     let gap = await this.workspaceViewGap(workspaceId, undefined, arms)
     while (waitForSync && gap?.transient
       && this.workspaceRunStaleReason(workspaceId, generation) === null
       && !this.isReadOnly) {
-      // Read when the wait begins, not per call: most calls never wait.
-      if (!waited) uploadHead = await uploadQueueHead()
-      if (performance.now() >= deadline) {
-        const head = await uploadQueueHead()
-        if (head === uploadHead) {
-          const minutes = OPERATOR_BACKFILL_SYNC_WAIT_MS / 60_000
-          return {gap: {...gap, reason: `sync did not settle within ${minutes} minutes: ${gap.reason}`}, waited}
+      const now = performance.now()
+      if (!waited) {
+        // Read when the wait begins, not per call: most calls never wait.
+        waited = true
+        waitStart = now
+        deadline = now + OPERATOR_BACKFILL_SYNC_WAIT_MS
+        heads = await pipelineHeads()
+      } else if (now >= deadline) {
+        const current = await pipelineHeads()
+        const minutes = OPERATOR_BACKFILL_SYNC_WAIT_MS / 60_000
+        if (current === heads) {
+          return {gap: {...gap, reason: `sync made no progress for ${minutes} minutes: ${gap.reason}`}, waited}
         }
-        uploadHead = head
-        deadline = performance.now() + OPERATOR_BACKFILL_SYNC_WAIT_MS
+        console.info(`[workspaceBackfills] still waiting for sync, which is making progress: ${gap.reason}`)
+        heads = current
+        deadline = now + OPERATOR_BACKFILL_SYNC_WAIT_MS
       }
-      waited = true
-      await new Promise<void>(resolve => setTimeout(resolve, BACKFILL_SYNC_POLL_MS))
+      const pollMs = now - waitStart >= BACKFILL_SYNC_SLOW_POLL_AFTER_MS
+        ? BACKFILL_SYNC_SLOW_POLL_MS
+        : BACKFILL_SYNC_POLL_MS
+      await new Promise<void>(resolve => setTimeout(resolve, pollMs))
       gap = await this.workspaceViewGap(workspaceId, undefined, arms)
     }
     return {gap, waited}
@@ -3682,8 +3702,7 @@ export class Repo {
     workspaceId: string,
     backfill: WorkspaceBackfill,
     generation: number,
-    waitForSync = backfill.trigger === 'operator',
-    arms: ViewGapArms = 'all',
+    {waitForSync, arms}: {waitForSync: boolean; arms: ViewGapArms},
   ): Promise<boolean> {
     // Re-sampled per transaction, and NOT from inside one. That is now a
     // CHOICE rather than a constraint: `workspaceViewGap` takes a
@@ -3831,7 +3850,7 @@ export class Repo {
     // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
     // transaction — there is deliberately no cheaper approximation for the hot
     // path, because that split is what let the two answers disagree.
-    const {gap} = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller)
+    const {gap} = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller, 'all')
     // The wait must not authorize a claim for a departed or read-only session.
     const staleNow = runStale()
     if (staleNow !== null) {
@@ -4159,22 +4178,30 @@ export class Repo {
       }
       let resolver = this.propertySchemaResolverFor(workspaceId)
       let syncWaitCount = 0
-      const assertMayWrite = async (
+      const assertMayWrite = async ({
         waitForSync = backfill.trigger === 'operator',
-        arms: ViewGapArms = 'all',
-      ): Promise<void> => {
-        if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, waitForSync, arms)) return
+        arms = 'all',
+      }: {waitForSync?: boolean; arms?: ViewGapArms} = {}): Promise<void> => {
+        if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, {waitForSync, arms})) return
         syncWaitCount += 1
       }
       // RELAXED GUARD: an operator batch does not wait on (or refuse for) the
       // device being behind the server — only on rows already on this device.
-      // Its own uploads hold that arm open: each batch's echo, and the core
-      // applying no checkpoint while `ps_crud` holds rows, so asking it per
-      // batch throttled the pass to one upload round trip per batch. DROPPED:
-      // a foreign row still mid-download when a batch starts. Accepted for a
-      // claimed run on a drained fleet; `awaitCaughtUp` asks the full gate
-      // between sweeps, so convergence still rests on a caught-up view.
+      // Its own uploads hold that arm open (each batch's echo, and the core
+      // applying no checkpoint while `ps_crud` holds rows), so asking it per
+      // batch would throttle the pass to one upload round trip per batch.
+      // DROPPED, accepted for a claimed run on a drained fleet:
+      // - a foreign row still mid-download when a batch starts. A download SEEN
+      //   is still counted, so the sweep it spans cannot prove convergence, and
+      //   `awaitCaughtUp` asks the full gate before every re-sweep.
+      // - a disconnected device: it keeps writing locally and uploads later.
+      // - the per-batch claim check reads the claim as of the last catch-up,
+      //   since no checkpoint applies while this pass's uploads are queued.
       const perBatchArms: ViewGapArms = backfill.trigger === 'operator' ? 'local' : 'all'
+      const assertBatchMayWrite = async (): Promise<void> => {
+        await assertMayWrite({arms: perBatchArms})
+        if (perBatchArms === 'local' && !this.backfillSyncSettledNow()) syncWaitCount += 1
+      }
       // Announced once, not per batch: the history is gone either way, and
       // saying so repeatedly for a pass that runs for minutes is noise.
       let announcedUndoClear = false
@@ -4226,7 +4253,7 @@ export class Repo {
           // that commits between this probe and the write is seen by the NEXT
           // batch's probe instead of this one. The synchronous half stays
           // inside, at both ends, where it costs no connection.
-          await assertMayWrite(undefined, perBatchArms)
+          await assertBatchMayWrite()
           const value = await this.tx(async t => {
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             // The claim can change while waiting for this lock, even without
@@ -4310,7 +4337,7 @@ export class Repo {
         await assertMayWrite()
         await backfill.run(ctx)
         // The scan is over: waiting here could admit rows it never examined.
-        await assertMayWrite(false)
+        await assertMayWrite({waitForSync: false})
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
