@@ -1,1 +1,1 @@
-export{kv as LazyBlockEntry}from"../../../chunks/app-Bb1rjZ6V.js";
+export{kv as LazyBlockEntry}from"../../../chunks/app-BsFMcQZO.js";

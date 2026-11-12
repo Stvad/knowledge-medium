@@ -1,1 +1,1 @@
-export{Bit as AliasSeatNamespaceUnavailableError,Vit as aliasSeatNamespacesInTx,Hit as resolveAliasSeatNamespaces}from"../../chunks/app-Bb1rjZ6V.js";
+export{Bit as AliasSeatNamespaceUnavailableError,Vit as aliasSeatNamespacesInTx,Hit as resolveAliasSeatNamespaces}from"../../chunks/app-BsFMcQZO.js";

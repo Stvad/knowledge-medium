@@ -1,1 +1,1 @@
-export{WX as annotationMarginOpenProp,GX as annotationMarginShareProp}from"../../../chunks/app-Bb1rjZ6V.js";
+export{WX as annotationMarginOpenProp,GX as annotationMarginShareProp}from"../../../chunks/app-BsFMcQZO.js";

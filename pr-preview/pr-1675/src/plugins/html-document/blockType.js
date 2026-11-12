@@ -1,1 +1,1 @@
-export{Iq as htmlDocumentTypeSeed}from"../../../chunks/app-Bb1rjZ6V.js";
+export{Iq as htmlDocumentTypeSeed}from"../../../chunks/app-BsFMcQZO.js";

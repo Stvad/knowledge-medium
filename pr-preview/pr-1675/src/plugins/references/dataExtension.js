@@ -1,1 +1,1 @@
-export{BK as referencesDataExtension}from"../../../chunks/app-Bb1rjZ6V.js";
+export{BK as referencesDataExtension}from"../../../chunks/app-BsFMcQZO.js";
