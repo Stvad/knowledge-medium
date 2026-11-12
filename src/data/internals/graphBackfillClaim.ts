@@ -316,12 +316,13 @@ export const releaseStrandedGraphBackfillClaim = async (
 export const createGraphBackfillClaim = (
   deps: GraphBackfillClaimDeps,
 ): BackfillCompletionClaim => {
-  /** The completed claim bag an operator reclaim overwrote, by claim id, held
-   *  from that reclaim until the claim is released. A release puts it back
-   *  instead of deleting the row, so a failed re-run of a finished pass leaves
-   *  the workspace's record that it finished. In memory, so a process that
-   *  dies mid-run still strands a plain in-flight claim (#617). */
-  const displacedCompletions = new Map<string, Record<string, unknown>>()
+  /** The bag a claim overwrote IN PLACE, by claim id, held until the claim is
+   *  released — normally a completed claim an operator reclaimed. A release
+   *  puts it back instead of deleting the row, so a failed re-run of a
+   *  finished pass leaves the workspace's record that it finished. In memory,
+   *  so a process that dies mid-run still strands a plain in-flight claim
+   *  (#617). */
+  const displacedBags = new Map<string, Record<string, unknown>>()
   return {
     async stillOwned(tx, workspaceId, backfillId) {
       const row = await tx.get(graphBackfillClaimBlockId(workspaceId, backfillId))
@@ -371,12 +372,11 @@ export const createGraphBackfillClaim = (
       // the row may be a sibling TAB's live claim, and a caller that released it
       // would delete a claim somebody is still writing under.
       /** Recorded only once the claim's tx has COMMITTED, so a reclaim that
-       *  failed to land leaves no completion for a later release to restore. */
+       *  failed to land leaves nothing for a later release to restore. */
       let displaced: Record<string, unknown> | undefined
       const won: ClaimAttempt = first === 'proceed'
         ? 'inherited'
         : await claimTx(deps, `claim backfill ${backfillId}`, async tx => {
-          displaced = undefined
           // Re-checked inside the WRITING tx against this row: the read above
           // happened outside it, and a peer's claim can arrive in between.
           const existing = await tx.get(claimId)
@@ -402,7 +402,7 @@ export const createGraphBackfillClaim = (
               return 'declined'
             }
             await tx.update(claimId, {properties: claimProperties})
-            if (live !== null) displaced = existing.properties
+            displaced = existing.properties
             return 'minted'
           }
           if (existing?.deleted) {
@@ -440,7 +440,7 @@ export const createGraphBackfillClaim = (
 
       // No convergence wait. Under an operator trigger there is nothing to
       // arbitrate, and the wait was unwinnable anyway — see the module header.
-      if (displaced) displacedCompletions.set(claimId, displaced)
+      if (displaced) displacedBags.set(claimId, displaced)
       return won
     },
 
@@ -508,10 +508,10 @@ export const createGraphBackfillClaim = (
         // A claim this run took over a COMPLETED one goes back to that
         // completion: the run failed, so the earlier one is still the last that
         // finished, and deleting would read the graph as never migrated.
-        const displaced = displacedCompletions.get(claimId)
+        const displaced = displacedBags.get(claimId)
         if (displaced) await tx.update(claimId, {properties: displaced})
         else await tx.delete(claimId)
-      }).finally(() => displacedCompletions.delete(claimId))
+      }).finally(() => displacedBags.delete(claimId))
     },
   }
 }
