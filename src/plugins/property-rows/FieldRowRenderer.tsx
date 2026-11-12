@@ -61,7 +61,7 @@ FieldRowLabel.displayName = 'FieldRowLabel'
 
 const FieldRowLayout: BlockLayout = ({
   block,
-  Content, BelowContent, Children, Footer,
+  Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
 }) => {
@@ -93,6 +93,7 @@ const FieldRowLayout: BlockLayout = ({
                     </PropertyFieldRowContext>
                   </CollapsibleContent>
                 </div>
+                {Properties && <Properties/>}
                 <BelowContent/>
                 <Footer/>
               </div>

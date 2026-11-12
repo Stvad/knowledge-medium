@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { isRefCodec, isRefListCodec } from '@/data/api'
+import { isReadOnlyBlock, isRefCodec, isRefListCodec } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeButton } from './shapeUi'
@@ -173,7 +173,7 @@ export function PropertyValueCell({
       onFocus={valueFocusHandlers.onFocus}
       onBlur={valueFocusHandlers.onBlur}
     >
-      {Editor !== undefined && !row.decodeFailed && !row.readOnly && !block.repo.isReadOnly ? (
+      {Editor !== undefined && !row.decodeFailed && !row.readOnly && !isReadOnlyBlock(block) ? (
         <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
       ) : row.decodeFailed ? (
         <RawJsonValue value={row.encodedValue} reason="Decode failed" />

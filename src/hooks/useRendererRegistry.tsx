@@ -3,7 +3,7 @@ import { rendererProp } from '@/data/properties.js'
 import { usePropertyValue, useData } from '@/hooks/block.js'
 import { useCallback, useContext, useSyncExternalStore } from 'react'
 import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
-import { useRepo } from '@/context/repo.js'
+import type { Repo } from '@/data/repo'
 import { blockRenderersFacet } from '@/extensions/core.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -16,8 +16,7 @@ export const refreshRendererRegistry = async () => {
 
 /** Re-render on a property-registry swap while `active`; otherwise the snapshot
  *  is a constant, so the subscription never re-renders the caller. */
-const usePropertyRegistryIn = (active: boolean): void => {
-  const repo = useRepo()
+const usePropertyRegistryIn = (repo: Repo, active: boolean): void => {
   const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
   const snapshot = () => (active ? repo.propertySchemas : null)
   useSyncExternalStore(subscribe, snapshot, snapshot)
@@ -34,7 +33,7 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   // A property-row renderer recognizes a field row through its DEFINITION, which
   // can register after the row mounted; re-choose on a registry swap — only in
   // a listing that shows property rows, so every other block ignores swaps.
-  usePropertyRegistryIn(useContext(PropertyRowListingContext))
+  usePropertyRegistryIn(block.repo, useContext(PropertyRowListingContext))
 
   const [rendererKey] = usePropertyValue(block, rendererProp)
   const runtime = useAppRuntime()

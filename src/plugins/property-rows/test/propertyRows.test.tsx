@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import type { Block } from '@/data/block'
+import { showPropertiesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { Repo } from '@/data/repo'
@@ -369,5 +370,17 @@ describe('a read-only workspace', () => {
     await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
     await screen.findByText('"draft"')
     expect(screen.queryByDisplayValue('draft')).toBeNull()
+  })
+})
+
+describe('a field row\'s own properties', () => {
+  // A field row is a block like any other: toggling its property panel shows it.
+  it('shows the field row\'s property panel when it is toggled on', async () => {
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    const row = document.querySelector<HTMLElement>('[data-property-field-row="true"]')!
+    expect(row.querySelector('.tm-property-fields')).toBeNull()
+    await act(async () => { await repo.block(row.dataset.blockId!).set(showPropertiesProp, true) })
+    await waitFor(() => expect(row.querySelector('.tm-property-fields')).not.toBeNull())
   })
 })
