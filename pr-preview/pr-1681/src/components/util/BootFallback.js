@@ -1,0 +1,1 @@
+export{RG as BootFallback}from"../../../chunks/app-Bqw9CkCm.js";

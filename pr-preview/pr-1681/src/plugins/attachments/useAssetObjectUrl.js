@@ -1,0 +1,1 @@
+export{Rx as useAssetObjectUrl}from"../../../chunks/app-Bqw9CkCm.js";

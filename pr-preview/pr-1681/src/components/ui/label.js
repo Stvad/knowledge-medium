@@ -1,0 +1,1 @@
+export{FO as Label}from"../../../chunks/app-Bqw9CkCm.js";

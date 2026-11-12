@@ -1,0 +1,1 @@
+export{NI as GESTURE_ACTIVE,PI as GESTURE_CANCEL,FI as GESTURE_IDLE,II as TOUCH_HOLD_MS,LI as TOUCH_SLOP_PX,RI as continuousGestureRecognizersFacet,zI as createBlockGestureController,BI as enabledTouchAction,VI as suppressNextClick,HI as unionTouchAction,UI as useContinuousGestures}from"../../chunks/app-Bqw9CkCm.js";

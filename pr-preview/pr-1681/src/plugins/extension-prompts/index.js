@@ -1,0 +1,1 @@
+export{IN as ExtensionPromptSurface,LN as extensionPromptsExtension}from"../../../chunks/app-Bqw9CkCm.js";

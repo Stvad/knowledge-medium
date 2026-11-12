@@ -1,0 +1,1 @@
+export{FP as dynamicExtensionsExtension}from"../../chunks/app-Bqw9CkCm.js";
