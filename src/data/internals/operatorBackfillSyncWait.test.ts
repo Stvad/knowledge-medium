@@ -178,7 +178,7 @@ describe('operator backfill transient sync waits', () => {
     expect(gapObserved).toBe(true)
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('download is still running')
-    expect(result.reason).not.toContain('within 30 seconds')
+    expect(result.reason).not.toContain('did not settle within')
     expect(events).not.toContain('markComplete')
     expect(events).toContain('releaseClaim')
     expect(warn.mock.calls.some(([message]) =>
@@ -608,28 +608,38 @@ describe('operator backfill transient sync waits', () => {
   it('waits out a download in flight when the pass asks to catch up', async () => {
     const events: string[] = []
     const batches: number[] = []
-    const gate = controllableGate()
+    let downloading = false
     let caughtUp = false
     const repo = await makeRepo({
       id: BACKFILL_ID,
       trigger: 'operator',
       run: async ctx => {
         await twoBatchWriter(batches)(ctx)
-        gate.close()
+        downloading = true
         await ctx.awaitCaughtUp()
         caughtUp = true
       },
-    }, events, {backfillSyncGate: gate.gate})
+    }, events)
+    // A download in flight is the device-wide arm, which only a full ask sees.
+    const askedArms: string[] = []
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (_ws, _reads, arms = 'all') => {
+      if (downloading) askedArms.push(arms)
+      return downloading && arms === 'all'
+        ? {reason: 'download is still running', transient: true}
+        : null
+    })
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(batches).toEqual([0, 1]))
+    await waitFor(() => expect(askedArms.length).toBeGreaterThan(0))
     await vi.advanceTimersByTimeAsync(1_000)
     expect(caughtUp).toBe(false)
+    expect(askedArms.every(arms => arms === 'all')).toBe(true)
 
-    gate.open()
+    downloading = false
     await vi.advanceTimersByTimeAsync(100)
     expect(await running).toMatchObject({outcome: 'ran'})
     expect(caughtUp).toBe(true)
+    expect(batches).toEqual([0, 1])
     expect(events.filter(event => event === 'markComplete')).toHaveLength(1)
   })
 
