@@ -68,7 +68,7 @@ describe('setSeedHiddenTier hide', () => {
 
     const second = await setSeedHiddenTier(repo, WS, [target(alpha), target(beta)], {direction: 'hide', apply: true})
     expect(second.counts).toEqual({upgraded: 0, alreadyCurrent: 2, skippedDiverged: 0, absent: 0})
-    // The no-op tx records nothing.
+    // A run with nothing to write opens no tx.
     expect(await commandCount(HIDE_TX)).toBe(1)
   })
 
@@ -135,6 +135,32 @@ describe('setSeedHiddenTier hide', () => {
       .rejects.toThrow(/read-only/)
     repo.setReadOnly(false)
     expect((await storedBag(alpha))[propertyHiddenProp.name]).toBe(false)
+  })
+})
+
+describe('setSeedHiddenTier undo history', () => {
+  it('drops the history a content edit of a seed row left, so undo cannot revert the pass', async () => {
+    await materializePropertySeeds(repo, WS, [alpha])
+    // Allowed under BlockDefault: the guard locks the bag, not the content.
+    await repo.tx(tx => tx.update(idOf(alpha), {content: 'renamed'}), {scope: ChangeScope.BlockDefault})
+
+    const result = await setSeedHiddenTier(repo, WS, [target(alpha)], {direction: 'hide', apply: true})
+    expect(result.undoHistoryCleared).toBe(true)
+    // A later content change the stack does not hold (a peer's, synced) makes
+    // the entry conflict, and a conflicting replay restores its whole row.
+    await repo.tx(tx => tx.update(idOf(alpha), {content: 'peer'}), {scope: ChangeScope.Automation})
+    await repo.undo()
+    expect(await storedBag(alpha)).toMatchObject({[propertyHiddenProp.name]: true, [seedRevisionProp.name]: 2})
+  })
+
+  it('keeps the history when there is nothing to write', async () => {
+    await materializePropertySeeds(repo, WS, [alpha])
+    await setSeedHiddenTier(repo, WS, [target(alpha)], {direction: 'hide', apply: true})
+    await repo.tx(tx => tx.update(idOf(alpha), {content: 'renamed'}), {scope: ChangeScope.BlockDefault})
+
+    const result = await setSeedHiddenTier(repo, WS, [target(alpha)], {direction: 'hide', apply: true})
+    expect(result.undoHistoryCleared).toBe(false)
+    expect(await repo.undo()).toBe(true)
   })
 })
 

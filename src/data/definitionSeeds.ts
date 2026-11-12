@@ -322,7 +322,7 @@ export const awaitPropertySeedMaterializationAccess = async (
   return {allowed: true}
 }
 
-const revisionFromProperties = (properties: Record<string, unknown>): number | undefined => {
+export const revisionFromProperties = (properties: Record<string, unknown>): number | undefined => {
   try {
     const raw = properties[seedRevisionProp.name]
     return raw === undefined ? undefined : seedRevisionProp.codec.decode(raw)

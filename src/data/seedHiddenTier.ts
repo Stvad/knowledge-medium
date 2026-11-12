@@ -15,8 +15,13 @@
 
 import { ChangeScope, type BlockData } from '@/data/api'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
-import { propertyDefinitionBlockId, seededDefinitionKey } from '@/data/definitionSeeds'
+import {
+  propertyDefinitionBlockId,
+  revisionFromProperties,
+  seededDefinitionKey,
+} from '@/data/definitionSeeds'
 import { propertyHiddenProp, seedRevisionProp } from '@/data/properties'
+import type { HistoryDrop } from '@/data/internals/undoManager'
 import type { Repo } from '@/data/repo'
 
 /** A seed the pass covers, at the revision its declaration now carries. */
@@ -52,12 +57,16 @@ export interface SeedHiddenTierResult {
   readonly applied: boolean
   readonly counts: Readonly<Record<'upgraded' | 'alreadyCurrent' | 'skippedDiverged' | 'absent', number>>
   readonly seeds: readonly SeedHiddenTierRow[]
+  /** True when the run wrote, which drops this tab's undo history for the
+   *  workspace (see the drop in `setSeedHiddenTier`). */
+  readonly undoHistoryCleared: boolean
 }
 
-const decodeOrUndefined = <T>(decode: (raw: unknown) => T, raw: unknown): T | undefined => {
+const storedHiddenOf = (properties: Record<string, unknown>): boolean | undefined => {
+  const raw = properties[propertyHiddenProp.name]
   if (raw === undefined) return undefined
   try {
-    return decode(raw)
+    return propertyHiddenProp.codec.decode(raw)
   } catch {
     return undefined
   }
@@ -77,8 +86,8 @@ const classify = (
   if (seededDefinitionKey(row) !== target.seedKey) {
     return {...base, status: 'skipped-diverged', reason: 'row is not seed-provenanced for this key'}
   }
-  const storedRevision = decodeOrUndefined(seedRevisionProp.codec.decode, row.properties[seedRevisionProp.name])
-  const storedHidden = decodeOrUndefined(propertyHiddenProp.codec.decode, row.properties[propertyHiddenProp.name])
+  const storedRevision = revisionFromProperties(row.properties)
+  const storedHidden = storedHiddenOf(row.properties)
   const stored = {...base, storedRevision, storedHidden}
   if (storedRevision === undefined || storedHidden === undefined) {
     return {...stored, status: 'skipped-diverged', reason: 'stored revision or hidden is missing or undecodable'}
@@ -148,12 +157,15 @@ export const setSeedHiddenTier = async (
   }
   // The plan is only a read; the write re-classifies every row inside its tx.
   if (!apply || !planned.some(row => row.status === 'upgraded')) {
-    return {workspaceId, direction, applied: apply, counts: countRows(planned), seeds: planned}
+    return {workspaceId, direction, applied: apply, counts: countRows(planned), seeds: planned, undoHistoryCleared: false}
   }
 
   const seeds: SeedHiddenTierRow[] = []
-  // Automation: not undoable, and the seed-row guard keeps these rows out of
-  // every BlockDefault undo entry, so there is no history to drop.
+  // The pass itself is Automation, which records no undo entry. Entries already
+  // on the stack can still hold these rows: a BlockDefault CONTENT edit of a seed
+  // row is allowed, and a replay restores its whole pre-pass row past the seed
+  // guard. So a run that writes drops the history, under the write lock.
+  let drop: HistoryDrop | undefined
   await repo.tx(async tx => {
     const writes: Array<{row: BlockData; revision: number}> = []
     for (const target of targets) {
@@ -175,9 +187,18 @@ export const setSeedHiddenTier = async (
         },
       }, {skipMetadata: true})
     }
+    if (writes.length > 0) drop = repo.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
   }, {
     scope: ChangeScope.Automation,
     description: direction === 'hide' ? 'move seed definitions to hidden tier' : 'move seed definitions out of hidden tier',
+  }).catch((err: unknown) => {
+    // Rolled back: nothing to replay an entry onto, so no history is owed.
+    drop?.abandon()
+    throw err
   })
-  return {workspaceId, direction, applied: true, counts: countRows(seeds), seeds}
+  drop?.finish()
+  return {
+    workspaceId, direction, applied: true, counts: countRows(seeds), seeds,
+    undoHistoryCleared: drop !== undefined,
+  }
 }
