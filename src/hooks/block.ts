@@ -28,6 +28,7 @@
 import { isEqual } from 'lodash-es'
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -39,6 +40,14 @@ import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import {
+  parsePropertyDisplaySetting,
+  propertyChildrenViewFor,
+  propertyDisplayProp,
+  resolvePropertyDisplayMode,
+  type PropertyDisplayMode,
+} from '@/data/propertyDisplayMode'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -411,14 +420,28 @@ export const useBlockAliases = (block: Block): readonly string[] =>
  *  this, every LazyBlockComponent that mounts on intersection would
  *  pay its own `block.load()` round-trip and the page would visibly
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
- *  non-rendering callers (counting / id-only scans). */
-export const useChildIds = (block: Block): string[] =>
-  // Display hook: the outline shows the visible view (recognized property
-  // field rows excluded, §9). Structural traversals use the everything-by-
-  // default query instead.
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
+ *  non-rendering callers (counting / id-only scans).
+ *
+ *  Lists the children the outline shows: which property rows are among
+ *  them is `usePropertyDisplayMode`'s answer for this block. */
+export const useChildIds = (block: Block): string[] => {
+  const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
+  return useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
+}
+
+/** The outline's property display mode for `block`'s children here: the
+ *  block's own switch over the panel's scope (`PropertyDisplayScope`). The one
+ *  reader of the levels — see `resolvePropertyDisplayMode`. The block setting
+ *  is read tolerantly, above the per-block error boundary. */
+export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
+  const scope = useContext(PropertyDisplayScopeContext)
+  const blockSetting = useHandle(block, {
+    selector: doc => parsePropertyDisplaySetting(doc?.properties[propertyDisplayProp.name]),
+  })
+  return resolvePropertyDisplayMode({...scope, block: blockSetting})
+}
 
 /** Reactive child Block facades. Same structural-equality bail-out
  *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
@@ -447,10 +470,12 @@ export const useChildren = (block: Block): Block[] => {
  *  — every block that renders a bullet (BlockBullet) also renders its
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
-export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
+export const useHasChildren = (block: Block): boolean => {
+  const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
+  return useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
+}
 
 /** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`
  *  walks leaf-to-root; every consumer renders root-first. */

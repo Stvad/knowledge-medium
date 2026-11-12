@@ -126,6 +126,9 @@ export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
  *  snapshot rule can see it. One key: there is one active registry. */
 export const KERNEL_FIELD_RECOGNITION_CHANNEL = 'kernel.fieldRecognition'
 export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
+/** Same channel, the hidden-tier half: fired when the active registry changes
+ *  which definitions are hidden — what the tier-aware child view binds. */
+export const KERNEL_FIELD_HIDDEN_TIER_KEY = 'active-registry-hidden-tier'
 
 const SEP = '\u0000'
 

@@ -34,6 +34,7 @@ import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } 
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { hiddenTierFieldIds } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
 import { refCodecKind } from './refProjection'
@@ -41,11 +42,15 @@ import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
   CHILDREN_IDS_SQL,
   CHILDREN_SQL,
+  NO_REGISTRY_HIDDEN_TIER_PARAMS,
   NO_REGISTRY_RECOGNITION_PARAMS,
+  NON_HIDDEN_CHILDREN_IDS_SQL,
+  NON_HIDDEN_CHILDREN_SQL,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
   VISIBLE_SUBTREE_SQL,
+  type HiddenTierParams,
   type RecognitionParams,
 } from './treeQueries'
 import {
@@ -60,6 +65,7 @@ import {
 import {
   KERNEL_ALIASES_CHANNEL,
   KERNEL_CONTENT_CHANNEL,
+  KERNEL_FIELD_HIDDEN_TIER_KEY,
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
@@ -887,6 +893,55 @@ export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   return params
 }
 
+/** Which property children a child listing leaves out: `false` none (the
+ *  structural view), `true` every recognized field row, `'hidden-tier'` only
+ *  the field rows whose definition is hidden. */
+export type PropertyChildrenView = boolean | 'hidden-tier'
+
+const propertyChildrenViewSchema = z.union([z.boolean(), z.literal('hidden-tier')])
+
+const hiddenTierParamsBySnapshot = new WeakMap<object, HiddenTierParams>()
+
+/** The bound half of the hidden-tier child view, with the dependency that
+ *  re-runs a query binding it when a definition's hidden bit moves — the same
+ *  contract as {@link dependOnRecognitionParams}. */
+const dependOnHiddenTierParams = (ctx: QueryCtx): HiddenTierParams => {
+  ctx.depend({
+    kind: 'plugin',
+    channel: KERNEL_FIELD_RECOGNITION_CHANNEL,
+    key: KERNEL_FIELD_HIDDEN_TIER_KEY,
+  })
+  const registry = ctx.repo.propertyDefinitions
+  if (!registry) return NO_REGISTRY_HIDDEN_TIER_PARAMS
+  const cached = hiddenTierParamsBySnapshot.get(registry)
+  if (cached) return cached
+  const params: HiddenTierParams = [
+    JSON.stringify([...hiddenTierFieldIds(registry)]),
+    registry.workspaceId,
+  ]
+  hiddenTierParamsBySnapshot.set(registry, params)
+  return params
+}
+
+/** The one statement choice for a child listing, so `core.children` and both
+ *  `core.childIds` shapes cannot disagree about a view. */
+const childrenStatement = (
+  view: PropertyChildrenView,
+  shape: 'rows' | 'ids',
+  id: string,
+  ctx: QueryCtx,
+): [string, unknown[]] => {
+  if (view === 'hidden-tier') {
+    return [shape === 'rows' ? NON_HIDDEN_CHILDREN_SQL : NON_HIDDEN_CHILDREN_IDS_SQL,
+      [id, ...dependOnHiddenTierParams(ctx)]]
+  }
+  if (view) {
+    return [shape === 'rows' ? VISIBLE_CHILDREN_SQL : VISIBLE_CHILDREN_IDS_SQL,
+      [id, ...dependOnRecognitionParams(ctx)]]
+  }
+  return [shape === 'rows' ? CHILDREN_SQL : CHILDREN_IDS_SQL, [id]]
+}
+
 /** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
  *  by default (property field rows included) — the structural view. The
  *  display-visible view — excluding recognized field rows
@@ -894,17 +949,16 @@ export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
  *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
  *  `tx.childrenOf` takes. */
 export const childrenQuery = defineQuery<
-  {id: string; hidePropertyChildren?: boolean},
+  {id: string; hidePropertyChildren?: PropertyChildrenView},
   BlockData[]
 >({
   name: 'core.children',
-  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
+  argsSchema: z.object({id: z.string(), hidePropertyChildren: propertyChildrenViewSchema.optional()}),
   resultSchema: blockDataArraySchema,
   resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...dependOnRecognitionParams(ctx)])
-      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const [sql, params] = childrenStatement(hidePropertyChildren, 'rows', id, ctx)
+    const rows = await ctx.db.getAll<BlockRow>(sql, params)
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
@@ -912,30 +966,28 @@ export const childrenQuery = defineQuery<
 /** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
  *  the full row SELECT and primes the cache — the consumer-facing
  *  variant the React hooks use to avoid N+1 row loads on mount. Same
- *  everything-by-default as `core.children` (the hooks opt into the
- *  visible view via `hidePropertyChildren: true`). */
+ *  everything-by-default as `core.children` (the hooks pass the view the
+ *  outline's property display resolved to). */
 export const childIdsQuery = defineQuery<
-  {id: string; hydrate?: boolean; hidePropertyChildren?: boolean},
+  {id: string; hydrate?: boolean; hidePropertyChildren?: PropertyChildrenView},
   string[]
 >({
   name: 'core.childIds',
   argsSchema: z.object({
     id: z.string(),
     hydrate: z.boolean().optional(),
-    hidePropertyChildren: z.boolean().optional(),
+    hidePropertyChildren: propertyChildrenViewSchema.optional(),
   }),
   resultSchema: z.array(z.string()),
   resolve: async ({id, hydrate = false, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const rows = hidePropertyChildren
-        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...dependOnRecognitionParams(ctx)])
-        : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      const [sql, params] = childrenStatement(hidePropertyChildren, 'ids', id, ctx)
+      const rows = await ctx.db.getAll<{id: string}>(sql, params)
       return rows.map(r => r.id)
     }
-    const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...dependOnRecognitionParams(ctx)])
-      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const [sql, params] = childrenStatement(hidePropertyChildren, 'rows', id, ctx)
+    const rows = await ctx.db.getAll<BlockRow>(sql, params)
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the
     // id set. Hydration here is pure cache priming for the React hooks

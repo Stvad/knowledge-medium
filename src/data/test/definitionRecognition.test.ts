@@ -118,3 +118,48 @@ describe('a mounted outline view follows the registry', () => {
     }
   })
 })
+
+describe('the hidden-tier child view (`hidePropertyChildren: \'hidden-tier\'`)', () => {
+  const tierView = (repo: Repo) => repo.runQuery('core.childIds', {id: OWNER, hidePropertyChildren: 'hidden-tier'})
+
+  it('keeps a field row whose definition is not hidden, and drops one whose definition is', async () => {
+    const repo = await openRepo()
+    await seed(repo, definitionBag({}))
+    await vi.waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.has(DEF)).toBe(true))
+    expect(await tierView(repo)).toEqual([NOTE, FIELD])
+
+    await repo.tx(tx => tx.update(DEF, {properties: definitionBag({'property-schema:hidden': true})}),
+      {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(async () => expect(await tierView(repo)).toEqual([NOTE]))
+  })
+
+  it('re-resolves a mounted handle when the hidden bit moves, though recognition does not', async () => {
+    const repo = await openRepo()
+    await seed(repo, definitionBag({'property-schema:hidden': true}))
+    const handle = repo.query.childIds({id: OWNER, hidePropertyChildren: 'hidden-tier'})
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await vi.waitFor(() => expect(handle.peek()).toEqual([NOTE]))
+      await repo.tx(tx => tx.update(DEF, {properties: definitionBag({'property-schema:hidden': false})}),
+        {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => expect(handle.peek()).toEqual([NOTE, FIELD]))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('drops the field row of a hidden kernel seed', async () => {
+    const repo = await openRepo()
+    await vi.waitFor(() => expect(repo.propertyDefinitions).not.toBeNull())
+    const collapsedFieldId = repo.propertySchemaResolverFor(WS).resolve('system:collapsed')
+    expect(collapsedFieldId.status).toBe('resolved')
+    const fieldId = collapsedFieldId.status === 'resolved' ? collapsedFieldId.schema.fieldId : ''
+    await repo.tx(async tx => {
+      await tx.create({id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
+      await tx.create({id: NOTE, workspaceId: WS, parentId: OWNER, orderKey: 'a0', content: 'note'})
+      await tx.create({id: FIELD, workspaceId: WS, parentId: OWNER, orderKey: 'a1', content: `::((${fieldId}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await repo.runQuery('core.childIds', {id: OWNER})).toEqual([NOTE, FIELD])
+    expect(await tierView(repo)).toEqual([NOTE])
+  })
+})

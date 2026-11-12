@@ -83,6 +83,10 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
    *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
    *  thing for a renderer that arrives through the facet instead. */
   contentShowsOtherBlocks?: boolean;
+  /** The layout for the block this renderer composes, in place of the
+   *  `blockLayoutFacet` resolution — for a renderer whose block has a shape of
+   *  its own (a property row's two-column grid). */
+  Layout?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -624,6 +628,7 @@ export function DefaultBlockRenderer(
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
     contentShowsOtherBlocks,
+    Layout: ComposedLayout,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -719,8 +724,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
   // fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => ComposedLayout ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [ComposedLayout, resolveContext, resolveBlockLayout],
   )
 
   // Content slot: the editable content surface — gesture ref + surface props +

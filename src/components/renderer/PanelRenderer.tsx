@@ -1,6 +1,7 @@
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { PropertyDisplayScope } from '@/components/propertyDisplay/PropertyDisplayScope'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
@@ -331,7 +332,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
         panelViewMode,
       }}
     >
-      <BlockComponent blockId={topLevelBlockId}/>
+      <PropertyDisplayScope>
+        <BlockComponent blockId={topLevelBlockId}/>
+      </PropertyDisplayScope>
     </NestedBlockContextProvider>
   )
 

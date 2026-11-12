@@ -16,6 +16,7 @@ import {
 import { flushPendingEditorContent } from './pendingEditorContent'
 import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
+import { propertyDisplayDefaultProp, propertyDisplayProp } from './propertyDisplayMode'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -778,6 +779,7 @@ export type { PropertySchema }
 export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   // UI-state schemas
   showPropertiesProp,
+  propertyDisplayProp,
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockLocationProp,
@@ -789,6 +791,8 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,
+  // UserPrefs schemas
+  propertyDisplayDefaultProp,
   // BlockDefault schemas
   isCollapsedProp,
   typesProp,

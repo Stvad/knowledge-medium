@@ -210,6 +210,43 @@ const sameKeys = (
   return true
 }
 
+const hiddenTierBySnapshot = new WeakMap<PropertyDefinitionRegistrySnapshot, ReadonlySet<string>>()
+
+/** The field ids whose definition is `hidden` — the HIDDEN TIER of the
+ *  outline's property display (§10): a field row targeting one of these stays
+ *  out of the default view. A materialized definition answers for itself (its
+ *  row's hidden bit); a seed whose row has not materialized yet answers with
+ *  its declaration. Memoized on snapshot identity: the outline asks once per
+ *  rendered block and the answer only moves when the registry is replaced. */
+export const hiddenTierFieldIds = (
+  snapshot: PropertyDefinitionRegistrySnapshot,
+): ReadonlySet<string> => {
+  const cached = hiddenTierBySnapshot.get(snapshot)
+  if (cached) return cached
+  const hidden = new Set<string>()
+  for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
+    if (definition.hidden) hidden.add(fieldId)
+  }
+  for (const seed of snapshot.seedsByKey.values()) {
+    const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)
+    if (!snapshot.definitionsByFieldId.has(fieldId) && seed.hidden) hidden.add(fieldId)
+  }
+  hiddenTierBySnapshot.set(snapshot, hidden)
+  return hidden
+}
+
+/** Do two snapshots put the same field ids in the hidden tier? The input to
+ *  the tier-aware child view, which {@link sameFieldRecognition} does not
+ *  cover: flipping a definition's hidden bit changes no recognition. */
+export const sameHiddenTier = (
+  a: PropertyDefinitionRegistrySnapshot | null,
+  b: PropertyDefinitionRegistrySnapshot | null,
+): boolean => {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.workspaceId === b.workspaceId && sameKeys(hiddenTierFieldIds(a), hiddenTierFieldIds(b))
+}
+
 /** Do two snapshots recognize the same field ids as definitions (§9
  *  condition 3)? The inputs to both views' answer: the parsed definitions, the
  *  unparseable blocks, the seed slots, and the workspace they belong to. A

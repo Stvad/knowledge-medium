@@ -353,3 +353,52 @@ ${recognizedFieldRowSql('child')}
   )
   SELECT * FROM subtree ORDER BY path
 `
+
+/** The registry's half of {@link hiddenTierFieldRowSql}, bound after the
+ *  statement's own parameters: the JSON id list of hidden-tier definitions
+ *  (`hiddenTierFieldIds`) and the workspace that registry belongs to. */
+export type HiddenTierParams = readonly [
+  hiddenDefinitionIdsJson: string,
+  registryWorkspaceId: string,
+]
+
+export const NO_REGISTRY_HIDDEN_TIER_PARAMS: HiddenTierParams = ['[]', '']
+
+/**
+ * HIDDEN-TIER field row: a field row (`is_field_form = 1`, non-root) whose
+ * target is a hidden definition — the rows the outline's default property
+ * display leaves out (§10). Narrower than {@link recognizedFieldRowSql}: every
+ * id in the bound list is a definition the registry resolved, so condition 3
+ * holds by construction and needs no `block_types` leg. Workspace-guarded for
+ * the same reason as there. Same NULL-safety under `NOT (...)`.
+ */
+const hiddenTierFieldRowSql = (rowRef: string): string => `
+     COALESCE(${rowRef}.is_field_form, 0) = 1
+     AND ${rowRef}.parent_id IS NOT NULL
+     AND ${rowRef}.reference_target_id IN (SELECT value FROM json_each(?))
+     AND ${rowRef}.workspace_id = ?
+`
+
+const NON_HIDDEN_CHILD_PREDICATE_SQL = `
+   AND NOT (
+${hiddenTierFieldRowSql('blocks')}
+   )
+`
+
+/** Tier-aware outline form of {@link CHILDREN_SQL}: every child except the
+ *  hidden-tier field rows. Bind `[parentId, ...HiddenTierParams]`. */
+export const NON_HIDDEN_CHILDREN_SQL = `
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${NON_HIDDEN_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
+
+/** Tier-aware outline form of {@link CHILDREN_IDS_SQL}. Bind
+ *  `[parentId, ...HiddenTierParams]`. */
+export const NON_HIDDEN_CHILDREN_IDS_SQL = `
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${NON_HIDDEN_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
