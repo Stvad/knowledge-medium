@@ -89,7 +89,7 @@ const SubtreeCountBadge = ({
     [countText],
   )
   const total = useHandle(
-    block.repo.query.subtree({id: block.id, hidePropertyChildren: true}),
+    block.repo.query.subtree({id: block.id, propertyChildren: 'none'}),
     {selector: sumRows},
   )
   // Nothing until the subtree has loaded: an empty sum would read as a real 0.

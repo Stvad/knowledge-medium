@@ -483,7 +483,7 @@ describe('retention deletion', () => {
     )).map((r) => r.id)
 
   // The production shape this guard exists for. With properties as blocks every
-  // record has generated field children, and `hidePropertyChildren` is the only
+  // record has generated field children, and `propertyChildren` is the only
   // thing keeping them from reading as hand-placed content — without it
   // retention silently stops, and both series grow without bound.
   it('prunes a record that has property machinery beneath it', async () => {

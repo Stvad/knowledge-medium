@@ -44,7 +44,6 @@ import { useRepo } from '@/context/repo.js'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import {
   blockPropertyDisplaySetting,
-  propertyChildrenViewFor,
   resolvePropertyDisplayMode,
   type PropertyDisplayMode,
 } from '@/data/propertyDisplayMode'
@@ -429,11 +428,10 @@ export const useChildIds = (block: Block): string[] =>
 
 /** {@link useChildIds} for a caller that already resolved the mode. */
 export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): string[] => {
-  const view = propertyChildrenViewFor(mode)
-  const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
+  const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: ids => ids,
   })
-  return ids ?? loadedListOfAnotherView(block, view)
+  return ids ?? loadedListOfAnotherView(block, mode)
 }
 
 /** While a non-default view's list loads, a loaded list of another view of
@@ -444,10 +442,10 @@ export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): str
  *  outline that never switches allocates nothing here; switching back to
  *  hide-all can remount the listing once. */
 const loadedListOfAnotherView = (block: Block, view: PropertyChildrenView): string[] => {
-  if (view === true) return EMPTY_STRING_ARRAY as string[]
-  const others: readonly PropertyChildrenView[] = view === 'hidden-tier' ? [false, true] : ['hidden-tier', true]
+  if (view === 'none') return EMPTY_STRING_ARRAY as string[]
+  const others: readonly PropertyChildrenView[] = view === 'non-hidden' ? ['all', 'none'] : ['non-hidden', 'none']
   for (const other of others) {
-    const ids = block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: other}).peek()
+    const ids = block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: other}).peek()
     if (ids) return ids
   }
   return EMPTY_STRING_ARRAY as string[]
@@ -476,7 +474,7 @@ export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
   // Display hook: visible view (property field rows excluded, §9).
-  return useHandle(block.repo.query.children({id: block.id, hidePropertyChildren: true}), {
+  return useHandle(block.repo.query.children({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -493,11 +491,11 @@ export const useChildren = (block: Block): Block[] => {
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean => {
-  const view = propertyChildrenViewFor(usePropertyDisplayMode(block))
-  const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: view}), {
+  const mode = usePropertyDisplayMode(block)
+  const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: ids => ids === undefined ? undefined : ids.length > 0,
   })
-  return hasChildren ?? loadedListOfAnotherView(block, view).length > 0
+  return hasChildren ?? loadedListOfAnotherView(block, mode).length > 0
 }
 
 /** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`
@@ -607,7 +605,7 @@ export const useRetainParents = (blocks: readonly Block[]): void => {
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
   // Display hook: visible view (property field rows excluded, §9).
-  return useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
+  return useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }

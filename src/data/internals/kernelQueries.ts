@@ -694,6 +694,14 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
 
 // ──── Tree queries ────
 
+/** Which property children a child listing shows: `'all'` every one (the
+ *  structural view), `'non-hidden'` the field rows whose definition is not
+ *  hidden, `'none'` no recognized field row. Also the outline's
+ *  `PropertyDisplayMode`. */
+export type PropertyChildrenView = 'all' | 'non-hidden' | 'none'
+
+const propertyChildrenViewSchema = z.enum(['all', 'non-hidden', 'none'])
+
 /** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
  *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
  *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
@@ -704,25 +712,29 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  machinery. The display-visible view — excluding recognized machinery
  *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
- *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
- *  true`, the same option `core.children` / `tx.childrenOf` take. The
+ *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `propertyChildren:
+ *  'none'`, the same option `core.children` / `tx.childrenOf` take. The
  *  outline hooks pass it; structural consumers (copy, navigation) get
  *  everything. */
 export const subtreeQuery = defineQuery<
-  {id: string; hidePropertyChildren?: boolean},
+  {id: string; propertyChildren?: PropertyChildrenView},
   SubtreeRow[]
 >({
   name: 'core.subtree',
-  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
+  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}),
   resultSchema: subtreeRowArraySchema,
-  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
+  resolve: async ({id, propertyChildren = 'all'}, ctx) => {
+    // No subtree SQL exists for the hidden-tier view.
+    if (propertyChildren === 'non-hidden') {
+      throw new Error("core.subtree supports propertyChildren 'all' and 'none' only")
+    }
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
     // something to match against. Re-declared per-row below; HandleStore
     // tolerates duplicates.
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = hidePropertyChildren
+    const rows = propertyChildren === 'none'
       ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...dependOnRecognitionParams(ctx)])
       : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
@@ -893,13 +905,6 @@ export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   return params
 }
 
-/** Which property children a child listing leaves out: `false` none (the
- *  structural view), `true` every recognized field row, `'hidden-tier'` only
- *  the field rows whose definition is hidden. */
-export type PropertyChildrenView = boolean | 'hidden-tier'
-
-const propertyChildrenViewSchema = z.union([z.boolean(), z.literal('hidden-tier')])
-
 const hiddenTierParamsBySnapshot = new WeakMap<object, HiddenTierParams>()
 
 /** The bound half of the hidden-tier child view, with the dependency that
@@ -931,11 +936,11 @@ const childrenStatement = (
   id: string,
   ctx: QueryCtx,
 ): [string, unknown[]] => {
-  if (view === 'hidden-tier') {
+  if (view === 'non-hidden') {
     return [shape === 'rows' ? NON_HIDDEN_CHILDREN_SQL : NON_HIDDEN_CHILDREN_IDS_SQL,
       [id, ...dependOnHiddenTierParams(ctx)]]
   }
-  if (view) {
+  if (view === 'none') {
     return [shape === 'rows' ? VISIBLE_CHILDREN_SQL : VISIBLE_CHILDREN_IDS_SQL,
       [id, ...dependOnRecognitionParams(ctx)]]
   }
@@ -946,19 +951,19 @@ const childrenStatement = (
  *  by default (property field rows included) — the structural view. The
  *  display-visible view — excluding recognized field rows
  *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
- *  `hidePropertyChildren: true`, the boolean `tx.childrenOf` also takes;
- *  `'hidden-tier'` drops only hidden-tier field rows. The outline hooks pass
+ *  `propertyChildren: 'none'`, the option `tx.childrenOf` also takes;
+ *  `'non-hidden'` drops only hidden-tier field rows. The outline hooks pass
  *  whichever their property display mode resolves to. */
 export const childrenQuery = defineQuery<
-  {id: string; hidePropertyChildren?: PropertyChildrenView},
+  {id: string; propertyChildren?: PropertyChildrenView},
   BlockData[]
 >({
   name: 'core.children',
-  argsSchema: z.object({id: z.string(), hidePropertyChildren: propertyChildrenViewSchema.optional()}),
+  argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}),
   resultSchema: blockDataArraySchema,
-  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
+  resolve: async ({id, propertyChildren = 'all'}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const [sql, params] = childrenStatement(hidePropertyChildren, 'rows', id, ctx)
+    const [sql, params] = childrenStatement(propertyChildren, 'rows', id, ctx)
     const rows = await ctx.db.getAll<BlockRow>(sql, params)
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -970,24 +975,24 @@ export const childrenQuery = defineQuery<
  *  everything-by-default as `core.children` (the hooks pass the view the
  *  outline's property display resolved to). */
 export const childIdsQuery = defineQuery<
-  {id: string; hydrate?: boolean; hidePropertyChildren?: PropertyChildrenView},
+  {id: string; hydrate?: boolean; propertyChildren?: PropertyChildrenView},
   string[]
 >({
   name: 'core.childIds',
   argsSchema: z.object({
     id: z.string(),
     hydrate: z.boolean().optional(),
-    hidePropertyChildren: propertyChildrenViewSchema.optional(),
+    propertyChildren: propertyChildrenViewSchema.optional(),
   }),
   resultSchema: z.array(z.string()),
-  resolve: async ({id, hydrate = false, hidePropertyChildren = false}, ctx) => {
+  resolve: async ({id, hydrate = false, propertyChildren = 'all'}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const [sql, params] = childrenStatement(hidePropertyChildren, 'ids', id, ctx)
+      const [sql, params] = childrenStatement(propertyChildren, 'ids', id, ctx)
       const rows = await ctx.db.getAll<{id: string}>(sql, params)
       return rows.map(r => r.id)
     }
-    const [sql, params] = childrenStatement(hidePropertyChildren, 'rows', id, ctx)
+    const [sql, params] = childrenStatement(propertyChildren, 'rows', id, ctx)
     const rows = await ctx.db.getAll<BlockRow>(sql, params)
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the

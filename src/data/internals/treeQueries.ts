@@ -245,7 +245,7 @@ export const NO_REGISTRY_RECOGNITION_PARAMS: RecognitionParams = ['[]', '[]', ''
 /**
  * VISIBLE-children predicate: excludes a recognized field row
  * (`is_field_form = 1`) from ordinary child listings at any depth — the
- * opt-in view (`hidePropertyChildren: true`), not the default. The outline's
+ * opt-in view (`propertyChildren: 'none'`), not the default. The outline's
  * hide-all property display; its show-non-hidden display is
  * {@link NON_HIDDEN_CHILDREN_SQL}.
  *

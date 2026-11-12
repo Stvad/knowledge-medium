@@ -21,7 +21,7 @@
  * Recognizing a row is not the same as HIDING it, and this file owns only the
  * first. Property children are ordinary blocks — that is the point of the
  * model, not a leak — so listing them is the default and exclusion is opt-IN
- * (`hidePropertyChildren`), which most queries do not even offer. The one
+ * (`propertyChildren`), which most queries do not even offer. The one
  * surface that hides ALL recognized rows today does so as an accepted interim
  * pending §10's tier-aware predicate; see `visibleChildren.ts`.
  * Content-intrinsic and

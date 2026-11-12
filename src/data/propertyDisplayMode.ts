@@ -18,8 +18,10 @@ import { ChangeScope, seedType } from '@/data/api'
 import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
 import { seedProperty } from './propertySeeds'
 
-export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const
-export type PropertyDisplayMode = typeof PROPERTY_DISPLAY_MODES[number]
+export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const satisfies readonly PropertyChildrenView[]
+/** The mode IS the child listing it shows (`core.childIds` / `core.children`'s
+ *  `propertyChildren`): one type, so no translation between them. */
+export type PropertyDisplayMode = PropertyChildrenView
 
 /** A level's stored setting: a mode, or `inherit` (unset — the next less
  *  specific level decides). */
@@ -107,7 +109,3 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   }
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
-
-/** The child listing a mode shows (`core.childIds` / `core.children`). */
-export const propertyChildrenViewFor = (mode: PropertyDisplayMode): PropertyChildrenView =>
-  mode === 'all' ? false : mode === 'non-hidden' ? 'hidden-tier' : true

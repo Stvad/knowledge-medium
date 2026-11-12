@@ -51,11 +51,11 @@ const scalarOf = (
  *  `reconcileSingleValueChild` overwrites. Derived from the structural child
  *  lists, so it follows reorders, folds and arrivals. */
 const useWriteTargetId = (repo: Block['repo'], ownerId: string | null, fieldId: string | undefined): string | null => {
-  const fieldRowId = useHandle(repo.query.children({id: ownerId ?? '', hidePropertyChildren: false}), {
+  const fieldRowId = useHandle(repo.query.children({id: ownerId ?? '', propertyChildren: 'all'}), {
     selector: children => (children ?? []).find(child =>
       child.isFieldForm === true && child.referenceTargetId === fieldId)?.id ?? null,
   })
-  return useHandle(repo.query.children({id: fieldRowId ?? '', hidePropertyChildren: false}), {
+  return useHandle(repo.query.children({id: fieldRowId ?? '', propertyChildren: 'all'}), {
     selector: children => (children ?? []).find(isFieldValueChild)?.id ?? null,
   })
 }
