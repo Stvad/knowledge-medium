@@ -24,9 +24,9 @@ export interface PropertySeedDeclaration<T = unknown, TConfig = unknown>
   /** Canonical JSON form persisted in property-schema:config. */
   readonly encodedConfig: unknown
   readonly hidden: boolean
-  /** See `propertyShownElsewhereProp`. Optional so a declaration built before
+  /** See `propertyHideInOutlineProp`. Optional so a declaration built before
    *  the field existed (a dynamic extension's) still validates; absent = false. */
-  readonly shownElsewhere?: boolean
+  readonly hideInOutline?: boolean
   /** Distinguishes an omitted default from an explicitly supplied undefined. */
   readonly hasExplicitDefault: boolean
   /** Meaningful only when hasExplicitDefault is true. */
@@ -47,7 +47,7 @@ export interface SeedPropertyArgs<T, TConfig = void> {
   readonly defaultValue?: T
   readonly changeScope: ChangeScope
   readonly hidden?: boolean
-  readonly shownElsewhere?: boolean
+  readonly hideInOutline?: boolean
 }
 
 type KernelSeedPropertyArgs<K extends KernelPresetId> =
@@ -127,7 +127,7 @@ export const isPropertySeedDeclaration = (
   own(value, 'defaultValue') &&
   isChangeScope(value.changeScope) &&
   typeof value.hidden === 'boolean' &&
-  (value.shownElsewhere === undefined || typeof value.shownElsewhere === 'boolean') &&
+  (value.hideInOutline === undefined || typeof value.hideInOutline === 'boolean') &&
   typeof value.hasExplicitDefault === 'boolean' &&
   own(value, 'encodedDefaultValue') &&
   (!value.hasExplicitDefault || isJsonValue(value.encodedDefaultValue))
@@ -230,7 +230,7 @@ export function seedProperty<T, TConfig = void>(
     defaultValue,
     changeScope: args.changeScope,
     hidden: args.hidden ?? false,
-    ...(args.shownElsewhere ? {shownElsewhere: true} : {}),
+    ...(args.hideInOutline ? {hideInOutline: true} : {}),
     hasExplicitDefault,
     encodedDefaultValue,
   }

@@ -211,8 +211,7 @@ const sameKeys = (
 }
 
 /** The field ids the outline's default property display (`'non-hidden'`)
- *  skips: definitions that are `hidden`, or whose value is shown elsewhere on
- *  the block (`propertyShownElsewhereProp`). A materialized definition answers
+ *  skips: definitions that are `hidden` or `propertyHideInOutlineProp`. A materialized definition answers
  *  for itself (its row's bits); a seed whose row has not materialized yet
  *  answers with its declaration. Not memoized here: the query layer memoizes the params it
  *  binds per snapshot (`kernelQueries`), and the only other reader runs once
@@ -222,19 +221,19 @@ export const outlineSkippedFieldIds = (
 ): ReadonlySet<string> => {
   const skipped = new Set<string>()
   for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
-    if (definition.hidden || definition.shownElsewhere === true) skipped.add(fieldId)
+    if (definition.hidden || definition.hideInOutline === true) skipped.add(fieldId)
   }
   for (const seed of snapshot.seedsByKey.values()) {
     const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)
     if (snapshot.definitionsByFieldId.has(fieldId)) continue
-    if (seed.hidden || seed.shownElsewhere === true) skipped.add(fieldId)
+    if (seed.hidden || seed.hideInOutline === true) skipped.add(fieldId)
   }
   return skipped
 }
 
 /** Do two snapshots skip the same field ids in the outline's default view?
  *  The input to that child view, which {@link sameFieldRecognition} does not
- *  cover: flipping a definition's hidden or shown-elsewhere bit changes no
+ *  cover: flipping a definition's hidden or hide-in-outline bit changes no
  *  recognition. */
 export const sameOutlineSkips = (
   a: PropertyDefinitionRegistrySnapshot | null,

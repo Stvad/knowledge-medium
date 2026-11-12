@@ -20,7 +20,7 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
-  propertyShownElsewhereProp,
+  propertyHideInOutlineProp,
 } from '@/data/properties.js'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes.js'
 import {
@@ -686,20 +686,20 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       )}
 
       <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
-        <label className="text-xs font-semibold text-muted-foreground" htmlFor={`${block.id}-shown-elsewhere`}>
+        <label className="text-xs font-semibold text-muted-foreground" htmlFor={`${block.id}-hide-in-outline`}>
           Outline
         </label>
-        <label className="flex items-center gap-2 text-sm" data-property-schema-shown-elsewhere="true">
+        <label className="flex items-center gap-2 text-sm" data-property-schema-hide-in-outline="true">
           <Checkbox
-            id={`${block.id}-shown-elsewhere`}
-            checked={data.properties[propertyShownElsewhereProp.name] === true}
+            id={`${block.id}-hide-in-outline`}
+            checked={data.properties[propertyHideInOutlineProp.name] === true}
             disabled={readOnly}
             onCheckedChange={(checked) => {
-              void block.set(propertyShownElsewhereProp, checked === true)
+              void block.set(propertyHideInOutlineProp, checked === true)
                 .catch(() => { showError('Could not change the outline setting') })
             }}
           />
-          <span>Shown elsewhere on the block — skip in the outline&rsquo;s default view</span>
+          <span>Hide in outline (its default view; show-all still shows it)</span>
         </label>
       </div>
 

@@ -134,10 +134,10 @@ describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () =
     await vi.waitFor(async () => expect(await tierView(repo)).toEqual([NOTE]))
   })
 
-  it('drops a field row whose definition is shown elsewhere, which the panel still shows', async () => {
+  it('drops a field row whose definition is hide-in-outline, which the panel still shows', async () => {
     const repo = await openRepo()
-    await seed(repo, definitionBag({'property-schema:shown-elsewhere': true}))
-    await vi.waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.get(DEF)?.shownElsewhere).toBe(true))
+    await seed(repo, definitionBag({'property-schema:hide-in-outline': true}))
+    await vi.waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.get(DEF)?.hideInOutline).toBe(true))
     expect(await tierView(repo)).toEqual([NOTE])
     expect(await repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'all'})).toEqual([NOTE, FIELD])
     // Only the outline's default view reads it: not hidden anywhere else.

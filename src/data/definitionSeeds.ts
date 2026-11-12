@@ -15,7 +15,7 @@ import {
   propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
-  propertyShownElsewhereProp,
+  propertyHideInOutlineProp,
   propertyNameProp,
   seedKeyProp,
   seedRevisionProp,
@@ -157,8 +157,8 @@ export const canonicalPropertySeedProperties = (
   }
   // Only when set: absent IS false, so no seed that does not declare it gains a
   // key its materialized row lacks.
-  if (seed.shownElsewhere === true) {
-    properties[propertyShownElsewhereProp.name] = propertyShownElsewhereProp.codec.encode(true)
+  if (seed.hideInOutline === true) {
+    properties[propertyHideInOutlineProp.name] = propertyHideInOutlineProp.codec.encode(true)
   }
   if (seed.hasExplicitDefault) {
     properties[propertyDefaultProp.name] = propertyDefaultProp.codec.encode(seed.encodedDefaultValue)

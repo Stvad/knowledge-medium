@@ -367,7 +367,7 @@ export const NO_REGISTRY_OUTLINE_SKIP_PARAMS: OutlineSkipParams = ['[]', '']
 /**
  * A field row the outline's default property display skips: one
  * (`is_field_form = 1`, non-root) whose target is in the bound skip list
- * (`outlineSkippedFieldIds` — hidden, or shown elsewhere on the block). Narrower than {@link recognizedFieldRowSql}: every
+ * (`outlineSkippedFieldIds` — hidden, or hidden in the outline). Narrower than {@link recognizedFieldRowSql}: every
  * id in the bound list is a definition the registry resolved, so condition 3
  * holds by construction and needs no `block_types` leg. Workspace-guarded for
  * the same reason as there. NULL-safe under `NOT (...)` the same way: an
