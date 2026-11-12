@@ -178,6 +178,17 @@ describe('setSeedHiddenTier unhide (recovery)', () => {
     const rehide = await setSeedHiddenTier(repo, WS, [target(alpha)], {direction: 'hide', apply: true})
     expect(rehide.counts).toEqual({upgraded: 0, alreadyCurrent: 0, skippedDiverged: 1, absent: 0})
   })
+
+  it('leaves a hidden row with no stored revision alone', async () => {
+    await materializePropertySeeds(repo, WS, [alpha])
+    const damaged = {...canonicalPropertySeedProperties(alpha), [propertyHiddenProp.name]: true}
+    delete damaged[seedRevisionProp.name]
+    await repo.tx(tx => tx.update(idOf(alpha), {properties: damaged}), {scope: ChangeScope.Automation})
+
+    const result = await setSeedHiddenTier(repo, WS, [target(alpha)], {direction: 'unhide', apply: true})
+    expect(result.seeds[0]).toMatchObject({status: 'skipped-diverged'})
+    expect(await storedBag(alpha)).toEqual(damaged)
+  })
 })
 
 describe('setSeedHiddenTier on a child-backed workspace', () => {

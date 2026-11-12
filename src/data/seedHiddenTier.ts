@@ -133,7 +133,9 @@ const assertActive = (repo: Repo, workspaceId: string): void => {
 const assertMayWrite = (repo: Repo, workspaceId: string): void => {
   assertActive(repo, workspaceId)
   // Automation scope is admitted in a read-only workspace, so the role is
-  // asked here rather than left to the commit gate.
+  // asked here rather than left to the commit gate. Not awaited on the synced
+  // membership as materialization is: an owner runs this, and a viewer's write
+  // is refused by the server.
   if (repo.isReadOnly) throw new Error(`setSeedHiddenTier: workspace ${workspaceId} is read-only here`)
 }
 

@@ -802,11 +802,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // tx CAN legally produce an undo entry for a valid seed row (e.g. a
     // content/references edit), and that entry's `applyRaw` snapshot
     // captures the row's full state including its properties bag.
-    // Replaying it restores that snapshot verbatim, which can transiently
-    // regress a code-owned bag (e.g. undoing an edit recorded before a
-    // revision-upgrade re-materialization). Accepted because
-    // materialization self-heals the bag on its next pass, and blocking
-    // replays outright would break undo atomicity.
+    // A conflicting replay restores that snapshot verbatim, which regresses
+    // a code-owned bag rewritten since — and materialization never repairs
+    // a payload. So a pass that rewrites seed bags drops the undo history
+    // (`setSeedHiddenTier`); blocking replays here would break undo atomicity.
     if (!isReplay) assertNoSeedDefinitionWrites(snapshots, scope)
 
     // Step 4: write command_events row — one per repo.tx invocation
