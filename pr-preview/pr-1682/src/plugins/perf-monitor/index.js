@@ -1,0 +1,1 @@
+export{Qr as perfMonitorPlugin}from"../../../chunks/app-BGKb2Vmj.js";

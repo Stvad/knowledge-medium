@@ -1,0 +1,1 @@
+export{iq as preferredSpanReplacement}from"../../../chunks/app-BGKb2Vmj.js";

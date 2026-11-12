@@ -1,0 +1,1 @@
+export{kM as BlockEmbed}from"../../../chunks/app-BGKb2Vmj.js";

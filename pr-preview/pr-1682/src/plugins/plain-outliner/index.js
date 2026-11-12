@@ -1,0 +1,1 @@
+export{Zw as plainOutlinerPlugin}from"../../../chunks/app-BGKb2Vmj.js";

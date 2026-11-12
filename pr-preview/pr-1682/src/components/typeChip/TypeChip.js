@@ -1,0 +1,1 @@
+export{RM as TypeChip}from"../../../chunks/app-BGKb2Vmj.js";

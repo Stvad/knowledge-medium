@@ -1,0 +1,1 @@
+export{zG as SuspenseFallback}from"../../../chunks/app-BGKb2Vmj.js";

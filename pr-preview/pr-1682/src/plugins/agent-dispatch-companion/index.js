@@ -1,0 +1,1 @@
+export{cm as agentDispatchCompanionPlugin}from"../../../chunks/app-BGKb2Vmj.js";

@@ -1,0 +1,1 @@
+export{XB as declarationOnlyDefinitionForName,ZB as declarationOnlyStatusText}from"../../../chunks/app-BGKb2Vmj.js";

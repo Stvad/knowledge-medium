@@ -1,0 +1,1 @@
+export{GN as approveExtensionHere}from"../../chunks/app-BGKb2Vmj.js";

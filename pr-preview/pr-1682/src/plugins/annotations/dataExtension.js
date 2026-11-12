@@ -1,0 +1,1 @@
+export{SY as annotationsDataExtension}from"../../../chunks/app-BGKb2Vmj.js";

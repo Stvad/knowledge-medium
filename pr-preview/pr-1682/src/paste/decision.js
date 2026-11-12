@@ -1,0 +1,1 @@
+export{YL as defaultPasteDecision,XL as pasteDecisionVerb}from"../../chunks/app-BGKb2Vmj.js";
