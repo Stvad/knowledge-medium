@@ -216,3 +216,26 @@ describe('a sealed workspace', () => {
     expect(fields[0]!.id).not.toBe(derivedFieldRow(SEALED_NS_FILL_7))
   })
 })
+
+describe('tx.createdInThisTx', () => {
+  beforeEach(async () => {
+    await seedWorkspace('none')
+    setModePin(USER, WS, 'plaintext')
+  })
+
+  it('is true for a row this tx inserted, deleted or not, and false for one it only wrote', async () => {
+    await createOwner()
+    let seen: Record<string, boolean> = {}
+    await write(async tx => {
+      await tx.update(OWNER, {content: 'edited'})
+      await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'k-fresh'})
+      await tx.create({id: 'gone', workspaceId: WS, parentId: null, orderKey: 'k-gone'})
+      await tx.delete('gone')
+      seen = {
+        edited: tx.createdInThisTx(OWNER), fresh: tx.createdInThisTx('fresh'),
+        gone: tx.createdInThisTx('gone'), untouched: tx.createdInThisTx('never-written'),
+      }
+    })
+    expect(seen).toEqual({edited: false, fresh: true, gone: true, untouched: false})
+  })
+})
