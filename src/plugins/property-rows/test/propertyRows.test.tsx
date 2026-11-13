@@ -603,10 +603,13 @@ describe('a child the user turns into a field row', () => {
   })
 
   it('keeps a hidden field row mounted while the caret edits its value child', async () => {
+    await repo.tx(tx => tx.update('def-plain', {properties: definition('rows:plain', {
+      'property-schema:preset': 'optional-number',
+    })}), {scope: ChangeScope.BlockDefault})
     await typeIntoChild('none', '::((def-plain))')
     await act(async () => {
       await repo.tx(tx => tx.create({id: 'typed-value', workspaceId: WS, parentId: TYPED,
-        orderKey: 'a0', content: ''}), {scope: ChangeScope.BlockDefault})
+        orderKey: 'a0', content: 'not a number'}), {scope: ChangeScope.BlockDefault})
     })
     await act(async () => { await focusBlock(repo.block(PANEL), 'typed-value', {edit: true}) })
     await waitFor(() => expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull())
@@ -616,6 +619,8 @@ describe('a child the user turns into a field row', () => {
       await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
     })
     await waitFor(() => expect(listedUnder()).toBe(NOTE))
+    expect(repo.block(OWNER).peek()?.properties['rows:plain']).toBeUndefined()
+    expect(repo.block(NOTE).peek()?.properties['rows:plain']).toBeUndefined()
     expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull()
     await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
     await waitFor(() => expect(typedRow()).toBeNull())
