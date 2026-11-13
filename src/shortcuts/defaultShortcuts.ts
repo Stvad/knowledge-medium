@@ -12,10 +12,8 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
-import { mergeReshapesProperty } from '@/data/blockMerge'
-import { repoPropertyRowClassifier } from '@/data/drawnSubtree'
-import { ChangeScope, type BlockData } from '@/data/api'
+import { isPropertyValueSetMoveError, merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
+import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
@@ -128,21 +126,6 @@ const applyEndEdit = (editorView: EditorView, edit: EditorEndEdit): EditorEndEdi
       : Math.min(head, from)),
   })
   return {end: edit.end, remove: edit.insert.length, insert: removed}
-}
-
-/** {@link mergeReshapesProperty} for a merge gesture, asked before it touches
- *  its editor: the merge it would run would be refused anyway. */
-const mergeWouldReshapeProperty = async (into: Block, from: Block): Promise<boolean> => {
-  const [intoData, fromData] = await Promise.all([into.load(), from.load()])
-  if (!intoData || !fromData) return false
-  const parentOf = async (data: BlockData): Promise<BlockData | null> =>
-    data.parentId === null ? null : await into.repo.load(data.parentId) ?? null
-  return mergeReshapesProperty({
-    into: intoData,
-    from: fromData,
-    intoParent: await parentOf(intoData),
-    fromParent: await parentOf(fromData),
-  }, repoPropertyRowClassifier(into.repo, intoData.workspaceId).isFieldDefinition)
 }
 
 /**
@@ -850,7 +833,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // root-level crossfade ghosts the shifting siblings, which
         // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay: deps.propertyDisplay})
+          // An empty value can't leave its property; it gets a sibling value instead.
+          const moved = policy.canOutdent && await repo.mutate
+            .outdent({id: block.id, scopeRootId, propertyDisplay: deps.propertyDisplay})
+            .catch(error => isPropertyValueSetMoveError(error) ? false : Promise.reject(error))
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed
@@ -1091,7 +1077,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoChildIds = await prevVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
-        if (await mergeWouldReshapeProperty(prevVisible, block)) return
 
         // Vestigial, and kept only because it costs nothing: every branch above
         // awaits, so the event has finished dispatching by now and the browser
@@ -1171,8 +1156,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const fromChildIds = await nextVisible.childIds.load()
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
-        // Before the editor re-arm below, like the deletion guard.
-        if (await mergeWouldReshapeProperty(block, nextVisible)) return
 
         // Ask the deletion guards BEFORE any side effect — the merge destroys
         // `nextVisible`, so a guarded page must not be folded away. This has to

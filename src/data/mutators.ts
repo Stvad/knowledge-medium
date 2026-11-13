@@ -31,15 +31,13 @@ import {
 } from './orderKeyPlacement'
 import { isCollapsedProp } from '@/data/properties'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
+import { isPropertyValueRow } from '@/data/propertyChildren'
 import {
   propertyDisplayScopeSchema,
   type PropertyDisplayScopeLevels,
 } from '@/data/propertyDisplayMode'
 import {
   mergeBlocksInTx,
-  mergeReshapesPropertyInTx,
-  PropertyMergeError,
   type ContentStrategy,
 } from './blockMerge'
 import { deleteSubtreeInTx } from './subtreeDelete'
@@ -501,7 +499,7 @@ export interface MoveTarget {
  * roots: none may be a descendant of another, or it is pulled out of its
  * ancestor. Every user-facing move (the move command, drag-and-drop, a cut
  * completed by paste) lands through here, inside the caller's one tx; a move
- * that would change a property's value set throws
+ * that would take a value out of its property throws
  * {@link PropertyValueSetMoveError} and the tx rolls back whole.
  *
  * ## The ordering rule
@@ -529,7 +527,7 @@ export const moveBlocksInTx = async (
 ): Promise<void> => {
   let position = target.position
   for (const id of ids) {
-    if (await changesValueSet(tx, await requireBlock(tx, id), target.parentId)) {
+    if (await leavesValueSet(tx, await requireBlock(tx, id), target.parentId)) {
       throw new PropertyValueSetMoveError()
     }
     await tx.run(move, {id, parentId: target.parentId, position})
@@ -565,40 +563,36 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  * gesture is a clean **no-op** rather than a surprising relocation.
  *
  * One rule on top, shared with every other user move ({@link moveBlocksInTx}):
- * none changes a field row's value set ({@link changesValueSet}). Reordering
- * values within their field row is fine.
+ * none takes a property's value out of its field row ({@link leavesValueSet});
+ * each throws {@link PropertyValueSetMoveError}. Reordering values within their
+ * field row, and moving a block in among them, are fine.
  *
  * Deliberate machinery movement is not blocked, it just doesn't go through an
  * outline gesture: `core.move` places a block at an explicit position on the
  * structural list, which is what materialization, merge, and the bridge use.
  */
 
-/** Would moving `self` under `newParentId` change a field row's value set:
- *  take a value out (the property loses it), or put a block in (a scalar's
- *  processor may take it as the value and overwrite its text on the next
- *  write)? A user move that would is refused; the property's own editor and
- *  Enter within the values change them instead. */
-const changesValueSet = async (
+/** Would moving `self` under `newParentId` take a property's value out of its
+ *  field row? Out, the property loses it at the next projection. */
+const leavesValueSet = async (
   tx: Tx,
   self: BlockData,
   newParentId: string | null,
-): Promise<boolean> => {
-  if (newParentId === self.parentId) return false
-  if (await isPropertyValueRow(tx, self)) return true
-  // A marked row is never a value (`isFieldValueChild`): under a field row it
-  // is a property of that row, so it may enter one.
-  if (self.isFieldForm === true) return false
-  const newParent = newParentId === null ? null : await tx.get(newParentId)
-  return newParent !== null && await isPropertyFieldRow(tx, newParent)
-}
+): Promise<boolean> =>
+  newParentId !== self.parentId && await isPropertyValueRow(tx, self)
 
-/** A user move refused by {@link changesValueSet}; its message is for the user. */
+/** A user move refused by {@link leavesValueSet}; its message is for the user. */
 export class PropertyValueSetMoveError extends Error {
   constructor() {
-    super('A block can\'t be moved into or out of a property\'s values')
+    super('A property\'s value can\'t be moved out of it')
     this.name = 'PropertyValueSetMoveError'
   }
 }
+
+/** Is `error` a {@link PropertyValueSetMoveError}? By name, so it holds for an
+ *  error that crossed a structured-clone boundary. */
+export const isPropertyValueSetMoveError = (error: unknown): error is PropertyValueSetMoveError =>
+  (error as {name?: unknown} | null)?.name === 'PropertyValueSetMoveError'
 
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
 
@@ -626,7 +620,7 @@ export const indent = defineMutator<IndentArgs, void>({
     const ix = siblings.findIndex(s => s.id === id)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
-    if (await changesValueSet(tx, self, newParent.id)) return
+    if (await leavesValueSet(tx, self, newParent.id)) throw new PropertyValueSetMoveError()
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
@@ -686,7 +680,7 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // parent, or a stale read): a no-op, not a fallback to the grandparent's
     // end, which would be exactly the silent relocation this rule prevents.
     if (parentIx < 0) return false
-    if (await changesValueSet(tx, self, grandparent)) return false
+    if (await leavesValueSet(tx, self, grandparent)) throw new PropertyValueSetMoveError()
     // Place the outdented block immediately after its parent (between the
     // parent and the parent's next sibling), breaking a tie by re-keying the
     // run when the parent shares an order_key with its next grand-sibling (A1).
@@ -798,7 +792,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     if (pIdx < 0) return false
     const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
     if (!neighbourParent) return false
-    if (await changesValueSet(tx, self, neighbourParent.id)) return false
+    if (await leavesValueSet(tx, self, neighbourParent.id)) throw new PropertyValueSetMoveError()
     // Moving INTO a neighbouring subtree reveals it if collapsed, so the block
     // stays visible.
     await revealChildren(tx, neighbourParent.id)
@@ -925,7 +919,6 @@ export const merge = defineMutator<MergeArgs, void>({
   apply: async (tx, {intoId, fromId, contentStrategy = 'concat'}) => {
     const into = await requireBlock(tx, intoId)
     const from = await requireBlock(tx, fromId)
-    if (await mergeReshapesPropertyInTx(tx, into, from)) throw new PropertyMergeError()
     await mergeBlocksInTx(tx, {into, from, contentStrategy})
   },
 })

@@ -11,9 +11,7 @@ import {
   childContentsToEncodedPropertyValue,
   fieldRowValues,
   getPropertyFieldTargetId,
-  isPropertyFieldInstance,
   unionValuesAcrossFieldRows,
-  type IsPropertyFieldDefinition,
 } from './propertyChildren'
 import {
   collapseDuplicateFieldRow,
@@ -83,46 +81,6 @@ const withTypeLabelFollowingContent = (
 }
 
 /** Fold one block into another. Thin wrapper — see `foldBlocksInTx`. */
-type MergeRow = Pick<BlockData, 'parentId' | 'isFieldForm' | 'referenceTargetId'>
-
-/** Would folding `from` into `into` reshape a property? A field row merged
- *  either way stops being one (its content is no longer just `::((id))`), and
- *  a block folded into or out of a field row's values changes the property's
- *  value. Two values of one field row join like any two blocks. Pure over the
- *  two rows and their parents, so a gesture can ask before touching its
- *  editor; `core.merge` asks again inside its tx. */
-export const mergeReshapesProperty = (
-  rows: {into: MergeRow; from: MergeRow; intoParent: MergeRow | null; fromParent: MergeRow | null},
-  isFieldDefinition: IsPropertyFieldDefinition,
-): boolean => {
-  const isField = (row: MergeRow | null): boolean =>
-    row !== null && isPropertyFieldInstance(row, isFieldDefinition)
-  if (isField(rows.into) || isField(rows.from)) return true
-  const intoIsValue = isField(rows.intoParent)
-  const fromIsValue = isField(rows.fromParent)
-  return intoIsValue !== fromIsValue || (intoIsValue && rows.into.parentId !== rows.from.parentId)
-}
-
-/** {@link mergeReshapesProperty} read inside `tx`. */
-export const mergeReshapesPropertyInTx = async (
-  tx: Tx,
-  into: BlockData,
-  from: BlockData,
-): Promise<boolean> => mergeReshapesProperty({
-  into,
-  from,
-  intoParent: into.parentId === null ? null : await tx.get(into.parentId),
-  fromParent: from.parentId === null ? null : await tx.get(from.parentId),
-}, fieldId => tx.isPropertyFieldDefinition(into.workspaceId, fieldId))
-
-/** A merge refused by {@link mergeReshapesProperty}; its message is for the user. */
-export class PropertyMergeError extends Error {
-  constructor() {
-    super('A property can\'t be merged with another block')
-    this.name = 'PropertyMergeError'
-  }
-}
-
 export const mergeBlocksInTx = async (
   tx: Tx,
   {into, from, ...rest}: MergeBlocksInTxArgs,

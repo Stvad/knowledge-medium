@@ -26,7 +26,6 @@ import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { moveBlocksInTx, PropertyValueSetMoveError } from '@/data/mutators'
-import { PropertyMergeError } from '@/data/blockMerge'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -134,21 +133,22 @@ describe('move up / down', () => {
     expect((await childIds('owner')).slice(0, 2)).toEqual([ids.status, ids.a])
   })
 
-  it('no-ops at a value row\'s edge instead of taking it out of its field row', async () => {
-    expect(await repo.mutate.moveVertical({id: ids.x, direction: -1, scopeRootId: 'page', propertyDisplay: ALL}))
-      .toBe(false)
+  it('refuses at a value row\'s edge rather than taking it out of its field row', async () => {
+    await expect(repo.mutate.moveVertical({id: ids.x, direction: -1, scopeRootId: 'page', propertyDisplay: ALL}))
+      .rejects.toBeInstanceOf(PropertyValueSetMoveError)
     expect(await parentOf(ids.x)).toBe(ids.tags)
   })
 
-  it('no-ops at an edge whose next drawn row is a field row, rather than entering its values', async () => {
-    // a's last child would step down into a's next DRAWN sibling, the status
-    // row, landing first among its values: the scalar's value to the next write.
+  it('steps into a drawn field row at an edge, like into any block', async () => {
+    // a's last child steps down into a's next DRAWN sibling, the status row,
+    // landing first among its values: a string it decodes as, so it is the value.
     await repo.tx(async tx => {
       await tx.create({id: 'a1', workspaceId: WS, parentId: 'a', orderKey: 'a0', content: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
     expect(await repo.mutate.moveVertical({id: 'a1', direction: 1, scopeRootId: 'page', propertyDisplay: NON_HIDDEN}))
-      .toBe(false)
-    expect(await parentOf('a1')).toBe('a')
+      .toBe(true)
+    expect(await parentOf('a1')).toBe(ids.status)
+    await vi.waitFor(() => expect(repo.block('owner').peekProperty(statusProp)).toBe('a1'))
   })
 
   it('steps past a hidden row into the next drawn ordinary row at an edge', async () => {
@@ -182,10 +182,12 @@ describe('indent', () => {
     expect(await parentOf(ids.status)).toBe(ids.a)
   })
 
-  it('no-ops under a drawn field row rather than entering its values', async () => {
+  it('indents under a drawn field row like under any block, as a peer of its value', async () => {
     await arrange('owner', [ids.status, ids.b, ids.a, ids.secret, ids.tags])
     await repo.mutate.indent({id: ids.b, propertyDisplay: NON_HIDDEN})
-    expect(await parentOf(ids.b)).toBe('owner')
+    expect(await parentOf(ids.b)).toBe(ids.status)
+    // Last among the values, so the value the cell reads is still the first.
+    expect(repo.block('owner').peekProperty(statusProp)).toBe('draft')
   })
 
   it('indents a drawn property row under the property row above it', async () => {
@@ -195,8 +197,8 @@ describe('indent', () => {
     expect(await parentOf(ids.tags)).toBe(ids.status)
   })
 
-  it('no-ops on a value row rather than nesting it under its sibling value', async () => {
-    await repo.mutate.indent({id: ids.y, propertyDisplay: ALL})
+  it('refuses a value row rather than nesting it under its sibling value', async () => {
+    await expect(repo.mutate.indent({id: ids.y, propertyDisplay: ALL})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
     expect(await parentOf(ids.y)).toBe(ids.tags)
   })
 })
@@ -217,8 +219,8 @@ describe('outdent', () => {
     expect(await childIds('page')).toEqual(['owner', ids.b, pageStatus.id])
   })
 
-  it('no-ops on a value row rather than taking it out of its field row', async () => {
-    expect(await repo.mutate.outdent({id: ids.draft, propertyDisplay: ALL})).toBe(false)
+  it('refuses a value row rather than taking it out of its field row', async () => {
+    await expect(repo.mutate.outdent({id: ids.draft, propertyDisplay: ALL})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
     expect(await parentOf(ids.draft)).toBe(ids.status)
   })
 })
@@ -252,10 +254,10 @@ describe('every other user move (move command, drag, cut and paste)', () => {
     expect(await parentOf(ids.b)).toBe('owner')
   })
 
-  it('refuses to put a block among a field row\'s values', async () => {
-    await expect(repo.tx(tx => moveBlocksInTx(tx, [ids.b], {parentId: ids.status, position: {kind: 'first'}}),
-      {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
-    expect(await parentOf(ids.b)).toBe('owner')
+  it('moves a block in among a field row\'s values', async () => {
+    await repo.tx(tx => moveBlocksInTx(tx, [ids.b], {parentId: ids.status, position: {kind: 'last'}}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await parentOf(ids.b)).toBe(ids.status)
   })
 
   it('moves a field row like any block, and values within their field row', async () => {
@@ -265,44 +267,5 @@ describe('every other user move (move command, drag, cut and paste)', () => {
     }, {scope: ChangeScope.BlockDefault})
     expect(await parentOf(ids.status)).toBe('page')
     expect(await childIds(ids.tags)).toEqual([ids.y, ids.x])
-  })
-})
-
-describe('merge (Backspace at a start, Delete at an end, the merge picker)', () => {
-  const contentOf = async (id: string): Promise<string | undefined> => (await repo.load(id))?.content
-
-  it('refuses to fold the first value into its field row', async () => {
-    await expect(repo.mutate.merge({intoId: ids.tags, fromId: ids.x})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(repo.block('owner').peekProperty(tagsProp)).toEqual(['x', 'y'])
-  })
-
-  it('refuses to fold a block into a field row', async () => {
-    await expect(repo.mutate.merge({intoId: ids.status, fromId: ids.b})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(repo.block('owner').peekProperty(statusProp)).toBe('draft')
-  })
-
-  it('refuses to fold a field row into the block above it', async () => {
-    await expect(repo.mutate.merge({intoId: ids.a, fromId: ids.status})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(await parentOf(ids.status)).toBe('owner')
-  })
-
-  it('refuses to fold an ordinary block into a value', async () => {
-    await expect(repo.mutate.merge({intoId: ids.y, fromId: ids.b})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(await contentOf(ids.y)).toBe('y')
-  })
-
-  it('refuses to fold a value into an ordinary block', async () => {
-    await expect(repo.mutate.merge({intoId: ids.a, fromId: ids.x})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(await parentOf(ids.x)).toBe(ids.tags)
-  })
-
-  it('refuses to fold one property\'s value into another\'s', async () => {
-    await expect(repo.mutate.merge({intoId: ids.x, fromId: ids.draft})).rejects.toBeInstanceOf(PropertyMergeError)
-    expect(await contentOf(ids.x)).toBe('x')
-  })
-
-  it('joins two values of one field row like any two blocks', async () => {
-    await repo.mutate.merge({intoId: ids.x, fromId: ids.y})
-    expect(await contentOf(ids.x)).toBe('xy')
   })
 })
