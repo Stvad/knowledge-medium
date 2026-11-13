@@ -1,1 +1,1 @@
-export{SG as usePropertySchemas}from"../../chunks/app-CYdcblIm.js";
+export{SG as usePropertySchemas}from"../../chunks/app-Cz3RWrXl.js";

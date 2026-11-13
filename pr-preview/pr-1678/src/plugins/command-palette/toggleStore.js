@@ -1,1 +1,1 @@
-export{Jj as commandPaletteToggle}from"../../../chunks/app-CYdcblIm.js";
+export{Jj as commandPaletteToggle}from"../../../chunks/app-Cz3RWrXl.js";
