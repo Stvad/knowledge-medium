@@ -1,1 +1,1 @@
-export{vz as ExtensionRenderBoundary}from"../../chunks/app-PyXAd2VT.js";
+export{vz as ExtensionRenderBoundary}from"../../chunks/app-DpcGzQLP.js";

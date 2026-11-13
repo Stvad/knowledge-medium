@@ -1,1 +1,1 @@
-export{NF as defaultRegistry,PF as defaultRendererContributions,FF as defaultRenderersExtension}from"../../chunks/app-PyXAd2VT.js";
+export{NF as defaultRegistry,PF as defaultRendererContributions,FF as defaultRenderersExtension}from"../../chunks/app-DpcGzQLP.js";

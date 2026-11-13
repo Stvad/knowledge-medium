@@ -1,1 +1,1 @@
-export{DF as LazyBlockComponent}from"../../chunks/app-PyXAd2VT.js";
+export{DF as LazyBlockComponent}from"../../chunks/app-DpcGzQLP.js";

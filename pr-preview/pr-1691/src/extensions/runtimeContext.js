@@ -1,1 +1,1 @@
-export{OG as AppRuntimeContextProvider,kG as useAppRuntime}from"../../chunks/app-PyXAd2VT.js";
+export{OG as AppRuntimeContextProvider,kG as useAppRuntime}from"../../chunks/app-DpcGzQLP.js";

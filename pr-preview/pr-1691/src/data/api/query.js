@@ -1,1 +1,1 @@
-export{Elt as defineQuery}from"../../../chunks/app-PyXAd2VT.js";
+export{Elt as defineQuery}from"../../../chunks/app-DpcGzQLP.js";

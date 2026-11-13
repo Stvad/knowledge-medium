@@ -1,1 +1,1 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-PyXAd2VT.js";
+export{Kr as ExtensionsSettings}from"../../../chunks/app-DpcGzQLP.js";

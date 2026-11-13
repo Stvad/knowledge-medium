@@ -1,1 +1,1 @@
-export{po as MigrationGate}from"../../../chunks/app-PyXAd2VT.js";
+export{po as MigrationGate}from"../../../chunks/app-DpcGzQLP.js";

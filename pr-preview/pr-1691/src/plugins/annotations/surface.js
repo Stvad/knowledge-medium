@@ -1,1 +1,1 @@
-export{Zp as AnnotationSurfaceContext,Qp as providedHere,$p as useAnnotationSurface}from"../../../chunks/app-PyXAd2VT.js";
+export{Zp as AnnotationSurfaceContext,Qp as providedHere,$p as useAnnotationSurface}from"../../../chunks/app-DpcGzQLP.js";

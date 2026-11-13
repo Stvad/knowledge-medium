@@ -1,1 +1,1 @@
-export{nat as DerivedIdNamespaceUnavailableError,rat as derivedIdNamespaceInTx,iat as resolveDerivedIdNamespace}from"../../chunks/app-PyXAd2VT.js";
+export{nat as DerivedIdNamespaceUnavailableError,rat as derivedIdNamespaceInTx,iat as resolveDerivedIdNamespace}from"../../chunks/app-DpcGzQLP.js";

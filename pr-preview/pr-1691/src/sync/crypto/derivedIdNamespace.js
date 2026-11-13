@@ -1,1 +1,1 @@
-export{Nat as deriveWorkspaceIdNamespace}from"../../../chunks/app-PyXAd2VT.js";
+export{Nat as deriveWorkspaceIdNamespace}from"../../../chunks/app-DpcGzQLP.js";
