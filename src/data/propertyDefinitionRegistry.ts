@@ -216,12 +216,23 @@ const sameKeys = (
  *  answers with its declaration. Not memoized here: the query layer memoizes the params it
  *  binds per snapshot (`kernelQueries`), and the only other reader runs once
  *  per registry swap. */
+/** A definition's hide-in-outline answer: what its row STORES, else what its
+ *  current seed declares. The fallback is what lets a built-in be marked in
+ *  code with no write to any workspace — nothing stores the field until
+ *  someone sets it — and a stored value, false included, still wins. */
+export const effectiveHideInOutline = (
+  definition: Pick<PropertyDefinitionMetadata, 'hideInOutline' | 'seedKey'>,
+  seedsByKey: ReadonlyMap<string, Pick<AnyPropertySeedDeclaration, 'hideInOutline'>>,
+): boolean =>
+  definition.hideInOutline
+  ?? (definition.seedKey !== undefined && seedsByKey.get(definition.seedKey)?.hideInOutline === true)
+
 export const outlineSkippedFieldIds = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): ReadonlySet<string> => {
   const skipped = new Set<string>()
   for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
-    if (definition.hidden || definition.hideInOutline === true) skipped.add(fieldId)
+    if (definition.hidden || effectiveHideInOutline(definition, snapshot.seedsByKey)) skipped.add(fieldId)
   }
   for (const seed of snapshot.seedsByKey.values()) {
     const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)

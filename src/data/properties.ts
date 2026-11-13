@@ -240,6 +240,7 @@ export const typesProp = seedProperty({
   name: 'types',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const rendererProp = seedProperty({
@@ -555,6 +556,7 @@ export const aliasesProp = seedProperty({
   name: 'alias',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 }) as PropertySeedDeclaration<string[]>
 
 // ──── Helpers ────
