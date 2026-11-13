@@ -1,0 +1,1 @@
+export{Zd as quotedInFooterContribution}from"../../../chunks/app-DvVqQMo9.js";

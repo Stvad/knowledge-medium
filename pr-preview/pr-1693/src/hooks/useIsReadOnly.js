@@ -1,0 +1,1 @@
+export{tb as useIsReadOnly}from"../../chunks/app-DvVqQMo9.js";

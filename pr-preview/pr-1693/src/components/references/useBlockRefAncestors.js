@@ -1,0 +1,1 @@
+export{GM as useBlockRefAncestors}from"../../../chunks/app-DvVqQMo9.js";

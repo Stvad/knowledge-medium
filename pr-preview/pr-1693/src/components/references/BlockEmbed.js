@@ -1,0 +1,1 @@
+export{WM as BlockEmbed}from"../../../chunks/app-DvVqQMo9.js";

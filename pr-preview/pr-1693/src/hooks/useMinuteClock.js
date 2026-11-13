@@ -1,0 +1,1 @@
+export{GD as useMinuteClock}from"../../chunks/app-DvVqQMo9.js";

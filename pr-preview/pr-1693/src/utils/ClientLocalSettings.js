@@ -1,0 +1,1 @@
+export{KP as ClientLocalSettings,qP as clientLocalSettings}from"../../chunks/app-DvVqQMo9.js";

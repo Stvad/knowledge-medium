@@ -1,0 +1,1 @@
+export{XI as GESTURE_ACTIVE,ZI as GESTURE_CANCEL,QI as GESTURE_IDLE,$I as TOUCH_HOLD_MS,eL as TOUCH_SLOP_PX,tL as continuousGestureRecognizersFacet,nL as createBlockGestureController,rL as enabledTouchAction,iL as suppressNextClick,aL as unionTouchAction,oL as useContinuousGestures}from"../../chunks/app-DvVqQMo9.js";

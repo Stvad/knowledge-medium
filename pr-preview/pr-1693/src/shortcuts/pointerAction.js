@@ -1,0 +1,1 @@
+export{FP as dispatchPointerAction,IP as setPointerActionDispatcher}from"../../chunks/app-DvVqQMo9.js";

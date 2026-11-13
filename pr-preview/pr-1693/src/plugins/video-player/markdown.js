@@ -1,0 +1,1 @@
+export{NS as videoPlayerMarkdownExtension}from"../../../chunks/app-DvVqQMo9.js";
