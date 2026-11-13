@@ -1,1 +1,1 @@
-export{TR as useShortcutSurfaceActivations}from"../../chunks/app-D7EDODv-.js";
+export{TR as useShortcutSurfaceActivations}from"../../chunks/app-79Q8lmhP.js";
