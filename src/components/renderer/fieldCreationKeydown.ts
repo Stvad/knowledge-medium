@@ -102,8 +102,9 @@ const createFieldFromTrigger = async (
     // below would wipe whatever they added.
     if (!isTriggerState(view)) return
 
+    restoreTypedMarker(view, TRIGGER_PREFIX)
     const childBacked = await readIsChildBackedWorkspace(repo.db, eligible.workspaceId)
-    if (!isTriggerState(view)) return
+    if (!docIsExactly(view, FIELD_FORM_MARKER)) return
     if (childBacked) {
       restoreTypedMarker(view, TRIGGER_PREFIX)
       flushEditorContent(view)

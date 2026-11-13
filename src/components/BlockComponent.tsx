@@ -3,16 +3,16 @@ import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
 import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import { useRepo } from '@/context/repo.js'
-import { Suspense, useCallback, useMemo, useSyncExternalStore } from 'react'
+import { Suspense } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/block.js'
-import { useUIStateBlock } from '@/data/globalState.js'
-import { focusedBlockLocationFromProperties } from '@/data/properties.js'
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { unlistedSiblingIndex } from '@/utils/selection.js'
+import { useFocusedChild } from '@/hooks/focusedChild'
+import { OutlinePropertyDrafts, useOutlinePropertyListing } from './propertyPanel/OutlinePropertyDrafts'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -64,8 +64,8 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
-  const focus = useFocusedChild(block, renderScopeId)
-  const focusedChild = focus?.row ?? null
+  const focusedChild = useFocusedChild(block, renderScopeId)
+  const transient = useOutlinePropertyListing(block)
   const listed = useChildIdsForMode(block, mode)
   const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   // A row placed outside the listing sits by every sibling's order, which a
@@ -73,74 +73,15 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // while there is one (otherwise this is the listing's own handle again).
   useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: placesUnlistedChild ? 'all' : mode}),
     {selector: ids => ids})
-  const childIds = withFocusedChild(block.repo, listed, focusedChild)
+  let childIds = withFocusedChild(block.repo, listed, focusedChild)
+  for (const id of transient.revealed) childIds = withFocusedChild(block.repo, childIds, block.repo.block(id).peek() ?? null)
 
-  return <PropertyRowListingContext value={mode !== 'none' || (placesUnlistedChild && !focus?.direct) ? block.id : null}>
-    {childIds.map((childId) => (
-      <LazyBlockComponent
-        key={childId}
-        blockId={childId}
-        renderScopeId={renderScopeId}
-      />
-    ))}
+  return <PropertyRowListingContext value={mode !== 'none' || placesUnlistedChild || transient.revealed.length ? block.id : null}>
+    <OutlinePropertyDrafts owner={block} mode={mode} children={childIds.map(childId => ({
+      id: childId,
+      element: <LazyBlockComponent key={childId} blockId={childId} renderScopeId={renderScopeId}/>,
+    }))}/>
   </PropertyRowListingContext>
-}
-
-/** The child containing this surface's focus. Follow ancestors too: a hidden
- * field row must stay mounted while its value or a nested comment is edited. */
-type FocusedChild = {row: BlockData; direct: boolean}
-
-const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | null => {
-  const uiStateBlock = useUIStateBlock()
-  const focusedRowId = useCallback((): string | null => {
-    const location = focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
-    if (!location) return null
-    if (typeof renderScopeId === 'string' && location.renderScopeId !== renderScopeId) return null
-    return location.blockId
-  }, [uiStateBlock, renderScopeId])
-  const subscribe = useCallback((notify: () => void) => {
-    let followed: {id: string; unsubscribe: () => void} | null = null
-    const followFocusedRow = () => {
-      const id = focusedRowId()
-      if (followed?.id === id) return
-      followed?.unsubscribe()
-      followed = id === null ? null : {id, unsubscribe: parent.repo.block(id).subscribe(notify)}
-    }
-    followFocusedRow()
-    const unsubscribeFocus = uiStateBlock.subscribe(() => {
-      followFocusedRow()
-      notify()
-    })
-    return () => {
-      unsubscribeFocus()
-      followed?.unsubscribe()
-    }
-  }, [uiStateBlock, parent, focusedRowId])
-  // Stable identity for unchanged external-store snapshots, as in useHandle.
-  /* eslint-disable react-hooks/immutability */
-  const snapshot = useMemo(() => {
-    let previous: FocusedChild | null = null
-    return (): FocusedChild | null => {
-      const focusedId = focusedRowId()
-      let id = focusedId
-      const seen = new Set<string>()
-      while (id !== null && id !== parent.id && !seen.has(id)) {
-        seen.add(id)
-        const row = parent.repo.block(id).peek()
-        if (!row) break
-        if (row.parentId === parent.id) {
-          const direct = row.id === focusedId
-          if (previous?.row !== row || previous.direct !== direct) previous = {row, direct}
-          return previous
-        }
-        id = row.parentId
-      }
-      previous = null
-      return previous
-    }
-  }, [parent, focusedRowId])
-  /* eslint-enable react-hooks/immutability */
-  return useSyncExternalStore(subscribe, snapshot)
 }
 
 /** `childIds` with the focused child at its sibling position when the property

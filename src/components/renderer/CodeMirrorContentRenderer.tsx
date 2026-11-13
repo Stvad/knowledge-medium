@@ -6,7 +6,7 @@ import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { editorSelection, focusBlock, requestEditorFocus, isCollapsedProp } from '@/data/properties.js'
+import { editorSelection, focusBlock } from '@/data/properties.js'
 import {
   pasteArmedCut,
   pasteChordIntent,
@@ -25,7 +25,7 @@ import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 import { useGutterText } from './BlockGutter.js'
 import { InlinePropertyPicker } from '@/components/propertyPanel/InlinePropertyPicker'
-import { createInlineProperty } from '@/utils/inlinePropertyCreation'
+import { beginInlineProperty } from '@/components/propertyPanel/inlinePropertyFlow'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
@@ -198,24 +198,16 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     {inlinePicker && <InlinePropertyPicker
       owner={repo.block(inlinePicker.parentId)}
       canSubmit={() => inlinePicker.view.state.doc.toString() === FIELD_FORM_MARKER}
-      onCancel={() => {
+      onCancel={(restoreFocus = true) => {
         setInlinePicker(null)
-        inlinePicker.view.focus()
+        if (restoreFocus) inlinePicker.view.focus()
       }}
-      onPick={async schema => {
+      onPick={async (schema, isActive) => {
         flushEditorContent(inlinePicker.view)
-        const result = await createInlineProperty(repo.block(inlinePicker.parentId), schema, block)
-        if (!result) return
-        const field = repo.block(result.fieldId)
-        await Promise.all([field.load(), repo.block(result.valueId).load()])
-        if (field.peekProperty(isCollapsedProp)) await field.set(isCollapsedProp, false)
+        await beginInlineProperty({owner: repo.block(inlinePicker.parentId), schema, ui: uiStateBlock,
+          scope: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined,
+          source: block, isActive})
         setInlinePicker(null)
-        await focusBlock(uiStateBlock, result.valueId, {
-          edit: true,
-          ...(typeof blockContext.renderScopeId === 'string' ? {renderScopeId: blockContext.renderScopeId} : {}),
-        })
-        await uiStateBlock.set(editorSelection, {blockId: result.valueId, start: 0})
-        requestEditorFocus(uiStateBlock)
       }}
     />}
     </>

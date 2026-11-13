@@ -10,6 +10,8 @@ import { systemToggle } from '@/facets/togglable.js'
 import { blockSetting, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
 import { FieldRowRenderer } from './FieldRowRenderer'
 import { ValueRowRenderer } from './ValueRowRenderer'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount'
+import { addFieldAction } from './addField'
 
 const SOURCE = 'property-rows'
 
@@ -32,6 +34,8 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
+  dialogAppMountExtension,
+  actionsFacet.of(addFieldAction, {source: SOURCE}),
   blockRenderersFacet.of({id: 'propertyFieldRow', renderer: FieldRowRenderer}, {source: SOURCE}),
   blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),

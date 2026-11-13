@@ -73,6 +73,8 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { propertyNameProp } from '@/data/properties'
+import { isGrammarShapedLabel } from '@/data/referenceBlock'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.projectPropertyChildren'
@@ -291,6 +293,10 @@ const reprojectOwner = async (
     // CHANGED row through its own bit or its parent's.
     if (mode === 'additive' && fieldRows.length > 1) continue
     const projected = await projectedFieldValue(tx, schema, fieldRows)
+    // Projection also runs for reference maintenance and imported legacy rows;
+    // preserve their stored name instead of refusing the enclosing transaction.
+    if (schema.name === propertyNameProp.name && typeof projected === 'string' &&
+      isGrammarShapedLabel(projected)) continue
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via

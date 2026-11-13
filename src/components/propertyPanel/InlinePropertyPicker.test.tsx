@@ -53,7 +53,7 @@ describe('InlinePropertyPicker', () => {
     const onPick = vi.fn()
     render(<InlinePropertyPicker owner={owner} onPick={onPick} onCancel={vi.fn()}/>)
     await typeAndSubmit('status')
-    expect(onPick).toHaveBeenCalledWith(schema)
+    expect(onPick).toHaveBeenCalledWith(schema, expect.any(Function))
     expect(addSchema).not.toHaveBeenCalled()
   })
 
@@ -64,7 +64,7 @@ describe('InlinePropertyPicker', () => {
     render(<InlinePropertyPicker owner={owner} onPick={onPick} onCancel={vi.fn()}/>)
     await typeAndSubmit('new field')
     expect(addSchema).toHaveBeenCalledWith({name: 'new field', presetId: 'string'})
-    expect(onPick).toHaveBeenCalledWith(created)
+    expect(onPick).toHaveBeenCalledWith(created, expect.any(Function))
   })
 
   it('cancels without creating a definition or selecting one and releases the editor hold', () => {

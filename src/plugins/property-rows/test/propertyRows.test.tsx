@@ -556,11 +556,12 @@ describe('a child the user turns into a field row', () => {
 
   // The editor itself remounts as the row's renderer changes; the caret comes
   // back from the stored selection, which this harness does not write.
-  it('keeps the row editable, with its text, while the user is on it, where the mode hides every property row', async () => {
+  it('draws a directly focused field as a property row even when the mode hides every property row', async () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()
     expect(typedRow()).not.toBeNull()
-    expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    expect(typedRow()!.querySelector('.cm-content')).toBeNull()
+    expect(typedRow()!.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
@@ -573,6 +574,25 @@ describe('a child the user turns into a field row', () => {
     await waitFor(() => expect(shownRows()).toEqual([name, 'rows:status']))
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
+  })
+
+  it('the real picker refuses changed editor text before creating a definition', async () => {
+    const addSchema = vi.spyOn(repo.userSchemas, 'addSchema')
+    await focusBlock(repo.block(PANEL), TYPED, {edit: true})
+    mount({workspace: 'none'})
+    await waitFor(() => expect(typedEditor()).not.toBeNull())
+    const view = EditorView.findFromDOM(typedEditor()!)!
+    act(() => {
+      view.dispatch({changes: {from: 0, insert: ':'}, selection: {anchor: 1}})
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key: ':', bubbles: true, cancelable: true}))
+    })
+    const input = await screen.findByPlaceholderText('Property name')
+    act(() => view.dispatch({changes: {from: 2, insert: 'kept'}, selection: {anchor: 6}}))
+    fireEvent.change(input, {target: {value: 'new draft schema'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+    await waitFor(() => expect(screen.queryByPlaceholderText('Property name')).toBeNull())
+    expect(addSchema).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe('::kept')
   })
 
   it('picking an existing collapsed field expands it and focuses its value editor', async () => {
@@ -603,7 +623,7 @@ describe('a child the user turns into a field row', () => {
     fireEvent.keyDown(input, {key: 'Enter'})
     await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .cm-content`)).not.toBeNull())
     expect(repo.block(field.id).peekProperty(isCollapsedProp)).toBe(false)
-    expect(repo.block(TYPED).peek()?.content).toBe('::')
+    expect(repo.block(TYPED).peek()).toBeNull()
   })
 
   it('keeps a hidden field row mounted while the caret edits its value child', async () => {

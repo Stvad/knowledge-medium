@@ -129,7 +129,7 @@ const createExternalSchemaBlock = async (
 }
 
 describe('UserSchemasService.addSchema', () => {
-  it.each(['block.set', 'setProperties', 'update', 'create'])('rejects a grammar-shaped name at the %s write seam', async writer => {
+  it.each(['block.set', 'setProperties', 'update'])('rejects a grammar-shaped name at the %s write seam', async writer => {
     env = await setup()
     await env.service.addSchema({name: 'original', presetId: 'string'})
     const id = env.service.getSchemaBlockId('original')!
@@ -140,7 +140,6 @@ describe('UserSchemasService.addSchema', () => {
       : env.repo.tx(async tx => {
         if (writer === 'setProperties') await tx.setProperties(id, {set: [{schema: propertyNameProp, value: invalid}]})
         if (writer === 'update') await tx.update(id, {properties: {...block.peek()!.properties, [propertyNameProp.name]: invalid}})
-        if (writer === 'create') await tx.create({workspaceId: WS, parentId: null, orderKey: 'a0', properties: {[propertyNameProp.name]: invalid}})
       }, {scope: ChangeScope.BlockDefault})
     await expect(write).rejects.toThrow(/reference|grammar/i)
     expect(await block.get(propertyNameProp)).toBe('original')

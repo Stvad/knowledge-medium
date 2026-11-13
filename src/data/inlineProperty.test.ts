@@ -5,7 +5,7 @@ import {seedProperty} from '@/data/propertySeeds'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import {createInlineProperty} from '@/utils/inlinePropertyCreation'
+import {selectInlineProperty, commitInlineProperty} from '@/data/inlineProperty'
 
 const note = seedProperty({seedKey: 'test/property/note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const tags = seedProperty({seedKey: 'test/property/tags', revision: 1, name: 'test:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
@@ -26,38 +26,52 @@ beforeEach(async () => {
 })
 const children = (id: string) => repo.query.children({id, propertyChildren: 'all'}).load()
 
-describe('createInlineProperty', () => {
-  it('converts the same block and creates one value in one transaction and undo step', async () => {
-    const result = await createInlineProperty(repo.block('owner'), note, repo.block('source'))
-    expect(result?.fieldId).toBe('source')
-    expect(await children('owner')).toHaveLength(1)
-    expect(await children('source')).toHaveLength(1)
-    expect(repo.block('source').peek()?.content).toMatch(/^::\(\([a-f0-9-]+\)\)$/)
-    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
-    const events = await h.db.getAll<{tx_id: string}>('SELECT DISTINCT tx_id FROM row_events WHERE block_id IN (?, ?) AND tx_id IS NOT NULL', ['source', result!.valueId])
-    // The scaffold's initial write belongs to the setup; its conversion and value share the final tx.
-    expect(events).toHaveLength(2)
-    expect(await repo.undo()).toBe(true)
-    expect(repo.block('source').peek()?.content).toBe('::')
-    expect(await children('source')).toEqual([])
-  })
-
-  it('returns an existing scalar value without writing or changing the typed block', async () => {
-    const first = await createInlineProperty(repo.block('owner'), note)
+describe('inline property drafts', () => {
+  it('selecting deletes only the scaffold; committing creates field and value in one undo step', async () => {
+    const selection = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
+    expect(await children('owner')).toEqual([])
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
+    expect(Object.hasOwn(repo.block('owner').peek()!.properties, note.name)).toBe(false)
     repo.undoManager.clear()
-    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    expect(await createInlineProperty(repo.block('owner'), note, repo.block('source'))).toEqual(first)
-    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
-    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    const target = await commitInlineProperty(repo.block('owner'), selection, 'committed')
+    expect(await children('owner')).toHaveLength(1)
+    expect(await children(target!.fieldRowId)).toHaveLength(1)
+    expect(await repo.block('owner').get(note)).toBe('committed')
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+    const events = await h.db.getAll('SELECT DISTINCT tx_id FROM row_events WHERE block_id IN (?, ?)', [target!.fieldRowId, target!.valueId])
+    expect(events).toHaveLength(1)
+    expect(await repo.undo()).toBe(true)
+    expect(await children('owner')).toEqual([])
   })
 
-  it('adds a member to an existing list instead of another field row', async () => {
-    const first = await createInlineProperty(repo.block('owner'), tags)
-    const next = await createInlineProperty(repo.block('owner'), tags, repo.block('source'))
-    expect(next?.fieldId).toBe(first?.fieldId)
-    expect(next?.valueId).not.toBe(first?.valueId)
-    expect(await children(first!.fieldId)).toHaveLength(2)
-    expect(repo.block('source').peek()?.content).toBe('::')
+  it('an empty draft writes nothing at all', async () => {
+    const selection = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    expect(await commitInlineProperty(repo.block('owner'), selection, '')).toBeNull()
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it('existing scalar navigation deletes the scaffold and preserves the value', async () => {
+    await repo.block('owner').set(note, 'saved')
+    const fields = (await children('owner')).filter(row => row.isFieldForm)
+    const values = await children(fields[0].id)
+    const result = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
+    expect(result.valueId).toBe(values[0].id)
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
+    expect(await children(fields[0].id)).toEqual(values)
+    expect(await repo.block('owner').get(note)).toBe('saved')
+  })
+
+  it('existing list selection deletes the scaffold without appending an empty member', async () => {
+    await repo.block('owner').set(tags, ['saved'])
+    const result = await selectInlineProperty(repo.block('owner'), tags, repo.block('source'))
+    expect(result.valueId).toBeUndefined()
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
+    expect(await repo.block('owner').get(tags)).toEqual(['saved'])
+    expect(await children(result.fieldRowId!)).toHaveLength(1)
+    await commitInlineProperty(repo.block('owner'), result, 'new')
+    expect(await repo.block('owner').get(tags)).toEqual(['saved', 'new'])
+    expect(await children(result.fieldRowId!)).toHaveLength(2)
   })
 
   it.each([
@@ -68,7 +82,7 @@ describe('createInlineProperty', () => {
       'UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[schema.name]: value}), 'owner']))
     expect((await children('owner')).map(row => row.id)).toEqual(['source'])
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(createInlineProperty(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/stored value/)
+    await expect(selectInlineProperty(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/stored value/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
@@ -77,8 +91,8 @@ describe('createInlineProperty', () => {
     if (kind === 'deleted owner') await repo.tx(tx => tx.delete('owner'), {scope: ChangeScope.BlockDefault})
     if (kind === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    expect(await createInlineProperty(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
-      repo.block(kind === 'missing source' ? 'absent' : 'source'))).toBeNull()
+    await expect(selectInlineProperty(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
+      repo.block(kind === 'missing source' ? 'absent' : 'source'))).rejects.toThrow()
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
@@ -93,7 +107,7 @@ describe('createInlineProperty', () => {
     if (kind === 'moved') await repo.tx(tx => tx.move('source', {parentId: null, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
     if (kind === 'deleted') await repo.tx(tx => tx.delete('source'), {scope: ChangeScope.BlockDefault})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    expect(await createInlineProperty(repo.block('owner'), note, repo.block('source'))).toBeNull()
+    await expect(selectInlineProperty(repo.block('owner'), note, repo.block('source'))).rejects.toThrow()
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 })

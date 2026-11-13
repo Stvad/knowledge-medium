@@ -360,23 +360,24 @@ describe('child-backed field creation', () => {
     })
     h.fire()
     await settle()
-    expect(h.doc()).toBe(':word')
-    expect(h.dispatched()).toBe(0)
+    expect(h.doc()).toBe('::word')
+    expect(h.dispatched()).toBe(1)
     expect(h.opened()).toBe(0)
   })
 
   it.each([false, true])('only opens one picker when two pending gestures resolve in reverse order=%s', async reverse => {
-    const resolvers: Array<(value: boolean) => void> = []
-    childBackedMock.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)))
+    const resolvers: Array<(value: BlockData) => void> = []
+    canConvertMock.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)))
+    childBackedMock.mockResolvedValue(true)
     const h = mount()
     h.fire()
     h.fire()
     await settle()
     expect(resolvers).toHaveLength(2)
     const order = reverse ? resolvers.toReversed() : resolvers
-    order[0]!(true)
+    order[0]!(ELIGIBLE)
     await settle()
-    order[1]!(true)
+    order[1]!(ELIGIBLE)
     await settle()
     expect(h.opened()).toBe(1)
     expect(h.doc()).toBe('::')

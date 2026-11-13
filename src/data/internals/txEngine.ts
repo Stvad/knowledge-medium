@@ -131,7 +131,7 @@ export interface TxDb {
   get<T>(sql: string, params?: unknown[]): Promise<T>
 }
 
-/** Unchanged legacy names survive unrelated edits; new names cannot parse as rows. */
+/** A rename cannot introduce reference grammar; copying a legacy bag is not a rename. */
 const assertPropertyNameWrite = (
   before: Readonly<Record<string, unknown>>,
   after: Readonly<Record<string, unknown>>,
@@ -504,7 +504,7 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    assertPropertyNameWrite(before?.properties ?? {}, after.properties)
+    if (before) assertPropertyNameWrite(before.properties, after.properties)
     const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
     if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
