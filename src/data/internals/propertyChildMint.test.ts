@@ -305,10 +305,11 @@ describe('mintPropertyChildRow restores a tombstone as the planned row', () => {
   // Read INSIDE the writing tx, right after the mint: the deferred materializer
   // canonicalizes a field row's content later in the same commit, which would
   // hide a restore that left the tombstone's own text.
-  it('content, references and both derived columns, before any processor runs', async () => {
+  it('content, order key, references and both derived columns, before any processor runs', async () => {
     const id = uuidv5(fieldKey(WS, OWNER, STATUS_FIELD), PLAINTEXT_NS)
     await write(async tx => {
-      await tx.create({id, workspaceId: WS, parentId: OWNER, orderKey: keyAtStart(null), content: 'old text'})
+      // An order key of its own, so the restore has to move it to the planned one.
+      await tx.create({id, workspaceId: WS, parentId: OWNER, orderKey: 'zz', content: 'old text'})
       await tx.delete(id)
     })
 
@@ -318,14 +319,14 @@ describe('mintPropertyChildRow restores a tombstone as the planned row', () => {
         tx, plannedFieldRow(tx, {id: OWNER, workspaceId: WS}, STATUS_FIELD), 'restore')
       const row = await tx.get(minted)
       restored = {
-        id: minted, deleted: row?.deleted, content: row?.content,
+        id: minted, deleted: row?.deleted, content: row?.content, orderKey: row?.orderKey,
         isFieldForm: row?.isFieldForm, target: row?.referenceTargetId,
         references: row?.references.map(ref => ref.id),
       }
     })
 
     expect(restored).toEqual({
-      id, deleted: false, content: propertyFieldContent(STATUS_FIELD),
+      id, deleted: false, content: propertyFieldContent(STATUS_FIELD), orderKey: keyAtStart(null),
       isFieldForm: true, target: STATUS_FIELD, references: [STATUS_FIELD],
     })
   })
