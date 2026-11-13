@@ -6,7 +6,7 @@ import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { editorSelection, focusBlock, requestEditorFocus } from '@/data/properties.js'
+import { editorSelection, focusBlock, requestEditorFocus, isCollapsedProp } from '@/data/properties.js'
 import {
   pasteArmedCut,
   pasteChordIntent,
@@ -203,16 +203,17 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         inlinePicker.view.focus()
       }}
       onPick={async schema => {
-        if (inlinePicker.view.state.doc.toString() !== FIELD_FORM_MARKER) return
         flushEditorContent(inlinePicker.view)
         const result = await createInlineProperty(repo.block(inlinePicker.parentId), schema, block)
         if (!result) return
+        const field = repo.block(result.fieldId)
+        if (field.peekProperty(isCollapsedProp)) await field.set(isCollapsedProp, false)
         setInlinePicker(null)
-        await uiStateBlock.set(editorSelection, {blockId: result.valueId, start: 0})
         await focusBlock(uiStateBlock, result.valueId, {
           edit: true,
           ...(typeof blockContext.renderScopeId === 'string' ? {renderScopeId: blockContext.renderScopeId} : {}),
         })
+        await uiStateBlock.set(editorSelection, {blockId: result.valueId, start: 0})
         requestEditorFocus(uiStateBlock)
       }}
     />}

@@ -1,7 +1,7 @@
 import type {Block} from '@/data/block'
-import {ChangeScope, memberCodecOf, type AnyPropertySchema} from '@/data/api'
-import {isResolvedPropertySchema} from '@/data/internals/propertySchemaResolution'
+import {ChangeScope, memberCodecOf, type AnyPropertySchema, type AnyResolvedPropertySchema, type BlockData} from '@/data/api'
 import {isFieldValueChild, scalarValueRow} from '@/data/propertyChildren'
+import {storedPropertyValue} from '@/data/rowProperty'
 import {keyAtEnd} from '@/data/orderKey'
 import {FIELD_FORM_MARKER, referenceBlockContentForId} from '@/data/referenceBlock'
 
@@ -18,28 +18,34 @@ export const createInlineProperty = async (
   source?: Block,
 ): Promise<InlinePropertyTarget | null> => {
   const repo = owner.repo
-  const ownerData = await owner.load()
-  if (repo.isReadOnly || !ownerData) return null
+  if (repo.isReadOnly) return null
   return repo.tx(async tx => {
     const parent = await tx.get(owner.id)
-    if (!parent || parent.deleted || parent.workspaceId !== ownerData.workspaceId ||
+    if (!parent || parent.deleted ||
       !await tx.isPropertyChildBackedWorkspace(parent.workspaceId)) return null
     const scaffold = source ? await tx.get(source.id) : null
     if (source && (!scaffold || scaffold.deleted || scaffold.parentId !== owner.id ||
       scaffold.content !== FIELD_FORM_MARKER || Object.keys(scaffold.properties).length > 0 ||
       await tx.hasChildren(source.id))) return null
 
-    const resolved = await tx.resolvePropertySchema(owner.id, schema)
-    if (!isResolvedPropertySchema(resolved)) throw new Error('Property definition is unavailable')
+    // Child-backed resolution has already required durable field identity.
+    const resolved = await tx.resolvePropertySchema(owner.id, schema) as AnyResolvedPropertySchema
     const children = await tx.childrenOf(owner.id)
     let field = children.find(row => row.isFieldForm && row.referenceTargetId === resolved.fieldId)
+    let childrenOfField: BlockData[] = []
     if (field) {
-      const values = (await tx.childrenOf(field.id)).filter(isFieldValueChild)
+      childrenOfField = await tx.childrenOf(field.id)
+      const values = childrenOfField.filter(isFieldValueChild)
       if (!memberCodecOf(resolved.codec)) {
         const existing = scalarValueRow(resolved, values)
         if (existing) return {fieldId: field.id, valueId: existing.id}
       }
     } else {
+      // A cell without children can still be awaiting materialization. Never
+      // replace it with an empty value or resurrect intentionally deleted rows.
+      if (storedPropertyValue(parent.properties, resolved.name) !== undefined) {
+        throw new Error('This property has a stored value but no field row. Open the property panel to inspect it before creating an empty field.')
+      }
       const content = FIELD_FORM_MARKER + referenceBlockContentForId(resolved.fieldId)
       if (scaffold) {
         await tx.update(scaffold.id, {content, referenceTargetId: resolved.fieldId, isFieldForm: true})
@@ -51,9 +57,8 @@ export const createInlineProperty = async (
         field = (await tx.get(id))!
       }
     }
-    const values = await tx.childrenOf(field.id)
     const valueId = await tx.create({workspaceId: parent.workspaceId, parentId: field.id,
-      orderKey: keyAtEnd(values.at(-1)?.orderKey), content: ''})
+      orderKey: keyAtEnd(childrenOfField.at(-1)?.orderKey), content: ''})
     return {fieldId: field.id, valueId}
   }, {scope: ChangeScope.BlockDefault, description: 'Create inline property'})
 }

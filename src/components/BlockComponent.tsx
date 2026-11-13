@@ -3,7 +3,7 @@ import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
 import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import { useRepo } from '@/context/repo.js'
-import { Suspense, useCallback, useSyncExternalStore } from 'react'
+import { Suspense, useCallback, useMemo, useSyncExternalStore } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -64,7 +64,8 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
-  const focusedChild = useFocusedChild(block, renderScopeId)
+  const focus = useFocusedChild(block, renderScopeId)
+  const focusedChild = focus?.row ?? null
   const listed = useChildIdsForMode(block, mode)
   const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   // A row placed outside the listing sits by every sibling's order, which a
@@ -74,7 +75,7 @@ export const BlockChildren = ({block}: { block: Block }) => {
     {selector: ids => ids})
   const childIds = withFocusedChild(block.repo, listed, focusedChild)
 
-  return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
+  return <PropertyRowListingContext value={mode !== 'none' || (placesUnlistedChild && !focus?.direct) ? block.id : null}>
     {childIds.map((childId) => (
       <LazyBlockComponent
         key={childId}
@@ -87,7 +88,9 @@ export const BlockChildren = ({block}: { block: Block }) => {
 
 /** The child containing this surface's focus. Follow ancestors too: a hidden
  * field row must stay mounted while its value or a nested comment is edited. */
-const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | null => {
+type FocusedChild = {row: BlockData; direct: boolean}
+
+const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | null => {
   const uiStateBlock = useUIStateBlock()
   const focusedRowId = useCallback((): string | null => {
     const location = focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
@@ -96,20 +99,23 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | nul
     return location.blockId
   }, [uiStateBlock, renderScopeId])
   const subscribe = useCallback((notify: () => void) => {
-    let followed: (() => void)[] = []
+    const followed = new Map<string, () => void>()
     const followFocusedRow = () => {
-      followed.forEach(unsubscribe => unsubscribe())
-      followed = []
       let id = focusedRowId()
       const seen = new Set<string>()
       while (id !== null && id !== parent.id && !seen.has(id)) {
         seen.add(id)
         const row = parent.repo.block(id)
-        followed.push(row.subscribe(() => {
+        if (!followed.has(id)) followed.set(id, row.subscribe(() => {
           followFocusedRow()
           notify()
         }))
         id = row.peek()?.parentId ?? null
+      }
+      for (const [followedId, unsubscribe] of followed) {
+        if (seen.has(followedId)) continue
+        unsubscribe()
+        followed.delete(followedId)
       }
     }
     followFocusedRow()
@@ -122,18 +128,28 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | nul
       followed.forEach(unsubscribe => unsubscribe())
     }
   }, [uiStateBlock, parent, focusedRowId])
-  return useSyncExternalStore(subscribe, () => {
-    let id = focusedRowId()
-    const seen = new Set<string>()
-    while (id !== null && id !== parent.id && !seen.has(id)) {
-      seen.add(id)
-      const row = parent.repo.block(id).peek()
-      if (!row) return null
-      if (row.parentId === parent.id) return row
-      id = row.parentId
+  const snapshot = useMemo(() => {
+    let previous: FocusedChild | null = null
+    return (): FocusedChild | null => {
+      const focusedId = focusedRowId()
+      let id = focusedId
+      const seen = new Set<string>()
+      while (id !== null && id !== parent.id && !seen.has(id)) {
+        seen.add(id)
+        const row = parent.repo.block(id).peek()
+        if (!row) break
+        if (row.parentId === parent.id) {
+          const direct = row.id === focusedId
+          if (previous?.row !== row || previous.direct !== direct) previous = {row, direct}
+          return previous
+        }
+        id = row.parentId
+      }
+      previous = null
+      return previous
     }
-    return null
-  })
+  }, [parent, focusedRowId])
+  return useSyncExternalStore(subscribe, snapshot)
 }
 
 /** `childIds` with the focused child at its sibling position when the property

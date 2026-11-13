@@ -11,7 +11,7 @@ export const PropertyDisplayScopeContext =
   createContext<PropertyDisplayScopeLevels>(NO_PROPERTY_DISPLAY_SCOPE)
 
 /** The parent whose child listing this is, when that listing shows property
- *  rows (its display mode is not `none`); `null` otherwise. Provided by
+ *  rows (including a focused row temporarily revealed by the listing); `null` otherwise. Provided by
  *  `BlockChildren`. A field row is drawn as a row only when it is a child of
  *  this parent, so a block mounted by id inside the listing's subtree — a
  *  backlink entry root, an embed — is never mistaken for one of its rows.

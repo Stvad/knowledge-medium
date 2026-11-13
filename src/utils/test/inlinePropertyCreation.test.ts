@@ -60,10 +60,36 @@ describe('createInlineProperty', () => {
     expect(repo.block('source').peek()?.content).toBe('::')
   })
 
+  it.each([
+    {schema: note, value: 'keep pending text'},
+    {schema: tags, value: ['keep', 'members']},
+  ])('refuses to replace a pending stored value for $schema.name with empty children', async ({schema, value}) => {
+    await h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[schema.name]: value}), 'owner']))
+    expect((await children('owner')).map(row => row.id)).toEqual(['source'])
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(createInlineProperty(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/stored value/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it.each(['cell', 'missing owner', 'deleted owner', 'missing source', 'read-only'])('refuses an unavailable target: %s', async kind => {
+    if (kind === 'cell') await h.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = 'ws'")
+    if (kind === 'deleted owner') await repo.tx(tx => tx.delete('owner'), {scope: ChangeScope.BlockDefault})
+    if (kind === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    expect(await createInlineProperty(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
+      repo.block(kind === 'missing source' ? 'absent' : 'source'))).toBeNull()
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
   it.each(['content', 'children', 'properties', 'moved', 'deleted'])('refuses a source changed while the picker was open: %s', async kind => {
     if (kind === 'content') await repo.block('source').setContent('keep this')
     if (kind === 'children') await repo.mutate.createChild({parentId: 'source', content: 'keep child'})
-    if (kind === 'properties') await repo.block('source').set(note, 'keep property')
+    if (kind === 'properties') {
+      await h.db.writeTransaction(tx => tx.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({'test:note': 'keep property'}), 'source']))
+      expect(await children('source')).toEqual([])
+    }
     if (kind === 'moved') await repo.tx(tx => tx.move('source', {parentId: null, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
     if (kind === 'deleted') await repo.tx(tx => tx.delete('source'), {scope: ChangeScope.BlockDefault})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')

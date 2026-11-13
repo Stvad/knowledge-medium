@@ -35,7 +35,7 @@ import { propertyRowsPlugin } from '../index'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { focusBlock, showPropertiesProp } from '@/data/properties'
+import { focusBlock, showPropertiesProp, isCollapsedProp } from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { setBlockPropertyDisplay } from '../actions'
 
@@ -76,8 +76,11 @@ let repo: Repo
 let runtime: FacetRuntime
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-afterEach(() => {
+afterEach(async () => {
   cleanup()
+  // Blur callbacks run on the next frame; fence their writes before the DB reset.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  await repo.tx(async () => {}, {scope: ChangeScope.UiState})
   committedListings.clear()
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -572,13 +575,43 @@ describe('a child the user turns into a field row', () => {
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
 
+  it('picking an existing collapsed field expands it and focuses its value editor', async () => {
+    const ownerChildren = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = ownerChildren.find(row => {
+      if (!row.isFieldForm || !row.referenceTargetId) return false
+      const resolution = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+      return resolution.status === 'resolved' && resolution.schema.name === statusProp.name
+    })!
+    expect(field).toBeDefined()
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    await repo.block(field.id).set(isCollapsedProp, true)
+    await focusBlock(repo.block(PANEL), TYPED, {edit: true})
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(typedEditor()).not.toBeNull())
+    expect(document.querySelector(`[data-block-id="${value.id}"]`)).toBeNull()
+    const view = EditorView.findFromDOM(typedEditor()!)!
+    act(() => {
+      view.dispatch({changes: {from: 0, insert: ':'}, selection: {anchor: 1}})
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key: ':', bubbles: true, cancelable: true}))
+    })
+    const input = await screen.findByPlaceholderText('Property name')
+    fireEvent.change(input, {target: {value: statusProp.name}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .cm-content`)).not.toBeNull())
+    expect(repo.block(field.id).peekProperty(isCollapsedProp)).toBe(false)
+    expect(repo.block(TYPED).peek()?.content).toBe('::')
+  })
+
   it('keeps a hidden field row mounted while the caret edits its value child', async () => {
     await typeIntoChild('none', '::((def-plain))')
-    await repo.tx(tx => tx.create({id: 'typed-value', workspaceId: WS, parentId: TYPED,
-      orderKey: 'a0', content: ''}), {scope: ChangeScope.BlockDefault})
+    await act(async () => {
+      await repo.tx(tx => tx.create({id: 'typed-value', workspaceId: WS, parentId: TYPED,
+        orderKey: 'a0', content: ''}), {scope: ChangeScope.BlockDefault})
+    })
     await act(async () => { await focusBlock(repo.block(PANEL), 'typed-value', {edit: true}) })
     await waitFor(() => expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull())
     expect(typedRow()).not.toBeNull()
+    expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
     await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
     await waitFor(() => expect(typedRow()).toBeNull())
   })
