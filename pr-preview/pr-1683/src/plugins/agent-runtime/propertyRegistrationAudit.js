@@ -1,1 +1,1 @@
-export{th as PROVENANCE_BLOCKS_PER_KEY,nh as PROVENANCE_KEY_LIMIT,rh as auditPropertyRegistration,ih as describeUnregisteredProperty}from"../../../chunks/app-Dw1dzF6W.js";
+export{th as PROVENANCE_BLOCKS_PER_KEY,nh as PROVENANCE_KEY_LIMIT,rh as auditPropertyRegistration,ih as describeUnregisteredProperty}from"../../../chunks/app-B1OrD5ie.js";

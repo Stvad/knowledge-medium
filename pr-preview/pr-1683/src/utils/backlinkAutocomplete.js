@@ -1,1 +1,1 @@
-export{fy as backlinkCompletionSource,py as createBacklinkAutocomplete,my as isInsideBacklinkBrackets}from"../../chunks/app-Dw1dzF6W.js";
+export{fy as backlinkCompletionSource,py as createBacklinkAutocomplete,my as isInsideBacklinkBrackets}from"../../chunks/app-B1OrD5ie.js";
