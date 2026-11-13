@@ -1,1 +1,0 @@
-export{b3 as Block,x3 as requireLoadedBlock}from"../../chunks/app-B1OrD5ie.js";

@@ -1,1 +1,0 @@
-export{B_ as BlockMetaCard}from"../../../chunks/app-B1OrD5ie.js";

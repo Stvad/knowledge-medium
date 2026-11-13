@@ -1,1 +1,0 @@
-export{fL as useIsMobile,pL as usePointerCoarse}from"../../chunks/app-B1OrD5ie.js";

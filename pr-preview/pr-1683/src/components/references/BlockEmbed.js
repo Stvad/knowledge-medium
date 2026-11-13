@@ -1,1 +1,0 @@
-export{OM as BlockEmbed}from"../../../chunks/app-B1OrD5ie.js";

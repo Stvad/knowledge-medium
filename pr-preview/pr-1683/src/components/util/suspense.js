@@ -1,1 +1,0 @@
-export{RG as SuspenseFallback}from"../../../chunks/app-B1OrD5ie.js";

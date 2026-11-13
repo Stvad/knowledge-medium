@@ -1,1 +1,0 @@
-export{MX as contributorsDataExtension}from"../../../chunks/app-B1OrD5ie.js";

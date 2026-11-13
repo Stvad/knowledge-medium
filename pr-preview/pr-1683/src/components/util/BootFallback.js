@@ -1,1 +1,0 @@
-export{LG as BootFallback}from"../../../chunks/app-B1OrD5ie.js";

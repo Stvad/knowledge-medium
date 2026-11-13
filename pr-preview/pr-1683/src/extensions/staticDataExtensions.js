@@ -1,1 +1,0 @@
-export{oK as staticDataExtensions}from"../../chunks/app-B1OrD5ie.js";

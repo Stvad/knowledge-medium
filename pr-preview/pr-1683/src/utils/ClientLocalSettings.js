@@ -1,1 +1,0 @@
-export{AP as ClientLocalSettings,jP as clientLocalSettings}from"../../chunks/app-B1OrD5ie.js";

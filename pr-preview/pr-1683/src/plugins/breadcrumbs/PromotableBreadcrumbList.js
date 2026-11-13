@@ -1,1 +1,0 @@
-export{Gw as PromotableBreadcrumbList}from"../../../chunks/app-B1OrD5ie.js";
