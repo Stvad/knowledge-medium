@@ -1,0 +1,1 @@
+export{Xh as authorIdOf}from"../../../chunks/app-69-ZGS97.js";

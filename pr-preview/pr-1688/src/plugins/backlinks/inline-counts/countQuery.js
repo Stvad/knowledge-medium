@@ -1,0 +1,1 @@
+export{KZ as BACKLINKS_COUNT_FOR_BLOCK_QUERY,qZ as backlinksCountForBlockQuery}from"../../../../chunks/app-69-ZGS97.js";

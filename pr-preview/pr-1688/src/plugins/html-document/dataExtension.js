@@ -1,0 +1,1 @@
+export{zq as htmlDocumentDataExtension}from"../../../chunks/app-69-ZGS97.js";

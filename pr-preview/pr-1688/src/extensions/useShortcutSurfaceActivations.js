@@ -1,0 +1,1 @@
+export{TR as useShortcutSurfaceActivations}from"../../chunks/app-69-ZGS97.js";

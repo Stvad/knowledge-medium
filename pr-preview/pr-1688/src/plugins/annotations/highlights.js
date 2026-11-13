@@ -1,0 +1,1 @@
+export{tm as HIGHLIGHT_CLASS,nm as MOVED_HIGHLIGHT_CLASS,rm as SUGGESTION_HIGHLIGHT_CLASS,im as coveringStyle,am as highlightClasses,om as highlightField,sm as highlightRange,cm as highlightRanges,lm as threadHighlights,um as threadHighlightsContribution}from"../../../chunks/app-69-ZGS97.js";
