@@ -1,1 +1,0 @@
-export{Ph as lintExtensionSource}from"../../../chunks/app-CB0yVxNx.js";

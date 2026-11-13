@@ -1,1 +1,0 @@
-export{RC as SpatialNavigationShellDecorator}from"../../../chunks/app-CB0yVxNx.js";

@@ -1,1 +1,0 @@
-export{JN as ExtensionPromptSurface,YN as extensionPromptsExtension}from"../../../chunks/app-CB0yVxNx.js";

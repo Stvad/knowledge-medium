@@ -1,1 +1,0 @@
-export{cT as BreadcrumbList,aT as BreadcrumbRenderer,sT as Breadcrumbs,iT as PromotableBreadcrumbList,tT as breadcrumbRendererContribution,nT as breadcrumbsPlugin,oT as getBreadcrumbContentPreview,rT as usePromotableBreadcrumb}from"../../../chunks/app-CB0yVxNx.js";

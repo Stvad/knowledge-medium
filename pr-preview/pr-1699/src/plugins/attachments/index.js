@@ -1,1 +1,0 @@
-export{jb as attachmentsPlugin}from"../../../chunks/app-CB0yVxNx.js";

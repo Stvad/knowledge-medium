@@ -1,1 +1,0 @@
-export{vu as BlockTagsConfigEditor}from"../../../chunks/app-CB0yVxNx.js";

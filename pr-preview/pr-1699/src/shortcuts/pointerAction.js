@@ -1,1 +1,0 @@
-export{MP as dispatchPointerAction,NP as setPointerActionDispatcher}from"../../chunks/app-CB0yVxNx.js";

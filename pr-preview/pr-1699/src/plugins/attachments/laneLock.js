@@ -1,1 +1,0 @@
-export{qx as runSingleOwner}from"../../../chunks/app-CB0yVxNx.js";
