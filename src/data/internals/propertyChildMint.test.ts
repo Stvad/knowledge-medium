@@ -195,7 +195,7 @@ describe('a plaintext workspace', () => {
     const [field] = await liveChildrenOf(OWNER)
     await write(async tx => {
       await tx.update(field!.id, {content: 'just text now'})
-      await tx.delete(field!.id)
+      await deleteSubtreeInTx(tx, field!.id)
     })
     const plain = await sharedDb.db.get<{is_field_form: number | null; reference_target_id: string | null}>(
       'SELECT is_field_form, reference_target_id FROM blocks WHERE id = ?', [field!.id])

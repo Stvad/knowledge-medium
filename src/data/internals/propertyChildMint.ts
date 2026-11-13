@@ -18,6 +18,11 @@
  *    tombstones on purpose;
  *  - a tombstone moved elsewhere before it died → a random id: its parent may
  *    be dead too, and restoring a row under a dead parent aborts the write;
+ *  - a tombstone with a LIVE child → a random id. Sync-apply skips the
+ *    parent-liveness trigger, so a peer's edit of a value can land live under
+ *    a field row this device deleted; restoring the row would hand that value
+ *    to the reconcile, which overwrites its text. The revival's rule (#809),
+ *    applied to every restore here;
  *  - a live row → it is no longer this slot's row (a field row moved out from
  *    under its owner, a member edited in place to another value), so the new
  *    row takes a random id. ACCEPTED: that row converges with nothing, exactly
@@ -88,6 +93,7 @@ export const mintPropertyChildRow = async (
   if (occupancy.verdict === 'absent') return tx.create({...row, id})
   const restorable = occupancy.verdict === 'tombstoned' && onTombstone === 'restore'
     && occupancy.block.parentId === row.parentId
+    && !await tx.hasChildren(id)
   if (!restorable) return tx.create(row)
 
   // The tombstone keeps its own property bag: a value row can own properties
