@@ -44,6 +44,18 @@ describe('inline property drafts', () => {
     expect(await children('owner')).toEqual([])
   })
 
+  it('allows filling a scalar field that exists without a value child', async () => {
+    const selected = await selectInlineProperty(repo.block('owner'), note)
+    await repo.tx(tx => tx.create({workspaceId: 'ws', parentId: 'owner', orderKey: 'a1',
+      content: `::((${selected.schema.fieldId}))`, isFieldForm: true, referenceTargetId: selected.schema.fieldId}),
+      {scope: ChangeScope.BlockDefault})
+    const pending = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
+    expect(pending.fieldRowId).toBeDefined()
+    expect(pending.valueId).toBeUndefined()
+    await commitInlineProperty(repo.block('owner'), pending, 'first value')
+    expect(await repo.block('owner').get(note)).toBe('first value')
+  })
+
   it('an empty draft writes nothing at all', async () => {
     const selection = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')

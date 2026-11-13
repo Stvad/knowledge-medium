@@ -57,6 +57,19 @@ describe('InlinePropertyPicker', () => {
     expect(addSchema).not.toHaveBeenCalled()
   })
 
+  it('picking a portalled suggestion is not click-away', async () => {
+    const onPick = vi.fn()
+    const onCancel = vi.fn()
+    render(<InlinePropertyPicker owner={owner} onPick={onPick} onCancel={onCancel}/>)
+    fireEvent.change(screen.getByPlaceholderText('Property name'), {target: {value: 'status'}})
+    const option = screen.getByRole('option', {hidden: true})
+    expect(document.querySelector('[data-inline-property-picker]')?.contains(option)).toBe(false)
+    fireEvent.pointerDown(option)
+    await act(async () => { fireEvent.click(option) })
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onPick).toHaveBeenCalledWith(schema, expect.any(Function))
+  })
+
   it('creates an unmatched name through the schema service and picks its result', async () => {
     const created = {name: 'new field', codec: {type: 'string'}} as AnyPropertySchema
     addSchema.mockResolvedValue(created)

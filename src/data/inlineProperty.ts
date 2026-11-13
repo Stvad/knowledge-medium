@@ -48,7 +48,7 @@ export const selectInlineProperty = async (
 export const commitInlineProperty = async (
   owner: Block, selection: InlinePropertySelection, content: string,
 ): Promise<{fieldRowId: string; valueId: string} | null> => {
-  if (content.trim() === '') return null
+  if (content === '') return null
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
   const {schema} = selection
   const member = memberCodecOf(schema.codec)
@@ -61,10 +61,11 @@ export const commitInlineProperty = async (
     }
     const ownerChildren = await tx.childrenOf(owner.id)
     const before = ownerChildren.filter(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)
-    if (!member && (before.length || storedPropertyValue(parent.properties, schema.name) !== undefined)) {
+    const previousValues = (await Promise.all(before.map(row => tx.childrenOf(row.id)))).flat().filter(isFieldValueChild)
+    if (!member && (previousValues.length || storedPropertyValue(parent.properties, schema.name) !== undefined)) {
       throw new Error('This property now has a value. Edit its existing row instead.')
     }
-    const oldIds = new Set(before.length ? (await tx.childrenOf(before[0].id)).map(row => row.id) : [])
+    const oldIds = new Set(previousValues.map(row => row.id))
     await tx.setProperty(owner.id, schema, member
       ? (current: unknown) => [...(Array.isArray(current) ? current : []), value]
       : value)

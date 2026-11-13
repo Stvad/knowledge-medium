@@ -24,7 +24,9 @@ export function InlinePropertyPicker({owner, onPick, onCancel, canSubmit}: Inlin
     cancelled.current = false
     const release = acquireEditModeKeepalive('yield-focus')
     const away = (event: PointerEvent) => {
-      if (element.current?.contains(event.target as Node)) return
+      const listId = element.current?.querySelector('[aria-controls]')?.getAttribute('aria-controls')
+      if (element.current?.contains(event.target as Node) ||
+        (listId && document.getElementById(listId)?.contains(event.target as Node))) return
       cancelled.current = true
       onCancelRef.current(false)
     }
