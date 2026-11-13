@@ -1,0 +1,1 @@
+export{gI as PropertyDisplayScope}from"../../../chunks/app-CaSX7hlF.js";

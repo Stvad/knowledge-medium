@@ -1,1 +1,1 @@
-export{vq as htmlDocumentDataExtension}from"../../../chunks/app-DZ0-08H7.js";
+export{Hq as htmlDocumentDataExtension}from"../../../chunks/app-CaSX7hlF.js";
