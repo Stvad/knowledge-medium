@@ -34,8 +34,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
-import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
+import type { BlockData, Handle, PropertyChildrenView, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { getAliases } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
@@ -452,8 +451,8 @@ const loadedListOfAnotherView = (block: Block, view: PropertyChildrenView): stri
 }
 
 /** The outline's property display mode for `block`'s children here: the
- *  block's own switch over the panel's scope (`PropertyDisplayScope`). The one
- *  reader of the levels — see `resolvePropertyDisplayMode`. The block setting
+ *  block's own switch over the panel's scope (`PropertyDisplayScope`), combined
+ *  by `resolvePropertyDisplayMode`, the one resolver. The block setting
  *  is read tolerantly, above the per-block error boundary. */
 export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
   const scope = useContext(PropertyDisplayScopeContext)
@@ -473,7 +472,7 @@ export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  // Display hook: visible view (property field rows excluded, §9).
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
   return useHandle(block.repo.query.children({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
@@ -604,7 +603,7 @@ export const useRetainParents = (blocks: readonly Block[]): void => {
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  // Display hook: visible view (property field rows excluded, §9).
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
   return useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })

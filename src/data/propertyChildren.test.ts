@@ -1755,6 +1755,110 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
   })
 })
 
+describe('a scalar write rewrites the value the cell reads', () => {
+  const COUNT_FIELD_ID = 'field-count-write-target'
+  const countSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+  const contentOf = async (id: string): Promise<string> =>
+    (await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id])).content
+
+  const setupCount = async (): Promise<{repo: Repo; fieldId: string; valueId: string}> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', countSchema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    return {repo, fieldId: field!.id, valueId: value!.id}
+  }
+
+  it('leaves a block ahead of the value alone', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    // An ordinary block first among the values: it does not decode, so the
+    // cell still reads the 5 behind it.
+    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await bagOf('p')).toMatchObject({count: 5})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf('notes')).toBe('meeting notes')
+    expect(await contentOf(valueId)).toBe('7')
+    expect(await bagOf('p')).toMatchObject({count: 7})
+  })
+
+  it('adds a value rather than overwrite one of two rows that do not decode', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.mutate.setContent({id: valueId, content: 'about five'})
+    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf('notes')).toBe('meeting notes')
+    expect(await contentOf(valueId)).toBe('about five')
+    expect(await bagOf('p')).toMatchObject({count: 7})
+  })
+
+  describe('a write whose content does not decode (a cleared ref)', () => {
+    const REF_FIELD_ID = 'field-ref-write-target'
+    const refSchema = defineProperty<string>('related', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const refFieldRows = liveFieldRowsFor(REF_FIELD_ID)
+
+    const setupRef = async (): Promise<{repo: Repo; fieldId: string; valueId: string}> => {
+      await seedWorkspace('children')
+      const repo = setup()
+      registerDefinition(repo, 'test-ref-definition', REF_FIELD_ID, refSchema)
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', refSchema, 'target-a'), {scope: ChangeScope.BlockDefault})
+      const [field] = await refFieldRows('p')
+      const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+      return {repo, fieldId: field!.id, valueId: value!.id}
+    }
+
+    it('keeps a divergent peer: both passes of the write land on the same row', async () => {
+      const {repo, fieldId, valueId} = await setupRef()
+      await repo.tx(tx => tx.create({id: 'peer', workspaceId: WS, parentId: fieldId, orderKey: 'z', content: '((target-b))'}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', refSchema, ''), {scope: ChangeScope.BlockDefault})
+
+      expect(await contentOf(valueId)).toBe('')
+      expect(await contentOf('peer')).toBe('((target-b))')
+    })
+
+    it('leaves a block ahead of the value alone', async () => {
+      const {repo, fieldId, valueId} = await setupRef()
+      await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', refSchema, ''), {scope: ChangeScope.BlockDefault})
+
+      expect(await contentOf('notes')).toBe('meeting notes')
+      expect(await contentOf(valueId)).toBe('')
+    })
+  })
+
+  it('repairs in place a value that no longer decodes', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.mutate.setContent({id: valueId, content: 'about five'})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf(valueId)).toBe('7')
+    expect((await childrenRows(fieldId)).filter(v => v.deleted === 0).map(v => v.id)).toEqual([valueId])
+  })
+})
+
 describe('movement gestures anchor on the visible sibling list (§9/§10)', () => {
   /** `p` → hidden field row → value child, plus two ordinary content
    *  children, so every gesture has both a visible and a hidden neighbour. */
@@ -1814,20 +1918,6 @@ describe('movement gestures anchor on the visible sibling list (§9/§10)', () =
 
     expect(moved).toBe(false)
     expect(await parentOf(valueRowId)).toBe(fieldRowId)
-    expect(await cellValue('p')).toBe('done')
-  })
-
-  // Resolves the asymmetry #404 flagged: `indent` and `moveVertical` already
-  // no-op on a row the caller can't see, while `outdent` acted on it. A
-  // deliberate machinery move goes through `core.move`, not an outline gesture.
-  it('outdenting a hidden field row is a no-op, like indent and moveVertical', async () => {
-    const {repo, fieldRowId} = await setupMovable()
-
-    expect(await repo.mutate.outdent({id: fieldRowId})).toBe(false)
-    expect(await repo.mutate.moveVertical({id: fieldRowId, direction: -1})).toBe(false)
-    await repo.mutate.indent({id: fieldRowId})
-
-    expect(await parentOf(fieldRowId)).toBe('p')
     expect(await cellValue('p')).toBe('done')
   })
 

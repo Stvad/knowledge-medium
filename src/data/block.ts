@@ -236,7 +236,7 @@ export class Block implements Handle<BlockData | null> {
    *  ones use `useChildIds(block)` (which subscribes to the same
    *  handle).
    *
-   *  Facade getters speak the visible/outline view (property field rows
+   *  Facade getters speak the mode-`none` view (every property field row
    *  excluded, §9); drop to `repo.query.*` / `tx.childrenOf` for the
    *  structural everything-view. */
   get childIds(): LoaderHandle<string[]> {

@@ -33,6 +33,7 @@ import type {
   BlockReference,
   Mutator,
   NewBlockData,
+  PropertyChildrenView,
   PropertySchema,
   ResolvedPropertySchema,
   SameTxEmittedEvent,
@@ -101,9 +102,10 @@ import {
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import {
-  isPropertyFieldInstance,
+  isLeftOutOfChildrenView,
   propertyCellValueRejection,
   type IsPropertyFieldDefinition,
+  type PropertyRowClassifier,
 } from '@/data/propertyChildren'
 import {
   changedPropertyNames,
@@ -261,6 +263,10 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** The definition ids the workspace's `'non-hidden'` view skips (`outlineSkippedFieldIds` over the
+   *  same tx-start registry snapshot the resolver reads), for the
+   *  `'non-hidden'` child view. */
+  outlineSkippedFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
   /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
    *  A scope with workspaceId null has no open workspace and refuses writes. */
   writableWorkspace: {readonly workspaceId: string | null} | null
@@ -1328,7 +1334,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {propertyChildren?: 'all' | 'none'},
+    options?: {propertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -1362,11 +1368,15 @@ export class TxImpl implements Tx {
     // `::` rows can classify, so a ref-typed VALUE pointing at a definition is
     // never misread, and a marked row inside a property subtree IS machinery
     // and filters like any other, at any depth.
-    if (parentId === null) return data
-    if (options?.propertyChildren !== 'none' || data.length === 0) return data
+    const view = options?.propertyChildren ?? 'all'
+    if (parentId === null || view === 'all' || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
-    const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
-    return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
+    const rowsWorkspaceId = data[0]!.workspaceId
+    const classifier: PropertyRowClassifier = {
+      isFieldDefinition: this.isFieldDefinitionCheckerFor(rowsWorkspaceId),
+      isOutlineSkipped: fieldId => this.ctx.outlineSkippedFieldIdsFor(rowsWorkspaceId).has(fieldId),
+    }
+    return data.filter(row => !isLeftOutOfChildrenView(row, view, classifier))
   }
 
   async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {

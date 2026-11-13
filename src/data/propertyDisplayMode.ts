@@ -14,8 +14,9 @@
  * the backfill) are not the source of truth and must not be edited in place.
  */
 
+import { z } from 'zod'
 import { ChangeScope, seedType } from '@/data/api'
-import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
+import type { PropertyChildrenView } from '@/data/api'
 import { seedProperty } from './propertySeeds'
 
 export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const satisfies readonly PropertyChildrenView[]
@@ -101,6 +102,20 @@ export interface PropertyDisplayLevels {
   readonly block: PropertyDisplaySetting
 }
 
+/** The levels above the block — workspace and panel — as a surface supplies
+ *  them (`PropertyDisplayScope` per panel). A gesture or copy carries the
+ *  scope of the surface it ran in, so it acts on the list that surface draws. */
+export type PropertyDisplayScopeLevels = Omit<PropertyDisplayLevels, 'block'>
+
+/** No surface: a cell-backed reading, so mode `none` — the outline before
+ *  property rows. What a caller without a surface (the bridge, a plugin)
+ *  gets. */
+export const NO_PROPERTY_DISPLAY_SCOPE: PropertyDisplayScopeLevels = Object.freeze({
+  childBacked: false,
+  workspace: 'inherit',
+  panel: 'inherit',
+})
+
 /** The mode for one block in one panel. */
 export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): PropertyDisplayMode => {
   if (!levels.childBacked) return 'none'
@@ -109,3 +124,18 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   }
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
+
+/** The child listing of `parent` that a surface with `scope` draws: the
+ *  parent's own block setting over the scope. `parent` is null for a
+ *  workspace-root listing, which has no block setting. */
+export const childrenViewIn = (
+  scope: PropertyDisplayScopeLevels,
+  parent: {readonly properties: Readonly<Record<string, unknown>>} | null,
+): PropertyDisplayMode =>
+  resolvePropertyDisplayMode({...scope, block: blockPropertyDisplaySetting(parent)})
+
+export const propertyDisplayScopeSchema = z.object({
+  childBacked: z.boolean(),
+  workspace: z.enum(['inherit', ...PROPERTY_DISPLAY_MODES]),
+  panel: z.enum(['inherit', ...PROPERTY_DISPLAY_MODES]),
+})
