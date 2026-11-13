@@ -1,1 +1,1 @@
-export{CG as usePropertySchemas}from"../../chunks/app-aN-LUAxp.js";
+export{CG as usePropertySchemas}from"../../chunks/app-DdA2-a80.js";

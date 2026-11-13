@@ -1,1 +1,1 @@
-export{kS as videoPlayerMarkdownExtension}from"../../../chunks/app-aN-LUAxp.js";
+export{kS as videoPlayerMarkdownExtension}from"../../../chunks/app-DdA2-a80.js";

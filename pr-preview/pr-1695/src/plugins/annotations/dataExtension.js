@@ -1,1 +1,1 @@
-export{KY as annotationsDataExtension}from"../../../chunks/app-aN-LUAxp.js";
+export{KY as annotationsDataExtension}from"../../../chunks/app-DdA2-a80.js";

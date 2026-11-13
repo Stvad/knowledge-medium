@@ -1,1 +1,1 @@
-export{KP as dynamicExtensionsExtension}from"../../chunks/app-aN-LUAxp.js";
+export{KP as dynamicExtensionsExtension}from"../../chunks/app-DdA2-a80.js";

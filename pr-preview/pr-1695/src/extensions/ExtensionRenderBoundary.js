@@ -1,1 +1,1 @@
-export{vz as ExtensionRenderBoundary}from"../../chunks/app-aN-LUAxp.js";
+export{vz as ExtensionRenderBoundary}from"../../chunks/app-DdA2-a80.js";

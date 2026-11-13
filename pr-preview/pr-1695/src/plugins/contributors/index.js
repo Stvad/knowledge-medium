@@ -1,1 +1,1 @@
-export{dm as contributorsPlugin}from"../../../chunks/app-aN-LUAxp.js";
+export{dm as contributorsPlugin}from"../../../chunks/app-DdA2-a80.js";

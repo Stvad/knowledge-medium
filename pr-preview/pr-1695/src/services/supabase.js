@@ -1,1 +1,1 @@
-export{Vit as hasSupabaseAuthConfig,Hit as isAuthCallbackUrl,Uit as readPersistedSession,Wit as sessionUserToAppUser,Git as supabase}from"../../chunks/app-aN-LUAxp.js";
+export{Vit as hasSupabaseAuthConfig,Hit as isAuthCallbackUrl,Uit as readPersistedSession,Wit as sessionUserToAppUser,Git as supabase}from"../../chunks/app-DdA2-a80.js";

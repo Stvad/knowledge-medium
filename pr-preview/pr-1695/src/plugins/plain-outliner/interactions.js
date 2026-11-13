@@ -1,1 +1,1 @@
-export{fT as blockEditingContentRenderer}from"../../../chunks/app-aN-LUAxp.js";
+export{fT as blockEditingContentRenderer}from"../../../chunks/app-DdA2-a80.js";

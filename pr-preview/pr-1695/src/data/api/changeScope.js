@@ -1,1 +1,1 @@
-export{hut as CHANGE_SCOPE_POLICIES,gut as ChangeScope,_ut as isChangeScope,vut as policyForScope,yut as scopeAllowedInReadOnly,but as scopeIsUndoable,xut as scopePoliciesEquivalent,Sut as scopeUploadsToServer,Cut as sourceForScope}from"../../../chunks/app-aN-LUAxp.js";
+export{hut as CHANGE_SCOPE_POLICIES,gut as ChangeScope,_ut as isChangeScope,vut as policyForScope,yut as scopeAllowedInReadOnly,but as scopeIsUndoable,xut as scopePoliciesEquivalent,Sut as scopeUploadsToServer,Cut as sourceForScope}from"../../../chunks/app-DdA2-a80.js";

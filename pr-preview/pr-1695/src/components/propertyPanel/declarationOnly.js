@@ -1,1 +1,1 @@
-export{dV as declarationOnlyDefinitionForName,fV as declarationOnlyStatusText}from"../../../chunks/app-aN-LUAxp.js";
+export{dV as declarationOnlyDefinitionForName,fV as declarationOnlyStatusText}from"../../../chunks/app-DdA2-a80.js";

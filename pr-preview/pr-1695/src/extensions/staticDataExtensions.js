@@ -1,1 +1,1 @@
-export{jK as staticDataExtensions}from"../../chunks/app-aN-LUAxp.js";
+export{jK as staticDataExtensions}from"../../chunks/app-DdA2-a80.js";

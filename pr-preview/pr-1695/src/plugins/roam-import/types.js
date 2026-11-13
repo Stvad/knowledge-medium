@@ -1,1 +1,1 @@
-export{Ad as getExtraRoamProps}from"../../../chunks/app-aN-LUAxp.js";
+export{Ad as getExtraRoamProps}from"../../../chunks/app-DdA2-a80.js";

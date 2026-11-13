@@ -1,1 +1,1 @@
-export{AF as BlockLoadingPlaceholder}from"../../chunks/app-aN-LUAxp.js";
+export{AF as BlockLoadingPlaceholder}from"../../chunks/app-DdA2-a80.js";

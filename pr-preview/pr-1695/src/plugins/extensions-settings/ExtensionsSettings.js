@@ -1,1 +1,1 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-aN-LUAxp.js";
+export{Kr as ExtensionsSettings}from"../../../chunks/app-DdA2-a80.js";

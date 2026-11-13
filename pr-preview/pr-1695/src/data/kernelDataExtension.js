@@ -1,1 +1,1 @@
-export{J3 as kernelDataExtension}from"../../chunks/app-aN-LUAxp.js";
+export{J3 as kernelDataExtension}from"../../chunks/app-DdA2-a80.js";
