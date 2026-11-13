@@ -99,24 +99,12 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | 
     return location.blockId
   }, [uiStateBlock, renderScopeId])
   const subscribe = useCallback((notify: () => void) => {
-    const followed = new Map<string, () => void>()
+    let followed: {id: string; unsubscribe: () => void} | null = null
     const followFocusedRow = () => {
-      let id = focusedRowId()
-      const seen = new Set<string>()
-      while (id !== null && id !== parent.id && !seen.has(id)) {
-        seen.add(id)
-        const row = parent.repo.block(id)
-        if (!followed.has(id)) followed.set(id, row.subscribe(() => {
-          followFocusedRow()
-          notify()
-        }))
-        id = row.peek()?.parentId ?? null
-      }
-      for (const [followedId, unsubscribe] of followed) {
-        if (seen.has(followedId)) continue
-        unsubscribe()
-        followed.delete(followedId)
-      }
+      const id = focusedRowId()
+      if (followed?.id === id) return
+      followed?.unsubscribe()
+      followed = id === null ? null : {id, unsubscribe: parent.repo.block(id).subscribe(notify)}
     }
     followFocusedRow()
     const unsubscribeFocus = uiStateBlock.subscribe(() => {
@@ -125,7 +113,7 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | 
     })
     return () => {
       unsubscribeFocus()
-      followed.forEach(unsubscribe => unsubscribe())
+      followed?.unsubscribe()
     }
   }, [uiStateBlock, parent, focusedRowId])
   // Stable identity for unchanged external-store snapshots, as in useHandle.
