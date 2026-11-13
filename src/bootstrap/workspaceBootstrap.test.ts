@@ -25,6 +25,7 @@ import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId, ensureAliasTarget } from '@
 import { storeWorkspaceKey } from '@/data/test/e2eeFixtures'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
+import { propertyChildNamespaceInTx } from '@/data/internals/propertyChildMint'
 import { bootstrapWorkspace } from './workspaceBootstrap.ts'
 
 const WS = 'ws-bootstrap'
@@ -129,6 +130,35 @@ describe('bootstrapWorkspace', () => {
       const publicSlots = Array.from({length: ALIAS_SEAT_PROBE_SLOTS},
         (_, index) => computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Private page', encrypted, index))
       expect(publicSlots).not.toContain(minted)
+    } finally {
+      localStorage.clear()
+      await getWorkspaceKeyStore().delete('user-1', encrypted)
+    }
+  })
+
+  it('resolves an encrypted workspace\'s property-child namespace on open', async () => {
+    // A property write inside a transaction cannot read `K_id` either; without
+    // this it would mint every field row at a random id.
+    const encrypted = 'ws-bootstrap-e2ee-props'
+    repo.setActiveWorkspaceId(encrypted)
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'e2ee', 'cell')`,
+      [encrypted],
+    )
+    setModePin('user-1', encrypted, 'e2ee')
+    await storeWorkspaceKey('user-1', encrypted)
+    try {
+      await open(encrypted)
+
+      // Not awaited by `open`, so poll for it.
+      await vi.waitFor(async () => {
+        let namespace: string | null = null
+        await repo.tx(async tx => { namespace = await propertyChildNamespaceInTx(tx, encrypted) },
+          {scope: ChangeScope.BlockDefault, description: 'probe'})
+        // HMAC(K_id, 'km/property-child-ns/v1') for `storeWorkspaceKey`'s default key.
+        expect(namespace).toBe('096acf4c-89fd-4e56-8595-c23d6801e6da')
+      })
     } finally {
       localStorage.clear()
       await getWorkspaceKeyStore().delete('user-1', encrypted)

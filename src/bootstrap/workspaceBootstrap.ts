@@ -12,6 +12,7 @@ import { applyCurrentLayoutUrl, createPanelRowInTx } from '@/utils/panelLayoutPr
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
 import { resolveAliasSeatNamespaces } from '@/data/aliasSeatNamespace.js'
+import { resolvePropertyChildNamespace } from '@/data/internals/propertyChildMint.js'
 
 const replaceHash = (hash: string): void => {
   if (typeof window === 'undefined') return
@@ -120,13 +121,17 @@ export const bootstrapWorkspace = async ({
   // that completeness boundary; the shared Repo tx path queues other callers.
   await repo.whenPropertyDefinitionsReady(workspaceId)
 
-  // An encrypted workspace's alias-seat namespace needs `K_id`, which a seat
-  // written inside a transaction cannot read, so it is resolved here for
+  // An encrypted workspace's derived-id namespaces need `K_id`, which a row
+  // written inside a transaction cannot read, so they are resolved here for
   // every in-transaction writer of the open workspace. NOT awaited: it opens
   // IndexedDB, which can hang rather than fail, and a writer that runs before
-  // it lands refuses rather than minting a public id.
+  // it lands never mints a public id — an alias seat is left out, a property
+  // row takes a random id.
   void resolveAliasSeatNamespaces(repo, workspaceId).catch(err => {
     console.warn(`[bootstrap] alias-seat namespace for ${workspaceId} is unresolved`, err)
+  })
+  void resolvePropertyChildNamespace(repo, workspaceId).catch(err => {
+    console.warn(`[bootstrap] property-child namespace for ${workspaceId} is unresolved`, err)
   })
 
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
