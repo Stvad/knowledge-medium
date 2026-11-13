@@ -1,0 +1,1 @@
+export{wG as usePropertySchemas}from"../../chunks/app-BlifBfVk.js";

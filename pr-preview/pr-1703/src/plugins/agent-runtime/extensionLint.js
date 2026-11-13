@@ -1,0 +1,1 @@
+export{Ph as lintExtensionSource}from"../../../chunks/app-BlifBfVk.js";

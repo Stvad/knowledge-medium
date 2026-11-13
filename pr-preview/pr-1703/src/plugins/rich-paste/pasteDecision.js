@@ -1,0 +1,1 @@
+export{Ob as richPasteDecisionContribution}from"../../../chunks/app-BlifBfVk.js";

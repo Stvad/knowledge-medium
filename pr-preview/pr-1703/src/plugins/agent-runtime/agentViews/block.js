@@ -1,0 +1,1 @@
+export{Mg as buildBlockView,Ng as renderBlockView}from"../../../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{fm as contributorsPlugin}from"../../../chunks/app-BlifBfVk.js";

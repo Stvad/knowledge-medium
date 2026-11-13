@@ -1,0 +1,1 @@
+export{dh as extensionsOverridesProp,fh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BlifBfVk.js";

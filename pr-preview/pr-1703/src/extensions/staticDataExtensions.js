@@ -1,0 +1,1 @@
+export{MK as staticDataExtensions}from"../../chunks/app-BlifBfVk.js";

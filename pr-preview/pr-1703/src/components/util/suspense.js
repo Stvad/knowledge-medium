@@ -1,0 +1,1 @@
+export{uK as SuspenseFallback}from"../../../chunks/app-BlifBfVk.js";

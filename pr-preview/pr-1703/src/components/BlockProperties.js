@@ -1,0 +1,1 @@
+export{RB as BlockProperties}from"../../chunks/app-BlifBfVk.js";

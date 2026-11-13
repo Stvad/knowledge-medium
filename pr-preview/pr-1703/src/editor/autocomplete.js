@@ -1,0 +1,1 @@
+export{GN as editorAutocompleteExtension}from"../../chunks/app-BlifBfVk.js";

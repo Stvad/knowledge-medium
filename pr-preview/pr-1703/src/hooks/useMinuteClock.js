@@ -1,0 +1,1 @@
+export{HD as useMinuteClock}from"../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{Lh as BLOCK_HISTORY_CONTENT_CHARS,Rh as LISTED_PROPERTY_NAMES,zh as MAX_LISTED_CHANGES,Bh as blockHistory,Vh as recentChanges}from"../../../chunks/app-BlifBfVk.js";

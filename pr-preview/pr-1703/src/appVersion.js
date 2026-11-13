@@ -1,0 +1,1 @@
+export{Cc as appVersion}from"../chunks/app-BlifBfVk.js";

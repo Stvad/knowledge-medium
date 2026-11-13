@@ -1,0 +1,1 @@
+export{go as migratePropertiesToBlocksAction,fo as propertiesMigrationPlugin}from"../../../chunks/app-BlifBfVk.js";

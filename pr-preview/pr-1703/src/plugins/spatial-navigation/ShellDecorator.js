@@ -1,0 +1,1 @@
+export{RC as SpatialNavigationShellDecorator}from"../../../chunks/app-BlifBfVk.js";

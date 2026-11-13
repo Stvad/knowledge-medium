@@ -1,0 +1,1 @@
+export{t_ as boundDisplayId,n_ as idMark}from"../../../../chunks/app-BlifBfVk.js";

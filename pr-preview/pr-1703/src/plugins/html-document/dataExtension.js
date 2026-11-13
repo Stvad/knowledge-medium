@@ -1,0 +1,1 @@
+export{Hq as htmlDocumentDataExtension}from"../../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{Db as richPastePlugin}from"../../../chunks/app-BlifBfVk.js";

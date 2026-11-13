@@ -1,0 +1,1 @@
+export{VM as BlockEmbed}from"../../../chunks/app-BlifBfVk.js";

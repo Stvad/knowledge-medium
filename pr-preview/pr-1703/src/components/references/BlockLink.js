@@ -1,0 +1,1 @@
+export{BD as BlockLink}from"../../../chunks/app-BlifBfVk.js";

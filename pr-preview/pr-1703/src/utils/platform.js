@@ -1,0 +1,1 @@
+export{dW as isIOS,fW as isMacPlatform}from"../../chunks/app-BlifBfVk.js";

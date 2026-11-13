@@ -1,0 +1,1 @@
+export{kj as COMMAND_PALETTE_ACTION_ID,Aj as COMMAND_PALETTE_CONTEXT,jj as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,Mj as commandPaletteActionContext}from"../../../chunks/app-BlifBfVk.js";

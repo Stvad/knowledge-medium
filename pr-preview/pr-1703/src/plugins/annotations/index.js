@@ -1,0 +1,1 @@
+export{Wd as annotationsPlugin}from"../../../chunks/app-BlifBfVk.js";

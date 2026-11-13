@@ -1,0 +1,1 @@
+export{vs as dataIntegrityPlugin}from"../../../chunks/app-BlifBfVk.js";

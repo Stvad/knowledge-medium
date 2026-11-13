@@ -1,0 +1,1 @@
+export{GP as resolveAppRuntime,KP as resolveAppRuntimeSync}from"../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{Jd as quotedInFooterContribution}from"../../../chunks/app-BlifBfVk.js";

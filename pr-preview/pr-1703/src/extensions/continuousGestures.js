@@ -1,0 +1,1 @@
+export{qI as GESTURE_ACTIVE,JI as GESTURE_CANCEL,YI as GESTURE_IDLE,XI as TOUCH_HOLD_MS,ZI as TOUCH_SLOP_PX,QI as continuousGestureRecognizersFacet,$I as createBlockGestureController,eL as enabledTouchAction,tL as suppressNextClick,nL as unionTouchAction,rL as useContinuousGestures}from"../../chunks/app-BlifBfVk.js";

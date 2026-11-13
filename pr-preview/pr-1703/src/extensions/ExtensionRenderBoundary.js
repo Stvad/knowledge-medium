@@ -1,0 +1,1 @@
+export{yz as ExtensionRenderBoundary}from"../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{MP as dispatchPointerAction,NP as setPointerActionDispatcher}from"../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{Qy as useIsReadOnly}from"../../chunks/app-BlifBfVk.js";

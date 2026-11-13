@@ -1,0 +1,1 @@
+export{yE as BINARY_ENVELOPE_MAGIC,bE as BINARY_ENVELOPE_MIN_BYTES,xE as BINARY_ENVELOPE_OVERHEAD_BYTES,SE as BINARY_MAGIC_BYTES,CE as decodeBinaryEnvelope,wE as encodeBinaryEnvelope,TE as hasBinaryEnvelopeMagic}from"../../../chunks/app-BlifBfVk.js";

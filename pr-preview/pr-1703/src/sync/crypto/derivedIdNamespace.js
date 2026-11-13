@@ -1,0 +1,1 @@
+export{kat as deriveWorkspaceIdNamespace}from"../../../chunks/app-BlifBfVk.js";

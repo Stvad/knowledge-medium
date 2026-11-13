@@ -1,0 +1,1 @@
+export{lR as defaultPasteDecision,uR as pasteDecisionVerb}from"../../chunks/app-BlifBfVk.js";

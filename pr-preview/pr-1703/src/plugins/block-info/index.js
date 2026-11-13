@@ -1,0 +1,1 @@
+export{Q_ as blockInfoPlugin}from"../../../chunks/app-BlifBfVk.js";

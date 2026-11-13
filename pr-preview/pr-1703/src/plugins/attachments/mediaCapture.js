@@ -1,0 +1,1 @@
+export{Ix as DEFAULT_MAX_CAPTURE_BYTES,Lx as captureMedia,Rx as mediaBlockId}from"../../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{TB as isFocalRender,EB as useIsFocalRender}from"../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{UF as DialogHost,WF as dialogAppMountExtension}from"../../chunks/app-BlifBfVk.js";

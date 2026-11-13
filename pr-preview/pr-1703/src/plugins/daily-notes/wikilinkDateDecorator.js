@@ -1,0 +1,1 @@
+export{Ak as dailyDateWikilinkDecorator}from"../../../chunks/app-BlifBfVk.js";

@@ -1,0 +1,1 @@
+export{OF as LazyBlockComponent}from"../../chunks/app-BlifBfVk.js";

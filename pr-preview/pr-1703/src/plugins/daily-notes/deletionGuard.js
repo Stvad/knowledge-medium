@@ -1,0 +1,1 @@
+export{Vk as dailyNotesDeletionGuard}from"../../../chunks/app-BlifBfVk.js";

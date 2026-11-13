@@ -1,0 +1,1 @@
+export{rT as usePromotableBreadcrumb}from"../../../chunks/app-BlifBfVk.js";

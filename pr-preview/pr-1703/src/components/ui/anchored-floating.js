@@ -1,0 +1,1 @@
+export{SG as floatingAnchorFromRect,CG as useAnchoredFloating}from"../../../chunks/app-BlifBfVk.js";

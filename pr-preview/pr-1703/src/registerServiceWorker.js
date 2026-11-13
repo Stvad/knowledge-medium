@@ -1,0 +1,1 @@
+export{_P as checkForAppUpdate,vP as registerServiceWorker}from"../chunks/app-BlifBfVk.js";

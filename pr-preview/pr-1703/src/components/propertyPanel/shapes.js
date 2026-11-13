@@ -1,0 +1,1 @@
+export{OG as propertyShapeLabel}from"../../../chunks/app-BlifBfVk.js";

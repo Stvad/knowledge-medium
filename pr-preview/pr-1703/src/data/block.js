@@ -1,0 +1,1 @@
+export{G3 as Block,K3 as requireLoadedBlock}from"../../chunks/app-BlifBfVk.js";

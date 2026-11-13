@@ -1,0 +1,1 @@
+export{JN as ExtensionPromptSurface,YN as extensionPromptsExtension}from"../../../chunks/app-BlifBfVk.js";

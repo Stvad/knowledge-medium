@@ -1,0 +1,1 @@
+"use client";export{PB as Collapsible,FB as CollapsibleContent,IB as CollapsibleTrigger}from"../../../chunks/app-BlifBfVk.js";
