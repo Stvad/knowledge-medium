@@ -1,1 +1,1 @@
-export{Dlt as defineMutator}from"../../../chunks/app-Cz3RWrXl.js";
+export{Alt as defineMutator}from"../../../chunks/app-vIOTcEtg.js";

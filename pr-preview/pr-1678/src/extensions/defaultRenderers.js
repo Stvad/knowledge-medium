@@ -1,1 +1,1 @@
-export{NF as defaultRegistry,PF as defaultRendererContributions,FF as defaultRenderersExtension}from"../../chunks/app-Cz3RWrXl.js";
+export{NF as defaultRegistry,PF as defaultRendererContributions,FF as defaultRenderersExtension}from"../../chunks/app-vIOTcEtg.js";
