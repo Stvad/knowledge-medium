@@ -1,1 +1,1 @@
-export{Zh as addComment,Qh as anchorForQuote,$h as suggestedContent}from"../../../chunks/app-C_lbCY6b.js";
+export{Qh as addComment,$h as anchorForQuote,eg as suggestedContent}from"../../../chunks/app-CB0yVxNx.js";

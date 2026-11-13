@@ -1,1 +1,1 @@
-export{UB as PropertyRow,WB as PropertyValueCell}from"../../../chunks/app-C_lbCY6b.js";
+export{WB as PropertyRow,GB as PropertyValueCell}from"../../../chunks/app-CB0yVxNx.js";

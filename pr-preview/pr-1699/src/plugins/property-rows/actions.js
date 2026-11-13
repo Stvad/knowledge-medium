@@ -1,1 +1,1 @@
-export{co as blockSetting,lo as propertyDisplayActions,uo as setBlockPropertyDisplay,do as setWorkspacePropertyDisplay}from"../../../chunks/app-C_lbCY6b.js";
+export{co as blockSetting,lo as cyclePropertyDisplayActions,uo as propertyDisplayActions,do as setBlockPropertyDisplay,fo as setWorkspacePropertyDisplay}from"../../../chunks/app-CB0yVxNx.js";
