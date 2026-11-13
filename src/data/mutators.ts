@@ -8,7 +8,6 @@
 import { z } from 'zod'
 import {
   ChangeScope,
-  CORE_BLOCK_DELETED_EVENT,
   CORE_BLOCK_SPLIT_EVENT,
   defineMutator,
   type AnyMutator,
@@ -40,7 +39,7 @@ import {
   mergeBlocksInTx,
   type ContentStrategy,
 } from './blockMerge'
-import { deleteSubtreeInTx } from './subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from './subtreeDelete'
 
 // ──── Common helpers ────
 
@@ -220,36 +219,13 @@ export const setProperty = defineMutator<
 
 // ──── delete (subtree-aware soft-delete) ────
 
-/** Subtree-aware soft-delete via the shared `deleteSubtreeInTx` walk
- *  (property field/value rows included — docs/properties-as-blocks-migration.html §9).
- *
- *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
- *  same-tx consumers can react atomically with the delete — the
- *  references plugin uses it to inline a deleted block's content into the
- *  blocks that referenced it (`((id))`), keeping those referrers readable
- *  instead of leaving dangling block-refs. The `!block.deleted` guard only
- *  ever skips an already-tombstoned root (children come back live from
- *  `childrenOf`, which is always live-only). */
-const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> =>
-  // deleteSubtreeInTx fetches the root itself (for the payload) and surfaces
-  // BlockNotFoundError via tx.delete on a missing root, so no separate
-  // existence pre-check is needed here.
-  deleteSubtreeInTx(tx, rootId, (block: BlockData) => {
-    if (!block.deleted) {
-      tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
-        workspaceId: block.workspaceId,
-        blockId: block.id,
-      })
-    }
-  })
-
 export const deleteBlock = defineMutator<{id: string}, void>({
   name: 'core.delete',
   argsSchema: z.object({id: z.string()}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `delete ${id} (subtree)`,
   apply: async (tx, {id}) => {
-    await softDeleteSubtree(tx, id)
+    await deleteSubtreeAnnouncedInTx(tx, id)
   },
 })
 

@@ -45,6 +45,7 @@
  */
 
 import {
+  CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   memberCodecOf,
   type AnyPropertySchema,
@@ -72,7 +73,7 @@ import {
 } from '@/data/propertyChildren'
 import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.projectPropertyChildren'
@@ -593,7 +594,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // history). Distinct from the §5 pending-materialization rule, which
       // is about ABSENT CHILDREN never licensing cell-key deletion.
       for (const child of matchingChildren) {
-        await deleteSubtreeInTx(tx, child.id)
+        await deleteSubtreeAnnouncedInTx(tx, child.id)
       }
       continue
     }
@@ -958,19 +959,11 @@ const reconcileSingleValueChild = async (
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
   for (const duplicate of values) {
-    if (duplicate !== primary && duplicate.content === content && await isRedundantScalarCopy(tx, duplicate)) {
+    if (duplicate !== primary && duplicate.content === content) {
       await collapseDuplicateValueChild(tx, primary.id, duplicate)
     }
   }
 }
-
-/** Whether an equal-valued sibling of a SCALAR's value is a redundant copy the
- *  fold may delete. Not when a block links to it: the fold would leave those
- *  links naming a deleted row, so it stays as a peer value — the cell reads the
- *  same either way. A list's equal row is an occurrence, folded by its own rule
- *  whatever links to it. */
-const isRedundantScalarCopy = async (tx: Tx, copy: BlockData): Promise<boolean> =>
-  !(await tx.hasLiveReferrer(copy.id, copy.workspaceId))
 
 const freshSlots = (
   values: readonly BlockData[],
@@ -1036,7 +1029,7 @@ const reconcileMemberValueChildren = async (
       // its sub-children with it, on an unrelated write to the same property.
       // Kept, exactly as the scalar branch keeps a divergent peer; removing it
       // is a delete in the tree, which is how any value row goes.
-      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeInTx(tx, row.id)
+      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeAnnouncedInTx(tx, row.id)
     }
   }
 
@@ -1138,7 +1131,9 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
  *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
  *  user-authored sub-children. Relocate those under the survivor BEFORE
  *  deleting; a bare subtree-delete would silently tombstone them, and a shallow
- *  delete would orphan them live under a tombstone.
+ *  delete would orphan them live under a tombstone. The loser may also be a
+ *  block others link to (any block can be moved into a value list): it is
+ *  announced as merged into the survivor, so its links follow as a merge's do.
  *
  *  WHETHER to fold is the caller's call, and it differs by grain: an
  *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
@@ -1150,6 +1145,9 @@ export const collapseDuplicateValueChild = async (
 ): Promise<void> => {
   await relocateChildren(tx, duplicate.id, survivorValueId)
   await deleteSubtreeInTx(tx, duplicate.id)
+  tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {
+    workspaceId: duplicate.workspaceId, fromId: duplicate.id, intoId: survivorValueId, aliasRewrites: [],
+  })
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
@@ -1189,9 +1187,9 @@ export const collapseDuplicateFieldRow = async (
   // a disagreement between the two costs. Resolves to raw-text matching for a
   // scalar, and for a field row whose definition does not resolve.
   const fieldId = getPropertyFieldTargetId(duplicate)
-  const schema = fieldId === undefined ? null : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId)
-  const keys = memberKeysFor(schema)
-  const isList = schema !== null && memberCodecOf(schema.codec) !== undefined
+  const keys = memberKeysFor(fieldId === undefined
+    ? null
+    : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId))
   for (const child of duplicateChildren) {
     const survivorChildren = await tx.childrenOf(
       survivorFieldRowId, undefined,
@@ -1216,7 +1214,7 @@ export const collapseDuplicateFieldRow = async (
     const match = additive
       ? undefined
       : survivorValues.find(v => keys.row(v).key === keys.row(child).key)
-    if (match && (isList || await isRedundantScalarCopy(tx, child))) {
+    if (match) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {
       await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
