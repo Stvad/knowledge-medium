@@ -13,15 +13,19 @@ import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js
 // children, not editable — instead of as an embed. An embed is its own surface,
 // never a reference.
 const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true, isReference: false}
+const EMBED_BOX_CLASS = 'blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r'
 
 export function BlockEmbed({
   blockId,
   sourceBlockId,
   occurrenceId,
+  className = EMBED_BOX_CLASS,
 }: {
   blockId: string
   sourceBlockId: string
   occurrenceId: string
+  /** Classes of the box around the embedded block. */
+  className?: string
 }) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
@@ -66,7 +70,7 @@ export function BlockEmbed({
   // no separate "source" link.
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
+      <div className={className}>
         <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
           <BlockComponent blockId={blockId}/>
         </NestedBlockContextProvider>
