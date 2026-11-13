@@ -203,7 +203,6 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(events).toContain('releaseClaim')
     expect(warn.mock.calls.some(([message]) =>
       typeof message === 'string' && message.includes('will retry when it clears'))).toBe(false)
-    warn.mockRestore()
   })
 
   it('waits before the inner claim when the outer claim creates the transient gap', async () => {
@@ -482,7 +481,6 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(events).not.toContain('markComplete')
     expect(warn.mock.calls.some(([message]) =>
       typeof message === 'string' && message.includes('will retry when it clears'))).toBe(false)
-    warn.mockRestore()
   })
 
   it('times out a persistent transient gap, releases the claim, and does not promise a retry', async () => {
@@ -514,7 +512,6 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(scheduled).not.toHaveBeenCalled()
     expect(warn.mock.calls.some(([message]) =>
       typeof message === 'string' && message.includes('will retry when it clears'))).toBe(false)
-    warn.mockRestore()
   })
 
   it.each([
@@ -574,7 +571,6 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(batches).toEqual([0])
     expect(warn.mock.calls.some(([message]) =>
       typeof message === 'string' && message.includes('made no progress'))).toBe(false)
-    warn.mockRestore()
   })
 
   it('still refuses a transient gap before taking the outer claim', async () => {
@@ -607,10 +603,9 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
         if (index === 0) gate.close()
       }),
     }, events, {backfillSyncGate: gate.gate})
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // A batch that waited on the closed gate would poll until this budget ran
-    // out; one that does not wait settles with both batches written.
+    // A batch that waited on the closed gate would not settle within settle's budget.
     const result = await settle(repo.runWorkspaceBackfillNow(WS, BACKFILL_ID))
     // Read once the run is over: rows and wait counts land as each batch
     // COMMITS, which lags the batch body `batches` records.
@@ -625,7 +620,6 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('not caught up with the server')
     expect(events).not.toContain('markComplete')
-    warn.mockRestore()
   })
 
   it('waits out a download in flight when the pass asks to catch up', async () => {
@@ -692,8 +686,8 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
       headReads += 1
       return {upload: uploadQueueHead, staged: stagedQueueHead}
     })
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     let settled = false
@@ -719,7 +713,5 @@ describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('made no progress for 5 minutes')
     expect(events).not.toContain('markComplete')
-    warn.mockRestore()
-    info.mockRestore()
   })
 })
