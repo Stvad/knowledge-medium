@@ -1,0 +1,1 @@
+export{LC as SpatialNavigationShellDecorator}from"../../../chunks/app-zAXEs53e.js";

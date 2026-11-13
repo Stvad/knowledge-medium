@@ -1,0 +1,1 @@
+export{G3 as kernelDataExtension}from"../../chunks/app-zAXEs53e.js";

@@ -1,0 +1,1 @@
+export{LB as BlockProperties}from"../../chunks/app-zAXEs53e.js";

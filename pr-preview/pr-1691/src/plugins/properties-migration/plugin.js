@@ -1,0 +1,1 @@
+export{fo as propertiesMigrationPlugin}from"../../../chunks/app-zAXEs53e.js";

@@ -1,0 +1,1 @@
+export{kS as videoPlayerMarkdownExtension}from"../../../chunks/app-zAXEs53e.js";

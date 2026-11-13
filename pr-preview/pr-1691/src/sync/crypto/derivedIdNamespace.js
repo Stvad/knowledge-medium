@@ -1,0 +1,1 @@
+export{Oat as deriveWorkspaceIdNamespace}from"../../../chunks/app-zAXEs53e.js";

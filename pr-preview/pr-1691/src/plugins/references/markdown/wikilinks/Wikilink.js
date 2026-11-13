@@ -1,0 +1,1 @@
+export{hy as Wikilink}from"../../../../../chunks/app-zAXEs53e.js";

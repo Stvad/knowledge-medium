@@ -1,0 +1,1 @@
+export{OK as staticDataExtensions}from"../../chunks/app-zAXEs53e.js";

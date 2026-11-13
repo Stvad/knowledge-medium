@@ -1,0 +1,1 @@
+export{jP as dispatchPointerAction,MP as setPointerActionDispatcher}from"../../chunks/app-zAXEs53e.js";

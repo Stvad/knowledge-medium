@@ -1,0 +1,1 @@
+export{Yit as aliasSeatNamespacesInTx,Xit as resolveAliasSeatNamespaces}from"../../chunks/app-zAXEs53e.js";

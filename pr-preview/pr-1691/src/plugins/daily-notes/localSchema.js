@@ -1,0 +1,1 @@
+export{wY as dailyNotesLocalSchema}from"../../../chunks/app-zAXEs53e.js";

@@ -1,0 +1,1 @@
+export{Tq as preferredSpanReplacement}from"../../../chunks/app-zAXEs53e.js";

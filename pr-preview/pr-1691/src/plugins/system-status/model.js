@@ -1,0 +1,1 @@
+export{Sc as getSyncIndicatorView}from"../../../chunks/app-zAXEs53e.js";
