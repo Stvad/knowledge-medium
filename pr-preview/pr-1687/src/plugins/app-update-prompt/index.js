@@ -1,1 +1,0 @@
-export{YN as appUpdatePromptExtension}from"../../../chunks/app-Rv5o19Mw.js";

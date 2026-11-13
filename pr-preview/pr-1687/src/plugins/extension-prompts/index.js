@@ -1,1 +1,0 @@
-export{FN as ExtensionPromptSurface,IN as extensionPromptsExtension}from"../../../chunks/app-Rv5o19Mw.js";

@@ -1,1 +1,0 @@
-export{MX as contributorsDataExtension}from"../../../chunks/app-Rv5o19Mw.js";

@@ -1,1 +1,0 @@
-export{kB as PropertyRow}from"../../../chunks/app-Rv5o19Mw.js";

@@ -1,1 +1,0 @@
-export{rG as usePropertySchemas}from"../../chunks/app-Rv5o19Mw.js";

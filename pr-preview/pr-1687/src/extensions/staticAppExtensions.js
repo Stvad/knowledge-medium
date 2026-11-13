@@ -1,1 +1,0 @@
-export{Jt as staticAppExtensions}from"../../chunks/app-Rv5o19Mw.js";
