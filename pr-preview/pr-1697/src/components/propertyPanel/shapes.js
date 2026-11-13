@@ -1,0 +1,1 @@
+export{DG as propertyShapeLabel}from"../../../chunks/app-B04zygdV.js";

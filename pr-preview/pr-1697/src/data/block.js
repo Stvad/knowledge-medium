@@ -1,0 +1,1 @@
+export{G3 as Block,K3 as requireLoadedBlock}from"../../chunks/app-B04zygdV.js";

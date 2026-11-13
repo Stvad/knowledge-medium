@@ -1,0 +1,1 @@
+export{TG as PropertyShapeButton,EG as PropertyShapeGlyph}from"../../../chunks/app-B04zygdV.js";

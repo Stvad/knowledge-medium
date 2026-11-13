@@ -1,0 +1,1 @@
+export{WN as editorAutocompleteExtension}from"../../chunks/app-B04zygdV.js";

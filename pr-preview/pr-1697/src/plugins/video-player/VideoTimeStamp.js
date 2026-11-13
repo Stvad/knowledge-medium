@@ -1,0 +1,1 @@
+export{MS as default}from"../../../chunks/app-B04zygdV.js";

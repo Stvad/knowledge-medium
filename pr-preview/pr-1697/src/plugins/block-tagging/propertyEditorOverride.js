@@ -1,0 +1,1 @@
+export{gu as blockTagsConfigUi}from"../../../chunks/app-B04zygdV.js";

@@ -1,0 +1,1 @@
+export{XM as chipStyle}from"../../../chunks/app-B04zygdV.js";

@@ -1,0 +1,1 @@
+export{gy as remarkWikilinks}from"../../../../../chunks/app-B04zygdV.js";

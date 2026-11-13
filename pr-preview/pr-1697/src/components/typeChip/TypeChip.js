@@ -1,0 +1,1 @@
+export{YM as TypeChip}from"../../../chunks/app-B04zygdV.js";
