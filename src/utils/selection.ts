@@ -12,7 +12,6 @@ import {
 import { ChangeScope, type BlockData } from '@/data/api'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import { siblingPrecedes, unlistedIndexAmong } from '@/data/orderKey'
-import { childrenViewIn, NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -37,10 +36,6 @@ export const unlistedSiblingIndex = (
   row: BlockData,
 ): number => unlistedIndexAmong(listedIds.map(id => repo.block(id).peek()), row)
 
-/** The same per-parent listing the outline draws in this surface. */
-const visibleChildIds = (block: Block, scope = NO_PROPERTY_DISPLAY_SCOPE) =>
-  block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: childrenViewIn(scope, block.peek() ?? null)}).load()
-
 /** Returns the next visible block in document order under
  *  `scopeRootId` (the surface's visible-subtree root — the panel's zoom
  *  root on the main outline, the shown block in a backlink entry, …),
@@ -57,14 +52,13 @@ export const nextVisibleBlock = async (
   current: Block,
   scopeRootId: string,
   scopeRootForcesOpen = true,
-  propertyDisplay?: PropertyDisplayScopeLevels,
 ): Promise<Block | null> => {
   const repo = current.repo
   await current.load()
 
   // Step into the first child if expanded.
   if (isExpanded(current, scopeRootId, scopeRootForcesOpen)) {
-    const childIds = await visibleChildIds(current, propertyDisplay)
+    const childIds = await current.childIds.load()
     if (childIds.length > 0) return repo.block(childIds[0])
   }
 
@@ -76,7 +70,7 @@ export const nextVisibleBlock = async (
     const parentId = data.parentId
     const parent = repo.block(parentId)
     await parent.load()
-    const siblingIds = await visibleChildIds(parent, propertyDisplay)
+    const siblingIds = await parent.childIds.load()
     const idx = siblingIds.indexOf(walker.id)
     const nextIdx = idx !== -1 ? idx + 1 : unlistedSiblingIndex(repo, siblingIds, data)
     if (nextIdx < siblingIds.length) {
@@ -95,7 +89,6 @@ export const nextVisibleBlock = async (
 export const previousVisibleBlock = async (
   current: Block,
   scopeRootId: string,
-  propertyDisplay?: PropertyDisplayScopeLevels,
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
@@ -107,13 +100,13 @@ export const previousVisibleBlock = async (
 
   const parent = repo.block(parentId)
   await parent.load()
-  const siblingIds = await visibleChildIds(parent, propertyDisplay)
+  const siblingIds = await parent.childIds.load()
   const idx = siblingIds.indexOf(current.id)
   const prevIdx = (idx !== -1 ? idx : unlistedSiblingIndex(repo, siblingIds, data)) - 1
 
   if (prevIdx >= 0) {
     // Descend into the previous sibling's last visible descendant.
-    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]), undefined, true, propertyDisplay)
+    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]))
   }
   // No previous sibling — the parent is the previous visible block.
   // When current is a direct child of scopeRootId, parent === scopeRootId,
@@ -187,7 +180,6 @@ export const getLastVisibleDescendant = async (
   block: Block,
   scopeRootId?: string,
   scopeRootForcesOpen = true,
-  propertyDisplay?: PropertyDisplayScopeLevels,
 ): Promise<Block> => {
   const repo = block.repo
   await block.load()
@@ -196,7 +188,7 @@ export const getLastVisibleDescendant = async (
     const isScopeRoot = current.id === scopeRootId && scopeRootForcesOpen
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
     if (collapsed && !isScopeRoot) return current
-    const childIds = await visibleChildIds(current, propertyDisplay)
+    const childIds = await current.childIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
     await current.load()
@@ -450,7 +442,6 @@ export async function getBlocksInRange(
   scopeRootId: string,
   repo: Repo,
   scopeRootForcesOpen = true,
-  propertyDisplay?: PropertyDisplayScopeLevels,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
     return validateSelectionHierarchy([startBlockId], repo)
@@ -463,7 +454,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen, propertyDisplay)
+      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen)
       if (!walker) return null
       ids.push(walker.id)
       if (walker.id === endBlockId) return ids
@@ -475,7 +466,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await previousVisibleBlock(walker, scopeRootId, propertyDisplay)
+      walker = await previousVisibleBlock(walker, scopeRootId)
       if (!walker) return null
       ids.unshift(walker.id)
       if (walker.id === endBlockId) return ids
@@ -515,12 +506,10 @@ export async function extendSelection(
     scopeRootForcesOpen = true,
     clearEditing = false,
     originBlockId,
-    propertyDisplay,
   }: {
     scopeRootForcesOpen?: boolean
     clearEditing?: boolean
     originBlockId?: string
-    propertyDisplay?: PropertyDisplayScopeLevels
   } = {},
 ): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
@@ -531,7 +520,7 @@ export async function extendSelection(
   const currentAnchor = currentState?.anchorBlockId || originBlockId || focusedId
   if (!currentAnchor) return false
 
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen, propertyDisplay)
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   // Returns false when the range resolved empty (commitSelectionRange writes

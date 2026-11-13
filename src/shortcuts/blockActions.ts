@@ -124,7 +124,6 @@ export const extendSelectionDown = async (
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
   clearEditing = false,
-  propertyDisplay?: BlockShortcutDependencies['propertyDisplay'],
 ): Promise<boolean> => {
   if (!scopeRootId) return false
 
@@ -137,13 +136,13 @@ export const extendSelectionDown = async (
   // meaningless, so leave the keystroke native (matches the old no-op there).
   if (!hasBlockSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing, propertyDisplay})
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }
 
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen, propertyDisplay)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return false
 
-  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing, propertyDisplay})
+  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
 }
 
 /** Mirror of {@link extendSelectionDown} for the previous visible block.
@@ -155,7 +154,6 @@ export const extendSelectionUp = async (
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
   clearEditing = false,
-  propertyDisplay?: BlockShortcutDependencies['propertyDisplay'],
 ): Promise<boolean> => {
   if (!scopeRootId) return false
 
@@ -165,13 +163,13 @@ export const extendSelectionUp = async (
   // Roam-style first press — see extendSelectionDown.
   if (!hasBlockSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing, propertyDisplay})
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }
 
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId, propertyDisplay)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return false
 
-  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing, propertyDisplay})
+  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -457,7 +455,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, false, deps.propertyDisplay)
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -471,7 +469,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, false, deps.propertyDisplay)
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

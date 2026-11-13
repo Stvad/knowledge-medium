@@ -61,14 +61,13 @@ export const jumpVisibleBlocks = async (
   count: number,
   direction: 'up' | 'down',
   scopeRootForcesOpen = true,
-  propertyDisplay?: BlockShortcutDependencies['propertyDisplay'],
 ) => {
   let current = startBlock
   let last = startBlock
   for (let i = 0; i < count; i++) {
     const next = direction === 'up'
-      ? await previousVisibleBlock(current, scopeRootId, propertyDisplay)
-      : await nextVisibleBlock(current, scopeRootId, scopeRootForcesOpen, propertyDisplay)
+      ? await previousVisibleBlock(current, scopeRootId)
+      : await nextVisibleBlock(current, scopeRootId, scopeRootForcesOpen)
     if (!next) break
     current = next
     last = next
@@ -117,10 +116,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'move_down',
       description: 'Move to next block',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !scopeRootId) return
 
-        const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen, propertyDisplay)
+        const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (next && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
         }
@@ -133,10 +132,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'move_up',
       description: 'Move to previous block',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !scopeRootId) return
 
-        const prev = await previousVisibleBlock(block, scopeRootId, propertyDisplay)
+        const prev = await previousVisibleBlock(block, scopeRootId)
         if (prev && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
         }
@@ -225,10 +224,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
-      handler: async ({uiStateBlock, scopeRootId, renderScopeId, scopeRootForcesOpen, propertyDisplay}: BlockShortcutDependencies) => {
+      handler: async ({uiStateBlock, scopeRootId, renderScopeId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
         if (!scopeRootId) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.block(scopeRootId), scopeRootId, scopeRootForcesOpen, propertyDisplay)
+        const lastBlock = await getLastVisibleDescendant(repo.block(scopeRootId), scopeRootId, scopeRootForcesOpen)
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id, {
@@ -242,10 +241,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_down',
       description: 'Jump down several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen, propertyDisplay}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
         if (!scopeRootId) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'down', scopeRootForcesOpen, propertyDisplay)
+        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'down', scopeRootForcesOpen)
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
@@ -255,10 +254,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_up',
       description: 'Jump up several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen, propertyDisplay}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
         if (!scopeRootId) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'up', scopeRootForcesOpen, propertyDisplay)
+        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'up', scopeRootForcesOpen)
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {

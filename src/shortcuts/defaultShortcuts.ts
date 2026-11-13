@@ -686,7 +686,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtStart(deps.editorView)) return
       const extended = await extendSelectionUp(
-        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true, deps.propertyDisplay,
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
       )
       if (extended) trigger.preventDefault()
     },
@@ -702,7 +702,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtEnd(deps.editorView)) return
       const extended = await extendSelectionDown(
-        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true, deps.propertyDisplay,
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
       )
       if (extended) trigger.preventDefault()
     },
@@ -853,7 +853,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to previous block when cursor is at start of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         if (!scopeRootId || !isOnFirstVisualLine(editorView)) return
@@ -873,7 +873,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId, propertyDisplay)
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
         if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
@@ -921,7 +921,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen, deps.propertyDisplay)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -940,7 +940,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to previous block when cursor is at start of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         const selection = editorView.state.selection.main
@@ -950,7 +950,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId, propertyDisplay)
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -980,7 +980,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen, deps.propertyDisplay)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -999,7 +999,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Backspace at block start: delete empty / merge into previous',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !editorView) return
 
         // Only act when the cursor is at position 0 with no selection;
@@ -1038,7 +1038,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           const landing: {at: {id: string; start: number} | null} = {at: null}
           const deleted = await deleteBlockThroughUi(block, {
             beforeWrite: async () => {
-              const prevVisible = await previousVisibleBlock(block, scopeRootId, propertyDisplay)
+              const prevVisible = await previousVisibleBlock(block, scopeRootId)
               if (!prevVisible) return
               const prevData = await prevVisible.load()
               landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}
@@ -1061,7 +1061,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // block lives outside the surface.
         if (!canMergeUp) return
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId, propertyDisplay)
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible || prevVisible.id === scopeRootId) return
 
         // Roam rule: refuse when both blocks have independent children — the
@@ -1116,7 +1116,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Delete at block end: merge the next block into this one (CodeMirror)',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !editorView) return
 
         // Mirror of delete_empty_block_cm in the down direction: Backspace
@@ -1140,7 +1140,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Backspace would merge upward if the caret sat at its start
         // (previousVisibleBlock and nextVisibleBlock are inverses over the
         // visible-order list, so this stays at the same boundary).
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen, propertyDisplay)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         // Roam rule (mirror of Backspace): refuse when both blocks have

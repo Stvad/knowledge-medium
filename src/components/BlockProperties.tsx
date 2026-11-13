@@ -4,7 +4,7 @@
  * row/add/config UI lives under `propertyPanel/`.
  */
 
-import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
@@ -22,7 +22,6 @@ import {
 } from '@/data/properties.js'
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
-import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -50,7 +49,6 @@ interface SyntheticPropertyRef {
 }
 
 export function BlockProperties({block}: BlockPropertiesProps) {
-  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const blockData = useHandle(block, {
     selector: data => data
       ? {
@@ -176,7 +174,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const focusAfterProperties = async () => {
     if (!scopeRootId) return
 
-    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface, propertyDisplay)
+    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})
