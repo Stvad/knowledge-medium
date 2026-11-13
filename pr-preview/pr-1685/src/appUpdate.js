@@ -1,1 +1,1 @@
-export{SP as appUpdate,CP as useAppUpdateAvailable}from"../chunks/app-CRyxdJj_.js";
+export{SP as appUpdate,CP as useAppUpdateAvailable}from"../chunks/app-Ch3n4OSB.js";
