@@ -1,1 +1,1 @@
-export{C3 as kernelDataExtension}from"../../chunks/app-DXEaDsxX.js";
+export{C3 as kernelDataExtension}from"../../chunks/app-Rv5o19Mw.js";
