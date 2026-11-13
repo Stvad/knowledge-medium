@@ -1,1 +1,1 @@
-export{MQ as aliasDataExtension}from"../../../chunks/app-0AJXS_3T.js";
+export{e$ as aliasDataExtension}from"../../../chunks/app-oruJsK-X.js";

@@ -1,1 +1,1 @@
-export{z_ as blockInfoPlugin}from"../../../chunks/app-0AJXS_3T.js";
+export{Z_ as blockInfoPlugin}from"../../../chunks/app-oruJsK-X.js";

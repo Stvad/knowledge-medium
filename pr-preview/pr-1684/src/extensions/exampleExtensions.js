@@ -1,1 +1,1 @@
-export{uN as exampleExtensions,dN as insertExampleExtensionsUnder}from"../../chunks/app-0AJXS_3T.js";
+export{SN as exampleExtensions,CN as insertExampleExtensionsUnder}from"../../chunks/app-oruJsK-X.js";

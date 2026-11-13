@@ -1,1 +1,1 @@
-export{WU as isIOS,GU as isMacPlatform}from"../../chunks/app-0AJXS_3T.js";
+export{oW as isIOS,sW as isMacPlatform}from"../../chunks/app-oruJsK-X.js";

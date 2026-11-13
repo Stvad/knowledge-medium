@@ -1,1 +1,1 @@
-export{LG as BootFallback}from"../../../chunks/app-0AJXS_3T.js";
+export{aK as BootFallback}from"../../../chunks/app-oruJsK-X.js";

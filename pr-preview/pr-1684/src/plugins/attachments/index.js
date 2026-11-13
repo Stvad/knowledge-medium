@@ -1,1 +1,1 @@
-export{vb as attachmentsPlugin}from"../../../chunks/app-0AJXS_3T.js";
+export{Ab as attachmentsPlugin}from"../../../chunks/app-oruJsK-X.js";

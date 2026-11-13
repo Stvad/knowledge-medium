@@ -1,1 +1,1 @@
-export{vF as BlockLoadingPlaceholder}from"../../chunks/app-0AJXS_3T.js";
+export{AF as BlockLoadingPlaceholder}from"../../chunks/app-oruJsK-X.js";

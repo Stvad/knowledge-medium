@@ -1,1 +1,1 @@
-export{PP as dynamicExtensionsExtension}from"../../chunks/app-0AJXS_3T.js";
+export{KP as dynamicExtensionsExtension}from"../../chunks/app-oruJsK-X.js";
