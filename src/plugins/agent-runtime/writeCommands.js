@@ -1,1 +1,1 @@
-export{Vh as appendMarkdown,Hh as contentEcho,Uh as createPage,Wh as editBlock,Gh as parseAgentMarkdown,Kh as renderAppendView}from"../../../chunks/app-CnrG6cJg.js";
+export{Hh as appendMarkdown,Uh as contentEcho,Wh as createPage,Gh as editBlock,Kh as parseAgentMarkdown,qh as renderAppendView}from"../../../chunks/app-DDs9_0XT.js";

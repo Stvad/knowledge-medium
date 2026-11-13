@@ -1,1 +1,1 @@
-export{Vy as blockDragPlugin}from"../../../chunks/app-CnrG6cJg.js";
+export{Hy as blockDragPlugin}from"../../../chunks/app-DDs9_0XT.js";
