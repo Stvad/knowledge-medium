@@ -1,1 +1,0 @@
-export{VB as BlockProperties}from"../../chunks/app-DvVqQMo9.js";

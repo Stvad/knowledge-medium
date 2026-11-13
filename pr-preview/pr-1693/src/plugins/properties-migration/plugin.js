@@ -1,1 +1,0 @@
-export{fo as propertiesMigrationPlugin}from"../../../chunks/app-DvVqQMo9.js";

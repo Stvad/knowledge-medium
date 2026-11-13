@@ -1,1 +1,0 @@
-export{XP as dynamicExtensionsExtension}from"../../chunks/app-DvVqQMo9.js";

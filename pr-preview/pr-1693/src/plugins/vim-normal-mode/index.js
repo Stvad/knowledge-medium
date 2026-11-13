@@ -1,1 +1,0 @@
-export{gC as vimNormalModeInteractionExtension,_C as vimNormalModePlugin}from"../../../chunks/app-DvVqQMo9.js";
