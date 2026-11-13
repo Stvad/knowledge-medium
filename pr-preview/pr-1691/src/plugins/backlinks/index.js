@@ -1,1 +1,1 @@
-export{pv as backlinksPlugin}from"../../../chunks/app-DpcGzQLP.js";
+export{pv as backlinksPlugin}from"../../../chunks/app-BnP9T9iH.js";

@@ -1,1 +1,1 @@
-export{Bk as dailyNotesDeletionGuard}from"../../../chunks/app-DpcGzQLP.js";
+export{Bk as dailyNotesDeletionGuard}from"../../../chunks/app-BnP9T9iH.js";
