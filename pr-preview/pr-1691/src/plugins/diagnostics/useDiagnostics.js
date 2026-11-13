@@ -1,1 +1,0 @@
-export{fc as aggregateDiagnostics,pc as useDiagnostics}from"../../../chunks/app-BnP9T9iH.js";

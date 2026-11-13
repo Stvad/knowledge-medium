@@ -1,1 +1,0 @@
-export{jK as staticDataExtensions}from"../../chunks/app-BnP9T9iH.js";
