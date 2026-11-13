@@ -1,1 +1,1 @@
-export{IC as spatialNavigationShellDecorator}from"../../../chunks/app-DD_L42Na.js";
+export{IC as spatialNavigationShellDecorator}from"../../../chunks/app-CwjMImwm.js";
