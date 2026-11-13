@@ -307,6 +307,20 @@ describe('PowerSync upload compaction', () => {
 
     expect(chunks.map(chunk => chunk.map(row => row.id))).toEqual([['parent', 'child', 'sibling']])
   })
+
+  it('places a row listed before the parent cycle it hangs from after that cycle', () => {
+    const chunks = __chunkBlockUpsertsForTest([
+      {id: 'below', parent_id: 'a', content: 'below'},
+      {id: 'a', parent_id: 'b', content: 'a'},
+      {id: 'b', parent_id: 'a', content: 'b'},
+      {id: 'self-child', parent_id: 'self', content: 'self-child'},
+      {id: 'self', parent_id: 'self', content: 'self'},
+    ], 500)
+
+    const ids = chunks.flat().map(row => row.id)
+    expect(ids.indexOf('a')).toBeLessThan(ids.indexOf('below'))
+    expect(ids.indexOf('self')).toBeLessThan(ids.indexOf('self-child'))
+  })
 })
 
 // ===========================================================================

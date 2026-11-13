@@ -393,7 +393,7 @@ const chunkBlockUpserts = (
 ): BlockUploadPayload[][] => {
   const byId = new Map(rows.map(row => [row.id, row]))
   const parentOf = (row: BlockUploadPayload): BlockUploadPayload | undefined =>
-    typeof row.parent_id === 'string' && row.parent_id !== row.id ? byId.get(row.parent_id) : undefined
+    typeof row.parent_id === 'string' ? byId.get(row.parent_id) : undefined
   const children = new Map<string, BlockUploadPayload[]>()
   for (const row of rows) {
     const parent = parentOf(row)
@@ -443,9 +443,10 @@ const chunkBlockUpserts = (
   for (const row of rows) {
     if (parentOf(row) === undefined && !placed.has(row.id)) place(row)
   }
-  // What no root reaches hangs off a parent cycle: enter each cycle at the
-  // member found by walking up from the first unplaced row, so one of its edges
-  // is reversed and every row below it still follows its parent.
+  // What no root reaches hangs off a parent cycle (a self-parented row is one):
+  // enter each cycle at the member found by walking up from the first unplaced
+  // row, so one of its edges is reversed and every row below it still follows
+  // its parent.
   for (const row of rows) {
     if (placed.has(row.id)) continue
     const walked = new Set<string>()
