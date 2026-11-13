@@ -14,7 +14,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
-import { isFieldValueChild, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { isFieldValueChild, scalarValueRow, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { persistedJsonKey } from '@/data/internals/jsonCanonical'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
@@ -45,18 +45,25 @@ const scalarOf = (
   return {fieldId: definition.fieldId, schema: definition.schema}
 }
 
-/** The id of the value child a write of this scalar lands on: the first value
- *  child of the owner's first field row for the definition, both in
+/** The id of the value child a write of this scalar lands on: the
+ *  `scalarValueRow` of the owner's first field row for the definition, in
  *  `(order_key, id)` order — the row `upsertFieldRow` keeps and
  *  `reconcileSingleValueChild` overwrites. Derived from the structural child
  *  lists, so it follows reorders, folds and arrivals. */
-const useWriteTargetId = (repo: Block['repo'], ownerId: string | null, fieldId: string | undefined): string | null => {
+const useWriteTargetId = (
+  repo: Block['repo'],
+  ownerId: string | null,
+  scalar: {fieldId: string; schema: AnyPropertySchema} | null,
+): string | null => {
+  const fieldId = scalar?.fieldId
   const fieldRowId = useHandle(repo.query.children({id: ownerId ?? '', propertyChildren: 'all'}), {
     selector: children => (children ?? []).find(child =>
       child.isFieldForm === true && child.referenceTargetId === fieldId)?.id ?? null,
   })
   return useHandle(repo.query.children({id: fieldRowId ?? '', propertyChildren: 'all'}), {
-    selector: children => (children ?? []).find(isFieldValueChild)?.id ?? null,
+    selector: children => scalar
+      ? scalarValueRow(scalar.schema, (children ?? []).filter(isFieldValueChild))?.id ?? null
+      : null,
   })
 }
 
@@ -85,7 +92,7 @@ const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow
   const owner = repo.block(ownerId ?? block.id)
   const ownerProperties = useHandle(owner, {selector: data => data?.properties ?? EMPTY_PROPERTIES})
   const scalar = scalarOf(repo, definitions, fieldRow)
-  const writeTargetId = useWriteTargetId(repo, ownerId, scalar?.fieldId)
+  const writeTargetId = useWriteTargetId(repo, ownerId, scalar ?? null)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   return useMemo(() => {

@@ -1781,7 +1781,7 @@ describe('a scalar write rewrites the value the cell reads', () => {
     const {repo, fieldId, valueId} = await setupCount()
     // An ordinary block first among the values: it does not decode, so the
     // cell still reads the 5 behind it.
-    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: '0', content: 'meeting notes'}),
+    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
       {scope: ChangeScope.BlockDefault})
     expect(await bagOf('p')).toMatchObject({count: 5})
 
@@ -1790,6 +1790,62 @@ describe('a scalar write rewrites the value the cell reads', () => {
     expect(await contentOf('notes')).toBe('meeting notes')
     expect(await contentOf(valueId)).toBe('7')
     expect(await bagOf('p')).toMatchObject({count: 7})
+  })
+
+  it('adds a value rather than overwrite one of two rows that do not decode', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.mutate.setContent({id: valueId, content: 'about five'})
+    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf('notes')).toBe('meeting notes')
+    expect(await contentOf(valueId)).toBe('about five')
+    expect(await bagOf('p')).toMatchObject({count: 7})
+  })
+
+  describe('a write whose content does not decode (a cleared ref)', () => {
+    const REF_FIELD_ID = 'field-ref-write-target'
+    const refSchema = defineProperty<string>('related', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const refFieldRows = liveFieldRowsFor(REF_FIELD_ID)
+
+    const setupRef = async (): Promise<{repo: Repo; fieldId: string; valueId: string}> => {
+      await seedWorkspace('children')
+      const repo = setup()
+      registerDefinition(repo, 'test-ref-definition', REF_FIELD_ID, refSchema)
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', refSchema, 'target-a'), {scope: ChangeScope.BlockDefault})
+      const [field] = await refFieldRows('p')
+      const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+      return {repo, fieldId: field!.id, valueId: value!.id}
+    }
+
+    it('keeps a divergent peer: both passes of the write land on the same row', async () => {
+      const {repo, fieldId, valueId} = await setupRef()
+      await repo.tx(tx => tx.create({id: 'peer', workspaceId: WS, parentId: fieldId, orderKey: 'z', content: '((target-b))'}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', refSchema, ''), {scope: ChangeScope.BlockDefault})
+
+      expect(await contentOf(valueId)).toBe('')
+      expect(await contentOf('peer')).toBe('((target-b))')
+    })
+
+    it('leaves a block ahead of the value alone', async () => {
+      const {repo, fieldId, valueId} = await setupRef()
+      await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'}),
+        {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', refSchema, ''), {scope: ChangeScope.BlockDefault})
+
+      expect(await contentOf('notes')).toBe('meeting notes')
+      expect(await contentOf(valueId)).toBe('')
+    })
   })
 
   it('repairs in place a value that no longer decodes', async () => {

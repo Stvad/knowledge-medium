@@ -1019,8 +1019,7 @@ export const childContentsToEncodedPropertyValue = (
 }
 
 /** A single-valued property's value: the first of its value children's
- *  contents that decodes, with its index. The cell reads this one, and the
- *  writer rewrites this one, so the two can never target different rows. */
+ *  contents that decodes, with its index. The cell reads this one. */
 export const firstDecodingValue = (
   schema: AnyPropertySchema,
   contents: Iterable<string>,
@@ -1034,6 +1033,28 @@ export const firstDecodingValue = (
     }
   }
   return undefined
+}
+
+/** The value child a single-valued property's value lives in, of `values` in
+ *  sibling order: the one the cell reads ({@link firstDecodingValue}), else
+ *  the ONLY child — a value its user made unreadable, which a write repairs in
+ *  place. `undefined` when neither holds: no child can be told apart as the
+ *  value, so a write must add one rather than overwrite any. The writer and
+ *  the outline's value editor both bind here, so the editor sits on the row a
+ *  write lands on. */
+export const scalarValueRow = <T extends {readonly content: string}>(
+  schema: AnyPropertySchema,
+  values: readonly T[],
+  /** A write's own content: a row already holding it counts as readable, so
+   *  a write that reconciles twice in one tx (the eager dual-write, then the
+   *  deferred materializer) lands on the same row both times even when that
+   *  content does not decode, as a cleared ref's does. */
+  writing?: string,
+): T | undefined => {
+  const read = values.findIndex(value => value.content === writing
+    || firstDecodingValue(schema, [value.content]) !== undefined)
+  if (read >= 0) return values[read]
+  return values.length === 1 ? values[0] : undefined
 }
 
 /** What a value row is, for comparison. `denotesValue` is false when the row's
