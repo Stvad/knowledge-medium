@@ -10,8 +10,8 @@ import {
 import type { Repo } from '@/data/repo'
 
 /** Which property rows a copy of a subtree carries: those a surface with this
- *  scope draws, or `'all'` — every row, hidden and hide-in-outline ones included (the structural
- *  subtree). */
+ *  scope draws, or `'all'` — every row, including those the outline skips
+ *  (the structural subtree). */
 export type PropertyCopy = PropertyDisplayScopeLevels | 'all'
 
 /** `rows` (a subtree in pre-order, root first) cut to what a surface with
@@ -35,15 +35,15 @@ export const pruneSubtreeToDrawn = (
   return out
 }
 
-/** The classifier for `workspaceId` from the repo's live registry — what the
- *  outline's queries bind (`dependOnHiddenTierParams`). */
+/** The classifier for `workspaceId` from the repo's live registry: the same
+ *  recognition and skip set the outline's queries bind. */
 export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): PropertyRowClassifier => {
   const resolver = repo.propertySchemaResolverFor(workspaceId)
   const registry = repo.propertyDefinitions
-  const hidden = registry?.workspaceId === workspaceId ? outlineSkippedFieldIds(registry) : new Set<string>()
+  const skipped = registry?.workspaceId === workspaceId ? outlineSkippedFieldIds(registry) : new Set<string>()
   return {
     isFieldDefinition: fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId)),
-    isOutlineSkipped: fieldId => hidden.has(fieldId),
+    isOutlineSkipped: fieldId => skipped.has(fieldId),
   }
 }
 

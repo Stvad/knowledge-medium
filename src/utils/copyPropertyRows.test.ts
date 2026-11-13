@@ -8,7 +8,7 @@
  *   owner
  *     a
  *     status::  → draft → note under status   (drawn in non-hidden)
- *     secret::  → shh   → note under secret   (hidden tier)
+ *     secret::  → shh   → note under secret   (outline-skipped)
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
@@ -90,7 +90,7 @@ const copiedLines = async (properties?: Parameters<typeof serializeBlock>[1]): P
   (await serializeBlock(repo.block('owner'), properties)).markdown.split('\n').map(line => line.trim())
 
 describe('copy of a block with property rows', () => {
-  it('carries a drawn property row with its subtree, and prunes a hidden-tier one whole', async () => {
+  it('carries a drawn property row with its subtree, and prunes an outline-skipped one whole', async () => {
     const lines = await copiedLines(NON_HIDDEN)
     expect(lines).toContain('- draft')
     expect(lines).toContain('- note under status')

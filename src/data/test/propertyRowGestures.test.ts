@@ -9,7 +9,7 @@
  *     owner
  *       a            (ordinary)
  *       status::     (shown in `non-hidden`)  → value `draft`
- *       secret::     (hidden tier)            → value `shh`
+ *       secret::     (outline-skipped)        → value `shh`
  *       tags::       (list)                   → `x`, `y`
  *       b            (ordinary)
  */
@@ -113,7 +113,7 @@ beforeEach(async () => {
 
 describe('move up / down', () => {
   it('skips a neighbour the mode hides', async () => {
-    // tags' physical neighbour above is the hidden-tier secret row, so in
+    // tags' physical neighbour above is the outline-skipped secret row, so in
     // non-hidden it swaps with status.
     expect(await repo.mutate.moveVertical({id: ids.tags, direction: -1, propertyDisplay: NON_HIDDEN})).toBe(true)
     const order = await childIds('owner')
@@ -171,7 +171,7 @@ describe('move up / down', () => {
 describe('indent', () => {
   it('never targets a row the mode hides', async () => {
     await arrange('owner', [ids.a, ids.secret, ids.b, ids.status, ids.tags])
-    // b's previous physical sibling is the hidden-tier secret row.
+    // b's previous physical sibling is the outline-skipped secret row.
     await repo.mutate.indent({id: ids.b, propertyDisplay: NON_HIDDEN})
     expect(await parentOf(ids.b)).toBe(ids.a)
   })

@@ -389,7 +389,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  /** {@link copyBlock} carrying every property row, hidden tier included. */
+  /** {@link copyBlock} carrying every property row, including those the outline skips. */
   const copyBlockWithHiddenProperties: BlockAction = {
     id: 'copy_block_with_hidden_properties',
     description: 'Copy block with hidden properties',
