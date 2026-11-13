@@ -207,6 +207,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         const result = await createInlineProperty(repo.block(inlinePicker.parentId), schema, block)
         if (!result) return
         const field = repo.block(result.fieldId)
+        await Promise.all([field.load(), repo.block(result.valueId).load()])
         if (field.peekProperty(isCollapsedProp)) await field.set(isCollapsedProp, false)
         setInlinePicker(null)
         await focusBlock(uiStateBlock, result.valueId, {

@@ -586,8 +586,12 @@ describe('a child the user turns into a field row', () => {
     const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
     await repo.block(field.id).set(isCollapsedProp, true)
     await focusBlock(repo.block(PANEL), TYPED, {edit: true})
-    mount({workspace: 'non-hidden'})
+    repo.cache.deleteSnapshot(field.id)
+    repo.cache.deleteSnapshot(value.id)
+    mount({workspace: 'none'})
     await waitFor(() => expect(typedEditor()).not.toBeNull())
+    expect(repo.block(field.id).peek()).toBeUndefined()
+    expect(repo.block(value.id).peek()).toBeUndefined()
     expect(document.querySelector(`[data-block-id="${value.id}"]`)).toBeNull()
     const view = EditorView.findFromDOM(typedEditor()!)!
     act(() => {
