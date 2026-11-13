@@ -7,8 +7,9 @@
  *
  * No processor runs on sync apply, so whatever the mints leave is final until
  * someone edits that property again. Machinery ids are derived only under a
- * parent created in the same transaction (`mintPropertyChildRow`), so the
- * block and its rows share the server's insert-or-touch fate.
+ * parent created in the same transaction (`mintPropertyChildRow`), so a row
+ * both devices minted collides along with the block and keeps the first
+ * create; a row only the losing device minted lands under the winner's block.
  *
  * Wiring as in `concurrentEditConvergence.test.ts`: the real upload pipeline
  * into `createFakeSyncServer`, delivered back through `blocks_synced` and the
@@ -213,6 +214,23 @@ describe('two devices creating one block with its properties converge on one set
     for (const device of [a, b]) {
       expect(await stateOf(device, TAGS_FIELD))
         .toEqual({cell: {tags: ['blue', 'blue']}, fieldRows: 1, values: ['blue', 'blue']})
+    }
+  })
+
+  it('a member only the losing create carried lands under the winning block', async () => {
+    // ACCEPTED (`mintPropertyChildRow`): the cell keeps the first create's list
+    // until the property is next edited.
+    const {a, b, server} = await setup({ownerExists: false})
+    await createOwner(a, {tags: ['blue', 'red']})
+    await createOwner(b, {tags: ['blue', 'green']})
+
+    await upload(a, server)
+    await quiesce([a, b], server)
+
+    for (const device of [a, b]) {
+      const state = await stateOf(device, TAGS_FIELD)
+      expect({...state, values: state.values.sort()})
+        .toEqual({cell: {tags: ['blue', 'red']}, fieldRows: 1, values: ['blue', 'green', 'red']})
     }
   })
 })

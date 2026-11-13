@@ -20,7 +20,9 @@
  * What converges is only what COLLIDES: a slot both devices filled resolves to
  * the first create, alongside the parent's. A slot only one device filled — a
  * member or a property the other did not have — lands on its own, as a
- * random-id row would, and the cell is the last writer's. A later edit of a row that turns
+ * random-id row would, under the server's block, whose cell is the FIRST
+ * create's; the next edit of that value in the tree projects it into the cell,
+ * and the next write of the property reaps it. A later edit of a row that turns
  * out to be a peer's tombstone follows the ordinary delete-vs-edit rule: the
  * delete holds in the children while the cell takes the edit, exactly as for
  * any row two devices share.
