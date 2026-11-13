@@ -23,7 +23,8 @@
  * model, not a leak — so listing them is the default and exclusion is opt-IN
  * (`propertyChildren`), which most queries do not even offer. Which rows a
  * listing leaves out is its view ({@link isLeftOutOfChildrenView}); the
- * outline's comes from the property display mode (`visibleChildren.ts`).
+ * outline's comes from its property display mode (`usePropertyDisplayMode`),
+ * and the gestures' from the same mode (`visibleChildren.ts`).
  * Content-intrinsic and
  * identical at every depth: a `::` child of ANY block — value rows included —
  * is that block's field row, and an unmarked ref targeting a definition is a

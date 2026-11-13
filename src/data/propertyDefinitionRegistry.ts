@@ -224,8 +224,8 @@ export const effectiveHideInOutline = (
 /** The field ids the outline's default property display (`'non-hidden'`)
  *  skips: definitions that are `hidden`, or hide-in-outline
  *  ({@link effectiveHideInOutline}). A seed whose row has not materialized yet
- *  answers with its declaration. Not memoized here: each reader memoizes per
- *  snapshot or per transaction (`kernelQueries`, `commitPipeline`). */
+ *  answers with its declaration. Not memoized here: the hot readers memoize
+ *  per snapshot or per transaction (`kernelQueries`, `commitPipeline`). */
 export const outlineSkippedFieldIds = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): ReadonlySet<string> => {

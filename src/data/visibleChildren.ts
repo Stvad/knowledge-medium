@@ -16,7 +16,7 @@ import {
  * Reach for this in outline / movement / display code: every gesture resolves
  * its anchors against the sibling list the CALLER sees, so a hidden row can
  * neither absorb nor deflect a gesture, and a drawn one is an ordinary row.
- * Use the bare `tx.childrenOf` for the structural view — copy/merge/delete,
+ * Use the bare `tx.childrenOf` for the structural view — merge/delete,
  * order-key math, machinery surgery.
  *
  * The `block/require-explicit-child-view` lint enforces this choice in

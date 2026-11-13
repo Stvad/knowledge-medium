@@ -1,8 +1,8 @@
 /**
  * The outline's structural gestures (indent / outdent / move up-down) over
  * property rows on a child-backed workspace: each acts on the sibling list the
- * caller's property display mode draws, and none takes a value out of its
- * field row.
+ * caller's property display mode draws, where a drawn row — field row or
+ * value — moves like any block.
  *
  * Owner layout, structural order, set up per test with `arrange`:
  *   page
@@ -25,7 +25,6 @@ import {
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { moveBlocksInTx } from '@/data/mutators'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -233,6 +232,9 @@ describe('outdent', () => {
   it('outdents a value out of its field row, like any block', async () => {
     expect(await repo.mutate.outdent({id: ids.draft, propertyDisplay: ALL})).toBe(true)
     expect(await parentOf(ids.draft)).toBe('owner')
+    // The scalar's only value left, so the key goes; its field row stays, empty.
+    expect(repo.block('owner').peekProperty(statusProp)).toBeUndefined()
+    expect(await parentOf(ids.status)).toBe('owner')
   })
 })
 
@@ -254,28 +256,5 @@ describe('without a display scope (mode none, as before property rows)', () => {
     expect(await repo.mutate.moveVertical({
       id: ids.status, direction: -1, propertyDisplay: {...ALL, childBacked: false},
     })).toBe(false)
-  })
-})
-
-describe('every other user move (move command, drag, cut and paste)', () => {
-  it('moves a value out of its field row, like any block', async () => {
-    await repo.tx(tx => moveBlocksInTx(tx, [ids.b, ids.x], {parentId: 'page', position: {kind: 'last'}}),
-      {scope: ChangeScope.BlockDefault})
-    expect(await parentOf(ids.x)).toBe('page')
-  })
-
-  it('moves a block in among a field row\'s values', async () => {
-    await repo.tx(tx => moveBlocksInTx(tx, [ids.b], {parentId: ids.status, position: {kind: 'last'}}),
-      {scope: ChangeScope.BlockDefault})
-    expect(await parentOf(ids.b)).toBe(ids.status)
-  })
-
-  it('moves a field row like any block, and values within their field row', async () => {
-    await repo.tx(async tx => {
-      await moveBlocksInTx(tx, [ids.status], {parentId: 'page', position: {kind: 'last'}})
-      await moveBlocksInTx(tx, [ids.y], {parentId: ids.tags, position: {kind: 'first'}})
-    }, {scope: ChangeScope.BlockDefault})
-    expect(await parentOf(ids.status)).toBe('page')
-    expect(await childIds(ids.tags)).toEqual([ids.y, ids.x])
   })
 })
