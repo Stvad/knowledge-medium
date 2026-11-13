@@ -1,0 +1,1 @@
+export{J3 as kernelDataExtension}from"../../chunks/app-C62SP8kN.js";

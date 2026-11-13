@@ -1,0 +1,1 @@
+export{Xt as typeChipsDecoratorContribution}from"../../../chunks/app-C62SP8kN.js";

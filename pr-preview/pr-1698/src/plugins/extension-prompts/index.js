@@ -1,0 +1,1 @@
+export{qN as ExtensionPromptSurface,JN as extensionPromptsExtension}from"../../../chunks/app-C62SP8kN.js";

@@ -1,0 +1,1 @@
+export{AF as BlockLoadingPlaceholder}from"../../chunks/app-C62SP8kN.js";

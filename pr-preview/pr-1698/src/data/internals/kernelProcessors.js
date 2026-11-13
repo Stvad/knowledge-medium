@@ -1,0 +1,1 @@
+export{V6 as KERNEL_PROCESSORS}from"../../../chunks/app-C62SP8kN.js";

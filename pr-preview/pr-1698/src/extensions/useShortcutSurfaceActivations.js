@@ -1,0 +1,1 @@
+export{TR as useShortcutSurfaceActivations}from"../../chunks/app-C62SP8kN.js";

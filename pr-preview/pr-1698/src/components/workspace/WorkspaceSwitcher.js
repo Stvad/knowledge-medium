@@ -1,0 +1,1 @@
+export{FT as WorkspaceSwitcher}from"../../../chunks/app-C62SP8kN.js";

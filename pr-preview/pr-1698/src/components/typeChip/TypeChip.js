@@ -1,0 +1,1 @@
+export{YM as TypeChip}from"../../../chunks/app-C62SP8kN.js";

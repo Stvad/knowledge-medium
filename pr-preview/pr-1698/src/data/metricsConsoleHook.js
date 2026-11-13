@@ -1,0 +1,1 @@
+export{pN as ensureMetricsConsoleHook}from"../../chunks/app-C62SP8kN.js";

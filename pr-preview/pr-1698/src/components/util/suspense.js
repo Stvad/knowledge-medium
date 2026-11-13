@@ -1,0 +1,1 @@
+export{lK as SuspenseFallback}from"../../../chunks/app-C62SP8kN.js";

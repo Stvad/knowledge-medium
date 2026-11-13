@@ -1,0 +1,1 @@
+export{bv as inlineBacklinksApplies}from"../../../../chunks/app-C62SP8kN.js";

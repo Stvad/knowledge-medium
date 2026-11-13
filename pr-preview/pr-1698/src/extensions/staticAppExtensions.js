@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-C62SP8kN.js";

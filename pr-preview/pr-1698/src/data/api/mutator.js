@@ -1,0 +1,1 @@
+export{Alt as defineMutator}from"../../../chunks/app-C62SP8kN.js";

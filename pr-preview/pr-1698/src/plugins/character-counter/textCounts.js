@@ -1,0 +1,1 @@
+export{$n as countCharacters,er as countWords}from"../../../chunks/app-C62SP8kN.js";
