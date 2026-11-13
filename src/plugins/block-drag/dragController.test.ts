@@ -254,6 +254,18 @@ describe('block drag controller', () => {
     pointer('pointerup', window, 40, 60)
   })
 
+  it('a bullet in a hover card (a link preview) does not start a drag', async () => {
+    const card = document.createElement('div')
+    card.setAttribute('data-hover-card', 'true')
+    document.body.append(card)
+    renderRow(card, 'previewed', 'panel:p1:preview')
+    drag('previewed')
+    expect(clickReaches('previewed')).toBe(true)
+    await settled()
+    expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
+    expect(mocks.moveBlocksTo).not.toHaveBeenCalled()
+  })
+
   it('a release with no target moves nothing', async () => {
     mocks.resolveDropTarget.mockReturnValue(null)
     drag('a')

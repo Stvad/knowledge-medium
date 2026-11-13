@@ -12,6 +12,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   focusedBlockLocationProp,
+  isCollapsedProp,
   focusBlock,
   isEditingProp,
   topLevelBlockIdProp,
@@ -476,7 +477,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       )
       const link = (await screen.findByText('Alias text')).closest('a')!
 
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
 
       const card = await waitFor(() => {
         const found = previewCard()
@@ -487,13 +488,33 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       expect(within(card).getByText('Child content')).toBeTruthy()
     })
 
+    it('shows a collapsed target open, with no expand control on its root', async () => {
+      await repo.block('target').set(isCollapsedProp, true)
+      renderInSource(
+        <BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1">Alias text</BlockRef>,
+      )
+      fireEvent.mouseOver((await screen.findByText('Alias text')).closest('a')!, {altKey: true})
+
+      const card = await waitFor(() => {
+        const found = previewCard()
+        expect(found).toBeTruthy()
+        return found!
+      })
+      await waitFor(() => expect(within(card).getByText('Child content')).toBeTruthy())
+      const [rootRow, childRow] = card.querySelectorAll('.tm-block')
+      const expandControl = (row: Element) => row.querySelector(':scope > .block-controls .expand-collapse-button')
+      expect(expandControl(childRow)).toBeTruthy()
+      expect(expandControl(rootRow)).toBeNull()
+      expect(repo.block('target').peekProperty(isCollapsedProp)).toBe(true)
+    })
+
     it('stays closed on a plain hover, and opens when Alt is pressed while hovering', async () => {
       renderInSource(
         <BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1">Alias text</BlockRef>,
       )
       const link = (await screen.findByText('Alias text')).closest('a')!
 
-      fireEvent.mouseEnter(link)
+      fireEvent.mouseOver(link)
       expect(previewCard()).toBeNull()
 
       fireEvent.keyDown(window, {key: 'Alt', altKey: true})
@@ -505,7 +526,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
         <BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1">Alias text</BlockRef>,
       )
       const link = (await screen.findByText('Alias text')).closest('a')!
-      fireEvent.mouseEnter(link)
+      fireEvent.mouseOver(link)
       fireEvent.mouseLeave(link)
 
       fireEvent.keyDown(window, {key: 'Alt', altKey: true})
@@ -516,7 +537,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       renderInSource(<BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
       const link = (await screen.findByText('Hello world')).closest('a')!
 
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
 
       const card = await waitFor(() => {
         const found = previewCard()
@@ -531,7 +552,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       renderInSource(<Wikilink alias="Target" blockId="target" workspaceId="ws-1">Target</Wikilink>)
       const link = (await screen.findByText('Target')).closest('a')!
 
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
 
       await waitFor(() => expect(within(previewCard()!).getByText('Child content')).toBeTruthy())
     })
@@ -542,23 +563,23 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       )
       const link = (await screen.findByText('Alias text')).closest('a')!
 
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
       await waitFor(() => expect(previewCard()).toBeTruthy())
       fireEvent.mouseLeave(link)
       await waitFor(() => expect(previewCard()).toBeNull())
 
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
       await waitFor(() => expect(previewCard()).toBeTruthy())
       fireEvent.keyDown(window, {key: 'Escape'})
       await waitFor(() => expect(previewCard()).toBeNull())
     })
 
-    it('is read-only: the block pointer filter reads its content as interactive, so a click never edits', async () => {
+    it('never takes a click as click-to-edit: the block pointer filter reads its content as interactive', async () => {
       renderInSource(
         <BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1">Alias text</BlockRef>,
       )
       const link = (await screen.findByText('Alias text')).closest('a')!
-      fireEvent.mouseEnter(link, {altKey: true})
+      fireEvent.mouseOver(link, {altKey: true})
       const child = await waitFor(() => within(previewCard()!).getByText('Child content'))
 
       expect(isInteractiveContentEvent({target: child})).toBe(true)

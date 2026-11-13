@@ -4,42 +4,38 @@
  * It decorates `BlockLink`, so every internal link — block refs, aliased refs,
  * page links — gets the same preview.
  */
-import { createPortal } from 'react-dom'
-import {
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from 'react'
-import { useAnchoredFloating, type FloatingSizing } from '@/components/ui/anchored-floating.js'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import type { FloatingSizing } from '@/components/ui/anchored-floating.js'
+import { HoverCard, type HoverHandlers } from '@/components/ui/hover-card.js'
 import { useBlockContext } from '@/context/block'
 import type { BlockLinkDecoratorProps } from '@/extensions/blockLinkDecorators.js'
 import { BlockEmbed } from '@/components/references/BlockEmbed'
 import { BlockRefAncestorsRoot } from '@/components/references/cycleGuard'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { hasEditableTarget } from '@/shortcuts/utils'
 
 const PREVIEW_KEY = 'Alt'
 // Bridges the gap between the link and the (offset) card as the pointer crosses.
 const CLOSE_DELAY_MS = 140
 const CARD_SIZING: FloatingSizing = {maxHeight: 420}
 
-interface HoverHandlers {
-  onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => void
-  onMouseLeave: (event: ReactMouseEvent<HTMLElement>) => void
-}
+const LINK_ANCHOR_ATTRIBUTE = 'data-link-preview-anchor'
 
-interface LinkPreviewController {
-  open: boolean
-  anchorEl: HTMLElement | null
-  linkHoverProps: HoverHandlers
-  /** Spread onto the card, so hovering it keeps it open. */
-  cardHoverProps: HoverHandlers
-  close: () => void
-}
+/** Links nest (a reference's content can hold a page link), and the innermost
+ *  link under the pointer owns the preview, not every link around it. */
+const ownsPointer = (event: ReactMouseEvent<HTMLElement>): boolean =>
+  event.target instanceof Element &&
+  event.target.closest(`[${LINK_ANCHOR_ATTRIBUTE}]`) === event.currentTarget
 
-function useLinkPreview(): LinkPreviewController {
+/** A bare Alt press: not one held down (auto-repeat), and not the start of a
+ *  chord typed into an editor (Option+arrow, an Option-typed character). */
+const opensPreview = (event: KeyboardEvent): boolean =>
+  event.key === PREVIEW_KEY && !event.repeat && !hasEditableTarget(event)
+
+function useLinkPreview() {
   const [open, setOpen] = useState(false)
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
-  // The link while the pointer is over it: only then does pressing Alt open.
+  // The link while it owns the pointer: only then does pressing Alt open.
   const [hoveredEl, setHoveredEl] = useState<HTMLElement | null>(null)
   const closeTimer = useRef<number | null>(null)
 
@@ -66,94 +62,61 @@ function useLinkPreview(): LinkPreviewController {
   }
 
   useEffect(() => {
-    if (!hoveredEl || open) return
+    if (!open && !hoveredEl) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === PREVIEW_KEY) show(hoveredEl)
+      if (open) {
+        if (event.key !== 'Escape') return
+        // The Escape that dismisses the card is spent on it: the app's own
+        // Escape (leave editing, clear selection) listens later, at the bubble.
+        event.stopPropagation()
+        close()
+      } else if (hoveredEl && opensPreview(event)) {
+        show(hoveredEl)
+      }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  })
-
-  useEffect(() => {
-    if (!open) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   })
 
   useEffect(() => () => {
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
   }, [])
 
-  return {
-    open,
-    anchorEl,
-    linkHoverProps: {
-      onMouseEnter: event => {
-        const el = event.currentTarget
-        setHoveredEl(el)
-        if (event.altKey) show(el)
-        else cancelClose()
-      },
-      onMouseLeave: () => {
+  const linkProps = {
+    onMouseOver: (event: ReactMouseEvent<HTMLElement>) => {
+      if (!ownsPointer(event)) {
         setHoveredEl(null)
         scheduleClose()
-      },
+        return
+      }
+      const el = event.currentTarget
+      setHoveredEl(el)
+      if (event.altKey) show(el)
+      else cancelClose()
     },
-    cardHoverProps: {
-      onMouseEnter: () => cancelClose(),
-      onMouseLeave: () => scheduleClose(),
+    onMouseLeave: () => {
+      setHoveredEl(null)
+      scheduleClose()
     },
-    close,
   }
+  const cardHoverProps: HoverHandlers = {
+    onMouseEnter: () => cancelClose(),
+    onMouseLeave: () => scheduleClose(),
+  }
+  return {open, anchorEl, linkProps, cardHoverProps, close}
 }
 
-/** The floating card: the target rendered as an embed, read-only. */
-function LinkPreviewCard({blockId, controller}: {
-  blockId: string
-  controller: LinkPreviewController
-}) {
-  const {open, anchorEl, cardHoverProps} = controller
+/** The target rendered as an embed. `HoverCard` marks it as interactive
+ *  content, so its blocks never take a click as click-to-edit. */
+function LinkPreviewBody({blockId}: {blockId: string}) {
   const blockContext = useBlockContext()
-  const {floatingStyle, setFloatingElement} = useAnchoredFloating({
-    open,
-    anchorElement: anchorEl,
-    placement: 'bottom-start',
-    gap: 4,
-    viewportMargin: 8,
-    sizing: CARD_SIZING,
-  })
-
-  if (!open || !anchorEl || typeof document === 'undefined') return null
-
   const sourceBlockId = typeof blockContext.scopeRootId === 'string' ? blockContext.scopeRootId : blockId
-
-  return createPortal(
-    <div
-      ref={setFloatingElement}
-      // Marks everything inside as interactive content, so the block shells in
-      // the preview never take a click as click-to-edit: the preview is
-      // read-only. Pointer/click propagation stops here because React bubbles
-      // portal events through the React tree, to the link and the source block.
-      data-block-interaction="ignore"
-      data-link-preview={blockId}
-      style={floatingStyle}
-      onMouseEnter={cardHoverProps.onMouseEnter}
-      onMouseLeave={cardHoverProps.onMouseLeave}
-      onPointerDown={event => event.stopPropagation()}
-      onClick={event => event.stopPropagation()}
-      className="link-preview z-50 w-[28rem] max-w-[calc(100vw-16px)] overflow-auto rounded-md border border-border bg-background text-foreground shadow-md p-2"
-    >
-      {/* A preview is opened by hand, one level per gesture, so it starts a
-          fresh cycle chain: the reference the link sits in has already
-          claimed this target. */}
-      <BlockRefAncestorsRoot>
-        <BlockEmbed blockId={blockId} sourceBlockId={sourceBlockId} occurrenceId="link-preview" className="blockembed"/>
-      </BlockRefAncestorsRoot>
-    </div>,
-    document.body,
+  return (
+    // A preview is opened by hand, one level per gesture, so it starts a fresh
+    // cycle chain: the reference the link sits in has already claimed this target.
+    <BlockRefAncestorsRoot>
+      <BlockEmbed blockId={blockId} sourceBlockId={sourceBlockId} occurrenceId="link-preview" peek/>
+    </BlockRefAncestorsRoot>
   )
 }
 
@@ -169,11 +132,25 @@ export function LinkPreviewDecorator({link, anchorProps, children}: BlockLinkDec
     <>
       {children({
         ...anchorProps,
-        onMouseEnter: chain(anchorProps.onMouseEnter, preview.linkHoverProps.onMouseEnter),
-        onMouseLeave: chain(anchorProps.onMouseLeave, preview.linkHoverProps.onMouseLeave),
+        ...{[LINK_ANCHOR_ATTRIBUTE]: ''},
+        onMouseOver: chain(anchorProps.onMouseOver, preview.linkProps.onMouseOver),
+        onMouseLeave: chain(anchorProps.onMouseLeave, preview.linkProps.onMouseLeave),
         onClick: chain(preview.close, anchorProps.onClick),
       })}
-      <LinkPreviewCard blockId={link.blockId} controller={preview}/>
+      <HoverCard
+        open={preview.open}
+        anchorEl={preview.anchorEl}
+        hoverProps={preview.cardHoverProps}
+        placement="bottom-start"
+        gap={4}
+        sizing={CARD_SIZING}
+        data-link-preview={link.blockId}
+        className="link-preview w-[28rem] max-w-[calc(100vw-16px)] overflow-auto p-2"
+      >
+        <ExtensionRenderBoundary>
+          <LinkPreviewBody blockId={link.blockId}/>
+        </ExtensionRenderBoundary>
+      </HoverCard>
     </>
   )
 }

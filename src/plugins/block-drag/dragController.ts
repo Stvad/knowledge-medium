@@ -18,6 +18,7 @@
  * either way. A held press that moves drags; one let go in place opens
  * the bullet's context menu, the touch long-press this takes over.
  */
+import { HOVER_CARD_ATTRIBUTE } from '@/components/ui/hover-card.js'
 import type { Repo } from '@/data/repo.js'
 import type { Block } from '@/data/block'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
@@ -122,6 +123,9 @@ export const createBlockDragController = (repo: Repo): BlockDragController => {
     const row = bullet?.closest<HTMLElement>(ROW_SELECTOR)
     const blockId = row?.dataset.blockId
     if (!bullet || !row || !blockId) return
+    // A hover card hides while a drag runs (`BlockDragLayer`), so a bullet in
+    // one (a link preview's rows) would drag a source the user can't see.
+    if (bullet.closest(`[${HOVER_CARD_ATTRIBUTE}]`)) return
 
     const payload = resolvePayload(repo, blockId, row)
     // Read only once the press becomes a drag; a click must not surface
