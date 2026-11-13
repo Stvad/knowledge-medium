@@ -59,6 +59,7 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
+  firstDecodingValue,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
@@ -908,7 +909,7 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, additive)
+    await reconcileSingleValueChild(tx, fieldRow, schema, values, contents[0]!, additive)
     return
   }
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
@@ -930,12 +931,18 @@ const createValueChild = (
 const reconcileSingleValueChild = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
   values: readonly BlockData[],
   content: string,
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
-  const [primary, ...duplicates] = values
+  // The primary is the row the cell reads (`firstDecodingValue`), so a write
+  // never lands on a row that is not the value — a block moved in among the
+  // values keeps its text. When no row decodes, the first is rewritten: the
+  // value the user broke is repaired in place.
+  const primary = values[firstDecodingValue(schema, values.map(value => value.content))?.index ?? 0]
+  const duplicates = values.filter(value => value !== primary)
   if (!primary) {
     await createValueChild(tx, fieldRow, content, keyAtStart(null))
     return

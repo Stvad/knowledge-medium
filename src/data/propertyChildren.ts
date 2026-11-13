@@ -981,15 +981,9 @@ export const childContentsToEncodedPropertyValue = (
   contents: Iterable<string>,
 ): unknown | undefined => {
   if (memberCodecOf(schema.codec) === undefined) {
-    for (const content of contents) {
-      try {
-        return valueChildContentToEncoded(schema, content)
-      } catch {
-        // Invalid child text should not preserve a stale parent cell
-        // projection. Skip it; if none parse the key is left unset.
-      }
-    }
-    return undefined
+    // Invalid child text should not preserve a stale parent cell projection:
+    // skip it; if none parse the key is left unset.
+    return firstDecodingValue(schema, contents)?.value
   }
   const members: unknown[] = []
   for (const content of contents) {
@@ -1000,6 +994,24 @@ export const childContentsToEncodedPropertyValue = (
     }
   }
   return members
+}
+
+/** A single-valued property's value: the first of its value children's
+ *  contents that decodes, with its index. The cell reads this one, and the
+ *  writer rewrites this one, so the two can never target different rows. */
+export const firstDecodingValue = (
+  schema: AnyPropertySchema,
+  contents: Iterable<string>,
+): {readonly index: number; readonly value: unknown} | undefined => {
+  let index = 0
+  for (const content of contents) {
+    try {
+      return {index, value: valueChildContentToEncoded(schema, content)}
+    } catch {
+      index++
+    }
+  }
+  return undefined
 }
 
 /** What a value row is, for comparison. `denotesValue` is false when the row's

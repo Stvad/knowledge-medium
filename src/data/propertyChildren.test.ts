@@ -1754,6 +1754,54 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
   })
 })
 
+describe('a scalar write rewrites the value the cell reads', () => {
+  const COUNT_FIELD_ID = 'field-count-write-target'
+  const countSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+  const contentOf = async (id: string): Promise<string> =>
+    (await sharedDb.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id])).content
+
+  const setupCount = async (): Promise<{repo: Repo; fieldId: string; valueId: string}> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', countSchema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    return {repo, fieldId: field!.id, valueId: value!.id}
+  }
+
+  it('leaves a block ahead of the value alone', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    // An ordinary block first among the values: it does not decode, so the
+    // cell still reads the 5 behind it.
+    await repo.tx(tx => tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: '0', content: 'meeting notes'}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await bagOf('p')).toMatchObject({count: 5})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf('notes')).toBe('meeting notes')
+    expect(await contentOf(valueId)).toBe('7')
+    expect(await bagOf('p')).toMatchObject({count: 7})
+  })
+
+  it('repairs in place a value that no longer decodes', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.mutate.setContent({id: valueId, content: 'about five'})
+
+    await repo.tx(tx => tx.setProperty('p', countSchema, 7), {scope: ChangeScope.BlockDefault})
+
+    expect(await contentOf(valueId)).toBe('7')
+    expect((await childrenRows(fieldId)).filter(v => v.deleted === 0).map(v => v.id)).toEqual([valueId])
+  })
+})
+
 describe('movement gestures anchor on the visible sibling list (§9/§10)', () => {
   /** `p` → hidden field row → value child, plus two ordinary content
    *  children, so every gesture has both a visible and a hidden neighbour. */
