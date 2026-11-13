@@ -7,8 +7,9 @@ import { Suspense } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIdsForMode, usePropertyDisplayMode } from '@/hooks/block.js'
-import { useFocusedChildId } from '@/data/globalState.js'
+import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/block.js'
+import { useUIStateBlock } from '@/data/globalState.js'
+import { focusedBlockLocationFromProperties } from '@/data/properties.js'
 import { siblingPrecedes } from '@/data/orderKey.js'
 import type { Repo } from '@/data/repo.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
@@ -62,7 +63,8 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
-  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), useFocusedChildId(block))
+  const focusedChildId = useFocusedChildId(block)
+  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), focusedChildId)
 
   return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
     {childIds.map((childId) => (
@@ -75,11 +77,26 @@ export const BlockChildren = ({block}: { block: Block }) => {
   </PropertyRowListingContext>
 }
 
-/** `childIds` with the focused child back at its sibling position when the
- *  property display mode left it out. The row the user is on stays where it is
- *  until they move on: typing `::((id))` makes a child a field row in the write
- *  that commits the text, and a mode hiding that row's tier would otherwise
- *  unmount it, editor and all, under the caret. */
+/** The child of `parent` focused in this panel, or null. Per-parent, same
+ *  selector pattern as `useInFocus`: a focus move re-renders only the parents
+ *  it enters or leaves. The focused row's own parent is read reactively too,
+ *  so moving it while focused (an indent) drops it from the parent it left. */
+const useFocusedChildId = (parent: Block): string | null => {
+  const candidate = useHandle(useUIStateBlock(), {
+    selector: doc => {
+      const location = focusedBlockLocationFromProperties(doc?.properties)
+      if (!location) return null
+      return parent.repo.block(location.blockId).peek()?.parentId === parent.id ? location.blockId : null
+    },
+  })
+  const candidateParentId = useHandle(parent.repo.block(candidate ?? parent.id), {selector: data => data?.parentId})
+  // Defence in depth: the selector above also re-checks on each re-render.
+  return candidate !== null && candidateParentId === parent.id ? candidate : null
+}
+
+/** `childIds` with the focused child at its sibling position when the property
+ *  display mode left it out: the row the user is on is never unmounted under
+ *  them, whatever tier it turns into while they edit it. */
 const withFocusedChild = (repo: Repo, childIds: string[], focusedId: string | null): string[] => {
   if (focusedId === null || childIds.includes(focusedId)) return childIds
   const focused = repo.block(focusedId).peek()
