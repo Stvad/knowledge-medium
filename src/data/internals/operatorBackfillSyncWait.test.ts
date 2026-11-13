@@ -21,7 +21,7 @@ let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { await resetTestDb(sharedDb.db); vi.useFakeTimers() })
-afterEach(() => { vi.useRealTimers() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 /** This gate has the production contract: it reports settled synchronously
  *  when open, and retains callbacks while a download is in flight. */
@@ -75,19 +75,38 @@ const makeRepo = async (
   return repo
 }
 
-const waitFor = async (predicate: () => void): Promise<void> => {
+/** Under fake timers `vi.waitFor` also moves the clock one interval per check,
+ *  so a poll the run arms while this waits still fires. */
+const waitFor = async (predicate: () => void | Promise<void>): Promise<void> => {
   await vi.waitFor(predicate, {interval: 10, timeout: 3_000})
 }
+
+/** Settles a run whose sync wait polls on FAKE timers between REAL database
+ *  reads, moving the clock `stepMs` per check until it does. One large
+ *  `advanceTimersByTimeAsync` is wrong here: a read still in flight when it
+ *  lands arms the next poll after it returns, on a clock nothing moves again. */
+const settle = async <T>(running: Promise<T>, stepMs = 100): Promise<T> => {
+  let settled = false
+  void running.then(() => { settled = true }, () => { settled = true })
+  await waitFor(async () => {
+    if (!settled) await vi.advanceTimersByTimeAsync(stepMs)
+    expect(settled).toBe(true)
+  })
+  return running
+}
+
+/** A step that lets the slow poll reach the 5-minute deadline in a few checks. */
+const DEADLINE_STEP_MS = 30_000
 
 /** A transient gap on a LOCAL arm — rows downloaded but still staged — which an
  *  operator batch waits on, unlike a download still in flight. Real answers
  *  otherwise. */
-const stageableGap = (repo: Repo, isStaged: () => boolean): {readonly seen: boolean} => {
-  let seen = false
+const stageableGap = (repo: Repo, isStaged: () => boolean): {readonly seen: number} => {
+  let seen = 0
   const realWorkspaceViewGap = repo.workspaceViewGap.bind(repo)
   vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async (...args) => {
     if (!isStaged()) return realWorkspaceViewGap(...args)
-    seen = true
+    seen += 1
     return {reason: 'downloaded rows are still staged', transient: true}
   })
   return {get seen() { return seen }}
@@ -133,8 +152,8 @@ describe('operator backfill transient sync waits', () => {
     const gap = stageableGap(repo, () => staged)
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gap.seen).toBe(true))
-    await vi.advanceTimersByTimeAsync(300)
+    // Seen again by a poll: the wait is under way, not merely begun.
+    await waitFor(() => expect(gap.seen).toBeGreaterThanOrEqual(2))
     expect(batches).toEqual([0])
     expect(events).not.toContain('markComplete')
     expect(events).not.toContain('releaseClaim')
@@ -143,8 +162,7 @@ describe('operator backfill transient sync waits', () => {
     })
 
     staged = false
-    await vi.advanceTimersByTimeAsync(100)
-    expect(await running).toMatchObject({outcome: 'ran', undoHistoryCleared: true})
+    expect(await settle(running)).toMatchObject({outcome: 'ran', undoHistoryCleared: true})
     expect(batches).toEqual([0, 1])
     expect(observedWaitCounts).toEqual([0, 1])
     expect(await persistedBatchIds()).toEqual([
@@ -171,9 +189,9 @@ describe('operator backfill transient sync waits', () => {
       return null
     })
 
-    const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await vi.advanceTimersByTimeAsync(5 * 60_000)
-    const result = await running
+    // Stepped past the deadline, so a regression that waited here would end in
+    // "made no progress" rather than hang.
+    const result = await settle(repo.runWorkspaceBackfillNow(WS, BACKFILL_ID), DEADLINE_STEP_MS)
 
     expect(gapObserved).toBe(true)
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
@@ -217,8 +235,7 @@ describe('operator backfill transient sync waits', () => {
     expect(events).toEqual(['tryClaim'])
 
     gap = false
-    await vi.advanceTimersByTimeAsync(100)
-    expect(await running).toMatchObject({outcome: 'ran'})
+    expect(await settle(running)).toMatchObject({outcome: 'ran'})
     expect(events).toEqual(['tryClaim', 'tryClaim', 'pass', 'markComplete', 'releaseClaim'])
   })
 
@@ -254,8 +271,7 @@ describe('operator backfill transient sync waits', () => {
 
     gap = false
     repo.setReadOnly(true)
-    await vi.advanceTimersByTimeAsync(100)
-    expect(await running).toMatchObject({outcome: 'deferred', retryable: false})
+    expect(await settle(running)).toMatchObject({outcome: 'deferred', retryable: false})
     expect(events).toEqual(['tryClaim', 'releaseClaim'])
   })
 
@@ -285,14 +301,14 @@ describe('operator backfill transient sync waits', () => {
     const gap = stageableGap(repo, () => staged)
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gap.seen).toBe(true))
+    await waitFor(() => expect(gap.seen).toBeGreaterThan(0))
     expect(batches).toEqual([0])
 
     waitWasCleared = true
     staged = false
-    await vi.advanceTimersByTimeAsync(100)
-    expect((await running).outcome).toBe('deferred')
-    expect((await running).reason).toContain('claim is no longer held')
+    const result = await settle(running)
+    expect(result.outcome).toBe('deferred')
+    expect(result.reason).toContain('claim is no longer held')
     expect(batches).toEqual([0])
     expect(events.filter(event => event === 'tryClaim')).toHaveLength(2)
     expect(events.filter(event => event === 'stillOwned')).toHaveLength(2)
@@ -342,12 +358,11 @@ describe('operator backfill transient sync waits', () => {
     const gap = stageableGap(repo, () => staged)
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gap.seen).toBe(true))
+    await waitFor(() => expect(gap.seen).toBeGreaterThan(0))
     expect(batches).toEqual([0])
     staged = false
-    await vi.advanceTimersByTimeAsync(100)
 
-    const result = await running
+    const result = await settle(running)
     expect(result).toMatchObject({outcome: 'deferred', retryable: false})
     expect(result.reason).toContain('claim is no longer held')
     expect(batches).toEqual([0])
@@ -437,11 +452,10 @@ describe('operator backfill transient sync waits', () => {
     const gap = stageableGap(repo, () => staged)
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gap.seen).toBe(true))
+    await waitFor(() => expect(gap.seen).toBeGreaterThan(0))
     staged = false
-    await vi.advanceTimersByTimeAsync(100)
 
-    expect(await running).toMatchObject({outcome: 'ran'})
+    expect(await settle(running)).toMatchObject({outcome: 'ran'})
     expect(seen).toEqual([newSchema])
   })
 
@@ -488,8 +502,7 @@ describe('operator backfill transient sync waits', () => {
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     await waitFor(() => expect(gapObserved).toBe(true))
-    await vi.advanceTimersByTimeAsync(5 * 60_000)
-    const result = await running
+    const result = await settle(running, DEADLINE_STEP_MS)
 
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('5 minutes')
@@ -523,11 +536,10 @@ describe('operator backfill transient sync waits', () => {
     const gap = stageableGap(repo, () => staged)
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(gap.seen).toBe(true))
+    await waitFor(() => expect(gap.seen).toBeGreaterThan(0))
     changeSession(repo)
-    await vi.advanceTimersByTimeAsync(100)
 
-    const result = await running
+    const result = await settle(running)
     expect(result.outcome).toBe('deferred')
     expect(result.reason).toContain(_label === 'write access revocation'
       ? 'lost write access'
@@ -593,18 +605,19 @@ describe('operator backfill transient sync waits', () => {
     }, events, {backfillSyncGate: gate.gate})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(batches).toEqual([0, 1]))
+    // A batch that waited on the closed gate would poll until this budget ran
+    // out; one that does not wait settles with both batches written.
+    const result = await settle(repo.runWorkspaceBackfillNow(WS, BACKFILL_ID))
+    // Read once the run is over: rows and wait counts land as each batch
+    // COMMITS, which lags the batch body `batches` records.
+    expect(batches).toEqual([0, 1])
     expect(await persistedBatchIds()).toEqual([
       'operator-sync-wait-batch-0', 'operator-sync-wait-batch-1',
     ])
-    // The check after the scan still asks every arm, so the run does not
-    // record completion over a download it never waited out.
-    const result = await running
-    // Read once the run is over: each entry is recorded after its batch
-    // COMMITS, which lags the batch body `batches` fences on.
     // Not waited on, but counted: the sweep it spans cannot prove convergence.
     expect(observedWaitCounts).toEqual([0, 1])
+    // The check after the scan still asks every arm, so the run does not
+    // record completion over a download it never waited out.
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
     expect(result.reason).toContain('not caught up with the server')
     expect(events).not.toContain('markComplete')
@@ -636,14 +649,13 @@ describe('operator backfill transient sync waits', () => {
     })
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
-    await waitFor(() => expect(askedArms.length).toBeGreaterThan(0))
-    await vi.advanceTimersByTimeAsync(1_000)
+    // Asked again by a poll: the wait is under way, not merely begun.
+    await waitFor(() => expect(askedArms.length).toBeGreaterThanOrEqual(2))
     expect(caughtUp).toBe(false)
     expect(askedArms.every(arms => arms === 'all')).toBe(true)
 
     downloading = false
-    await vi.advanceTimersByTimeAsync(100)
-    expect(await running).toMatchObject({outcome: 'ran'})
+    expect(await settle(running)).toMatchObject({outcome: 'ran'})
     expect(caughtUp).toBe(true)
     expect(batches).toEqual([0, 1])
     expect(events.filter(event => event === 'markComplete')).toHaveLength(1)
@@ -667,17 +679,24 @@ describe('operator backfill transient sync waits', () => {
     // the real read is exercised by the plain timeout test above.
     let uploadQueueHead: number | null = 1
     let stagedQueueHead: number | null = null
-    const realGet = repo.db.get.bind(repo.db)
-    vi.spyOn(repo.db, 'get').mockImplementation(async (sql: string, params?: unknown[]) =>
-      sql.includes('FROM ps_crud')
-        ? {upload: uploadQueueHead, staged: stagedQueueHead}
-        : realGet(sql, params))
+    let headReads = 0
+    // On the database itself: `repo.db` is a timing proxy that calls through
+    // to it, so an original taken from the proxy would call this spy again.
+    const realGet = sharedDb.db.get.bind(sharedDb.db)
+    vi.spyOn(sharedDb.db, 'get').mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (!sql.includes('FROM ps_crud')) return realGet(sql, params)
+      headReads += 1
+      return {upload: uploadQueueHead, staged: stagedQueueHead}
+    })
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     let settled = false
     void running.then(() => { settled = true })
+    // The windows below count from when the wait begins, which follows the
+    // claim's real reads, so the clock moves only once the heads are read.
+    await waitFor(() => expect(headReads).toBeGreaterThan(0))
     await vi.advanceTimersByTimeAsync(4 * 60_000)
     // An upload completes inside the first window, so the deadline renews.
     uploadQueueHead = 2
