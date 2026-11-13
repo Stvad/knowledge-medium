@@ -1,1 +1,1 @@
-export{uh as extensionsOverridesProp,dh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DdA2-a80.js";
+export{gh as extensionsOverridesProp,_h as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-roajnCN4.js";

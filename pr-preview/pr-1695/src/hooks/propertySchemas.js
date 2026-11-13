@@ -1,1 +1,1 @@
-export{CG as usePropertySchemas}from"../../chunks/app-DdA2-a80.js";
+export{kG as usePropertySchemas}from"../../chunks/app-roajnCN4.js";
