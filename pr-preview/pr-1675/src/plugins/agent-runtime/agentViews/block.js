@@ -1,1 +1,1 @@
-export{jg as buildBlockView,Mg as renderBlockView}from"../../../../chunks/app-BiaCrnSj.js";
+export{jg as buildBlockView,Mg as renderBlockView}from"../../../../chunks/app-DD_L42Na.js";

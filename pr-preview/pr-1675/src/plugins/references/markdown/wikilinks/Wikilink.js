@@ -1,1 +1,1 @@
-export{hy as Wikilink}from"../../../../../chunks/app-BiaCrnSj.js";
+export{hy as Wikilink}from"../../../../../chunks/app-DD_L42Na.js";

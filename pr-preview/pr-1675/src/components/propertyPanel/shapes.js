@@ -1,1 +1,1 @@
-export{CG as propertyShapeLabel}from"../../../chunks/app-BiaCrnSj.js";
+export{CG as propertyShapeLabel}from"../../../chunks/app-DD_L42Na.js";

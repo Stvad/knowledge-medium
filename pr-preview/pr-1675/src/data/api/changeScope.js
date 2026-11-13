@@ -1,1 +1,1 @@
-export{iut as CHANGE_SCOPE_POLICIES,aut as ChangeScope,out as isChangeScope,sut as policyForScope,cut as scopeAllowedInReadOnly,lut as scopeIsUndoable,uut as scopePoliciesEquivalent,dut as scopeUploadsToServer,fut as sourceForScope}from"../../../chunks/app-BiaCrnSj.js";
+export{iut as CHANGE_SCOPE_POLICIES,aut as ChangeScope,out as isChangeScope,sut as policyForScope,cut as scopeAllowedInReadOnly,lut as scopeIsUndoable,uut as scopePoliciesEquivalent,dut as scopeUploadsToServer,fut as sourceForScope}from"../../../chunks/app-DD_L42Na.js";

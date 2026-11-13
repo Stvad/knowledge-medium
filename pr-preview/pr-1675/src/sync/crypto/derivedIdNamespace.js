@@ -1,1 +1,1 @@
-export{wat as deriveWorkspaceIdNamespace}from"../../../chunks/app-BiaCrnSj.js";
+export{wat as deriveWorkspaceIdNamespace}from"../../../chunks/app-DD_L42Na.js";

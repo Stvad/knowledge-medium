@@ -1,1 +1,1 @@
-export{HP as ClientLocalSettings,UP as clientLocalSettings}from"../../chunks/app-BiaCrnSj.js";
+export{HP as ClientLocalSettings,UP as clientLocalSettings}from"../../chunks/app-DD_L42Na.js";

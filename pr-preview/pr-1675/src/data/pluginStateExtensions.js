@@ -1,1 +1,1 @@
-export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-BiaCrnSj.js";
+export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-DD_L42Na.js";

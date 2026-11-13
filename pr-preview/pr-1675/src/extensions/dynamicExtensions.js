@@ -1,1 +1,1 @@
-export{KP as dynamicExtensionsExtension}from"../../chunks/app-BiaCrnSj.js";
+export{KP as dynamicExtensionsExtension}from"../../chunks/app-DD_L42Na.js";
