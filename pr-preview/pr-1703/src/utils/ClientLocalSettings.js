@@ -1,1 +1,0 @@
-export{UP as ClientLocalSettings,WP as clientLocalSettings}from"../../chunks/app-BlifBfVk.js";

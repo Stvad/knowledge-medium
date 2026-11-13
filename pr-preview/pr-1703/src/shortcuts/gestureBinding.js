@@ -1,1 +1,0 @@
-export{AP as gestureBindingDescriptor,jP as matchesGestureEvent}from"../../chunks/app-BlifBfVk.js";

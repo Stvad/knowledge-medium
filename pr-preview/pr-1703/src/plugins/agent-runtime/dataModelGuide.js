@@ -1,1 +1,0 @@
-export{k_ as DATA_MODEL_GUIDE,A_ as dataModelGuide}from"../../../chunks/app-BlifBfVk.js";

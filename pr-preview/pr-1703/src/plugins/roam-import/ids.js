@@ -1,1 +1,0 @@
-export{Md as resolveDailyPage}from"../../../chunks/app-BlifBfVk.js";

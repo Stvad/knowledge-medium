@@ -1,1 +1,0 @@
-export{yu as blockTaggingDataExtension}from"../../../chunks/app-BlifBfVk.js";

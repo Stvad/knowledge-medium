@@ -1,1 +1,0 @@
-export{XM as TypeChip}from"../../../chunks/app-BlifBfVk.js";

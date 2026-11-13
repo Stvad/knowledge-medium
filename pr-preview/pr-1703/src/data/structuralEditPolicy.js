@@ -1,1 +1,0 @@
-export{TN as resolveStructuralEditPolicy,EN as structuralEditPolicyForBlock}from"../../chunks/app-BlifBfVk.js";

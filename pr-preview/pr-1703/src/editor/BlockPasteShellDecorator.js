@@ -1,1 +1,0 @@
-export{FN as BlockPasteShellDecorator,IN as blockPasteShellDecorator}from"../../chunks/app-BlifBfVk.js";

@@ -1,1 +1,0 @@
-export{ch as extensionApiCatalog,lh as extensionApiRuntimeExports}from"../../chunks/app-BlifBfVk.js";

@@ -1,1 +1,0 @@
-export{AT as getOrCreateShortcutsBlock,jT as journalShortcutBlockId,MT as shortcutsBlockId}from"../../../chunks/app-BlifBfVk.js";

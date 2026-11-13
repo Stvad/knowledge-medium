@@ -1,1 +1,0 @@
-export{rP as approveExtensionHere}from"../../chunks/app-BlifBfVk.js";

@@ -1,1 +1,0 @@
-export{TM as DEFAULT_QUICK_ACTION_ITEMS,EM as SWIPE_RIGHT_BLOCK_ACTION_ID,DM as isQuickActionItem,OM as quickActionItemsFacet}from"../../../chunks/app-BlifBfVk.js";

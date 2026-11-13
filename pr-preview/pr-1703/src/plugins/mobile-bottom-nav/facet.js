@@ -1,1 +1,0 @@
-export{Qw as mobileBottomNavItemsFacet}from"../../../chunks/app-BlifBfVk.js";

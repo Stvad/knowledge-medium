@@ -1,1 +1,0 @@
-export{aj as adoptTypedBlock,oj as createTypedChild,rot as derivedBlockId,sj as getOrCreateTypedChild}from"../../chunks/app-BlifBfVk.js";

@@ -1,1 +1,0 @@
-export{PI as BlockTypeBlockRenderer,FI as BlockTypeContentRenderer,II as writeBlockTypeLabel}from"../../../chunks/app-BlifBfVk.js";
