@@ -59,6 +59,7 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
+  scalarValueRow,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
@@ -908,7 +909,7 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, additive)
+    await reconcileSingleValueChild(tx, fieldRow, schema, values, contents[0]!, additive)
     return
   }
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
@@ -930,13 +931,13 @@ const createValueChild = (
 const reconcileSingleValueChild = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
   values: readonly BlockData[],
   content: string,
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
-  const [primary, ...duplicates] = values
-  if (!primary) {
+  if (values.length === 0) {
     await createValueChild(tx, fieldRow, content, keyAtStart(null))
     return
   }
@@ -946,13 +947,18 @@ const reconcileSingleValueChild = async (
   // there is against `content`, the cell value the primary was just permitted
   // to disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive) return
+  const primary = scalarValueRow(schema, values, content)
+  if (!primary) {
+    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]!.orderKey))
+    return
+  }
   if (primary.content !== content) await tx.update(primary.id, {content})
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
-  for (const duplicate of duplicates) {
-    if (duplicate.content === content) {
+  for (const duplicate of values) {
+    if (duplicate !== primary && duplicate.content === content) {
       await collapseDuplicateValueChild(tx, primary.id, duplicate)
     }
   }

@@ -6,6 +6,7 @@ import type {
 } from 'react';
 import { Block } from '../data/block';
 import type { FocusedBlockLocation } from '../data/properties';
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
@@ -155,6 +156,10 @@ export interface BaseShortcutDependencies {
    *  primitives use it so they don't descend into a collapsed nested
    *  root whose children aren't rendered. Defaults to true (focal). */
   scopeRootForcesOpen?: boolean;
+  /** The property display scope of the surface (`PropertyDisplayScope`), so
+   *  a structural gesture or copy acts on the list that surface draws.
+   *  Injected beside `scopeRootId`; absent means mode `none`. */
+  propertyDisplay?: PropertyDisplayScopeLevels;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
