@@ -28,28 +28,34 @@ const hiddenKernelPropertyNames = new Set([
   'renderer',
   'blockSelectionState',
   'system:showProperties',
+  'system:propertyDisplay',
+  'system:propertyDisplayDefault',
   'sourceBlockId',
   'topLevelBlockId',
 ])
 
+const userPrefsPropertyNames = new Set(['system:propertyDisplayDefault'])
+
 const uiStatePropertyNames = new Set([
-  'system:showProperties', 'isEditing', 'topLevelBlockId',
+  'system:showProperties', 'system:propertyDisplay', 'isEditing', 'topLevelBlockId',
   'focusedBlockLocation', 'activePanelId', 'scrollTop', 'panelViewMode',
   'panelMaximized', 'layoutColumnWeight', 'editorSelection', 'editorFocusRequest', 'blockSelectionState',
 ])
 
 describe('kernel property seed conversion', () => {
-  it('defines all 40 kernel properties as valid, unique seeds', () => {
+  it('defines all 43 kernel properties as valid, unique seeds', () => {
     const seeds = KERNEL_PROPERTY_SEEDS
 
-    expect(seeds).toHaveLength(40)
+    expect(seeds).toHaveLength(43)
     expect(new Set(seeds.map(seed => seed.seedKey))).toHaveLength(seeds.length)
     expect(new Set(seeds.map(seed => seed.name))).toHaveLength(seeds.length)
     expect(seeds.every(isPropertySeedDeclaration)).toBe(true)
 
     expect(new Set(seeds.filter(seed => seed.changeScope === ChangeScope.UiState).map(seed => seed.name)))
       .toEqual(uiStatePropertyNames)
-    expect(seeds.filter(seed => !uiStatePropertyNames.has(seed.name))
+    expect(new Set(seeds.filter(seed => seed.changeScope === ChangeScope.UserPrefs).map(seed => seed.name)))
+      .toEqual(userPrefsPropertyNames)
+    expect(seeds.filter(seed => !uiStatePropertyNames.has(seed.name) && !userPrefsPropertyNames.has(seed.name))
       .every(seed => seed.changeScope === ChangeScope.BlockDefault)).toBe(true)
   })
 
@@ -70,6 +76,8 @@ describe('kernel property seed conversion', () => {
       'blockSelectionState',
       'property-schema:change-scope',
       'property-schema:config',
+      'system:propertyDisplay',
+      'system:propertyDisplayDefault',
     ])
     expect(seeds.find(seed => seed.name === 'blockSelectionState')?.encodedDefaultValue)
       .toEqual({selectedBlockIds: [], anchorBlockId: null})

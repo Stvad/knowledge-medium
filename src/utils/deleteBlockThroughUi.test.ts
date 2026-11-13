@@ -244,7 +244,7 @@ describe('bulk-delete confirmation', () => {
 
     // Precondition: the field row really is recognized as machinery, or this
     // test proves nothing — the visible view would include the branch anyway.
-    const visible = await repo.runQuery('core.subtree', {id: 'root', hidePropertyChildren: true})
+    const visible = await repo.runQuery('core.subtree', {id: 'root', propertyChildren: 'none'})
     expect((visible as {id: string}[]).map(row => row.id)).not.toContain('comment-0')
 
     const deleting = deleteBlockThroughUi(repo.block('root'))

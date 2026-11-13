@@ -12,7 +12,8 @@
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
- *   Delete (`CommentActions`).
+ *   Delete (`CommentActions`). A card zoomed into a comment renders that
+ *   comment in the root's place (`ZoomableSurface`).
  */
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
@@ -40,9 +41,10 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
-import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
+import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
+import {SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
@@ -343,7 +345,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
 const CARD_CHAIN_KEY = 'annotations.cardChain'
 
 const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
-  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
+  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : NO_IDS
 
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
@@ -352,17 +354,45 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
+    <ZoomableSurface renderScopeId={renderScopeId} rootId={thread.id}>
+      {zoom => <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={zoom}/>}
+    </ZoomableSurface>
+  )
+}
+
+const rootCrumbLabel = (anchor: ThreadAnchor): string =>
+  anchor.kind === 'block' ? 'Thread' : `“${truncate(firstLine(anchor.quote), 32)}”`
+
+/** A zoomed card shows a comment in the root's place, so the thread's header
+ *  and the comments outside the zoom are hidden until it is zoomed out. */
+const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: SurfaceZoom | null}) => {
+  const parent = useBlockContext()
+  const shownId = zoom?.blockId ?? thread.id
+  // Stable across the card's own re-renders (a zoom), which would otherwise
+  // hand every block in it a new context.
+  const outerChain = cardChainOf(parent)
+  const chain = useMemo(() => [...outerChain, thread.id], [outerChain, thread.id])
+  return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
+      {zoom && (
+        <SurfaceZoomCrumbs
+          renderScopeId={renderScopeId}
+          zoom={zoom}
+          rootLabel={rootCrumbLabel(thread.anchor)}
+          label="Zoomed in comment thread"
+        />
+      )}
       <NestedBlockContextProvider overrides={{
         isNestedSurface: true,
         layoutBoundary: false,
         renderScopeId,
-        scopeRootId: thread.id,
+        scopeRootId: shownId,
         [COMMENT_CARD_KEY]: renderScopeId,
-        [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
-        [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
+        [CONTRIBUTOR_CARD_MODE_KEY]: shownId,
+        [CONTRIBUTOR_CARD_HEADER_KEY]: thread.id,
+        [CARD_CHAIN_KEY]: chain,
       }}>
-        <BlockComponent blockId={thread.id}/>
+        <BlockComponent blockId={shownId}/>
       </NestedBlockContextProvider>
     </div>
   )

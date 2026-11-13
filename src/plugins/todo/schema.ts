@@ -20,6 +20,7 @@ export const statusProp = seedProperty<TodoStatus>({
   ]},
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const roamTodoStateProp = seedProperty<RoamTodoState>({
@@ -33,6 +34,7 @@ export const roamTodoStateProp = seedProperty<RoamTodoState>({
   ]},
   defaultValue: 'TODO',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const todoType = seedType({

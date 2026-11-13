@@ -107,7 +107,8 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
     if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
     return {pending: true, reason: 'stale-running'}
   }
-  if (status) return {pending: false, reason: 'already-processed'}
+  // `queued` is seen-but-unclaimed: it goes through every gate below.
+  if (status && status !== 'queued') return {pending: false, reason: 'already-processed'}
 
   // Baseline gate only for UNCLAIMED blocks (a claim implies the block
   // already passed it). Unknown edit time counts as old: every real row

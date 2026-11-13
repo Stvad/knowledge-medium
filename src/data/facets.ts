@@ -166,7 +166,9 @@ export interface BackfillCompletionClaim {
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
-   *  thrown backfill). Give the claim back, or the pass never runs again. */
+   *  thrown backfill). Give the claim back, or the pass never runs again — and
+   *  a claim taken over a COMPLETED one back to that completion, so a failed
+   *  re-run does not erase the record that an earlier run finished. */
   releaseClaim(workspaceId: string, backfillId: string): Promise<void>
 }
 
@@ -212,9 +214,17 @@ export interface WorkspaceBackfill {
 }
 
 export interface WorkspaceBackfillContext {
-  /** Successful sync waits during this run. A scan spanning a change in this
-   *  count must revisit its candidates before declaring convergence. */
+  /** Sync activity this run waited for or saw. A scan spanning a change in
+   *  this count must revisit its candidates before declaring convergence. */
   readonly syncWaitCount: number
+  /** Ask the full view-gap check — downloads in flight included — and throw
+   *  why the view is incomplete. An `operator` pass waits for it to clear; a
+   *  `workspace-open` pass is refused at once. An `operator` batch checks only
+   *  rows already on this device, so a pass that re-reads from the top asks
+   *  here first. It does not wait for this device's own upload queue: until
+   *  their checkpoint arrives, queued uploads read as settled, and the sweep
+   *  that sees them land counts it through `syncWaitCount`. */
+  awaitCaughtUp: () => Promise<void>
   /** The single workspace this run is scoped to. Every read and write MUST be
    *  filtered to it — a backfill never touches another workspace (that was the
    *  cross-workspace cold-start hazard the original raw backfill had). */

@@ -118,6 +118,11 @@ export type {
 } from '@/utils/navigation.js'
 
 export type {
+  SurfaceZoom,
+  ZoomCrumb,
+} from '@/components/ZoomableSurface.js'
+
+export type {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,

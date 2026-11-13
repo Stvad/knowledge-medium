@@ -24,8 +24,7 @@
  * of claude's --strict-mcp-config rather than an equivalent.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import { envForBilling, humanizeToolName } from './runner.js'
-import type { AgentRunResult, CommonRunOptions, RunEvent } from './runner.js'
+import { envForBilling, humanizeToolName, tokenCount, type AgentRunResult, type CommonRunOptions, type RunEvent, type RunUsage } from './runner.js'
 import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 export type { SpawnImpl }
@@ -277,6 +276,21 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
   return {feed, finish}
 }
 
+/** The usage on codex's `turn.completed` line. Its input_tokens INCLUDES
+ *  the cached ones, and codex reports no cache writes. */
+export const codexUsageFrom = (raw: Record<string, unknown>): RunUsage | null => {
+  const usage = raw.type === 'turn.completed' ? raw.usage : undefined
+  if (!usage || typeof usage !== 'object') return null
+  const counts = usage as Record<string, unknown>
+  const cached = tokenCount(counts.cached_input_tokens)
+  return {
+    inputTokens: Math.max(0, tokenCount(counts.input_tokens) - cached),
+    cacheReadTokens: cached,
+    cacheWriteTokens: null,
+    outputTokens: tokenCount(counts.output_tokens),
+  }
+}
+
 export const runCodex = async (
   options: CodexRunOptions,
   spawnImpl?: SpawnImpl,
@@ -317,5 +331,6 @@ export const runCodex = async (
     timedOut,
     stderr: effectiveStderr,
     raw: parsed.raw,
+    usage: codexUsageFrom(parsed.raw),
   }
 }

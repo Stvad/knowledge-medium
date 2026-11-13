@@ -136,10 +136,13 @@ const ContributorBadgeItem: BlockRenderer = ({block}) => {
 
 /** A surface that wants every block's author shown, humans included (a comment
  *  card), sets this to its scope root's id in its `NestedBlockContextProvider`
- *  overrides. Card mode covers the blocks under that root, not the root itself
- *  (the card's header), and stops at any nested surface inside the card, which
- *  resets the scope root. */
+ *  overrides. Card mode covers that root and the blocks under it, and stops at
+ *  any nested surface inside the card, which resets the scope root. */
 export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
+
+/** The id of the one block in a card that is its header, not a contribution,
+ *  and gets no author line. */
+export const CONTRIBUTOR_CARD_HEADER_KEY = 'contributors.cardHeader'
 
 /** The author line of a card, by the rule `authorIdOf` (./author.ts)
  *  states. A user page that is not loaded, or not created, shows the user id,
@@ -184,7 +187,8 @@ const badgeItem: BlockGutterItem = {corner: 'top-right', component: ContributorB
 
 const inCardBody = ({block, blockContext}: BlockResolveContext): boolean => {
   const root = blockContext?.[CONTRIBUTOR_CARD_MODE_KEY]
-  return typeof root === 'string' && root === blockContext?.scopeRootId && block.id !== root
+  return typeof root === 'string' && root === blockContext?.scopeRootId &&
+    block.id !== blockContext[CONTRIBUTOR_CARD_HEADER_KEY]
 }
 
 /** In a card body the author line replaces the badge. */

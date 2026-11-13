@@ -32,8 +32,11 @@ export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | n
   return null
 }
 
-/** Where `element` can actually be seen: the window, clipped by EVERY scrollport
- *  between it and the root.
+const CLIPPING_OVERFLOW: ReadonlySet<string> = new Set(['auto', 'scroll', 'overlay', 'hidden', 'clip'])
+
+/** Where `element` can actually be seen: the window, clipped by EVERY ancestor
+ *  between it and the root that clips its overflow, a scrollport or a box that
+ *  clips without scrolling (the comments margin's column).
  *
  *  All of them, not just the nearest: panes nest. A note row inside the
  *  video-notes aside sits in that aside's scrollport, and the whole pane is
@@ -46,7 +49,7 @@ export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibi
   let ancestor = element.parentElement
   while (ancestor) {
     const {overflowY} = window.getComputedStyle(ancestor)
-    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+    if (CLIPPING_OVERFLOW.has(overflowY)) {
       const rect = ancestor.getBoundingClientRect()
       bounds = {
         top: Math.max(bounds.top, rect.top),

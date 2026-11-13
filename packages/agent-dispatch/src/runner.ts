@@ -77,7 +77,61 @@ export interface AgentRunResult {
   stderr: string
   /** Parsed --output-format json envelope (null if unparseable). */
   raw: Record<string, unknown> | null
+  /** Token counts summed over every request of the run; null when the
+   *  executor reported none (a crash or timeout before its final line). */
+  usage: RunUsage | null
 }
+
+export interface RunUsage {
+  /** Input billed at the full rate: neither read from nor written to the cache. */
+  inputTokens: number
+  cacheReadTokens: number
+  /** null for an executor that doesn't report cache writes (codex). */
+  cacheWriteTokens: number | null
+  outputTokens: number
+}
+
+/** A token count off an executor's usage object; 0 for a missing field. */
+export const tokenCount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+/** The run's usage from a claude `result` line. `modelUsage` totals the whole
+ *  process, every model and subagent; `usage` covers only the turn that line
+ *  ends, and a run that waits on a background subagent has one per turn. */
+export const claudeUsageFrom = (raw: Record<string, unknown> | null): RunUsage | null => {
+  if (isRecord(raw?.modelUsage)) {
+    const perModel = Object.values(raw.modelUsage).filter(isRecord)
+    const sum = (key: string) => perModel.reduce((total, counts) => total + tokenCount(counts[key]), 0)
+    return {
+      inputTokens: sum('inputTokens'),
+      cacheReadTokens: sum('cacheReadInputTokens'),
+      cacheWriteTokens: sum('cacheCreationInputTokens'),
+      outputTokens: sum('outputTokens'),
+    }
+  }
+  if (!isRecord(raw?.usage)) return null
+  const counts = raw.usage
+  return {
+    inputTokens: tokenCount(counts.input_tokens),
+    cacheReadTokens: tokenCount(counts.cache_read_input_tokens),
+    cacheWriteTokens: tokenCount(counts.cache_creation_input_tokens),
+    outputTokens: tokenCount(counts.output_tokens),
+  }
+}
+
+const compactCount = (count: number): string =>
+  count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}M`
+    : count >= 1_000 ? `${(count / 1_000).toFixed(1)}k`
+      : String(count)
+
+export const formatRunUsage = (usage: RunUsage): string => [
+  `tokens: in ${compactCount(usage.inputTokens)}`,
+  `cache read ${compactCount(usage.cacheReadTokens)}`,
+  ...(usage.cacheWriteTokens === null ? [] : [`cache write ${compactCount(usage.cacheWriteTokens)}`]),
+  `out ${compactCount(usage.outputTokens)}`,
+].join(' · ')
 
 /** Env vars that would redirect billing away from the subscription
  *  (API key / bearer token beat OAuth in claude's credential order;
@@ -108,6 +162,14 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
+/** The built-in tools among `allowedTools`, by name: `Bash(git *)` allows
+ *  Bash. MCP tools come from --mcp-config, not --tools. */
+const builtInToolsAllowed = (allowedTools: readonly string[]): string[] => [
+  ...new Set(allowedTools
+    .filter(rule => !rule.startsWith('mcp__'))
+    .map(rule => rule.replace(/\(.*\)$/, '').trim())),
+]
+
 /** The prompt is deliberately NOT an argv element — it goes via stdin
  *  (claude -p reads stdin when no prompt argument is given). Argv is
  *  visible to every local process in `ps` and capped by ARG_MAX; note
@@ -125,6 +187,11 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     // globally-registered servers.
     args.push('--mcp-config', options.mcpConfigPath, '--strict-mcp-config')
   }
+  // --allowedTools only pre-approves: an offered tool that needs no approval
+  // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
+  // anyway, so the offered set is the boundary. Offer only the built-ins the
+  // allow list names, and no skills: every request carries each one offered.
+  args.push('--disable-slash-commands', '--tools', builtInToolsAllowed(options.allowedTools).join(','))
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
@@ -340,5 +407,6 @@ export const runClaude = async (
     timedOut,
     stderr,
     raw: parsed?.raw ?? null,
+    usage: claudeUsageFrom(parsed?.raw ?? null),
   }
 }
