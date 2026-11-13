@@ -1,1 +1,1 @@
-import"../chunks/app-DO8EtrQ0.js";
+import"../chunks/app-965Q2DFR.js";

@@ -1,1 +1,1 @@
-export{ko as OPEN_DB_MIRROR_SETTINGS_ACTION_ID,Do as dbMirrorPlugin}from"../../../chunks/app-DO8EtrQ0.js";
+export{ko as OPEN_DB_MIRROR_SETTINGS_ACTION_ID,Do as dbMirrorPlugin}from"../../../chunks/app-965Q2DFR.js";

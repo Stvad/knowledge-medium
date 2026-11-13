@@ -1,1 +1,1 @@
-export{WK as referencesDataExtension}from"../../../chunks/app-DO8EtrQ0.js";
+export{GK as referencesDataExtension}from"../../../chunks/app-965Q2DFR.js";

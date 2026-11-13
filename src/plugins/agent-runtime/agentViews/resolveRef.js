@@ -1,1 +1,1 @@
-export{Gg as BlockRefError,Kg as resolveBlockRef}from"../../../../chunks/app-DO8EtrQ0.js";
+export{Gg as BlockRefError,Kg as resolveBlockRef}from"../../../../chunks/app-965Q2DFR.js";

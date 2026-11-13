@@ -1,1 +1,1 @@
-export{Zx as useAssetObjectUrl}from"../../../chunks/app-DO8EtrQ0.js";
+export{Zx as useAssetObjectUrl}from"../../../chunks/app-965Q2DFR.js";

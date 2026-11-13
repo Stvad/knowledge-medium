@@ -1,1 +1,1 @@
-export{E2 as CATCHUP_DEEP_IDLE,D2 as LAZY_DEEP_IDLE,O2 as scheduleDeepIdle,k2 as scheduleIdle}from"../../chunks/app-DO8EtrQ0.js";
+export{D2 as CATCHUP_DEEP_IDLE,O2 as LAZY_DEEP_IDLE,k2 as scheduleDeepIdle,A2 as scheduleIdle}from"../../chunks/app-965Q2DFR.js";
