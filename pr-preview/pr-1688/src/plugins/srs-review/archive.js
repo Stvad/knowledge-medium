@@ -1,1 +1,0 @@
-export{qc as archiveSrsCard}from"../../../chunks/app-69-ZGS97.js";

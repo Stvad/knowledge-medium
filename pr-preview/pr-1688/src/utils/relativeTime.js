@@ -1,1 +1,0 @@
-export{FD as formatAbsoluteDateTime,ID as formatRelativeTime}from"../../chunks/app-69-ZGS97.js";

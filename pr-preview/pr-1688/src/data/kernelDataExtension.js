@@ -1,1 +1,0 @@
-export{G3 as kernelDataExtension}from"../../chunks/app-69-ZGS97.js";

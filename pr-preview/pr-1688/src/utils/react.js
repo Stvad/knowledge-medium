@@ -1,1 +1,0 @@
-export{EL as useIsMobile,DL as usePointerCoarse}from"../../chunks/app-69-ZGS97.js";

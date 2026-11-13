@@ -1,1 +1,0 @@
-export{ca as ResponsivenessTotals,la as SLOW_MS,ua as observeResponsiveness}from"../../../chunks/app-69-ZGS97.js";

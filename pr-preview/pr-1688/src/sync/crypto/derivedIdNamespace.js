@@ -1,1 +1,0 @@
-export{wat as deriveWorkspaceIdNamespace}from"../../../chunks/app-69-ZGS97.js";

@@ -1,1 +1,0 @@
-export{Zy as useIsReadOnly}from"../../chunks/app-69-ZGS97.js";
