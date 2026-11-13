@@ -1,0 +1,1 @@
+export{RG as SuspenseFallback}from"../../../chunks/app-DXEaDsxX.js";

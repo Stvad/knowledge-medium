@@ -1,0 +1,1 @@
+export{Fj as CommandPaletteHeaderItem}from"../../../chunks/app-DXEaDsxX.js";

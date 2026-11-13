@@ -1,0 +1,1 @@
+export{RM as chipStyle}from"../../../chunks/app-DXEaDsxX.js";

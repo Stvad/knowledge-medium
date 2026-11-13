@@ -1,0 +1,1 @@
+export{rG as usePropertySchemas}from"../../chunks/app-DXEaDsxX.js";

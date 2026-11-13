@@ -1,0 +1,1 @@
+export{DD as BlockLink}from"../../../chunks/app-DXEaDsxX.js";

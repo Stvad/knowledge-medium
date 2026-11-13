@@ -1,0 +1,1 @@
+export{Kj as SwipeActionMenu}from"../../../chunks/app-DXEaDsxX.js";

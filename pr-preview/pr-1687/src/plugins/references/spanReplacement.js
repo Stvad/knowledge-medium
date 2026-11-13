@@ -1,0 +1,1 @@
+export{rq as preferredSpanReplacement}from"../../../chunks/app-DXEaDsxX.js";

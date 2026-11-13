@@ -1,0 +1,1 @@
+export{zx as useAssetObjectUrl}from"../../../chunks/app-DXEaDsxX.js";

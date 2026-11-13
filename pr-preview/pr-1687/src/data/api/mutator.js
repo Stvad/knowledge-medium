@@ -1,0 +1,1 @@
+export{Fct as defineMutator}from"../../../chunks/app-DXEaDsxX.js";

@@ -1,0 +1,1 @@
+export{MQ as aliasDataExtension}from"../../../chunks/app-DXEaDsxX.js";

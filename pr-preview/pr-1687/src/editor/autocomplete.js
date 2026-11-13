@@ -1,0 +1,1 @@
+export{MN as editorAutocompleteExtension}from"../../chunks/app-DXEaDsxX.js";

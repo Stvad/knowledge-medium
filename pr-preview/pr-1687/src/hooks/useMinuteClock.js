@@ -1,0 +1,1 @@
+export{kD as useMinuteClock}from"../../chunks/app-DXEaDsxX.js";

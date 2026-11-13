@@ -1,0 +1,1 @@
+export{dR as useShortcutSurfaceActivations}from"../../chunks/app-DXEaDsxX.js";

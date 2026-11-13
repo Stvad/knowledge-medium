@@ -1,0 +1,1 @@
+export{WU as isIOS,GU as isMacPlatform}from"../../chunks/app-DXEaDsxX.js";
