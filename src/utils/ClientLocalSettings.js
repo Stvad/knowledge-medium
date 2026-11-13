@@ -1,1 +1,1 @@
-export{WP as ClientLocalSettings,GP as clientLocalSettings}from"../../chunks/app-BlxTdjlq.js";
+export{JP as ClientLocalSettings,YP as clientLocalSettings}from"../../chunks/app-Ck14S0Ac.js";
