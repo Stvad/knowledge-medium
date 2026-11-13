@@ -1,1 +1,0 @@
-export{UD as openRecentsPage}from"../../../chunks/app-oruJsK-X.js";

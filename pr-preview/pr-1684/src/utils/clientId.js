@@ -1,1 +1,0 @@
-export{prt as deviceSurface,mrt as getClientId,hrt as getDeviceLabel,grt as isClientIdPersistent,_rt as resetClientIdCache}from"../../chunks/app-oruJsK-X.js";

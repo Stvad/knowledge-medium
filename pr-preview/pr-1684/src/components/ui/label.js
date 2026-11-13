@@ -1,1 +1,0 @@
-export{KO as Label}from"../../../chunks/app-oruJsK-X.js";

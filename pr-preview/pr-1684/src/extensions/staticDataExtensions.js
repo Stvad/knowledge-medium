@@ -1,1 +1,0 @@
-export{OK as staticDataExtensions}from"../../chunks/app-oruJsK-X.js";

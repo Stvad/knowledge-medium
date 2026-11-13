@@ -1,1 +1,0 @@
-export{go as migratePropertiesToBlocksAction,fo as propertiesMigrationPlugin}from"../../../chunks/app-oruJsK-X.js";

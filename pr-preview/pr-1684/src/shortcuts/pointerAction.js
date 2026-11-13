@@ -1,1 +1,0 @@
-export{jP as dispatchPointerAction,MP as setPointerActionDispatcher}from"../../chunks/app-oruJsK-X.js";

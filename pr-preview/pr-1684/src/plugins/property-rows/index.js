@@ -1,1 +1,0 @@
-export{eo as propertyRowsPlugin}from"../../../chunks/app-oruJsK-X.js";

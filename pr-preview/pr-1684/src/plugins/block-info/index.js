@@ -1,1 +1,0 @@
-export{Z_ as blockInfoPlugin}from"../../../chunks/app-oruJsK-X.js";

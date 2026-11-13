@@ -1,1 +1,0 @@
-export{nT as usePromotableBreadcrumb}from"../../../chunks/app-oruJsK-X.js";

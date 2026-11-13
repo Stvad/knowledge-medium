@@ -1,1 +1,0 @@
-export{Sc as getSyncIndicatorView}from"../../../chunks/app-oruJsK-X.js";

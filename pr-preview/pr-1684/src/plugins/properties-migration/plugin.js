@@ -1,1 +1,0 @@
-export{fo as propertiesMigrationPlugin}from"../../../chunks/app-oruJsK-X.js";

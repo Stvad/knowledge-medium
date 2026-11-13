@@ -1,1 +1,0 @@
-export{UY as annotationsDataExtension}from"../../../chunks/app-oruJsK-X.js";

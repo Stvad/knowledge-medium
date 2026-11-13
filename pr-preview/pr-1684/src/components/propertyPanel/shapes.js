@@ -1,1 +1,0 @@
-export{CG as propertyShapeLabel}from"../../../chunks/app-oruJsK-X.js";

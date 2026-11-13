@@ -1,1 +1,0 @@
-export{xG as PropertyShapeButton,SG as PropertyShapeGlyph}from"../../../chunks/app-oruJsK-X.js";

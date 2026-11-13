@@ -1,1 +1,0 @@
-export{LB as BlockProperties}from"../../chunks/app-oruJsK-X.js";

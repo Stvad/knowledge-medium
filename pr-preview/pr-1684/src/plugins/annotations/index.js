@@ -1,1 +1,0 @@
-export{Ud as annotationsPlugin}from"../../../chunks/app-oruJsK-X.js";

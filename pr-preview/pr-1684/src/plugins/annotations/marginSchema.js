@@ -1,1 +1,0 @@
-export{JX as annotationMarginOpenProp,YX as annotationMarginShareProp}from"../../../chunks/app-oruJsK-X.js";

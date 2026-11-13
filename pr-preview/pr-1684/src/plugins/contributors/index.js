@@ -1,1 +1,0 @@
-export{dm as contributorsPlugin}from"../../../chunks/app-oruJsK-X.js";

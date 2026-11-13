@@ -1,1 +1,0 @@
-export{yG as usePropertySchemas}from"../../chunks/app-oruJsK-X.js";

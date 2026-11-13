@@ -1,1 +1,0 @@
-export{Bq as htmlDocumentTypeSeed}from"../../../chunks/app-oruJsK-X.js";

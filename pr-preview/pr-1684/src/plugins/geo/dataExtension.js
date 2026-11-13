@@ -1,1 +1,0 @@
-export{mJ as geoDataExtension}from"../../../chunks/app-oruJsK-X.js";

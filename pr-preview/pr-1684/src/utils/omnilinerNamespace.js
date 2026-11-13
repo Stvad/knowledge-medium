@@ -1,1 +1,0 @@
-export{s1 as omnilinerNamespace}from"../../chunks/app-oruJsK-X.js";

@@ -1,1 +1,0 @@
-export{ir as birthdayPlugin}from"../../../chunks/app-oruJsK-X.js";
