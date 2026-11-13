@@ -1,1 +1,1 @@
-export{MS as default}from"../../../chunks/app-ByoeuUTY.js";
+export{MS as default}from"../../../chunks/app-uYV7JbTU.js";

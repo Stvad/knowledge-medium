@@ -1,1 +1,1 @@
-export{VD as useMinuteClock}from"../../chunks/app-ByoeuUTY.js";
+export{VD as useMinuteClock}from"../../chunks/app-uYV7JbTU.js";

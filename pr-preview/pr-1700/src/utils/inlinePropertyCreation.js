@@ -1,1 +1,1 @@
-export{YL as createInlineProperty}from"../../chunks/app-ByoeuUTY.js";
+export{YL as createInlineProperty}from"../../chunks/app-uYV7JbTU.js";
