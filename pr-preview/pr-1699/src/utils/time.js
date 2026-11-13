@@ -1,0 +1,1 @@
+export{NS as hmsToSeconds}from"../../chunks/app-B651sOA2.js";

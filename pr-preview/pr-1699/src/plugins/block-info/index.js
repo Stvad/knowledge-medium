@@ -1,0 +1,1 @@
+export{Z_ as blockInfoPlugin}from"../../../chunks/app-B651sOA2.js";

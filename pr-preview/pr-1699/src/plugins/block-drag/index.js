@@ -1,0 +1,1 @@
+export{Vy as blockDragPlugin}from"../../../chunks/app-B651sOA2.js";

@@ -1,0 +1,1 @@
+export{UD as openRecentsPage}from"../../../chunks/app-B651sOA2.js";

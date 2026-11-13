@@ -1,0 +1,1 @@
+export{gy as remarkWikilinks}from"../../../../../chunks/app-B651sOA2.js";

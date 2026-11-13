@@ -1,0 +1,1 @@
+export{ZM as DEFAULT_TYPE_COLORS,QM as defaultTypeColor,$M as pickLeastUsedTypeColor}from"../../chunks/app-B651sOA2.js";

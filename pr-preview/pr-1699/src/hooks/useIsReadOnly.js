@@ -1,0 +1,1 @@
+export{Zy as useIsReadOnly}from"../../chunks/app-B651sOA2.js";

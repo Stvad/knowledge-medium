@@ -1,0 +1,1 @@
+export{kP as gestureBindingDescriptor,AP as matchesGestureEvent}from"../../chunks/app-B651sOA2.js";

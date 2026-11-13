@@ -1,0 +1,1 @@
+export{lg as readMedia}from"../../../chunks/app-B651sOA2.js";

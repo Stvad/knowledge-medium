@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-B651sOA2.js";

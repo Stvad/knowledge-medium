@@ -1,0 +1,1 @@
+export{Kr as ExtensionsSettings}from"../../../chunks/app-B651sOA2.js";

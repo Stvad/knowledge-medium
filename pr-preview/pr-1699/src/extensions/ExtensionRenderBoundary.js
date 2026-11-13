@@ -1,0 +1,1 @@
+export{vz as ExtensionRenderBoundary}from"../../chunks/app-B651sOA2.js";

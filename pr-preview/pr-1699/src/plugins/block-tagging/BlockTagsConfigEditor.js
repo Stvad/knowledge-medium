@@ -1,0 +1,1 @@
+export{_u as BlockTagsConfigEditor}from"../../../chunks/app-B651sOA2.js";

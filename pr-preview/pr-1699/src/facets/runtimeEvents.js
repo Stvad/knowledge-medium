@@ -1,0 +1,1 @@
+export{AG as appRuntimeUpdateEvent,jG as refreshAppRuntime}from"../../chunks/app-B651sOA2.js";

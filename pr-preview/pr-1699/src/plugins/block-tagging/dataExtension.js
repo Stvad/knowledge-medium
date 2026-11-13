@@ -1,0 +1,1 @@
+export{yu as blockTaggingDataExtension}from"../../../chunks/app-B651sOA2.js";
