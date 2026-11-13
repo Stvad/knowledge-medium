@@ -4,7 +4,6 @@ import {
   ActionContextTypes,
   BaseShortcutDependencies,
   ActionConfig,
-  ActionContextType,
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
   CodeMirrorEditModeDependencies,
@@ -13,8 +12,6 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { matchesAction } from './effectiveActions'
-import { keybindingOverridesFacet } from './keybindingOverrides'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
@@ -246,17 +243,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const moveBlockDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockDown)
   const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
-  // The default yields to both the child-backed cycle and saved panel bindings.
-  const panelDefaultShortcut = <T extends ActionContextType>(action: ActionConfig<T>): ActionConfig<T> => ({
-    ...action,
-    id: `${action.id}_default`,
-    defaultBinding: {keys: 't'},
-    isVisible: () => false,
-    canDispatch: ({propertyDisplay}) => !propertyDisplay?.childBacked &&
-      !repo.facetRuntime?.read(keybindingOverridesFacet).some(override => matchesAction(override, action)),
-  })
-  const togglePropertiesShortcutAction = panelDefaultShortcut(togglePropertiesDisplayAction)
-  const toggleSelectedPropertiesAction = applyToAllBlocksInSelection(togglePropertiesDisplayAction)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock),
@@ -419,7 +405,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     // activates.
     {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
     togglePropertiesDisplayAction,
-    togglePropertiesShortcutAction,
     toggleBlockCollapseAction,
   ]
 
@@ -1367,8 +1352,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
     applyToAllBlocksInSelection(toggleBlockCollapseAction),
-    toggleSelectedPropertiesAction,
-    panelDefaultShortcut(toggleSelectedPropertiesAction),
+    applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
     // Not a per-block fan-out: one guarded, confirmed batch delete.
