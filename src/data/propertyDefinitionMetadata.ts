@@ -39,7 +39,7 @@ export const propertySchemaOriginForSeedKey = (seedKey: string): PropertySchemaO
  * seed marker is the one deliberate exception and demotes to ordinary user
  * provenance. */
 export const parsePropertyDefinitionMetadata = (
-  row: BlockData,
+  row: Pick<BlockData, 'id' | 'workspaceId' | 'properties' | 'deleted' | 'createdAt'>,
 ): PropertyDefinitionMetadata | null => {
   if (row.deleted) return null
 
