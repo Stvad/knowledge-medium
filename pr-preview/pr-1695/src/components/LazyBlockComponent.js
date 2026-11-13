@@ -1,0 +1,1 @@
+export{DF as LazyBlockComponent}from"../../chunks/app-D9cRR9jc.js";

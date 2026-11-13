@@ -1,0 +1,1 @@
+export{CG as usePropertySchemas}from"../../chunks/app-D9cRR9jc.js";
