@@ -21,7 +21,7 @@ const DIVERGENCE_RECHECK_MS = 4000
 // the diagnostics store. A fresh session starts empty (always runs once).
 const lastRun = new Map<string, number>()
 // Shared idle-job queue so tests can drain in-flight audits deterministically.
-// The audit is the heaviest cold-start idle job (≈13 scan queries + bounded
+// The audit is the heaviest cold-start idle job (≈14 scan queries, two paged property-cell scans and bounded
 // decrypt spot-checks) and a 30-min-cadence smoke alarm with no urgency, so it
 // runs on GENUINE idle only (deep idle, no force-run fallback) — it must never
 // land in the time-to-interactivity window, and skipping a never-idle session
@@ -50,6 +50,7 @@ export const runConsistencyAuditNow = async (
     // The observer's §6 resolver (real in production via repoProvider; undefined
     // in tests/plaintext Repos ⇒ the divergence spot-check runs cleartext-only).
     decrypt: repo.syncObserverDeps,
+    repo,
   })
   lastRun.set(workspaceId, Date.now())
   publishConsistencyAudit(result)
