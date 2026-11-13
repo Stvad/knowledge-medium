@@ -117,6 +117,21 @@ const bothShowIndependentChildren = async (
   return intoChildIds.some(childId => childId !== from.id)
 }
 
+/** Where the edit-mode caret goes from `block`: the nearest visible row in
+ *  `direction` with text to edit. A field row on the drawn list is passed
+ *  over — it is drawn as the property's name, with no editor to hold a
+ *  caret, and a block left editing there takes no keys. */
+const caretNeighbour = async (
+  block: Block,
+  surface: OutlineSurface,
+  direction: 'next' | 'previous',
+): Promise<Block | null> => {
+  const step = direction === 'next' ? nextVisibleBlock : previousVisibleBlock
+  let neighbour = await step(block, surface)
+  while (neighbour && await isRecognizedFieldRow(neighbour)) neighbour = await step(neighbour, surface)
+  return neighbour
+}
+
 const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
   editorView.state.facet(language)?.name === markdownLanguage.name
 
@@ -892,7 +907,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const prevVisible = await caretNeighbour(block, surface, 'previous')
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
         if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
@@ -941,7 +956,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const nextVisible = await caretNeighbour(block, surface, 'next')
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -971,7 +986,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, surface)
+        const prevVisible = await caretNeighbour(block, surface, 'previous')
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -1002,7 +1017,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, surface)
+        const nextVisible = await caretNeighbour(block, surface, 'next')
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -1061,7 +1076,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           const landing: {at: {id: string; start: number} | null} = {at: null}
           const deleted = await deleteBlockThroughUi(block, {
             beforeWrite: async () => {
-              const prevVisible = await previousVisibleBlock(block, surface)
+              const prevVisible = await caretNeighbour(block, surface, 'previous')
               if (!prevVisible) return
               const prevData = await prevVisible.load()
               landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}

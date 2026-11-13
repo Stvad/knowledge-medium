@@ -21,7 +21,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
-import { focusBlock, isCollapsedProp, selectionStateProp } from '@/data/properties'
+import { focusBlock, isCollapsedProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -201,6 +201,26 @@ describe('range selection and the data walker step onto drawn property rows', ()
       targetElement: document.createElement('div'),
     }, {kind: 'test'} as never)
     expect(ui.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['a', statusRow, 'b'])
+  })
+})
+
+describe('the edit-mode caret passes a row drawn as a property\'s name', () => {
+  const focusedId = (): string | undefined => peekFocusedBlockLocation(repo.block('ui'))?.blockId
+
+  it('ArrowRight at the end of `a` lands in the value, not on the name row', async () => {
+    await pressInEditor('move_right_from_cm_end', 'a', 'end', NON_HIDDEN)
+    expect(focusedId()).toBe(draftRow)
+  })
+
+  it('ArrowLeft at the start of the value lands in `a`', async () => {
+    await pressInEditor('move_left_from_cm_start', draftRow, 'start', NON_HIDDEN)
+    expect(focusedId()).toBe('a')
+  })
+
+  it('Backspace on an emptied value lands in `a`', async () => {
+    await repo.tx(tx => tx.update(draftRow, {content: ''}), {scope: ChangeScope.BlockDefault})
+    await pressInEditor('delete_empty_block_cm', draftRow, 'start', NON_HIDDEN)
+    expect(focusedId()).toBe('a')
   })
 })
 
