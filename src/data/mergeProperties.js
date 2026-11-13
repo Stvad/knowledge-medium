@@ -1,1 +1,1 @@
-export{B8 as mergeProperties}from"../../chunks/app-ZmwwhcMd.js";
+export{V8 as mergeProperties}from"../../chunks/app-DtV18g_Z.js";

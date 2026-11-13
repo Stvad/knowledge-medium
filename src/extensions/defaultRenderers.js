@@ -1,1 +1,1 @@
-export{SF as defaultRegistry,CF as defaultRendererContributions,wF as defaultRenderersExtension}from"../../chunks/app-ZmwwhcMd.js";
+export{xF as defaultRegistry,SF as defaultRendererContributions,CF as defaultRenderersExtension}from"../../chunks/app-DtV18g_Z.js";

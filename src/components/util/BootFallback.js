@@ -1,1 +1,1 @@
-export{RG as BootFallback}from"../../../chunks/app-ZmwwhcMd.js";
+export{LG as BootFallback}from"../../../chunks/app-DtV18g_Z.js";

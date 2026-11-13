@@ -1,1 +1,1 @@
-export{WB as Checkbox}from"../../../chunks/app-ZmwwhcMd.js";
+export{UB as Checkbox}from"../../../chunks/app-DtV18g_Z.js";
