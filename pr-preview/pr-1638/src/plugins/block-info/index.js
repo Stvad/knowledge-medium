@@ -1,1 +1,0 @@
-export{Z_ as blockInfoPlugin}from"../../../chunks/app-CaSX7hlF.js";

@@ -1,1 +1,0 @@
-export{gP as checkForAppUpdate,_P as registerServiceWorker}from"../chunks/app-CaSX7hlF.js";

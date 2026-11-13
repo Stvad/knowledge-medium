@@ -1,1 +1,0 @@
-export{CG as usePropertySchemas}from"../../chunks/app-CaSX7hlF.js";

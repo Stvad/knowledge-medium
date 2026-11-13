@@ -1,1 +1,0 @@
-export{ZX as annotationMarginOpenProp,QX as annotationMarginShareProp}from"../../../chunks/app-CaSX7hlF.js";

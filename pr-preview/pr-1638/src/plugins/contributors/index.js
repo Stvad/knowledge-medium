@@ -1,1 +1,0 @@
-export{dm as contributorsPlugin}from"../../../chunks/app-CaSX7hlF.js";

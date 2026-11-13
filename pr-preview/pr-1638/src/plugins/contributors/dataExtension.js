@@ -1,1 +1,0 @@
-export{rZ as contributorsDataExtension}from"../../../chunks/app-CaSX7hlF.js";

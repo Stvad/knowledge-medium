@@ -1,1 +1,0 @@
-export{i2 as Repo}from"../../chunks/app-CaSX7hlF.js";

@@ -1,1 +1,0 @@
-export{gy as remarkWikilinks}from"../../../../../chunks/app-CaSX7hlF.js";

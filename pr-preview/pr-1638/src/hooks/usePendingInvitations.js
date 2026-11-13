@@ -1,1 +1,0 @@
-export{WE as usePendingInvitations}from"../../chunks/app-CaSX7hlF.js";

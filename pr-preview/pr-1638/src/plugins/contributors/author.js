@@ -1,1 +1,0 @@
-export{Xh as authorIdOf}from"../../../chunks/app-CaSX7hlF.js";

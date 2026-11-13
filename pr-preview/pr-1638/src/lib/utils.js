@@ -1,1 +1,0 @@
-export{t2 as cn}from"../../chunks/app-CaSX7hlF.js";

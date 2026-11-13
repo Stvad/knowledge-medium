@@ -1,1 +1,0 @@
-export{WN as editorAutocompleteExtension}from"../../chunks/app-CaSX7hlF.js";

@@ -1,1 +1,0 @@
-export{YM as TypeChip}from"../../../chunks/app-CaSX7hlF.js";

@@ -1,1 +1,0 @@
-export{XM as chipStyle}from"../../../chunks/app-CaSX7hlF.js";

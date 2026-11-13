@@ -1,1 +1,0 @@
-export{kP as gestureBindingDescriptor,AP as matchesGestureEvent}from"../../chunks/app-CaSX7hlF.js";

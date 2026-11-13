@@ -1,1 +1,0 @@
-export{EL as useIsMobile,DL as usePointerCoarse}from"../../chunks/app-CaSX7hlF.js";

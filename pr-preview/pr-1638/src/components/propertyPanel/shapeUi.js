@@ -1,1 +1,0 @@
-export{TG as PropertyShapeButton,EG as PropertyShapeGlyph}from"../../../chunks/app-CaSX7hlF.js";

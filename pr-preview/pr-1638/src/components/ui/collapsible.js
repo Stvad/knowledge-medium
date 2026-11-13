@@ -1,1 +1,0 @@
-"use client";export{NB as Collapsible,PB as CollapsibleContent,FB as CollapsibleTrigger}from"../../../chunks/app-CaSX7hlF.js";

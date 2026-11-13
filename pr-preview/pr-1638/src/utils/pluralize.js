@@ -1,1 +1,0 @@
-export{_8 as agree,v8 as pluralize}from"../../chunks/app-CaSX7hlF.js";

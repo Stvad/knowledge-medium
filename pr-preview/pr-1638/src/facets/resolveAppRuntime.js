@@ -1,1 +1,0 @@
-export{WP as resolveAppRuntime,GP as resolveAppRuntimeSync}from"../../chunks/app-CaSX7hlF.js";

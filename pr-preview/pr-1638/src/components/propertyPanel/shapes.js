@@ -1,1 +1,0 @@
-export{DG as propertyShapeLabel}from"../../../chunks/app-CaSX7hlF.js";

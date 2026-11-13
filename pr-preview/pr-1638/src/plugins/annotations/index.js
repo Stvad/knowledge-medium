@@ -1,1 +1,0 @@
-export{Ud as annotationsPlugin}from"../../../chunks/app-CaSX7hlF.js";

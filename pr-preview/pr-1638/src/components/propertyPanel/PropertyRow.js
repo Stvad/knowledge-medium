@@ -1,1 +1,0 @@
-export{UB as PropertyRow,WB as PropertyValueCell}from"../../../chunks/app-CaSX7hlF.js";

@@ -1,1 +1,0 @@
-export{nT as usePromotableBreadcrumb}from"../../../chunks/app-CaSX7hlF.js";
