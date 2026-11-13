@@ -1,0 +1,1 @@
+export{GB as PropertyRow,KB as PropertyValueCell}from"../../../chunks/app-ByoeuUTY.js";

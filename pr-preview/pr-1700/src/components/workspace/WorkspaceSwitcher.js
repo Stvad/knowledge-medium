@@ -1,0 +1,1 @@
+export{FT as WorkspaceSwitcher}from"../../../chunks/app-ByoeuUTY.js";

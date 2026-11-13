@@ -1,0 +1,1 @@
+export{ov as backlinksViewPlugin}from"../../../chunks/app-ByoeuUTY.js";

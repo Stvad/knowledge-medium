@@ -1,0 +1,1 @@
+export{uR as defaultPasteDecision,dR as pasteDecisionVerb}from"../../chunks/app-ByoeuUTY.js";

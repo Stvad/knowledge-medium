@@ -1,0 +1,1 @@
+export{Aq as preferredSpanReplacement}from"../../../chunks/app-ByoeuUTY.js";

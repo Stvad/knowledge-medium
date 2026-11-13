@@ -1,0 +1,1 @@
+export{DR as useShortcutSurfaceActivations}from"../../chunks/app-ByoeuUTY.js";

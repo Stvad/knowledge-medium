@@ -1,0 +1,1 @@
+export{f1 as omnilinerNamespace}from"../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{fW as isIOS,pW as isMacPlatform}from"../../chunks/app-ByoeuUTY.js";

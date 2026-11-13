@@ -1,0 +1,1 @@
+export{MG as appRuntimeUpdateEvent,NG as refreshAppRuntime}from"../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{qd as quotedInFooterContribution}from"../../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{jat as deriveWorkspaceIdNamespace}from"../../../chunks/app-ByoeuUTY.js";

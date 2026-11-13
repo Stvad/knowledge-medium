@@ -1,0 +1,1 @@
+export{uK as BootFallback}from"../../../chunks/app-ByoeuUTY.js";

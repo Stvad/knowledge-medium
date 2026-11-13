@@ -1,0 +1,1 @@
+export{R3 as applySyncInvalidation}from"../../../../chunks/app-ByoeuUTY.js";

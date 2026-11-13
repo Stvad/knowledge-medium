@@ -1,0 +1,1 @@
+export{sP as appUpdatePromptExtension}from"../../../chunks/app-ByoeuUTY.js";

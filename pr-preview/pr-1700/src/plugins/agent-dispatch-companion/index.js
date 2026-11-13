@@ -1,0 +1,1 @@
+export{bm as agentDispatchCompanionPlugin}from"../../../chunks/app-ByoeuUTY.js";

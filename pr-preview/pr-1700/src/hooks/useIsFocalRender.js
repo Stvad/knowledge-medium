@@ -1,0 +1,1 @@
+export{EB as isFocalRender,DB as useIsFocalRender}from"../../chunks/app-ByoeuUTY.js";

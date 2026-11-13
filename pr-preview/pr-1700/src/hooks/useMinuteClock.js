@@ -1,0 +1,1 @@
+export{VD as useMinuteClock}from"../../chunks/app-ByoeuUTY.js";

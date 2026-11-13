@@ -1,0 +1,1 @@
+export{y8 as agree,b8 as pluralize}from"../../chunks/app-ByoeuUTY.js";

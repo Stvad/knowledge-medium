@@ -1,0 +1,1 @@
+export{Q_ as BlockMetaCard}from"../../../chunks/app-ByoeuUTY.js";

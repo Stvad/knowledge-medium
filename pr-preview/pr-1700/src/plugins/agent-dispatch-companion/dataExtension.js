@@ -1,0 +1,1 @@
+export{H$ as agentDispatchCompanionDataExtension}from"../../../chunks/app-ByoeuUTY.js";

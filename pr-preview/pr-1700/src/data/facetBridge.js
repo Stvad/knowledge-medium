@@ -1,0 +1,1 @@
+export{c2 as FacetBridge}from"../../chunks/app-ByoeuUTY.js";

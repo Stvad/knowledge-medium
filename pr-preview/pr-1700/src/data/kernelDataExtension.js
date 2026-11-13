@@ -1,0 +1,1 @@
+export{X3 as kernelDataExtension}from"../../chunks/app-ByoeuUTY.js";

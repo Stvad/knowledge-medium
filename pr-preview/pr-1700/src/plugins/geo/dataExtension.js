@@ -1,0 +1,1 @@
+export{yJ as geoDataExtension}from"../../../chunks/app-ByoeuUTY.js";

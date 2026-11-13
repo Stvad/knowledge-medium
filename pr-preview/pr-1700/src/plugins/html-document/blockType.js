@@ -1,0 +1,1 @@
+export{Gq as htmlDocumentTypeSeed}from"../../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{dK as SuspenseFallback}from"../../../chunks/app-ByoeuUTY.js";

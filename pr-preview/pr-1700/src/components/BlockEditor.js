@@ -1,0 +1,1 @@
+export{bR as BlockEditor}from"../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{TG as usePropertySchemas}from"../../chunks/app-ByoeuUTY.js";

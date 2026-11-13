@@ -1,0 +1,1 @@
+export{fT as blockEditingContentRenderer}from"../../../chunks/app-ByoeuUTY.js";

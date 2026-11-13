@@ -1,0 +1,1 @@
+export{Ud as annotationsPlugin}from"../../../chunks/app-ByoeuUTY.js";

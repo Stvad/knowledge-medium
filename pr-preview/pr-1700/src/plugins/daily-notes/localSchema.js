@@ -1,0 +1,1 @@
+export{kY as dailyNotesLocalSchema}from"../../../chunks/app-ByoeuUTY.js";

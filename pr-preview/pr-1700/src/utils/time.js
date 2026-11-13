@@ -1,0 +1,1 @@
+export{NS as hmsToSeconds}from"../../chunks/app-ByoeuUTY.js";

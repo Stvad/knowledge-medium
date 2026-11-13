@@ -1,0 +1,1 @@
+export{VI as ConfirmBulkDeleteDialog}from"../../chunks/app-ByoeuUTY.js";

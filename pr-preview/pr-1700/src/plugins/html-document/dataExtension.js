@@ -1,0 +1,1 @@
+export{Wq as htmlDocumentDataExtension}from"../../../chunks/app-ByoeuUTY.js";

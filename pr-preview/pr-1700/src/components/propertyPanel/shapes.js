@@ -1,0 +1,1 @@
+export{kG as propertyShapeLabel}from"../../../chunks/app-ByoeuUTY.js";

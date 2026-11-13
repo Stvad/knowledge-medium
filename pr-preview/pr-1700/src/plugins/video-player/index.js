@@ -1,0 +1,1 @@
+export{OS as videoPlayerPlugin}from"../../../chunks/app-ByoeuUTY.js";

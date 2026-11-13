@@ -1,0 +1,1 @@
+export{IC as spatialNavigationShellDecorator}from"../../../chunks/app-ByoeuUTY.js";

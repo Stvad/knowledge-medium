@@ -1,0 +1,1 @@
+export{TZ as characterCounterDataExtension}from"../../../chunks/app-ByoeuUTY.js";

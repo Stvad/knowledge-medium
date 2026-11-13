@@ -1,0 +1,1 @@
+export{CG as floatingAnchorFromRect,wG as useAnchoredFloating}from"../../../chunks/app-ByoeuUTY.js";

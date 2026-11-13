@@ -1,0 +1,1 @@
+export{NK as staticDataExtensions}from"../../chunks/app-ByoeuUTY.js";

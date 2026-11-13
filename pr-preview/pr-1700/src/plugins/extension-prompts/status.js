@@ -1,0 +1,1 @@
+export{YN as extensionPromptDiagnosticContribution,XN as extensionPromptDiagnosticSource}from"../../../chunks/app-ByoeuUTY.js";

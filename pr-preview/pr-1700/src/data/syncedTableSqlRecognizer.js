@@ -1,0 +1,1 @@
+export{r1 as SYNCED_TABLES,i1 as syncedWriteTarget,a1 as writeTargets}from"../../chunks/app-ByoeuUTY.js";

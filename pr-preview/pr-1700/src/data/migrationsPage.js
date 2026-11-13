@@ -1,0 +1,1 @@
+export{Vrt as MIGRATIONS_PAGE_ALIAS,Hrt as getOrCreateMigrationsPage,Urt as migrationsPageBlockId,Wrt as migrationsPageSpec}from"../../chunks/app-ByoeuUTY.js";

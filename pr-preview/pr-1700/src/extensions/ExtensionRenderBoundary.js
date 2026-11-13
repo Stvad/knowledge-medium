@@ -1,0 +1,1 @@
+export{bz as ExtensionRenderBoundary}from"../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{zB as BlockProperties}from"../../chunks/app-ByoeuUTY.js";

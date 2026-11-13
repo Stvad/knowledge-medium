@@ -1,0 +1,1 @@
+export{bv as inlineBacklinksApplies}from"../../../../chunks/app-ByoeuUTY.js";

@@ -1,0 +1,1 @@
+export{YL as createInlineProperty}from"../../chunks/app-ByoeuUTY.js";

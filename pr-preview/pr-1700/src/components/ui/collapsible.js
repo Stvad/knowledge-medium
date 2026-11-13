@@ -1,0 +1,1 @@
+"use client";export{FB as Collapsible,IB as CollapsibleContent,LB as CollapsibleTrigger}from"../../../chunks/app-ByoeuUTY.js";
