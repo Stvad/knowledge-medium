@@ -1,0 +1,1 @@
+export{vq as htmlDocumentDataExtension}from"../../../chunks/app-DZ0-08H7.js";

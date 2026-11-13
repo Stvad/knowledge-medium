@@ -1,1 +1,1 @@
-export{RW as referencesDataExtension}from"../../../chunks/app-Db968Mqe.js";
+export{CK as referencesDataExtension}from"../../../chunks/app-DZ0-08H7.js";

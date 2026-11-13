@@ -1,1 +1,1 @@
-export{SW as staticDataExtensions}from"../../chunks/app-Db968Mqe.js";
+export{sK as staticDataExtensions}from"../../chunks/app-DZ0-08H7.js";

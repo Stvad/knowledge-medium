@@ -1,1 +1,1 @@
-export{Ly as attachmentsPlugin}from"../../../chunks/app-Db968Mqe.js";
+export{vb as attachmentsPlugin}from"../../../chunks/app-DZ0-08H7.js";

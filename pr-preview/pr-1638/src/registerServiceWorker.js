@@ -1,1 +1,1 @@
-export{YM as checkForAppUpdate,XM as registerServiceWorker}from"../chunks/app-Db968Mqe.js";
+export{aP as checkForAppUpdate,oP as registerServiceWorker}from"../chunks/app-DZ0-08H7.js";

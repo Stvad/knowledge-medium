@@ -1,1 +1,1 @@
-export{Nq as annotationsDataExtension}from"../../../chunks/app-Db968Mqe.js";
+export{SY as annotationsDataExtension}from"../../../chunks/app-DZ0-08H7.js";
